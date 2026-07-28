@@ -77,7 +77,7 @@ fn grouped_stack(
         bottleneck,
         dilations,
         kernel_sizes: vec![kernel_size; n],
-        activation: ActivationConfig::simple(ActivationKind::Tanh),
+        activations: vec![ActivationConfig::simple(ActivationKind::Tanh)],
         gating_modes,
         secondary_activations,
         groups_input,
@@ -110,6 +110,7 @@ fn grouped_construction_consumes_reference_weight_count() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     let weights = counted_weights(GROUPED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -139,6 +140,7 @@ fn gated_grouped_construction_consumes_reference_weight_count() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     let weights = counted_weights(70);
     let mut reader = WeightReader::new(&weights);
@@ -220,7 +222,7 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
             bottleneck: 4,
             dilations: vec![1],
             kernel_sizes: vec![1],
-            activation: ActivationConfig::simple(ActivationKind::Tanh),
+            activations: vec![ActivationConfig::simple(ActivationKind::Tanh)],
             gating_modes: vec![GatingMode::None],
             secondary_activations: vec![None],
             groups_input: 2,
@@ -232,6 +234,7 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -307,6 +310,7 @@ fn grouped_mixin_and_layer1x1_are_bit_identical_to_hand_computed_reference() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)

@@ -18,6 +18,12 @@
 //! / `_head_output_size` in NAM/wavenet/model.cpp). A1 models have
 //! `bottleneck == channels` and no head1x1, which reproduces the historical
 //! layout bit-identically.
+//!
+//! A2 models may carry a `condition_dsp` sub-network: a complete nested
+//! model (with its OWN weight array — the outer flat stream is unaffected)
+//! that runs on the raw input once per sample and whose multi-channel
+//! output becomes the condition for every stack's input mixin and FiLM
+//! sites (reference `WaveNet::_process_condition`).
 
 use super::super::activations::Activation;
 use super::super::parse::{WaveNetConfig, WeightReader};
@@ -88,6 +94,32 @@ fn read_film(
 }
 
 pub struct WaveNetModel {
+    /// A2 condition_dsp sub-network: a nested WaveNet that transforms the
+    /// raw input sample into the condition signal before it feeds the
+    /// stacks (reference `WaveNet::_process_condition`). Its weights come
+    /// from the nested model object's own weight array, never from the
+    /// outer flat stream. `None` = the condition passes through unchanged
+    /// (the per-stack post-rechannel snapshot below — the engine's A1
+    /// condition source, kept bit-identical).
+    condition_dsp: Option<Box<WaveNetModel>>,
+    /// Nested condition output, `condition_dsp.out_channels()` wide
+    /// (empty when there is no condition_dsp). Preallocated; refreshed
+    /// once per sample before the stack loop.
+    condition_buf: Vec<f32>,
+    /// Number of input channels (`config.input_size`; the engine processes
+    /// mono, so this is 1 for every loadable file — recorded for the
+    /// reference's condition_dsp input-width validation).
+    in_channels: usize,
+    /// Head MLP input width (`config.head_size`). `head_input` may be
+    /// allocated wider when a later stack's head rechannel outputs more
+    /// channels than the first (multi-channel nested nets).
+    head_size: usize,
+    /// Model output width: `head_size` with a head MLP, else the LAST
+    /// stack's head rechannel width (reference `wave_net_output_channels`).
+    /// 1 for the main (audio) model; nested condition_dsp models are
+    /// multi-channel.
+    out_channels: usize,
+
     // Per-stack data
     rechannels: Vec<Option<Conv1x1>>,
     stacks: Vec<Vec<WaveNetLayer>>,
@@ -153,7 +185,47 @@ impl WaveNetModel {
                     s.dilations.len()
                 ));
             }
+            // Activations: one broadcast entry, or one per layer.
+            if s.activations.len() != 1 && s.activations.len() != s.dilations.len() {
+                return Err(format!(
+                    "WaveNet stack {si}: activations ({}) must be a single broadcast entry or match dilations ({})",
+                    s.activations.len(),
+                    s.dilations.len()
+                ));
+            }
         }
+
+        // --- condition_dsp sub-network (A2) ---
+        // Built recursively from its own nested model JSON BEFORE the main
+        // arrays touch the flat weight stream, and consuming none of it
+        // (reference WaveNet ctor + set_weights_: "condition_dsp already
+        // has its own weights from construction"). Validations mirror the
+        // reference ctor: the nested net's input width must match what the
+        // WaveNet feeds it (the raw model input), and its output width must
+        // match every stack's condition_size.
+        let condition_dsp = match &config.condition_dsp {
+            Some(value) => {
+                let nested = super::super::parse::build_condition_dsp(value)?;
+                if nested.in_channels() != config.input_size {
+                    return Err(format!(
+                        "input channels of WaveNet ({}) don't match input channels of condition DSP ({})",
+                        config.input_size,
+                        nested.in_channels()
+                    ));
+                }
+                for (si, s) in config.stacks.iter().enumerate() {
+                    if s.condition_size != nested.out_channels() {
+                        return Err(format!(
+                            "condition_size of stack {si} ({}) doesn't match output channels of condition DSP ({})",
+                            s.condition_size,
+                            nested.out_channels()
+                        ));
+                    }
+                }
+                Some(Box::new(nested))
+            }
+            None => None,
+        };
 
         let num_stacks = config.stacks.len();
         // The condition width can exceed the channel count (a condition_dsp
@@ -166,6 +238,10 @@ impl WaveNetModel {
             .flat_map(|s| [s.channels, s.condition_size])
             .max()
             .unwrap_or(1)
+            // The first rechannel reads `input_size` channels; wider-than-
+            // channels inputs (possible in hand-written nested configs)
+            // must fit the scratch buffers too.
+            .max(config.input_size)
             .max(1);
         let max_bn = config
             .stacks
@@ -239,10 +315,17 @@ impl WaveNetModel {
                 ));
             }
 
-            // Resolve activation dispatch once, at construction. fast_tanh
-            // mode maps the A1 "Tanh" config to the fast-tanh path, exactly
-            // as the previously hardcoded implementation (bit-identical).
-            let stack_activation = Activation::from_config(&stack_cfg.activation, true);
+            // Per-layer activation config: a single entry broadcasts to
+            // every layer (A1 / A2 single configs); A2 activation arrays
+            // give each layer its own (e.g. the wavenet_a2_max nested
+            // condition_dsp mixes PReLU and Softsign per layer).
+            let layer_activation_cfg = |layer_idx: usize| {
+                if stack_cfg.activations.len() == 1 {
+                    &stack_cfg.activations[0]
+                } else {
+                    &stack_cfg.activations[layer_idx]
+                }
+            };
 
             // --- Rechannel (1x1, no bias) ---
             if prev_ch != ch {
@@ -450,7 +533,11 @@ impl WaveNetModel {
                     mid_ch,
                     groups_input: g_in,
                     groups_input_mixin: g_mixin,
-                    activation: stack_activation.clone(),
+                    // Resolve activation dispatch once, at construction.
+                    // fast_tanh mode maps the A1 "Tanh" config to the
+                    // fast-tanh path, exactly as the previously hardcoded
+                    // implementation (bit-identical).
+                    activation: Activation::from_config(layer_activation_cfg(layer_idx), true),
                     gating,
                     conv_pre_film,
                     conv_post_film,
@@ -561,19 +648,45 @@ impl WaveNetModel {
             1.0
         };
 
-        // Head MLP hidden-layer activation (A1: "Tanh" -> fast tanh).
+        // Head MLP hidden-layer activation (A1: "Tanh" -> fast tanh; taken
+        // from the first stack's first layer activation, as before).
         let head_activation = config
             .stacks
             .first()
-            .map(|s| Activation::from_config(&s.activation, true))
+            .and_then(|s| s.activations.first())
+            .map(|a| Activation::from_config(a, true))
             .unwrap_or(Activation::FastTanh);
 
+        // Head buffers must cover every stack's head rechannel width, not
+        // just the first stack's `head_size`: a nested condition_dsp net's
+        // arrays may widen toward the output (e.g. head 2 -> 3 in the
+        // wavenet_condition_dsp fixture). A1 models have their widest head
+        // first, so these sizes are unchanged there.
+        let max_stack_head = config
+            .stacks
+            .iter()
+            .map(|s| s.head_size)
+            .max()
+            .unwrap_or(head_size);
+        // Model output width (reference `wave_net_output_channels`): the
+        // head MLP's output size when present, else the LAST stack's head
+        // rechannel width.
+        let out_channels = if config.head.is_empty() {
+            config
+                .stacks
+                .last()
+                .map(|s| s.head_size)
+                .unwrap_or(head_size)
+        } else {
+            head_size
+        };
         let max_head_buf = config
             .head
             .iter()
             .copied()
             .chain(std::iter::once(head_size))
             .chain(std::iter::once(max_ch))
+            .chain(std::iter::once(max_stack_head))
             .max()
             .unwrap_or(1);
 
@@ -594,7 +707,7 @@ impl WaveNetModel {
         let scratch_conv_out = vec![0.0f32; max_mid];
         let scratch_skip = vec![0.0f32; max_skip];
         let scratch_head_buf = vec![0.0f32; max_head_buf];
-        let scratch_head_input = vec![0.0f32; head_size];
+        let scratch_head_input = vec![0.0f32; head_size.max(max_stack_head)];
         let scratch_film_ss = vec![0.0f32; max_film_ss];
 
         for (si, rc) in rechannels.iter().enumerate() {
@@ -729,7 +842,16 @@ impl WaveNetModel {
             }
         }
 
+        let condition_buf = condition_dsp
+            .as_ref()
+            .map_or(Vec::new(), |cd| vec![0.0f32; cd.out_channels()]);
+
         Ok(Self {
+            condition_dsp,
+            condition_buf,
+            in_channels: config.input_size,
+            head_size,
+            out_channels,
             rechannels,
             stacks,
             head_rechannels,
@@ -755,8 +877,44 @@ impl WaveNetModel {
     }
 }
 
-impl NamInference for WaveNetModel {
-    fn process_sample(&mut self, input: f32) -> f32 {
+impl WaveNetModel {
+    /// Number of input channels this model expects (`config.input_size`).
+    pub fn in_channels(&self) -> usize {
+        self.in_channels
+    }
+
+    /// Number of output channels this model produces (reference
+    /// `wave_net_output_channels`): the head MLP width when present, else
+    /// the last stack's head rechannel width. 1 for main audio models;
+    /// nested condition_dsp models are multi-channel.
+    pub fn out_channels(&self) -> usize {
+        self.out_channels
+    }
+
+    /// Multi-channel inference used for nested condition_dsp models: runs
+    /// one input sample and writes the `out_channels()` head-scaled output
+    /// channels into `out` (which must be at least that wide).
+    /// Allocation-free; shares the forward pass with `process_sample`.
+    pub fn process_sample_into(&mut self, input: f32, out: &mut [f32]) {
+        self.forward(input);
+        let n = self.out_channels;
+        for (o, v) in out[..n].iter_mut().zip(&self.head_input[..n]) {
+            *o = v * self.head_scale;
+        }
+    }
+
+    /// One full forward pass; leaves the pre-`head_scale` output channels
+    /// in `head_input[..out_channels]`.
+    fn forward(&mut self, input: f32) {
+        // condition_dsp (A2): the nested net transforms the raw input into
+        // the condition once per sample, before the stacks run (reference
+        // `WaveNet::process`: `_process_condition` ahead of the layer
+        // arrays). The stacks still receive the raw input on the audio
+        // path; only the condition source changes.
+        if let Some(cd) = &mut self.condition_dsp {
+            cd.process_sample_into(input, &mut self.condition_buf);
+        }
+
         // Seed activation with the raw input (will be rechanneled by first stack's rechannel)
         self.activation[0] = input;
 
@@ -780,10 +938,21 @@ impl NamInference for WaveNetModel {
                 self.activation[..rc.out_ch].copy_from_slice(&self.rechannel_buf[..rc.out_ch]);
             }
 
-            // Save condition signal (activation after rechannel, before layers modify it)
-            // We'll read it from activation snapshot. Since layers modify activation in-place,
-            // we need to save condition for input_mixin. We reuse rechannel_buf for this.
-            self.rechannel_buf[..ch].copy_from_slice(&self.activation[..ch]);
+            // Save the condition snapshot the layers' input_mixin and FiLM
+            // sites read (all of them index rechannel_buf). With a
+            // condition_dsp its per-sample output IS the condition for
+            // every stack (reference passes `_condition_output` to each
+            // LayerArray). Without one, the engine's condition is the
+            // post-rechannel activation snapshot (the #1113-recorded
+            // engine-ism; layers modify activation in-place, so it must be
+            // saved here) — unchanged, bit-identical A1 behavior.
+            match &self.condition_dsp {
+                Some(_) => {
+                    let n = self.condition_buf.len();
+                    self.rechannel_buf[..n].copy_from_slice(&self.condition_buf);
+                }
+                None => self.rechannel_buf[..ch].copy_from_slice(&self.activation[..ch]),
+            }
 
             // Zero skip accumulator for this stack. Its width follows the
             // head path: head1x1.out_channels when the stack's head1x1 is
@@ -1099,13 +1268,14 @@ impl NamInference for WaveNetModel {
         }
 
         // Head MLP
-        let head_size = self.head_input.len();
         if self.head_layers.is_empty() {
-            // No head MLP — output is head_input[0] * head_scale
-            return self.head_input[0] * self.head_scale;
+            // No head MLP — the pre-head_scale output channels are the
+            // accumulated head_input as-is.
+            return;
         }
+        let head_size = self.head_size;
 
-        self.head_buf_a[..head_size].copy_from_slice(&self.head_input);
+        self.head_buf_a[..head_size].copy_from_slice(&self.head_input[..head_size]);
         let mut current_size = head_size;
         let mut use_a = true;
 
@@ -1132,15 +1302,32 @@ impl NamInference for WaveNetModel {
             use_a = !use_a;
         }
 
-        let result = if use_a {
-            self.head_buf_a[0]
+        // Expose the MLP result in head_input so every path reads the
+        // pre-head_scale output channels from the same place
+        // (out_channels == head_size on the MLP path).
+        let src = if use_a {
+            &self.head_buf_a
         } else {
-            self.head_buf_b[0]
+            &self.head_buf_b
         };
-        result * self.head_scale
+        self.head_input[..head_size].copy_from_slice(&src[..head_size]);
+    }
+}
+
+impl NamInference for WaveNetModel {
+    fn process_sample(&mut self, input: f32) -> f32 {
+        self.forward(input);
+        self.head_input[0] * self.head_scale
     }
 
     fn reset(&mut self) {
+        // Nested condition_dsp state (its rings, recursively) must clear
+        // too, or the first samples after reset would see a stale
+        // condition.
+        if let Some(cd) = &mut self.condition_dsp {
+            cd.reset();
+        }
+        self.condition_buf.fill(0.0);
         for stack_rings in &mut self.ring_buffers {
             for ring in stack_rings {
                 ring.reset();

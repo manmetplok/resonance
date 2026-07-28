@@ -155,7 +155,7 @@ fn bottleneck_stack(
         bottleneck,
         dilations,
         kernel_sizes: vec![2; n],
-        activation: ActivationConfig::from_name("Tanh").unwrap(),
+        activations: vec![ActivationConfig::from_name("Tanh").unwrap()],
         gating_modes,
         secondary_activations,
         groups_input: 1,
@@ -174,6 +174,7 @@ fn direct_construction_consumes_every_weight() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     let weights = counted_weights(NONGATED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -189,6 +190,7 @@ fn direct_gated_construction_consumes_every_weight() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     let weights = counted_weights(GATED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -386,7 +388,7 @@ fn bottleneck_without_layer1x1_is_rejected() {
             bottleneck: 1,
             dilations: vec![1],
             kernel_sizes: vec![2],
-            activation: ActivationConfig::from_name("Tanh").unwrap(),
+            activations: vec![ActivationConfig::from_name("Tanh").unwrap()],
             gating_modes: vec![GatingMode::None],
             secondary_activations: vec![None],
             groups_input: 1,
@@ -398,6 +400,7 @@ fn bottleneck_without_layer1x1_is_rejected() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
     let weights = counted_weights(64);
     let mut reader = WeightReader::new(&weights);

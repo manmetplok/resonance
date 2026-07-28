@@ -5,7 +5,7 @@ use std::path::Path;
 use super::activations::{ActivationConfig, ActivationKind};
 use super::lstm::LstmModel;
 use super::wavenet::params::{
-    parse_gating_config, FilmParams, GatingMode, Head1x1Params, LayerFilms,
+    parse_activation_value, parse_gating_config, FilmParams, GatingMode, Head1x1Params, LayerFilms,
 };
 use super::wavenet::WaveNetModel;
 use super::NamInference;
@@ -57,6 +57,14 @@ pub struct WaveNetConfig {
     /// Whether layers have a learned 1x1 residual conv (_layer1x1).
     /// True for new-format NAM models (default), false for old format.
     pub has_layer1x1: bool,
+    /// Raw A2 `condition_dsp` sub-model JSON: a complete nested .nam-style
+    /// model object (`architecture`/`config`/`weights`/`sample_rate`) that
+    /// preprocesses the raw model input into the condition signal fed to
+    /// every layer array's input mixin and FiLM points. Constructed
+    /// recursively at model-build time (see
+    /// [`build_condition_dsp`]); `None` (A1 and condition_dsp-less A2)
+    /// leaves the condition source untouched.
+    pub condition_dsp: Option<serde_json::Value>,
 }
 
 pub struct StackConfig {
@@ -84,9 +92,12 @@ pub struct StackConfig {
     pub bottleneck: usize,
     pub dilations: Vec<usize>,
     pub kernel_sizes: Vec<usize>,
-    /// Layer activation for this stack. A1 models use `"Tanh"`, which
-    /// resolves to the fast-tanh path at model construction.
-    pub activation: ActivationConfig,
+    /// Layer activation(s) for this stack: a single entry is broadcast to
+    /// every layer (A1 string configs and A2 single-object configs), or one
+    /// entry per layer (A2 per-layer activation arrays). A1 models use
+    /// `"Tanh"`, which resolves to the fast-tanh path at model
+    /// construction.
+    pub activations: Vec<ActivationConfig>,
     /// Gating mode per layer (same length as `dilations`; A2 allows mixed
     /// per-layer modes). Layers with a non-`None` mode have their conv and
     /// input-mixin output width doubled (primary + secondary halves).
@@ -145,7 +156,7 @@ impl OldWaveNetConfig {
             .collect();
         let stacks = dilations
             .into_iter()
-            .map(|d| {
+            .map(|d: Vec<usize>| {
                 let n = d.len();
                 // Old-format gating is a plain boolean: every layer is
                 // "gated" with the backward-compat Sigmoid secondary (which
@@ -171,7 +182,7 @@ impl OldWaveNetConfig {
                     bottleneck: self.channels,
                     kernel_sizes: vec![2; n],
                     dilations: d,
-                    activation: activation.clone(),
+                    activations: vec![activation.clone(); n],
                     gating_modes,
                     secondary_activations,
                     // Old-format models predate grouped convolutions.
@@ -191,6 +202,8 @@ impl OldWaveNetConfig {
             head: self.head,
             head_size: self.head_size,
             has_layer1x1: false,
+            // Old-format models predate the condition_dsp sub-network.
+            condition_dsp: None,
         })
     }
 }
@@ -229,8 +242,9 @@ struct NewLayerArrayConfig {
     /// Secondary (gate/blend) activation: single config or per-layer array.
     #[serde(default)]
     secondary_activation: Option<serde_json::Value>,
-    /// Activation: plain string (A1) or A2-style config object. Absent in
-    /// some old exports; defaults to `"Tanh"`.
+    /// Activation: plain string (A1), A2-style config object, or a
+    /// per-layer array of either. Absent in some old exports; defaults to
+    /// `"Tanh"`.
     #[serde(default)]
     activation: Option<serde_json::Value>,
     #[serde(default = "default_true")]
@@ -344,6 +358,12 @@ struct NewWaveNetConfig {
     #[serde(default)]
     #[allow(dead_code)]
     head_scale: Option<f32>,
+    /// A2 nested condition_dsp model object, kept as raw JSON; the engine
+    /// constructs it recursively (`build_condition_dsp`). JSON `null`
+    /// deserializes to `None`, matching the reference's
+    /// `!config["condition_dsp"].is_null()` guard.
+    #[serde(default)]
+    condition_dsp: Option<serde_json::Value>,
 }
 
 impl NewWaveNetConfig {
@@ -352,6 +372,7 @@ impl NewWaveNetConfig {
             .layers
             .first()
             .ok_or("WaveNet config has no layer arrays")?;
+        let first_input_size = first.input_size;
 
         let stacks: Vec<StackConfig> = self
             .layers
@@ -364,10 +385,14 @@ impl NewWaveNetConfig {
                     let k = l.kernel_size.unwrap_or(2);
                     vec![k; l.dilations.len()]
                 };
-                let activation = match l.activation {
-                    Some(ref v) => ActivationConfig::from_json(v)?,
-                    None => ActivationConfig::simple(ActivationKind::Tanh),
-                };
+                // Per-layer activations through the shared A2 parsing:
+                // single config broadcast, or an array matching the layer
+                // count (e.g. the wavenet_a2_max nested condition_dsp).
+                let activations = parse_activation_value(
+                    l.activation.as_ref().filter(|v| !v.is_null()),
+                    l.dilations.len(),
+                    &format!("Layer array {i}"),
+                )?;
                 // Per-layer gating modes + secondary activations, through
                 // the typed A2 parsing (single source of gating semantics).
                 let (gating_modes, secondary_activations) = parse_gating_config(
@@ -410,7 +435,7 @@ impl NewWaveNetConfig {
                     bottleneck: l.bottleneck.unwrap_or(l.channels),
                     dilations: l.dilations.clone(),
                     kernel_sizes: ks,
-                    activation,
+                    activations,
                     gating_modes,
                     secondary_activations,
                     groups_input: l.groups_input,
@@ -443,11 +468,12 @@ impl NewWaveNetConfig {
         };
 
         Ok(WaveNetConfig {
-            input_size: first.input_size,
+            input_size: first_input_size,
             stacks,
             head,
             head_size,
             has_layer1x1: true,
+            condition_dsp: self.condition_dsp,
         })
     }
 }
@@ -490,6 +516,55 @@ pub fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, S
     let new_cfg: NewWaveNetConfig =
         serde_json::from_value(value).map_err(|e| format!("Invalid WaveNet config: {e}"))?;
     new_cfg.into_config()
+}
+
+// -- condition_dsp sub-network ------------------------------------------------
+
+/// Shape of a nested `condition_dsp` model object: a complete .nam-style
+/// model (`architecture`/`config`/`weights`/optional `sample_rate`) embedded
+/// under the outer WaveNet config. The reference (`parse_config_json` in
+/// NAM/wavenet/model.cpp) builds it eagerly via `nam::get_dsp`, so its
+/// weights come from this object's own `weights` array — NOT from the outer
+/// flat weight stream, which `WaveNet::set_weights_` consumes for the layer
+/// arrays + head only ("condition_dsp already has its own weights from
+/// construction"). The outer stream layout is therefore identical with or
+/// without a condition_dsp.
+#[derive(Deserialize)]
+struct NestedModelFile {
+    architecture: String,
+    config: serde_json::Value,
+    weights: Vec<f32>,
+}
+
+/// Construct the A2 `condition_dsp` sub-network from its raw nested model
+/// JSON, recursively through the engine's normal WaveNet parse/construction
+/// (a nested net may itself carry the full A2 surface — bottleneck, gating,
+/// FiLM, head1x1, even its own condition_dsp, exactly as the reference's
+/// recursive `get_dsp` allows).
+///
+/// A2 training only emits WaveNet sub-networks; any other nested
+/// architecture is rejected with a clear error. The nested weight array must
+/// be consumed exactly (the reference `set_weights_` throws on leftovers).
+pub(crate) fn build_condition_dsp(value: &serde_json::Value) -> Result<WaveNetModel, String> {
+    let nested: NestedModelFile = serde_json::from_value(value.clone())
+        .map_err(|e| format!("Invalid condition_dsp model: {e}"))?;
+    if nested.architecture != "WaveNet" {
+        return Err(format!(
+            "Unsupported condition_dsp architecture: {} (only WaveNet condition_dsp sub-networks are supported)",
+            nested.architecture
+        ));
+    }
+    let config = parse_wavenet_config(nested.config).map_err(|e| format!("condition_dsp: {e}"))?;
+    let mut reader = WeightReader::new(&nested.weights);
+    let model = WaveNetModel::from_config_and_weights(config, &mut reader)
+        .map_err(|e| format!("condition_dsp: {e}"))?;
+    if reader.remaining() > 0 {
+        return Err(format!(
+            "condition_dsp: {} unused weights after construction",
+            reader.remaining()
+        ));
+    }
+    Ok(model)
 }
 
 #[derive(Deserialize)]
@@ -543,6 +618,16 @@ pub fn load_model_from_file(path: &str) -> Result<LoadedModel, String> {
     let model: Box<dyn NamInference> = match nam_file.architecture.as_str() {
         "WaveNet" => {
             let config = parse_wavenet_config(nam_file.config)?;
+            // Reference `parse_config_json`: a condition_dsp trained at a
+            // different rate than the outer model is a broken export.
+            if let Some(cd) = &config.condition_dsp {
+                let nested_rate = parse_sample_rate(cd.get("sample_rate"));
+                if nested_rate != sample_rate {
+                    return Err(format!(
+                        "condition_dsp expected sample rate ({nested_rate}) doesn't match model sample rate ({sample_rate})"
+                    ));
+                }
+            }
             let model = WaveNetModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
                 eprintln!(

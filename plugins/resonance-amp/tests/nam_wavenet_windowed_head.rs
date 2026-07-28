@@ -58,7 +58,7 @@ fn windowed_stack(
         bottleneck: channels,
         dilations: vec![1],
         kernel_sizes: vec![1],
-        activation: ActivationConfig::simple(ActivationKind::Relu),
+        activations: vec![ActivationConfig::simple(ActivationKind::Relu)],
         gating_modes: vec![GatingMode::None],
         secondary_activations: vec![None],
         groups_input: 1,
@@ -94,6 +94,7 @@ fn windowed_head_taps_and_dilation_offsets_are_bit_exact() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -132,6 +133,7 @@ fn reset_clears_windowed_head_history() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader).unwrap();
@@ -174,6 +176,7 @@ fn windowed_head_weight_order_deinterleaves_conv1d_layout() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -217,6 +220,7 @@ fn windowed_head_weight_count_is_pinned() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
 
     let weights = counted_weights(count);
@@ -248,6 +252,7 @@ fn zero_head_kernel_size_is_rejected() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
     let weights = counted_weights(16);
     let mut reader = WeightReader::new(&weights);
