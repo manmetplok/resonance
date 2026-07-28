@@ -267,6 +267,9 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
                 None,
                 Some(ActivationConfig::simple(ActivationKind::Sigmoid)),
             ],
+            groups_input: 1,
+            groups_input_mixin: 1,
+            layer1x1_groups: 1,
         }],
         head: vec![],
         head_size: 1,
@@ -352,6 +355,9 @@ fn fixture_typed_gating_vectors_drive_construction() {
         activation: ActivationConfig::simple(ActivationKind::Softsign),
         gating_modes: l1.gating_modes.clone(),
         secondary_activations: l1.secondary_activations.clone(),
+        groups_input: 1,
+        groups_input_mixin: 1,
+        layer1x1_groups: 1,
     };
 
     // Reference weight count for this stack.

@@ -10,12 +10,19 @@ pub(super) struct Conv1x1 {
     pub(super) in_ch: usize,
 }
 
-/// 1x1 convolution with optional bias.
+/// 1x1 convolution with optional bias and optional grouping.
+///
+/// With `groups == 1` the weight is the dense row-major `[out_ch x in_ch]`
+/// matrix. With `groups == G` it is the compact grouped layout of the
+/// reference `Conv1x1` (NAM/dsp.cpp `set_weights_`): `G` concatenated
+/// row-major `[out_ch/G x in_ch/G]` per-group blocks, `out_ch * in_ch / G`
+/// values total.
 pub(super) struct Conv1x1Bias {
     pub(super) weight: Vec<f32>,
     pub(super) bias: Vec<f32>, // empty if no bias
     pub(super) out_ch: usize,
     pub(super) in_ch: usize,
+    pub(super) groups: usize,
 }
 
 /// Per-layer gating behavior, resolved from config at construction
@@ -42,19 +49,26 @@ pub(super) enum LayerGating {
 ///
 /// NAM weight order per layer (reference `Layer::set_weights_` in
 /// NAM/wavenet/model.cpp):
-///   _conv.weight  [mid_ch, ch, kernel_size]  (primary+secondary combined if
-///                                             gated/blended)
+///   _conv.weight  [mid_ch, ch/groups_input, kernel_size]
+///                 (primary+secondary combined if gated/blended; flat
+///                  consumption order [group][out][in][tap], reference
+///                  `Conv1D::set_weights_` in NAM/conv1d.cpp)
 ///   _conv.bias    [mid_ch]
-///   _input_mixin.weight [mid_ch, condition_size]  (no bias)
-///   _layer1x1.weight [ch, bottleneck]  (if active)
-///   _layer1x1.bias [ch]                (if active)
+///   _input_mixin.weight [mid_ch, condition_size/groups_input_mixin]
+///                 (no bias; flat order [group][out][in], reference
+///                  `Conv1x1::set_weights_` in NAM/dsp.cpp)
+///   _layer1x1.weight [ch, bottleneck/layer1x1.groups]  (if active)
+///   _layer1x1.bias [ch]                                (if active)
 ///
 /// where `mid_ch = 2*bottleneck` when the layer's gating mode is gated or
-/// blended, else `bottleneck`. In A1 models `bottleneck == channels`, so
-/// this degenerates to the historical layout.
+/// blended, else `bottleneck`. In A1 models `bottleneck == channels` and all
+/// groups are 1, so this degenerates to the historical dense layout.
 pub(super) struct WaveNetLayer {
-    /// Combined filter+gate conv weights per kernel tap.
-    /// w_conv[tap] has size [mid_ch * ch].
+    /// Combined filter+gate conv weights per kernel tap. With
+    /// `groups_input == 1`, w_conv[tap] is the dense row-major
+    /// `[mid_ch x ch]` matrix (size mid_ch * ch); with G groups it is the
+    /// compact grouped layout (G concatenated `[mid_ch/G x ch/G]` row-major
+    /// blocks, size mid_ch * ch / G).
     pub(super) w_conv: Vec<Vec<f32>>,
     /// Combined filter+gate conv bias [mid_ch].
     pub(super) b_conv: Vec<f32>,
@@ -75,6 +89,11 @@ pub(super) struct WaveNetLayer {
     /// Conv/mixin output channels = 2*bottleneck if gated/blended, else
     /// bottleneck.
     pub(super) mid_ch: usize,
+    /// Groups of the dilated input conv (in: channels, out: mid_ch). A1: 1.
+    pub(super) groups_input: usize,
+    /// Groups of the condition input-mixin conv (in: condition_size,
+    /// out: mid_ch). A1: 1.
+    pub(super) groups_input_mixin: usize,
 
     /// Primary layer activation, resolved from config at construction
     /// (A1: fast tanh).

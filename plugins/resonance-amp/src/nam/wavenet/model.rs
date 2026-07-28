@@ -14,11 +14,40 @@
 
 use super::super::activations::Activation;
 use super::super::parse::{WaveNetConfig, WeightReader};
-use super::super::{matvec, matvec_add, validate_matvec_dims, NamInference};
+use super::super::{
+    grouped_matvec, grouped_matvec_add, matvec, validate_grouped_matvec_dims,
+    validate_matvec_dims, NamInference,
+};
 use super::conv_layer::{Conv1x1, Conv1x1Bias, LayerGating, WaveNetLayer};
 use super::head::DenseLayer;
 use super::params::GatingMode;
 use super::ring::RingBuffer;
+
+/// Construction-time validation of a grouped convolution's channel counts
+/// (reference `Conv1D::set_size_` / `Conv1x1` ctor): both the input and the
+/// output channel count must divide evenly by the group count.
+fn check_groups(
+    ctx: &str,
+    what: &str,
+    in_ch: usize,
+    out_ch: usize,
+    groups: usize,
+) -> Result<(), String> {
+    if groups == 0 {
+        return Err(format!("{ctx}: {what} groups must be >= 1"));
+    }
+    if !in_ch.is_multiple_of(groups) {
+        return Err(format!(
+            "{ctx}: {what} in_channels ({in_ch}) must be divisible by groups ({groups})"
+        ));
+    }
+    if !out_ch.is_multiple_of(groups) {
+        return Err(format!(
+            "{ctx}: {what} out_channels ({out_ch}) must be divisible by groups ({groups})"
+        ));
+    }
+    Ok(())
+}
 
 pub struct WaveNetModel {
     // Per-stack data
@@ -104,9 +133,12 @@ impl WaveNetModel {
 
         let mut prev_ch = config.input_size;
 
-        for stack_cfg in &config.stacks {
+        for (si, stack_cfg) in config.stacks.iter().enumerate() {
             let ch = stack_cfg.channels;
             let bottleneck = stack_cfg.bottleneck;
+            let g_in = stack_cfg.groups_input;
+            let g_mixin = stack_cfg.groups_input_mixin;
+            let g_1x1 = stack_cfg.layer1x1_groups;
             // Reference validation: without a layer1x1 there is nothing to
             // map the bottleneck-wide activation back to `channels`.
             if !config.has_layer1x1 && bottleneck != ch {
@@ -166,15 +198,25 @@ impl WaveNetModel {
                     }
                 };
 
-                // _conv.weight [mid_ch, ch, kernel_size] row-major
-                let raw = reader.read(mid_ch * ch * ks)?;
+                let ctx = format!("WaveNet stack {si} layer {layer_idx}");
+
+                // _conv.weight [mid_ch, ch/g, kernel_size]: the grouped conv
+                // shrinks the weight tensor to per-group [mid_ch/g x ch/g]
+                // blocks (reference Conv1D::set_size_/set_weights_ in
+                // NAM/conv1d.cpp). Flat consumption order is
+                // [group][out][in][tap]; splitting off the innermost tap
+                // index (`raw[m * ks + tap]`) leaves exactly the compact
+                // per-tap grouped layout `grouped_matvec` consumes —
+                // concatenated per-group row-major blocks — and for g == 1
+                // this is the historical dense [mid_ch x ch] matrix.
+                check_groups(&ctx, "conv", ch, mid_ch, g_in)?;
+                let per_tap = mid_ch * ch / g_in;
+                let raw = reader.read(per_tap * ks)?;
                 let mut w_conv = Vec::with_capacity(ks);
                 for tap in 0..ks {
-                    let mut w = vec![0.0f32; mid_ch * ch];
-                    for out_c in 0..mid_ch {
-                        for in_c in 0..ch {
-                            w[out_c * ch + in_c] = raw[(out_c * ch + in_c) * ks + tap];
-                        }
+                    let mut w = vec![0.0f32; per_tap];
+                    for (m, wv) in w.iter_mut().enumerate() {
+                        *wv = raw[m * ks + tap];
                     }
                     w_conv.push(w);
                 }
@@ -182,25 +224,32 @@ impl WaveNetModel {
                 // _conv.bias [mid_ch]
                 let b_conv = reader.read(mid_ch)?;
 
-                // _input_mixin.weight [mid_ch, condition_size] (no bias)
+                // _input_mixin.weight [mid_ch, condition_size/g] (no bias).
+                // The reference Conv1x1 flat order [group][out][in] IS the
+                // compact concatenated per-group layout — read as-is.
                 let w_input_mixin = if stack_cfg.condition_size > 0 {
-                    Some(reader.read(mid_ch * stack_cfg.condition_size)?)
+                    check_groups(&ctx, "input_mixin", stack_cfg.condition_size, mid_ch, g_mixin)?;
+                    Some(reader.read(mid_ch * stack_cfg.condition_size / g_mixin)?)
                 } else {
                     None
                 };
 
                 // _layer1x1: learned 1x1 residual conv mapping the
                 // bottleneck-wide activation back to `channels` (active by
-                // default in new-format NAM). Weight [ch, bottleneck], bias
-                // [ch] — reference Conv1x1(bottleneck, channels, bias).
+                // default in new-format NAM). Weight [ch, bottleneck/g],
+                // bias [ch] — reference Conv1x1(bottleneck, channels, bias,
+                // layer1x1.groups); the flat grouped order is the compact
+                // per-group layout, read as-is.
                 let layer1x1 = if config.has_layer1x1 {
-                    let w = reader.read(ch * bottleneck)?;
+                    check_groups(&ctx, "layer1x1", bottleneck, ch, g_1x1)?;
+                    let w = reader.read(ch * bottleneck / g_1x1)?;
                     let b = reader.read(ch)?;
                     Some(Conv1x1Bias {
                         weight: w,
                         bias: b,
                         out_ch: ch,
                         in_ch: bottleneck,
+                        groups: g_1x1,
                     })
                 } else {
                     None
@@ -219,6 +268,8 @@ impl WaveNetModel {
                     channels: ch,
                     bottleneck,
                     mid_ch,
+                    groups_input: g_in,
+                    groups_input_mixin: g_mixin,
                     activation: stack_activation.clone(),
                     gating,
                 });
@@ -243,6 +294,9 @@ impl WaveNetModel {
                 bias: hr_bias,
                 out_ch: hr_out,
                 in_ch: bottleneck,
+                // The head rechannel is ungrouped in the reference
+                // (head1x1 grouping is a separate module/todo).
+                groups: 1,
             });
 
             prev_ch = ch;
@@ -324,24 +378,26 @@ impl WaveNetModel {
                 let ch = layer.channels;
                 let mid_ch = layer.mid_ch;
                 for (tap_idx, w) in layer.w_conv.iter().enumerate() {
-                    if !validate_matvec_dims(
+                    if !validate_grouped_matvec_dims(
                         w,
                         &scratch_activation[..ch],
                         &scratch_conv_out[..mid_ch],
                         mid_ch,
                         ch,
+                        layer.groups_input,
                     ) {
                         return Err(format!("WaveNet stack {si} layer {li} tap {tap_idx}: conv weight dimension mismatch"));
                     }
                 }
                 if let Some(ref w_mixin) = layer.w_input_mixin {
-                    let cond_size = w_mixin.len() / mid_ch;
-                    if !validate_matvec_dims(
+                    let cond_size = w_mixin.len() * layer.groups_input_mixin / mid_ch;
+                    if !validate_grouped_matvec_dims(
                         w_mixin,
                         &scratch_activation[..cond_size],
                         &scratch_conv_out[..mid_ch],
                         mid_ch,
                         cond_size,
+                        layer.groups_input_mixin,
                     ) {
                         return Err(format!(
                             "WaveNet stack {si} layer {li}: input_mixin dimension mismatch"
@@ -351,12 +407,13 @@ impl WaveNetModel {
                 if let Some(ref l1x1) = layer.layer1x1 {
                     // layer1x1 input is the bottleneck-wide activated z,
                     // which lives in the conv_out scratch during processing.
-                    if !validate_matvec_dims(
+                    if !validate_grouped_matvec_dims(
                         &l1x1.weight,
                         &scratch_conv_out[..l1x1.in_ch],
                         &scratch_activation[..l1x1.out_ch],
                         l1x1.out_ch,
                         l1x1.in_ch,
+                        l1x1.groups,
                     ) {
                         return Err(format!(
                             "WaveNet stack {si} layer {li}: layer1x1 dimension mismatch"
@@ -452,13 +509,29 @@ impl NamInference for WaveNetModel {
                 // Write current activation into ring buffer
                 ring.write(&self.activation[..ch]);
 
-                // Dilated convolution (combined filter+gate)
+                // Dilated convolution (combined filter+gate). Grouped
+                // (groups_input > 1) runs blocked per-group matvecs; the
+                // g == 1 case is the historical dense matvec unchanged.
                 let x0 = ring.read_delayed((ks - 1) * layer.dilation);
-                matvec(&layer.w_conv[0], x0, mid_ch, ch, &mut self.conv_out);
+                grouped_matvec(
+                    &layer.w_conv[0],
+                    x0,
+                    mid_ch,
+                    ch,
+                    layer.groups_input,
+                    &mut self.conv_out,
+                );
                 for tap in 1..ks {
                     let delay = (ks - 1 - tap) * layer.dilation;
                     let xt = ring.read_delayed(delay);
-                    matvec_add(&layer.w_conv[tap], xt, mid_ch, ch, &mut self.conv_out);
+                    grouped_matvec_add(
+                        &layer.w_conv[tap],
+                        xt,
+                        mid_ch,
+                        ch,
+                        layer.groups_input,
+                        &mut self.conv_out,
+                    );
                 }
                 for c in 0..mid_ch {
                     self.conv_out[c] += layer.b_conv[c];
@@ -466,12 +539,13 @@ impl NamInference for WaveNetModel {
 
                 // Input mixin: add condition signal projected to mid_ch
                 if let Some(ref w_mixin) = layer.w_input_mixin {
-                    let cond_size = w_mixin.len() / mid_ch;
-                    matvec(
+                    let cond_size = w_mixin.len() * layer.groups_input_mixin / mid_ch;
+                    grouped_matvec(
                         w_mixin,
                         &self.rechannel_buf[..cond_size],
                         mid_ch,
                         cond_size,
+                        layer.groups_input_mixin,
                         &mut self.mixin_buf,
                     );
                     for c in 0..mid_ch {
@@ -524,11 +598,12 @@ impl NamInference for WaveNetModel {
                 // (enforced at construction) and z IS the residual.
                 match &layer.layer1x1 {
                     Some(l1x1) => {
-                        matvec(
+                        grouped_matvec(
                             &l1x1.weight,
                             &self.conv_out[..l1x1.in_ch],
                             l1x1.out_ch,
                             l1x1.in_ch,
+                            l1x1.groups,
                             &mut self.residual_buf,
                         );
                         for c in 0..l1x1.out_ch {
