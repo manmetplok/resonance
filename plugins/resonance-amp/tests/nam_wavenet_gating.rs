@@ -257,6 +257,9 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
             input_size: 1,
             condition_size: 1,
             head_size: 1,
+            head_kernel_size: 1,
+            head_dilation: 1,
+            head_bias: true,
             channels: 2,
             bottleneck: 2,
             dilations: vec![1, 2],
@@ -274,7 +277,6 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
         }],
         head: vec![],
         head_size: 1,
-        head_bias: true,
         has_layer1x1: true,
     };
     // rechannel 2 + layer0 (mid 2: conv 8 + bias 2 + mixin 2 + l1x1 6 = 18)
@@ -349,6 +351,9 @@ fn fixture_typed_gating_vectors_drive_construction() {
         input_size: 1,
         condition_size: 1,
         head_size: 1,
+        head_kernel_size: 1,
+        head_dilation: 1,
+        head_bias: true,
         channels: l1.channels,
         bottleneck: l1.bottleneck,
         dilations: l1.dilations.clone(),
@@ -381,7 +386,6 @@ fn fixture_typed_gating_vectors_drive_construction() {
         stacks: vec![stack],
         head: vec![],
         head_size: 1,
-        head_bias: true,
         has_layer1x1: true,
     };
     let weights = counted_weights(count);

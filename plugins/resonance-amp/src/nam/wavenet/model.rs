@@ -3,7 +3,8 @@
 //! Follows the NAM (Neural Amp Modeler) weight serialization order
 //! (reference `set_weights_` in NAM/wavenet/model.cpp):
 //! Per LayerArray (stack): rechannel, layers (conv+bias, input_mixin,
-//! layer1x1, head1x1), head_rechannel
+//! layer1x1, head1x1), head_rechannel (kernel taps in Conv1D
+//! [out][in][tap] order, then bias when head_bias)
 //! Then: head MLP layers, head_scale.
 //!
 //! Tensor shapes follow the A2 bottleneck convention: the dilated conv and
@@ -21,11 +22,11 @@
 use super::super::activations::Activation;
 use super::super::parse::{WaveNetConfig, WeightReader};
 use super::super::{
-    grouped_matvec, grouped_matvec_add, matvec, validate_grouped_matvec_dims,
+    grouped_matvec, grouped_matvec_add, matvec, matvec_add, validate_grouped_matvec_dims,
     validate_matvec_dims, NamInference,
 };
 use super::conv_layer::{Conv1x1, Conv1x1Bias, LayerGating, WaveNetLayer};
-use super::head::DenseLayer;
+use super::head::{DenseLayer, HeadRechannel};
 use super::params::GatingMode;
 use super::ring::RingBuffer;
 
@@ -59,8 +60,12 @@ pub struct WaveNetModel {
     // Per-stack data
     rechannels: Vec<Option<Conv1x1>>,
     stacks: Vec<Vec<WaveNetLayer>>,
-    head_rechannels: Vec<Conv1x1Bias>,
+    head_rechannels: Vec<HeadRechannel>,
     ring_buffers: Vec<Vec<RingBuffer>>,
+    /// Per-stack history of past skip-accumulator frames for windowed head
+    /// rechannels (`Some` iff `head_kernel_size > 1`; the kernel-1 path is
+    /// memoryless and skips the ring entirely).
+    head_rings: Vec<Option<RingBuffer>>,
 
     // Head MLP (may be empty)
     head_layers: Vec<DenseLayer>,
@@ -166,6 +171,7 @@ impl WaveNetModel {
         let mut stacks = Vec::with_capacity(num_stacks);
         let mut head_rechannels = Vec::with_capacity(num_stacks);
         let mut ring_buffers = Vec::with_capacity(num_stacks);
+        let mut head_rings = Vec::with_capacity(num_stacks);
 
         let mut prev_ch = config.input_size;
 
@@ -339,32 +345,61 @@ impl WaveNetModel {
             stacks.push(layers);
             ring_buffers.push(rings);
 
-            // --- Head rechannel (1x1, bias controlled by head_bias) ---
+            // --- Head rechannel (causal conv, kernel `head_kernel_size`,
+            // dilation `head_dilation`, bias controlled by head_bias) ---
             // Its input is the accumulated skip signal:
             // head1x1.out_channels wide when the stack's head1x1 is active,
             // else bottleneck wide (reference `_head_rechannel(
             // head1x1.active ? head1x1.out_channels : bottleneck,
-            // head_size, ...)`).
+            // head_size, head_kernel_size, head_bias, head_dilation, 1)`).
             let skip_ch = if stack_cfg.head1x1.active {
                 stack_cfg.head1x1.out_channels
             } else {
                 bottleneck
             };
             let hr_out = stack_cfg.head_size;
-            let hr_weight = reader.read(hr_out * skip_ch)?;
-            let hr_bias = if config.head_bias {
+            let hr_ks = stack_cfg.head_kernel_size;
+            if hr_ks == 0 {
+                return Err(format!(
+                    "WaveNet stack {si}: head_kernel_size must be >= 1"
+                ));
+            }
+            // Weight order matches the reference `Conv1D::set_weights_`
+            // (groups = 1): flat [out][in][tap]. Splitting off the innermost
+            // tap index (`raw[m * hr_ks + tap]`) yields one compact
+            // [out x in] matrix per tap; for hr_ks == 1 this is the
+            // historical dense 1x1 head rechannel matrix bit-for-bit.
+            let per_tap = hr_out * skip_ch;
+            let raw = reader.read(per_tap * hr_ks)?;
+            let mut hr_taps = Vec::with_capacity(hr_ks);
+            for tap in 0..hr_ks {
+                let mut w = vec![0.0f32; per_tap];
+                for (m, wv) in w.iter_mut().enumerate() {
+                    *wv = raw[m * hr_ks + tap];
+                }
+                hr_taps.push(w);
+            }
+            let hr_bias = if stack_cfg.head_bias {
                 reader.read(hr_out)?
             } else {
                 vec![0.0; hr_out]
             };
-            head_rechannels.push(Conv1x1Bias {
-                weight: hr_weight,
+            head_rechannels.push(HeadRechannel {
+                taps: hr_taps,
                 bias: hr_bias,
                 out_ch: hr_out,
                 in_ch: skip_ch,
-                // The head rechannel is ungrouped in the reference
-                // (head1x1 grouping is a separate module/todo).
-                groups: 1,
+                dilation: stack_cfg.head_dilation,
+            });
+            // Windowed heads need a history of past skip-accumulator
+            // frames; capacity mirrors the per-layer conv rings.
+            head_rings.push(if hr_ks > 1 {
+                Some(RingBuffer::new(
+                    (hr_ks - 1) * stack_cfg.head_dilation + 2,
+                    skip_ch,
+                ))
+            } else {
+                None
             });
 
             prev_ch = ch;
@@ -507,16 +542,18 @@ impl WaveNetModel {
                 }
             }
             let hr = &head_rechannels[si];
-            if !validate_matvec_dims(
-                &hr.weight,
-                &scratch_skip[..hr.in_ch],
-                &scratch_head_buf[..hr.out_ch],
-                hr.out_ch,
-                hr.in_ch,
-            ) {
-                return Err(format!(
-                    "WaveNet stack {si}: head_rechannel dimension mismatch"
-                ));
+            for (tap_idx, w) in hr.taps.iter().enumerate() {
+                if !validate_matvec_dims(
+                    w,
+                    &scratch_skip[..hr.in_ch],
+                    &scratch_head_buf[..hr.out_ch],
+                    hr.out_ch,
+                    hr.in_ch,
+                ) {
+                    return Err(format!(
+                        "WaveNet stack {si} tap {tap_idx}: head_rechannel dimension mismatch"
+                    ));
+                }
             }
         }
         for (hi, hl) in head_layers.iter().enumerate() {
@@ -536,6 +573,7 @@ impl WaveNetModel {
             stacks,
             head_rechannels,
             ring_buffers,
+            head_rings,
             head_layers,
             head_scale,
             head_activation,
@@ -738,18 +776,55 @@ impl NamInference for WaveNetModel {
             }
 
             // Head rechannel: project skip_accum (skip_ch wide) to
-            // head_size and accumulate
+            // head_size and accumulate.
             let hr = &self.head_rechannels[stack_idx];
-            // Pre-activation on skip_accum before head_rechannel, using the
-            // stack's configured activation (A1: fast tanh, as before).
-            stack[0].activation.apply(&mut self.skip_accum[..skip_ch]);
-            matvec(
-                &hr.weight,
-                &self.skip_accum[..hr.in_ch],
-                hr.out_ch,
-                hr.in_ch,
-                &mut self.head_buf_a,
-            );
+            match &mut self.head_rings[stack_idx] {
+                None => {
+                    // Kernel-1 path (A1 / head_kernel_size == 1, memoryless).
+                    // Pre-activation on skip_accum before head_rechannel,
+                    // using the stack's configured activation (A1: fast
+                    // tanh) — the historical engine head path, kept
+                    // bit-identical.
+                    stack[0].activation.apply(&mut self.skip_accum[..skip_ch]);
+                    matvec(
+                        &hr.taps[0],
+                        &self.skip_accum[..hr.in_ch],
+                        hr.out_ch,
+                        hr.in_ch,
+                        &mut self.head_buf_a,
+                    );
+                }
+                Some(ring) => {
+                    // Windowed path (head_kernel_size > 1): reference-exact
+                    // causal dilated convolution over the raw accumulated
+                    // skip frames. The reference applies NO activation here
+                    // (`_head_rechannel.Process(_head_inputs)` directly in
+                    // LayerArray::ProcessInner, NAM/wavenet/model.cpp); the
+                    // per-layer skip contributions are already activated z.
+                    // Tap k reads the frame (ks - 1 - k) * dilation samples
+                    // back (reference `Conv1D::Process` offsets), so
+                    // taps[ks - 1] multiplies the current frame.
+                    ring.write(&self.skip_accum[..skip_ch]);
+                    let ks = hr.kernel_size();
+                    matvec(
+                        &hr.taps[0],
+                        ring.read_delayed((ks - 1) * hr.dilation),
+                        hr.out_ch,
+                        hr.in_ch,
+                        &mut self.head_buf_a,
+                    );
+                    for tap in 1..ks {
+                        let delay = (ks - 1 - tap) * hr.dilation;
+                        matvec_add(
+                            &hr.taps[tap],
+                            ring.read_delayed(delay),
+                            hr.out_ch,
+                            hr.in_ch,
+                            &mut self.head_buf_a,
+                        );
+                    }
+                }
+            }
             for c in 0..hr.out_ch {
                 self.head_input[c] += self.head_buf_a[c] + hr.bias[c];
             }
@@ -802,6 +877,9 @@ impl NamInference for WaveNetModel {
             for ring in stack_rings {
                 ring.reset();
             }
+        }
+        for ring in self.head_rings.iter_mut().flatten() {
+            ring.reset();
         }
         self.activation.fill(0.0);
         self.skip_accum.fill(0.0);

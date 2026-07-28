@@ -64,6 +64,9 @@ fn ungated_stack(
         input_size: 1,
         condition_size: 1,
         head_size: 1,
+        head_kernel_size: 1,
+        head_dilation: 1,
+        head_bias: false,
         channels,
         bottleneck,
         dilations,
@@ -146,7 +149,6 @@ fn head1x1_weight_order_matches_reference_position() {
         )],
         head: vec![],
         head_size: 1,
-        head_bias: false,
         has_layer1x1: true,
     };
     let mut reader = WeightReader::new(&weights);
@@ -232,7 +234,6 @@ fn grouped_head1x1_is_bit_identical_to_hand_computed_reference() {
         )],
         head: vec![],
         head_size: 1,
-        head_bias: false,
         has_layer1x1: false,
     };
     let mut reader = WeightReader::new(&weights);

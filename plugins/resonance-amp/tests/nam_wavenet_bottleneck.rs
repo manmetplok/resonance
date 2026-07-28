@@ -148,6 +148,9 @@ fn bottleneck_stack(
         input_size: 1,
         condition_size: 1,
         head_size: 1,
+        head_kernel_size: 1,
+        head_dilation: 1,
+        head_bias: true,
         channels,
         bottleneck,
         dilations,
@@ -169,7 +172,6 @@ fn direct_construction_consumes_every_weight() {
         stacks: vec![bottleneck_stack(3, 2, vec![1, 2], false)],
         head: vec![],
         head_size: 1,
-        head_bias: true,
         has_layer1x1: true,
     };
     let weights = counted_weights(NONGATED_TOTAL);
@@ -185,7 +187,6 @@ fn direct_gated_construction_consumes_every_weight() {
         stacks: vec![bottleneck_stack(3, 2, vec![1], true)],
         head: vec![],
         head_size: 1,
-        head_bias: true,
         has_layer1x1: true,
     };
     let weights = counted_weights(GATED_TOTAL);
@@ -377,6 +378,9 @@ fn bottleneck_without_layer1x1_is_rejected() {
             input_size: 1,
             condition_size: 1,
             head_size: 1,
+            head_kernel_size: 1,
+            head_dilation: 1,
+            head_bias: false,
             channels: 2,
             bottleneck: 1,
             dilations: vec![1],
@@ -391,7 +395,6 @@ fn bottleneck_without_layer1x1_is_rejected() {
         }],
         head: vec![],
         head_size: 1,
-        head_bias: false,
         has_layer1x1: false,
     };
     let weights = counted_weights(64);
