@@ -58,6 +58,7 @@ pub mod __test_support {
         export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,
     };
     pub use crate::types::{StemBitDepth, StemSource, StemTarget};
+    pub use crate::engine::affects_latency;
     pub use crate::latency::{
         add_external_offsets, chain_latencies, compensation_delays, LatencyComp,
     };
