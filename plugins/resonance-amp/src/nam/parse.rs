@@ -261,6 +261,25 @@ fn determine_gated(layer: &NewLayerArrayConfig) -> Result<bool, String> {
     }
 }
 
+// -- Full A2 config surface ---------------------------------------------------
+
+/// Parse a WaveNet config covering the full A2 surface into typed structs
+/// (see [`super::wavenet::params`]): activation config objects/arrays,
+/// `bottleneck`, blended gating + `secondary_activation`, grouped
+/// convolutions, `layer1x1`/`head1x1` objects, the 8 FiLM insertion points,
+/// windowed heads, `condition_dsp`, and `slimmable` descriptors. Plain A1
+/// layer-array configs parse too, with every A2 field at its A1-equivalent
+/// default.
+///
+/// PARSE-ONLY for now: `load_model_from_file` does not consume this yet —
+/// model construction is still driven by [`parse_wavenet_config`] and A2
+/// files keep failing at later stages until the A2 inference todos land.
+pub fn parse_full_wavenet_config(
+    value: &serde_json::Value,
+) -> Result<super::wavenet::params::WaveNetFullConfig, String> {
+    super::wavenet::params::WaveNetFullConfig::from_json(value)
+}
+
 // -- Shared -----------------------------------------------------------------
 
 fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, String> {
