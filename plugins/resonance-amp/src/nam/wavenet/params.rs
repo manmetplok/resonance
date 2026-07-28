@@ -66,6 +66,19 @@ pub struct Head1x1Params {
     pub groups: usize,
 }
 
+impl Head1x1Params {
+    /// The A1 default: no head1x1 conv, with `out_channels` mirroring the
+    /// reference's absent-object fallback (`head1x1_out_channels = channels`
+    /// in NAM/wavenet/model.cpp `parse_config_json`).
+    pub fn inactive(out_channels: usize) -> Self {
+        Self {
+            active: false,
+            out_channels,
+            groups: 1,
+        }
+    }
+}
+
 /// FiLM (feature-wise linear modulation) insertion-point configuration
 /// (reference `_FiLMParams`). A1 default: inactive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -443,11 +456,7 @@ impl LayerArrayParams {
                     groups: req_usize(h, "groups", &hctx)?,
                 }
             }
-            None => Head1x1Params {
-                active: false,
-                out_channels: channels,
-                groups: 1,
-            },
+            None => Head1x1Params::inactive(channels),
         };
 
         let film = |key: &str| parse_film(obj, key, &ctx);

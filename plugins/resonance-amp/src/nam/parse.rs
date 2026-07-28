@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::activations::{ActivationConfig, ActivationKind};
 use super::lstm::LstmModel;
-use super::wavenet::params::{parse_gating_config, GatingMode};
+use super::wavenet::params::{parse_gating_config, GatingMode, Head1x1Params};
 use super::wavenet::WaveNetModel;
 use super::NamInference;
 
@@ -96,6 +96,12 @@ pub struct StackConfig {
     /// `Layer1x1Params::groups`); only meaningful when the config has a
     /// layer1x1. A1: 1.
     pub layer1x1_groups: usize,
+    /// Optional head1x1 skip-path convolution (reference `Head1x1Params`).
+    /// When active, each layer's skip contribution is
+    /// `head1x1(activated z)` (bottleneck -> `out_channels`, grouped) and
+    /// the stack's skip accumulator / head_rechannel input are
+    /// `out_channels` wide instead of `bottleneck`. A1: inactive.
+    pub head1x1: Head1x1Params,
 }
 
 // -- Old NAM format (flat config with layer counts) --------------------------
@@ -152,6 +158,8 @@ impl OldWaveNetConfig {
                     groups_input: 1,
                     groups_input_mixin: 1,
                     layer1x1_groups: 1,
+                    // Old-format models predate the head1x1 skip conv.
+                    head1x1: Head1x1Params::inactive(self.channels),
                 }
             })
             .collect();
@@ -209,11 +217,26 @@ struct NewLayerArrayConfig {
     /// see [`super::wavenet::params::Layer1x1Params`]).
     #[serde(default)]
     layer1x1: Option<NewLayer1x1Config>,
+    /// A2 `head1x1` object: optional 1x1 conv on the skip path. Absent (A1)
+    /// means inactive with `out_channels = channels`, matching the reference
+    /// `parse_config_json` fallback.
+    #[serde(default)]
+    head1x1: Option<NewHead1x1Config>,
 }
 
 #[derive(Deserialize)]
 struct NewLayer1x1Config {
     #[serde(default = "default_one")]
+    groups: usize,
+}
+
+/// All three fields are required when the object is present, matching the
+/// reference (`head1x1_config["active"]` / `["out_channels"]` / `["groups"]`
+/// in NAM/wavenet/model.cpp throw on absence) and the typed A2 parser.
+#[derive(Deserialize)]
+struct NewHead1x1Config {
+    active: bool,
+    out_channels: usize,
     groups: usize,
 }
 
@@ -286,6 +309,14 @@ impl NewWaveNetConfig {
                     groups_input: l.groups_input,
                     groups_input_mixin: l.groups_input_mixin,
                     layer1x1_groups: l.layer1x1.as_ref().map(|c| c.groups).unwrap_or(1),
+                    head1x1: l.head1x1.as_ref().map_or(
+                        Head1x1Params::inactive(l.channels),
+                        |h| Head1x1Params {
+                            active: h.active,
+                            out_channels: h.out_channels,
+                            groups: h.groups,
+                        },
+                    ),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -337,7 +368,12 @@ pub fn parse_full_wavenet_config(
 
 // -- Shared -----------------------------------------------------------------
 
-fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, String> {
+/// Parse a WaveNet `config` JSON object (old flat or new layer-array format)
+/// into the engine's [`WaveNetConfig`]. This is the exact parse
+/// `load_model_from_file` uses before model construction; exposed so tests
+/// can assert what reaches the engine for a given config. Unknown A2 fields
+/// the engine does not consume yet (e.g. FiLM insertion points) are ignored.
+pub fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, String> {
     // Try old format first (flat config with integer layer counts).
     if let Ok(old) = serde_json::from_value::<OldWaveNetConfig>(value.clone()) {
         return old.into_config();
