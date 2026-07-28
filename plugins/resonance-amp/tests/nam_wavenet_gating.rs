@@ -5,13 +5,15 @@
 //! bit-identity of the default gated path is asserted against the legacy
 //! `gated: true` config.
 
-use resonance_amp::nam::activations::{hardswish, leaky_relu, ActivationConfig, ActivationKind};
+use resonance_amp::nam::activations::{
+    exact_sigmoid, hardswish, leaky_relu, ActivationConfig, ActivationKind,
+};
 use resonance_amp::nam::parse::{
     load_model_from_file, parse_full_wavenet_config, StackConfig, WaveNetConfig, WeightReader,
 };
 use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params, LayerFilms};
 use resonance_amp::nam::wavenet::WaveNetModel;
-use resonance_amp::nam::{fast_tanh, sigmoid as fast_sigmoid, NamInference};
+use resonance_amp::nam::NamInference;
 
 fn write_temp_nam(name: &str, body: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -57,12 +59,17 @@ fn assert_close(out: f32, expected: f32, what: &str) {
 // -- Hand-computed tiny models ------------------------------------------------
 //
 // Single layer array, channels = bottleneck = 1, condition_size 1, one layer
-// with kernel 1 / dilation 1 (no memory), head_bias false, no head MLP. The
-// engine path per sample x is:
+// with kernel 1 / dilation 1 (no memory), head_bias false, no head MLP.
+// A `gating_mode` key is an A2 marker, so these files run under REFERENCE
+// semantics (ba todo #1113): the condition is the raw input (identical to
+// the post-rechannel snapshot here — channels == 1, no rechannel), there
+// is NO extra activation between the skip accumulator and the head
+// rechannel, and `Tanh`/`Sigmoid` resolve to the exact functions. The
+// path per sample x is:
 //   z_top    = conv_w[0]*x + conv_b[0] + mixin[0]*x
 //   z_bottom = conv_w[1]*x + conv_b[1] + mixin[1]*x   (gated/blended only)
 //   z        = <gating>(z_top, z_bottom)
-//   out      = head_rechannel * primary_act(z) * head_scale
+//   out      = head_rechannel * z * head_scale
 // (the layer1x1 residual only feeds the unused post-layer activation).
 //
 // Gated/blended weight order (mid = 2): conv[2], conv bias[2], mixin[2],
@@ -107,7 +114,7 @@ fn tiny_pre_activation(x: f32) -> (f32, f32) {
 const TINY_INPUTS: [f32; 5] = [0.0, 0.25, -0.5, 0.8, -1.2];
 
 /// gated with a configurable (non-default) secondary activation:
-/// z = fast_tanh(z_top) * hardswish(z_bottom).
+/// z = tanh(z_top) * hardswish(z_bottom).
 #[test]
 fn gated_honors_configured_secondary_activation() {
     let config = tiny_config("gated", r#""Tanh""#, Some(r#""Hardswish""#));
@@ -117,15 +124,15 @@ fn gated_honors_configured_secondary_activation() {
 
     for &x in &TINY_INPUTS {
         let (zt, zb) = tiny_pre_activation(x);
-        let z = fast_tanh(zt) * hardswish(zb);
-        let expected = h * fast_tanh(z) * s;
+        let z = zt.tanh() * hardswish(zb);
+        let expected = h * z * s;
         assert_close(model.process_sample(x), expected, "gated+Hardswish");
     }
 }
 
 /// blended per the reference BlendingActivation, with LeakyReLU primary and
-/// Sigmoid blend: alpha = fast_sigmoid(z_bottom) (the engine resolves a
-/// Sigmoid secondary to the fast sigmoid), and
+/// Sigmoid blend: alpha = sigmoid(z_bottom) (exact, per reference
+/// semantics), and
 /// z = alpha * leaky_relu(z_top) + (1 - alpha) * z_top (pre-activation).
 #[test]
 fn blended_weighs_activated_against_pre_activation() {
@@ -140,9 +147,9 @@ fn blended_weighs_activated_against_pre_activation() {
 
     for &x in &TINY_INPUTS {
         let (zt, zb) = tiny_pre_activation(x);
-        let alpha = fast_sigmoid(zb);
+        let alpha = exact_sigmoid(zb);
         let z = alpha * leaky_relu(zt, 0.2) + (1.0 - alpha) * zt;
-        let expected = h * leaky_relu(z, 0.2) * s;
+        let expected = h * z * s;
         assert_close(model.process_sample(x), expected, "blended+LeakyReLU");
     }
 }
@@ -160,17 +167,20 @@ fn blended_honors_configured_blend_activation() {
     for &x in &TINY_INPUTS {
         let (zt, zb) = tiny_pre_activation(x);
         let alpha = hardswish(zb);
-        let z = alpha * fast_tanh(zt) + (1.0 - alpha) * zt;
-        let expected = h * fast_tanh(z) * s;
+        let z = alpha * zt.tanh() + (1.0 - alpha) * zt;
+        let expected = h * z * s;
         assert_close(model.process_sample(x), expected, "blended+Hardswish");
     }
 }
 
-// -- A1 bit-identity of the default gated path --------------------------------
+// -- Default-secondary equivalence & the legacy/reference semantic gate -------
 
-/// `gating_mode: "gated"` with no secondary, with an explicit `"Sigmoid"`
-/// secondary, and the legacy boolean `gated: true` must all construct the
-/// exact historical A1 path: fast_tanh(z) * fast_sigmoid(g), bit-identical.
+/// `gating_mode: "gated"` with no secondary must equal an explicit
+/// `"Sigmoid"` secondary bit-for-bit (the reference backward-compat
+/// default; both run under reference semantics with the exact sigmoid).
+/// The legacy boolean `gated: true` carries NO A2 marker and stays on the
+/// historical A1 path (fast_tanh * fast_sigmoid, skip pre-activation) —
+/// the #1113 semantic gate — so it must NOT match the reference pair.
 #[test]
 fn a1_gated_default_and_explicit_sigmoid_secondary_are_bit_identical() {
     let base = r#""input_size": 1, "condition_size": 1, "head_size": 1,
@@ -200,28 +210,33 @@ fn a1_gated_default_and_explicit_sigmoid_secondary_are_bit_identical() {
         })
         .collect();
 
+    let mut legacy_differs = false;
     for i in 0..32 {
         let x = ((i as f32) * 0.41).sin() * 0.7;
         let outs: Vec<f32> = models.iter_mut().map(|m| m.process_sample(x)).collect();
         assert!(outs[0].is_finite());
-        // Manually verify the fast_tanh * fast_sigmoid structure is live:
-        // all three variants agree bit-for-bit.
+        assert!(outs[2].is_finite());
+        // Reference pair: the default secondary IS the (exact) Sigmoid.
         assert_eq!(
             outs[0].to_bits(),
             outs[1].to_bits(),
-            "explicit Sigmoid secondary must be the A1 fast-sigmoid gate"
+            "explicit Sigmoid secondary must equal the default secondary"
         );
-        assert_eq!(
-            outs[0].to_bits(),
-            outs[2].to_bits(),
-            "legacy gated boolean must match gating_mode \"gated\""
-        );
+        legacy_differs |= outs[0].to_bits() != outs[2].to_bits();
     }
+    assert!(
+        legacy_differs,
+        "legacy `gated: true` must stay on the historical A1 path, distinct from reference semantics"
+    );
 }
 
-/// `gating_mode: "none"` must be bit-identical to omitting gating entirely.
+/// A single `gating_mode: "none"` string must be bit-identical to the
+/// per-layer `["none", "none"]` array (both are A2 markers, both run under
+/// reference semantics). Omitting gating entirely is the A1 surface and
+/// stays on the legacy path — the #1113 semantic gate — so it must NOT
+/// match.
 #[test]
-fn gating_mode_none_is_bit_identical_to_ungated() {
+fn gating_mode_none_is_bit_identical_to_per_layer_none_array() {
     let base = r#""input_size": 1, "condition_size": 1, "head_size": 1,
         "channels": 2,
         "dilations": [1, 2], "kernel_size": 2,
@@ -229,6 +244,9 @@ fn gating_mode_none_is_bit_identical_to_ungated() {
         "head_bias": true"#;
     let with_mode =
         format!(r#"{{"layers": [{{ {base}, "gating_mode": "none" }}], "head": null, "head_scale": 1.0}}"#);
+    let with_array = format!(
+        r#"{{"layers": [{{ {base}, "gating_mode": ["none", "none"] }}], "head": null, "head_scale": 1.0}}"#
+    );
     let without = format!(r#"{{"layers": [{{ {base} }}], "head": null, "head_scale": 1.0}}"#);
 
     // Non-gated: rechannel 2 + 2*(conv 2*2*2=8 + bias 2 + mixin 2 + l1x1 6)
@@ -237,11 +255,23 @@ fn gating_mode_none_is_bit_identical_to_ungated() {
     let weights = counted_weights(count);
 
     let mut a = load_nam("none_explicit", &new_format_json(&with_mode, &weights)).unwrap();
-    let mut b = load_nam("none_implicit", &new_format_json(&without, &weights)).unwrap();
+    let mut b = load_nam("none_array", &new_format_json(&with_array, &weights)).unwrap();
+    let mut legacy = load_nam("none_implicit", &new_format_json(&without, &weights)).unwrap();
+    let mut legacy_differs = false;
     for i in 0..16 {
         let x = ((i as f32) * 0.53).cos() * 0.6;
-        assert_eq!(a.process_sample(x).to_bits(), b.process_sample(x).to_bits());
+        let ra = a.process_sample(x);
+        let rb = b.process_sample(x);
+        let rl = legacy.process_sample(x);
+        assert!(ra.is_finite());
+        assert!(rl.is_finite());
+        assert_eq!(ra.to_bits(), rb.to_bits());
+        legacy_differs |= ra.to_bits() != rl.to_bits();
     }
+    assert!(
+        legacy_differs,
+        "an A1 file without gating fields must stay on the legacy path, distinct from reference semantics"
+    );
 }
 
 // -- Mixed per-layer gating modes ---------------------------------------------
@@ -272,6 +302,7 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
             ],
             groups_input: 1,
             groups_input_mixin: 1,
+            layer1x1_active: true,
             layer1x1_groups: 1,
             head1x1: Head1x1Params::inactive(2),
             films: LayerFilms::default(),
@@ -280,6 +311,7 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     // rechannel 2 + layer0 (mid 2: conv 8 + bias 2 + mixin 2 + l1x1 6 = 18)
     // + layer1 (mid 4: conv 16 + bias 4 + mixin 4 + l1x1 6 = 30)
@@ -365,6 +397,7 @@ fn fixture_typed_gating_vectors_drive_construction() {
         secondary_activations: l1.secondary_activations.clone(),
         groups_input: 1,
         groups_input_mixin: 1,
+        layer1x1_active: true,
         layer1x1_groups: 1,
         head1x1: Head1x1Params::inactive(l1.channels),
         films: LayerFilms::default(),
@@ -391,6 +424,7 @@ fn fixture_typed_gating_vectors_drive_construction() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let weights = counted_weights(count);
     let mut reader = WeightReader::new(&weights);

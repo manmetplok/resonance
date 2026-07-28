@@ -233,8 +233,11 @@ fn condition_width_mismatch_is_rejected() {
     );
 }
 
-/// Nested input width must equal the WaveNet's own input channels
-/// (reference: the condition DSP consumes the raw model input).
+/// A nested net with a widened input cannot be fed by this engine (it
+/// processes one scalar sample at a time): reference-semantics
+/// construction rejects any non-mono WaveNet outright, which also
+/// subsumes the reference's nested-input-width-vs-model-input check
+/// (both sides must equal 1 to construct at all).
 #[test]
 fn nested_input_width_mismatch_is_rejected() {
     // input_size 2 -> a 2->1 rechannel (2 weights) precedes the usual 7.
@@ -246,7 +249,7 @@ fn nested_input_width_mismatch_is_rejected() {
         "input width mismatch",
     );
     assert!(
-        err.contains("input channels") && err.contains("condition DSP"),
+        err.contains("condition_dsp") && err.contains("only mono models are supported"),
         "unexpected error: {err}"
     );
 }

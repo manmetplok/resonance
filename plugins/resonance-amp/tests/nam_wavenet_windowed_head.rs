@@ -63,6 +63,7 @@ fn windowed_stack(
         secondary_activations: vec![None],
         groups_input: 1,
         groups_input_mixin: 1,
+        layer1x1_active: true,
         layer1x1_groups: 1,
         head1x1: Head1x1Params::inactive(channels),
         films: LayerFilms::default(),
@@ -95,6 +96,7 @@ fn windowed_head_taps_and_dilation_offsets_are_bit_exact() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -134,6 +136,7 @@ fn reset_clears_windowed_head_history() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader).unwrap();
@@ -177,6 +180,7 @@ fn windowed_head_weight_order_deinterleaves_conv1d_layout() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -221,6 +225,7 @@ fn windowed_head_weight_count_is_pinned() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
 
     let weights = counted_weights(count);
@@ -253,6 +258,7 @@ fn zero_head_kernel_size_is_rejected() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let weights = counted_weights(16);
     let mut reader = WeightReader::new(&weights);
@@ -301,14 +307,18 @@ fn kernel1_json(head_field: &str) -> String {
     )
 }
 
-/// A nested A2 `head` object with kernel_size 1 must reduce to the legacy
-/// flat `head_size`/`head_bias` path bit-for-bit: same weight layout, same
-/// output (including the legacy skip pre-activation). `head_dilation` is
-/// irrelevant at kernel 1 (the window is a single frame).
+/// A nested A2 `head` object with kernel_size 1 must reduce to the flat
+/// `head_size`/`head_bias` weight layout bit-for-bit. The nested object is
+/// an A2 marker (reference semantics), so the flat twin gets an equally
+/// inert marker (`gating_mode: "none"`) to run under the same semantics —
+/// a bare flat config would take the legacy path by design (#1113
+/// semantic gate). `head_dilation` is irrelevant at kernel 1 (the window
+/// is a single frame).
 #[test]
 fn nested_head_kernel1_is_bit_identical_to_legacy_flat() {
-    // Legacy A1-format layer array (implicit kernel-1 head).
-    let legacy = kernel1_json(r#""head_size": 1, "head_bias": true"#);
+    // Flat layer-array config (implicit kernel-1 head), pushed into
+    // reference semantics by a no-op A2 marker.
+    let flat = kernel1_json(r#""head_size": 1, "head_bias": true, "gating_mode": "none""#);
     // Same model through the A2 nested head object.
     let nested = kernel1_json(r#""head": {"out_channels": 1, "kernel_size": 1, "bias": true}"#);
     // And with a (meaningless at kernel 1) head_dilation.
@@ -316,20 +326,20 @@ fn nested_head_kernel1_is_bit_identical_to_legacy_flat() {
         r#""head": {"out_channels": 1, "kernel_size": 1, "head_dilation": 7, "bias": true}"#,
     );
 
-    let mut legacy = load_nam("legacy", &legacy).expect("legacy flat head must load");
+    let mut flat = load_nam("flat_marked", &flat).expect("flat head must load");
     let mut nested = load_nam("nested", &nested).expect("nested kernel-1 head must load");
     let mut nested_dilated =
         load_nam("nested_dilated", &nested_dilated).expect("dilated kernel-1 head must load");
 
     for i in 0..64 {
         let x = ((i as f32) * 0.37).sin() * 0.8;
-        let a = legacy.process_sample(x);
+        let a = flat.process_sample(x);
         let b = nested.process_sample(x);
         let c = nested_dilated.process_sample(x);
         assert_eq!(
             a.to_bits(),
             b.to_bits(),
-            "sample {i}: nested kernel-1 head diverged from legacy ({b} vs {a})"
+            "sample {i}: nested kernel-1 head diverged from marked flat ({b} vs {a})"
         );
         assert_eq!(
             a.to_bits(),

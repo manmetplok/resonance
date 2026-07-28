@@ -101,12 +101,16 @@ fn film_conv_post_scale_shift_hand_computed() {
         load_nam("conv_post", &new_format_json(&config, &weights)).expect("model must load");
 
     for &x in &[0.25f32, -0.5, 0.75] {
-        let a = x; // no rechannel (1 -> 1); condition = layer input
+        // Reference semantics (film keys are A2 markers): the condition is
+        // the raw input (== the 1-wide layer input here), the activation is
+        // the exact tanh, and the skip feeds the head rechannel directly
+        // (no extra activation).
+        let a = x;
         let (scale, shift) = film1(&f, a);
         let z = ((c0 * a) + cb) * scale + shift; // conv + bias, then FiLM
         let z = z + m * a; // mixin sum AFTER conv_post FiLM
-        let t = fast_tanh(z);
-        let expected = (h * fast_tanh(t)) * s;
+        let t = z.tanh();
+        let expected = (h * t) * s;
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),
@@ -135,10 +139,12 @@ fn film_activation_post_scale_only_hand_computed() {
         load_nam("act_post", &new_format_json(&config, &weights)).expect("model must load");
 
     for &x in &[0.25f32, -0.5, 0.75] {
+        // Reference semantics: raw-input condition, exact tanh, no extra
+        // skip activation.
         let a = x;
         let z = ((c0 * a) + cb) + m * a;
-        let t = fast_tanh(z) * ((f[0] * a) + f[1]); // scale-only FiLM
-        let expected = (h * fast_tanh(t)) * s;
+        let t = z.tanh() * ((f[0] * a) + f[1]); // scale-only FiLM
+        let expected = (h * t) * s;
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),
@@ -206,7 +212,10 @@ fn film_weight_order_all_sites_hand_computed() {
         v * scale + shift
     };
     for &x in &[0.2f32, -0.35, 0.6] {
-        let a = x; // condition (no rechannel)
+        // Reference semantics: raw-input condition (== the 1-wide layer
+        // input), exact tanh, and the skip feeds the head rechannel
+        // directly (no extra activation).
+        let a = x;
         let xin = apply(&f_cp, a, a); // conv_pre: modulated conv input
         let z = (c0 * xin) + cb;
         let z = apply(&f_cpo, a, z); // conv_post
@@ -214,12 +223,12 @@ fn film_weight_order_all_sites_hand_computed() {
         let mb = apply(&f_mpo, a, m * condm); // input_mixin_post
         let z = z + mb;
         let z = apply(&f_ap, a, z); // activation_pre
-        let t = apply(&f_apo, a, fast_tanh(z)); // activation_post
+        let t = apply(&f_apo, a, z.tanh()); // activation_post
         // Skip: head1x1 (with bias) then head1x1_post FiLM.
         let skip = apply(&f_hp, a, (hx[0] * t) + hx[1]);
         // layer1x1_post is NOT applied under gating none (residual unused
         // for the output here anyway — single layer).
-        let expected = (hr * fast_tanh(skip)) * s;
+        let expected = (hr * skip) * s;
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),
@@ -342,6 +351,7 @@ fn width_pin_config(films: LayerFilms, gating: GatingMode) -> WaveNetConfig {
             secondary_activations: vec![secondary],
             groups_input: 1,
             groups_input_mixin: 1,
+            layer1x1_active: true,
             layer1x1_groups: 1,
             head1x1: Head1x1Params {
                 active: true,
@@ -354,6 +364,7 @@ fn width_pin_config(films: LayerFilms, gating: GatingMode) -> WaveNetConfig {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     }
 }
 
@@ -439,6 +450,13 @@ fn film_per_site_widths_match_reference() {
 /// and shift, the 4 scale/shift rows split into two blocks — rows 0-1
 /// (scales) read condition channel 0, rows 2-3 (shifts) read condition
 /// channel 1 (reference `Conv1x1::set_weights_` block-diagonal layout).
+///
+/// A grouped FiLM needs a multi-channel condition; without a condition_dsp
+/// the reference only permits condition_size == input_size, so this builds
+/// the engine config directly (legacy semantics, whose condition is the
+/// 2-wide post-rechannel snapshot). The grouped block-diagonal layout under
+/// test is shared by both modes; the wavenet_a2_max fixture covers grouped
+/// FiLMs under reference semantics end to end.
 #[test]
 fn film_grouped_conv_hand_computed() {
     let r = [0.3f32, -0.4]; // rechannel 2x1
@@ -458,17 +476,46 @@ fn film_grouped_conv_hand_computed() {
     weights.push(s);
     assert_eq!(weights.len(), 29);
 
-    let config = r#"{"layers": [{
-        "input_size": 1, "condition_size": 2, "head_size": 1,
-        "channels": 2, "bottleneck": 2,
-        "dilations": [1], "kernel_size": 1,
-        "activation": "Tanh", "gating_mode": "none",
-        "head_bias": false,
-        "layer1x1": {"active": true, "groups": 1},
-        "conv_post_film": {"shift": true, "groups": 2} }],
-        "head": null, "head_scale": 1.0}"#;
-    let mut model =
-        load_nam("grouped", &new_format_json(config, &weights)).expect("model must load");
+    let config = WaveNetConfig {
+        input_size: 1,
+        stacks: vec![StackConfig {
+            input_size: 1,
+            condition_size: 2,
+            head_size: 1,
+            head_kernel_size: 1,
+            head_dilation: 1,
+            head_bias: false,
+            channels: 2,
+            bottleneck: 2,
+            layer1x1_active: true,
+            dilations: vec![1],
+            kernel_sizes: vec![1],
+            activations: vec![ActivationConfig::simple(ActivationKind::Tanh)],
+            gating_modes: vec![GatingMode::None],
+            secondary_activations: vec![None],
+            groups_input: 1,
+            groups_input_mixin: 1,
+            layer1x1_groups: 1,
+            head1x1: Head1x1Params::inactive(2),
+            films: LayerFilms {
+                conv_post: FilmParams {
+                    active: true,
+                    shift: true,
+                    groups: 2,
+                },
+                ..Default::default()
+            },
+        }],
+        head: vec![],
+        head_size: 1,
+        has_layer1x1: true,
+        condition_dsp: None,
+        reference_semantics: false,
+    };
+    let mut reader = WeightReader::new(&weights);
+    let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
+        .expect("model must load");
+    assert_eq!(reader.remaining(), 0);
 
     for &x in &[0.25f32, -0.5, 0.75] {
         let a = [r[0] * x, r[1] * x]; // rechannel; also the condition
