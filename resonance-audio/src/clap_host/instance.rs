@@ -16,6 +16,7 @@ use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::events::{clap_event_note, clap_event_param_value};
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports};
 use clap_sys::ext::gui::clap_plugin_gui;
+use clap_sys::ext::latency::clap_plugin_latency;
 use clap_sys::ext::params::clap_plugin_params;
 use clap_sys::ext::state::clap_plugin_state;
 use clap_sys::plugin::clap_plugin;
@@ -36,13 +37,17 @@ pub struct StereoBufMut<'a> {
 
 pub struct ClapInstance {
     pub(super) plugin: *const clap_plugin,
-    pub(super) _host_data: Pin<Box<HostData>>,
+    pub(super) host_data: Pin<Box<HostData>>,
     pub(super) active: bool,
     pub(super) sample_rate: u32,
     pub(super) params_ext: Option<*const clap_plugin_params>,
     pub(super) state_ext: Option<*const clap_plugin_state>,
     pub(super) audio_ports_ext: Option<*const clap_plugin_audio_ports>,
     pub(super) gui_ext: Option<*const clap_plugin_gui>,
+    /// The plugin's `clap.latency` extension, kept so the engine can
+    /// re-query after a deactivate → reactivate cycle (doc #260
+    /// finding #10). `None` when the plugin doesn't implement it.
+    pub(super) latency_ext: Option<*const clap_plugin_latency>,
     /// True when `gui_create` has been called and `gui_destroy` hasn't yet.
     pub(super) gui_open: bool,
     /// Number of output audio ports as reported by the plugin's audio-ports
@@ -52,9 +57,11 @@ pub struct ClapInstance {
     pub(super) output_port_count: usize,
     /// Processing latency in samples, as reported by the plugin's
     /// `clap.latency` extension right after activation (0 if the
-    /// extension is absent). The host never deactivates/reactivates
-    /// instances and doesn't implement `clap_host_latency.changed`, so
-    /// this value is fixed for the lifetime of the instance.
+    /// extension is absent). Refreshed on every deactivate → reactivate
+    /// cycle ([`ClapInstance::restart`] / `reload_with_state`) because
+    /// latency may only change while deactivated per the CLAP spec —
+    /// and the built-in bridge serves an activation-time cached value
+    /// while active (todo #1125).
     pub(super) latency: u32,
     /// Pending parameter changes to send during next process() call.
     pub(super) pending_params: Vec<(u32, f64)>,
@@ -95,6 +102,7 @@ impl ClapInstance {
         state_ext: Option<*const clap_plugin_state>,
         audio_ports_ext: Option<*const clap_plugin_audio_ports>,
         gui_ext: Option<*const clap_plugin_gui>,
+        latency_ext: Option<*const clap_plugin_latency>,
         output_port_count: usize,
         latency: u32,
         audio_out_buffers: Vec<clap_audio_buffer>,
@@ -102,13 +110,14 @@ impl ClapInstance {
     ) -> Self {
         Self {
             plugin,
-            _host_data: host_data,
+            host_data,
             active: true,
             sample_rate,
             params_ext,
             state_ext,
             audio_ports_ext,
             gui_ext,
+            latency_ext,
             gui_open: false,
             output_port_count,
             latency,
@@ -137,11 +146,47 @@ impl ClapInstance {
         self.output_port_count
     }
 
-    /// Processing latency in samples (`clap.latency` at activation;
-    /// 0 if the plugin doesn't implement the extension). Stable for the
-    /// lifetime of the instance — see the field doc for why.
+    /// Processing latency in samples (`clap.latency` at the most recent
+    /// activation; 0 if the plugin doesn't implement the extension).
+    /// Refreshed whenever the instance cycles activation — see the
+    /// field doc.
     pub fn latency_samples(&self) -> u32 {
         self.latency
+    }
+
+    /// Consume the host-callback flags set by the plugin: returns true
+    /// when it asked for a restart (`clap_host.request_restart`) and/or
+    /// signalled a latency change (`clap_host_latency.changed`) since
+    /// the last check. Both are honored the same way — the engine
+    /// thread runs [`ClapInstance::restart`] at its next safe point,
+    /// which re-reads the latency, then republishes PDC.
+    pub fn take_host_restart_request(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let restart = self.host_data.restart_requested.swap(false, Ordering::AcqRel);
+        let latency = self.host_data.latency_changed.swap(false, Ordering::AcqRel);
+        restart || latency
+    }
+
+    /// Re-read the plugin's reported latency. Only meaningful right
+    /// after (re)activation: the CLAP spec defines `latency.get()` for
+    /// active plugins, and the built-in bridge serves an
+    /// activation-time cached value while active (todo #1125), so a
+    /// query without an intervening deactivate → reactivate cycle
+    /// returns the stale figure. Called from the activation-cycle paths
+    /// in [`super::state`].
+    pub(super) fn requery_latency(&mut self) {
+        self.latency = unsafe {
+            match self.latency_ext.and_then(|ext| (*ext).get) {
+                Some(get_fn) => get_fn(self.plugin),
+                None => 0,
+            }
+        };
+        // A `changed()` fired during the activation we just completed is
+        // captured by the query above; clear it so it doesn't schedule a
+        // redundant restart cycle.
+        self.host_data
+            .latency_changed
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Human-readable name of each output port, as reported by the plugin's

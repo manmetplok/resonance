@@ -320,6 +320,13 @@ pub(crate) fn engine_thread(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
 
+        // Service plugin-initiated `clap_host_latency.changed()` /
+        // `request_restart()` callbacks: cycle the flagged instances'
+        // activation (the safe point at which latency may change),
+        // re-read their latency, and republish PDC if anything moved
+        // (doc #260 finding #10).
+        plugins::poll_plugin_host_requests(&ctx, &state.external_instruments);
+
         // Drain hardware MIDI events the audio callback picked up since
         // the previous iteration. Instrument delivery already happened
         // on the audio thread (within one quantum — doc #260 finding

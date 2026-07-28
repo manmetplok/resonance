@@ -48,7 +48,10 @@ pub use types::*;
 /// without forcing the parent module public.
 #[doc(hidden)]
 pub mod __test_support {
-    pub use crate::clap_host::{ClapBundle, SyncClapInstance};
+    pub use crate::clap_host::{ClapBundle, ClapInstance, SyncClapInstance};
+    /// Build a `ClapInstance` around a hand-rolled raw `clap_plugin` —
+    /// see `tests/clap_latency_tracking.rs` (doc #260 finding #10).
+    pub use crate::clap_host::__instance_from_raw_for_test;
     pub use crate::engine::{
         chunk_span, encode_buffer_for_test, freeze_terminal_event, midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,

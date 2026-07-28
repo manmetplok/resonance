@@ -226,6 +226,13 @@ fn freeze_and_bypass_commands_refresh_the_comp_table() {
     // published master latency the reference A/B aligns with — so it
     // must run the refresh too (finding #19).
     assert!(affects_latency(&AudioCommand::SetMasterFxBypass { bypassed: true }));
+    // Loading plugin state cycles the instance's activation and
+    // re-reads its latency (finding #10) — the comp table must pick
+    // the new value up.
+    assert!(affects_latency(&AudioCommand::LoadPluginState {
+        instance_id: 1,
+        data: Vec::new(),
+    }));
 }
 
 #[test]
