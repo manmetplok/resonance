@@ -100,6 +100,48 @@ impl Default for FilmParams {
     }
 }
 
+impl FilmParams {
+    /// Parse one FiLM insertion-point block from its raw JSON value (absent
+    /// or `null` passed as `None`): `None` or literal `false` means
+    /// inactive; an object defaults to `{active: true, shift: true,
+    /// groups: 1}` (reference `parse_film_params` in
+    /// NAM/wavenet/model.cpp). Shared between the typed A2 parse and the
+    /// engine config path in `parse.rs` (single source of FiLM-block
+    /// semantics).
+    pub(crate) fn from_json(value: Option<&Value>, ctx: &str, key: &str) -> Result<Self, String> {
+        match value {
+            None | Some(Value::Bool(false)) => Ok(Self::default()),
+            Some(Value::Object(f)) => {
+                let fctx = format!("{ctx}: {key}");
+                Ok(Self {
+                    active: opt_bool_or(f, "active", true, &fctx)?,
+                    shift: opt_bool_or(f, "shift", true, &fctx)?,
+                    groups: opt_usize_or(f, "groups", 1, &fctx)?,
+                })
+            }
+            Some(_) => Err(format!("{ctx}: {key} must be a JSON object or false")),
+        }
+    }
+}
+
+/// The 8 per-layer FiLM insertion points of one layer array, in reference
+/// weight-consumption order (`Layer::set_weights_` in
+/// NAM/wavenet/model.cpp: conv_pre, conv_post, input_mixin_pre,
+/// input_mixin_post, activation_pre, activation_post, layer1x1_post,
+/// head1x1_post — all after the layer's conv/input_mixin/layer1x1/head1x1
+/// tensors). Default: all inactive (A1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LayerFilms {
+    pub conv_pre: FilmParams,
+    pub conv_post: FilmParams,
+    pub input_mixin_pre: FilmParams,
+    pub input_mixin_post: FilmParams,
+    pub activation_pre: FilmParams,
+    pub activation_post: FilmParams,
+    pub layer1x1_post: FilmParams,
+    pub head1x1_post: FilmParams,
+}
+
 /// Slimmable packed-weight descriptor for one layer array (reference
 /// `NAM/wavenet/slimmable.cpp`). Only the `slice_channels_uniform` method
 /// exists; unknown methods are a parse error.
@@ -689,18 +731,7 @@ fn parse_film(
     key: &str,
     ctx: &str,
 ) -> Result<FilmParams, String> {
-    match non_null(obj, key) {
-        None | Some(Value::Bool(false)) => Ok(FilmParams::default()),
-        Some(Value::Object(f)) => {
-            let fctx = format!("{ctx}: {key}");
-            Ok(FilmParams {
-                active: opt_bool_or(f, "active", true, &fctx)?,
-                shift: opt_bool_or(f, "shift", true, &fctx)?,
-                groups: opt_usize_or(f, "groups", 1, &fctx)?,
-            })
-        }
-        Some(_) => Err(format!("{ctx}: {key} must be a JSON object or false")),
-    }
+    FilmParams::from_json(non_null(obj, key), ctx, key)
 }
 
 /// Slimmable packed-weight descriptor. Only `slice_channels_uniform` is
