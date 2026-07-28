@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::activations::{ActivationConfig, ActivationKind};
 use super::lstm::LstmModel;
+use super::wavenet::params::{parse_gating_config, GatingMode};
 use super::wavenet::WaveNetModel;
 use super::NamInference;
 
@@ -51,7 +52,6 @@ pub struct WaveNetConfig {
     pub head: Vec<usize>,
     /// Final output size from head (typically 1).
     pub head_size: usize,
-    pub gated: bool,
     pub head_bias: bool,
     /// Whether layers have a learned 1x1 residual conv (_layer1x1).
     /// True for new-format NAM models (default), false for old format.
@@ -75,6 +75,15 @@ pub struct StackConfig {
     /// Layer activation for this stack. A1 models use `"Tanh"`, which
     /// resolves to the fast-tanh path at model construction.
     pub activation: ActivationConfig,
+    /// Gating mode per layer (same length as `dilations`; A2 allows mixed
+    /// per-layer modes). Layers with a non-`None` mode have their conv and
+    /// input-mixin output width doubled (primary + secondary halves).
+    pub gating_modes: Vec<GatingMode>,
+    /// Secondary (gate/blend) activation config per layer. `None` for
+    /// ungated layers; a gated/blended layer without an explicit config
+    /// defaults to `Sigmoid` (reference backward-compat), which the engine
+    /// resolves to the fast sigmoid so A1 gated models stay bit-identical.
+    pub secondary_activations: Vec<Option<ActivationConfig>>,
 }
 
 // -- Old NAM format (flat config with layer counts) --------------------------
@@ -104,6 +113,17 @@ impl OldWaveNetConfig {
             .into_iter()
             .map(|d| {
                 let n = d.len();
+                // Old-format gating is a plain boolean: every layer is
+                // "gated" with the backward-compat Sigmoid secondary (which
+                // resolves to the fast sigmoid — today's A1 path).
+                let (gating_modes, secondary_activations) = if self.gated {
+                    (
+                        vec![GatingMode::Gated; n],
+                        vec![Some(ActivationConfig::simple(ActivationKind::Sigmoid)); n],
+                    )
+                } else {
+                    (vec![GatingMode::None; n], vec![None; n])
+                };
                 StackConfig {
                     input_size: self.input_size,
                     condition_size: self.condition_size,
@@ -114,6 +134,8 @@ impl OldWaveNetConfig {
                     kernel_sizes: vec![2; n],
                     dilations: d,
                     activation: activation.clone(),
+                    gating_modes,
+                    secondary_activations,
                 }
             })
             .collect();
@@ -122,7 +144,6 @@ impl OldWaveNetConfig {
             stacks,
             head: self.head,
             head_size: self.head_size,
-            gated: self.gated,
             head_bias: self.head_bias,
             has_layer1x1: false,
         })
@@ -151,6 +172,9 @@ struct NewLayerArrayConfig {
     gated: Option<bool>,
     #[serde(default)]
     gating_mode: Option<serde_json::Value>,
+    /// Secondary (gate/blend) activation: single config or per-layer array.
+    #[serde(default)]
+    secondary_activation: Option<serde_json::Value>,
     /// Activation: plain string (A1) or A2-style config object. Absent in
     /// some old exports; defaults to `"Tanh"`.
     #[serde(default)]
@@ -186,21 +210,11 @@ impl NewWaveNetConfig {
             .first()
             .ok_or("WaveNet config has no layer arrays")?;
 
-        // Determine gating mode.
-        let gated = determine_gated(first)?;
-        for (i, layer) in self.layers.iter().enumerate().skip(1) {
-            if determine_gated(layer)? != gated {
-                return Err(format!(
-                    "Layer array {} has different gating than layer array 0 (mixed gating not supported)",
-                    i
-                ));
-            }
-        }
-
         let stacks: Vec<StackConfig> = self
             .layers
             .iter()
-            .map(|l| {
+            .enumerate()
+            .map(|(i, l)| {
                 let ks = if let Some(ref ks) = l.kernel_sizes {
                     ks.clone()
                 } else {
@@ -211,6 +225,15 @@ impl NewWaveNetConfig {
                     Some(ref v) => ActivationConfig::from_json(v)?,
                     None => ActivationConfig::simple(ActivationKind::Tanh),
                 };
+                // Per-layer gating modes + secondary activations, through
+                // the typed A2 parsing (single source of gating semantics).
+                let (gating_modes, secondary_activations) = parse_gating_config(
+                    l.gating_mode.as_ref(),
+                    l.gated,
+                    l.secondary_activation.as_ref(),
+                    l.dilations.len(),
+                    &format!("Layer array {i}"),
+                )?;
                 Ok(StackConfig {
                     input_size: l.input_size,
                     condition_size: l.condition_size,
@@ -220,6 +243,8 @@ impl NewWaveNetConfig {
                     dilations: l.dilations.clone(),
                     kernel_sizes: ks,
                     activation,
+                    gating_modes,
+                    secondary_activations,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -241,38 +266,9 @@ impl NewWaveNetConfig {
             stacks,
             head,
             head_size,
-            gated,
             head_bias: first.head_bias,
             has_layer1x1: true,
         })
-    }
-}
-
-/// Extract the boolean gated flag from a layer array config.
-fn determine_gated(layer: &NewLayerArrayConfig) -> Result<bool, String> {
-    if let Some(ref gm) = layer.gating_mode {
-        match gm {
-            serde_json::Value::String(s) => match s.as_str() {
-                "none" => Ok(false),
-                "gated" => Ok(true),
-                other => Err(format!("Unsupported gating_mode: {other}")),
-            },
-            serde_json::Value::Array(arr) => {
-                let first = arr.first().and_then(|v| v.as_str()).unwrap_or("none");
-                if first != "gated" && first != "none" {
-                    return Err(format!("Unsupported gating_mode: {first}"));
-                }
-                for v in arr {
-                    if v.as_str().unwrap_or("none") != first {
-                        return Err("Mixed per-layer gating modes not supported".into());
-                    }
-                }
-                Ok(first == "gated")
-            }
-            _ => Ok(false),
-        }
-    } else {
-        Ok(layer.gated.unwrap_or(false))
     }
 }
 
@@ -286,9 +282,12 @@ fn determine_gated(layer: &NewLayerArrayConfig) -> Result<bool, String> {
 /// layer-array configs parse too, with every A2 field at its A1-equivalent
 /// default.
 ///
-/// PARSE-ONLY for now: `load_model_from_file` does not consume this yet —
-/// model construction is still driven by [`parse_wavenet_config`] and A2
-/// files keep failing at later stages until the A2 inference todos land.
+/// `load_model_from_file` does not consume the full typed config yet — model
+/// construction is still driven by [`parse_wavenet_config`], which shares
+/// the typed gating parsing (`parse_gating_config`) so all three gating
+/// modes reach inference; the remaining A2 surface (FiLM, groups, head1x1,
+/// windowed head, condition_dsp, slimmable) keeps failing at later stages
+/// until its inference todos land.
 pub fn parse_full_wavenet_config(
     value: &serde_json::Value,
 ) -> Result<super::wavenet::params::WaveNetFullConfig, String> {

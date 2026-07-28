@@ -251,9 +251,11 @@ pub enum Activation {
     },
     /// Exact logistic sigmoid (reference `ActivationSigmoid`).
     Sigmoid,
-    /// Fast-tanh-derived sigmoid ([`super::sigmoid`]). Not reachable from
-    /// config parsing; constructed directly as the A1 gated-path gate so A1
-    /// output stays bit-identical to the previous hardcoded path.
+    /// Fast-tanh-derived sigmoid ([`super::sigmoid`]). What a `Sigmoid`
+    /// secondary (gate/blend) activation resolves to in fast-tanh mode (see
+    /// [`Activation::secondary_from_config`]), so A1 gated output stays
+    /// bit-identical to the previously hardcoded fast_tanh * fast_sigmoid
+    /// path.
     FastSigmoid,
     Silu,
     Hardswish,
@@ -299,6 +301,21 @@ impl Activation {
             ActivationKind::Silu => Self::Silu,
             ActivationKind::Hardswish => Self::Hardswish,
             ActivationKind::Softsign => Self::Softsign,
+        }
+    }
+
+    /// Resolve a parsed secondary (gate/blend) activation config.
+    ///
+    /// Same as [`Activation::from_config`], except that in fast-tanh mode a
+    /// `Sigmoid` secondary resolves to the fast sigmoid — the engine-wide
+    /// fast-mode convention (mirroring `Tanh` -> fast tanh). The default
+    /// secondary of gated/blended layers is `Sigmoid` (reference
+    /// backward-compat), so this keeps A1 gated models bit-identical to the
+    /// historical hardcoded `fast_tanh(z) * fast_sigmoid(g)` path.
+    pub fn secondary_from_config(config: &ActivationConfig, fast_tanh_mode: bool) -> Self {
+        match config.kind {
+            ActivationKind::Sigmoid if fast_tanh_mode => Self::FastSigmoid,
+            _ => Self::from_config(config, fast_tanh_mode),
         }
     }
 
