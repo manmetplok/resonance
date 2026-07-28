@@ -4,7 +4,9 @@ use std::path::Path;
 
 use super::activations::{ActivationConfig, ActivationKind};
 use super::lstm::LstmModel;
-use super::wavenet::params::{parse_gating_config, GatingMode, Head1x1Params};
+use super::wavenet::params::{
+    parse_gating_config, FilmParams, GatingMode, Head1x1Params, LayerFilms,
+};
 use super::wavenet::WaveNetModel;
 use super::NamInference;
 
@@ -112,6 +114,10 @@ pub struct StackConfig {
     /// the stack's skip accumulator / head_rechannel input are
     /// `out_channels` wide instead of `bottleneck`. A1: inactive.
     pub head1x1: Head1x1Params,
+    /// The 8 per-layer FiLM insertion points (reference `_FiLMParams`
+    /// members of `LayerArrayParams`). A1: all inactive, which leaves the
+    /// signal untouched at every site.
+    pub films: LayerFilms,
 }
 
 // -- Old NAM format (flat config with layer counts) --------------------------
@@ -174,6 +180,8 @@ impl OldWaveNetConfig {
                     layer1x1_groups: 1,
                     // Old-format models predate the head1x1 skip conv.
                     head1x1: Head1x1Params::inactive(self.channels),
+                    // Old-format models predate FiLM conditioning.
+                    films: LayerFilms::default(),
                 }
             })
             .collect();
@@ -244,6 +252,45 @@ struct NewLayerArrayConfig {
     /// `parse_config_json` fallback.
     #[serde(default)]
     head1x1: Option<NewHead1x1Config>,
+    /// The 8 A2 FiLM insertion-point blocks. Kept as raw JSON values so the
+    /// typed `FilmParams::from_json` semantics (absent/`null`/`false` =
+    /// inactive; object defaults `{active: true, shift: true, groups: 1}`)
+    /// stay single-sourced with the typed A2 parser.
+    #[serde(default)]
+    conv_pre_film: Option<serde_json::Value>,
+    #[serde(default)]
+    conv_post_film: Option<serde_json::Value>,
+    #[serde(default)]
+    input_mixin_pre_film: Option<serde_json::Value>,
+    #[serde(default)]
+    input_mixin_post_film: Option<serde_json::Value>,
+    #[serde(default)]
+    activation_pre_film: Option<serde_json::Value>,
+    #[serde(default)]
+    activation_post_film: Option<serde_json::Value>,
+    #[serde(default)]
+    layer1x1_post_film: Option<serde_json::Value>,
+    #[serde(default)]
+    head1x1_post_film: Option<serde_json::Value>,
+}
+
+impl NewLayerArrayConfig {
+    /// Parse the 8 FiLM insertion-point blocks (reference weight/site order).
+    fn films(&self, ctx: &str) -> Result<LayerFilms, String> {
+        let film = |v: &Option<serde_json::Value>, key: &str| {
+            FilmParams::from_json(v.as_ref().filter(|v| !v.is_null()), ctx, key)
+        };
+        Ok(LayerFilms {
+            conv_pre: film(&self.conv_pre_film, "conv_pre_film")?,
+            conv_post: film(&self.conv_post_film, "conv_post_film")?,
+            input_mixin_pre: film(&self.input_mixin_pre_film, "input_mixin_pre_film")?,
+            input_mixin_post: film(&self.input_mixin_post_film, "input_mixin_post_film")?,
+            activation_pre: film(&self.activation_pre_film, "activation_pre_film")?,
+            activation_post: film(&self.activation_post_film, "activation_post_film")?,
+            layer1x1_post: film(&self.layer1x1_post_film, "layer1x1_post_film")?,
+            head1x1_post: film(&self.head1x1_post_film, "head1x1_post_film")?,
+        })
+    }
 }
 
 /// A2 per-array head rechannel object. `out_channels`, `kernel_size`, and
@@ -377,6 +424,7 @@ impl NewWaveNetConfig {
                             groups: h.groups,
                         },
                     ),
+                    films: l.films(&format!("Layer array {i}"))?,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

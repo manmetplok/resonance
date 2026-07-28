@@ -2,6 +2,7 @@
 //! primitives it composes from.
 
 use super::super::activations::Activation;
+use super::film::Film;
 
 /// 1x1 convolution (no bias).
 pub(super) struct Conv1x1 {
@@ -63,6 +64,14 @@ pub(super) enum LayerGating {
 ///                                                      (if active)
 ///   _head1x1.bias  [head1x1.out_channels]              (if active)
 ///
+/// then the active FiLM blocks, in reference site order (each a biased
+/// grouped 1x1 conv, see [`Film`]):
+///   conv_pre (width channels), conv_post (width mid_ch),
+///   input_mixin_pre (width condition_size), input_mixin_post (width
+///   mid_ch), activation_pre (width mid_ch), activation_post (width
+///   bottleneck), layer1x1_post (width channels), head1x1_post (width
+///   head1x1.out_channels)
+///
 /// where `mid_ch = 2*bottleneck` when the layer's gating mode is gated or
 /// blended, else `bottleneck`. In A1 models `bottleneck == channels` and all
 /// groups are 1, so this degenerates to the historical dense layout.
@@ -109,4 +118,46 @@ pub(super) struct WaveNetLayer {
     pub(super) activation: Activation,
     /// Gating behavior of this layer (mode + resolved secondary activation).
     pub(super) gating: LayerGating,
+
+    // FiLM insertion points (reference `Layer` FiLM members in
+    // NAM/wavenet/detail.h). `None` = inactive = signal untouched.
+    /// Modulates the layer input feeding the dilated conv (width
+    /// `channels`); the residual path keeps the raw input.
+    pub(super) conv_pre_film: Option<Film>,
+    /// Modulates the dilated-conv output (width `mid_ch`).
+    pub(super) conv_post_film: Option<Film>,
+    /// Modulates the condition feeding the input mixin (width
+    /// `condition_size`); later sites still see the raw condition.
+    pub(super) input_mixin_pre_film: Option<Film>,
+    /// Modulates the input-mixin output (width `mid_ch`).
+    pub(super) input_mixin_post_film: Option<Film>,
+    /// Modulates z = conv + mixin before activation (width `mid_ch`).
+    pub(super) activation_pre_film: Option<Film>,
+    /// Modulates the activated z (width `bottleneck`, after gating).
+    pub(super) activation_post_film: Option<Film>,
+    /// Modulates the layer1x1 output (width `channels`). Reference-exact:
+    /// applied ONLY when the layer's gating mode is `blended`
+    /// (NAM/wavenet/model.cpp `Layer::Process` applies it in the BLENDED
+    /// branch alone; the NONE and GATED branches construct it and consume
+    /// its weights but skip the modulation).
+    pub(super) layer1x1_post_film: Option<Film>,
+    /// Modulates the head1x1 output (width `head1x1.out_channels`).
+    pub(super) head1x1_post_film: Option<Film>,
+}
+
+impl WaveNetLayer {
+    /// The 8 FiLM insertion points in reference site order (inactive sites
+    /// are `None`). Used for load-time sizing/validation sweeps.
+    pub(super) fn films(&self) -> [Option<&Film>; 8] {
+        [
+            self.conv_pre_film.as_ref(),
+            self.conv_post_film.as_ref(),
+            self.input_mixin_pre_film.as_ref(),
+            self.input_mixin_post_film.as_ref(),
+            self.activation_pre_film.as_ref(),
+            self.activation_post_film.as_ref(),
+            self.layer1x1_post_film.as_ref(),
+            self.head1x1_post_film.as_ref(),
+        ]
+    }
 }

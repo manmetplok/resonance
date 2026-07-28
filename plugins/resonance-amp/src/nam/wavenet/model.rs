@@ -26,8 +26,9 @@ use super::super::{
     validate_matvec_dims, NamInference,
 };
 use super::conv_layer::{Conv1x1, Conv1x1Bias, LayerGating, WaveNetLayer};
+use super::film::Film;
 use super::head::{DenseLayer, HeadRechannel};
-use super::params::GatingMode;
+use super::params::{FilmParams, GatingMode};
 use super::ring::RingBuffer;
 
 /// Construction-time validation of a grouped convolution's channel counts
@@ -54,6 +55,36 @@ fn check_groups(
         ));
     }
     Ok(())
+}
+
+/// Read one FiLM insertion point's weights, if active (reference
+/// `FiLM::set_weights_` -> `Conv1x1::set_weights_`): the biased grouped 1x1
+/// conv mapping the condition (`cond_ch` wide) to `(shift ? 2 : 1) * width`
+/// scale/shift channels — compact grouped weights, then the bias.
+fn read_film(
+    reader: &mut WeightReader,
+    ctx: &str,
+    site: &str,
+    cond_ch: usize,
+    width: usize,
+    params: &FilmParams,
+) -> Result<Option<Film>, String> {
+    if !params.active {
+        return Ok(None);
+    }
+    let out_ch = if params.shift { 2 * width } else { width };
+    check_groups(ctx, site, cond_ch, out_ch, params.groups)?;
+    let weight = reader.read(out_ch * cond_ch / params.groups)?;
+    let bias = reader.read(out_ch)?;
+    Ok(Some(Film {
+        weight,
+        bias,
+        cond_ch,
+        out_ch,
+        width,
+        groups: params.groups,
+        shift: params.shift,
+    }))
 }
 
 pub struct WaveNetModel {
@@ -87,6 +118,13 @@ pub struct WaveNetModel {
     skip_accum: Vec<f32>,
     /// Per-layer head1x1 output (head1x1.out_channels sized).
     head1x1_buf: Vec<f32>,
+    /// FiLM scale/shift scratch, sized for the widest active FiLM conv
+    /// output (`max out_ch` = up to twice the widest modulated tensor).
+    film_ss_buf: Vec<f32>,
+    /// FiLM output scratch for the const-input sites (conv_pre input copy,
+    /// input_mixin_pre modulated condition); max(channels, condition_size)
+    /// sized.
+    film_pre_buf: Vec<f32>,
     rechannel_buf: Vec<f32>,
     head_input: Vec<f32>, // head_size sized, accumulated across stacks
     head_buf_a: Vec<f32>,
@@ -186,6 +224,18 @@ impl WaveNetModel {
             if !config.has_layer1x1 && bottleneck != ch {
                 return Err(format!(
                     "WaveNet config: bottleneck ({bottleneck}) must equal channels ({ch}) when layer1x1 is inactive"
+                ));
+            }
+            // Reference validations (Layer ctor, NAM/wavenet/detail.h): a
+            // post-FiLM on an inactive conv would be redundant weights.
+            if stack_cfg.films.layer1x1_post.active && !config.has_layer1x1 {
+                return Err(format!(
+                    "WaveNet stack {si}: layer1x1_post_film cannot be active when layer1x1 is not active"
+                ));
+            }
+            if stack_cfg.films.head1x1_post.active && !stack_cfg.head1x1.active {
+                return Err(format!(
+                    "WaveNet stack {si}: head1x1_post_film cannot be active when head1x1 is not active"
                 ));
             }
 
@@ -321,6 +371,69 @@ impl WaveNetModel {
                     None
                 };
 
+                // FiLM insertion points, consumed AFTER the layer's other
+                // tensors and in reference site order (Layer::set_weights_
+                // in NAM/wavenet/model.cpp: conv, input_mixin, layer1x1,
+                // head1x1, then conv_pre/conv_post/input_mixin_pre/
+                // input_mixin_post/activation_pre/activation_post/
+                // layer1x1_post/head1x1_post films). Widths per site follow
+                // the reference Layer ctor: conv_pre modulates the layer
+                // input (`channels`), conv_post / input_mixin_post /
+                // activation_pre the conv-width z (`2*bottleneck` when
+                // gated/blended, else `bottleneck` — mid_ch),
+                // input_mixin_pre the condition itself (`condition_size`),
+                // activation_post the activated z (`bottleneck`),
+                // layer1x1_post the residual conv output (`channels`), and
+                // head1x1_post the head1x1 output (`head1x1.out_channels`).
+                let cond = stack_cfg.condition_size;
+                let films = &stack_cfg.films;
+                let conv_pre_film =
+                    read_film(reader, &ctx, "conv_pre_film", cond, ch, &films.conv_pre)?;
+                let conv_post_film =
+                    read_film(reader, &ctx, "conv_post_film", cond, mid_ch, &films.conv_post)?;
+                let input_mixin_pre_film = read_film(
+                    reader,
+                    &ctx,
+                    "input_mixin_pre_film",
+                    cond,
+                    cond,
+                    &films.input_mixin_pre,
+                )?;
+                let input_mixin_post_film = read_film(
+                    reader,
+                    &ctx,
+                    "input_mixin_post_film",
+                    cond,
+                    mid_ch,
+                    &films.input_mixin_post,
+                )?;
+                let activation_pre_film = read_film(
+                    reader,
+                    &ctx,
+                    "activation_pre_film",
+                    cond,
+                    mid_ch,
+                    &films.activation_pre,
+                )?;
+                let activation_post_film = read_film(
+                    reader,
+                    &ctx,
+                    "activation_post_film",
+                    cond,
+                    bottleneck,
+                    &films.activation_post,
+                )?;
+                let layer1x1_post_film =
+                    read_film(reader, &ctx, "layer1x1_post_film", cond, ch, &films.layer1x1_post)?;
+                let head1x1_post_film = read_film(
+                    reader,
+                    &ctx,
+                    "head1x1_post_film",
+                    cond,
+                    stack_cfg.head1x1.out_channels,
+                    &films.head1x1_post,
+                )?;
+
                 let ring_capacity = (ks - 1) * dilation + 2;
                 rings.push(RingBuffer::new(ring_capacity, ch));
 
@@ -339,6 +452,14 @@ impl WaveNetModel {
                     groups_input_mixin: g_mixin,
                     activation: stack_activation.clone(),
                     gating,
+                    conv_pre_film,
+                    conv_post_film,
+                    input_mixin_pre_film,
+                    input_mixin_post_film,
+                    activation_pre_film,
+                    activation_post_film,
+                    layer1x1_post_film,
+                    head1x1_post_film,
                 });
             }
 
@@ -456,12 +577,25 @@ impl WaveNetModel {
             .max()
             .unwrap_or(1);
 
+        // FiLM scale/shift scratch: widest active FiLM conv output across
+        // all layers (0 films -> minimal 1-slot buffer, untouched).
+        let max_film_ss = stacks
+            .iter()
+            .flatten()
+            .flat_map(|l| l.films())
+            .flatten()
+            .map(|f| f.out_ch)
+            .max()
+            .unwrap_or(0)
+            .max(1);
+
         // Validate matvec dimensions for all weight matrices at load time.
         let scratch_activation = vec![0.0f32; max_ch];
         let scratch_conv_out = vec![0.0f32; max_mid];
         let scratch_skip = vec![0.0f32; max_skip];
         let scratch_head_buf = vec![0.0f32; max_head_buf];
         let scratch_head_input = vec![0.0f32; head_size];
+        let scratch_film_ss = vec![0.0f32; max_film_ss];
 
         for (si, rc) in rechannels.iter().enumerate() {
             if let Some(ref rc) = rc {
@@ -540,6 +674,33 @@ impl WaveNetModel {
                         ));
                     }
                 }
+                // FiLM convs read the condition snapshot and write the
+                // scale/shift scratch.
+                const FILM_SITES: [&str; 8] = [
+                    "conv_pre_film",
+                    "conv_post_film",
+                    "input_mixin_pre_film",
+                    "input_mixin_post_film",
+                    "activation_pre_film",
+                    "activation_post_film",
+                    "layer1x1_post_film",
+                    "head1x1_post_film",
+                ];
+                for (site, film) in FILM_SITES.iter().zip(layer.films()) {
+                    let Some(f) = film else { continue };
+                    if !validate_grouped_matvec_dims(
+                        &f.weight,
+                        &scratch_activation[..f.cond_ch],
+                        &scratch_film_ss[..f.out_ch],
+                        f.out_ch,
+                        f.cond_ch,
+                        f.groups,
+                    ) {
+                        return Err(format!(
+                            "WaveNet stack {si} layer {li}: {site} dimension mismatch"
+                        ));
+                    }
+                }
             }
             let hr = &head_rechannels[si];
             for (tap_idx, w) in hr.taps.iter().enumerate() {
@@ -584,6 +745,8 @@ impl WaveNetModel {
             residual_buf: vec![0.0; max_ch],
             skip_accum: scratch_skip,
             head1x1_buf: vec![0.0; max_skip],
+            film_ss_buf: scratch_film_ss,
+            film_pre_buf: vec![0.0; max_ch],
             rechannel_buf: vec![0.0; max_ch],
             head_input: scratch_head_input,
             head_buf_a: scratch_head_buf,
@@ -638,8 +801,24 @@ impl NamInference for WaveNetModel {
                 let ks = layer.kernel_size;
                 let mid_ch = layer.mid_ch;
 
-                // Write current activation into ring buffer
-                ring.write(&self.activation[..ch]);
+                // Write current activation into ring buffer. With an active
+                // conv_pre FiLM the conv (and its tap history) sees the
+                // FiLM-modulated input instead (reference
+                // `_conv.Process(_conv_pre_film->GetOutput())`); the
+                // residual path keeps the raw input, which stays in
+                // `self.activation` until the residual update below.
+                match &layer.conv_pre_film {
+                    Some(f) => {
+                        f.modulate(
+                            &self.rechannel_buf,
+                            &self.activation,
+                            &mut self.film_pre_buf,
+                            &mut self.film_ss_buf,
+                        );
+                        ring.write(&self.film_pre_buf[..ch]);
+                    }
+                    None => ring.write(&self.activation[..ch]),
+                }
 
                 // Dilated convolution (combined filter+gate). Grouped
                 // (groups_input > 1) runs blocked per-group matvecs; the
@@ -669,20 +848,66 @@ impl NamInference for WaveNetModel {
                     self.conv_out[c] += layer.b_conv[c];
                 }
 
-                // Input mixin: add condition signal projected to mid_ch
+                // conv_post FiLM: modulate the conv output in place before
+                // the mixin sum (reference `Process_` on `_conv.GetOutput()`).
+                if let Some(f) = &layer.conv_post_film {
+                    f.modulate_in_place(
+                        &self.rechannel_buf,
+                        &mut self.conv_out[..mid_ch],
+                        &mut self.film_ss_buf,
+                    );
+                }
+
+                // Input mixin: add condition signal projected to mid_ch.
+                // An active input_mixin_pre FiLM modulates the condition fed
+                // to the mixin ONLY (self-conditioned, reference
+                // `Process(condition, condition)`); later sites still see
+                // the raw condition snapshot.
                 if let Some(ref w_mixin) = layer.w_input_mixin {
                     let cond_size = w_mixin.len() * layer.groups_input_mixin / mid_ch;
+                    let mixin_in: &[f32] = match &layer.input_mixin_pre_film {
+                        Some(f) => {
+                            f.modulate(
+                                &self.rechannel_buf,
+                                &self.rechannel_buf,
+                                &mut self.film_pre_buf,
+                                &mut self.film_ss_buf,
+                            );
+                            &self.film_pre_buf[..cond_size]
+                        }
+                        None => &self.rechannel_buf[..cond_size],
+                    };
                     grouped_matvec(
                         w_mixin,
-                        &self.rechannel_buf[..cond_size],
+                        mixin_in,
                         mid_ch,
                         cond_size,
                         layer.groups_input_mixin,
                         &mut self.mixin_buf,
                     );
+                    // input_mixin_post FiLM: modulate the mixin output in
+                    // place before summing into z.
+                    if let Some(f) = &layer.input_mixin_post_film {
+                        f.modulate_in_place(
+                            &self.rechannel_buf,
+                            &mut self.mixin_buf[..mid_ch],
+                            &mut self.film_ss_buf,
+                        );
+                    }
                     for c in 0..mid_ch {
                         self.conv_out[c] += self.mixin_buf[c];
                     }
+                }
+
+                // activation_pre FiLM: modulate z = conv + mixin (full
+                // conv width, incl. the secondary half when gated/blended)
+                // before the activation (reference `Process_(_z)`).
+                if let Some(f) = &layer.activation_pre_film {
+                    f.modulate_in_place(
+                        &self.rechannel_buf,
+                        &mut self.conv_out[..mid_ch],
+                        &mut self.film_ss_buf,
+                    );
                 }
 
                 // Activation / gating (dispatch resolved at construction).
@@ -720,6 +945,18 @@ impl NamInference for WaveNetModel {
                     }
                 }
 
+                // activation_post FiLM: modulate the activated z (the
+                // primary bottleneck-wide half in all gating modes;
+                // reference applies it to `_z` when ungated and to
+                // `_z.topRows(bottleneck)` in the gated/blended branches).
+                if let Some(f) = &layer.activation_post_film {
+                    f.modulate_in_place(
+                        &self.rechannel_buf,
+                        &mut self.conv_out[..bottleneck],
+                        &mut self.film_ss_buf,
+                    );
+                }
+
                 // Skip contribution: head1x1(activated z) when the stack's
                 // head1x1 is active (reference `_head1x1->process_(z)` on
                 // the activated top-bottleneck rows), else the activated z
@@ -735,7 +972,20 @@ impl NamInference for WaveNetModel {
                             &mut self.head1x1_buf,
                         );
                         for c in 0..h1x1.out_ch {
-                            self.skip_accum[c] += self.head1x1_buf[c] + h1x1.bias[c];
+                            self.head1x1_buf[c] += h1x1.bias[c];
+                        }
+                        // head1x1_post FiLM: modulate the (biased) head1x1
+                        // output before it joins the skip accumulator
+                        // (reference `Process_` on `_head1x1->GetOutput()`).
+                        if let Some(f) = &layer.head1x1_post_film {
+                            f.modulate_in_place(
+                                &self.rechannel_buf,
+                                &mut self.head1x1_buf[..h1x1.out_ch],
+                                &mut self.film_ss_buf,
+                            );
+                        }
+                        for c in 0..h1x1.out_ch {
+                            self.skip_accum[c] += self.head1x1_buf[c];
                         }
                     }
                     None => {
@@ -747,7 +997,12 @@ impl NamInference for WaveNetModel {
 
                 // Residual connection: layer1x1 maps z (bottleneck) back to
                 // channels; without a layer1x1, bottleneck == channels
-                // (enforced at construction) and z IS the residual.
+                // (enforced at construction) and z IS the residual. The raw
+                // layer input still sits in `self.activation` (the conv_pre
+                // FiLM, when active, modulated only the ring copy), so the
+                // residual reads it from there — bit-identical to the
+                // historical ring `read_current()`, whose newest frame was
+                // that same value.
                 match &layer.layer1x1 {
                     Some(l1x1) => {
                         grouped_matvec(
@@ -761,15 +1016,28 @@ impl NamInference for WaveNetModel {
                         for c in 0..l1x1.out_ch {
                             self.residual_buf[c] += l1x1.bias[c];
                         }
-                        let x_curr = ring.read_current();
-                        for (c, a) in self.activation.iter_mut().enumerate().take(ch) {
-                            *a = x_curr[c] + self.residual_buf[c];
+                        // layer1x1_post FiLM: reference-exact, the
+                        // modulation is applied ONLY in the BLENDED gating
+                        // branch of `Layer::Process` (NAM/wavenet/model.cpp
+                        // applies it after `_layer1x1` there alone; the
+                        // NONE and GATED branches run the layer1x1 without
+                        // it, even though its weights were consumed).
+                        if matches!(layer.gating, LayerGating::Blended(_)) {
+                            if let Some(f) = &layer.layer1x1_post_film {
+                                f.modulate_in_place(
+                                    &self.rechannel_buf,
+                                    &mut self.residual_buf[..l1x1.out_ch],
+                                    &mut self.film_ss_buf,
+                                );
+                            }
+                        }
+                        for c in 0..ch {
+                            self.activation[c] += self.residual_buf[c];
                         }
                     }
                     None => {
-                        let x_curr = ring.read_current();
-                        for (c, a) in self.activation.iter_mut().enumerate().take(ch) {
-                            *a = self.conv_out[c] + x_curr[c];
+                        for c in 0..ch {
+                            self.activation[c] += self.conv_out[c];
                         }
                     }
                 }

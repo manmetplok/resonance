@@ -14,7 +14,7 @@ use resonance_amp::nam::parse::{
     load_model_from_file, parse_full_wavenet_config, parse_wavenet_config, StackConfig,
     WaveNetConfig, WeightReader,
 };
-use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params, HeadParams};
+use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params, HeadParams, LayerFilms};
 use resonance_amp::nam::wavenet::WaveNetModel;
 use resonance_amp::nam::NamInference;
 
@@ -65,6 +65,7 @@ fn windowed_stack(
         groups_input_mixin: 1,
         layer1x1_groups: 1,
         head1x1: Head1x1Params::inactive(channels),
+        films: LayerFilms::default(),
     }
 }
 

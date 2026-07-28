@@ -36,11 +36,6 @@ impl RingBuffer {
         &self.data[base..base + self.channels]
     }
 
-    #[inline(always)]
-    pub(super) fn read_current(&self) -> &[f32] {
-        self.read_delayed(0)
-    }
-
     pub(super) fn reset(&mut self) {
         self.data.fill(0.0);
         self.write_pos = 0;

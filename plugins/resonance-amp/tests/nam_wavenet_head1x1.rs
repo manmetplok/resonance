@@ -14,7 +14,7 @@ use resonance_amp::nam::activations::{ActivationConfig, ActivationKind};
 use resonance_amp::nam::parse::{
     load_model_from_file, parse_wavenet_config, StackConfig, WaveNetConfig, WeightReader,
 };
-use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params};
+use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params, LayerFilms};
 use resonance_amp::nam::wavenet::WaveNetModel;
 use resonance_amp::nam::{fast_tanh, NamInference};
 
@@ -78,6 +78,7 @@ fn ungated_stack(
         groups_input_mixin: 1,
         layer1x1_groups: 1,
         head1x1,
+        films: LayerFilms::default(),
     }
 }
 
@@ -371,10 +372,9 @@ fn loader_head1x1_weight_count_matches_reference() {
 
 /// The real A2 fixture's outer layer array has an active grouped head1x1.
 /// The engine parse must surface it, and construction must consume the
-/// head1x1-extended weight count for the engine-implemented surface (the
-/// fixture's FiLM tensors are the remaining gap — todo #1109 — so the full
-/// fixture weight stream is not loadable yet; this pins the head1x1 portion
-/// with synthesized weights).
+/// fixture's real weight stream exactly (since todo #1109 the FiLM tensors
+/// load too, so the full 818-weight outer model is consumed end to end;
+/// per-site FiLM counts are pinned in nam_wavenet_film.rs).
 #[test]
 fn a2_max_fixture_head1x1_reaches_construction() {
     let path = format!(
@@ -396,21 +396,20 @@ fn a2_max_fixture_head1x1_reaches_construction() {
         "fixture head1x1 params must reach the engine config"
     );
 
-    // Engine-consumed weight count for the fixture's outer array (channels
-    // 4, bottleneck 4, condition 8, kernel 4, dilations [1,2], mixin groups
-    // 4, layer1x1 groups 2, head1x1 4/2):
-    // rechannel 4
-    // per layer: conv 64 + bias 4 + mixin 4*8/4=8 + l1x1 8+4 + h1x1 8+4
-    //            = 100, 2 layers = 200
-    // head_rechannel 1*4 + 1 = 5, head_scale 1 -> 210.
-    let weights = counted_weights(210);
+    let weights: Vec<f32> = file["weights"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_f64().unwrap() as f32)
+        .collect();
+    assert_eq!(weights.len(), 818, "fixture outer weight stream");
     let mut reader = WeightReader::new(&weights);
     WaveNetModel::from_config_and_weights(config, &mut reader)
-        .expect("fixture-shaped construction must succeed");
+        .expect("fixture construction must succeed");
     assert_eq!(
         reader.remaining(),
         0,
-        "head1x1-extended weight count must be consumed exactly"
+        "the fixture's full weight stream must be consumed exactly"
     );
 }
 
