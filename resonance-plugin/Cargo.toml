@@ -19,3 +19,8 @@ serde.workspace = true
 serde_json.workspace = true
 iced = { workspace = true, optional = true }
 wayland-plugin-gui = { path = "../wayland-plugin-gui", optional = true }
+
+[dev-dependencies]
+# Drive the CLAP bridge from the host side in tests (activate + latency query).
+clack-host = { workspace = true }
+clack-extensions = { workspace = true, features = ["clack-host"] }
