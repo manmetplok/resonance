@@ -200,6 +200,25 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
 
         AudioCommand::PollPeaks => peaks::handle_poll_peaks(ctx),
 
+        AudioCommand::QueryIoLatency => {
+            use std::sync::atomic::Ordering;
+            // Capture latency is only meaningful while an input stream
+            // is actually open — the atomic keeps its last value after
+            // teardown, so gate on the live handle instead of chasing
+            // every teardown site.
+            let capture = if state.rec.input_stream.is_some() {
+                ctx.shared.capture_latency_samples.load(Ordering::Relaxed)
+            } else {
+                0
+            };
+            let playback = ctx.shared.playback_latency_samples.load(Ordering::Relaxed);
+            let _ = ctx.event_tx.send(AudioEvent::IoLatencyReport {
+                capture_samples: capture,
+                playback_samples: playback,
+                round_trip_samples: capture + playback,
+            });
+        }
+
         AudioCommand::ShutDown => {
             // Handled in the engine_thread loop directly; this arm is
             // unreachable in practice but keeps the match exhaustive.

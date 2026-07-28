@@ -327,6 +327,7 @@ pub(crate) fn build_input_stream(
             &mut rec_producer,
             Arc::clone(&mon_producer),
             engine_sample_rate,
+            quantum as u32,
             desired_channels,
             capture_gate.clone(),
         ) {
@@ -350,6 +351,24 @@ pub(crate) fn build_input_stream(
         capture_gate,
     )?;
     Ok((crate::input_handle::InputHandle::Cpal(stream), sr, ch))
+}
+
+/// Convert a `pw_time.delay` (expressed in the time domain of the
+/// graph, `rate = num/denom` seconds per tick — usually `1/graph_rate`)
+/// into whole samples at the engine rate. Negative delays (possible
+/// with user-configured latency offsets) clamp to 0 — the engine treats
+/// I/O latency as non-negative. Pure; unit-tested (doc #260 finding
+/// #13).
+pub fn pw_delay_to_engine_samples(
+    delay: i64,
+    rate_num: u32,
+    rate_denom: u32,
+    engine_rate: u32,
+) -> u64 {
+    if delay <= 0 || rate_denom == 0 {
+        return 0;
+    }
+    ((delay as u128 * rate_num as u128 * engine_rate as u128) / rate_denom as u128) as u64
 }
 
 /// N-channel monitor-path rate converter for the cpal fallback input

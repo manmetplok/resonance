@@ -165,6 +165,18 @@ pub struct SharedState {
     /// bounce/export threads so their latency comp folds the same
     /// offsets the live mixer compensates (doc #260 finding #4).
     pub external_offsets: arc_swap::ArcSwap<std::collections::HashMap<TrackId, i64>>,
+    /// Capture-side I/O latency in samples at the engine rate — the
+    /// graph-reported time a sample takes from the capture device to
+    /// the native input stream (`pw_time.delay`). Published every graph
+    /// cycle by the input process callback; 0 when no native input
+    /// stream is running (doc #260 finding #13).
+    pub capture_latency_samples: AtomicU64,
+    /// Playback-side I/O latency in samples at the engine rate — the
+    /// graph-reported time the next output sample takes from the native
+    /// output stream to the playback device. Published every graph
+    /// cycle by the output process callback; 0 on the cpal fallback
+    /// (which cannot report it — part of why it is a fallback).
+    pub playback_latency_samples: AtomicU64,
     /// Master-chain latency in samples (0 while master FX are
     /// bypassed), published by the engine thread's comp refresh. The
     /// audio callback reads it to latency-match the reference A/B
@@ -250,6 +262,8 @@ impl Default for SharedState {
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
+            capture_latency_samples: AtomicU64::new(0),
+            playback_latency_samples: AtomicU64::new(0),
             reference: reference::ReferenceMonitor::default(),
             mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),
@@ -646,6 +660,7 @@ impl AudioEngine {
             let (mix, prod) = make_mixer();
             match crate::output_pipewire::build(
                 None,
+                Arc::clone(&shared),
                 sample_rate,
                 2,
                 quantum as u32,

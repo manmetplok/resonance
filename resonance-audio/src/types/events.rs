@@ -672,6 +672,16 @@ pub enum AudioEvent {
     /// Snapshot of peak meters for VU display, sent in response to
     /// `AudioCommand::PollPeaks`. Replaces the older `read_and_clear_peaks`
     /// getter so the GUI never reaches into engine state directly.
+    /// Reply to `AudioCommand::QueryIoLatency`: graph-reported I/O
+    /// latency in samples at the engine rate (doc #260 finding #13).
+    /// `round_trip_samples = capture + playback` — the hardware I/O
+    /// portion of a monitoring round trip, excluding the monitor ring
+    /// backlog (see doc #260 finding #12).
+    IoLatencyReport {
+        capture_samples: u64,
+        playback_samples: u64,
+        round_trip_samples: u64,
+    },
     PeakSnapshot {
         track_peaks: Vec<(TrackId, f32, f32)>,
         bus_peaks: Vec<(BusId, f32, f32)>,
