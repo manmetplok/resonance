@@ -63,6 +63,13 @@ pub struct StackConfig {
     pub condition_size: usize,
     pub head_size: usize,
     pub channels: usize,
+    /// Internal (bottleneck) channel count of each layer in this stack
+    /// (A2). The dilated conv and input mixin output `bottleneck` channels
+    /// (doubled when gated), activation runs at bottleneck width, and the
+    /// layer1x1 maps bottleneck back to `channels`. A1 models — and A2
+    /// models that omit the field — use `bottleneck == channels`, which
+    /// degenerates to the historical layout exactly.
+    pub bottleneck: usize,
     pub dilations: Vec<usize>,
     pub kernel_sizes: Vec<usize>,
     /// Layer activation for this stack. A1 models use `"Tanh"`, which
@@ -102,6 +109,8 @@ impl OldWaveNetConfig {
                     condition_size: self.condition_size,
                     head_size: self.head_size,
                     channels: self.channels,
+                    // Old-format models predate the A2 bottleneck.
+                    bottleneck: self.channels,
                     kernel_sizes: vec![2; n],
                     dilations: d,
                     activation: activation.clone(),
@@ -128,6 +137,11 @@ struct NewLayerArrayConfig {
     condition_size: usize,
     head_size: usize,
     channels: usize,
+    /// Internal channel count (A2). Defaults to `channels` (A1), matching
+    /// the reference (`bottleneck = layer_config.value("bottleneck",
+    /// channels)` in NAM/wavenet/model.cpp).
+    #[serde(default)]
+    bottleneck: Option<usize>,
     dilations: Vec<usize>,
     #[serde(default)]
     kernel_size: Option<usize>,
@@ -202,6 +216,7 @@ impl NewWaveNetConfig {
                     condition_size: l.condition_size,
                     head_size: l.head_size,
                     channels: l.channels,
+                    bottleneck: l.bottleneck.unwrap_or(l.channels),
                     dilations: l.dilations.clone(),
                     kernel_sizes: ks,
                     activation,
