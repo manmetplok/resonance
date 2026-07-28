@@ -76,6 +76,7 @@ fn ungated_stack(
         secondary_activations: vec![None; n],
         groups_input: 1,
         groups_input_mixin: 1,
+        layer1x1_active: true,
         layer1x1_groups: 1,
         head1x1,
         films: LayerFilms::default(),
@@ -152,6 +153,7 @@ fn head1x1_weight_order_matches_reference_position() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -238,6 +240,7 @@ fn grouped_head1x1_is_bit_identical_to_hand_computed_reference() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)

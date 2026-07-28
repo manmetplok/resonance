@@ -82,6 +82,7 @@ fn grouped_stack(
         secondary_activations,
         groups_input,
         groups_input_mixin,
+        layer1x1_active: true,
         layer1x1_groups,
         head1x1: Head1x1Params::inactive(channels),
         films: LayerFilms::default(),
@@ -111,6 +112,7 @@ fn grouped_construction_consumes_reference_weight_count() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let weights = counted_weights(GROUPED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -141,6 +143,7 @@ fn gated_grouped_construction_consumes_reference_weight_count() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let weights = counted_weights(70);
     let mut reader = WeightReader::new(&weights);
@@ -151,14 +154,18 @@ fn gated_grouped_construction_consumes_reference_weight_count() {
 
 /// The same grouped shape end-to-end through the .nam loader: the JSON
 /// groups fields (incl. the layer1x1 object) must reach construction, the
-/// exact reference count loads, and a short vector underflows.
+/// exact reference count loads, and a short vector underflows. Loader-side
+/// the config runs under reference semantics (A2 markers), so
+/// condition_size matches input_size and the mixin stays ungrouped
+/// (mixin 4*1 = 4 per layer keeps the 74-weight total of GROUPED_TOTAL:
+/// the legacy literal's grouped mixin was 4*2/2 = 4 too).
 const GROUPED_CONFIG: &str = r#"{
     "layers": [{
-        "input_size": 1, "condition_size": 2, "head_size": 1,
+        "input_size": 1, "condition_size": 1, "head_size": 1,
         "channels": 4, "bottleneck": 4,
         "dilations": [1, 2], "kernel_size": 2,
         "activation": "Tanh", "gating_mode": "none",
-        "groups_input": 2, "groups_input_mixin": 2,
+        "groups_input": 2, "groups_input_mixin": 1,
         "layer1x1": {"active": true, "groups": 4},
         "head_bias": true
     }],
@@ -227,6 +234,7 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
             secondary_activations: vec![None],
             groups_input: 2,
             groups_input_mixin: 1,
+            layer1x1_active: true,
             layer1x1_groups: 1,
             head1x1: Head1x1Params::inactive(4),
             films: LayerFilms::default(),
@@ -235,6 +243,7 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -311,6 +320,7 @@ fn grouped_mixin_and_layer1x1_are_bit_identical_to_hand_computed_reference() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -396,10 +406,13 @@ fn explicit_unit_groups_are_bit_identical_to_a1_default() {
 
 // -- Construction-time divisibility validation --------------------------------
 
+// condition_size matches input_size (1): these configs carry A2 markers,
+// so they load under reference semantics, where a mismatched condition
+// width without a condition_dsp is rejected before the groups checks run.
 fn grouped_json(extra: &str) -> String {
     format!(
         r#"{{"layers": [{{
-            "input_size": 1, "condition_size": 2, "head_size": 1,
+            "input_size": 1, "condition_size": 1, "head_size": 1,
             "channels": 4, "bottleneck": 2,
             "dilations": [1], "kernel_size": 2,
             "activation": "Tanh", "gating_mode": "none",
@@ -443,7 +456,7 @@ fn conv_out_channels_not_divisible_by_groups_is_rejected() {
 
 #[test]
 fn mixin_condition_size_not_divisible_by_groups_is_rejected() {
-    // condition_size=2 with groups_input_mixin=3.
+    // condition_size=1 with groups_input_mixin=3.
     let err = load_nam(
         "mixin_indiv",
         &new_format_json(
@@ -454,7 +467,7 @@ fn mixin_condition_size_not_divisible_by_groups_is_rejected() {
     .err()
     .expect("condition_size % groups != 0 must fail");
     assert!(
-        err.contains("input_mixin in_channels (2) must be divisible by groups (3)"),
+        err.contains("input_mixin in_channels (1) must be divisible by groups (3)"),
         "{err}"
     );
 }

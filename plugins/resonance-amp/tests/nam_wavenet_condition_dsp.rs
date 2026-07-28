@@ -41,10 +41,13 @@ fn fixture_weights(file: &Value) -> Vec<f32> {
 }
 
 /// Minimal single-stack, single-layer, kernel-1 ungated ReLU config (new
-/// format, so layer1x1 is active). Weight consumption order: conv (1),
+/// format, so layer1x1 is active). Under REFERENCE semantics (which a
+/// `condition_dsp` marker forces, for the nested net too) the 1-to-1 input
+/// rechannel is always consumed, so the order is: rechannel (1), conv (1),
 /// conv bias (1), input_mixin (1), layer1x1 w+b (2), head rechannel (1),
-/// head_scale (1) = 7 weights. With positive inputs and weights every ReLU
-/// is the identity, so outputs are exact in f32.
+/// head_scale (1) = 8 weights. (Legacy skips the equal-width rechannel:
+/// 7 weights.) With positive inputs and weights every ReLU is the identity,
+/// so outputs are exact in f32.
 fn tiny_config(input_size: usize, condition_size: usize, head_size: usize) -> Value {
     json!({
         "layers": [{
@@ -94,23 +97,33 @@ fn build_err(config: Value, weights: &[f32], what: &str) -> String {
     }
 }
 
-/// Nested net N with weights [conv=1, bias=0, mixin=1, l1x1=0, l1x1_b=0,
-/// head=1, head_scale=2]: for x > 0, z = relu(x + x) = 2x, head path
-/// relu(2x) = 2x, output N(x) = 2 * 2x = 4x.
-const NESTED_WEIGHTS: [f32; 7] = [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 2.0];
+/// Nested net N with weights [rechannel=0.5, conv=1, bias=0, mixin=1,
+/// l1x1=0, l1x1_b=0, head=1, head_scale=2]: for x > 0 (reference: the
+/// rechannel is applied, the condition is the raw input),
+/// z = relu(1*(0.5x) + 0 + 1*x) = 1.5x, output N(x) = 2 * 1.5x = 3x.
+/// The rechannel weight is deliberately != 1 to pin its consumption AND
+/// its arithmetic.
+const NESTED_WEIGHTS: [f32; 8] = [0.5, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 2.0];
 
-/// Outer net O with weights [conv=1, bias=0, mixin=1, l1x1=0, l1x1_b=0,
-/// head=1, head_scale=1]: with condition c(x), z = relu(x + c(x)), output
-/// O(x) = relu(z). With condition_dsp: c(x) = 4x so O(x) = 5x. Without:
-/// c(x) = x (post-rechannel snapshot) so O(x) = 2x.
-const OUTER_WEIGHTS: [f32; 7] = [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
+/// Outer net O with weights [rechannel=2, conv=1, bias=0, mixin=1, l1x1=0,
+/// l1x1_b=0, head=1, head_scale=1]: with condition c(x),
+/// z = relu(1*(2x) + 0 + 1*c(x)), output O(x) = z. With condition_dsp:
+/// c(x) = 3x so O(x) = 5x. (Legacy semantics — no condition_dsp possible —
+/// consume no rechannel and read the post-rechannel snapshot condition.)
+const OUTER_WEIGHTS: [f32; 8] = [2.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
+
+/// Legacy (no condition_dsp) variant of `OUTER_WEIGHTS`: no A2 marker, so
+/// the equal-width rechannel is skipped — 7 weights, condition = the
+/// post-rechannel snapshot x: z = relu(x + x) = 2x, O(x) = relu(2x) = 2x.
+const LEGACY_OUTER_WEIGHTS: [f32; 7] = [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
 
 // -- Hand-computed wiring -----------------------------------------------------
 
 /// The nested output must replace the condition the input_mixin reads:
 /// O(0.5) = 5 * 0.5 = 2.5 exactly. If the condition were still the raw
-/// input the result would be 1.0; if the nested net had (wrongly) consumed
-/// the outer stream's weights (head_scale 1 instead of 2) it would be 1.5.
+/// input the result would be 1.5 (z = 2x + x); if the nested net had
+/// (wrongly) consumed the outer stream's weights the misaligned tensors
+/// would shift every product.
 #[test]
 fn condition_dsp_output_feeds_input_mixin() {
     let nested = nested_model(tiny_config(1, 1, 1), &NESTED_WEIGHTS);
@@ -126,14 +139,15 @@ fn condition_dsp_output_feeds_input_mixin() {
 /// parses identically to the key being absent.
 #[test]
 fn absent_condition_dsp_is_passthrough() {
-    let (mut plain, remaining) = build(tiny_config(1, 1, 1), &OUTER_WEIGHTS).expect("construction");
+    let (mut plain, remaining) =
+        build(tiny_config(1, 1, 1), &LEGACY_OUTER_WEIGHTS).expect("construction");
     assert_eq!(remaining, 0);
     assert_eq!(plain.process_sample(0.5), 1.0);
 
     let cfg_null = parse_wavenet_config(with_condition_dsp(tiny_config(1, 1, 1), Value::Null))
         .expect("null condition_dsp parses");
     assert!(cfg_null.condition_dsp.is_none(), "null == absent");
-    let mut reader = WeightReader::new(&OUTER_WEIGHTS);
+    let mut reader = WeightReader::new(&LEGACY_OUTER_WEIGHTS);
     let mut from_null =
         WaveNetModel::from_config_and_weights(cfg_null, &mut reader).expect("construction");
     for i in 1..16 {
@@ -156,7 +170,7 @@ fn nested_weights_are_not_taken_from_the_outer_stream() {
             .expect("construction");
     assert_eq!(remaining, 0);
 
-    // Appending the nested net's 7 weights to the outer stream must leave
+    // Appending the nested net's 8 weights to the outer stream must leave
     // them unconsumed (a wrong "nested weights after the main arrays"
     // reading would eat them).
     let mut padded = OUTER_WEIGHTS.to_vec();
@@ -167,7 +181,7 @@ fn nested_weights_are_not_taken_from_the_outer_stream() {
 
     // A wrong "nested weights before the main arrays" reading would
     // underflow the exact-length stream — covered by the first assert
-    // (construction succeeded with only the outer 7).
+    // (construction succeeded with only the outer 8).
 }
 
 /// The nested weight array itself must be consumed exactly.
@@ -233,8 +247,11 @@ fn condition_width_mismatch_is_rejected() {
     );
 }
 
-/// Nested input width must equal the WaveNet's own input channels
-/// (reference: the condition DSP consumes the raw model input).
+/// A nested net with a widened input cannot be fed by this engine (it
+/// processes one scalar sample at a time): reference-semantics
+/// construction rejects any non-mono WaveNet outright, which also
+/// subsumes the reference's nested-input-width-vs-model-input check
+/// (both sides must equal 1 to construct at all).
 #[test]
 fn nested_input_width_mismatch_is_rejected() {
     // input_size 2 -> a 2->1 rechannel (2 weights) precedes the usual 7.
@@ -246,7 +263,7 @@ fn nested_input_width_mismatch_is_rejected() {
         "input width mismatch",
     );
     assert!(
-        err.contains("input channels") && err.contains("condition DSP"),
+        err.contains("condition_dsp") && err.contains("only mono models are supported"),
         "unexpected error: {err}"
     );
 }

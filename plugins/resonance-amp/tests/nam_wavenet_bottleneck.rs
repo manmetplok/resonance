@@ -8,7 +8,7 @@ use resonance_amp::nam::activations::{ActivationConfig, ActivationKind};
 use resonance_amp::nam::parse::{load_model_from_file, StackConfig, WaveNetConfig, WeightReader};
 use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params, LayerFilms};
 use resonance_amp::nam::wavenet::WaveNetModel;
-use resonance_amp::nam::{fast_tanh, NamInference};
+use resonance_amp::nam::NamInference;
 
 fn write_temp_nam(name: &str, body: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -160,6 +160,7 @@ fn bottleneck_stack(
         secondary_activations,
         groups_input: 1,
         groups_input_mixin: 1,
+        layer1x1_active: true,
         layer1x1_groups: 1,
         head1x1: Head1x1Params::inactive(channels),
         films: LayerFilms::default(),
@@ -175,6 +176,7 @@ fn direct_construction_consumes_every_weight() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let weights = counted_weights(NONGATED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -191,6 +193,7 @@ fn direct_gated_construction_consumes_every_weight() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let weights = counted_weights(GATED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -233,15 +236,16 @@ fn bottleneck_layout_output_is_bit_identical_to_hand_computed_reference() {
         .expect("bottleneck model must load");
 
     for &x in &[0.25f32, -0.5, 0.75] {
-        // Engine op order: rechannel, condition snapshot (channel 0),
-        // conv matvec + bias + mixin, activation at bottleneck width,
-        // skip pre-activation, head rechannel, head scale. Kernel size 1
-        // means the layer has no memory, so each sample is independent.
+        // Reference-semantics op order (`bottleneck`/`gating_mode` are A2
+        // markers): rechannel, RAW-INPUT condition, conv matvec + bias +
+        // mixin, exact-tanh activation at bottleneck width, head rechannel
+        // (no extra activation), head scale. Kernel size 1 means the layer
+        // has no memory, so each sample is independent.
         let a0 = r0 * x;
         let a1 = r1 * x;
-        let z_pre = ((c0 * a0 + c1 * a1) + b) + m * a0;
-        let z = fast_tanh(z_pre);
-        let expected = (h * fast_tanh(z)) * s;
+        let z_pre = ((c0 * a0 + c1 * a1) + b) + m * x;
+        let z = z_pre.tanh();
+        let expected = (h * z) * s;
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),
@@ -393,6 +397,7 @@ fn bottleneck_without_layer1x1_is_rejected() {
             secondary_activations: vec![None],
             groups_input: 1,
             groups_input_mixin: 1,
+            layer1x1_active: true,
             layer1x1_groups: 1,
             head1x1: Head1x1Params::inactive(2),
             films: LayerFilms::default(),
@@ -401,6 +406,7 @@ fn bottleneck_without_layer1x1_is_rejected() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
+        reference_semantics: false,
     };
     let weights = counted_weights(64);
     let mut reader = WeightReader::new(&weights);

@@ -66,6 +66,31 @@ pub struct WaveNetConfig {
     /// [`build_condition_dsp`]); `None` (A1 and condition_dsp-less A2)
     /// leaves the condition source untouched.
     pub condition_dsp: Option<serde_json::Value>,
+    /// Which forward-pass semantics the model runs with (ba todo #1113).
+    ///
+    /// `false` — LEGACY (historical engine) semantics, preserved
+    /// bit-for-bit for every config expressible in the pre-A2 surface: the
+    /// per-stack condition is the post-rechannel activation snapshot, each
+    /// stack's skip accumulator starts at zero and the per-stack
+    /// head-rechannel outputs are SUMMED into the model output, the skip
+    /// accumulator gets an extra stack-activation before the (kernel-1)
+    /// head rechannel, an old-format layer without a layer1x1 adds the
+    /// activated z into the residual, and `Tanh`/`Sigmoid` resolve to the
+    /// fast approximations. NOTE: these semantics differ from the
+    /// reference NeuralAmpModelerCore for MULTI-detail reasons recorded in
+    /// doc #258 / todo #1113 — kept only so existing A1 projects keep
+    /// their sound.
+    ///
+    /// `true` — REFERENCE (NeuralAmpModelerCore `WaveNet::process`)
+    /// semantics, applied to every config that carries any A2 marker (see
+    /// [`config_has_a2_markers`]) and to all nested/container submodels:
+    /// the condition is the raw input (or the condition_dsp output) for
+    /// every stack, stack i's skip accumulator is SEEDED with stack i-1's
+    /// head-rechannel output and the model output is the LAST stack's head
+    /// rechannel only, no extra skip activation, inactive layer1x1 means
+    /// an identity residual, and activations are exact (`Tanh` =
+    /// `std::tanh`-equivalent), matching the fixture reference renders.
+    pub reference_semantics: bool,
 }
 
 pub struct StackConfig {
@@ -91,6 +116,13 @@ pub struct StackConfig {
     /// models that omit the field — use `bottleneck == channels`, which
     /// degenerates to the historical layout exactly.
     pub bottleneck: usize,
+    /// Whether this stack's layers have a learned 1x1 residual conv whose
+    /// weights sit in the stream (reference `Layer1x1Params::active`).
+    /// Old-format models: false. New-format models: true unless the A2
+    /// `layer1x1` object says `"active": false` — in which case the
+    /// reference consumes NO layer1x1 weights and the residual is the
+    /// identity.
+    pub layer1x1_active: bool,
     pub dilations: Vec<usize>,
     pub kernel_sizes: Vec<usize>,
     /// Layer activation(s) for this stack: a single entry is broadcast to
@@ -186,6 +218,10 @@ impl OldWaveNetConfig {
                     activations: vec![activation.clone(); n],
                     gating_modes,
                     secondary_activations,
+                    // Old-format models predate the layer1x1 residual conv
+                    // entirely (config-wide `has_layer1x1: false` governs;
+                    // the per-stack flag stays at its neutral default).
+                    layer1x1_active: true,
                     // Old-format models predate grouped convolutions.
                     groups_input: 1,
                     groups_input_mixin: 1,
@@ -205,6 +241,8 @@ impl OldWaveNetConfig {
             has_layer1x1: false,
             // Old-format models predate the condition_dsp sub-network.
             condition_dsp: None,
+            // Old flat configs cannot carry A2 markers: always legacy.
+            reference_semantics: false,
         })
     }
 }
@@ -256,10 +294,10 @@ struct NewLayerArrayConfig {
     /// Groups of the condition input-mixin conv (A2). Absent (A1) means 1.
     #[serde(default = "default_one")]
     groups_input_mixin: usize,
-    /// A2 `layer1x1` object. Only its `groups` field feeds the engine here;
-    /// existence of the residual 1x1 stays governed by the config-wide
-    /// `has_layer1x1` (per-array `active` handling is typed-params scope,
-    /// see [`super::wavenet::params::Layer1x1Params`]).
+    /// A2 `layer1x1` object. Governs whether this array's layers carry
+    /// layer1x1 weights at all (reference `Layer1x1Params`: an INACTIVE
+    /// layer1x1 consumes no weights and the residual is the identity);
+    /// absent (A1) means active with a single group.
     #[serde(default)]
     layer1x1: Option<NewLayer1x1Config>,
     /// A2 `head1x1` object: optional 1x1 conv on the skip path. Absent (A1)
@@ -321,9 +359,12 @@ struct NewLayerHeadConfig {
     bias: bool,
 }
 
+/// Both fields are required when the object is present, matching the
+/// reference (`layer1x1_config["active"]` / `["groups"]` in
+/// NAM/wavenet/model.cpp throw on absence) and the typed A2 parser.
 #[derive(Deserialize)]
 struct NewLayer1x1Config {
-    #[serde(default = "default_one")]
+    active: bool,
     groups: usize,
 }
 
@@ -355,7 +396,12 @@ struct NewHeadConfig {
 #[derive(Deserialize)]
 struct NewWaveNetConfig {
     layers: Vec<NewLayerArrayConfig>,
-    head: Option<NewHeadConfig>,
+    /// Top-level post-stack head. Kept raw: `null`/absent means none, the
+    /// legacy head-MLP shape (`channels`/`num_layers`/`out_channels`)
+    /// feeds the historical MLP path, and any head on an A2-marked config
+    /// is rejected with a clear error (see `into_config`).
+    #[serde(default)]
+    head: Option<serde_json::Value>,
     #[serde(default)]
     #[allow(dead_code)]
     head_scale: Option<f32>,
@@ -368,7 +414,7 @@ struct NewWaveNetConfig {
 }
 
 impl NewWaveNetConfig {
-    fn into_config(self) -> Result<WaveNetConfig, String> {
+    fn into_config(self, reference_semantics: bool) -> Result<WaveNetConfig, String> {
         let first = self
             .layers
             .first()
@@ -434,6 +480,7 @@ impl NewWaveNetConfig {
                     head_bias,
                     channels: l.channels,
                     bottleneck: l.bottleneck.unwrap_or(l.channels),
+                    layer1x1_active: l.layer1x1.as_ref().map(|c| c.active).unwrap_or(true),
                     dilations: l.dilations.clone(),
                     kernel_sizes: ks,
                     activations,
@@ -455,8 +502,23 @@ impl NewWaveNetConfig {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        let (head, head_size) = match self.head {
+        let (head, head_size) = match self.head.filter(|h| !h.is_null()) {
             Some(h) => {
+                // The reference A2 post-stack head (`detail::Head`: per-conv
+                // kernel_sizes with activations applied ahead of every
+                // conv) is structurally different from the engine's legacy
+                // head-MLP guess; running an A2 file through the latter
+                // would silently produce wrong audio, so it is rejected
+                // with the offending field named. Legacy (A1-shaped)
+                // configs keep the historical head-MLP path bit-for-bit.
+                if reference_semantics {
+                    return Err(
+                        "WaveNet config: a post-stack 'head' is not supported for A2 models"
+                            .to_string(),
+                    );
+                }
+                let h: NewHeadConfig = serde_json::from_value(h)
+                    .map_err(|e| format!("Invalid WaveNet head config: {e}"))?;
                 let hidden = if h.num_layers > 0 {
                     vec![h.channels; h.num_layers]
                 } else {
@@ -475,6 +537,7 @@ impl NewWaveNetConfig {
             head_size,
             has_layer1x1: true,
             condition_dsp: self.condition_dsp,
+            reference_semantics,
         })
     }
 }
@@ -503,20 +566,84 @@ pub fn parse_full_wavenet_config(
 
 // -- Shared -----------------------------------------------------------------
 
+/// The FiLM insertion-point keys of an A2 layer-array config (reference
+/// site order).
+const FILM_KEYS: [&str; 8] = [
+    "conv_pre_film",
+    "conv_post_film",
+    "input_mixin_pre_film",
+    "input_mixin_post_film",
+    "activation_pre_film",
+    "activation_post_film",
+    "layer1x1_post_film",
+    "head1x1_post_film",
+];
+
+/// Raw-JSON probe: does this (new-format) WaveNet config carry any A2
+/// marker? This is the semantic gate for
+/// [`WaveNetConfig::reference_semantics`]: a config is LEGACY only when it
+/// is fully expressible in the pre-A2 surface the historical engine
+/// supported (plain string activations, `gated` booleans, flat
+/// `head_size`/`head_bias`, `kernel_size`/`kernel_sizes`, no
+/// grouped/bottleneck/FiLM/head1x1/layer1x1 objects, no `condition_dsp`,
+/// no `slimmable`) — exactly the files existing user projects may contain.
+/// Anything the A2 era introduced flips the whole model to the reference
+/// (NeuralAmpModelerCore) forward-pass semantics.
+///
+/// Deliberately NOT markers: `kernel_sizes` (per-layer kernels predate A2
+/// and always ran through the legacy engine), `gated`, and every field of
+/// the original layer-array format.
+pub fn config_has_a2_markers(config: &serde_json::Value) -> bool {
+    let non_null = |v: Option<&serde_json::Value>| v.is_some_and(|v| !v.is_null());
+    if non_null(config.get("condition_dsp")) {
+        return true;
+    }
+    // An A2-style post-stack head carries `kernel_sizes`/`activation`
+    // (the legacy head-MLP shape does not).
+    if let Some(head) = config.get("head") {
+        if head.get("kernel_sizes").is_some() || head.get("activation").is_some() {
+            return true;
+        }
+    }
+    let Some(layers) = config.get("layers").and_then(serde_json::Value::as_array) else {
+        return false;
+    };
+    layers.iter().any(|l| {
+        non_null(l.get("bottleneck"))
+            || non_null(l.get("gating_mode"))
+            || non_null(l.get("secondary_activation"))
+            || non_null(l.get("groups_input"))
+            || non_null(l.get("groups_input_mixin"))
+            || non_null(l.get("layer1x1"))
+            || non_null(l.get("head1x1"))
+            || non_null(l.get("head"))
+            || non_null(l.get("slimmable"))
+            // A2 activation config objects / per-layer arrays; a plain
+            // string is the A1 surface.
+            || l.get("activation")
+                .is_some_and(|a| a.is_object() || a.is_array())
+            || FILM_KEYS.iter().any(|k| non_null(l.get(k)))
+    })
+}
+
 /// Parse a WaveNet `config` JSON object (old flat or new layer-array format)
 /// into the engine's [`WaveNetConfig`]. This is the exact parse
 /// `load_model_from_file` uses before model construction; exposed so tests
-/// can assert what reaches the engine for a given config. Unknown A2 fields
-/// the engine does not consume yet (e.g. FiLM insertion points) are ignored.
+/// can assert what reaches the engine for a given config.
+/// [`WaveNetConfig::reference_semantics`] is set by probing the raw JSON
+/// for A2 markers ([`config_has_a2_markers`]); nested condition_dsp and
+/// container submodels force it on regardless (they only exist in the A2
+/// era).
 pub fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, String> {
     // Try old format first (flat config with integer layer counts).
     if let Ok(old) = serde_json::from_value::<OldWaveNetConfig>(value.clone()) {
         return old.into_config();
     }
+    let reference_semantics = config_has_a2_markers(&value);
     // Try new format (layer array config objects).
     let new_cfg: NewWaveNetConfig =
         serde_json::from_value(value).map_err(|e| format!("Invalid WaveNet config: {e}"))?;
-    new_cfg.into_config()
+    new_cfg.into_config(reference_semantics)
 }
 
 // -- condition_dsp sub-network ------------------------------------------------
@@ -555,7 +682,14 @@ pub(crate) fn build_condition_dsp(value: &serde_json::Value) -> Result<WaveNetMo
             nested.architecture
         ));
     }
-    let config = parse_wavenet_config(nested.config).map_err(|e| format!("condition_dsp: {e}"))?;
+    let mut config =
+        parse_wavenet_config(nested.config).map_err(|e| format!("condition_dsp: {e}"))?;
+    // A condition_dsp only exists in the A2 era, and the reference builds
+    // it through the same `get_dsp` semantics as the outer net — even when
+    // the nested config itself looks A1-shaped (e.g. the
+    // wavenet_condition_dsp fixture's plain-Tanh sub-network), it must run
+    // with reference semantics, not the legacy engine path.
+    config.reference_semantics = true;
     let mut reader = WeightReader::new(&nested.weights);
     let model = WaveNetModel::from_config_and_weights(config, &mut reader)
         .map_err(|e| format!("condition_dsp: {e}"))?;
@@ -669,12 +803,19 @@ fn container_submodel_index(max_values: &[f64], size: f64) -> usize {
 /// exactly (the slice/layout verification of todo #1112), while top-level
 /// non-slimmable files keep the historical lenient warning so A1 and plain
 /// A2 files load bit-for-bit unchanged.
+///
+/// `force_reference` forces reference (A2) forward-pass semantics
+/// regardless of the config's own A2 markers: `SlimmableContainer`
+/// submodels only exist in the A2 era, so even an A1-shaped submodel runs
+/// with reference semantics, exactly as the reference `nam::get_dsp`
+/// would.
 fn build_model(
     architecture: &str,
     config: serde_json::Value,
     weights: &[f32],
     sample_rate: f32,
     strict_weights: bool,
+    force_reference: bool,
 ) -> Result<Box<dyn NamInference>, String> {
     let mut reader = WeightReader::new(weights);
     match architecture {
@@ -718,17 +859,14 @@ fn build_model(
                 )?;
                 debug_assert_eq!(slice, weights, "full-size slice must be the identity");
             }
-            let config = parse_wavenet_config(config)?;
             // Reference `parse_config_json`: a condition_dsp trained at a
-            // different rate than the outer model is a broken export.
-            if let Some(cd) = &config.condition_dsp {
-                let nested_rate = parse_sample_rate(cd.get("sample_rate"));
-                if nested_rate != sample_rate {
-                    return Err(format!(
-                        "condition_dsp expected sample rate ({nested_rate}) doesn't match model sample rate ({sample_rate})"
-                    ));
-                }
-            }
+            // different rate than the outer model is a broken export. The
+            // reference checks this at EVERY nesting level (each recursive
+            // `get_dsp` re-validates its own condition_dsp), so walk the
+            // raw JSON down through nested condition_dsp models too.
+            check_condition_dsp_rates(&config, sample_rate)?;
+            let mut config = parse_wavenet_config(config)?;
+            config.reference_semantics |= force_reference;
             let model = WaveNetModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
                 if slimmable {
@@ -816,9 +954,37 @@ fn build_model(
                     ));
                 }
             }
-            build_model(&sub.architecture, sub.config, &sub.weights, sample_rate, true)
+            build_model(
+                &sub.architecture,
+                sub.config,
+                &sub.weights,
+                sample_rate,
+                true,
+                // Containers only exist in the A2 era: submodels always run
+                // with reference semantics.
+                true,
+            )
         }
         other => Err(format!("Unsupported architecture: {other}")),
+    }
+}
+
+/// Walk a WaveNet config's `condition_dsp` chain and validate every nested
+/// model's sample rate against the top-level model's (reference
+/// `parse_config_json`, applied per level through the recursive `get_dsp`).
+fn check_condition_dsp_rates(config: &serde_json::Value, expected: f32) -> Result<(), String> {
+    let Some(cd) = config.get("condition_dsp").filter(|v| !v.is_null()) else {
+        return Ok(());
+    };
+    let nested_rate = parse_sample_rate(cd.get("sample_rate"));
+    if nested_rate != expected {
+        return Err(format!(
+            "condition_dsp expected sample rate ({nested_rate}) doesn't match model sample rate ({expected})"
+        ));
+    }
+    match cd.get("config") {
+        Some(nested_config) => check_condition_dsp_rates(nested_config, expected),
+        None => Ok(()),
     }
 }
 
@@ -836,6 +1002,7 @@ pub fn load_model_from_file(path: &str) -> Result<LoadedModel, String> {
         nam_file.config,
         &nam_file.weights,
         sample_rate,
+        false,
         false,
     )?;
 

@@ -372,10 +372,12 @@ fn slimmable_fixture_matches_non_slimmable_twin_bit_for_bit() {
         .expect("fixture loads")
         .model;
 
-    file["config"]["layers"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("slimmable");
+    let layer = file["config"]["layers"][0].as_object_mut().unwrap();
+    layer.remove("slimmable");
+    // `slimmable` was the file's only A2 marker; give the twin an inert one
+    // so it runs under the same (reference) semantics as the slimmable
+    // original instead of the legacy path (#1113 semantic gate).
+    layer.insert("gating_mode".into(), serde_json::json!("none"));
     let mut twin = load_value("stripped_twin", &file).expect("stripped twin loads");
 
     assert_outputs_bit_identical(
@@ -555,7 +557,11 @@ fn hand_packed_two_size_file_loads_the_full_slice_end_to_end() {
     // non-slimmable export.
     let mut twin_file = file.clone();
     for layer in twin_file["config"]["layers"].as_array_mut().unwrap() {
-        layer.as_object_mut().unwrap().remove("slimmable");
+        let layer = layer.as_object_mut().unwrap();
+        layer.remove("slimmable");
+        // Keep the twin on reference semantics (an inert A2 marker replaces
+        // the removed `slimmable` one, #1113 semantic gate).
+        layer.insert("gating_mode".into(), serde_json::json!("none"));
     }
     let mut twin = load_value("hand_packed_twin", &twin_file).expect("twin loads");
 
