@@ -82,6 +82,17 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
             .map(|c| c.latency_offset_samples)
             .unwrap_or(0)
     });
+    // Publish the offsets snapshot for the offline bounce/export
+    // threads, which build their own comp tables off the engine thread
+    // and must fold the same offsets (doc #260 finding #4). Refreshed
+    // here because every offsets change routes through this function
+    // (affects_latency covers the external-instrument commands and the
+    // ping applies its measurement via refresh too).
+    let offsets: std::collections::HashMap<crate::types::TrackId, i64> = external
+        .iter()
+        .map(|(&id, c)| (id, c.latency_offset_samples))
+        .collect();
+    ctx.shared.external_offsets.store(Arc::new(offsets));
     let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
     let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);
     if ctx

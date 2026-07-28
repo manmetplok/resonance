@@ -225,7 +225,7 @@ pub fn render_stem(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(tracks, busses, plugins);
+    let latency_comp = build_latency_comp(shared, tracks, busses, plugins);
     // Stems that include the master FX chain (the master stem) are
     // shifted by its latency on top of the track/bus comp; pre-rolling
     // and trimming both keeps every stem mutually sample-aligned and

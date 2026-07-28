@@ -128,6 +128,9 @@ pub(crate) fn begin_recording_stream(
     state: &mut HandlerState,
     start_sample: SamplePos,
 ) {
+    // Fresh session: no take shift unless the realtime bounce sets one
+    // after this returns (external-instrument round-trip compensation).
+    state.rec.take_shift_samples = 0;
     // Recording must have a project directory to stream WAVs into.
     // The startup modal guarantees a project is always selected, so
     // hitting this branch is a programmer error — surface it rather

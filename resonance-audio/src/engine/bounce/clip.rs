@@ -125,7 +125,7 @@ pub fn to_audio_clip(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(tracks, busses, plugins);
+    let latency_comp = build_latency_comp(shared, tracks, busses, plugins);
     // Render `max_latency` extra frames and drop the same number from
     // the front: plugin-delay compensation shifts every contributing
     // track by the pipeline latency, so trimming it gives the bounced
