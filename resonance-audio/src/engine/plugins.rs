@@ -47,6 +47,11 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             // (see `latency::chain_latencies`).
             | AudioCommand::SetTrackFrozenSource { .. }
             | AudioCommand::UnfreezeTrack { .. }
+            // Loading plugin state cycles the instance's activation and
+            // re-reads its latency (doc #260 finding #10) — a preset
+            // that implies a different latency (e.g. a longer IR) must
+            // land in the comp table.
+            | AudioCommand::LoadPluginState { .. }
             | AudioCommand::SetTrackFxBypass { .. }
             | AudioCommand::SetBusFxBypass { .. }
             // Master-chain edits don't change per-track comp (master
@@ -148,6 +153,45 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
         bus_max,
         &bus_delays,
     )));
+}
+
+/// Service plugin-initiated host callbacks (doc #260 finding #10):
+/// `clap_host_latency.changed()` and `clap_host.request_restart()` both
+/// flag the instance's host data; this poll — run once per engine-loop
+/// iteration — consumes the flags and performs the CLAP-sanctioned
+/// deactivate → reactivate cycle, which re-reads the plugin's latency
+/// (it may only change across that boundary, and the bridge serves an
+/// activation-time cache while active — todo #1125). If any instance
+/// cycled, the PDC table is republished so the new latency takes
+/// effect.
+///
+/// Instances whose lock is held by the audio callback are skipped
+/// without consuming their flag; the next iteration (~16 ms) retries.
+pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalInstruments) {
+    let mut any_restarted = false;
+    {
+        let plugins_guard = ctx.plugins.read();
+        for (&instance_id, mutex) in plugins_guard.iter() {
+            let Some(mut inst) = mutex.try_lock() else {
+                continue;
+            };
+            if !inst.0.take_host_restart_request() {
+                continue;
+            }
+            if inst.0.restart() {
+                any_restarted = true;
+            } else {
+                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                    "Plugin instance {} failed to reactivate after a restart/latency-change \
+                     request; it is deactivated and will stay silent.",
+                    instance_id
+                )));
+            }
+        }
+    }
+    if any_restarted {
+        refresh_latency_comp(ctx, external);
+    }
 }
 
 pub(crate) fn handle_add_plugin(

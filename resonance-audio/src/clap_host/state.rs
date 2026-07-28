@@ -90,12 +90,35 @@ impl ClapInstance {
     }
 
     /// Load state with full lifecycle cycle: stop → deactivate → load → activate → start.
-    /// This ensures `initialize()` runs again so the plugin picks up new persist fields.
+    /// This ensures `initialize()` runs again so the plugin picks up new persist fields,
+    /// and the post-reactivation latency re-query picks up any latency change the new
+    /// state implies (doc #260 finding #10).
     pub fn reload_with_state(&mut self, data: &[u8]) -> bool {
         if !self.active {
             return self.load_state(data);
         }
+        self.cycle_activation(|inst| inst.load_state(data))
+    }
 
+    /// Deactivate → reactivate cycle without touching state. This is the
+    /// CLAP-sanctioned safe point at which a plugin's latency may change:
+    /// the engine thread runs it when the plugin called
+    /// `clap_host_latency.changed()` or `clap_host.request_restart()`
+    /// (see [`ClapInstance::take_host_restart_request`]), and the fresh
+    /// latency is re-read on the way back up. Returns false — leaving
+    /// the plugin deactivated — if reactivation fails.
+    pub fn restart(&mut self) -> bool {
+        if !self.active {
+            return false;
+        }
+        self.cycle_activation(|_| true)
+    }
+
+    /// Shared activation cycle: stop → deactivate → `while_deactivated`
+    /// → activate → re-query latency → start. On any failure the plugin
+    /// is left deactivated (`self.active == false`) and `false` is
+    /// returned; `Drop` then skips the deactivate it would otherwise run.
+    fn cycle_activation(&mut self, while_deactivated: impl FnOnce(&mut Self) -> bool) -> bool {
         // Stop processing
         if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
             unsafe { stop(self.plugin) };
@@ -107,9 +130,7 @@ impl ClapInstance {
 
         self.active = false;
 
-        // Load state
-        let ok = self.load_state(data);
-        if !ok {
+        if !while_deactivated(self) {
             return false;
         }
 
@@ -123,6 +144,12 @@ impl ClapInstance {
         // Mark active immediately after successful activate,
         // so Drop will properly deactivate even if start_processing fails
         self.active = true;
+
+        // Latency may only change across a deactivate → reactivate
+        // boundary (and the bridge serves an activation-time cache while
+        // active — todo #1125), so this is exactly where the fresh value
+        // becomes readable.
+        self.requery_latency();
 
         // Start processing
         if let Some(start) = unsafe { (*self.plugin).start_processing } {
