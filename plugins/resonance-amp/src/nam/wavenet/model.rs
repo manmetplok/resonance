@@ -6,7 +6,8 @@
 //! Then: head MLP layers, head_scale.
 //!
 //! Tensor shapes follow the A2 bottleneck convention: the dilated conv and
-//! input mixin output `bottleneck` channels (doubled when gated), the
+//! input mixin output `bottleneck` channels (doubled for layers whose gating
+//! mode is `gated` or `blended` — primary + secondary halves), the
 //! activation and skip path run at bottleneck width, and the layer1x1 maps
 //! bottleneck back to `channels`. A1 models have `bottleneck == channels`,
 //! which reproduces the historical layout bit-identically.
@@ -14,8 +15,9 @@
 use super::super::activations::Activation;
 use super::super::parse::{WaveNetConfig, WeightReader};
 use super::super::{matvec, matvec_add, validate_matvec_dims, NamInference};
-use super::conv_layer::{Conv1x1, Conv1x1Bias, WaveNetLayer};
+use super::conv_layer::{Conv1x1, Conv1x1Bias, LayerGating, WaveNetLayer};
 use super::head::DenseLayer;
+use super::params::GatingMode;
 use super::ring::RingBuffer;
 
 pub struct WaveNetModel {
@@ -36,6 +38,9 @@ pub struct WaveNetModel {
     activation: Vec<f32>,
     conv_out: Vec<f32>,  // mid_ch sized; holds the activated z (bottleneck)
     mixin_buf: Vec<f32>, // mid_ch sized
+    /// Pre-activation copy of the primary half, for blended gating
+    /// (bottleneck sized).
+    pre_act_buf: Vec<f32>,
     residual_buf: Vec<f32>,
     skip_accum: Vec<f32>, // bottleneck sized
     rechannel_buf: Vec<f32>,
@@ -54,6 +59,19 @@ impl WaveNetModel {
         if config.stacks.is_empty() || config.stacks.iter().any(|s| s.dilations.is_empty()) {
             return Err("WaveNet config has no layers".into());
         }
+        // Per-layer gating vectors must line up with the layer list.
+        for (si, s) in config.stacks.iter().enumerate() {
+            if s.gating_modes.len() != s.dilations.len()
+                || s.secondary_activations.len() != s.dilations.len()
+            {
+                return Err(format!(
+                    "WaveNet stack {si}: gating_modes ({}) and secondary_activations ({}) must match dilations ({})",
+                    s.gating_modes.len(),
+                    s.secondary_activations.len(),
+                    s.dilations.len()
+                ));
+            }
+        }
 
         let num_stacks = config.stacks.len();
         let max_ch = config.stacks.iter().map(|s| s.channels).max().unwrap_or(1);
@@ -63,7 +81,20 @@ impl WaveNetModel {
             .map(|s| s.bottleneck)
             .max()
             .unwrap_or(1);
-        let max_mid = if config.gated { max_bn * 2 } else { max_bn };
+        // Conv/mixin scratch width: doubled for layers with gated/blended
+        // gating (primary + secondary halves).
+        let max_mid = config
+            .stacks
+            .iter()
+            .map(|s| {
+                if s.gating_modes.iter().any(|m| *m != GatingMode::None) {
+                    s.bottleneck * 2
+                } else {
+                    s.bottleneck
+                }
+            })
+            .max()
+            .unwrap_or(1);
         let head_size = config.head_size;
 
         let mut rechannels = Vec::with_capacity(num_stacks);
@@ -76,13 +107,6 @@ impl WaveNetModel {
         for stack_cfg in &config.stacks {
             let ch = stack_cfg.channels;
             let bottleneck = stack_cfg.bottleneck;
-            // Conv/mixin output width: doubled when gated (filter + gate),
-            // reference Layer ctor: `gated ? 2*bottleneck : bottleneck`.
-            let mid_ch = if config.gated {
-                bottleneck * 2
-            } else {
-                bottleneck
-            };
             // Reference validation: without a layer1x1 there is nothing to
             // map the bottleneck-wide activation back to `channels`.
             if !config.has_layer1x1 && bottleneck != ch {
@@ -95,13 +119,6 @@ impl WaveNetModel {
             // mode maps the A1 "Tanh" config to the fast-tanh path, exactly
             // as the previously hardcoded implementation (bit-identical).
             let stack_activation = Activation::from_config(&stack_cfg.activation, true);
-            // The A1 gate is architecturally the fast sigmoid; configurable
-            // gated/secondary activations arrive with A2 gating support.
-            let gate_activation = if config.gated {
-                Some(Activation::FastSigmoid)
-            } else {
-                None
-            };
 
             // --- Rechannel (1x1, no bias) ---
             if prev_ch != ch {
@@ -121,6 +138,33 @@ impl WaveNetModel {
 
             for (layer_idx, &dilation) in stack_cfg.dilations.iter().enumerate() {
                 let ks = stack_cfg.kernel_sizes[layer_idx];
+
+                // Conv/mixin output width: doubled for gated/blended layers
+                // (primary + secondary halves), reference Layer ctor:
+                // `gating_mode != NONE ? 2*bottleneck : bottleneck`.
+                let mode = stack_cfg.gating_modes[layer_idx];
+                let mid_ch = if mode == GatingMode::None {
+                    bottleneck
+                } else {
+                    bottleneck * 2
+                };
+                // Secondary (gate/blend) activation: config-driven, with the
+                // reference backward-compat `Sigmoid` default resolving to
+                // the fast sigmoid (bit-identical A1 gated path).
+                let gating = match mode {
+                    GatingMode::None => LayerGating::None,
+                    GatingMode::Gated | GatingMode::Blended => {
+                        let secondary = match &stack_cfg.secondary_activations[layer_idx] {
+                            Some(cfg) => Activation::secondary_from_config(cfg, true),
+                            None => Activation::FastSigmoid,
+                        };
+                        if mode == GatingMode::Gated {
+                            LayerGating::Gated(secondary)
+                        } else {
+                            LayerGating::Blended(secondary)
+                        }
+                    }
+                };
 
                 // _conv.weight [mid_ch, ch, kernel_size] row-major
                 let raw = reader.read(mid_ch * ch * ks)?;
@@ -176,7 +220,7 @@ impl WaveNetModel {
                     bottleneck,
                     mid_ch,
                     activation: stack_activation.clone(),
-                    gate_activation: gate_activation.clone(),
+                    gating,
                 });
             }
 
@@ -356,6 +400,7 @@ impl WaveNetModel {
             activation: scratch_activation,
             conv_out: scratch_conv_out,
             mixin_buf: vec![0.0; max_mid],
+            pre_act_buf: vec![0.0; max_bn],
             residual_buf: vec![0.0; max_ch],
             skip_accum: scratch_skip,
             rechannel_buf: vec![0.0; max_ch],
@@ -434,22 +479,38 @@ impl NamInference for WaveNetModel {
                     }
                 }
 
-                // Activation function (dispatch resolved at construction).
+                // Activation / gating (dispatch resolved at construction).
                 // The activated z is bottleneck-wide and lives in
-                // conv_out[..bottleneck]. A1 (bottleneck == channels)
+                // conv_out[..bottleneck]; for gated/blended layers the
+                // secondary half sits in conv_out[bottleneck..2*bottleneck]
+                // and must not be used past this point (reference
+                // NAM/gating_activations.h). A1 (bottleneck == channels)
                 // semantics preserved bit-identically: the gated path
                 // computes fast_tanh(z) * fast_sigmoid(g) per channel.
-                match &layer.gate_activation {
-                    Some(gate) => {
+                match &layer.gating {
+                    LayerGating::None => {
+                        layer.activation.apply(&mut self.conv_out[..bottleneck]);
+                    }
+                    LayerGating::Gated(secondary) => {
                         let (z, g) = self.conv_out.split_at_mut(bottleneck);
                         layer.activation.apply(&mut z[..bottleneck]);
-                        gate.apply(&mut g[..bottleneck]);
+                        secondary.apply(&mut g[..bottleneck]);
                         for c in 0..bottleneck {
                             z[c] *= g[c];
                         }
                     }
-                    None => {
-                        layer.activation.apply(&mut self.conv_out[..bottleneck]);
+                    LayerGating::Blended(secondary) => {
+                        // Reference BlendingActivation: alpha = blend(g);
+                        // out = alpha * primary(z) + (1 - alpha) * z_pre,
+                        // with z_pre the pre-activation primary half.
+                        let (z, g) = self.conv_out.split_at_mut(bottleneck);
+                        self.pre_act_buf[..bottleneck].copy_from_slice(&z[..bottleneck]);
+                        layer.activation.apply(&mut z[..bottleneck]);
+                        secondary.apply(&mut g[..bottleneck]);
+                        for c in 0..bottleneck {
+                            let alpha = g[c];
+                            z[c] = alpha * z[c] + (1.0 - alpha) * self.pre_act_buf[c];
+                        }
                     }
                 }
 

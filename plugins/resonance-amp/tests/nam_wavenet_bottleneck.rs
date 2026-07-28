@@ -4,8 +4,9 @@
 //! (bottleneck == channels is bit-identical to the historical layout), and
 //! construction-time validation of degenerate configs.
 
-use resonance_amp::nam::activations::ActivationConfig;
+use resonance_amp::nam::activations::{ActivationConfig, ActivationKind};
 use resonance_amp::nam::parse::{load_model_from_file, StackConfig, WaveNetConfig, WeightReader};
+use resonance_amp::nam::wavenet::params::GatingMode;
 use resonance_amp::nam::wavenet::WaveNetModel;
 use resonance_amp::nam::{fast_tanh, NamInference};
 
@@ -128,8 +129,21 @@ fn gated_bottleneck_conv_consumes_two_bottleneck_output_channels() {
 /// Same constructions driven directly through WeightReader: every weight is
 /// consumed (head_scale included), nothing remains — this pins the exact
 /// consumption totals to the reference formula.
-fn bottleneck_stack(channels: usize, bottleneck: usize, dilations: Vec<usize>) -> StackConfig {
+fn bottleneck_stack(
+    channels: usize,
+    bottleneck: usize,
+    dilations: Vec<usize>,
+    gated: bool,
+) -> StackConfig {
     let n = dilations.len();
+    let (gating_modes, secondary_activations) = if gated {
+        (
+            vec![GatingMode::Gated; n],
+            vec![Some(ActivationConfig::simple(ActivationKind::Sigmoid)); n],
+        )
+    } else {
+        (vec![GatingMode::None; n], vec![None; n])
+    };
     StackConfig {
         input_size: 1,
         condition_size: 1,
@@ -139,6 +153,8 @@ fn bottleneck_stack(channels: usize, bottleneck: usize, dilations: Vec<usize>) -
         dilations,
         kernel_sizes: vec![2; n],
         activation: ActivationConfig::from_name("Tanh").unwrap(),
+        gating_modes,
+        secondary_activations,
     }
 }
 
@@ -146,10 +162,9 @@ fn bottleneck_stack(channels: usize, bottleneck: usize, dilations: Vec<usize>) -
 fn direct_construction_consumes_every_weight() {
     let config = WaveNetConfig {
         input_size: 1,
-        stacks: vec![bottleneck_stack(3, 2, vec![1, 2])],
+        stacks: vec![bottleneck_stack(3, 2, vec![1, 2], false)],
         head: vec![],
         head_size: 1,
-        gated: false,
         head_bias: true,
         has_layer1x1: true,
     };
@@ -163,10 +178,9 @@ fn direct_construction_consumes_every_weight() {
 fn direct_gated_construction_consumes_every_weight() {
     let config = WaveNetConfig {
         input_size: 1,
-        stacks: vec![bottleneck_stack(3, 2, vec![1])],
+        stacks: vec![bottleneck_stack(3, 2, vec![1], true)],
         head: vec![],
         head_size: 1,
-        gated: true,
         head_bias: true,
         has_layer1x1: true,
     };
@@ -251,9 +265,10 @@ fn explicit_bottleneck_equal_to_channels_is_bit_identical_to_a1_default() {
     let without_field = format!(r#"{{"layers": [{{ {base} }}], "head": null, "head_scale": 1.0}}"#);
 
     // channels=2, bottleneck=2, gated, 2 layers, kernel 2:
-    // rechannel 2 + 2*(conv 4*2*2=16 + bias 4 + mixin 4 + l1x1 4+2) + hr 4+2...
-    // exact count pinned by construction succeeding with no leftovers below.
-    let count = 2 + 2 * (16 + 4 + 4 + 6) + (4 + 2) + 1;
+    // rechannel 2 + 2*(conv 4*2*2=16 + bias 4 + mixin 4 + l1x1 4+2)
+    // + head_rechannel 1*2+1=3 + head_scale 1 — the exact reference total,
+    // so the load leaves no unused weights.
+    let count = 2 + 2 * (16 + 4 + 4 + 6) + (2 + 1) + 1;
     let weights = counted_weights(count);
 
     let mut explicit = load_nam("bn_explicit", &new_format_json(&with_field, &weights))
@@ -363,10 +378,11 @@ fn bottleneck_without_layer1x1_is_rejected() {
             dilations: vec![1],
             kernel_sizes: vec![2],
             activation: ActivationConfig::from_name("Tanh").unwrap(),
+            gating_modes: vec![GatingMode::None],
+            secondary_activations: vec![None],
         }],
         head: vec![],
         head_size: 1,
-        gated: false,
         head_bias: false,
         has_layer1x1: false,
     };

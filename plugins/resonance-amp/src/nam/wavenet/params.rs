@@ -7,9 +7,11 @@
 //! value, so a plain A1 layer-array config parses to the same effective
 //! configuration the engine uses today.
 //!
-//! This module is PARSE-ONLY for now: model construction does not consume
-//! [`WaveNetFullConfig`] yet. The A2 inference todos (#1105..#1113) wire it
-//! into `WaveNetModel` construction area by area.
+//! Model construction does not consume [`WaveNetFullConfig`] wholesale yet;
+//! the A2 inference todos (#1105..#1113) wire it into `WaveNetModel`
+//! construction area by area. The gating surface ([`GatingMode`] + secondary
+//! activations, via `parse_gating_config`) is shared with the engine's
+//! legacy config path in `parse.rs` and drives inference already.
 
 use serde_json::Value;
 
@@ -560,7 +562,37 @@ fn parse_gating(
     num_layers: usize,
     ctx: &str,
 ) -> Result<(Vec<GatingMode>, Vec<Option<ActivationConfig>>), String> {
-    let secondary_json = non_null(obj, "secondary_activation");
+    let legacy_gated = match non_null(obj, "gated") {
+        Some(v) => Some(
+            v.as_bool()
+                .ok_or_else(|| format!("{ctx}: gated must be a boolean"))?,
+        ),
+        None => None,
+    };
+    parse_gating_config(
+        non_null(obj, "gating_mode"),
+        legacy_gated,
+        non_null(obj, "secondary_activation"),
+        num_layers,
+        ctx,
+    )
+}
+
+/// Core gating-config semantics, shared between the typed A2 parse above and
+/// the legacy engine config path in `parse.rs` (single source of truth —
+/// wired into model construction by the gating-mode todo #1106).
+///
+/// `gating_mode` is the raw JSON value (string or array of strings),
+/// `legacy_gated` the old boolean `gated` field, and `secondary_activation`
+/// the raw secondary activation config (single value or per-layer array).
+#[allow(clippy::type_complexity)]
+pub(crate) fn parse_gating_config(
+    gating_mode: Option<&Value>,
+    legacy_gated: Option<bool>,
+    secondary_json: Option<&Value>,
+    num_layers: usize,
+    ctx: &str,
+) -> Result<(Vec<GatingMode>, Vec<Option<ActivationConfig>>), String> {
 
     // Secondary activation for one gated/blended layer.
     let secondary_for = |layer: usize| -> Result<ActivationConfig, String> {
@@ -580,7 +612,7 @@ fn parse_gating(
         }
     };
 
-    match non_null(obj, "gating_mode") {
+    match gating_mode {
         Some(Value::Array(arr)) => {
             let mut modes = Vec::with_capacity(arr.len());
             let mut secondary = Vec::with_capacity(arr.len());
@@ -629,8 +661,7 @@ fn parse_gating(
         )),
         None => {
             // Legacy boolean `gated`; absent means ungated.
-            let gated = opt_bool_or(obj, "gated", false, ctx)?;
-            if gated {
+            if legacy_gated.unwrap_or(false) {
                 Ok((
                     vec![GatingMode::Gated; num_layers],
                     vec![Some(ActivationConfig::simple(ActivationKind::Sigmoid)); num_layers],
