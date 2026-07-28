@@ -88,3 +88,63 @@ fn zero_block_len_returns_zero() {
     let now = Instant::now();
     assert_eq!(live_arrival_sample_offset(now, now, SR, 0), 0);
 }
+
+// -- Audio-thread pickup at small quanta (doc #260 finding #16) --------------
+//
+// The old engine-thread pickup ran ~16 ms after arrival, so at q=128
+// (2.67 ms) `block_len - elapsed` always clamped to 0 and every live
+// note quantized to the block boundary. Picked up on the audio callback
+// one quantum after arrival, elapsed stays under one block and offsets
+// spread properly.
+
+const SMALL_BLOCK: usize = 128;
+
+#[test]
+fn quantum_128_offsets_are_nonzero_and_spread() {
+    let now = Instant::now();
+    // Arrived 1 ms ago (48 samples): lands at 128 - 48 = 80.
+    let off = live_arrival_sample_offset(now - secs_for_samples(48.0), now, SR, SMALL_BLOCK);
+    assert_eq!(off, 80);
+    // Two events 0.5 ms apart keep their 24-sample spacing.
+    let a = live_arrival_sample_offset(now - secs_for_samples(72.0), now, SR, SMALL_BLOCK);
+    let b = live_arrival_sample_offset(now - secs_for_samples(48.0), now, SR, SMALL_BLOCK);
+    assert_eq!(b - a, 24);
+    assert!(a > 0, "sub-block arrivals must not clamp to the boundary");
+}
+
+#[test]
+fn engine_cadence_arrivals_would_still_clamp_at_small_quanta() {
+    // Documents WHY pickup moved to the audio thread: a 16 ms-old
+    // arrival (the old engine cadence) exceeds the whole 128-frame
+    // block, so its offset clamps to 0 — timing quantized away.
+    let now = Instant::now();
+    let arrival = now - std::time::Duration::from_millis(16);
+    assert_eq!(live_arrival_sample_offset(arrival, now, SR, SMALL_BLOCK), 0);
+}
+
+// -- Instrument resolution for the audio-thread pickup -----------------------
+
+use indexmap::IndexMap;
+use resonance_audio::__test_support::live_instrument_for;
+use resonance_audio::types::{Track, TrackId, TrackType};
+
+#[test]
+fn live_instrument_resolution_mirrors_the_engine_path() {
+    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    // Instrument track with an instrument in slot 0.
+    let inst = Track::with_type(1, "inst".into(), TrackType::Instrument);
+    inst.push_plugin(42);
+    inst.push_plugin(43); // FX after the instrument — never the target
+    tracks.insert(1, inst);
+    // Instrument track with an empty chain.
+    tracks.insert(2, Track::with_type(2, "empty".into(), TrackType::Instrument));
+    // Audio track with plugins: never accepts live MIDI.
+    let audio = Track::new(3, "audio".into());
+    audio.push_plugin(7);
+    tracks.insert(3, audio);
+
+    assert_eq!(live_instrument_for(&tracks, 1), Some(42));
+    assert_eq!(live_instrument_for(&tracks, 2), None);
+    assert_eq!(live_instrument_for(&tracks, 3), None);
+    assert_eq!(live_instrument_for(&tracks, 99), None);
+}

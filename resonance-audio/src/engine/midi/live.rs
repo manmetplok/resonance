@@ -173,11 +173,24 @@ pub(crate) fn handle_send_note_off(
         .send_note_off(track_id, channel, note);
 }
 
-/// Dispatch a single drained `LiveMidiEvent`. Routes inbound notes
-/// to the track's instrument plugin (live monitoring) and to a
-/// recording clip (when the track is armed during playback). Thru
-/// to the track's hardware MIDI output is handled inside
-/// `handle_send_note_on/off`.
+/// The Thru channel for a track's hardware MIDI output, mirroring the
+/// `handle_send_note_on` guards: only MIDI-accepting tracks emit Thru.
+fn thru_channel(ctx: &HandlerCtx, track_id: TrackId) -> Option<u8> {
+    let tracks_guard = ctx.tracks.read();
+    let track = tracks_guard.get(&track_id)?;
+    if !track.track_type.accepts_midi() {
+        return None;
+    }
+    Some(track.midi_output_channel.unwrap_or(0))
+}
+
+/// Bookkeeping for a `LiveMidiEvent` the *audio callback* already
+/// picked up and delivered to the instrument (doc #260 finding #16,
+/// `mixer::pickup_live_midi`): record-into-clip when armed + playing,
+/// and Thru to the track's hardware MIDI output. Deliberately does NOT
+/// touch the plugin — that would double-trigger the note the audio
+/// thread already queued one quantum ago. (GUI notes still take the
+/// full `handle_send_note_on/off` path via `AudioCommand::SendNoteOn`.)
 pub(crate) fn handle_live_midi_event(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -190,17 +203,13 @@ pub(crate) fn handle_live_midi_event(
             velocity,
             arrival,
         } => {
-            // handle_send_note_on already routes to plugin AND to
-            // the configured MIDI output (Thru). Record-into-clip
-            // happens separately; recording must not also re-emit
-            // the note.
-            let offset = live_arrival_sample_offset(
-                arrival,
-                std::time::Instant::now(),
-                ctx.sample_rate,
-                ctx.quantum,
-            );
-            handle_send_note_on(ctx, state, track_id, note, velocity, offset);
+            if let Some(channel) = thru_channel(ctx, track_id) {
+                let velocity_u8 = (velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+                state
+                    .midi_hw
+                    .midi_outputs
+                    .send_note_on(track_id, channel, note, velocity_u8);
+            }
             handle_record_midi_event(ctx, state, track_id, true, note, velocity, arrival);
         }
         LiveMidiEvent::InboundNoteOff {
@@ -208,13 +217,12 @@ pub(crate) fn handle_live_midi_event(
             note,
             arrival,
         } => {
-            let offset = live_arrival_sample_offset(
-                arrival,
-                std::time::Instant::now(),
-                ctx.sample_rate,
-                ctx.quantum,
-            );
-            handle_send_note_off(ctx, state, track_id, note, offset);
+            if let Some(channel) = thru_channel(ctx, track_id) {
+                state
+                    .midi_hw
+                    .midi_outputs
+                    .send_note_off(track_id, channel, note);
+            }
             handle_record_midi_event(ctx, state, track_id, false, note, 0.0, arrival);
         }
     }

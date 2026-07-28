@@ -412,6 +412,12 @@ impl AudioEngine {
         // MIDI events queue without bound. 1024 fits a comfortable
         // burst at typical engine-thread cadence (~60 Hz wakeups).
         let (live_midi_tx, live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(1024);
+        // Audio-thread live-MIDI pickup (doc #260 finding #16): the mix
+        // callback drains `live_midi_rx` (instrument delivery within one
+        // quantum) and forwards each event on this channel for the
+        // engine thread's recording / MIDI-thru bookkeeping.
+        let (live_midi_fwd_tx, live_midi_fwd_rx) =
+            crossbeam_channel::bounded::<LiveMidiEvent>(1024);
         // Separate channel for the dedicated control-surface input. Same
         // bound + rationale as the per-track live MIDI channel above.
         let (live_control_tx, live_control_rx) =
@@ -547,6 +553,8 @@ impl AudioEngine {
             // sticky startup backlog (same graph clock); the cpal
             // fallback keeps the standing margin (doc #260 finding #12).
             let mut monitor_drain = mixer::MonitorDrain::new(native_backend);
+            let live_midi_rx = live_midi_rx.clone();
+            let live_midi_fwd = live_midi_fwd_tx.clone();
 
             // Pre-fault every page of the audio-thread scratch so the cpal
             // callback isn't the first writer. `vec![0.0f32; N]` and
@@ -596,6 +604,8 @@ impl AudioEngine {
                         &mut monitor_cons,
                         &mut monitor_temp,
                         &mut monitor_drain,
+                        &live_midi_rx,
+                        &live_midi_fwd,
                         audio_buf_frames,
                         audio_quantum,
                         &mut ab_meters,
@@ -752,7 +762,7 @@ impl AudioEngine {
                     automation_ctrl,
                     monitor_prod_audio,
                     live_midi_tx,
-                    live_midi_rx,
+                    live_midi_fwd_rx,
                     live_control_tx,
                     live_control_rx,
                     clock_tx,

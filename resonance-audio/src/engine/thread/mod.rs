@@ -218,7 +218,10 @@ pub(crate) fn engine_thread(
     automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     live_midi_tx: Sender<LiveMidiEvent>,
-    live_midi_rx: Receiver<LiveMidiEvent>,
+    // Events already picked up (and instrument-delivered) by the audio
+    // callback, forwarded here for recording + MIDI-thru bookkeeping
+    // (doc #260 finding #16).
+    live_midi_fwd_rx: Receiver<LiveMidiEvent>,
     live_control_tx: Sender<LiveControlEvent>,
     live_control_rx: Receiver<LiveControlEvent>,
     clock_tx: Sender<MidiClockEvent>,
@@ -317,11 +320,12 @@ pub(crate) fn engine_thread(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
 
-        // Drain any hardware MIDI input that's queued up since the
-        // previous iteration. Each event is dispatched into the same
-        // queue_note_on/off path as `AudioCommand::SendNoteOn`, plus
-        // optional record-into-clip and Thru-to-output.
-        for ev in live_midi_rx.try_iter() {
+        // Drain hardware MIDI events the audio callback picked up since
+        // the previous iteration. Instrument delivery already happened
+        // on the audio thread (within one quantum — doc #260 finding
+        // #16); this pass only does the non-realtime bookkeeping:
+        // record-into-clip and Thru-to-output.
+        for ev in live_midi_fwd_rx.try_iter() {
             midi::handle_live_midi_event(&ctx, &mut state, ev);
         }
 
