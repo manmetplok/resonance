@@ -2,15 +2,21 @@
 //!
 //! Follows the NAM (Neural Amp Modeler) weight serialization order
 //! (reference `set_weights_` in NAM/wavenet/model.cpp):
-//! Per LayerArray (stack): rechannel, layers (conv+bias, input_mixin, layer1x1), head_rechannel
+//! Per LayerArray (stack): rechannel, layers (conv+bias, input_mixin,
+//! layer1x1, head1x1), head_rechannel
 //! Then: head MLP layers, head_scale.
 //!
 //! Tensor shapes follow the A2 bottleneck convention: the dilated conv and
 //! input mixin output `bottleneck` channels (doubled for layers whose gating
 //! mode is `gated` or `blended` — primary + secondary halves), the
 //! activation and skip path run at bottleneck width, and the layer1x1 maps
-//! bottleneck back to `channels`. A1 models have `bottleneck == channels`,
-//! which reproduces the historical layout bit-identically.
+//! bottleneck back to `channels`. With an active `head1x1`, each layer's
+//! skip contribution goes through a dedicated grouped 1x1 conv (bottleneck
+//! -> `head1x1.out_channels`), so the stack's skip accumulator and the
+//! head_rechannel input are `out_channels` wide (reference `_head_rechannel`
+//! / `_head_output_size` in NAM/wavenet/model.cpp). A1 models have
+//! `bottleneck == channels` and no head1x1, which reproduces the historical
+//! layout bit-identically.
 
 use super::super::activations::Activation;
 use super::super::parse::{WaveNetConfig, WeightReader};
@@ -71,7 +77,11 @@ pub struct WaveNetModel {
     /// (bottleneck sized).
     pre_act_buf: Vec<f32>,
     residual_buf: Vec<f32>,
-    skip_accum: Vec<f32>, // bottleneck sized
+    /// Skip accumulator: `head1x1.out_channels` wide for stacks with an
+    /// active head1x1, else bottleneck wide.
+    skip_accum: Vec<f32>,
+    /// Per-layer head1x1 output (head1x1.out_channels sized).
+    head1x1_buf: Vec<f32>,
     rechannel_buf: Vec<f32>,
     head_input: Vec<f32>, // head_size sized, accumulated across stacks
     head_buf_a: Vec<f32>,
@@ -103,7 +113,17 @@ impl WaveNetModel {
         }
 
         let num_stacks = config.stacks.len();
-        let max_ch = config.stacks.iter().map(|s| s.channels).max().unwrap_or(1);
+        // The condition width can exceed the channel count (a condition_dsp
+        // sub-model may feed wider condition signals than the audio path,
+        // e.g. the wavenet_a2_max fixture); the condition snapshot buffer
+        // and the input-mixin validation scratch must cover both.
+        let max_ch = config
+            .stacks
+            .iter()
+            .flat_map(|s| [s.channels, s.condition_size])
+            .max()
+            .unwrap_or(1)
+            .max(1);
         let max_bn = config
             .stacks
             .iter()
@@ -124,6 +144,22 @@ impl WaveNetModel {
             })
             .max()
             .unwrap_or(1);
+        // Skip accumulator width per stack: head1x1.out_channels when the
+        // stack's head1x1 is active, else bottleneck (reference
+        // `_head_output_size`).
+        let max_skip = config
+            .stacks
+            .iter()
+            .map(|s| {
+                if s.head1x1.active {
+                    s.head1x1.out_channels
+                } else {
+                    s.bottleneck
+                }
+            })
+            .max()
+            .unwrap_or(1)
+            .max(1);
         let head_size = config.head_size;
 
         let mut rechannels = Vec::with_capacity(num_stacks);
@@ -255,6 +291,30 @@ impl WaveNetModel {
                     None
                 };
 
+                // _head1x1: optional 1x1 skip conv mapping the activated z
+                // (bottleneck) to head1x1.out_channels. Always biased and
+                // consumed AFTER the layer1x1 (reference Layer::set_weights_:
+                // conv, input_mixin, layer1x1, head1x1) — reference
+                // `Conv1x1(bottleneck, out_channels, true, groups)`; the
+                // flat grouped order is the compact per-group layout, read
+                // as-is.
+                let head1x1 = if stack_cfg.head1x1.active {
+                    let h_out = stack_cfg.head1x1.out_channels;
+                    let h_groups = stack_cfg.head1x1.groups;
+                    check_groups(&ctx, "head1x1", bottleneck, h_out, h_groups)?;
+                    let w = reader.read(h_out * bottleneck / h_groups)?;
+                    let b = reader.read(h_out)?;
+                    Some(Conv1x1Bias {
+                        weight: w,
+                        bias: b,
+                        out_ch: h_out,
+                        in_ch: bottleneck,
+                        groups: h_groups,
+                    })
+                } else {
+                    None
+                };
+
                 let ring_capacity = (ks - 1) * dilation + 2;
                 rings.push(RingBuffer::new(ring_capacity, ch));
 
@@ -263,6 +323,7 @@ impl WaveNetModel {
                     b_conv,
                     w_input_mixin,
                     layer1x1,
+                    head1x1,
                     kernel_size: ks,
                     dilation,
                     channels: ch,
@@ -279,11 +340,18 @@ impl WaveNetModel {
             ring_buffers.push(rings);
 
             // --- Head rechannel (1x1, bias controlled by head_bias) ---
-            // Its input is the accumulated skip signal, which is
-            // bottleneck-wide (reference `_head_rechannel(bottleneck,
-            // head_size, ...)` when head1x1 is inactive).
+            // Its input is the accumulated skip signal:
+            // head1x1.out_channels wide when the stack's head1x1 is active,
+            // else bottleneck wide (reference `_head_rechannel(
+            // head1x1.active ? head1x1.out_channels : bottleneck,
+            // head_size, ...)`).
+            let skip_ch = if stack_cfg.head1x1.active {
+                stack_cfg.head1x1.out_channels
+            } else {
+                bottleneck
+            };
             let hr_out = stack_cfg.head_size;
-            let hr_weight = reader.read(hr_out * bottleneck)?;
+            let hr_weight = reader.read(hr_out * skip_ch)?;
             let hr_bias = if config.head_bias {
                 reader.read(hr_out)?
             } else {
@@ -293,7 +361,7 @@ impl WaveNetModel {
                 weight: hr_weight,
                 bias: hr_bias,
                 out_ch: hr_out,
-                in_ch: bottleneck,
+                in_ch: skip_ch,
                 // The head rechannel is ungrouped in the reference
                 // (head1x1 grouping is a separate module/todo).
                 groups: 1,
@@ -356,7 +424,7 @@ impl WaveNetModel {
         // Validate matvec dimensions for all weight matrices at load time.
         let scratch_activation = vec![0.0f32; max_ch];
         let scratch_conv_out = vec![0.0f32; max_mid];
-        let scratch_skip = vec![0.0f32; max_bn];
+        let scratch_skip = vec![0.0f32; max_skip];
         let scratch_head_buf = vec![0.0f32; max_head_buf];
         let scratch_head_input = vec![0.0f32; head_size];
 
@@ -420,6 +488,23 @@ impl WaveNetModel {
                         ));
                     }
                 }
+                if let Some(ref h1x1) = layer.head1x1 {
+                    // head1x1 input is the bottleneck-wide activated z
+                    // (conv_out scratch); its output feeds the skip
+                    // accumulator scratch.
+                    if !validate_grouped_matvec_dims(
+                        &h1x1.weight,
+                        &scratch_conv_out[..h1x1.in_ch],
+                        &scratch_skip[..h1x1.out_ch],
+                        h1x1.out_ch,
+                        h1x1.in_ch,
+                        h1x1.groups,
+                    ) {
+                        return Err(format!(
+                            "WaveNet stack {si} layer {li}: head1x1 dimension mismatch"
+                        ));
+                    }
+                }
             }
             let hr = &head_rechannels[si];
             if !validate_matvec_dims(
@@ -460,6 +545,7 @@ impl WaveNetModel {
             pre_act_buf: vec![0.0; max_bn],
             residual_buf: vec![0.0; max_ch],
             skip_accum: scratch_skip,
+            head1x1_buf: vec![0.0; max_skip],
             rechannel_buf: vec![0.0; max_ch],
             head_input: scratch_head_input,
             head_buf_a: scratch_head_buf,
@@ -498,8 +584,16 @@ impl NamInference for WaveNetModel {
             // we need to save condition for input_mixin. We reuse rechannel_buf for this.
             self.rechannel_buf[..ch].copy_from_slice(&self.activation[..ch]);
 
-            // Zero skip accumulator for this stack (bottleneck-wide)
-            self.skip_accum[..bottleneck].fill(0.0);
+            // Zero skip accumulator for this stack. Its width follows the
+            // head path: head1x1.out_channels when the stack's head1x1 is
+            // active, else bottleneck (reference `_head_output_size`). All
+            // layers of a stack share one head1x1 config (per-layer-array in
+            // the reference), so the width is uniform within the stack.
+            let skip_ch = stack[0]
+                .head1x1
+                .as_ref()
+                .map_or(bottleneck, |h| h.out_ch);
+            self.skip_accum[..skip_ch].fill(0.0);
 
             for (layer_idx, layer) in stack.iter().enumerate() {
                 let ring = &mut self.ring_buffers[stack_idx][layer_idx];
@@ -588,9 +682,29 @@ impl NamInference for WaveNetModel {
                     }
                 }
 
-                // Add z to the skip accumulator (bottleneck-wide)
-                for c in 0..bottleneck {
-                    self.skip_accum[c] += self.conv_out[c];
+                // Skip contribution: head1x1(activated z) when the stack's
+                // head1x1 is active (reference `_head1x1->process_(z)` on
+                // the activated top-bottleneck rows), else the activated z
+                // itself (A1 direct skip, bottleneck-wide).
+                match &layer.head1x1 {
+                    Some(h1x1) => {
+                        grouped_matvec(
+                            &h1x1.weight,
+                            &self.conv_out[..h1x1.in_ch],
+                            h1x1.out_ch,
+                            h1x1.in_ch,
+                            h1x1.groups,
+                            &mut self.head1x1_buf,
+                        );
+                        for c in 0..h1x1.out_ch {
+                            self.skip_accum[c] += self.head1x1_buf[c] + h1x1.bias[c];
+                        }
+                    }
+                    None => {
+                        for c in 0..bottleneck {
+                            self.skip_accum[c] += self.conv_out[c];
+                        }
+                    }
                 }
 
                 // Residual connection: layer1x1 maps z (bottleneck) back to
@@ -623,12 +737,12 @@ impl NamInference for WaveNetModel {
                 }
             }
 
-            // Head rechannel: project skip_accum (bottleneck) to head_size
-            // and accumulate
+            // Head rechannel: project skip_accum (skip_ch wide) to
+            // head_size and accumulate
             let hr = &self.head_rechannels[stack_idx];
             // Pre-activation on skip_accum before head_rechannel, using the
             // stack's configured activation (A1: fast tanh, as before).
-            stack[0].activation.apply(&mut self.skip_accum[..bottleneck]);
+            stack[0].activation.apply(&mut self.skip_accum[..skip_ch]);
             matvec(
                 &hr.weight,
                 &self.skip_accum[..hr.in_ch],

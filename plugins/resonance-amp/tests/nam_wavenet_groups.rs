@@ -6,7 +6,7 @@
 
 use resonance_amp::nam::activations::{ActivationConfig, ActivationKind};
 use resonance_amp::nam::parse::{load_model_from_file, StackConfig, WaveNetConfig, WeightReader};
-use resonance_amp::nam::wavenet::params::GatingMode;
+use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params};
 use resonance_amp::nam::wavenet::WaveNetModel;
 use resonance_amp::nam::{fast_tanh, NamInference};
 
@@ -79,6 +79,7 @@ fn grouped_stack(
         groups_input,
         groups_input_mixin,
         layer1x1_groups,
+        head1x1: Head1x1Params::inactive(channels),
     }
 }
 
@@ -219,6 +220,7 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
             groups_input: 2,
             groups_input_mixin: 1,
             layer1x1_groups: 1,
+            head1x1: Head1x1Params::inactive(4),
         }],
         head: vec![],
         head_size: 1,

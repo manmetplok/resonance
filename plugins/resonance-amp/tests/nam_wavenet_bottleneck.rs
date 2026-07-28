@@ -6,7 +6,7 @@
 
 use resonance_amp::nam::activations::{ActivationConfig, ActivationKind};
 use resonance_amp::nam::parse::{load_model_from_file, StackConfig, WaveNetConfig, WeightReader};
-use resonance_amp::nam::wavenet::params::GatingMode;
+use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params};
 use resonance_amp::nam::wavenet::WaveNetModel;
 use resonance_amp::nam::{fast_tanh, NamInference};
 
@@ -158,6 +158,7 @@ fn bottleneck_stack(
         groups_input: 1,
         groups_input_mixin: 1,
         layer1x1_groups: 1,
+        head1x1: Head1x1Params::inactive(channels),
     }
 }
 
@@ -386,6 +387,7 @@ fn bottleneck_without_layer1x1_is_rejected() {
             groups_input: 1,
             groups_input_mixin: 1,
             layer1x1_groups: 1,
+            head1x1: Head1x1Params::inactive(2),
         }],
         head: vec![],
         head_size: 1,

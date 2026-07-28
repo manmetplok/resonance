@@ -59,6 +59,9 @@ pub(super) enum LayerGating {
 ///                  `Conv1x1::set_weights_` in NAM/dsp.cpp)
 ///   _layer1x1.weight [ch, bottleneck/layer1x1.groups]  (if active)
 ///   _layer1x1.bias [ch]                                (if active)
+///   _head1x1.weight [head1x1.out_channels, bottleneck/head1x1.groups]
+///                                                      (if active)
+///   _head1x1.bias  [head1x1.out_channels]              (if active)
 ///
 /// where `mid_ch = 2*bottleneck` when the layer's gating mode is gated or
 /// blended, else `bottleneck`. In A1 models `bottleneck == channels` and all
@@ -79,6 +82,12 @@ pub(super) struct WaveNetLayer {
     /// Layer 1x1 residual conv (bottleneck -> channels). None when the
     /// config has no layer1x1, which requires bottleneck == channels.
     pub(super) layer1x1: Option<Conv1x1Bias>,
+
+    /// Head 1x1 skip conv (bottleneck -> head1x1.out_channels, always
+    /// biased, reference `Conv1x1(bottleneck, out_channels, true, groups)`).
+    /// When present, the layer's skip contribution is `head1x1(activated z)`
+    /// instead of the activated z itself; None (A1) keeps the direct skip.
+    pub(super) head1x1: Option<Conv1x1Bias>,
 
     pub(super) kernel_size: usize,
     pub(super) dilation: usize,

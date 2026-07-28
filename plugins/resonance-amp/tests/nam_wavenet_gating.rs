@@ -9,7 +9,7 @@ use resonance_amp::nam::activations::{hardswish, leaky_relu, ActivationConfig, A
 use resonance_amp::nam::parse::{
     load_model_from_file, parse_full_wavenet_config, StackConfig, WaveNetConfig, WeightReader,
 };
-use resonance_amp::nam::wavenet::params::GatingMode;
+use resonance_amp::nam::wavenet::params::{GatingMode, Head1x1Params};
 use resonance_amp::nam::wavenet::WaveNetModel;
 use resonance_amp::nam::{fast_tanh, sigmoid as fast_sigmoid, NamInference};
 
@@ -270,6 +270,7 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
             groups_input: 1,
             groups_input_mixin: 1,
             layer1x1_groups: 1,
+            head1x1: Head1x1Params::inactive(2),
         }],
         head: vec![],
         head_size: 1,
@@ -358,6 +359,7 @@ fn fixture_typed_gating_vectors_drive_construction() {
         groups_input: 1,
         groups_input_mixin: 1,
         layer1x1_groups: 1,
+        head1x1: Head1x1Params::inactive(l1.channels),
     };
 
     // Reference weight count for this stack.
