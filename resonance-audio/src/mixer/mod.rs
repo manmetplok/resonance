@@ -64,6 +64,31 @@ pub fn render_aux_for_test(
     frames: usize,
     sample_rate: u32,
 ) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
+    render_aux_with_comp_for_test(
+        tracks,
+        busses,
+        clips,
+        aux_sends,
+        frames,
+        sample_rate,
+        crate::latency::LatencyComp::empty(),
+    )
+}
+
+/// [`render_aux_for_test`] with an explicit compensation table, so
+/// latency tests can drive the bus-stage / dry delay lines through the
+/// real render path with synthetic delays (no live CLAP plugin needed).
+#[doc(hidden)]
+#[allow(clippy::type_complexity)]
+pub fn render_aux_with_comp_for_test(
+    tracks: Vec<Track>,
+    busses: Vec<Bus>,
+    clips: Vec<AudioClip>,
+    aux_sends: Vec<AuxSend>,
+    frames: usize,
+    sample_rate: u32,
+    latency: crate::latency::LatencyComp,
+) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
     use indexmap::IndexMap;
 
     let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
@@ -74,7 +99,6 @@ pub fn render_aux_for_test(
     > = IndexMap::new();
     let midi_clips: Vec<MidiClip> = Vec::new();
     let tempo_map = TempoMap::default();
-    let latency = crate::latency::LatencyComp::empty();
     let active_busses = busses_guard.len();
 
     let mut data = vec![0.0f32; frames * 2];

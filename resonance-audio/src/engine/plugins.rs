@@ -58,16 +58,20 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
 /// Runs on the engine thread; delay lines are allocated here, never on
 /// the audio callback.
 pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
-    let mut chains = {
+    let (mut chains, bus_chains) = {
         let tracks_guard = ctx.tracks.read();
         let busses_guard = ctx.busses.read();
         let plugins_guard = ctx.plugins.read();
-        crate::latency::chain_latencies(&tracks_guard, &busses_guard, |id| {
+        let latency_of = |id: crate::types::PluginInstanceId| {
             plugins_guard
                 .get(&id)
                 .map(|m| super::try_lock_with_backoff(m).0.latency_samples() as u64)
                 .unwrap_or(0)
-        })
+        };
+        (
+            crate::latency::chain_latencies(&tracks_guard, latency_of),
+            crate::latency::bus_chain_latencies(&busses_guard, latency_of),
+        )
     };
     // External-instrument tracks add a manual round-trip latency offset on
     // top of their plugin chain so the rest of the mix is delayed to align
@@ -78,12 +82,21 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
             .map(|c| c.latency_offset_samples)
             .unwrap_or(0)
     });
-    let (max, delays) = crate::latency::compensation_delays(&chains);
-    if ctx.latency_comp.load().delays_match(&delays) {
+    let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
+    let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);
+    if ctx
+        .latency_comp
+        .load()
+        .delays_match(&track_delays, &bus_delays, bus_max)
+    {
         return;
     }
-    ctx.latency_comp
-        .store(Arc::new(crate::latency::LatencyComp::new(max, &delays)));
+    ctx.latency_comp.store(Arc::new(crate::latency::LatencyComp::new(
+        track_max,
+        &track_delays,
+        bus_max,
+        &bus_delays,
+    )));
 }
 
 pub(crate) fn handle_add_plugin(

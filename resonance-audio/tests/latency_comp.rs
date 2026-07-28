@@ -1,20 +1,24 @@
 //! Plugin-delay-compensation math and delay-line behavior
-//! (`crate::latency`): per-chain latency summation across tracks,
-//! sub-tracks and busses; the max-minus-chain delay computation; and
-//! the `LatencyComp` apply path (delay, tail flush across blocks,
-//! reset on playhead discontinuity). No live CLAP plugin needed —
-//! plugin latencies are supplied by a lookup table.
+//! (`crate::latency`): track-stage chain summation across tracks and
+//! sub-tracks; bus-stage chain summation; the max-minus-chain delay
+//! computation; and the `LatencyComp` apply paths — per-track, per-bus
+//! and the shared dry line (delay, tail flush across blocks, reset on
+//! playhead discontinuity, wet/dry send alignment). No live CLAP plugin
+//! needed — plugin latencies are supplied by a lookup table and the
+//! render-path tests drive synthetic comp tables through the real
+//! `render_block` loop.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
 use resonance_audio::__test_support::{
-    add_external_offsets, affects_latency, chain_latencies, compensation_delays, LatencyComp,
-    MAX_COMP_LATENCY,
+    add_external_offsets, affects_latency, bus_chain_latencies, chain_latencies,
+    compensation_delays, render_aux_with_comp_for_test, LatencyComp, MAX_COMP_LATENCY,
 };
 use resonance_audio::types::{
-    AudioCommand, Bus, BusId, FrozenSource, Track, TrackId, TrackOutput, TrackType,
+    AudioCommand, AudioClip, AuxSend, Bus, BusId, ClipSource, FadeCurve, FrozenSource, SendId,
+    SendSource, Track, TrackId, TrackOutput, TrackType,
 };
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
@@ -53,7 +57,7 @@ fn compensation_delays_clamp_hostile_latency() {
 }
 
 #[test]
-fn chain_latencies_sum_track_bus_and_parent_instrument() {
+fn chain_latencies_sum_track_and_parent_instrument_bus_stage_separate() {
     // Plugin latencies: 1 → 100, 2 → 50, 3 → 7, 4 → 30.
     let lat: HashMap<u64, u64> = [(1u64, 100u64), (2, 50), (3, 7), (4, 30)].into();
 
@@ -63,7 +67,9 @@ fn chain_latencies_sum_track_bus_and_parent_instrument() {
     t10.push_plugin(1);
     t10.push_plugin(2);
     tracks.insert(10, t10);
-    // Track 11: no FX, routed to bus 5 (which carries plugin 3) → 7.
+    // Track 11: no FX, routed to bus 5 (which carries plugin 3). The
+    // bus chain is *not* part of the track stage — it shows up in
+    // `bus_chain_latencies` and is equalized by the bus-stage delays.
     let t11 = Track::new(11, "to bus".into());
     t11.set_output(TrackOutput::Bus(5));
     tracks.insert(11, t11);
@@ -81,12 +87,17 @@ fn chain_latencies_sum_track_bus_and_parent_instrument() {
     bus.plugin_ids.push(3);
     busses.insert(5, bus);
 
-    let chains = chain_latencies(&tracks, &busses, |id| lat.get(&id).copied().unwrap_or(0));
-    let chains: HashMap<TrackId, u64> = chains.into_iter().collect();
+    let resolve = |id| lat.get(&id).copied().unwrap_or(0);
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, resolve).into_iter().collect();
     assert_eq!(chains[&10], 150);
-    assert_eq!(chains[&11], 7);
+    assert_eq!(chains[&11], 0, "bus chains are equalized in the bus stage");
     assert_eq!(chains[&12], 30);
     assert_eq!(chains[&13], 80);
+
+    let bus_chains: HashMap<BusId, u64> =
+        bus_chain_latencies(&busses, resolve).into_iter().collect();
+    assert_eq!(bus_chains[&5], 7);
 }
 
 #[test]
@@ -106,15 +117,19 @@ fn frozen_track_excludes_own_chain_but_keeps_downstream_bus() {
 
     let resolve = |id| lat.get(&id).copied().unwrap_or(0);
     let chains: HashMap<TrackId, u64> =
-        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
-    assert_eq!(chains[&10], 157, "live: instrument + FX + bus");
+        chain_latencies(&tracks, resolve).into_iter().collect();
+    assert_eq!(chains[&10], 150, "live: instrument + FX (track stage)");
 
-    // Frozen: the cache replaces instrument + FX (pre-trimmed), but the
-    // bus chain still runs live downstream and must stay compensated.
+    // Frozen: the cache replaces instrument + FX (pre-trimmed), so the
+    // track stage contributes nothing; the bus chain still runs live
+    // downstream and stays counted in the bus stage.
     tracks[&10].frozen_source.store(Some(Arc::new(dummy_frozen_source())));
     let chains: HashMap<TrackId, u64> =
-        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
-    assert_eq!(chains[&10], 7, "frozen: only the live bus chain counts");
+        chain_latencies(&tracks, resolve).into_iter().collect();
+    assert_eq!(chains[&10], 0, "frozen: idle chain adds no latency");
+    let bus_chains: HashMap<BusId, u64> =
+        bus_chain_latencies(&busses, resolve).into_iter().collect();
+    assert_eq!(bus_chains[&5], 7, "the live bus chain still counts");
 }
 
 #[test]
@@ -134,10 +149,8 @@ fn fx_bypass_excludes_effects_but_not_the_instrument() {
     inst.push_plugin(2);
     inst.set_fx_bypassed(true);
     tracks.insert(11, inst);
-    let busses: IndexMap<BusId, Bus> = IndexMap::new();
-
     let chains: HashMap<TrackId, u64> =
-        chain_latencies(&tracks, &busses, |id| lat.get(&id).copied().unwrap_or(0))
+        chain_latencies(&tracks, |id| lat.get(&id).copied().unwrap_or(0))
             .into_iter()
             .collect();
     assert_eq!(chains[&10], 0, "bypassed audio track contributes nothing");
@@ -147,21 +160,17 @@ fn fx_bypass_excludes_effects_but_not_the_instrument() {
 #[test]
 fn bypassed_bus_chain_contributes_zero() {
     let lat: HashMap<u64, u64> = [(3u64, 7u64)].into();
-    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
-    let t = Track::new(10, "to bus".into());
-    t.set_output(TrackOutput::Bus(5));
-    tracks.insert(10, t);
     let mut busses: IndexMap<BusId, Bus> = IndexMap::new();
     let mut bus = Bus::new(5, "bus".into());
     bus.plugin_ids.push(3);
     bus.set_fx_bypassed(true);
     busses.insert(5, bus);
 
-    let chains: HashMap<TrackId, u64> =
-        chain_latencies(&tracks, &busses, |id| lat.get(&id).copied().unwrap_or(0))
+    let bus_chains: HashMap<BusId, u64> =
+        bus_chain_latencies(&busses, |id| lat.get(&id).copied().unwrap_or(0))
             .into_iter()
             .collect();
-    assert_eq!(chains[&10], 0, "bypassed bus chain is skipped by the mixer");
+    assert_eq!(bus_chains[&5], 0, "bypassed bus chain is skipped by the mixer");
 }
 
 #[test]
@@ -174,25 +183,24 @@ fn frozen_parent_drops_parent_instrument_for_sub_tracks() {
     let sub = Track::new_sub_track(13, "sub".into(), 12, 1);
     sub.push_plugin(2);
     tracks.insert(13, sub);
-    let busses: IndexMap<BusId, Bus> = IndexMap::new();
 
     let resolve = |id| lat.get(&id).copied().unwrap_or(0);
     let chains: HashMap<TrackId, u64> =
-        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+        chain_latencies(&tracks, resolve).into_iter().collect();
     assert_eq!(chains[&13], 80, "live parent: sub inherits the instrument");
 
     // Frozen parent: the instrument fan-out never runs, so the sub-track
     // no longer inherits its latency — but its own FX still run live.
     tracks[&12].frozen_source.store(Some(Arc::new(dummy_frozen_source())));
     let chains: HashMap<TrackId, u64> =
-        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+        chain_latencies(&tracks, resolve).into_iter().collect();
     assert_eq!(chains[&13], 50, "frozen parent: only the sub's own FX count");
 
     // A frozen source on the sub-track itself is ignored: the mixer's
     // sub-track pass always renders live off the parent fan-out.
     tracks[&13].frozen_source.store(Some(Arc::new(dummy_frozen_source())));
     let chains: HashMap<TrackId, u64> =
-        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+        chain_latencies(&tracks, resolve).into_iter().collect();
     assert_eq!(chains[&13], 50, "sub-track frozen flag doesn't change rendering");
 }
 
@@ -248,7 +256,7 @@ fn external_offset_delays_rest_of_mix_to_meet_return() {
 #[test]
 fn apply_delays_signal_and_flushes_tail_across_blocks() {
     // Track 1 gets a 4-frame delay; track 2 (delay 0) gets no entry.
-    let comp = LatencyComp::new(4, &[(1, 4), (2, 0)]);
+    let comp = LatencyComp::new(4, &[(1, 4), (2, 0)], 0, &[]);
     assert_eq!(comp.max_latency(), 4);
     assert_eq!(comp.delay_for(1), 4);
     assert_eq!(comp.delay_for(2), 0);
@@ -282,7 +290,7 @@ fn apply_aligns_tracks_with_different_chain_latencies() {
     // must land on the same output frame.
     let chains = vec![(1u64, 3u64), (2, 0)];
     let (max, delays) = compensation_delays(&chains);
-    let comp = LatencyComp::new(max, &delays);
+    let comp = LatencyComp::new(max, &delays, 0, &[]);
 
     let mut t1_l = [0.0f32; 16];
     let mut t1_r = [0.0f32; 16];
@@ -304,7 +312,7 @@ fn apply_aligns_tracks_with_different_chain_latencies() {
 
 #[test]
 fn apply_resets_on_playhead_discontinuity() {
-    let comp = LatencyComp::new(4, &[(1, 4)]);
+    let comp = LatencyComp::new(4, &[(1, 4)], 0, &[]);
     let mut l = [0.0f32; 8];
     let mut r = [0.0f32; 8];
     l[7] = 1.0;
@@ -321,16 +329,166 @@ fn apply_resets_on_playhead_discontinuity() {
 
 #[test]
 fn delays_match_detects_unchanged_tables() {
-    let comp = LatencyComp::new(10, &[(1, 10), (2, 0), (3, 4)]);
-    assert!(comp.delays_match(&[(1, 10), (2, 0), (3, 4)]));
+    let comp = LatencyComp::new(10, &[(1, 10), (2, 0), (3, 4)], 0, &[]);
+    assert!(comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[], 0));
     // Zero entries are irrelevant — they have no delay line.
-    assert!(comp.delays_match(&[(3, 4), (1, 10)]));
-    assert!(!comp.delays_match(&[(1, 10), (3, 5)]));
-    assert!(!comp.delays_match(&[(1, 10)]));
-    assert!(!comp.delays_match(&[(1, 10), (3, 4), (4, 2)]));
+    assert!(comp.delays_match(&[(3, 4), (1, 10)], &[], 0));
+    assert!(!comp.delays_match(&[(1, 10), (3, 5)], &[], 0));
+    assert!(!comp.delays_match(&[(1, 10)], &[], 0));
+    assert!(!comp.delays_match(&[(1, 10), (3, 4), (4, 2)], &[], 0));
+    // Bus-stage changes force a republish too.
+    assert!(!comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[], 5));
+    assert!(!comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[(7, 3)], 0));
+
+    let with_bus = LatencyComp::new(10, &[(1, 10)], 6, &[(7, 2)]);
+    assert!(with_bus.delays_match(&[(1, 10)], &[(7, 2)], 6));
+    assert!(!with_bus.delays_match(&[(1, 10)], &[(7, 2)], 4));
+    assert!(!with_bus.delays_match(&[(1, 10)], &[(7, 3)], 6));
 
     let empty = LatencyComp::empty();
     assert!(empty.is_empty());
-    assert!(empty.delays_match(&[(1, 0), (2, 0)]));
-    assert!(!empty.delays_match(&[(1, 1)]));
+    assert!(empty.delays_match(&[(1, 0), (2, 0)], &[], 0));
+    assert!(!empty.delays_match(&[(1, 1)], &[], 0));
+    assert!(!empty.delays_match(&[], &[], 3));
+}
+
+#[test]
+fn apply_bus_and_dry_delay_lines() {
+    // Track stage max 3 (track 1 delayed 3); bus stage max 4 with bus 7
+    // padded by 1 (its own chain would be 3). Total pipeline = 3 + 4.
+    let comp = LatencyComp::new(3, &[(1, 3)], 4, &[(7, 1)]);
+    assert_eq!(comp.max_latency(), 7);
+    assert_eq!(comp.bus_stage(), 4);
+    assert!(!comp.is_empty());
+
+    // Bus 7's summing buffer is delayed by exactly 1 frame.
+    let mut l = [0.0f32; 8];
+    let mut r = [0.0f32; 8];
+    l[2] = 1.0;
+    r[2] = 1.0;
+    assert!(comp.apply_bus(7, &mut l, &mut r, 0));
+    assert_eq!(l.iter().position(|&s| s != 0.0), Some(3));
+    assert!(!comp.apply_bus(99, &mut l, &mut r, 8), "unknown bus has no entry");
+
+    // The dry (master-direct) interleaved sum is delayed by the full
+    // bus stage (4 frames).
+    let mut data = [0.0f32; 16]; // 8 frames stereo
+    data[2 * 2] = 1.0;
+    data[2 * 2 + 1] = -1.0;
+    assert!(comp.apply_dry(&mut data, 2, 8, 0));
+    let pos = data
+        .chunks(2)
+        .position(|f| f.iter().any(|&s| s != 0.0));
+    assert_eq!(pos, Some(6), "impulse at frame 2 emerges at 2 + bus_stage");
+    assert_eq!(data[6 * 2], 1.0);
+    assert_eq!(data[6 * 2 + 1], -1.0);
+}
+
+#[test]
+fn apply_dry_is_noop_without_bus_stage_latency() {
+    let comp = LatencyComp::new(3, &[(1, 3)], 0, &[]);
+    let mut data = [0.0f32; 8];
+    data[0] = 1.0;
+    assert!(!comp.apply_dry(&mut data, 2, 4, 0));
+    assert_eq!(data[0], 1.0, "buffer untouched — common path stays identical");
+}
+
+/// An impulse clip: interleaved-stereo silence with a single `1.0`
+/// frame at `at`, so post-render positions are exactly assertable.
+fn impulse_track(id: TrackId, output: TrackOutput, at: usize, frames: usize) -> (Track, AudioClip) {
+    let track = Track::new(id, format!("t{id}"));
+    track.set_output(output);
+    let mut samples = vec![0.0f32; frames * 2];
+    samples[at * 2] = 1.0;
+    samples[at * 2 + 1] = 1.0;
+    let clip = AudioClip {
+        id,
+        track_id: id,
+        start_sample: 0,
+        source: ClipSource::Memory(samples),
+        name: "impulse".into(),
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::default(),
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::default(),
+        gain_db: 0.0,
+        vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
+    };
+    (track, clip)
+}
+
+/// Frames where the interleaved-stereo output carries any signal.
+fn nonzero_frames(data: &[f32]) -> Vec<usize> {
+    data.chunks(2)
+        .enumerate()
+        .filter(|(_, f)| f.iter().any(|&s| s != 0.0))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn render_block_delays_master_direct_signal_by_bus_stage() {
+    // A master-routed impulse at frame 5 must emerge `bus_stage` (4)
+    // frames later through the shared dry line in the real render loop.
+    const FRAMES: usize = 48;
+    let (track, clip) = impulse_track(1, TrackOutput::Master, 5, FRAMES);
+    let comp = LatencyComp::new(0, &[], 4, &[]);
+    let (data, _busses) = render_aux_with_comp_for_test(
+        vec![track],
+        vec![],
+        vec![clip],
+        vec![],
+        FRAMES,
+        48_000,
+        comp,
+    );
+    assert_eq!(nonzero_frames(&data), vec![5 + 4]);
+}
+
+#[test]
+fn render_block_aligns_wet_send_with_dry_master_path() {
+    // Track 1 routes to master AND pre-fader-sends into return bus 10.
+    // The comp table models a bus stage of 4 where bus 10's own chain
+    // is latency-free (padded by the full 4): the wet return and the
+    // dry master path must land on the same output frame — the exact
+    // wet/dry alignment finding #7 is about.
+    const FRAMES: usize = 48;
+    let (track, clip) = impulse_track(1, TrackOutput::Master, 5, FRAMES);
+    let ret = Bus::new(10, "return".into());
+    let send = AuxSend {
+        id: 1 as SendId,
+        source: SendSource::Track(1),
+        dest: 10,
+        level_db: 0.0,
+        pre_fader: true,
+        enabled: true,
+    };
+    let comp = LatencyComp::new(0, &[], 4, &[(10, 4)]);
+    let (data, _busses) = render_aux_with_comp_for_test(
+        vec![track],
+        vec![ret],
+        vec![clip],
+        vec![send],
+        FRAMES,
+        48_000,
+        comp,
+    );
+    // One single frame carries all the energy: dry + wet, together.
+    assert_eq!(
+        nonzero_frames(&data),
+        vec![5 + 4],
+        "wet return must not smear against the dry path"
+    );
+    // Dry (~center-pan gain) and wet (send at 0 dB through the return's
+    // own center-pan fader) sum — i.e. the frame holds MORE than the dry
+    // path alone, proving the wet contribution landed on the same frame.
+    let g = (std::f32::consts::PI * 0.25).cos();
+    assert!((data[(5 + 4) * 2] - 2.0 * g).abs() < 1e-6);
 }
