@@ -71,7 +71,7 @@ fn ungated_stack(
         bottleneck,
         dilations,
         kernel_sizes: vec![kernel_size; n],
-        activation: ActivationConfig::simple(ActivationKind::Tanh),
+        activations: vec![ActivationConfig::simple(ActivationKind::Tanh)],
         gating_modes: vec![GatingMode::None; n],
         secondary_activations: vec![None; n],
         groups_input: 1,
@@ -151,6 +151,7 @@ fn head1x1_weight_order_matches_reference_position() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -236,6 +237,7 @@ fn grouped_head1x1_is_bit_identical_to_hand_computed_reference() {
         head: vec![],
         head_size: 1,
         has_layer1x1: false,
+        condition_dsp: None,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)

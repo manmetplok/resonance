@@ -337,7 +337,7 @@ fn width_pin_config(films: LayerFilms, gating: GatingMode) -> WaveNetConfig {
             bottleneck: 2,
             dilations: vec![1],
             kernel_sizes: vec![1],
-            activation: ActivationConfig::simple(ActivationKind::Tanh),
+            activations: vec![ActivationConfig::simple(ActivationKind::Tanh)],
             gating_modes: vec![gating],
             secondary_activations: vec![secondary],
             groups_input: 1,
@@ -353,6 +353,7 @@ fn width_pin_config(films: LayerFilms, gating: GatingMode) -> WaveNetConfig {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     }
 }
 

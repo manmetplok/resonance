@@ -264,7 +264,7 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
             bottleneck: 2,
             dilations: vec![1, 2],
             kernel_sizes: vec![2, 2],
-            activation: ActivationConfig::simple(ActivationKind::Tanh),
+            activations: vec![ActivationConfig::simple(ActivationKind::Tanh)],
             gating_modes: vec![GatingMode::None, GatingMode::Blended],
             secondary_activations: vec![
                 None,
@@ -279,6 +279,7 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     // rechannel 2 + layer0 (mid 2: conv 8 + bias 2 + mixin 2 + l1x1 6 = 18)
     // + layer1 (mid 4: conv 16 + bias 4 + mixin 4 + l1x1 6 = 30)
@@ -359,7 +360,7 @@ fn fixture_typed_gating_vectors_drive_construction() {
         bottleneck: l1.bottleneck,
         dilations: l1.dilations.clone(),
         kernel_sizes: l1.kernel_sizes.clone(),
-        activation: ActivationConfig::simple(ActivationKind::Softsign),
+        activations: vec![ActivationConfig::simple(ActivationKind::Softsign)],
         gating_modes: l1.gating_modes.clone(),
         secondary_activations: l1.secondary_activations.clone(),
         groups_input: 1,
@@ -389,6 +390,7 @@ fn fixture_typed_gating_vectors_drive_construction() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
+        condition_dsp: None,
     };
     let weights = counted_weights(count);
     let mut reader = WeightReader::new(&weights);

@@ -581,7 +581,19 @@ fn parse_activations(
     num_layers: usize,
     ctx: &str,
 ) -> Result<Vec<ActivationConfig>, String> {
-    match non_null(obj, "activation") {
+    parse_activation_value(non_null(obj, "activation"), num_layers, ctx)
+}
+
+/// Shared primary-activation parsing (typed A2 parser + engine config
+/// parse): a single config (string or object) is duplicated per layer, a
+/// per-layer array must match the layer count, absent defaults to `"Tanh"`
+/// (A1).
+pub(crate) fn parse_activation_value(
+    value: Option<&Value>,
+    num_layers: usize,
+    ctx: &str,
+) -> Result<Vec<ActivationConfig>, String> {
+    match value {
         None => Ok(vec![
             ActivationConfig::simple(ActivationKind::Tanh);
             num_layers
