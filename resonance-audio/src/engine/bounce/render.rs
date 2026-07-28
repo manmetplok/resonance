@@ -20,7 +20,13 @@ use crate::types::*;
 
 use super::super::{SharedState, MAX_BUSSES};
 
-pub(super) const BOUNCE_CHUNK: usize = 1024;
+pub const BOUNCE_CHUNK: usize = 1024;
+
+/// CLAP activation minimum block size: plugins are activated with
+/// `activate(…, min_frames = 32, max_frames = 8192)`
+/// (`clap_host::bundle`), so no offline `process()` call may run fewer
+/// frames — see [`chunk_span`].
+pub const MIN_CLAP_FRAMES: usize = 32;
 
 /// How many `try_lock` spins before falling back to sleeping. A spin is
 /// a `std::hint::spin_loop` + immediate retry — cheap and only useful
@@ -171,6 +177,43 @@ pub(super) fn build_latency_comp(
     let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
     let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);
     LatencyComp::new(track_max, &track_delays, bus_max, &bus_delays)
+}
+
+/// Effective master-chain latency for renders that include the master
+/// FX pass (`include_master_fx = true`): those paths must pre-roll and
+/// trim by this on top of [`build_latency_comp`]'s `max_latency()` so
+/// the export starts at t=0 with its full tail (doc #260 finding #8).
+/// 0 while the master FX are bypassed — the chunk render skips the
+/// chain then.
+pub(super) fn master_fx_latency(
+    shared: &Arc<SharedState>,
+    master: &Arc<RwLock<MasterBus>>,
+    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+) -> u64 {
+    let master_guard = master.read();
+    let plugins_guard = plugins.read();
+    crate::latency::master_chain_latency(
+        &master_guard.plugin_ids,
+        shared.master_fx_bypassed.load(Ordering::Relaxed),
+        |id| {
+            plugins_guard
+                .get(&id)
+                .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
+                .unwrap_or(0)
+        },
+    )
+}
+
+/// Split the remaining render range into this iteration's chunk:
+/// `.0` is the frame count to *process* — padded up to
+/// [`MIN_CLAP_FRAMES`] so a short tail chunk still honours the CLAP
+/// activation contract (`activate(…, min_frames=32, …)`) — and `.1` is
+/// the frame count actually *consumed* from the front of the rendered
+/// chunk (the padding frames are rendered and discarded). Always
+/// `emit <= render <= BOUNCE_CHUNK`.
+pub fn chunk_span(remaining: u64) -> (usize, usize) {
+    let emit = (remaining.min(BOUNCE_CHUNK as u64)) as usize;
+    (emit.max(MIN_CLAP_FRAMES), emit)
 }
 
 /// Reset every plugin so the bounce starts from a clean state. Without

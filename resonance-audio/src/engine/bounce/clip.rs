@@ -22,7 +22,7 @@ use crate::types::*;
 use super::super::bounce_common::midi_render_range;
 use super::super::SharedState;
 use super::render::{
-    build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
+    build_latency_comp, chunk_span, render_chunk, reset_plugins, ChunkCtx, ChunkScratch,
 };
 
 /// Bounce one instrument track (and any of its sub-tracks) to a single
@@ -180,15 +180,17 @@ pub fn to_audio_clip(
             return;
         }
 
-        let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
-        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false, false);
-        let drop_now = skip_frames.min(frames);
+        // Tail chunks are padded up to the CLAP activation minimum and
+        // only `emit` frames are consumed — see `chunk_span`.
+        let (render_frames, emit) = chunk_span(render_stop - pos);
+        render_chunk(&ctx, &mut scratch, pos, render_frames, &in_filter, false, false, false);
+        let drop_now = skip_frames.min(emit);
         skip_frames -= drop_now;
-        let copy = (frames - drop_now).min(total_frames - written);
+        let copy = (emit - drop_now).min(total_frames - written);
         output[written * 2..(written + copy) * 2]
             .copy_from_slice(&scratch.mix_buf[drop_now * 2..(drop_now + copy) * 2]);
         written += copy;
-        pos += frames as u64;
+        pos += emit as u64;
 
         // Emit progress at most once per integer percent so we don't
         // flood the GUI event channel on a long bounce.
