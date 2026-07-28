@@ -64,33 +64,29 @@ pub struct WaveNetConfig {
     /// every layer array's input mixin and FiLM points. Constructed
     /// recursively at model-build time (see
     /// [`build_condition_dsp`]); `None` (A1 and condition_dsp-less A2)
-    /// leaves the condition source untouched.
+    /// means the condition is the raw model input.
     pub condition_dsp: Option<serde_json::Value>,
-    /// Which forward-pass semantics the model runs with (ba todo #1113).
+    /// Activation FLAVOR the model resolves `Tanh`/`Sigmoid` with (ba todo
+    /// #1116). Every model runs the reference (NeuralAmpModelerCore
+    /// `WaveNet::process`) STRUCTURAL semantics — raw-input/condition_dsp
+    /// condition for every stack, unconditionally consumed learned input
+    /// rechannels, chained head accumulators with the model output taken
+    /// from the last stack only, no extra skip activation, identity
+    /// residual for layers without a layer1x1 — the historical legacy
+    /// wiring was proven wrong against every official implementation
+    /// (doc #258) and its removal is a user-approved sound change.
     ///
-    /// `false` — LEGACY (historical engine) semantics, preserved
-    /// bit-for-bit for every config expressible in the pre-A2 surface: the
-    /// per-stack condition is the post-rechannel activation snapshot, each
-    /// stack's skip accumulator starts at zero and the per-stack
-    /// head-rechannel outputs are SUMMED into the model output, the skip
-    /// accumulator gets an extra stack-activation before the (kernel-1)
-    /// head rechannel, an old-format layer without a layer1x1 adds the
-    /// activated z into the residual, and `Tanh`/`Sigmoid` resolve to the
-    /// fast approximations. NOTE: these semantics differ from the
-    /// reference NeuralAmpModelerCore for MULTI-detail reasons recorded in
-    /// doc #258 / todo #1113 — kept only so existing A1 projects keep
-    /// their sound.
+    /// `true` — files expressible in the pre-A2 surface resolve
+    /// `Tanh`/`Sigmoid` to the fast approximations: the official NAM
+    /// plugin runs with `enable_fast_tanh()`, so this IS correct-vs-plugin
+    /// for A1 files.
     ///
-    /// `true` — REFERENCE (NeuralAmpModelerCore `WaveNet::process`)
-    /// semantics, applied to every config that carries any A2 marker (see
-    /// [`config_has_a2_markers`]) and to all nested/container submodels:
-    /// the condition is the raw input (or the condition_dsp output) for
-    /// every stack, stack i's skip accumulator is SEEDED with stack i-1's
-    /// head-rechannel output and the model output is the LAST stack's head
-    /// rechannel only, no extra skip activation, inactive layer1x1 means
-    /// an identity residual, and activations are exact (`Tanh` =
-    /// `std::tanh`-equivalent), matching the fixture reference renders.
-    pub reference_semantics: bool,
+    /// `false` — configs carrying any A2 marker (see
+    /// [`config_has_a2_markers`]) and all nested/container submodels use
+    /// the exact functions (`Tanh` = `std::tanh`-equivalent), matching the
+    /// A2 fixture reference renders (`tools/render` never enables fast
+    /// tanh).
+    pub fast_activations: bool,
 }
 
 pub struct StackConfig {
@@ -241,8 +237,8 @@ impl OldWaveNetConfig {
             has_layer1x1: false,
             // Old-format models predate the condition_dsp sub-network.
             condition_dsp: None,
-            // Old flat configs cannot carry A2 markers: always legacy.
-            reference_semantics: false,
+            // Old flat configs cannot carry A2 markers: A1 flavor.
+            fast_activations: true,
         })
     }
 }
@@ -414,7 +410,7 @@ struct NewWaveNetConfig {
 }
 
 impl NewWaveNetConfig {
-    fn into_config(self, reference_semantics: bool) -> Result<WaveNetConfig, String> {
+    fn into_config(self, a2_surface: bool) -> Result<WaveNetConfig, String> {
         let first = self
             .layers
             .first()
@@ -508,10 +504,11 @@ impl NewWaveNetConfig {
                 // kernel_sizes with activations applied ahead of every
                 // conv) is structurally different from the engine's legacy
                 // head-MLP guess; running an A2 file through the latter
-                // would silently produce wrong audio, so it is rejected
-                // with the offending field named. Legacy (A1-shaped)
-                // configs keep the historical head-MLP path bit-for-bit.
-                if reference_semantics {
+                // would silently produce wrong audio, so any head on an
+                // A2-marked config is rejected with the offending field
+                // named. Pre-A2 (A1-shaped) configs keep the historical
+                // head-MLP path.
+                if a2_surface {
                     return Err(
                         "WaveNet config: a post-stack 'head' is not supported for A2 models"
                             .to_string(),
@@ -537,7 +534,7 @@ impl NewWaveNetConfig {
             head_size,
             has_layer1x1: true,
             condition_dsp: self.condition_dsp,
-            reference_semantics,
+            fast_activations: !a2_surface,
         })
     }
 }
@@ -580,19 +577,20 @@ const FILM_KEYS: [&str; 8] = [
 ];
 
 /// Raw-JSON probe: does this (new-format) WaveNet config carry any A2
-/// marker? This is the semantic gate for
-/// [`WaveNetConfig::reference_semantics`]: a config is LEGACY only when it
-/// is fully expressible in the pre-A2 surface the historical engine
-/// supported (plain string activations, `gated` booleans, flat
+/// marker? Since ba todo #1116 every model runs the reference
+/// (NeuralAmpModelerCore) forward-pass STRUCTURE; this gate only selects
+/// the ACTIVATION FLAVOR ([`WaveNetConfig::fast_activations`]) — plus the
+/// rejection of a post-stack `head` on A2-marked configs. A config keeps
+/// the fast (A1) activations only when it is fully expressible in the
+/// pre-A2 surface (plain string activations, `gated` booleans, flat
 /// `head_size`/`head_bias`, `kernel_size`/`kernel_sizes`, no
 /// grouped/bottleneck/FiLM/head1x1/layer1x1 objects, no `condition_dsp`,
-/// no `slimmable`) — exactly the files existing user projects may contain.
-/// Anything the A2 era introduced flips the whole model to the reference
-/// (NeuralAmpModelerCore) forward-pass semantics.
+/// no `slimmable`) — exactly the files the official NAM plugin runs with
+/// `enable_fast_tanh()`. Anything the A2 era introduced flips the model to
+/// the exact activations the A2 reference renders were produced with.
 ///
-/// Deliberately NOT markers: `kernel_sizes` (per-layer kernels predate A2
-/// and always ran through the legacy engine), `gated`, and every field of
-/// the original layer-array format.
+/// Deliberately NOT markers: `kernel_sizes` (per-layer kernels predate
+/// A2), `gated`, and every field of the original layer-array format.
 pub fn config_has_a2_markers(config: &serde_json::Value) -> bool {
     let non_null = |v: Option<&serde_json::Value>| v.is_some_and(|v| !v.is_null());
     if non_null(config.get("condition_dsp")) {
@@ -630,20 +628,20 @@ pub fn config_has_a2_markers(config: &serde_json::Value) -> bool {
 /// into the engine's [`WaveNetConfig`]. This is the exact parse
 /// `load_model_from_file` uses before model construction; exposed so tests
 /// can assert what reaches the engine for a given config.
-/// [`WaveNetConfig::reference_semantics`] is set by probing the raw JSON
+/// [`WaveNetConfig::fast_activations`] is cleared by probing the raw JSON
 /// for A2 markers ([`config_has_a2_markers`]); nested condition_dsp and
-/// container submodels force it on regardless (they only exist in the A2
-/// era).
+/// container submodels force exact activations regardless (they only exist
+/// in the A2 era).
 pub fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, String> {
     // Try old format first (flat config with integer layer counts).
     if let Ok(old) = serde_json::from_value::<OldWaveNetConfig>(value.clone()) {
         return old.into_config();
     }
-    let reference_semantics = config_has_a2_markers(&value);
+    let a2_surface = config_has_a2_markers(&value);
     // Try new format (layer array config objects).
     let new_cfg: NewWaveNetConfig =
         serde_json::from_value(value).map_err(|e| format!("Invalid WaveNet config: {e}"))?;
-    new_cfg.into_config(reference_semantics)
+    new_cfg.into_config(a2_surface)
 }
 
 // -- condition_dsp sub-network ------------------------------------------------
@@ -688,8 +686,8 @@ pub(crate) fn build_condition_dsp(value: &serde_json::Value) -> Result<WaveNetMo
     // it through the same `get_dsp` semantics as the outer net — even when
     // the nested config itself looks A1-shaped (e.g. the
     // wavenet_condition_dsp fixture's plain-Tanh sub-network), it must run
-    // with reference semantics, not the legacy engine path.
-    config.reference_semantics = true;
+    // with the exact activations its reference renders used.
+    config.fast_activations = false;
     let mut reader = WeightReader::new(&nested.weights);
     let model = WaveNetModel::from_config_and_weights(config, &mut reader)
         .map_err(|e| format!("condition_dsp: {e}"))?;
@@ -804,18 +802,18 @@ fn container_submodel_index(max_values: &[f64], size: f64) -> usize {
 /// non-slimmable files keep the historical lenient warning so A1 and plain
 /// A2 files load bit-for-bit unchanged.
 ///
-/// `force_reference` forces reference (A2) forward-pass semantics
+/// `force_exact_activations` forces the exact (A2) activation flavor
 /// regardless of the config's own A2 markers: `SlimmableContainer`
 /// submodels only exist in the A2 era, so even an A1-shaped submodel runs
-/// with reference semantics, exactly as the reference `nam::get_dsp`
-/// would.
+/// with the exact activations, exactly as the reference `nam::get_dsp`
+/// (which never enables fast tanh for fixture renders) would.
 fn build_model(
     architecture: &str,
     config: serde_json::Value,
     weights: &[f32],
     sample_rate: f32,
     strict_weights: bool,
-    force_reference: bool,
+    force_exact_activations: bool,
 ) -> Result<Box<dyn NamInference>, String> {
     let mut reader = WeightReader::new(weights);
     match architecture {
@@ -866,7 +864,7 @@ fn build_model(
             // raw JSON down through nested condition_dsp models too.
             check_condition_dsp_rates(&config, sample_rate)?;
             let mut config = parse_wavenet_config(config)?;
-            config.reference_semantics |= force_reference;
+            config.fast_activations &= !force_exact_activations;
             let model = WaveNetModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
                 if slimmable {
@@ -961,7 +959,7 @@ fn build_model(
                 sample_rate,
                 true,
                 // Containers only exist in the A2 era: submodels always run
-                // with reference semantics.
+                // with the exact activation flavor.
                 true,
             )
         }

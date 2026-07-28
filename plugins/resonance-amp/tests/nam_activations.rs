@@ -131,7 +131,8 @@ fn fast_sigmoid_matches_shared_primitive() {
     let act = Activation::FastSigmoid;
     for &x in &SAMPLE_POINTS {
         assert_eq!(act.scalar(x), fast_sigmoid(x));
-        assert_eq!(act.scalar(x), 0.5 + 0.5 * fast_tanh(x * 0.5));
+        // The reference's exact form (NAM/activations.h fast_sigmoid).
+        assert_eq!(act.scalar(x), 0.5 * (fast_tanh(x * 0.5) + 1.0));
     }
     assert_scalar_matches_apply(&act);
 }
@@ -329,9 +330,11 @@ fn write_temp_nam(name: &str, body: &str) -> std::path::PathBuf {
 }
 
 /// Old-format gated WaveNet, 1 stack / 1 layer / 1 channel, kernel size 2.
-/// Weight order: w_conv[4] (raw layout [(out*ch+in)*ks+tap]), b_conv[2],
+/// Weight order: rechannel[1] (the reference consumes the 1-to-1 input
+/// rechannel unconditionally; 1.0 keeps the hand math below unchanged),
+/// w_conv[4] (raw layout [(out*ch+in)*ks+tap]), b_conv[2],
 /// input_mixin[2], head_rechannel[1], head_scale[1].
-const GATED_WEIGHTS: [f32; 10] = [0.1, 0.2, 0.3, 0.4, 0.05, -0.05, 0.5, 0.6, 0.9, 2.0];
+const GATED_WEIGHTS: [f32; 11] = [1.0, 0.1, 0.2, 0.3, 0.4, 0.05, -0.05, 0.5, 0.6, 0.9, 2.0];
 
 fn gated_wavenet_json() -> String {
     let weights: Vec<String> = GATED_WEIGHTS.iter().map(|w| w.to_string()).collect();
@@ -351,17 +354,19 @@ fn gated_wavenet_json() -> String {
     )
 }
 
-/// Replicate the A1 gated WaveNet computation with the shared fast_tanh /
-/// fast sigmoid primitives, in the exact operation order of the engine.
+/// Replicate the A1-flavor gated WaveNet computation with the shared
+/// fast_tanh / fast sigmoid primitives, in the exact operation order of
+/// the engine (reference structure since #1116: raw-input condition, no
+/// skip pre-activation; the 1.0 rechannel is a no-op numerically).
 fn expected_gated_output(x: f32, prev: f32) -> f32 {
-    let [w00, w01, w10, w11, b0, b1, m0, m1, hr, scale] = GATED_WEIGHTS;
+    let [_rc, w00, w01, w10, w11, b0, b1, m0, m1, hr, scale] = GATED_WEIGHTS;
     // conv_out[c] = ((w_tap0*prev) + (w_tap1*x)) + b[c] + (mixin[c]*x)
     let c0 = ((w00 * prev) + (w01 * x) + b0) + (m0 * x);
     let c1 = ((w10 * prev) + (w11 * x) + b1) + (m1 * x);
     // Gated activation: fast_tanh(z) * fast_sigmoid(g)
     let z = fast_tanh(c0) * fast_sigmoid(c1);
-    // Skip pre-activation, head rechannel (no bias), head scale.
-    (hr * fast_tanh(z)) * scale
+    // Head rechannel (no bias, no extra activation), head scale.
+    (hr * z) * scale
 }
 
 #[test]
@@ -394,9 +399,9 @@ fn a1_gated_wavenet_output_is_bit_identical_to_fast_tanh_path() {
 
 #[test]
 fn a1_non_gated_wavenet_output_is_bit_identical_to_fast_tanh_path() {
-    // Non-gated variant: w_conv[2], b_conv[1], mixin[1], head_rechannel[1],
-    // head_scale[1].
-    let weights = [0.1f32, 0.2, 0.05, 0.5, 0.9, 2.0];
+    // Non-gated variant: rechannel[1] (1.0, see GATED_WEIGHTS), w_conv[2],
+    // b_conv[1], mixin[1], head_rechannel[1], head_scale[1].
+    let weights = [1.0f32, 0.1, 0.2, 0.05, 0.5, 0.9, 2.0];
     let body = format!(
         r#"{{
             "architecture": "WaveNet",
@@ -419,12 +424,13 @@ fn a1_non_gated_wavenet_output_is_bit_identical_to_fast_tanh_path() {
     let _ = std::fs::remove_file(&path);
     let mut model = loaded.expect("non-gated WaveNet should load").model;
 
-    let [w0, w1, b, m, hr, scale] = weights;
+    let [_rc, w0, w1, b, m, hr, scale] = weights;
     let mut prev = 0.0f32;
     for &x in &[0.25f32, -0.5, 0.75] {
         let out = model.process_sample(x);
         let z = fast_tanh(((w0 * prev) + (w1 * x) + b) + (m * x));
-        let expected = (hr * fast_tanh(z)) * scale;
+        // No skip pre-activation (reference structure since #1116).
+        let expected = (hr * z) * scale;
         assert_eq!(out.to_bits(), expected.to_bits());
         prev = x;
     }

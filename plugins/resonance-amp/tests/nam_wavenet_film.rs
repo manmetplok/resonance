@@ -333,8 +333,25 @@ fn film_layer1x1_post_only_applies_when_blended() {
 /// Direct engine config for the width pins: gated layer (mid = 2 *
 /// bottleneck), distinct channel counts everywhere so each site's width is
 /// unambiguous: channels 2, bottleneck 2 (mid 4), condition 3, head1x1 out
-/// 6.
+/// 6. The 3-wide condition requires a condition_dsp under the shared
+/// reference validation; its weights live in the nested object, so the
+/// OUTER weight counts pinned here are unaffected.
 fn width_pin_config(films: LayerFilms, gating: GatingMode) -> WaveNetConfig {
+    // Trivial 1 -> 3 channel Identity sub-network (rechannel, conv, bias,
+    // mixin, layer1x1 w+b, head_rechannel 3x1, head_scale).
+    let nested = serde_json::json!({
+        "architecture": "WaveNet",
+        "sample_rate": 48000,
+        "config": {
+            "layers": [{
+                "input_size": 1, "condition_size": 1, "head_size": 3,
+                "channels": 1, "dilations": [1], "kernel_size": 1,
+                "activation": "Identity", "gated": false, "head_bias": false
+            }],
+            "head": null
+        },
+        "weights": [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.25, 1.0]
+    });
     let secondary = match gating {
         GatingMode::None => None,
         _ => Some(ActivationConfig::simple(ActivationKind::Sigmoid)),
@@ -369,8 +386,8 @@ fn width_pin_config(films: LayerFilms, gating: GatingMode) -> WaveNetConfig {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
-        condition_dsp: None,
-        reference_semantics: false,
+        condition_dsp: Some(nested),
+        fast_activations: true,
     }
 }
 
@@ -458,11 +475,11 @@ fn film_per_site_widths_match_reference() {
 /// channel 1 (reference `Conv1x1::set_weights_` block-diagonal layout).
 ///
 /// A grouped FiLM needs a multi-channel condition; without a condition_dsp
-/// the reference only permits condition_size == input_size, so this builds
-/// the engine config directly (legacy semantics, whose condition is the
-/// 2-wide post-rechannel snapshot). The grouped block-diagonal layout under
-/// test is shared by both modes; the wavenet_a2_max fixture covers grouped
-/// FiLMs under reference semantics end to end.
+/// the reference only permits condition_size == input_size, so the config
+/// carries a trivial Identity condition_dsp computing c(x) = [0.3x, -0.4x]
+/// (the same values as the audio-path rechannel, keeping the hand math
+/// compact); the wavenet_a2_max fixture covers grouped FiLMs on a real
+/// file end to end.
 #[test]
 fn film_grouped_conv_hand_computed() {
     let r = [0.3f32, -0.4]; // rechannel 2x1
@@ -482,6 +499,21 @@ fn film_grouped_conv_hand_computed() {
     weights.push(s);
     assert_eq!(weights.len(), 29);
 
+    // Identity condition_dsp: c(x) = [0.3x, -0.4x] (rechannel, conv,
+    // bias, mixin, layer1x1 w+b, head_rechannel [0.3, -0.4], head_scale).
+    let nested = serde_json::json!({
+        "architecture": "WaveNet",
+        "sample_rate": 48000,
+        "config": {
+            "layers": [{
+                "input_size": 1, "condition_size": 1, "head_size": 2,
+                "channels": 1, "dilations": [1], "kernel_size": 1,
+                "activation": "Identity", "gated": false, "head_bias": false
+            }],
+            "head": null
+        },
+        "weights": [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.3, -0.4, 1.0]
+    });
     let config = WaveNetConfig {
         input_size: 1,
         stacks: vec![StackConfig {
@@ -515,8 +547,8 @@ fn film_grouped_conv_hand_computed() {
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
-        condition_dsp: None,
-        reference_semantics: false,
+        condition_dsp: Some(nested),
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -524,22 +556,23 @@ fn film_grouped_conv_hand_computed() {
     assert_eq!(reader.remaining(), 0);
 
     for &x in &[0.25f32, -0.5, 0.75] {
-        let a = [r[0] * x, r[1] * x]; // rechannel; also the condition
+        let a = [r[0] * x, r[1] * x]; // rechannel (audio path)
+        let cond = [0.3f32 * x, -0.4f32 * x]; // condition_dsp output
         let z = [
             (c[0] * a[0] + c[1] * a[1]) + cb[0],
             (c[2] * a[0] + c[3] * a[1]) + cb[1],
         ];
         // Grouped film conv: block-diagonal over the 4 output rows.
-        let scale = [fw[0] * a[0] + fb[0], fw[1] * a[0] + fb[1]];
-        let shift = [fw[2] * a[1] + fb[2], fw[3] * a[1] + fb[3]];
+        let scale = [fw[0] * cond[0] + fb[0], fw[1] * cond[0] + fb[1]];
+        let shift = [fw[2] * cond[1] + fb[2], fw[3] * cond[1] + fb[3]];
         let z = [z[0] * scale[0] + shift[0], z[1] * scale[1] + shift[1]];
         let z = [
-            z[0] + (m[0] * a[0] + m[1] * a[1]),
-            z[1] + (m[2] * a[0] + m[3] * a[1]),
+            z[0] + (m[0] * cond[0] + m[1] * cond[1]),
+            z[1] + (m[2] * cond[0] + m[3] * cond[1]),
         ];
+        // No extra skip activation under reference structure.
         let t = [fast_tanh(z[0]), fast_tanh(z[1])];
-        let sk = [fast_tanh(t[0]), fast_tanh(t[1])];
-        let expected = (h[0] * sk[0] + h[1] * sk[1]) * s;
+        let expected = (h[0] * t[0] + h[1] * t[1]) * s;
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),

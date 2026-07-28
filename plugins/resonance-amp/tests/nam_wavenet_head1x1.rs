@@ -153,7 +153,7 @@ fn head1x1_weight_order_matches_reference_position() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -161,11 +161,11 @@ fn head1x1_weight_order_matches_reference_position() {
     assert_eq!(reader.remaining(), 0, "all weights must be consumed");
 
     for &x in &[0.25f32, -0.5, 0.75] {
-        let a = [r[0] * x, r[1] * x]; // rechannel; a[0] is the condition
+        let a = [r[0] * x, r[1] * x]; // rechannel; the condition is raw x
         // Layer 1.
         let z1 = [
-            ((c1[0] * a[0] + c1[1] * a[1]) + d1[0]) + m1[0] * a[0],
-            ((c1[2] * a[0] + c1[3] * a[1]) + d1[1]) + m1[1] * a[0],
+            ((c1[0] * a[0] + c1[1] * a[1]) + d1[0]) + m1[0] * x,
+            ((c1[2] * a[0] + c1[3] * a[1]) + d1[1]) + m1[1] * x,
         ];
         let t1 = [fast_tanh(z1[0]), fast_tanh(z1[1])];
         // Skip contribution: head1x1(t1) + bias (NOT t1 itself).
@@ -178,17 +178,16 @@ fn head1x1_weight_order_matches_reference_position() {
             a[0] + ((l1[0] * t1[0] + l1[1] * t1[1]) + p1[0]),
             a[1] + ((l1[2] * t1[0] + l1[3] * t1[1]) + p1[1]),
         ];
-        // Layer 2 (condition is still the stack input snapshot).
+        // Layer 2 (the raw input conditions every layer).
         let z2 = [
-            ((c2[0] * a2[0] + c2[1] * a2[1]) + d2[0]) + m2[0] * a[0],
-            ((c2[2] * a2[0] + c2[3] * a2[1]) + d2[1]) + m2[1] * a[0],
+            ((c2[0] * a2[0] + c2[1] * a2[1]) + d2[0]) + m2[0] * x,
+            ((c2[2] * a2[0] + c2[3] * a2[1]) + d2[1]) + m2[1] * x,
         ];
         let t2 = [fast_tanh(z2[0]), fast_tanh(z2[1])];
         skip[0] += (hw2[0] * t2[0] + hw2[1] * t2[1]) + hb2[0];
         skip[1] += (hw2[2] * t2[0] + hw2[3] * t2[1]) + hb2[1];
-        // Skip pre-activation + head rechannel + scale.
-        let sk = [fast_tanh(skip[0]), fast_tanh(skip[1])];
-        let expected = (h[0] * sk[0] + h[1] * sk[1]) * s;
+        // Head rechannel + scale (no extra skip activation).
+        let expected = (h[0] * skip[0] + h[1] * skip[1]) * s;
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),
@@ -240,7 +239,7 @@ fn grouped_head1x1_is_bit_identical_to_hand_computed_reference() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -250,25 +249,20 @@ fn grouped_head1x1_is_bit_identical_to_hand_computed_reference() {
     for &x in &[0.25f32, -0.5, 0.75] {
         let a = [r[0] * x, r[1] * x];
         let z = [
-            ((c[0] * a[0] + c[1] * a[1]) + d[0]) + m[0] * a[0],
-            ((c[2] * a[0] + c[3] * a[1]) + d[1]) + m[1] * a[0],
+            ((c[0] * a[0] + c[1] * a[1]) + d[0]) + m[0] * x,
+            ((c[2] * a[0] + c[3] * a[1]) + d[1]) + m[1] * x,
         ];
         let t = [fast_tanh(z[0]), fast_tanh(z[1])];
         // Grouped head1x1: group 0 maps t[0] to skip rows 0-1, group 1 maps
-        // t[1] to rows 2-3.
+        // t[1] to rows 2-3. The accumulator feeds the head rechannel
+        // directly (no extra activation).
         let skip = [
             hw[0] * t[0] + hb[0],
             hw[1] * t[0] + hb[1],
             hw[2] * t[1] + hb[2],
             hw[3] * t[1] + hb[3],
         ];
-        let sk = [
-            fast_tanh(skip[0]),
-            fast_tanh(skip[1]),
-            fast_tanh(skip[2]),
-            fast_tanh(skip[3]),
-        ];
-        let expected = (h[0] * sk[0] + h[1] * sk[1] + h[2] * sk[2] + h[3] * sk[3]) * s;
+        let expected = (h[0] * skip[0] + h[1] * skip[1] + h[2] * skip[2] + h[3] * skip[3]) * s;
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),

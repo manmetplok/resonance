@@ -267,9 +267,9 @@ impl Activation {
     ///
     /// `fast_tanh_mode` mirrors the reference core's `enable_fast_tanh()`:
     /// when `true`, `Tanh` resolves to [`Activation::FastTanh`]. Model
-    /// construction passes `true` for LEGACY (A1) models — keeping them on
-    /// today's bit-identical fast_tanh path — and `false` under reference
-    /// semantics (A2), matching the reference tools' exact-tanh default
+    /// construction passes `true` for A1-flavor (pre-A2-surface) models —
+    /// the official plugin runs with fast tanh enabled — and `false` for
+    /// A2-marked ones, matching the reference tools' exact-tanh default
     /// (`tools/render` never enables fast tanh).
     pub fn from_config(config: &ActivationConfig, fast_tanh_mode: bool) -> Self {
         match config.kind {

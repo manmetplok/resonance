@@ -43,8 +43,9 @@ fn fixture_path(name: &str) -> String {
     format!("{}/tests/fixtures/a2/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
-/// A legacy A1-shaped model (no A2 markers), so the historical engine path
-/// is audited alongside the reference-semantics one.
+/// An A1-shaped model (no A2 markers), so the fast-activation A1 flavor
+/// is audited alongside the exact-flavor A2 fixtures (both share the
+/// reference forward structure since ba todo #1116).
 fn write_legacy_a1_model() -> std::path::PathBuf {
     // rechannel 2 + 2 layers x (conv 12 + bias 2 + mixin 2 + layer1x1 4+2)
     // + head_rechannel 2 + head bias 1 + head_scale 1 = 50.

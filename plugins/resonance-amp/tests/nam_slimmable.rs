@@ -375,8 +375,9 @@ fn slimmable_fixture_matches_non_slimmable_twin_bit_for_bit() {
     let layer = file["config"]["layers"][0].as_object_mut().unwrap();
     layer.remove("slimmable");
     // `slimmable` was the file's only A2 marker; give the twin an inert one
-    // so it runs under the same (reference) semantics as the slimmable
-    // original instead of the legacy path (#1113 semantic gate).
+    // so it resolves the same (exact) activation flavor as the slimmable
+    // original instead of the fast A1 flavor (the gate's only remaining
+    // effect since #1116).
     layer.insert("gating_mode".into(), serde_json::json!("none"));
     let mut twin = load_value("stripped_twin", &file).expect("stripped twin loads");
 

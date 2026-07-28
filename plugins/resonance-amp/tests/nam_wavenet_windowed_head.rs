@@ -86,9 +86,11 @@ fn windowed_head_taps_and_dilation_offsets_are_bit_exact() {
     let (w0, w1, w2) = (0.5f32, 0.25f32, 2.0f32); // head taps, oldest first
     let hb = 0.125f32; // head bias
 
-    // Weight order: conv, conv bias, mixin, head taps ([out][in][tap] with
-    // out = in = 1 is just the tap sequence), head bias, head_scale.
-    let weights = vec![a, b, m, w0, w1, w2, hb, 1.0];
+    // Weight order: rechannel (the 1-to-1 input rechannel is consumed
+    // unconditionally; 1.0 keeps the skip math unchanged), conv, conv
+    // bias, mixin, head taps ([out][in][tap] with out = in = 1 is just the
+    // tap sequence), head bias, head_scale.
+    let weights = vec![1.0, a, b, m, w0, w1, w2, hb, 1.0];
     let config = WaveNetConfig {
         input_size: 1,
         stacks: vec![windowed_stack(1, 3, 2, true)],
@@ -96,7 +98,7 @@ fn windowed_head_taps_and_dilation_offsets_are_bit_exact() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -128,7 +130,7 @@ fn windowed_head_taps_and_dilation_offsets_are_bit_exact() {
 /// after reset() reproduces the exact same output sequence.
 #[test]
 fn reset_clears_windowed_head_history() {
-    let weights = vec![0.5, 0.0, 0.25, 0.5, 0.25, 2.0, 0.125, 1.0];
+    let weights = vec![1.0, 0.5, 0.0, 0.25, 0.5, 0.25, 2.0, 0.125, 1.0];
     let config = WaveNetConfig {
         input_size: 1,
         stacks: vec![windowed_stack(1, 3, 2, true)],
@@ -136,7 +138,7 @@ fn reset_clears_windowed_head_history() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader).unwrap();
@@ -180,7 +182,7 @@ fn windowed_head_weight_order_deinterleaves_conv1d_layout() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -225,7 +227,7 @@ fn windowed_head_weight_count_is_pinned() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
 
     let weights = counted_weights(count);
@@ -258,7 +260,7 @@ fn zero_head_kernel_size_is_rejected() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let weights = counted_weights(16);
     let mut reader = WeightReader::new(&weights);
@@ -309,11 +311,11 @@ fn kernel1_json(head_field: &str) -> String {
 
 /// A nested A2 `head` object with kernel_size 1 must reduce to the flat
 /// `head_size`/`head_bias` weight layout bit-for-bit. The nested object is
-/// an A2 marker (reference semantics), so the flat twin gets an equally
-/// inert marker (`gating_mode: "none"`) to run under the same semantics —
-/// a bare flat config would take the legacy path by design (#1113
-/// semantic gate). `head_dilation` is irrelevant at kernel 1 (the window
-/// is a single frame).
+/// an A2 marker (exact activation flavor), so the flat twin gets an
+/// equally inert marker (`gating_mode: "none"`) to run with the same
+/// activations — a bare flat config would resolve Tanh to the fast tanh
+/// (the gate's only remaining effect since #1116). `head_dilation` is
+/// irrelevant at kernel 1 (the window is a single frame).
 #[test]
 fn nested_head_kernel1_is_bit_identical_to_legacy_flat() {
     // Flat layer-array config (implicit kernel-1 head), pushed into

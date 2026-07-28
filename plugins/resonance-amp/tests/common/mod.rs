@@ -27,9 +27,17 @@ use resonance_amp::nam::parse::{load_model_from_file, LoadedModel};
 /// standard config, has RF 4092; the A2 fixtures are all far smaller).
 pub const PREWARM_SAMPLES: usize = 1 << 15;
 
+/// Absolute path of a file in `tests/fixtures/<dir>/`.
+pub fn fixture_path_in(dir: &str, name: &str) -> String {
+    format!(
+        "{}/tests/fixtures/{dir}/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 /// Absolute path of a file in `tests/fixtures/a2/`.
 pub fn fixture_path(name: &str) -> String {
-    format!("{}/tests/fixtures/a2/{name}", env!("CARGO_MANIFEST_DIR"))
+    fixture_path_in("a2", name)
 }
 
 /// Read a raw little-endian f32 vector (the fixture input/output format).
