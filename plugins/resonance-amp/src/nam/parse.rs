@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::activations::{ActivationConfig, ActivationKind};
 use super::lstm::LstmModel;
+use super::wavenet;
 use super::wavenet::params::{
     parse_activation_value, parse_gating_config, FilmParams, GatingMode, Head1x1Params, LayerFilms,
 };
@@ -604,20 +605,120 @@ impl<'a> WeightReader<'a> {
     }
 }
 
-/// Load a NAM model from a .nam file path.
-pub fn load_model_from_file(path: &str) -> Result<LoadedModel, String> {
-    let data = std::fs::read_to_string(Path::new(path))
-        .map_err(|e| format!("Failed to read file: {e}"))?;
+// -- Slimmable models ---------------------------------------------------------
 
-    let nam_file: NamFile =
-        serde_json::from_str(&data).map_err(|e| format!("Failed to parse JSON: {e}"))?;
+/// Raw-JSON probe: does any layer array of a (new-format) WaveNet config
+/// carry a non-null `slimmable` descriptor? Old flat configs have no
+/// `layers` array and are never slimmable; non-slimmable files must keep
+/// taking the historical load path bit-for-bit, so this never rejects — the
+/// typed parse validates the descriptors once a file IS slimmable.
+fn wavenet_config_is_slimmable(config: &serde_json::Value) -> bool {
+    config
+        .get("layers")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|layers| {
+            layers
+                .iter()
+                .any(|l| l.get("slimmable").is_some_and(|s| !s.is_null()))
+        })
+}
 
-    let sample_rate = parse_sample_rate(nam_file.sample_rate.as_ref());
-    let mut reader = WeightReader::new(&nam_file.weights);
+/// One `SlimmableContainer` submodel descriptor: the size threshold this
+/// submodel covers values up to, and its complete nested .nam-style model
+/// object (reference `ContainerConfig::create` in NAM/container.cpp).
+#[derive(Deserialize)]
+struct ContainerSubmodelEntry {
+    max_value: f64,
+    model: serde_json::Value,
+}
 
-    let model: Box<dyn NamInference> = match nam_file.architecture.as_str() {
+#[derive(Deserialize)]
+struct ContainerConfigFile {
+    submodels: Vec<ContainerSubmodelEntry>,
+}
+
+/// A container submodel's nested model spec. Unlike `condition_dsp` nets it
+/// carries its own `sample_rate`, validated against the container's.
+#[derive(Deserialize)]
+struct SubmodelFile {
+    architecture: String,
+    config: serde_json::Value,
+    weights: Vec<f32>,
+    #[serde(default)]
+    sample_rate: Option<serde_json::Value>,
+}
+
+/// Reference `ContainerModel::_get_index_for_slimmable_size`: the first
+/// submodel whose `max_value` exceeds the requested size; the last submodel
+/// is the fallback (and the load-time default, size = 1.0 -> full).
+fn container_submodel_index(max_values: &[f64], size: f64) -> usize {
+    max_values
+        .iter()
+        .position(|&mv| size < mv)
+        .unwrap_or(max_values.len() - 1)
+}
+
+// -- Model construction -------------------------------------------------------
+
+/// Construct a model from its parts, dispatching on the architecture.
+/// Shared by the top-level file load and `SlimmableContainer` submodels
+/// (which recurse through it with their own nested spec).
+///
+/// `strict_weights` controls the leftover-weight policy: container
+/// submodels and slimmable WaveNets must consume their weight vector
+/// exactly (the slice/layout verification of todo #1112), while top-level
+/// non-slimmable files keep the historical lenient warning so A1 and plain
+/// A2 files load bit-for-bit unchanged.
+fn build_model(
+    architecture: &str,
+    config: serde_json::Value,
+    weights: &[f32],
+    sample_rate: f32,
+    strict_weights: bool,
+) -> Result<Box<dyn NamInference>, String> {
+    let mut reader = WeightReader::new(weights);
+    match architecture {
         "WaveNet" => {
-            let config = parse_wavenet_config(nam_file.config)?;
+            let slimmable = wavenet_config_is_slimmable(&config);
+            if slimmable {
+                // Typed parse first (before any weights are consumed): it
+                // validates every slimmable descriptor — unknown methods,
+                // unsorted allowed_channels, last entry != channels — with
+                // clear errors (see params::SlimmableParams).
+                let full = parse_full_wavenet_config(&config)?;
+                if full.head.is_some() {
+                    return Err(
+                        "Slimmable WaveNet: a post-stack head is not supported".to_string()
+                    );
+                }
+                let target = wavenet::slimmable::channels_for_size(
+                    &full.layer_arrays,
+                    wavenet::slimmable::FULL_SIZE,
+                );
+                // v1 always selects the full size, and full allowed_channels
+                // lists end at the full channel count (validated), so the
+                // slice is the whole packed vector and the weights below
+                // flow to construction unchanged. Smaller sizes additionally
+                // need `derive_params_for_channels` + engine-config
+                // rederivation when runtime A2-Lite selection lands
+                // (follow-on todo).
+                if !wavenet::slimmable::is_full_size(&full.layer_arrays, &target) {
+                    return Err(
+                        "Slimmable WaveNet: only the full-size slice is supported (runtime A2-Lite size selection is not implemented yet)"
+                            .to_string(),
+                    );
+                }
+                // The full-size extraction walk verifies the packed vector
+                // against the full-size layout exactly (every tensor,
+                // head_scale included) and returns it bit-identically.
+                let slice = wavenet::slimmable::extract_slimmed_weights(
+                    &full.layer_arrays,
+                    weights,
+                    &target,
+                )?;
+                debug_assert_eq!(slice, weights, "full-size slice must be the identity");
+            }
+            let config = parse_wavenet_config(config)?;
             // Reference `parse_config_json`: a condition_dsp trained at a
             // different rate than the outer model is a broken export.
             if let Some(cd) = &config.condition_dsp {
@@ -630,27 +731,113 @@ pub fn load_model_from_file(path: &str) -> Result<LoadedModel, String> {
             }
             let model = WaveNetModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
+                if slimmable {
+                    // The packed vector must BE the full-size layout; a
+                    // mismatch means a broken slice descriptor or export.
+                    return Err(format!(
+                        "Slimmable WaveNet: {} unused weights after loading the full-size slice (packed vector doesn't match the full-size layout)",
+                        reader.remaining()
+                    ));
+                }
+                if strict_weights {
+                    return Err(format!(
+                        "{} unused weights after loading WaveNet model",
+                        reader.remaining()
+                    ));
+                }
                 eprintln!(
                     "Warning: {} unused weights after loading WaveNet model",
                     reader.remaining()
                 );
             }
-            Box::new(model)
+            Ok(Box::new(model))
         }
         "LSTM" => {
-            let config: LstmConfig = serde_json::from_value(nam_file.config)
+            let config: LstmConfig = serde_json::from_value(config)
                 .map_err(|e| format!("Invalid LSTM config: {e}"))?;
             let model = LstmModel::from_config_and_weights(config, &mut reader)?;
             if reader.remaining() > 0 {
+                if strict_weights {
+                    return Err(format!(
+                        "{} unused weights after loading LSTM model",
+                        reader.remaining()
+                    ));
+                }
                 eprintln!(
                     "Warning: {} unused weights after loading LSTM model",
                     reader.remaining()
                 );
             }
-            Box::new(model)
+            Ok(Box::new(model))
         }
-        other => return Err(format!("Unsupported architecture: {other}")),
-    };
+        // A2 slimmable container (e.g. the A2.nam trainer export): one file
+        // holding complete submodels at different sizes (reference
+        // NAM/container.cpp). The top-level weight vector is unused — every
+        // submodel carries its own. v1 constructs the FULL (last) submodel
+        // only; the descriptor validation and index selection mirror the
+        // reference so runtime size selection can pick another submodel
+        // later without reshaping this path.
+        "SlimmableContainer" => {
+            let cfg: ContainerConfigFile = serde_json::from_value(config)
+                .map_err(|e| format!("Invalid SlimmableContainer config: {e}"))?;
+            if cfg.submodels.is_empty() {
+                return Err("SlimmableContainer: 'submodels' must be a non-empty array".to_string());
+            }
+            for pair in cfg.submodels.windows(2) {
+                if pair[1].max_value <= pair[0].max_value {
+                    return Err(
+                        "SlimmableContainer: submodels must be sorted by ascending max_value"
+                            .to_string(),
+                    );
+                }
+            }
+            let max_values: Vec<f64> = cfg.submodels.iter().map(|s| s.max_value).collect();
+            if *max_values.last().expect("non-empty") < 1.0 {
+                return Err(
+                    "SlimmableContainer: last submodel max_value must be >= 1.0".to_string()
+                );
+            }
+            let index = container_submodel_index(&max_values, wavenet::slimmable::FULL_SIZE);
+            let entry = cfg
+                .submodels
+                .into_iter()
+                .nth(index)
+                .expect("index selected from the same list");
+            let sub: SubmodelFile = serde_json::from_value(entry.model)
+                .map_err(|e| format!("SlimmableContainer: invalid submodel {index}: {e}"))?;
+            // Reference ContainerModel ctor: a submodel trained at a
+            // different rate than the container is a broken export (an
+            // absent submodel rate counts as unknown and skips the check).
+            if let Some(v) = &sub.sample_rate {
+                let sub_rate = parse_sample_rate(Some(v));
+                if sub_rate != sample_rate {
+                    return Err(format!(
+                        "SlimmableContainer: submodel {index} sample rate ({sub_rate}) doesn't match container sample rate ({sample_rate})"
+                    ));
+                }
+            }
+            build_model(&sub.architecture, sub.config, &sub.weights, sample_rate, true)
+        }
+        other => Err(format!("Unsupported architecture: {other}")),
+    }
+}
+
+/// Load a NAM model from a .nam file path.
+pub fn load_model_from_file(path: &str) -> Result<LoadedModel, String> {
+    let data = std::fs::read_to_string(Path::new(path))
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+
+    let nam_file: NamFile =
+        serde_json::from_str(&data).map_err(|e| format!("Failed to parse JSON: {e}"))?;
+
+    let sample_rate = parse_sample_rate(nam_file.sample_rate.as_ref());
+    let model = build_model(
+        &nam_file.architecture,
+        nam_file.config,
+        &nam_file.weights,
+        sample_rate,
+        false,
+    )?;
 
     Ok(LoadedModel { model, sample_rate })
 }

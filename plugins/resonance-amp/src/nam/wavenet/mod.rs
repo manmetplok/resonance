@@ -7,9 +7,11 @@
 //! - `ring` — dilated-conv state ring buffer.
 //! - `model` — the `WaveNetModel` orchestrator (load + per-sample inference).
 //! - `params` — typed full A2 config surface (parse-only for now).
+//! - `slimmable` — packed-weight slice extraction for slimmable models.
 //!
-//! Only `WaveNetModel` and the typed `params` config structs are exported;
-//! the layer primitives stay crate-private.
+//! Only `WaveNetModel`, the typed `params` config structs, and the
+//! `slimmable` slice helpers are exported; the layer primitives stay
+//! crate-private.
 
 mod conv_layer;
 mod film;
@@ -17,5 +19,6 @@ mod head;
 mod model;
 pub mod params;
 mod ring;
+pub mod slimmable;
 
 pub use model::WaveNetModel;
