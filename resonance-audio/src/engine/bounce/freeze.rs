@@ -27,7 +27,7 @@ use crate::types::*;
 
 use super::super::SharedState;
 use super::render::{
-    build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
+    build_latency_comp, chunk_span, render_chunk, reset_plugins, ChunkCtx, ChunkScratch,
 };
 
 /// Bit depth of the freeze-cache WAV. Matches the project-bounce path
@@ -197,18 +197,20 @@ pub fn to_freeze_cache(
             return Err(FREEZE_CANCELLED_MSG.into());
         }
 
-        let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
+        // Tail chunks are padded up to the CLAP activation minimum and
+        // only `emit` frames are consumed — see `chunk_span`.
+        let (render_frames, emit) = chunk_span(render_stop - pos);
         // include_master_fx = false (cache replays through master),
         // respect_mute_solo = false (freeze the track's own output
         // regardless of its live mute/solo state), freeze_raw = true
         // (capture the raw pre-fader / pre-pan / pre-routing post-FX
         // signal so the live mixer re-applies volume / pan / routing on
         // playback and stays sample-identical to the unfrozen track).
-        render_chunk(&ctx, &mut scratch, pos, frames, &in_filter, false, false, true);
+        render_chunk(&ctx, &mut scratch, pos, render_frames, &in_filter, false, false, true);
 
-        let drop_now = skip_frames.min(frames);
+        let drop_now = skip_frames.min(emit);
         skip_frames -= drop_now;
-        for &sample in &scratch.mix_buf[drop_now * 2..frames * 2] {
+        for &sample in &scratch.mix_buf[drop_now * 2..emit * 2] {
             if let Err(e) = writer.write_sample(sample) {
                 // Drop the partial file so a half-written cache never
                 // sits next to its expected output.
@@ -218,7 +220,7 @@ pub fn to_freeze_cache(
             }
         }
 
-        pos += frames as u64;
+        pos += emit as u64;
 
         // Emit progress at most once per integer percent so we don't
         // flood the caller on a long render.

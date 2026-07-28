@@ -28,7 +28,8 @@ use super::encoder::{build_sink, EncoderError, EncoderSink};
 use super::limiter::TruePeakLimiter;
 use super::normalize::{target_gain_db, LoudnessMeasure};
 use super::render::{
-    build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
+    build_latency_comp, chunk_span, master_fx_latency, render_chunk, reset_plugins, ChunkCtx,
+    ChunkScratch, BOUNCE_CHUNK,
 };
 use super::resample::ResampleStage;
 
@@ -239,17 +240,19 @@ fn render_range(
         if shared.bounce_cancel.load(Ordering::Relaxed) {
             return RenderOutcome::Cancelled;
         }
-        let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
-        render_chunk(ctx, scratch, pos, frames, &everything, true, true, false);
+        // Tail chunks are padded up to the CLAP activation minimum and
+        // only `emit` frames are consumed — see `chunk_span`.
+        let (render_frames, emit) = chunk_span(render_stop - pos);
+        render_chunk(ctx, scratch, pos, render_frames, &everything, true, true, false);
 
-        let drop_now = skip_frames.min(frames);
+        let drop_now = skip_frames.min(emit);
         skip_frames -= drop_now;
-        let out = &scratch.mix_buf[drop_now * 2..frames * 2];
+        let out = &scratch.mix_buf[drop_now * 2..emit * 2];
         if let Err(e) = on_chunk(out) {
             return RenderOutcome::WriteError(e);
         }
 
-        pos += frames as u64;
+        pos += emit as u64;
         reporter.progress(event_tx, phase, (pos - render_start) as f32 / total_frames);
     }
     RenderOutcome::Completed
@@ -363,11 +366,13 @@ pub(crate) fn run_export(
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
     let latency_comp = build_latency_comp(tracks, busses, plugins);
-    // Render `max_latency` extra frames and drop the same number from
-    // the front: plugin-delay compensation shifts every track by the
-    // pipeline latency, so trimming it re-aligns the file with the
-    // timeline (and the extra tail catches the delayed final samples).
-    let comp_latency = latency_comp.max_latency();
+    // Render extra frames and drop the same number from the front:
+    // plugin-delay compensation shifts every track by the pipeline
+    // latency, and the master FX chain (which this export path runs,
+    // unlike live PDC) shifts the summed mix by its own latency on top.
+    // Trimming both re-aligns the file with the timeline and the extra
+    // tail catches the delayed final samples (doc #260 finding #8).
+    let comp_latency = latency_comp.max_latency() + master_fx_latency(shared, master, plugins);
     let render_stop = render_end + comp_latency;
     let ctx = ChunkCtx {
         shared,

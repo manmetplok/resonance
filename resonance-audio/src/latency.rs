@@ -145,6 +145,24 @@ pub fn bus_chain_latencies(
         .collect()
 }
 
+/// Effective master-chain latency: the sum of the master plugins'
+/// reported latencies, 0 while the master FX are bypassed (the render
+/// paths skip the whole chain). Live playback deliberately leaves this
+/// uncompensated — it delays every path equally — but *offline export*
+/// pre-rolls/trims by it on top of the track/bus comp so the file
+/// starts at t=0 and keeps its full tail (doc #260 finding #8).
+pub fn master_chain_latency(
+    plugin_ids: &[PluginInstanceId],
+    bypassed: bool,
+    plugin_latency: impl Fn(PluginInstanceId) -> u64,
+) -> u64 {
+    if bypassed {
+        0
+    } else {
+        plugin_ids.iter().map(|&p| plugin_latency(p)).sum()
+    }
+}
+
 /// Fold manual external-instrument latency offsets into per-track chain
 /// latencies, in place. An external instrument's audio return arrives a
 /// round-trip late (MIDI out → hardware synth → audio in); its positive
