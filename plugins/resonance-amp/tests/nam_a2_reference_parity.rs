@@ -1,12 +1,20 @@
-//! End-to-end A2 reference parity (ba todo #1113): every committed A2
-//! fixture must load through the public loader and produce audio matching
-//! the NeuralAmpModelerCore reference render within tight tolerance.
-//! Todo #1115 formalizes/extends this suite; the harness lives in
-//! `tests/common/mod.rs`.
+//! End-to-end A2 reference parity (ba todos #1113 + #1115): every
+//! committed A2 fixture must load through the public loader and produce
+//! audio matching the NeuralAmpModelerCore reference render within tight
+//! tolerance. Parity conditions (f64 reference, prewarm semantics,
+//! 64-block equivalence, tolerance rationale): `tests/common/mod.rs`
+//! module docs. Companion suites: `nam_a1_reference_parity` (A1 WaveNet,
+//! fast-tanh reference) and `nam_lstm_reference_parity` (LSTM).
 //!
-//! The engine loads slimmable files at the full size, so the slimmable
-//! fixtures compare against their `slim1` reference renders (byte-identical
-//! to the reference's no-`--slim` default per the fixtures README).
+//! The engine loads slimmable files at the full (A2-Full) size only —
+//! runtime Lite-slice selection is not implemented (todo #1112 scoped v1
+//! to the full slice; requesting a non-full size is rejected at the
+//! `extract_slimmed_weights` layer, covered in `nam_slimmable.rs`). The
+//! slimmable fixtures therefore compare against their `slim1` reference
+//! renders (byte-identical to the reference's no-`--slim` default per the
+//! fixtures README); the committed `slim0` (Lite) reference vectors are
+//! the ready-made acceptance data for future Lite support and are only
+//! integrity-checked here.
 
 mod common;
 
@@ -43,9 +51,33 @@ fn wavenet_condition_dsp_matches_reference() {
     );
 }
 
+/// The Lite-slice reference vectors must stay distinct from the Full
+/// renders they sit next to: if a regeneration ever overwrote a `slim0`
+/// vector with a full-size render (or vice versa), the future Lite
+/// acceptance data would silently become meaningless. Also pins the
+/// shared 4096-sample window for every committed vector.
+#[test]
+fn lite_reference_vectors_are_intact_for_future_lite_support() {
+    for (slim0, slim1) in [
+        ("A2.slim0.f32", "A2.slim1.f32"),
+        ("slimmable_wavenet.slim0.f32", "slimmable_wavenet.slim1.f32"),
+    ] {
+        let lite = common::read_f32(&common::fixture_path(slim0));
+        let full = common::read_f32(&common::fixture_path(slim1));
+        assert_eq!(lite.len(), 4096, "{slim0}: reference window must be 4096");
+        assert_eq!(full.len(), 4096, "{slim1}: reference window must be 4096");
+        assert!(
+            lite.iter().zip(&full).any(|(a, b)| a.to_bits() != b.to_bits()),
+            "{slim0} is byte-identical to {slim1}: the Lite reference render was overwritten"
+        );
+    }
+}
+
 /// Ad-hoc comparison of an arbitrary model against an arbitrary reference
-/// render, for debugging parity work outside the committed fixture set
-/// (e.g. A1 models rendered with the reference `tools/render`):
+/// render, for debugging parity work outside the committed fixture set —
+/// works for every fixture family (A2, A1, LSTM) since it takes explicit
+/// paths; pass your own `NAM_DIAG_INPUT` if the model was not rendered
+/// over the shared `a2/input.f32`:
 /// `NAM_DIAG_MODEL=/path/model.nam NAM_DIAG_REF=/path/ref.f32 \
 ///  NAM_DIAG_INPUT=/path/input.f32 cargo test -p resonance-amp \
 ///  --test nam_a2_reference_parity -- --ignored --nocapture`

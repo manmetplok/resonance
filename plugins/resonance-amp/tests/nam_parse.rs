@@ -3,14 +3,15 @@ use std::path::PathBuf;
 use resonance_amp::nam::parse::{load_model_from_file, DEFAULT_SAMPLE_RATE};
 
 /// Minimal valid LSTM .nam file body: input 1, hidden 1, one layer.
-/// Weights: w_ih(4) + w_hh(4) + b_ih(4) + b_hh(4) + dense(1) + bias(1)
-/// + head_scale(1) = 19.
+/// Weights in the reference NAM export layout (see `src/nam/lstm.rs`):
+/// combined w[4*1, 1+1](8) + combined bias(4) + h0(1) + c0(1)
+/// + dense(1) + bias(1) = 16.
 fn minimal_lstm_json(sample_rate_field: Option<&str>) -> String {
     let rate_line = match sample_rate_field {
         Some(v) => format!("\"sample_rate\": {v},"),
         None => String::new(),
     };
-    let weights: Vec<String> = (0..19).map(|_| "0.01".to_string()).collect();
+    let weights: Vec<String> = (0..16).map(|_| "0.01".to_string()).collect();
     format!(
         r#"{{
             "version": "0.5.2",

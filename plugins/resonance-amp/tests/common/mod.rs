@@ -1,24 +1,47 @@
-//! Shared NAM reference-parity harness (ba todo #1113; the A2 fixture
-//! parity suite of todo #1115 builds on this).
+//! Shared NAM reference-parity harness (ba todo #1113, formalized by todo
+//! #1115). This header is THE definition of the parity conditions; the
+//! `nam_a2_reference_parity`, `nam_a1_reference_parity` and
+//! `nam_lstm_reference_parity` suites (and the fixture READMEs under
+//! `tests/fixtures/{a1,a2,lstm}/`) all reference it.
 //!
-//! Reproduces the exact conditions the reference outputs in
-//! `tests/fixtures/a2/` were rendered under (NeuralAmpModelerCore
-//! `tools/render` at commit 3cde95c, see the fixtures README):
+//! Reproduces the exact conditions the reference output vectors were
+//! rendered under (NeuralAmpModelerCore `tools/render` at commit 3cde95c,
+//! see the fixture READMEs for provenance and exact commands):
 //!
 //! - `DSP::Reset(48000.0, 64)` with prewarm-on-reset: the model is fed
-//!   zeros over (at least) its receptive field before the first real
-//!   sample. The reference feeds `ceil((1 + sum of receptive fields) /
-//!   64) * 64` zeros; a WaveNet is a finite-impulse-response network, so
-//!   its state reaches a fixed point once the zero run covers the
-//!   receptive field — feeding MORE zeros leaves the state bit-identical.
-//!   The harness therefore uses one generous constant instead of
-//!   re-deriving each model's receptive field.
+//!   zeros before the first real sample, in 64-sample blocks, until at
+//!   least `GetPrewarmSamples()` zeros have been processed.
+//!   - WaveNet: `1 + sum of receptive fields` zeros, rounded up to whole
+//!     blocks. A WaveNet is a finite-impulse-response network, so its
+//!     state reaches a fixed point once the zero run covers the receptive
+//!     field — feeding MORE zeros leaves the state bit-identical. The
+//!     harness therefore uses one generous constant
+//!     ([`PREWARM_SAMPLES`]) instead of re-deriving each model's
+//!     receptive field.
+//!   - LSTM: exactly `0.5 * sample_rate` zeros (24000 at 48 kHz; 375
+//!     whole 64-blocks, so no rounding). An LSTM is recurrent — its
+//!     state only converges asymptotically under zero input — so the
+//!     LSTM suite feeds EXACTLY the reference count
+//!     ([`LSTM_PREWARM_SAMPLES_48K`]) rather than the generous constant.
 //! - 64-sample blocks: the engine is sample-serial, so block size cannot
 //!   change its output; the reference's blocked processing is likewise
-//!   stream-equivalent.
+//!   stream-equivalent. This is why the harness has no block-size
+//!   dimension to vary — sample-serial processing IS every block size.
 //! - The reference computes in f64 (`NAM_SAMPLE = double`) with one final
 //!   f32 cast per sample; this engine is f32 throughout, so comparisons
-//!   use a small tolerance, never bit equality.
+//!   use a small tolerance, never bit equality. Per-suite tolerances and
+//!   the measured errors that justify them are documented on each
+//!   suite's `TOL` constant; all sit at f32 build-noise level
+//!   (accumulation-order / FMA-contraction differences), orders of
+//!   magnitude below any wiring error.
+//! - Activation flavor: A2-marked models use the exact activations and
+//!   compare against default reference renders; A1 WaveNet and LSTM
+//!   models use the fast flavor (the official NAM plugin runs
+//!   `enable_fast_tanh()`) and compare against `--fast-tanh` renders
+//!   (see `tests/fixtures/a1/README.md` for the render-tool patch).
+
+// Compiled once per test binary; each suite uses a subset of the helpers.
+#![allow(dead_code)]
 
 use resonance_amp::nam::parse::{load_model_from_file, LoadedModel};
 
@@ -26,6 +49,10 @@ use resonance_amp::nam::parse::{load_model_from_file, LoadedModel};
 /// Must exceed every fixture's receptive field (the largest, the A1
 /// standard config, has RF 4092; the A2 fixtures are all far smaller).
 pub const PREWARM_SAMPLES: usize = 1 << 15;
+
+/// Exact prewarm the reference feeds a 48 kHz LSTM: `GetPrewarmSamples()
+/// = 0.5 * 48000`, already a whole number of 64-blocks.
+pub const LSTM_PREWARM_SAMPLES_48K: usize = 24_000;
 
 /// Absolute path of a file in `tests/fixtures/<dir>/`.
 pub fn fixture_path_in(dir: &str, name: &str) -> String {
@@ -58,10 +85,20 @@ pub fn read_f32(path: &str) -> Vec<f32> {
 /// Load a .nam model and run it under the reference conditions: reset,
 /// prewarm on zeros, then process `input` sample-serially.
 pub fn run_nam_model(model_path: &str, input: &[f32]) -> Vec<f32> {
+    run_nam_model_with_prewarm(model_path, input, PREWARM_SAMPLES)
+}
+
+/// [`run_nam_model`] with an explicit prewarm length, for recurrent
+/// models where the exact reference count matters (see the module docs).
+pub fn run_nam_model_with_prewarm(
+    model_path: &str,
+    input: &[f32],
+    prewarm_samples: usize,
+) -> Vec<f32> {
     let LoadedModel { mut model, .. } = load_model_from_file(model_path)
         .unwrap_or_else(|e| panic!("failed to load {model_path}: {e}"));
     model.reset();
-    for _ in 0..PREWARM_SAMPLES {
+    for _ in 0..prewarm_samples {
         model.process_sample(0.0);
     }
     input.iter().map(|&x| model.process_sample(x)).collect()
