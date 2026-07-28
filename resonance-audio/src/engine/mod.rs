@@ -474,6 +474,12 @@ pub struct AudioEngine {
     sample_rate: u32,
     channels: usize,
     quantum: usize,
+    /// Holds the PipeWire graph at the engine's rate for the lifetime
+    /// of the engine (`None` when the force was rejected and we follow
+    /// the graph instead). Declared last so its `Drop` — which hands
+    /// the graph back by clearing `clock.force-rate` — runs after the
+    /// output stream has been torn down.
+    _graph_force: Option<platform::GraphRateForce>,
 }
 
 impl AudioEngine {
@@ -501,11 +507,22 @@ impl AudioEngine {
         let channels = config.channels() as usize;
         let default_rate = config.sample_rate();
 
-        // Prefer the PipeWire graph sample rate to avoid resampling.
-        // cpal's default_output_config often returns 44100 via ALSA compat, but the
-        // actual hardware/graph runs at a different rate -- causing PipeWire to resample
-        // every buffer and inflating the quantum (e.g. 1102 frames instead of 128).
-        let sample_rate = platform::pick_sample_rate(&device, &config, DeviceDirection::Output);
+        // Assert the graph rate rather than follow it: another client
+        // (e.g. a 44.1 kHz music stream on an idle graph) may have
+        // dragged PipeWire off the project rate, and following it would
+        // adopt that rate for the whole session. Force the preferred
+        // rate (canonical 48 kHz when the device supports it) via the
+        // settings metadata; when the environment rejects the force,
+        // fall back to following the graph as before. cpal's
+        // default_output_config often returns 44100 via ALSA compat
+        // while the actual graph runs at a different rate — following
+        // that blindly makes PipeWire resample every buffer and inflate
+        // the quantum (e.g. 1102 frames instead of 128).
+        let graph_force = platform::assert_graph_rate(&device, DeviceDirection::Output);
+        let sample_rate = match &graph_force {
+            Some(force) => force.rate(),
+            None => platform::pick_sample_rate(&device, &config, DeviceDirection::Output),
+        };
 
         // Query PipeWire quantum to size buffers relative to the actual period.
         let probed_quantum = platform::pipewire_quantum();
@@ -846,11 +863,12 @@ impl AudioEngine {
         // numbers, which is usually the cause of "why is latency higher than
         // the pipewire quantum".
         eprintln!(
-            "audio: backend={} device={:?} sample_rate={} (cpal_default={}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
+            "audio: backend={} device={:?} sample_rate={} (cpal_default={}, graph_forced={:?}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
             if pw_output.is_some() { "pipewire" } else { "cpal" },
             device_name,
             sample_rate,
             default_rate,
+            graph_force.as_ref().map(|f| f.rate()),
             quantum,
             probed_quantum,
             max_quantum,
@@ -930,6 +948,7 @@ impl AudioEngine {
             sample_rate,
             channels,
             quantum,
+            _graph_force: graph_force,
         })
     }
 
@@ -1045,6 +1064,7 @@ impl AudioEngine {
             sample_rate: 48_000,
             channels: 2,
             quantum: 128,
+            _graph_force: None,
         }
     }
 
@@ -1086,6 +1106,7 @@ impl AudioEngine {
             sample_rate: 48_000,
             channels: 2,
             quantum: 128,
+            _graph_force: None,
         };
         (engine, cmd_rx)
     }

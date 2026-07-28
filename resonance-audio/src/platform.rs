@@ -63,6 +63,24 @@ pub(crate) enum DeviceDirection {
     Output,
 }
 
+/// The app-wide canonical sample rate. The engine asserts this on the
+/// PipeWire graph when the output device supports it (engine tests pin
+/// 48_000 as well); see [`choose_assert_rate`].
+pub const CANONICAL_RATE: u32 = 48_000;
+
+/// Whether `device` can open a stream at `rate` in the given direction.
+fn device_supports_rate(device: &cpal::Device, direction: &DeviceDirection, rate: u32) -> bool {
+    let supported = match direction {
+        DeviceDirection::Output => device.supported_output_configs().ok().map(|mut configs| {
+            configs.any(|c| c.min_sample_rate() <= rate && rate <= c.max_sample_rate())
+        }),
+        DeviceDirection::Input => device.supported_input_configs().ok().map(|mut configs| {
+            configs.any(|c| c.min_sample_rate() <= rate && rate <= c.max_sample_rate())
+        }),
+    };
+    supported == Some(true)
+}
+
 /// Pick the best sample rate: prefer the PipeWire graph rate to avoid resampling.
 /// Falls back to the default config rate if we can't determine the graph rate.
 /// Works for both input and output devices.
@@ -79,20 +97,30 @@ pub(crate) fn pick_sample_rate(
     let candidates = [pipewire_graph_rate(), default_sink_sample_rate()];
 
     for candidate in candidates.into_iter().flatten() {
-        let supported = match direction {
-            DeviceDirection::Output => device.supported_output_configs().ok().map(|mut configs| {
-                configs.any(|c| c.min_sample_rate() <= candidate && candidate <= c.max_sample_rate())
-            }),
-            DeviceDirection::Input => device.supported_input_configs().ok().map(|mut configs| {
-                configs.any(|c| c.min_sample_rate() <= candidate && candidate <= c.max_sample_rate())
-            }),
-        };
-        if supported == Some(true) {
+        if device_supports_rate(device, &direction, candidate) {
             return candidate;
         }
     }
 
     default_rate
+}
+
+/// Candidate order for the rate the engine asserts on the PipeWire
+/// graph: the canonical 48 kHz first, then the current graph rate,
+/// then the default-sink rate — first one the device supports wins.
+/// This is [`pick_sample_rate`]'s follow-the-graph candidate list with
+/// [`CANONICAL_RATE`] prepended: when the device can do 48 kHz the
+/// engine pulls the graph there instead of adopting whatever rate
+/// another client dragged it to.
+pub fn choose_assert_rate(
+    graph_rate: Option<u32>,
+    sink_rate: Option<u32>,
+    supports: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    [Some(CANONICAL_RATE), graph_rate, sink_rate]
+        .into_iter()
+        .flatten()
+        .find(|rate| supports(*rate))
 }
 
 /// Run a command with a timeout (in seconds). Returns stdout on success.
@@ -142,14 +170,18 @@ fn run_pactl(args: &[&str]) -> Option<String> {
 /// Run a pw-metadata query with a 2-second timeout. Returns the parsed value on success.
 fn run_pw_metadata(key: &str) -> Option<String> {
     let stdout = run_command_with_timeout("pw-metadata", &["-n", "settings", "0", key], 2)?;
-    // Format: "update: id:0 key:'clock.quantum' value:'1024' type:''"
-    if let Some(start) = stdout.find("value:'") {
-        let rest = &stdout[start + 7..];
-        if let Some(end) = rest.find('\'') {
-            return rest[..end].parse::<u32>().ok().map(|v| v.to_string());
-        }
-    }
-    None
+    parse_pw_metadata_value(&stdout)
+        .and_then(|v| v.parse::<u32>().ok())
+        .map(|v| v.to_string())
+}
+
+/// Extract the payload of the first `value:'…'` field from `pw-metadata`
+/// output. Line format: "update: id:0 key:'clock.quantum' value:'1024' type:''".
+pub fn parse_pw_metadata_value(stdout: &str) -> Option<&str> {
+    let start = stdout.find("value:'")? + "value:'".len();
+    let rest = &stdout[start..];
+    let end = rest.find('\'')?;
+    Some(&rest[..end])
 }
 
 /// Query PipeWire's graph sample rate via `pw-metadata`.
@@ -209,6 +241,96 @@ pub(crate) fn pipewire_quantum() -> Option<u32> {
 /// Query PipeWire's maximum quantum.
 pub(crate) fn pipewire_max_quantum() -> Option<u32> {
     run_pw_metadata("clock.max-quantum").and_then(|s| s.parse().ok())
+}
+
+/// The rate currently asserted on the graph by [`GraphRateForce`]
+/// (0 = none). A process-global because the PipeWire settings metadata
+/// it mirrors is itself global; lets [`reassert_graph_force`] run from
+/// the input-stream builders without plumbing the guard through.
+static ASSERTED_GRAPH_RATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Write `clock.force-rate` in the PipeWire settings metadata
+/// (`pw-metadata -n settings 0 clock.force-rate <rate>`). 0 clears the
+/// force and hands the graph back to its configured default rate.
+fn write_force_rate(rate: u32) -> Option<()> {
+    run_command_with_timeout(
+        "pw-metadata",
+        &["-n", "settings", "0", "clock.force-rate", &rate.to_string()],
+        2,
+    )
+    .map(|_| ())
+}
+
+/// RAII assertion of a PipeWire graph rate via the settings metadata's
+/// `clock.force-rate`. The force switches the graph immediately — even
+/// with other streams running (they get resampled) and regardless of
+/// `default.clock.allowed-rates` (unless the non-default
+/// `settings.check-rate = true` is set, in which case PipeWire ignores
+/// the update silently; the metadata still echoes it, so that corner
+/// can't be detected from here). The metadata outlives this process —
+/// it only resets when the daemon restarts — hence the `Drop` clear.
+pub(crate) struct GraphRateForce {
+    rate: u32,
+}
+
+impl GraphRateForce {
+    /// Force the graph to `rate` and verify the settings metadata took
+    /// the update. `None` means the environment rejected it (no
+    /// PipeWire, no pw-metadata binary, no settings object) — the
+    /// caller should fall back to following the graph rate.
+    pub(crate) fn engage(rate: u32) -> Option<Self> {
+        write_force_rate(rate)?;
+        let readback = run_pw_metadata("clock.force-rate").and_then(|s| s.parse::<u32>().ok());
+        if readback != Some(rate) {
+            eprintln!(
+                "audio: clock.force-rate {rate} not accepted (readback {readback:?}); following graph rate instead"
+            );
+            return None;
+        }
+        ASSERTED_GRAPH_RATE.store(rate, std::sync::atomic::Ordering::Relaxed);
+        Some(Self { rate })
+    }
+
+    /// The rate this guard holds the graph at.
+    pub(crate) fn rate(&self) -> u32 {
+        self.rate
+    }
+}
+
+impl Drop for GraphRateForce {
+    fn drop(&mut self) {
+        ASSERTED_GRAPH_RATE.store(0, std::sync::atomic::Ordering::Relaxed);
+        // Hand the graph back, but only if the force is still ours —
+        // if another client re-forced meanwhile, clearing would
+        // clobber their setting.
+        let current = run_pw_metadata("clock.force-rate").and_then(|s| s.parse::<u32>().ok());
+        if current == Some(self.rate) {
+            let _ = write_force_rate(0);
+        }
+    }
+}
+
+/// Pick the assert-rate for `device` (see [`choose_assert_rate`]) and
+/// force the graph to it. `None` → no suitable candidate or the force
+/// was rejected; the caller falls back to [`pick_sample_rate`].
+pub(crate) fn assert_graph_rate(
+    device: &cpal::Device,
+    direction: DeviceDirection,
+) -> Option<GraphRateForce> {
+    let target = choose_assert_rate(pipewire_graph_rate(), default_sink_sample_rate(), |rate| {
+        device_supports_rate(device, &direction, rate)
+    })?;
+    GraphRateForce::engage(target)
+}
+
+/// Re-write the currently asserted graph rate, if any. Called from the
+/// input-stream builders so a device switch mid-session re-asserts the
+/// engine's rate (best effort; a no-op when nothing is asserted).
+pub(crate) fn reassert_graph_force() {
+    let rate = ASSERTED_GRAPH_RATE.load(std::sync::atomic::Ordering::Relaxed);
+    if rate != 0 {
+        let _ = write_force_rate(rate);
+    }
 }
 
 /// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
@@ -319,6 +441,10 @@ pub(crate) fn build_input_stream(
     desired_channels: u16,
     capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(crate::input_handle::InputHandle, u32, u16), String> {
+    // Input streams are (re)built on device switches — re-assert the
+    // engine's graph rate so the new device negotiation can't leave
+    // the graph on a foreign rate.
+    reassert_graph_force();
     #[cfg(target_os = "linux")]
     {
         match crate::input_pipewire::build(

@@ -120,6 +120,7 @@ pub mod __test_support {
         sum_to_stereo, transport_pos_beats,
         whole_frame_push_len,
     };
+    pub use crate::platform::{choose_assert_rate, parse_pw_metadata_value, CANONICAL_RATE};
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
     };
