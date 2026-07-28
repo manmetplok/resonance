@@ -40,11 +40,22 @@ use parking_lot::Mutex;
 use resonance_dsp::DelayLine;
 
 use crate::limits::MAX_COMP_LATENCY;
-use crate::types::{Bus, BusId, PluginInstanceId, Track, TrackId, TrackOutput};
+use crate::types::{Bus, BusId, PluginInstanceId, Track, TrackId, TrackOutput, TrackType};
 
 /// Total chain latency per track (see the module doc for what counts
 /// toward a chain). Returns one entry per track, sub-tracks included.
 /// `plugin_latency` resolves one plugin instance's latency in samples.
+///
+/// Only *effective* processing counts — plugins the mixer will actually
+/// run this pass (mirroring `mixer::render_core`):
+/// - a frozen track plays its latency-trimmed cache instead of the
+///   instrument + FX chain, so its own chain contributes 0 (downstream
+///   bus FX still run live and still count);
+/// - FX bypass skips a track's effect chain (on instrument tracks the
+///   instrument itself still runs and still counts; sub-track chains
+///   are all FX), and a bypassed bus chain contributes 0;
+/// - a frozen parent skips its instrument fan-out, so its sub-tracks
+///   don't inherit the parent-instrument latency.
 pub fn chain_latencies(
     tracks: &IndexMap<TrackId, Track>,
     busses: &IndexMap<BusId, Bus>,
@@ -53,22 +64,51 @@ pub fn chain_latencies(
     let bus_latency: HashMap<BusId, u64> = busses
         .iter()
         .map(|(&id, bus)| {
-            (
-                id,
-                bus.plugin_ids.iter().map(|&p| plugin_latency(p)).sum(),
-            )
+            let lat = if bus.fx_bypassed() {
+                0
+            } else {
+                bus.plugin_ids.iter().map(|&p| plugin_latency(p)).sum()
+            };
+            (id, lat)
         })
         .collect();
     tracks
         .values()
         .map(|track| {
-            let own: u64 = track.plugins().iter().map(|&p| plugin_latency(p)).sum();
+            let is_sub = track.sub_track_of.is_some();
+            let own: u64 = if !is_sub && track.frozen_source.load().is_some() {
+                // Frozen: audio comes from the pre-trimmed cache; the
+                // idle instrument + FX chain adds no latency. (Sub-tracks
+                // are always rendered live off the parent's fan-out, so
+                // a frozen source on one is ignored — as in the mixer.)
+                0
+            } else {
+                let plugins = track.plugins();
+                if !is_sub && track.track_type == TrackType::Instrument {
+                    // The instrument (first plugin) runs even under FX
+                    // bypass; only the downstream effects are skipped.
+                    let instrument =
+                        plugins.first().map(|&p| plugin_latency(p)).unwrap_or(0);
+                    let fx: u64 = if track.fx_bypassed() {
+                        0
+                    } else {
+                        plugins.iter().skip(1).map(|&p| plugin_latency(p)).sum()
+                    };
+                    instrument + fx
+                } else if track.fx_bypassed() {
+                    0
+                } else {
+                    plugins.iter().map(|&p| plugin_latency(p)).sum()
+                }
+            };
             // Sub-tracks are fed by the parent's instrument (first
             // plugin), so they inherit its latency on top of their own
-            // FX chain.
+            // FX chain — unless the parent is frozen, in which case the
+            // fan-out never runs.
             let parent_instrument = track
                 .sub_track_of
                 .and_then(|(parent_id, _)| tracks.get(&parent_id))
+                .filter(|parent| parent.frozen_source.load().is_none())
                 .and_then(|parent| parent.plugins().first().copied())
                 .map(&plugin_latency)
                 .unwrap_or(0);

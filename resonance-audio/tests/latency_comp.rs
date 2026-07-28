@@ -6,12 +6,24 @@
 //! plugin latencies are supplied by a lookup table.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use resonance_audio::__test_support::{
-    add_external_offsets, chain_latencies, compensation_delays, LatencyComp, MAX_COMP_LATENCY,
+    add_external_offsets, affects_latency, chain_latencies, compensation_delays, LatencyComp,
+    MAX_COMP_LATENCY,
 };
-use resonance_audio::types::{Bus, BusId, Track, TrackId, TrackOutput};
+use resonance_audio::types::{
+    AudioCommand, Bus, BusId, FrozenSource, Track, TrackId, TrackOutput, TrackType,
+};
+use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
+
+/// A minimal frozen source so a test track reads as frozen; the decoded
+/// samples themselves are never touched by the latency math.
+fn dummy_frozen_source() -> FrozenSource {
+    let cache_ref = FreezeCacheRef::new("t.wav".into(), 48_000, 32, 1, FreezeCacheStatus::Frozen);
+    FrozenSource::new(cache_ref, Arc::new(vec![0.0; 4]), 48_000, 2)
+}
 
 #[test]
 fn compensation_delays_align_every_chain_to_max() {
@@ -75,6 +87,134 @@ fn chain_latencies_sum_track_bus_and_parent_instrument() {
     assert_eq!(chains[&11], 7);
     assert_eq!(chains[&12], 30);
     assert_eq!(chains[&13], 80);
+}
+
+#[test]
+fn frozen_track_excludes_own_chain_but_keeps_downstream_bus() {
+    // Instrument 100 + FX 50 on the track, plugin 7 on its output bus.
+    let lat: HashMap<u64, u64> = [(1u64, 100u64), (2, 50), (3, 7)].into();
+    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    let t = Track::with_type(10, "inst".into(), TrackType::Instrument);
+    t.push_plugin(1);
+    t.push_plugin(2);
+    t.set_output(TrackOutput::Bus(5));
+    tracks.insert(10, t);
+    let mut busses: IndexMap<BusId, Bus> = IndexMap::new();
+    let mut bus = Bus::new(5, "bus".into());
+    bus.plugin_ids.push(3);
+    busses.insert(5, bus);
+
+    let resolve = |id| lat.get(&id).copied().unwrap_or(0);
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+    assert_eq!(chains[&10], 157, "live: instrument + FX + bus");
+
+    // Frozen: the cache replaces instrument + FX (pre-trimmed), but the
+    // bus chain still runs live downstream and must stay compensated.
+    tracks[&10].frozen_source.store(Some(Arc::new(dummy_frozen_source())));
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+    assert_eq!(chains[&10], 7, "frozen: only the live bus chain counts");
+}
+
+#[test]
+fn fx_bypass_excludes_effects_but_not_the_instrument() {
+    let lat: HashMap<u64, u64> = [(1u64, 100u64), (2, 50), (4, 30)].into();
+    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    // Audio track: every plugin is an effect — bypass drops them all.
+    let audio = Track::new(10, "audio".into());
+    audio.push_plugin(1);
+    audio.push_plugin(2);
+    audio.set_fx_bypassed(true);
+    tracks.insert(10, audio);
+    // Instrument track: the instrument (first plugin) keeps running
+    // under FX bypass; only the effect after it is skipped.
+    let inst = Track::with_type(11, "inst".into(), TrackType::Instrument);
+    inst.push_plugin(4);
+    inst.push_plugin(2);
+    inst.set_fx_bypassed(true);
+    tracks.insert(11, inst);
+    let busses: IndexMap<BusId, Bus> = IndexMap::new();
+
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, &busses, |id| lat.get(&id).copied().unwrap_or(0))
+            .into_iter()
+            .collect();
+    assert_eq!(chains[&10], 0, "bypassed audio track contributes nothing");
+    assert_eq!(chains[&11], 30, "instrument still counts; its FX don't");
+}
+
+#[test]
+fn bypassed_bus_chain_contributes_zero() {
+    let lat: HashMap<u64, u64> = [(3u64, 7u64)].into();
+    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    let t = Track::new(10, "to bus".into());
+    t.set_output(TrackOutput::Bus(5));
+    tracks.insert(10, t);
+    let mut busses: IndexMap<BusId, Bus> = IndexMap::new();
+    let mut bus = Bus::new(5, "bus".into());
+    bus.plugin_ids.push(3);
+    bus.set_fx_bypassed(true);
+    busses.insert(5, bus);
+
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, &busses, |id| lat.get(&id).copied().unwrap_or(0))
+            .into_iter()
+            .collect();
+    assert_eq!(chains[&10], 0, "bypassed bus chain is skipped by the mixer");
+}
+
+#[test]
+fn frozen_parent_drops_parent_instrument_for_sub_tracks() {
+    let lat: HashMap<u64, u64> = [(2u64, 50u64), (4, 30)].into();
+    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    let parent = Track::with_type(12, "parent".into(), TrackType::Instrument);
+    parent.push_plugin(4);
+    tracks.insert(12, parent);
+    let sub = Track::new_sub_track(13, "sub".into(), 12, 1);
+    sub.push_plugin(2);
+    tracks.insert(13, sub);
+    let busses: IndexMap<BusId, Bus> = IndexMap::new();
+
+    let resolve = |id| lat.get(&id).copied().unwrap_or(0);
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+    assert_eq!(chains[&13], 80, "live parent: sub inherits the instrument");
+
+    // Frozen parent: the instrument fan-out never runs, so the sub-track
+    // no longer inherits its latency — but its own FX still run live.
+    tracks[&12].frozen_source.store(Some(Arc::new(dummy_frozen_source())));
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+    assert_eq!(chains[&13], 50, "frozen parent: only the sub's own FX count");
+
+    // A frozen source on the sub-track itself is ignored: the mixer's
+    // sub-track pass always renders live off the parent fan-out.
+    tracks[&13].frozen_source.store(Some(Arc::new(dummy_frozen_source())));
+    let chains: HashMap<TrackId, u64> =
+        chain_latencies(&tracks, &busses, resolve).into_iter().collect();
+    assert_eq!(chains[&13], 50, "sub-track frozen flag doesn't change rendering");
+}
+
+#[test]
+fn freeze_and_bypass_commands_refresh_the_comp_table() {
+    // Freeze / bypass toggles change which plugins actually run, so the
+    // engine loop must rebuild delay lines after they execute.
+    assert!(affects_latency(&AudioCommand::SetTrackFrozenSource {
+        track_id: 1,
+        source: None,
+    }));
+    assert!(affects_latency(&AudioCommand::UnfreezeTrack { track_id: 1 }));
+    assert!(affects_latency(&AudioCommand::SetTrackFxBypass {
+        track_id: 1,
+        bypassed: true,
+    }));
+    assert!(affects_latency(&AudioCommand::SetBusFxBypass {
+        bus_id: 5,
+        bypassed: true,
+    }));
+    // Master bypass delays every path equally — no per-track comp change.
+    assert!(!affects_latency(&AudioCommand::SetMasterFxBypass { bypassed: true }));
 }
 
 #[test]

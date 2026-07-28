@@ -14,9 +14,11 @@ use super::external_instrument::ExternalInstruments;
 use super::thread::{HandlerCtx, HandlerState};
 
 /// True for commands that can change a track's or bus's chain latency
-/// (plugin add/remove, routing, track/bus topology). The engine loop
-/// republishes the plugin-delay-compensation table after these run.
-pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
+/// (plugin add/remove, routing, track/bus topology, freeze / FX-bypass
+/// state). The engine loop republishes the plugin-delay-compensation
+/// table after these run. `pub` (via `__test_support`) so integration
+/// tests can pin the command set.
+pub fn affects_latency(cmd: &AudioCommand) -> bool {
     matches!(
         cmd,
         AudioCommand::AddPlugin { .. }
@@ -39,6 +41,14 @@ pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
             | AudioCommand::SetExternalInstrument { .. }
             | AudioCommand::ClearExternalInstrument { .. }
             | AudioCommand::SetExternalInstrumentLatencyOffset { .. }
+            // Freeze and FX bypass change which plugins actually run:
+            // frozen tracks play a pre-trimmed cache and bypassed chains
+            // are skipped, so their latency must leave the comp table
+            // (see `latency::chain_latencies`).
+            | AudioCommand::SetTrackFrozenSource { .. }
+            | AudioCommand::UnfreezeTrack { .. }
+            | AudioCommand::SetTrackFxBypass { .. }
+            | AudioCommand::SetBusFxBypass { .. }
     )
 }
 
