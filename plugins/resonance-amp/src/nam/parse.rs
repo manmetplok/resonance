@@ -2,6 +2,7 @@
 use serde::Deserialize;
 use std::path::Path;
 
+use super::activations::{ActivationConfig, ActivationKind};
 use super::lstm::LstmModel;
 use super::wavenet::WaveNetModel;
 use super::NamInference;
@@ -64,6 +65,9 @@ pub struct StackConfig {
     pub channels: usize,
     pub dilations: Vec<usize>,
     pub kernel_sizes: Vec<usize>,
+    /// Layer activation for this stack. A1 models use `"Tanh"`, which
+    /// resolves to the fast-tanh path at model construction.
+    pub activation: ActivationConfig,
 }
 
 // -- Old NAM format (flat config with layer counts) --------------------------
@@ -76,14 +80,14 @@ struct OldWaveNetConfig {
     channels: usize,
     layers: Vec<usize>,
     head: Vec<usize>,
-    #[allow(dead_code)]
     activation: String,
     gated: bool,
     head_bias: bool,
 }
 
 impl OldWaveNetConfig {
-    fn into_config(self) -> WaveNetConfig {
+    fn into_config(self) -> Result<WaveNetConfig, String> {
+        let activation = ActivationConfig::from_name(&self.activation)?;
         let dilations: Vec<Vec<usize>> = self
             .layers
             .iter()
@@ -100,10 +104,11 @@ impl OldWaveNetConfig {
                     channels: self.channels,
                     kernel_sizes: vec![2; n],
                     dilations: d,
+                    activation: activation.clone(),
                 }
             })
             .collect();
-        WaveNetConfig {
+        Ok(WaveNetConfig {
             input_size: self.input_size,
             stacks,
             head: self.head,
@@ -111,7 +116,7 @@ impl OldWaveNetConfig {
             gated: self.gated,
             head_bias: self.head_bias,
             has_layer1x1: false,
-        }
+        })
     }
 }
 
@@ -132,6 +137,10 @@ struct NewLayerArrayConfig {
     gated: Option<bool>,
     #[serde(default)]
     gating_mode: Option<serde_json::Value>,
+    /// Activation: plain string (A1) or A2-style config object. Absent in
+    /// some old exports; defaults to `"Tanh"`.
+    #[serde(default)]
+    activation: Option<serde_json::Value>,
     #[serde(default = "default_true")]
     head_bias: bool,
 }
@@ -184,16 +193,21 @@ impl NewWaveNetConfig {
                     let k = l.kernel_size.unwrap_or(2);
                     vec![k; l.dilations.len()]
                 };
-                StackConfig {
+                let activation = match l.activation {
+                    Some(ref v) => ActivationConfig::from_json(v)?,
+                    None => ActivationConfig::simple(ActivationKind::Tanh),
+                };
+                Ok(StackConfig {
                     input_size: l.input_size,
                     condition_size: l.condition_size,
                     head_size: l.head_size,
                     channels: l.channels,
                     dilations: l.dilations.clone(),
                     kernel_sizes: ks,
-                }
+                    activation,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
 
         let (head, head_size) = match self.head {
             Some(h) => {
@@ -252,7 +266,7 @@ fn determine_gated(layer: &NewLayerArrayConfig) -> Result<bool, String> {
 fn parse_wavenet_config(value: serde_json::Value) -> Result<WaveNetConfig, String> {
     // Try old format first (flat config with integer layer counts).
     if let Ok(old) = serde_json::from_value::<OldWaveNetConfig>(value.clone()) {
-        return Ok(old.into_config());
+        return old.into_config();
     }
     // Try new format (layer array config objects).
     let new_cfg: NewWaveNetConfig =

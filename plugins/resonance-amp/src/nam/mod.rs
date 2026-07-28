@@ -1,4 +1,5 @@
 /// NAM (Neural Amp Modeler) model inference.
+pub mod activations;
 pub mod lstm;
 pub mod parse;
 pub mod wavenet;

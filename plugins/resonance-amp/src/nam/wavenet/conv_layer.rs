@@ -1,6 +1,8 @@
 //! A single WaveNet dilated convolution layer plus the small 1x1 conv
 //! primitives it composes from.
 
+use super::super::activations::Activation;
+
 /// 1x1 convolution (no bias).
 pub(super) struct Conv1x1 {
     pub(super) weight: Vec<f32>, // [out_ch * in_ch]
@@ -42,4 +44,10 @@ pub(super) struct WaveNetLayer {
     pub(super) channels: usize,
     /// mid_channels = 2*channels if gated, else channels.
     pub(super) mid_ch: usize,
+
+    /// Layer activation, resolved from config at construction (A1: fast tanh).
+    pub(super) activation: Activation,
+    /// Gate activation applied to the second half of the conv output when
+    /// gated. A1 gated models use the fast sigmoid; `None` when not gated.
+    pub(super) gate_activation: Option<Activation>,
 }
