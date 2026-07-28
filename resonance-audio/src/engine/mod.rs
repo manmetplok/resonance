@@ -165,6 +165,12 @@ pub struct SharedState {
     /// bounce/export threads so their latency comp folds the same
     /// offsets the live mixer compensates (doc #260 finding #4).
     pub external_offsets: arc_swap::ArcSwap<std::collections::HashMap<TrackId, i64>>,
+    /// Master-chain latency in samples (0 while master FX are
+    /// bypassed), published by the engine thread's comp refresh. The
+    /// audio callback reads it to latency-match the reference A/B
+    /// monitor against the PDC-delayed, master-processed mix
+    /// (doc #260 finding #19).
+    pub master_latency_samples: AtomicU64,
     /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
     /// (the comp clamp is engaging and alignment for that chain is
     /// degraded). Used to emit the warning once per engagement instead
@@ -243,6 +249,7 @@ impl Default for SharedState {
             bounce_cancel: AtomicBool::new(false),
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
             comp_clamp_engaged: AtomicBool::new(false),
+            master_latency_samples: AtomicU64::new(0),
             reference: reference::ReferenceMonitor::default(),
             mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),

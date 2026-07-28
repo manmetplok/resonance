@@ -338,8 +338,6 @@ pub(crate) fn build_input_stream(
             }
         }
     }
-    let _ = engine_sample_rate; // cpal negotiates its own rate from the device
-
     let (stream, sr, ch) = build_input_stream_cpal(
         source_name,
         shared,
@@ -347,10 +345,79 @@ pub(crate) fn build_input_stream(
         mon_producer,
         buf_frames,
         quantum,
+        engine_sample_rate,
         desired_channels,
         capture_gate,
     )?;
     Ok((crate::input_handle::InputHandle::Cpal(stream), sr, ch))
+}
+
+/// N-channel monitor-path rate converter for the cpal fallback input
+/// (doc #260 finding #21): when the device rate differs from the engine
+/// rate, the monitor ring would otherwise carry device-rate frames that
+/// the engine-rate consumer replays pitch-shifted and glitchy. Wraps
+/// the existing stereo [`StreamingLinearResampler`] (the same one the
+/// recording drain uses) over channel pairs, preserving the interleaved
+/// N-channel layout. The native PipeWire input negotiates the engine
+/// rate in the graph and never needs this.
+///
+/// The recording push is untouched — takes stay at the device rate and
+/// are resampled once at drain time, exactly as before.
+pub struct MonitorResampler {
+    channels: usize,
+    pairs: Vec<crate::decode::StreamingLinearResampler>,
+    pair_in: Vec<f32>,
+    pair_outs: Vec<Vec<f32>>,
+    out: Vec<f32>,
+}
+
+impl MonitorResampler {
+    pub fn new(source_rate: u32, target_rate: u32, channels: usize) -> Self {
+        let channels = channels.max(1);
+        let n_pairs = channels.div_ceil(2);
+        Self {
+            channels,
+            pairs: (0..n_pairs)
+                .map(|_| crate::decode::StreamingLinearResampler::new(source_rate, target_rate))
+                .collect(),
+            pair_in: Vec::new(),
+            pair_outs: (0..n_pairs).map(|_| Vec::new()).collect(),
+            out: Vec::new(),
+        }
+    }
+
+    /// Convert one interleaved input chunk (`channels`-wide frames at
+    /// the source rate) and return the converted chunk at the target
+    /// rate, same channel layout. Every pair advances with the same
+    /// ratio over the same frame count, so all pair outputs are equal
+    /// length and re-interleave losslessly.
+    pub fn process(&mut self, input: &[f32]) -> &[f32] {
+        let frames = input.len() / self.channels;
+        if frames == 0 {
+            return &[];
+        }
+        for (p, resampler) in self.pairs.iter_mut().enumerate() {
+            let cl = (p * 2).min(self.channels - 1);
+            let cr = (p * 2 + 1).min(self.channels - 1);
+            self.pair_in.clear();
+            for f in 0..frames {
+                let base = f * self.channels;
+                self.pair_in.push(input[base + cl]);
+                self.pair_in.push(input[base + cr]);
+            }
+            self.pair_outs[p].clear();
+            resampler.process(&self.pair_in, &mut self.pair_outs[p]);
+        }
+        let out_frames = self.pair_outs[0].len() / 2;
+        self.out.clear();
+        for f in 0..out_frames {
+            for c in 0..self.channels {
+                let pair = &self.pair_outs[c / 2];
+                self.out.push(pair[f * 2 + (c % 2)]);
+            }
+        }
+        &self.out
+    }
 }
 
 /// cpal-based input stream builder. Kept as the fallback for non-
@@ -363,6 +430,7 @@ fn build_input_stream_cpal(
     mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     buf_frames: usize,
     quantum: usize,
+    engine_sample_rate: u32,
     desired_channels: u16,
     capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(cpal::Stream, u32, u16), String> {
@@ -438,6 +506,13 @@ fn build_input_stream_cpal(
                               mut rec_producer: Option<ringbuf::HeapProd<f32>>,
                               capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>| {
         let stride = channels.max(1) as usize;
+        // Monitor-path rate conversion (finding #21): the monitor ring's
+        // consumer replays at the engine rate, so a device running at a
+        // different rate must be converted before the push — otherwise
+        // monitoring pitch-shifts and glitches. Recording pushes stay at
+        // the device rate (the drain resamples them, as before).
+        let mut monitor_resampler = (sample_rate != engine_sample_rate)
+            .then(|| MonitorResampler::new(sample_rate, engine_sample_rate, stride));
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             let capture = shared.recording.load(Ordering::Relaxed)
                 || capture_gate.as_ref().is_some_and(|g| g.load(Ordering::Relaxed));
@@ -451,10 +526,17 @@ fn build_input_stream_cpal(
                 }
             }
             if shared.monitoring.load(Ordering::Relaxed) {
+                let monitor: &[f32] = match monitor_resampler.as_mut() {
+                    Some(rs) => rs.process(data),
+                    None => data,
+                };
                 if let Some(mut prod) = mon_producer.try_lock() {
-                    let take =
-                        crate::mixer::whole_frame_push_len(data.len(), prod.vacant_len(), stride);
-                    let _ = prod.push_slice(&data[..take]);
+                    let take = crate::mixer::whole_frame_push_len(
+                        monitor.len(),
+                        prod.vacant_len(),
+                        stride,
+                    );
+                    let _ = prod.push_slice(&monitor[..take]);
                 }
             }
         }
