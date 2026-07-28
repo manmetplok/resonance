@@ -49,6 +49,13 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             | AudioCommand::UnfreezeTrack { .. }
             | AudioCommand::SetTrackFxBypass { .. }
             | AudioCommand::SetBusFxBypass { .. }
+            // Master-chain edits don't change per-track comp (master
+            // delays every path equally) but they feed the published
+            // master-latency figure the reference A/B monitor is
+            // aligned with (doc #260 finding #19).
+            | AudioCommand::AddPluginToMaster { .. }
+            | AudioCommand::RemovePluginFromMaster { .. }
+            | AudioCommand::SetMasterFxBypass { .. }
     )
 }
 
@@ -58,9 +65,10 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
 /// Runs on the engine thread; delay lines are allocated here, never on
 /// the audio callback.
 pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
-    let (mut chains, bus_chains) = {
+    let (mut chains, bus_chains, master_latency) = {
         let tracks_guard = ctx.tracks.read();
         let busses_guard = ctx.busses.read();
+        let master_guard = ctx.master.read();
         let plugins_guard = ctx.plugins.read();
         let latency_of = |id: crate::types::PluginInstanceId| {
             plugins_guard
@@ -71,8 +79,21 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
         (
             crate::latency::chain_latencies(&tracks_guard, latency_of),
             crate::latency::bus_chain_latencies(&busses_guard, latency_of),
+            crate::latency::master_chain_latency(
+                &master_guard.plugin_ids,
+                ctx.shared
+                    .master_fx_bypassed
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                latency_of,
+            ),
         )
     };
+    // Master latency isn't compensated per-track (it delays every path
+    // equally) but the reference A/B monitor aligns against it
+    // (doc #260 finding #19).
+    ctx.shared
+        .master_latency_samples
+        .store(master_latency, std::sync::atomic::Ordering::Relaxed);
     // External-instrument tracks add a manual round-trip latency offset on
     // top of their plugin chain so the rest of the mix is delayed to align
     // with the late hardware audio return.

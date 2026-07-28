@@ -300,11 +300,19 @@ pub(crate) fn mix_audio(
         && !shared.count_in_active.load(Ordering::Relaxed)
     {
         let playhead = shared.playhead.load(Ordering::Relaxed);
+        // Latency-match the reference against the mix (doc #260 finding
+        // #19): the processed mix at this output position is the
+        // timeline of `max comp latency + master-chain latency` ago, so
+        // in loop-to-mix mode the reference reads from that delayed
+        // position — toggling A/B then produces no timing jump. Free-run
+        // mode ignores the playhead entirely.
+        let ab_delay = latency_comp.load().max_latency()
+            + shared.master_latency_samples.load(Ordering::Relaxed);
         if shared.reference.render(
             &mut data[..output_frames * channels],
             channels,
             output_frames,
-            playhead,
+            playhead.saturating_sub(ab_delay),
         ) {
             // Meter the reference exactly as monitored — post loudness-match
             // / trim gain — so the panel's Delta against the mix is honest.

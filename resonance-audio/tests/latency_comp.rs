@@ -222,8 +222,10 @@ fn freeze_and_bypass_commands_refresh_the_comp_table() {
         bus_id: 5,
         bypassed: true,
     }));
-    // Master bypass delays every path equally — no per-track comp change.
-    assert!(!affects_latency(&AudioCommand::SetMasterFxBypass { bypassed: true }));
+    // Master bypass changes no per-track comp, but it does change the
+    // published master latency the reference A/B aligns with — so it
+    // must run the refresh too (finding #19).
+    assert!(affects_latency(&AudioCommand::SetMasterFxBypass { bypassed: true }));
 }
 
 #[test]
