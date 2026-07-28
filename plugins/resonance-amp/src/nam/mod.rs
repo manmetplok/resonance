@@ -55,6 +55,95 @@ pub fn matvec_add(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32])
     }
 }
 
+/// Validate buffer dimensions for a grouped matrix-vector operation. The
+/// compact grouped weight holds `rows * cols / groups` values (each group is
+/// a `[rows/groups x cols/groups]` row-major block); `groups == 1` is the
+/// dense case of [`validate_matvec_dims`].
+pub fn validate_grouped_matvec_dims(
+    a: &[f32],
+    x: &[f32],
+    y: &[f32],
+    rows: usize,
+    cols: usize,
+    groups: usize,
+) -> bool {
+    groups >= 1
+        && rows.is_multiple_of(groups)
+        && cols.is_multiple_of(groups)
+        && a.len() >= rows * cols / groups
+        && x.len() >= cols
+        && y.len() >= rows
+}
+
+/// Grouped matrix-vector multiply: `y = blockdiag(A_0, ..., A_{G-1}) * x`.
+///
+/// Mirrors the reference NAM grouped `Conv1D`/`Conv1x1` semantics
+/// (NAM/conv1d.cpp, NAM/dsp.cpp): the `cols` input channels and `rows`
+/// output channels are split into `groups` contiguous blocks, and output
+/// block g sees only input block g. `a` is the compact grouped weight —
+/// `groups` concatenated row-major `[rows/groups x cols/groups]` matrices,
+/// exactly the flat `[g][i][j]` order the reference consumes.
+///
+/// `groups == 1` dispatches to the dense [`matvec`] unchanged, so ungrouped
+/// (A1) models keep the historical code path bit-for-bit.
+#[inline(always)]
+pub fn grouped_matvec(
+    a: &[f32],
+    x: &[f32],
+    rows: usize,
+    cols: usize,
+    groups: usize,
+    y: &mut [f32],
+) {
+    if groups <= 1 {
+        matvec(a, x, rows, cols, y);
+        return;
+    }
+    let opg = rows / groups;
+    let ipg = cols / groups;
+    let block = opg * ipg;
+    for g in 0..groups {
+        matvec(
+            &a[g * block..(g + 1) * block],
+            &x[g * ipg..(g + 1) * ipg],
+            opg,
+            ipg,
+            &mut y[g * opg..(g + 1) * opg],
+        );
+    }
+}
+
+/// Grouped matrix-vector multiply-add: `y += blockdiag(A_0, ..., A_{G-1}) * x`.
+///
+/// Same layout and grouping semantics as [`grouped_matvec`]; `groups == 1`
+/// dispatches to the dense [`matvec_add`] unchanged.
+#[inline(always)]
+pub fn grouped_matvec_add(
+    a: &[f32],
+    x: &[f32],
+    rows: usize,
+    cols: usize,
+    groups: usize,
+    y: &mut [f32],
+) {
+    if groups <= 1 {
+        matvec_add(a, x, rows, cols, y);
+        return;
+    }
+    let opg = rows / groups;
+    let ipg = cols / groups;
+    let block = opg * ipg;
+    for g in 0..groups {
+        matvec_add(
+            &a[g * block..(g + 1) * block],
+            &x[g * ipg..(g + 1) * ipg],
+            opg,
+            ipg,
+            &mut y[g * opg..(g + 1) * opg],
+        );
+    }
+}
+
 /// Fast tanh approximation using a degree-7/6 Padé approximant.
 /// Accurate to ~20 bits across the full range — more than sufficient
 /// for neural network inference on audio signals.

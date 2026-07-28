@@ -84,6 +84,18 @@ pub struct StackConfig {
     /// defaults to `Sigmoid` (reference backward-compat), which the engine
     /// resolves to the fast sigmoid so A1 gated models stay bit-identical.
     pub secondary_activations: Vec<Option<ActivationConfig>>,
+    /// Groups of the dilated input convolution (reference
+    /// `LayerArrayParams::groups_input`). Splits the conv's `channels`
+    /// inputs and `bottleneck`-wide (doubled when gated) outputs into
+    /// contiguous per-group blocks. A1: 1.
+    pub groups_input: usize,
+    /// Groups of the condition input-mixin 1x1 convolution (reference
+    /// `groups_input_mixin`). A1: 1.
+    pub groups_input_mixin: usize,
+    /// Groups of the layer1x1 residual convolution (reference
+    /// `Layer1x1Params::groups`); only meaningful when the config has a
+    /// layer1x1. A1: 1.
+    pub layer1x1_groups: usize,
 }
 
 // -- Old NAM format (flat config with layer counts) --------------------------
@@ -136,6 +148,10 @@ impl OldWaveNetConfig {
                     activation: activation.clone(),
                     gating_modes,
                     secondary_activations,
+                    // Old-format models predate grouped convolutions.
+                    groups_input: 1,
+                    groups_input_mixin: 1,
+                    layer1x1_groups: 1,
                 }
             })
             .collect();
@@ -181,10 +197,32 @@ struct NewLayerArrayConfig {
     activation: Option<serde_json::Value>,
     #[serde(default = "default_true")]
     head_bias: bool,
+    /// Groups of the dilated input conv (A2). Absent (A1) means 1.
+    #[serde(default = "default_one")]
+    groups_input: usize,
+    /// Groups of the condition input-mixin conv (A2). Absent (A1) means 1.
+    #[serde(default = "default_one")]
+    groups_input_mixin: usize,
+    /// A2 `layer1x1` object. Only its `groups` field feeds the engine here;
+    /// existence of the residual 1x1 stays governed by the config-wide
+    /// `has_layer1x1` (per-array `active` handling is typed-params scope,
+    /// see [`super::wavenet::params::Layer1x1Params`]).
+    #[serde(default)]
+    layer1x1: Option<NewLayer1x1Config>,
+}
+
+#[derive(Deserialize)]
+struct NewLayer1x1Config {
+    #[serde(default = "default_one")]
+    groups: usize,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_one() -> usize {
+    1
 }
 
 #[derive(Deserialize)]
@@ -245,6 +283,9 @@ impl NewWaveNetConfig {
                     activation,
                     gating_modes,
                     secondary_activations,
+                    groups_input: l.groups_input,
+                    groups_input_mixin: l.groups_input_mixin,
+                    layer1x1_groups: l.layer1x1.as_ref().map(|c| c.groups).unwrap_or(1),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

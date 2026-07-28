@@ -155,6 +155,9 @@ fn bottleneck_stack(
         activation: ActivationConfig::from_name("Tanh").unwrap(),
         gating_modes,
         secondary_activations,
+        groups_input: 1,
+        groups_input_mixin: 1,
+        layer1x1_groups: 1,
     }
 }
 
@@ -380,6 +383,9 @@ fn bottleneck_without_layer1x1_is_rejected() {
             activation: ActivationConfig::from_name("Tanh").unwrap(),
             gating_modes: vec![GatingMode::None],
             secondary_activations: vec![None],
+            groups_input: 1,
+            groups_input_mixin: 1,
+            layer1x1_groups: 1,
         }],
         head: vec![],
         head_size: 1,
