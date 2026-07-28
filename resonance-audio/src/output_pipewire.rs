@@ -43,6 +43,8 @@ use spa::param::ParamType;
 use spa::pod::serialize::PodSerializer;
 use spa::pod::{Object, Pod, Value};
 
+use crate::engine::SharedState;
+
 /// The mixer callback the output stream drives: fills the interleaved
 /// f32 slice (`frames * channels` samples) for one graph cycle.
 /// Boxed so `engine::mod` can hand over the fully-captured
@@ -78,6 +80,10 @@ impl PipeWireOutputHandle {
 /// Closure-captured state shared with the process / param-changed
 /// callbacks running on the PipeWire RT thread.
 struct UserData {
+    /// Engine shared state: the process callback publishes the graph's
+    /// reported playback latency into it every cycle (doc #260 finding
+    /// #13).
+    shared: Arc<SharedState>,
     /// The engine mixer, rendering directly into the graph buffer.
     mix: MixFn,
     /// Hard cap on frames per callback — the mixer's pre-allocated
@@ -105,6 +111,7 @@ struct UserData {
 /// attached the stream.
 pub(crate) fn build(
     sink_name: Option<&str>,
+    shared: Arc<SharedState>,
     sample_rate: u32,
     channels: u16,
     quantum: u32,
@@ -158,6 +165,7 @@ pub(crate) fn build(
     let notify = Arc::new((Mutex::new(false), Condvar::new()));
 
     let user_data = UserData {
+        shared,
         mix,
         max_frames,
         channels: Arc::clone(&channels_atomic),
@@ -302,6 +310,31 @@ fn on_state_changed(
 /// it, and publish the written chunk. No intermediate ring — this is
 /// where the ALSA-shim periods used to live.
 fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
+    // Publish the playback-side latency (stream -> device, as reported
+    // by the graph: includes downstream filters, device buffering and
+    // configured offsets) for the engine's round-trip queries
+    // (doc #260 finding #13). RT-safe struct fill.
+    unsafe {
+        let mut time = std::mem::zeroed::<pw::sys::pw_time>();
+        if pw::sys::pw_stream_get_time_n(
+            stream.as_raw_ptr(),
+            &mut time,
+            std::mem::size_of::<pw::sys::pw_time>(),
+        ) == 0
+        {
+            let engine_rate = user_data.rate.load(Ordering::Relaxed);
+            let samples = crate::platform::pw_delay_to_engine_samples(
+                time.delay,
+                time.rate.num,
+                time.rate.denom,
+                engine_rate,
+            );
+            user_data
+                .shared
+                .playback_latency_samples
+                .store(samples, Ordering::Relaxed);
+        }
+    }
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return;
     };

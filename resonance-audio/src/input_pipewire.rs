@@ -96,6 +96,7 @@ pub(crate) fn build(
     rec_producer: &mut Option<ringbuf::HeapProd<f32>>,
     mon_producer: Arc<PlMutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
+    quantum: u32,
     desired_channels: u16,
     capture_gate: Option<Arc<AtomicBool>>,
 ) -> Result<(PipeWireInputHandle, u32, u16), String> {
@@ -130,7 +131,10 @@ pub(crate) fn build(
         *pw::keys::MEDIA_ROLE => "Production",
         *pw::keys::NODE_NAME => "resonance-input",
         *pw::keys::APP_NAME => "resonance-app",
-        *pw::keys::NODE_LATENCY => format!("1024/{}", sample_rate).as_str(),
+        // Vote the engine quantum — the historical 1024 vote asked the
+        // graph for a *larger* cycle and was only masked by the pinned
+        // force-quantum config (doc #260 finding #14).
+        *pw::keys::NODE_LATENCY => format!("{}/{}", quantum, sample_rate).as_str(),
     };
     if let Some(name) = source_name {
         props.insert(*pw::keys::TARGET_OBJECT, name);
@@ -282,6 +286,31 @@ fn on_param_changed(
 /// atomics, and pushes into the corresponding ringbuf — the same
 /// contract `recording::drain_ring_to_buffers` consumes today.
 fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
+    // Publish this stream's capture-side latency (device -> stream, as
+    // reported by the graph) so the engine can answer round-trip
+    // queries (doc #260 finding #13). Cheap struct fill; runs on the RT
+    // thread by design (`pw_stream_get_time_n` is RT-safe).
+    unsafe {
+        let mut time = std::mem::zeroed::<pw::sys::pw_time>();
+        if pw::sys::pw_stream_get_time_n(
+            stream.as_raw_ptr(),
+            &mut time,
+            std::mem::size_of::<pw::sys::pw_time>(),
+        ) == 0
+        {
+            let engine_rate = user_data.rate.load(Ordering::Relaxed);
+            let samples = crate::platform::pw_delay_to_engine_samples(
+                time.delay,
+                time.rate.num,
+                time.rate.denom,
+                engine_rate,
+            );
+            user_data
+                .shared
+                .capture_latency_samples
+                .store(samples, Ordering::Relaxed);
+        }
+    }
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return;
     };
