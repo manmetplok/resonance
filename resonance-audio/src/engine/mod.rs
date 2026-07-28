@@ -299,6 +299,12 @@ pub struct AudioEngine {
     cmd_tx: Sender<AudioCommand>,
     event_rx: Receiver<AudioEvent>,
     _stream: Option<cpal::Stream>,
+    /// Native PipeWire output stream (the default backend). `None` when
+    /// running on the cpal fallback (`_stream` is `Some` then) or in
+    /// test constructors. Held so follow-up work can query pw
+    /// time-info / Latency params via
+    /// [`output_pipewire::PipeWireOutputHandle::with_stream`].
+    pw_output: Option<crate::output_pipewire::PipeWireOutputHandle>,
     /// Join handle for the engine control thread. `Drop` sends a
     /// `ShutDown` command (which breaks the thread's loop, since the
     /// thread's own `cmd_tx_retry` keeps the channel from ever
@@ -440,7 +446,12 @@ impl AudioEngine {
         // under normal UI load, so we coalesce into one summary line
         // per `UNDERRUN_REPORT_INTERVAL` instead of spamming.
         let underrun_limiter = Arc::new(UnderrunRateLimiter::new());
-        let build_stream = |config: &cpal::StreamConfig| {
+        // Build one fully-captured mixer callback plus the matching
+        // monitor-ring producer. Callable more than once (the native
+        // PipeWire attempt, then the cpal fallback) — each call
+        // allocates a fresh scratch set and the losing attempt's set is
+        // simply dropped with its backend.
+        let make_mixer = || -> (crate::output_pipewire::MixFn, ringbuf::HeapProd<f32>) {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
             let tracks_audio = Arc::clone(&tracks_audio);
@@ -452,7 +463,6 @@ impl AudioEngine {
             let tempo_audio = Arc::clone(&tempo_audio);
             let latency_comp_audio = Arc::clone(&latency_comp_audio);
             let automation_audio = Arc::clone(&automation_audio);
-            let underrun_limiter = Arc::clone(&underrun_limiter);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
             // Pre-allocate MAX_BUSSES stereo buffers so adding a bus at
@@ -521,9 +531,8 @@ impl AudioEngine {
                 prefault_f32(r);
             }
             prefault_f32(&mut monitor_temp);
-            let result = device.build_output_stream(
-                config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let mix: crate::output_pipewire::MixFn =
+                Box::new(move |data: &mut [f32], channels: usize| {
                     mixer::mix_audio(
                         data,
                         channels,
@@ -550,7 +559,20 @@ impl AudioEngine {
                         audio_quantum,
                         &mut ab_meters,
                     );
-                },
+                });
+            (mix, prod)
+        };
+
+        // cpal fallback: the historical output path through the
+        // pipewire-alsa shim. Kept for non-PipeWire hosts (and the
+        // RESONANCE_FORCE_CPAL_OUTPUT escape hatch); its ALSA ring adds
+        // 2+ periods of extra latency over the native stream.
+        let build_cpal = |config: &cpal::StreamConfig| {
+            let (mut mix, prod) = make_mixer();
+            let underrun_limiter = Arc::clone(&underrun_limiter);
+            let result = device.build_output_stream(
+                config,
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| mix(data, channels),
                 move |err| match err {
                     cpal::StreamError::BufferUnderrun => {
                         if let Some(report) =
@@ -567,27 +589,66 @@ impl AudioEngine {
             );
             result.map(|stream| (stream, prod))
         };
-
-        let (stream, monitor_prod_raw, used_fixed_buffer) = match build_stream(&stream_config) {
-            Ok((stream, prod)) => (stream, prod, true),
+        let build_cpal_with_fallback = || match build_cpal(&stream_config) {
+            Ok((stream, prod)) => Ok((stream, prod, true)),
             Err(fixed_err) => {
                 // Fall back to default buffer size if fixed quantum was rejected.
                 let mut fallback_config = stream_config.clone();
                 fallback_config.buffer_size = cpal::BufferSize::Default;
-                match build_stream(&fallback_config) {
+                match build_cpal(&fallback_config) {
                     Ok((stream, prod)) => {
                         eprintln!(
                                 "audio: Fixed({}) rejected ({}) — falling back to BufferSize::Default (HIGH LATENCY)",
                                 quantum, fixed_err
                             );
-                        (stream, prod, false)
+                        Ok((stream, prod, false))
                     }
-                    Err(e) => {
-                        return Err(format!("Failed to build output stream: {}", e));
-                    }
+                    Err(e) => Err(format!("Failed to build output stream: {}", e)),
                 }
             }
         };
+
+        // Output backend selection: native PipeWire stream first — it
+        // renders straight into the graph cycle (~1 quantum of output
+        // buffering) and exposes real latency/time info — with cpal as
+        // the explicit fallback for non-PipeWire hosts (doc #260
+        // finding #11).
+        let force_cpal = std::env::var_os("RESONANCE_FORCE_CPAL_OUTPUT").is_some();
+        let mut pw_output: Option<crate::output_pipewire::PipeWireOutputHandle> = None;
+        let mut out_channels = channels;
+        let (stream, monitor_prod_raw, used_fixed_buffer) = if force_cpal {
+            eprintln!("audio: RESONANCE_FORCE_CPAL_OUTPUT set — skipping native PipeWire output");
+            let (s, p, fixed) = build_cpal_with_fallback()?;
+            (Some(s), p, fixed)
+        } else {
+            let (mix, prod) = make_mixer();
+            match crate::output_pipewire::build(
+                None,
+                sample_rate,
+                2,
+                quantum as u32,
+                buf_frames,
+                mix,
+            ) {
+                Ok((handle, pw_rate, pw_channels)) => {
+                    eprintln!(
+                        "audio: native PipeWire output up: rate={} channels={} latency_vote={}/{}",
+                        pw_rate, pw_channels, quantum, sample_rate
+                    );
+                    pw_output = Some(handle);
+                    out_channels = 2;
+                    (None, prod, true)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "audio: native PipeWire output unavailable ({e}) — falling back to cpal (ALSA shim, higher latency)"
+                    );
+                    let (s, p, fixed) = build_cpal_with_fallback()?;
+                    (Some(s), p, fixed)
+                }
+            }
+        };
+        let channels = out_channels;
 
         // One-line negotiation summary so latency regressions are diagnosable
         // from stderr alone. `probed_*` being None means the pw-metadata
@@ -595,7 +656,8 @@ impl AudioEngine {
         // numbers, which is usually the cause of "why is latency higher than
         // the pipewire quantum".
         eprintln!(
-            "audio: device={:?} sample_rate={} (cpal_default={}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
+            "audio: backend={} device={:?} sample_rate={} (cpal_default={}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
+            if pw_output.is_some() { "pipewire" } else { "cpal" },
             device_name,
             sample_rate,
             default_rate,
@@ -610,9 +672,11 @@ impl AudioEngine {
         let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod_raw));
         let monitor_prod_audio = Arc::clone(&monitor_prod);
 
-        stream
-            .play()
-            .map_err(|e| format!("Failed to start stream: {}", e))?;
+        if let Some(stream) = &stream {
+            stream
+                .play()
+                .map_err(|e| format!("Failed to start stream: {}", e))?;
+        }
 
         // Spawn the engine control thread
         let shared_ctrl = Arc::clone(&shared);
@@ -661,7 +725,8 @@ impl AudioEngine {
         Ok(Self {
             cmd_tx,
             event_rx,
-            _stream: Some(stream),
+            _stream: stream,
+            pw_output,
             engine_thread: Some(engine_thread),
             shared,
             tracks,
@@ -776,6 +841,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: None,
+            pw_output: None,
             engine_thread: None,
             shared,
             tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
@@ -816,6 +882,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: None,
+            pw_output: None,
             engine_thread: None,
             shared,
             tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
