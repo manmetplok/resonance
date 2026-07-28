@@ -74,8 +74,8 @@ pub mod __test_support {
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
         monitor_catchup_skip, monitor_read_len, ramped_gain, recorded_monitor_gate,
-        render_aux_for_test, render_aux_with_comp_for_test, sum_to_output, sum_to_stereo,
-        transport_pos_beats,
+        push_recording_frames, render_aux_for_test, render_aux_with_comp_for_test, sum_to_output,
+        sum_to_stereo, transport_pos_beats,
         whole_frame_push_len,
     };
     pub use crate::stream_errors::{
@@ -210,7 +210,8 @@ pub use engine::{
 /// opening a real audio device or MIDI port.
 #[doc(hidden)]
 pub use engine::{
-    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms,
+    ping_deadline_reached, OnsetOutcome,
 };
 /// Exposed for `tests/external_instrument_handlers.rs` so it can construct an
 /// empty output registry and exercise the patch-send offline branch without

@@ -158,3 +158,52 @@ fn end_to_end_measurement_is_plausible() {
     let samples = onset_to_engine_samples(idx, 48_000, 44_100);
     assert_eq!(samples, 2822); // 3072 * 44100/48000, rounded
 }
+
+// -- Deadline predicate (doc #260 finding #3) --------------------------------
+//
+// The frame-counted listen window only advances while the capture stream
+// actually delivers frames; the wall-clock ceiling guarantees a dead stream
+// still completes, releases the device and allows an immediate retry.
+
+use resonance_audio::ping_deadline_reached;
+use std::time::Duration;
+
+#[test]
+fn deadline_not_reached_while_listening_normally() {
+    // Frames still accumulating, wall clock well inside the ceiling.
+    assert!(!ping_deadline_reached(
+        100,
+        36_000,
+        Duration::from_millis(50),
+        Duration::from_millis(1250),
+    ));
+}
+
+#[test]
+fn frame_window_full_is_a_deadline() {
+    // The stream delivered its whole listen window without a detection.
+    assert!(ping_deadline_reached(
+        36_000,
+        36_000,
+        Duration::from_millis(700),
+        Duration::from_millis(1250),
+    ));
+}
+
+#[test]
+fn dead_stream_hits_the_wall_clock_ceiling() {
+    // Zero frames ever arrived — the old frame-counted timeout would spin
+    // forever; the wall clock must end the ping.
+    assert!(ping_deadline_reached(
+        0,
+        36_000,
+        Duration::from_millis(1250),
+        Duration::from_millis(1250),
+    ));
+    assert!(!ping_deadline_reached(
+        0,
+        36_000,
+        Duration::from_millis(1249),
+        Duration::from_millis(1250),
+    ));
+}

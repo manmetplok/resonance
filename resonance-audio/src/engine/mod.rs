@@ -74,7 +74,8 @@ pub use external_instrument::{
     ExternalInstruments,
 };
 pub use external_instrument_ping::{
-    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms,
+    ping_deadline_reached, OnsetOutcome,
 };
 pub use clips::transcode_to_wav;
 pub use clips::{

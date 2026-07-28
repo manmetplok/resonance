@@ -371,6 +371,7 @@ fn sync_input_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
         ctx.quantum,
         ctx.sample_rate,
         desired_channels,
+        None,
     ) {
         Ok((stream, in_sr, in_ch)) => {
             state.rec.input_stream = Some(stream);

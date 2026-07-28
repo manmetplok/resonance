@@ -303,6 +303,10 @@ pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>
 /// won. PipeWire init failures fall through to cpal so a system
 /// without a running PipeWire daemon still records (just at the
 /// cpal-via-ALSA cap of two channels).
+/// `capture_gate` is an optional per-stream capture enable ORed with
+/// `shared.recording`: the latency ping records through its own stream
+/// while the global recording flag is off (doc #260 finding #3).
+/// Regular recording / monitoring streams pass `None`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_input_stream(
     source_name: Option<&str>,
@@ -313,6 +317,7 @@ pub(crate) fn build_input_stream(
     quantum: usize,
     engine_sample_rate: u32,
     desired_channels: u16,
+    capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(crate::input_handle::InputHandle, u32, u16), String> {
     #[cfg(target_os = "linux")]
     {
@@ -323,6 +328,7 @@ pub(crate) fn build_input_stream(
             Arc::clone(&mon_producer),
             engine_sample_rate,
             desired_channels,
+            capture_gate.clone(),
         ) {
             Ok((handle, sr, ch)) => {
                 return Ok((crate::input_handle::InputHandle::PipeWire(handle), sr, ch));
@@ -342,12 +348,14 @@ pub(crate) fn build_input_stream(
         buf_frames,
         quantum,
         desired_channels,
+        capture_gate,
     )?;
     Ok((crate::input_handle::InputHandle::Cpal(stream), sr, ch))
 }
 
 /// cpal-based input stream builder. Kept as the fallback for non-
 /// Linux platforms and for Linux setups where PipeWire init fails.
+#[allow(clippy::too_many_arguments)]
 fn build_input_stream_cpal(
     source_name: Option<&str>,
     shared: Arc<SharedState>,
@@ -356,6 +364,7 @@ fn build_input_stream_cpal(
     buf_frames: usize,
     quantum: usize,
     desired_channels: u16,
+    capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(cpal::Stream, u32, u16), String> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -426,13 +435,17 @@ fn build_input_stream_cpal(
     let make_callback = move |channels: u16,
                               shared: Arc<SharedState>,
                               mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                              mut rec_producer: Option<ringbuf::HeapProd<f32>>| {
+                              mut rec_producer: Option<ringbuf::HeapProd<f32>>,
+                              capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>| {
         let stride = channels.max(1) as usize;
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            if shared.recording.load(Ordering::Relaxed) {
+            let capture = shared.recording.load(Ordering::Relaxed)
+                || capture_gate.as_ref().is_some_and(|g| g.load(Ordering::Relaxed));
+            if capture {
                 if let Some(ref mut prod) = rec_producer {
-                    let written = prod.push_slice(data);
-                    if written < data.len() {
+                    // Whole frames only — a partial push on overflow
+                    // would rotate the take's channels (finding #17).
+                    if crate::mixer::push_recording_frames(prod, data, stride) {
                         shared.recording_overflow.store(true, Ordering::Relaxed);
                     }
                 }
@@ -454,7 +467,8 @@ fn build_input_stream_cpal(
     let attempt = |channels: u16,
                    shared: Arc<SharedState>,
                    mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                   rec_producer: Option<ringbuf::HeapProd<f32>>| {
+                   rec_producer: Option<ringbuf::HeapProd<f32>>,
+                   capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>| {
         let mut cfg = base_config.clone();
         cfg.sample_rate = sample_rate;
         cfg.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
@@ -462,7 +476,7 @@ fn build_input_stream_cpal(
         let underrun_limiter = Arc::clone(&underrun_limiter);
         device.build_input_stream(
             &cfg,
-            make_callback(channels, shared, mon_producer, rec_producer),
+            make_callback(channels, shared, mon_producer, rec_producer, capture_gate),
             move |err| match err {
                 cpal::StreamError::BufferUnderrun => {
                     if let Some(report) =
@@ -485,6 +499,7 @@ fn build_input_stream_cpal(
         Arc::clone(&shared),
         Arc::clone(&mon_producer),
         rec_producer.take(),
+        capture_gate.clone(),
     ) {
         Ok(s) => (s, primary_channels),
         Err(primary_err) => {
@@ -496,7 +511,7 @@ fn build_input_stream_cpal(
                 "[input] {} channels rejected ({}); falling back to {} channels",
                 primary_channels, primary_err, default_channels
             );
-            match attempt(default_channels, shared, mon_producer, rec_producer) {
+            match attempt(default_channels, shared, mon_producer, rec_producer, capture_gate) {
                 Ok(s) => (s, default_channels),
                 Err(e) => {
                     return Err(format!(

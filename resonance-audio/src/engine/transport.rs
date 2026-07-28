@@ -207,6 +207,7 @@ pub(crate) fn begin_recording_stream(
         ctx.quantum,
         ctx.sample_rate,
         desired_channels,
+        None,
     ) {
         Ok(triple) => triple,
         Err(e) => {

@@ -17,8 +17,9 @@
 //! here runs on the audio callback; the capture stream pushes into a lock-free
 //! ring and we drain it on the engine thread.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ringbuf::traits::{Consumer, Split};
 
@@ -41,6 +42,15 @@ const PING_VELOCITY: u8 = 127;
 /// exceeds a few hundred ms round-trip, but we'd rather wait than miss a slow
 /// return. The poll loop still terminates promptly on a clean detection.
 const LISTEN_WINDOW_MS: u64 = 750;
+
+/// Hard wall-clock ceiling on the whole measurement. The frame-counted
+/// listen window only advances while captured frames actually arrive —
+/// a dead input stream (device wedged, daemon hiccup) would previously
+/// keep the ping pending forever, holding the device and blocking
+/// retries (doc #260 finding #3). The grace over `LISTEN_WINDOW_MS`
+/// covers stream bring-up so a healthy-but-slow device still gets its
+/// full listen window.
+const WALL_DEADLINE_MS: u64 = LISTEN_WINDOW_MS + 500;
 
 /// Lead-in window used to estimate the input noise floor, in milliseconds.
 /// The detector measures the average level over the first `LEAD_IN_MS` of
@@ -131,6 +141,21 @@ pub fn onset_to_ms(onset_input_frames: usize, input_sr: u32) -> f32 {
     (onset_input_frames as f64 / input_sr as f64 * 1000.0) as f32
 }
 
+/// Has the in-flight ping reached its end-of-listening condition?
+/// Either the frame-counted listen window filled (normal timeout: the
+/// stream delivered audio but no detectable return) or the wall clock
+/// passed the hard deadline (a dead stream delivering nothing must
+/// still complete, release the device and allow an immediate retry).
+/// Pure; unit-tested.
+pub fn ping_deadline_reached(
+    captured_frames: u64,
+    deadline_frames: u64,
+    elapsed: Duration,
+    wall_deadline: Duration,
+) -> bool {
+    captured_frames >= deadline_frames || elapsed >= wall_deadline
+}
+
 /// In-flight latency-ping run. Owns the capture stream + ring consumer for the
 /// duration of the measurement so it never touches the recording session's
 /// state. Survives across engine-thread iterations until a return is detected
@@ -165,6 +190,13 @@ pub(crate) struct PendingLatencyPing {
     pub deadline_frames: u64,
     /// Lead-in frames used to estimate the noise floor (input-rate).
     pub lead_in_frames: usize,
+    /// Per-stream capture enable for the ping's input stream: flipped
+    /// on right after the impulse is sent (the global
+    /// `shared.recording` flag stays off during a ping) and cleared on
+    /// completion.
+    pub capture_gate: Arc<AtomicBool>,
+    /// When the impulse was fired — the wall-clock deadline reference.
+    pub started: Instant,
 }
 
 impl PendingLatencyPing {
@@ -264,6 +296,12 @@ pub(crate) fn handle_detect_latency(ctx: &HandlerCtx, state: &mut HandlerState, 
     let ring = ringbuf::HeapRb::<f32>::new(super::RECORDING_RING_SIZE);
     let (prod, cons) = ring.split();
 
+    // Per-stream capture enable: the ping records with the global
+    // recording flag OFF, so the stream needs its own gate (finding
+    // #3). Armed right after the impulse below so `captured` counts
+    // from the moment the note was sent.
+    let capture_gate = Arc::new(AtomicBool::new(false));
+
     let (input, in_sr, in_ch) = match platform::build_input_stream(
         Some(return_device.as_str()),
         Arc::clone(ctx.shared),
@@ -273,6 +311,7 @@ pub(crate) fn handle_detect_latency(ctx: &HandlerCtx, state: &mut HandlerState, 
         ctx.quantum,
         ctx.sample_rate,
         desired_channels,
+        Some(Arc::clone(&capture_gate)),
     ) {
         Ok(triple) => triple,
         Err(e) => {
@@ -308,6 +347,9 @@ pub(crate) fn handle_detect_latency(ctx: &HandlerCtx, state: &mut HandlerState, 
         .midi_hw
         .midi_outputs
         .send_note_on(track_id, channel, PING_NOTE, PING_VELOCITY);
+    // Open the capture gate only now: frames accumulate from the
+    // moment the impulse left, so the onset index IS the round trip.
+    capture_gate.store(true, Ordering::Release);
 
     let deadline_frames = (in_sr as u64 * LISTEN_WINDOW_MS) / 1000;
     let lead_in_frames = ((in_sr as u64 * LEAD_IN_MS) / 1000).max(1) as usize;
@@ -325,6 +367,8 @@ pub(crate) fn handle_detect_latency(ctx: &HandlerCtx, state: &mut HandlerState, 
         return_port,
         deadline_frames,
         lead_in_frames,
+        capture_gate,
+        started: Instant::now(),
     });
 }
 
@@ -339,15 +383,20 @@ pub(crate) fn poll_pending_latency_ping(ctx: &HandlerCtx, state: &mut HandlerSta
     // Borrow split: detect on the owned ping, then mutate engine state after
     // taking it, so we don't hold a `&mut state.pending_latency_ping` across
     // the `&mut state.external_instruments` / `&mut state.midi_hw` writes.
-    let (outcome, frames, input_sr, deadline) = {
+    let (outcome, timed_out, frames) = {
         let ping = state.pending_latency_ping.as_mut().unwrap();
         ping.drain();
         let outcome = detect_impulse_onset(&ping.captured, ping.lead_in_frames);
+        let frames = ping.captured.len() as u64;
         (
             outcome,
-            ping.captured.len() as u64,
-            ping.input_sample_rate,
-            ping.deadline_frames,
+            ping_deadline_reached(
+                frames,
+                ping.deadline_frames,
+                ping.started.elapsed(),
+                Duration::from_millis(WALL_DEADLINE_MS),
+            ),
+            frames,
         )
     };
 
@@ -357,12 +406,13 @@ pub(crate) fn poll_pending_latency_ping(ctx: &HandlerCtx, state: &mut HandlerSta
             finish_ping_success(ctx, state, &ping, onset_input_frames);
         }
         OnsetOutcome::NeedMore | OnsetOutcome::NotFound => {
-            // Keep listening until the window elapses; only then is
-            // "NotFound" actually a failure. `NeedMore` simply means the
-            // lead-in hasn't filled yet.
-            if frames >= deadline {
+            // Keep listening until the frame window fills — or, for a
+            // stream that never delivers, until the wall-clock ceiling
+            // — only then is "NotFound" actually a failure. `NeedMore`
+            // simply means the lead-in hasn't filled yet.
+            if timed_out {
                 let ping = state.pending_latency_ping.take().unwrap();
-                finish_ping_failure(ctx, state, &ping, input_sr);
+                finish_ping_failure(ctx, state, &ping, frames);
             }
         }
     }
@@ -410,21 +460,27 @@ fn finish_ping_success(
     super::plugins::refresh_latency_comp(ctx, &state.external_instruments);
 }
 
-/// The listen window elapsed with no detectable return. Report a clean
-/// failure and send the Note Off so the ping note doesn't hang.
+/// The listen window (or the wall-clock ceiling) elapsed with no
+/// detectable return. Report a clean failure and send the Note Off so
+/// the ping note doesn't hang. Dropping the taken `ping` afterwards
+/// closes the capture stream, releasing the device for an immediate
+/// retry.
 fn finish_ping_failure(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
     ping: &PendingLatencyPing,
-    input_sr: u32,
+    captured_frames: u64,
 ) {
     send_ping_note_off(state, ping);
 
-    // Distinguish "no frames at all" (device opened but delivered nothing)
-    // from "frames but no impulse" (cabling/level problem) for a clearer
-    // message — the realtime bounce draws the same distinction.
-    let reason = if input_sr == 0 {
-        "The audio return delivered no audio — check the device.".to_string()
+    // Distinguish "no frames at all" (device opened but delivered nothing
+    // before the wall-clock ceiling) from "frames but no impulse"
+    // (cabling/level problem) for a clearer message — the realtime bounce
+    // draws the same distinction.
+    let reason = if captured_frames == 0 {
+        "The audio return delivered no audio within the deadline — the \
+         input stream may be stalled; check the device and try again."
+            .to_string()
     } else {
         "No return detected within the listen window. Check that the synth's \
          audio output is wired to the picked return input and that its level \
@@ -442,6 +498,10 @@ fn finish_ping_failure(
 /// Send the matching Note Off for the ping impulse so a hardware synth doesn't
 /// sustain the note after the measurement ends.
 fn send_ping_note_off(state: &mut HandlerState, ping: &PendingLatencyPing) {
+    // Close the capture gate before the note-off so the stream stops
+    // pushing the moment the measurement is decided (the stream itself
+    // closes when the taken ping is dropped).
+    ping.capture_gate.store(false, Ordering::Release);
     state
         .midi_hw
         .midi_outputs
