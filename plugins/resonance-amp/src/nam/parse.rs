@@ -52,7 +52,6 @@ pub struct WaveNetConfig {
     pub head: Vec<usize>,
     /// Final output size from head (typically 1).
     pub head_size: usize,
-    pub head_bias: bool,
     /// Whether layers have a learned 1x1 residual conv (_layer1x1).
     /// True for new-format NAM models (default), false for old format.
     pub has_layer1x1: bool,
@@ -62,6 +61,17 @@ pub struct StackConfig {
     pub input_size: usize,
     pub condition_size: usize,
     pub head_size: usize,
+    /// Kernel size of this stack's head rechannel convolution (reference
+    /// `LayerArrayParams::head_kernel_size`, from the A2 nested `head`
+    /// object's `kernel_size`). A1 / legacy flat configs: 1, which is the
+    /// historical 1x1 head rechannel exactly.
+    pub head_kernel_size: usize,
+    /// Dilation of the head rechannel convolution (`head.head_dilation`).
+    /// A1: 1. Irrelevant when `head_kernel_size == 1`.
+    pub head_dilation: usize,
+    /// Whether this stack's head rechannel has a bias (per-array in the
+    /// reference: nested `head.bias`, or legacy flat `head_bias`).
+    pub head_bias: bool,
     pub channels: usize,
     /// Internal (bottleneck) channel count of each layer in this stack
     /// (A2). The dilated conv and input mixin output `bottleneck` channels
@@ -146,6 +156,10 @@ impl OldWaveNetConfig {
                     input_size: self.input_size,
                     condition_size: self.condition_size,
                     head_size: self.head_size,
+                    // Old-format models predate the windowed head rechannel.
+                    head_kernel_size: 1,
+                    head_dilation: 1,
+                    head_bias: self.head_bias,
                     channels: self.channels,
                     // Old-format models predate the A2 bottleneck.
                     bottleneck: self.channels,
@@ -168,7 +182,6 @@ impl OldWaveNetConfig {
             stacks,
             head: self.head,
             head_size: self.head_size,
-            head_bias: self.head_bias,
             has_layer1x1: false,
         })
     }
@@ -180,7 +193,16 @@ impl OldWaveNetConfig {
 struct NewLayerArrayConfig {
     input_size: usize,
     condition_size: usize,
-    head_size: usize,
+    /// Legacy flat head output size (implicit kernel 1). The A2 trainer
+    /// export uses the nested `head` object instead; the reference
+    /// (`parse_config_json` in NAM/wavenet/model.cpp) prefers `head` when
+    /// both are present and errors when both are absent.
+    #[serde(default)]
+    head_size: Option<usize>,
+    /// A2 nested head rechannel config (`head.out_channels` /
+    /// `kernel_size` / `head_dilation` / `bias`).
+    #[serde(default)]
+    head: Option<NewLayerHeadConfig>,
     channels: usize,
     /// Internal channel count (A2). Defaults to `channels` (A1), matching
     /// the reference (`bottleneck = layer_config.value("bottleneck",
@@ -222,6 +244,19 @@ struct NewLayerArrayConfig {
     /// `parse_config_json` fallback.
     #[serde(default)]
     head1x1: Option<NewHead1x1Config>,
+}
+
+/// A2 per-array head rechannel object. `out_channels`, `kernel_size`, and
+/// `bias` are required when the object is present (reference
+/// `head_json.at(...)` throws on absence); `head_dilation` defaults to 1
+/// (reference `head_json.contains("head_dilation")` guard).
+#[derive(Deserialize)]
+struct NewLayerHeadConfig {
+    out_channels: usize,
+    kernel_size: usize,
+    #[serde(default = "default_one")]
+    head_dilation: usize,
+    bias: bool,
 }
 
 #[derive(Deserialize)]
@@ -295,10 +330,35 @@ impl NewWaveNetConfig {
                     l.dilations.len(),
                     &format!("Layer array {i}"),
                 )?;
+                // Head rechannel: prefer the nested `head` object (A2 /
+                // trainer export); legacy files use flat head_size +
+                // head_bias with an implicit kernel of 1 (reference
+                // `parse_config_json` precedence).
+                let (head_size, head_kernel_size, head_dilation, head_bias) = match &l.head {
+                    Some(h) => {
+                        if h.kernel_size == 0 {
+                            return Err(format!(
+                                "Layer array {i}: head.kernel_size must be >= 1"
+                            ));
+                        }
+                        (h.out_channels, h.kernel_size, h.head_dilation, h.bias)
+                    }
+                    None => match l.head_size {
+                        Some(hs) => (hs, 1, 1, l.head_bias),
+                        None => {
+                            return Err(format!(
+                                "Layer array {i}: expected 'head' object with out_channels, kernel_size, and bias, or legacy 'head_size' and 'head_bias'"
+                            ));
+                        }
+                    },
+                };
                 Ok(StackConfig {
                     input_size: l.input_size,
                     condition_size: l.condition_size,
-                    head_size: l.head_size,
+                    head_size,
+                    head_kernel_size,
+                    head_dilation,
+                    head_bias,
                     channels: l.channels,
                     bottleneck: l.bottleneck.unwrap_or(l.channels),
                     dilations: l.dilations.clone(),
@@ -330,7 +390,8 @@ impl NewWaveNetConfig {
                 };
                 (hidden, h.out_channels)
             }
-            None => (vec![], first.head_size),
+            // stacks is non-empty (checked above via `first`).
+            None => (vec![], stacks[0].head_size),
         };
 
         Ok(WaveNetConfig {
@@ -338,7 +399,6 @@ impl NewWaveNetConfig {
             stacks,
             head,
             head_size,
-            head_bias: first.head_bias,
             has_layer1x1: true,
         })
     }

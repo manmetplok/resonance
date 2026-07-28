@@ -55,6 +55,7 @@ fn grouped_stack(
     groups_input: usize,
     groups_input_mixin: usize,
     layer1x1_groups: usize,
+    head_bias: bool,
 ) -> StackConfig {
     let n = dilations.len();
     let (gating_modes, secondary_activations) = if gated {
@@ -69,6 +70,9 @@ fn grouped_stack(
         input_size: 1,
         condition_size,
         head_size: 1,
+        head_kernel_size: 1,
+        head_dilation: 1,
+        head_bias,
         channels,
         bottleneck,
         dilations,
@@ -101,10 +105,9 @@ const GROUPED_TOTAL: usize = 74;
 fn grouped_construction_consumes_reference_weight_count() {
     let config = WaveNetConfig {
         input_size: 1,
-        stacks: vec![grouped_stack(4, 4, 2, vec![1, 2], 2, false, 2, 2, 4)],
+        stacks: vec![grouped_stack(4, 4, 2, vec![1, 2], 2, false, 2, 2, 4, true)],
         head: vec![],
         head_size: 1,
-        head_bias: true,
         has_layer1x1: true,
     };
     let weights = counted_weights(GROUPED_TOTAL);
@@ -131,10 +134,9 @@ fn grouped_construction_consumes_reference_weight_count() {
 fn gated_grouped_construction_consumes_reference_weight_count() {
     let config = WaveNetConfig {
         input_size: 1,
-        stacks: vec![grouped_stack(4, 4, 2, vec![1], 2, true, 2, 2, 2)],
+        stacks: vec![grouped_stack(4, 4, 2, vec![1], 2, true, 2, 2, 2, true)],
         head: vec![],
         head_size: 1,
-        head_bias: true,
         has_layer1x1: true,
     };
     let weights = counted_weights(70);
@@ -210,6 +212,9 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
             input_size: 1,
             condition_size: 1,
             head_size: 1,
+            head_kernel_size: 1,
+            head_dilation: 1,
+            head_bias: false,
             channels: 4,
             bottleneck: 4,
             dilations: vec![1],
@@ -224,7 +229,6 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
         }],
         head: vec![],
         head_size: 1,
-        head_bias: false,
         has_layer1x1: false,
     };
     let mut reader = WeightReader::new(&weights);
@@ -297,10 +301,9 @@ fn grouped_mixin_and_layer1x1_are_bit_identical_to_hand_computed_reference() {
 
     let config = WaveNetConfig {
         input_size: 1,
-        stacks: vec![grouped_stack(2, 2, 2, vec![1, 1], 1, false, 2, 2, 2)],
+        stacks: vec![grouped_stack(2, 2, 2, vec![1, 1], 1, false, 2, 2, 2, false)],
         head: vec![],
         head_size: 1,
-        head_bias: false,
         has_layer1x1: true,
     };
     let mut reader = WeightReader::new(&weights);
