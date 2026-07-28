@@ -213,6 +213,59 @@ pub fn monitor_catchup_skip(
     }
 }
 
+/// Adaptive monitor-ring backlog drain for the native PipeWire backend
+/// (doc #260 finding #12). With input and output streams in the same
+/// graph on the same clock, pushes and reads are strictly 1:1 — the
+/// only backlog the ring *needs* is the intra-cycle ordering bound
+/// (`monitor_catchup_skip`'s one-quantum margin covers a read that
+/// runs before that cycle's push). A startup burst can still leave one
+/// sticky extra quantum that the margin skip never reclaims. This
+/// tracker watches for backlog that stays above `needed` for
+/// [`MONITOR_DRAIN_STREAK`] consecutive callbacks — only a stable
+/// scheduling order produces that — and then drains the excess down to
+/// `needed`, converging the ring to its true minimum (0 or 1 cycle
+/// depending on ordering). Any low cycle resets the streak, so jittery
+/// ordering keeps the full margin. Inactive on the cpal fallback,
+/// whose independent clock genuinely needs the standing margin.
+pub struct MonitorDrain {
+    native: bool,
+    high_streak: u32,
+}
+
+/// Consecutive high-backlog callbacks before the excess is drained:
+/// ~43 ms at 48 kHz / q128 — long enough to prove a stable scheduling
+/// order, short enough to reclaim the latency promptly after startup.
+pub const MONITOR_DRAIN_STREAK: u32 = 16;
+
+impl MonitorDrain {
+    pub fn new(native: bool) -> Self {
+        Self {
+            native,
+            high_streak: 0,
+        }
+    }
+
+    /// Whole-frame sample count to drain beyond the margin skip, given
+    /// the ring occupancy right before this callback's read. Non-zero
+    /// only on the native backend after a full high streak.
+    pub fn excess_drain(&mut self, available: usize, needed: usize, frame_stride: usize) -> usize {
+        if !self.native {
+            return 0;
+        }
+        if available > needed {
+            self.high_streak += 1;
+        } else {
+            self.high_streak = 0;
+            return 0;
+        }
+        if self.high_streak < MONITOR_DRAIN_STREAK {
+            return 0;
+        }
+        self.high_streak = 0;
+        (available - needed) / frame_stride.max(1) * frame_stride.max(1)
+    }
+}
+
 /// Whole-frame read length for the monitor ring.
 #[inline]
 pub fn monitor_read_len(needed: usize, occupied: usize, frame_stride: usize) -> usize {
@@ -262,6 +315,7 @@ pub(crate) fn mix_audio(
     midi_stash: &mut MidiStash,
     monitor_cons: &mut ringbuf::HeapCons<f32>,
     monitor_temp: &mut [f32],
+    monitor_drain: &mut MonitorDrain,
     buf_frames: usize,
     quantum: usize,
     // A/B metering taps: the mix tap is fed the processed-mix output at the
@@ -369,6 +423,13 @@ pub(crate) fn mix_audio(
     let catchup = monitor_catchup_skip(available, needed, quantum, frame_stride);
     if catchup > 0 {
         monitor_cons.skip(catchup);
+    }
+    // Native backend: drain the sticky post-startup quantum once the
+    // backlog has been stably above `needed` (doc #260 finding #12) —
+    // the margin skip above still bounds transients on every path.
+    let extra = monitor_drain.excess_drain(monitor_cons.occupied_len(), needed, frame_stride);
+    if extra > 0 {
+        monitor_cons.skip(extra);
     }
     let to_read = monitor_read_len(needed, monitor_cons.occupied_len(), frame_stride);
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);

@@ -112,3 +112,66 @@ fn overflow_does_not_rotate_channel_alignment() {
         }
     }
 }
+
+// -- Adaptive native-backend backlog drain (doc #260 finding #12) ------------
+
+use resonance_audio::__test_support::{MonitorDrain, MONITOR_DRAIN_STREAK};
+
+#[test]
+fn drain_fires_only_after_a_full_stable_high_streak() {
+    let stride = 2;
+    let needed = 128 * stride;
+    let mut d = MonitorDrain::new(true);
+    // One sticky extra quantum above `needed`, stable for the whole
+    // streak: cycles before the threshold drain nothing…
+    for _ in 0..MONITOR_DRAIN_STREAK - 1 {
+        assert_eq!(d.excess_drain(needed + 256, needed, stride), 0);
+    }
+    // …the threshold cycle reclaims exactly the excess, whole frames.
+    assert_eq!(d.excess_drain(needed + 256, needed, stride), 256);
+    // And the streak restarts — no repeated draining right after.
+    assert_eq!(d.excess_drain(needed + 2, needed, stride), 0);
+}
+
+#[test]
+fn any_low_cycle_resets_the_streak() {
+    let stride = 2;
+    let needed = 128 * stride;
+    let mut d = MonitorDrain::new(true);
+    for _ in 0..MONITOR_DRAIN_STREAK - 1 {
+        assert_eq!(d.excess_drain(needed + 64, needed, stride), 0);
+    }
+    // Jittery ordering: one cycle at/below `needed` resets everything —
+    // the standing margin is kept when scheduling order isn't stable.
+    assert_eq!(d.excess_drain(needed, needed, stride), 0);
+    for _ in 0..MONITOR_DRAIN_STREAK - 1 {
+        assert_eq!(d.excess_drain(needed + 64, needed, stride), 0);
+    }
+    assert_eq!(d.excess_drain(needed + 64, needed, stride), 64);
+}
+
+#[test]
+fn drain_rounds_down_to_whole_frames() {
+    let stride = 4;
+    let needed = 32 * stride;
+    let mut d = MonitorDrain::new(true);
+    for _ in 0..MONITOR_DRAIN_STREAK - 1 {
+        assert_eq!(d.excess_drain(needed + 10, needed, stride), 0);
+    }
+    // 10 excess samples at stride 4 -> 8 (2 whole frames).
+    assert_eq!(d.excess_drain(needed + 10, needed, stride), 8);
+}
+
+#[test]
+fn cpal_fallback_never_drains() {
+    let stride = 2;
+    let needed = 128 * stride;
+    let mut d = MonitorDrain::new(false);
+    for _ in 0..MONITOR_DRAIN_STREAK * 3 {
+        assert_eq!(
+            d.excess_drain(needed + 512, needed, stride),
+            0,
+            "fallback clock drift needs its standing margin"
+        );
+    }
+}
