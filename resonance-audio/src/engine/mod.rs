@@ -30,10 +30,10 @@ use crate::types::*;
 
 mod bounce;
 pub use bounce::{
-    encode_buffer_for_test, export_stems, freeze_terminal_event, normalize_buffer_for_test,
-    read_freeze_cache, render_stem, stem_filter, stem_project_range, to_audio_clip, to_freeze_cache,
-    to_freeze_cache_spawn, to_wav, try_lock_with_backoff, write_stem_wav, FREEZE_CANCELLED_MSG,
-    StemFilter,
+    chunk_span, encode_buffer_for_test, export_stems, freeze_terminal_event,
+    normalize_buffer_for_test, read_freeze_cache, render_stem, stem_filter, stem_project_range,
+    to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav, try_lock_with_backoff,
+    write_stem_wav, BOUNCE_CHUNK, FREEZE_CANCELLED_MSG, MIN_CLAP_FRAMES, StemFilter,
 };
 mod bounce_common;
 pub use bounce_common::midi_render_range;
@@ -74,7 +74,8 @@ pub use external_instrument::{
     ExternalInstruments,
 };
 pub use external_instrument_ping::{
-    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms,
+    ping_deadline_reached, OnsetOutcome,
 };
 pub use clips::transcode_to_wav;
 pub use clips::{
@@ -93,6 +94,7 @@ mod thread;
 mod tracks;
 mod transport;
 mod vocal_analysis;
+pub use plugins::affects_latency;
 pub use tracks::set_track_playback_source_in_place;
 pub use vocal_analysis::{analyze_clip_pitch_in_place, analyze_pitch};
 
@@ -156,6 +158,48 @@ pub struct SharedState {
     /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+    /// External-instrument round-trip offsets per track
+    /// (`latency_offset_samples`, positive = the hardware return
+    /// arrives that late). Published by the engine control thread
+    /// whenever the comp table is refreshed and read by the offline
+    /// bounce/export threads so their latency comp folds the same
+    /// offsets the live mixer compensates (doc #260 finding #4).
+    pub external_offsets: arc_swap::ArcSwap<std::collections::HashMap<TrackId, i64>>,
+    /// Capture-side I/O latency in samples at the engine rate — the
+    /// graph-reported time a sample takes from the capture device to
+    /// the native input stream (`pw_time.delay`). Published every graph
+    /// cycle by the input process callback; 0 when no native input
+    /// stream is running (doc #260 finding #13).
+    pub capture_latency_samples: AtomicU64,
+    /// Playback-side I/O latency in samples at the engine rate — the
+    /// graph-reported time the next output sample takes from the native
+    /// output stream to the playback device. Published every graph
+    /// cycle by the output process callback; 0 on the cpal fallback
+    /// (which cannot report it — part of why it is a fallback).
+    pub playback_latency_samples: AtomicU64,
+    /// True from the moment a recording session arms its flags until
+    /// the input callback pushes the session's first frames. That push
+    /// latches the take's aligned start position into
+    /// `recording_start_latch` (see [`SharedState::latch_recording_start`]),
+    /// eliminating the stream-open / engine-cadence variance that used
+    /// to land inside takes (doc #260 finding #2).
+    pub recording_start_pending: AtomicBool,
+    /// The raw playhead latched at the session's first captured frame.
+    /// The engine loop turns it into the take's aligned start (minus
+    /// measured I/O latency for performer sessions), so recorded audio
+    /// lands where the performer heard the mix.
+    pub recording_start_latch: AtomicU64,
+    /// Master-chain latency in samples (0 while master FX are
+    /// bypassed), published by the engine thread's comp refresh. The
+    /// audio callback reads it to latency-match the reference A/B
+    /// monitor against the PDC-delayed, master-processed mix
+    /// (doc #260 finding #19).
+    pub master_latency_samples: AtomicU64,
+    /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
+    /// (the comp clamp is engaging and alignment for that chain is
+    /// degraded). Used to emit the warning once per engagement instead
+    /// of on every comp refresh (doc #260 finding #20).
+    pub comp_clamp_engaged: AtomicBool,
     /// Reference A/B monitor snapshot. Published by the control thread
     /// (`reference::ReferencePlayer::publish`) and read lock-free by the
     /// audio callback to replace the post-master output with the active
@@ -206,6 +250,35 @@ pub struct SharedState {
     pub audition_finished: AtomicBool,
 }
 
+impl SharedState {
+    /// Called by the capture callbacks on every recording push: on the
+    /// *first* push of a session (armed via `recording_start_pending`)
+    /// latch the raw playhead at that instant into
+    /// `recording_start_latch`. That is the first moment capture data
+    /// actually flows — after the stream-open delay, independent of the
+    /// engine thread's wake cadence — so the stream-open gap can never
+    /// land inside a take (doc #260 finding #2). The engine loop then
+    /// derives the take's aligned start from it (subtracting the
+    /// measured capture+playback latency for performer sessions).
+    /// Subsequent pushes are a single relaxed load + failed CAS.
+    pub fn latch_recording_start(&self) {
+        if self
+            .recording_start_pending
+            .compare_exchange(
+                true,
+                false,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            let playhead = self.playhead.load(std::sync::atomic::Ordering::Relaxed);
+            self.recording_start_latch
+                .store(playhead, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 impl Default for SharedState {
     fn default() -> Self {
         Self {
@@ -227,6 +300,13 @@ impl Default for SharedState {
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
+            external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
+            comp_clamp_engaged: AtomicBool::new(false),
+            master_latency_samples: AtomicU64::new(0),
+            capture_latency_samples: AtomicU64::new(0),
+            playback_latency_samples: AtomicU64::new(0),
+            recording_start_pending: AtomicBool::new(false),
+            recording_start_latch: AtomicU64::new(0),
             reference: reference::ReferenceMonitor::default(),
             mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),
@@ -298,6 +378,12 @@ pub struct AudioEngine {
     cmd_tx: Sender<AudioCommand>,
     event_rx: Receiver<AudioEvent>,
     _stream: Option<cpal::Stream>,
+    /// Native PipeWire output stream (the default backend). `None` when
+    /// running on the cpal fallback (`_stream` is `Some` then) or in
+    /// test constructors. Held so follow-up work can query pw
+    /// time-info / Latency params via
+    /// [`output_pipewire::PipeWireOutputHandle::with_stream`].
+    pw_output: Option<crate::output_pipewire::PipeWireOutputHandle>,
     /// Join handle for the engine control thread. `Drop` sends a
     /// `ShutDown` command (which breaks the thread's loop, since the
     /// thread's own `cmd_tx_retry` keeps the channel from ever
@@ -369,6 +455,12 @@ impl AudioEngine {
         // MIDI events queue without bound. 1024 fits a comfortable
         // burst at typical engine-thread cadence (~60 Hz wakeups).
         let (live_midi_tx, live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(1024);
+        // Audio-thread live-MIDI pickup (doc #260 finding #16): the mix
+        // callback drains `live_midi_rx` (instrument delivery within one
+        // quantum) and forwards each event on this channel for the
+        // engine thread's recording / MIDI-thru bookkeeping.
+        let (live_midi_fwd_tx, live_midi_fwd_rx) =
+            crossbeam_channel::bounded::<LiveMidiEvent>(1024);
         // Separate channel for the dedicated control-surface input. Same
         // bound + rationale as the per-track live MIDI channel above.
         let (live_control_tx, live_control_rx) =
@@ -439,7 +531,12 @@ impl AudioEngine {
         // under normal UI load, so we coalesce into one summary line
         // per `UNDERRUN_REPORT_INTERVAL` instead of spamming.
         let underrun_limiter = Arc::new(UnderrunRateLimiter::new());
-        let build_stream = |config: &cpal::StreamConfig| {
+        // Build one fully-captured mixer callback plus the matching
+        // monitor-ring producer. Callable more than once (the native
+        // PipeWire attempt, then the cpal fallback) — each call
+        // allocates a fresh scratch set and the losing attempt's set is
+        // simply dropped with its backend.
+        let make_mixer = |native_backend: bool| -> (crate::output_pipewire::MixFn, ringbuf::HeapProd<f32>) {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
             let tracks_audio = Arc::clone(&tracks_audio);
@@ -451,7 +548,6 @@ impl AudioEngine {
             let tempo_audio = Arc::clone(&tempo_audio);
             let latency_comp_audio = Arc::clone(&latency_comp_audio);
             let automation_audio = Arc::clone(&automation_audio);
-            let underrun_limiter = Arc::clone(&underrun_limiter);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
             // Pre-allocate MAX_BUSSES stereo buffers so adding a bus at
@@ -496,6 +592,12 @@ impl AudioEngine {
             // feed path never allocates.
             let mut ab_meters = reference::ABMeters::new(audio_sample_rate as f32);
             ab_meters.reserve(audio_buf_frames);
+            // Native backend: the monitor ring may adaptively drain its
+            // sticky startup backlog (same graph clock); the cpal
+            // fallback keeps the standing margin (doc #260 finding #12).
+            let mut monitor_drain = mixer::MonitorDrain::new(native_backend);
+            let live_midi_rx = live_midi_rx.clone();
+            let live_midi_fwd = live_midi_fwd_tx.clone();
 
             // Pre-fault every page of the audio-thread scratch so the cpal
             // callback isn't the first writer. `vec![0.0f32; N]` and
@@ -520,9 +622,8 @@ impl AudioEngine {
                 prefault_f32(r);
             }
             prefault_f32(&mut monitor_temp);
-            let result = device.build_output_stream(
-                config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let mix: crate::output_pipewire::MixFn =
+                Box::new(move |data: &mut [f32], channels: usize| {
                     mixer::mix_audio(
                         data,
                         channels,
@@ -545,11 +646,27 @@ impl AudioEngine {
                         &mut midi_stash,
                         &mut monitor_cons,
                         &mut monitor_temp,
+                        &mut monitor_drain,
+                        &live_midi_rx,
+                        &live_midi_fwd,
                         audio_buf_frames,
                         audio_quantum,
                         &mut ab_meters,
                     );
-                },
+                });
+            (mix, prod)
+        };
+
+        // cpal fallback: the historical output path through the
+        // pipewire-alsa shim. Kept for non-PipeWire hosts (and the
+        // RESONANCE_FORCE_CPAL_OUTPUT escape hatch); its ALSA ring adds
+        // 2+ periods of extra latency over the native stream.
+        let build_cpal = |config: &cpal::StreamConfig| {
+            let (mut mix, prod) = make_mixer(false);
+            let underrun_limiter = Arc::clone(&underrun_limiter);
+            let result = device.build_output_stream(
+                config,
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| mix(data, channels),
                 move |err| match err {
                     cpal::StreamError::BufferUnderrun => {
                         if let Some(report) =
@@ -566,27 +683,67 @@ impl AudioEngine {
             );
             result.map(|stream| (stream, prod))
         };
-
-        let (stream, monitor_prod_raw, used_fixed_buffer) = match build_stream(&stream_config) {
-            Ok((stream, prod)) => (stream, prod, true),
+        let build_cpal_with_fallback = || match build_cpal(&stream_config) {
+            Ok((stream, prod)) => Ok((stream, prod, true)),
             Err(fixed_err) => {
                 // Fall back to default buffer size if fixed quantum was rejected.
                 let mut fallback_config = stream_config.clone();
                 fallback_config.buffer_size = cpal::BufferSize::Default;
-                match build_stream(&fallback_config) {
+                match build_cpal(&fallback_config) {
                     Ok((stream, prod)) => {
                         eprintln!(
                                 "audio: Fixed({}) rejected ({}) — falling back to BufferSize::Default (HIGH LATENCY)",
                                 quantum, fixed_err
                             );
-                        (stream, prod, false)
+                        Ok((stream, prod, false))
                     }
-                    Err(e) => {
-                        return Err(format!("Failed to build output stream: {}", e));
-                    }
+                    Err(e) => Err(format!("Failed to build output stream: {}", e)),
                 }
             }
         };
+
+        // Output backend selection: native PipeWire stream first — it
+        // renders straight into the graph cycle (~1 quantum of output
+        // buffering) and exposes real latency/time info — with cpal as
+        // the explicit fallback for non-PipeWire hosts (doc #260
+        // finding #11).
+        let force_cpal = std::env::var_os("RESONANCE_FORCE_CPAL_OUTPUT").is_some();
+        let mut pw_output: Option<crate::output_pipewire::PipeWireOutputHandle> = None;
+        let mut out_channels = channels;
+        let (stream, monitor_prod_raw, used_fixed_buffer) = if force_cpal {
+            eprintln!("audio: RESONANCE_FORCE_CPAL_OUTPUT set — skipping native PipeWire output");
+            let (s, p, fixed) = build_cpal_with_fallback()?;
+            (Some(s), p, fixed)
+        } else {
+            let (mix, prod) = make_mixer(true);
+            match crate::output_pipewire::build(
+                None,
+                Arc::clone(&shared),
+                sample_rate,
+                2,
+                quantum as u32,
+                buf_frames,
+                mix,
+            ) {
+                Ok((handle, pw_rate, pw_channels)) => {
+                    eprintln!(
+                        "audio: native PipeWire output up: rate={} channels={} latency_vote={}/{}",
+                        pw_rate, pw_channels, quantum, sample_rate
+                    );
+                    pw_output = Some(handle);
+                    out_channels = 2;
+                    (None, prod, true)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "audio: native PipeWire output unavailable ({e}) — falling back to cpal (ALSA shim, higher latency)"
+                    );
+                    let (s, p, fixed) = build_cpal_with_fallback()?;
+                    (Some(s), p, fixed)
+                }
+            }
+        };
+        let channels = out_channels;
 
         // One-line negotiation summary so latency regressions are diagnosable
         // from stderr alone. `probed_*` being None means the pw-metadata
@@ -594,7 +751,8 @@ impl AudioEngine {
         // numbers, which is usually the cause of "why is latency higher than
         // the pipewire quantum".
         eprintln!(
-            "audio: device={:?} sample_rate={} (cpal_default={}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
+            "audio: backend={} device={:?} sample_rate={} (cpal_default={}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
+            if pw_output.is_some() { "pipewire" } else { "cpal" },
             device_name,
             sample_rate,
             default_rate,
@@ -609,9 +767,11 @@ impl AudioEngine {
         let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod_raw));
         let monitor_prod_audio = Arc::clone(&monitor_prod);
 
-        stream
-            .play()
-            .map_err(|e| format!("Failed to start stream: {}", e))?;
+        if let Some(stream) = &stream {
+            stream
+                .play()
+                .map_err(|e| format!("Failed to start stream: {}", e))?;
+        }
 
         // Spawn the engine control thread
         let shared_ctrl = Arc::clone(&shared);
@@ -645,7 +805,7 @@ impl AudioEngine {
                     automation_ctrl,
                     monitor_prod_audio,
                     live_midi_tx,
-                    live_midi_rx,
+                    live_midi_fwd_rx,
                     live_control_tx,
                     live_control_rx,
                     clock_tx,
@@ -660,7 +820,8 @@ impl AudioEngine {
         Ok(Self {
             cmd_tx,
             event_rx,
-            _stream: Some(stream),
+            _stream: stream,
+            pw_output,
             engine_thread: Some(engine_thread),
             shared,
             tracks,
@@ -775,6 +936,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: None,
+            pw_output: None,
             engine_thread: None,
             shared,
             tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
@@ -815,6 +977,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: None,
+            pw_output: None,
             engine_thread: None,
             shared,
             tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),

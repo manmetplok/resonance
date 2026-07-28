@@ -128,6 +128,9 @@ pub(crate) fn begin_recording_stream(
     state: &mut HandlerState,
     start_sample: SamplePos,
 ) {
+    // Fresh session: no take shift unless the realtime bounce sets one
+    // after this returns (external-instrument round-trip compensation).
+    state.rec.take_shift_samples = 0;
     // Recording must have a project directory to stream WAVs into.
     // The startup modal guarantees a project is always selected, so
     // hitting this branch is a programmer error — surface it rather
@@ -142,7 +145,12 @@ pub(crate) fn begin_recording_stream(
         }
     };
 
-    ctx.shared.playing.store(true, Ordering::SeqCst);
+    // NOTE: `playing` is deliberately NOT set yet. It used to flip here
+    // — before the input stream was even built (an up-to-500 ms open) —
+    // so the playhead ran ahead while no frames could be captured and
+    // that variable gap landed inside every take (doc #260 finding #2).
+    // The transport now starts after the stream is up; the paths that
+    // bail out early below still start playback for behavioural parity.
 
     // Snapshot port + mono per armed track so the drain loop on the
     // engine thread doesn't need to re-lock the tracks map for every
@@ -168,6 +176,8 @@ pub(crate) fn begin_recording_stream(
     };
 
     if armed_tracks.is_empty() {
+        // Nothing to record: Record degrades to Play, as before.
+        ctx.shared.playing.store(true, Ordering::SeqCst);
         return;
     }
 
@@ -207,9 +217,13 @@ pub(crate) fn begin_recording_stream(
         ctx.quantum,
         ctx.sample_rate,
         desired_channels,
+        None,
     ) {
         Ok(triple) => triple,
         Err(e) => {
+            // Keep the legacy behaviour: the transport rolls even when
+            // the recording stream could not be opened.
+            ctx.shared.playing.store(true, Ordering::SeqCst);
             let _ = ctx.event_tx.send(AudioEvent::Error(format!(
                 "Failed to start recording: {}",
                 e
@@ -219,6 +233,7 @@ pub(crate) fn begin_recording_stream(
     };
 
     state.rec.start_sample = start_sample;
+    state.rec.start_latch_applied = false;
     state.rec.ring_consumer = Some(cons);
     state.rec.input_sample_rate = in_sr;
     state.rec.input_channels = in_ch;
@@ -254,6 +269,18 @@ pub(crate) fn begin_recording_stream(
 
     state.rec.input_stream = Some(stream);
     ctx.shared.input_channels.store(in_ch, Ordering::Release);
+    // Transport + capture start together, *after* the stream is up:
+    // the first pushed frames latch the aligned take start (playhead −
+    // measured capture+playback latency) via
+    // `SharedState::latch_recording_start`; the engine loop applies it
+    // to this session before the first drain (doc #260 finding #2).
+    ctx.shared
+        .recording_start_latch
+        .store(start_sample, Ordering::Relaxed);
+    ctx.shared
+        .recording_start_pending
+        .store(true, Ordering::Release);
+    ctx.shared.playing.store(true, Ordering::SeqCst);
     ctx.shared.recording.store(true, Ordering::SeqCst);
 
     let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {

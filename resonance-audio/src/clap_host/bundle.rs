@@ -8,6 +8,7 @@
 
 use std::ffi::{CStr, CString};
 use std::path::Path;
+use std::pin::Pin;
 use std::ptr;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
@@ -20,10 +21,12 @@ use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
 use clap_sys::host::clap_host;
 
+use clap_sys::plugin::clap_plugin;
+
 use crate::types::PluginDescInfo;
 
-use super::create_host_data;
 use super::instance::ClapInstance;
+use super::{create_host_data, HostData};
 
 pub struct ClapBundle {
     _library: libloading::Library,
@@ -151,158 +154,179 @@ impl ClapBundle {
             return Err(format!("Failed to create plugin '{}'", plugin_id));
         }
 
-        // Init
-        if let Some(init_fn) = unsafe { (*plugin).init } {
-            let ok = unsafe { init_fn(plugin) };
-            if !ok {
-                if let Some(destroy) = unsafe { (*plugin).destroy } {
-                    unsafe { destroy(plugin) };
-                }
-                return Err("plugin.init() failed".to_string());
-            }
-        }
-
-        // Query extensions before activation
-        let params_ext = unsafe {
-            if let Some(get_ext) = (*plugin).get_extension {
-                let ext = get_ext(plugin, CLAP_EXT_PARAMS.as_ptr());
-                if ext.is_null() {
-                    None
-                } else {
-                    Some(ext as *const clap_plugin_params)
-                }
-            } else {
-                None
-            }
-        };
-
-        let state_ext = unsafe {
-            if let Some(get_ext) = (*plugin).get_extension {
-                let ext = get_ext(plugin, CLAP_EXT_STATE.as_ptr());
-                if ext.is_null() {
-                    None
-                } else {
-                    Some(ext as *const clap_plugin_state)
-                }
-            } else {
-                None
-            }
-        };
-
-        let gui_ext = unsafe {
-            if let Some(get_ext) = (*plugin).get_extension {
-                let ext = get_ext(plugin, CLAP_EXT_GUI.as_ptr());
-                if ext.is_null() {
-                    None
-                } else {
-                    Some(ext as *const clap_plugin_gui)
-                }
-            } else {
-                None
-            }
-        };
-
-        // Query the audio-ports extension to learn how many output ports
-        // this plugin declares. Defaults to 1 (single stereo) if the
-        // extension is absent — matches CLAP host fallback behaviour and
-        // keeps pre-multi-output plugins working unchanged.
-        let audio_ports_ext = unsafe {
-            if let Some(get_ext) = (*plugin).get_extension {
-                let ext = get_ext(plugin, CLAP_EXT_AUDIO_PORTS.as_ptr());
-                if ext.is_null() {
-                    None
-                } else {
-                    Some(ext as *const clap_plugin_audio_ports)
-                }
-            } else {
-                None
-            }
-        };
-        let output_port_count = unsafe {
-            match audio_ports_ext.and_then(|ports| (*ports).count) {
-                Some(count_fn) => (count_fn(plugin, false) as usize).max(1),
-                None => 1,
-            }
-        };
-
-        let latency_ext = unsafe {
-            if let Some(get_ext) = (*plugin).get_extension {
-                let ext = get_ext(plugin, CLAP_EXT_LATENCY.as_ptr());
-                if ext.is_null() {
-                    None
-                } else {
-                    Some(ext as *const clap_plugin_latency)
-                }
-            } else {
-                None
-            }
-        };
-
-        // Activate
-        if let Some(activate) = unsafe { (*plugin).activate } {
-            let ok = unsafe { activate(plugin, sample_rate as f64, 32, 8192) };
-            if !ok {
-                if let Some(destroy) = unsafe { (*plugin).destroy } {
-                    unsafe { destroy(plugin) };
-                }
-                return Err("plugin.activate() failed".to_string());
-            }
-        }
-
-        // Query the latency extension now that the plugin is activated
-        // (the CLAP spec only defines `latency.get()` while active).
-        // The host vtable doesn't implement `clap_host_latency`, so this
-        // activation-time value is the one the engine compensates with
-        // for the lifetime of the instance.
-        let latency = unsafe {
-            match latency_ext.and_then(|ext| (*ext).get) {
-                Some(get_fn) => get_fn(plugin),
-                None => 0,
-            }
-        };
-
-        // Start processing
-        if let Some(start) = unsafe { (*plugin).start_processing } {
-            let ok = unsafe { start(plugin) };
-            if !ok {
-                if let Some(deactivate) = unsafe { (*plugin).deactivate } {
-                    unsafe { deactivate(plugin) };
-                }
-                if let Some(destroy) = unsafe { (*plugin).destroy } {
-                    unsafe { destroy(plugin) };
-                }
-                return Err("plugin.start_processing() failed".to_string());
-            }
-        }
-
-        // Pre-allocate the audio-output buffer array once per plugin
-        // instance. process_multi refreshes the data32 pointers each block
-        // without ever allocating.
-        let audio_out_ptrs = vec![[ptr::null_mut(); 2]; output_port_count];
-        let audio_out_buffers = (0..output_port_count)
-            .map(|_| clap_audio_buffer {
-                data32: ptr::null_mut(),
-                data64: ptr::null_mut(),
-                channel_count: 2,
-                latency: 0,
-                constant_mask: 0,
-            })
-            .collect();
-
-        Ok(ClapInstance::from_parts(
-            plugin,
-            host_data,
-            sample_rate,
-            params_ext,
-            state_ext,
-            audio_ports_ext,
-            gui_ext,
-            output_port_count,
-            latency,
-            audio_out_buffers,
-            audio_out_ptrs,
-        ))
+        build_instance(plugin, host_data, sample_rate)
     }
+}
+
+/// Init → query extensions → activate → query latency → start a freshly
+/// created `clap_plugin` and wrap it in a [`ClapInstance`]. Shared by
+/// [`ClapBundle::create_instance`] and the raw test-construction hook
+/// ([`super::__instance_from_raw_for_test`]) so both go through the
+/// identical lifecycle sequence.
+pub(super) fn build_instance(
+    plugin: *const clap_plugin,
+    host_data: Pin<Box<HostData>>,
+    sample_rate: u32,
+) -> Result<ClapInstance, String> {
+    // Init
+    if let Some(init_fn) = unsafe { (*plugin).init } {
+        let ok = unsafe { init_fn(plugin) };
+        if !ok {
+            if let Some(destroy) = unsafe { (*plugin).destroy } {
+                unsafe { destroy(plugin) };
+            }
+            return Err("plugin.init() failed".to_string());
+        }
+    }
+
+    // Query extensions before activation
+    let params_ext = unsafe {
+        if let Some(get_ext) = (*plugin).get_extension {
+            let ext = get_ext(plugin, CLAP_EXT_PARAMS.as_ptr());
+            if ext.is_null() {
+                None
+            } else {
+                Some(ext as *const clap_plugin_params)
+            }
+        } else {
+            None
+        }
+    };
+
+    let state_ext = unsafe {
+        if let Some(get_ext) = (*plugin).get_extension {
+            let ext = get_ext(plugin, CLAP_EXT_STATE.as_ptr());
+            if ext.is_null() {
+                None
+            } else {
+                Some(ext as *const clap_plugin_state)
+            }
+        } else {
+            None
+        }
+    };
+
+    let gui_ext = unsafe {
+        if let Some(get_ext) = (*plugin).get_extension {
+            let ext = get_ext(plugin, CLAP_EXT_GUI.as_ptr());
+            if ext.is_null() {
+                None
+            } else {
+                Some(ext as *const clap_plugin_gui)
+            }
+        } else {
+            None
+        }
+    };
+
+    // Query the audio-ports extension to learn how many output ports
+    // this plugin declares. Defaults to 1 (single stereo) if the
+    // extension is absent — matches CLAP host fallback behaviour and
+    // keeps pre-multi-output plugins working unchanged.
+    let audio_ports_ext = unsafe {
+        if let Some(get_ext) = (*plugin).get_extension {
+            let ext = get_ext(plugin, CLAP_EXT_AUDIO_PORTS.as_ptr());
+            if ext.is_null() {
+                None
+            } else {
+                Some(ext as *const clap_plugin_audio_ports)
+            }
+        } else {
+            None
+        }
+    };
+    let output_port_count = unsafe {
+        match audio_ports_ext.and_then(|ports| (*ports).count) {
+            Some(count_fn) => (count_fn(plugin, false) as usize).max(1),
+            None => 1,
+        }
+    };
+
+    let latency_ext = unsafe {
+        if let Some(get_ext) = (*plugin).get_extension {
+            let ext = get_ext(plugin, CLAP_EXT_LATENCY.as_ptr());
+            if ext.is_null() {
+                None
+            } else {
+                Some(ext as *const clap_plugin_latency)
+            }
+        } else {
+            None
+        }
+    };
+
+    // Activate
+    if let Some(activate) = unsafe { (*plugin).activate } {
+        let ok = unsafe { activate(plugin, sample_rate as f64, 32, 8192) };
+        if !ok {
+            if let Some(destroy) = unsafe { (*plugin).destroy } {
+                unsafe { destroy(plugin) };
+            }
+            return Err("plugin.activate() failed".to_string());
+        }
+    }
+
+    // Query the latency extension now that the plugin is activated
+    // (the CLAP spec only defines `latency.get()` while active).
+    // Latency changes after this point are tracked: the plugin
+    // signals `clap_host_latency.changed()` / `request_restart()`
+    // and the engine cycles activation + re-queries at the next
+    // safe point (doc #260 finding #10).
+    let latency = unsafe {
+        match latency_ext.and_then(|ext| (*ext).get) {
+            Some(get_fn) => get_fn(plugin),
+            None => 0,
+        }
+    };
+    // A `changed()` fired during activation is already captured by
+    // the query above; clear the flag so it doesn't schedule a
+    // redundant restart cycle.
+    host_data
+        .latency_changed
+        .store(false, std::sync::atomic::Ordering::Release);
+
+    // Start processing
+    if let Some(start) = unsafe { (*plugin).start_processing } {
+        let ok = unsafe { start(plugin) };
+        if !ok {
+            if let Some(deactivate) = unsafe { (*plugin).deactivate } {
+                unsafe { deactivate(plugin) };
+            }
+            if let Some(destroy) = unsafe { (*plugin).destroy } {
+                unsafe { destroy(plugin) };
+            }
+            return Err("plugin.start_processing() failed".to_string());
+        }
+    }
+
+    // Pre-allocate the audio-output buffer array once per plugin
+    // instance. process_multi refreshes the data32 pointers each block
+    // without ever allocating.
+    let audio_out_ptrs = vec![[ptr::null_mut(); 2]; output_port_count];
+    let audio_out_buffers = (0..output_port_count)
+        .map(|_| clap_audio_buffer {
+            data32: ptr::null_mut(),
+            data64: ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        })
+        .collect();
+
+    Ok(ClapInstance::from_parts(
+        plugin,
+        host_data,
+        sample_rate,
+        params_ext,
+        state_ext,
+        audio_ports_ext,
+        gui_ext,
+        latency_ext,
+        output_port_count,
+        latency,
+        audio_out_buffers,
+        audio_out_ptrs,
+    ))
 }
 
 impl Drop for ClapBundle {

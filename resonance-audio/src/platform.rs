@@ -303,6 +303,10 @@ pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>
 /// won. PipeWire init failures fall through to cpal so a system
 /// without a running PipeWire daemon still records (just at the
 /// cpal-via-ALSA cap of two channels).
+/// `capture_gate` is an optional per-stream capture enable ORed with
+/// `shared.recording`: the latency ping records through its own stream
+/// while the global recording flag is off (doc #260 finding #3).
+/// Regular recording / monitoring streams pass `None`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_input_stream(
     source_name: Option<&str>,
@@ -313,6 +317,7 @@ pub(crate) fn build_input_stream(
     quantum: usize,
     engine_sample_rate: u32,
     desired_channels: u16,
+    capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(crate::input_handle::InputHandle, u32, u16), String> {
     #[cfg(target_os = "linux")]
     {
@@ -322,7 +327,9 @@ pub(crate) fn build_input_stream(
             &mut rec_producer,
             Arc::clone(&mon_producer),
             engine_sample_rate,
+            quantum as u32,
             desired_channels,
+            capture_gate.clone(),
         ) {
             Ok((handle, sr, ch)) => {
                 return Ok((crate::input_handle::InputHandle::PipeWire(handle), sr, ch));
@@ -332,8 +339,6 @@ pub(crate) fn build_input_stream(
             }
         }
     }
-    let _ = engine_sample_rate; // cpal negotiates its own rate from the device
-
     let (stream, sr, ch) = build_input_stream_cpal(
         source_name,
         shared,
@@ -341,13 +346,102 @@ pub(crate) fn build_input_stream(
         mon_producer,
         buf_frames,
         quantum,
+        engine_sample_rate,
         desired_channels,
+        capture_gate,
     )?;
     Ok((crate::input_handle::InputHandle::Cpal(stream), sr, ch))
 }
 
+/// Convert a `pw_time.delay` (expressed in the time domain of the
+/// graph, `rate = num/denom` seconds per tick — usually `1/graph_rate`)
+/// into whole samples at the engine rate. Negative delays (possible
+/// with user-configured latency offsets) clamp to 0 — the engine treats
+/// I/O latency as non-negative. Pure; unit-tested (doc #260 finding
+/// #13).
+pub fn pw_delay_to_engine_samples(
+    delay: i64,
+    rate_num: u32,
+    rate_denom: u32,
+    engine_rate: u32,
+) -> u64 {
+    if delay <= 0 || rate_denom == 0 {
+        return 0;
+    }
+    ((delay as u128 * rate_num as u128 * engine_rate as u128) / rate_denom as u128) as u64
+}
+
+/// N-channel monitor-path rate converter for the cpal fallback input
+/// (doc #260 finding #21): when the device rate differs from the engine
+/// rate, the monitor ring would otherwise carry device-rate frames that
+/// the engine-rate consumer replays pitch-shifted and glitchy. Wraps
+/// the existing stereo [`StreamingLinearResampler`] (the same one the
+/// recording drain uses) over channel pairs, preserving the interleaved
+/// N-channel layout. The native PipeWire input negotiates the engine
+/// rate in the graph and never needs this.
+///
+/// The recording push is untouched — takes stay at the device rate and
+/// are resampled once at drain time, exactly as before.
+pub struct MonitorResampler {
+    channels: usize,
+    pairs: Vec<crate::decode::StreamingLinearResampler>,
+    pair_in: Vec<f32>,
+    pair_outs: Vec<Vec<f32>>,
+    out: Vec<f32>,
+}
+
+impl MonitorResampler {
+    pub fn new(source_rate: u32, target_rate: u32, channels: usize) -> Self {
+        let channels = channels.max(1);
+        let n_pairs = channels.div_ceil(2);
+        Self {
+            channels,
+            pairs: (0..n_pairs)
+                .map(|_| crate::decode::StreamingLinearResampler::new(source_rate, target_rate))
+                .collect(),
+            pair_in: Vec::new(),
+            pair_outs: (0..n_pairs).map(|_| Vec::new()).collect(),
+            out: Vec::new(),
+        }
+    }
+
+    /// Convert one interleaved input chunk (`channels`-wide frames at
+    /// the source rate) and return the converted chunk at the target
+    /// rate, same channel layout. Every pair advances with the same
+    /// ratio over the same frame count, so all pair outputs are equal
+    /// length and re-interleave losslessly.
+    pub fn process(&mut self, input: &[f32]) -> &[f32] {
+        let frames = input.len() / self.channels;
+        if frames == 0 {
+            return &[];
+        }
+        for (p, resampler) in self.pairs.iter_mut().enumerate() {
+            let cl = (p * 2).min(self.channels - 1);
+            let cr = (p * 2 + 1).min(self.channels - 1);
+            self.pair_in.clear();
+            for f in 0..frames {
+                let base = f * self.channels;
+                self.pair_in.push(input[base + cl]);
+                self.pair_in.push(input[base + cr]);
+            }
+            self.pair_outs[p].clear();
+            resampler.process(&self.pair_in, &mut self.pair_outs[p]);
+        }
+        let out_frames = self.pair_outs[0].len() / 2;
+        self.out.clear();
+        for f in 0..out_frames {
+            for c in 0..self.channels {
+                let pair = &self.pair_outs[c / 2];
+                self.out.push(pair[f * 2 + (c % 2)]);
+            }
+        }
+        &self.out
+    }
+}
+
 /// cpal-based input stream builder. Kept as the fallback for non-
 /// Linux platforms and for Linux setups where PipeWire init fails.
+#[allow(clippy::too_many_arguments)]
 fn build_input_stream_cpal(
     source_name: Option<&str>,
     shared: Arc<SharedState>,
@@ -355,7 +449,9 @@ fn build_input_stream_cpal(
     mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
     buf_frames: usize,
     quantum: usize,
+    engine_sample_rate: u32,
     desired_channels: u16,
+    capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(cpal::Stream, u32, u16), String> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -426,22 +522,46 @@ fn build_input_stream_cpal(
     let make_callback = move |channels: u16,
                               shared: Arc<SharedState>,
                               mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                              mut rec_producer: Option<ringbuf::HeapProd<f32>>| {
+                              mut rec_producer: Option<ringbuf::HeapProd<f32>>,
+                              capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>| {
         let stride = channels.max(1) as usize;
+        // Monitor-path rate conversion (finding #21): the monitor ring's
+        // consumer replays at the engine rate, so a device running at a
+        // different rate must be converted before the push — otherwise
+        // monitoring pitch-shifts and glitches. Recording pushes stay at
+        // the device rate (the drain resamples them, as before).
+        let mut monitor_resampler = (sample_rate != engine_sample_rate)
+            .then(|| MonitorResampler::new(sample_rate, engine_sample_rate, stride));
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            if shared.recording.load(Ordering::Relaxed) {
+            let recording = shared.recording.load(Ordering::Relaxed);
+            let capture = recording
+                || capture_gate.as_ref().is_some_and(|g| g.load(Ordering::Relaxed));
+            if capture {
                 if let Some(ref mut prod) = rec_producer {
-                    let written = prod.push_slice(data);
-                    if written < data.len() {
+                    if recording {
+                        // First push of a session latches the aligned
+                        // take start (doc #260 finding #2).
+                        shared.latch_recording_start();
+                    }
+                    // Whole frames only — a partial push on overflow
+                    // would rotate the take's channels (finding #17).
+                    if crate::mixer::push_recording_frames(prod, data, stride) {
                         shared.recording_overflow.store(true, Ordering::Relaxed);
                     }
                 }
             }
             if shared.monitoring.load(Ordering::Relaxed) {
+                let monitor: &[f32] = match monitor_resampler.as_mut() {
+                    Some(rs) => rs.process(data),
+                    None => data,
+                };
                 if let Some(mut prod) = mon_producer.try_lock() {
-                    let take =
-                        crate::mixer::whole_frame_push_len(data.len(), prod.vacant_len(), stride);
-                    let _ = prod.push_slice(&data[..take]);
+                    let take = crate::mixer::whole_frame_push_len(
+                        monitor.len(),
+                        prod.vacant_len(),
+                        stride,
+                    );
+                    let _ = prod.push_slice(&monitor[..take]);
                 }
             }
         }
@@ -454,7 +574,8 @@ fn build_input_stream_cpal(
     let attempt = |channels: u16,
                    shared: Arc<SharedState>,
                    mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                   rec_producer: Option<ringbuf::HeapProd<f32>>| {
+                   rec_producer: Option<ringbuf::HeapProd<f32>>,
+                   capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>| {
         let mut cfg = base_config.clone();
         cfg.sample_rate = sample_rate;
         cfg.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
@@ -462,7 +583,7 @@ fn build_input_stream_cpal(
         let underrun_limiter = Arc::clone(&underrun_limiter);
         device.build_input_stream(
             &cfg,
-            make_callback(channels, shared, mon_producer, rec_producer),
+            make_callback(channels, shared, mon_producer, rec_producer, capture_gate),
             move |err| match err {
                 cpal::StreamError::BufferUnderrun => {
                     if let Some(report) =
@@ -485,6 +606,7 @@ fn build_input_stream_cpal(
         Arc::clone(&shared),
         Arc::clone(&mon_producer),
         rec_producer.take(),
+        capture_gate.clone(),
     ) {
         Ok(s) => (s, primary_channels),
         Err(primary_err) => {
@@ -496,7 +618,7 @@ fn build_input_stream_cpal(
                 "[input] {} channels rejected ({}); falling back to {} channels",
                 primary_channels, primary_err, default_channels
             );
-            match attempt(default_channels, shared, mon_producer, rec_producer) {
+            match attempt(default_channels, shared, mon_producer, rec_producer, capture_gate) {
                 Ok(s) => (s, default_channels),
                 Err(e) => {
                     return Err(format!(

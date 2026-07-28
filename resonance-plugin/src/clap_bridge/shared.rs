@@ -109,6 +109,11 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     pub(super) host: HostMainThreadHandle<'a>,
     pub(crate) shared: &'a ClapShared<'a>,
     pub(crate) plugin: Option<P>,
+    /// Latency (in samples) captured from the plugin after `initialize()`
+    /// inside `activate`, and refreshed by any direct main-thread query
+    /// while inactive. The CLAP latency extension serves this value while
+    /// the plugin object lives in the audio processor — in particular for
+    /// the host's single post-activation `latency.get()` query.
     pub(crate) last_latency: u32,
     /// Editor factory harvested from the plugin at construction time. `None`
     /// if the plugin has no GUI. Kept alive across activate/deactivate so

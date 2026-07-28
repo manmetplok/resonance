@@ -20,7 +20,13 @@ use crate::types::*;
 
 use super::super::{SharedState, MAX_BUSSES};
 
-pub(super) const BOUNCE_CHUNK: usize = 1024;
+pub const BOUNCE_CHUNK: usize = 1024;
+
+/// CLAP activation minimum block size: plugins are activated with
+/// `activate(…, min_frames = 32, max_frames = 8192)`
+/// (`clap_host::bundle`), so no offline `process()` call may run fewer
+/// frames — see [`chunk_span`].
+pub const MIN_CLAP_FRAMES: usize = 32;
 
 /// How many `try_lock` spins before falling back to sleeping. A spin is
 /// a `std::hint::spin_loop` + immediate retry — cheap and only useful
@@ -150,9 +156,13 @@ pub(super) struct ChunkCtx<'a> {
 }
 
 /// Build a fresh compensation table from the current topology, reading
-/// each plugin's activation-time latency. Runs on the bounce thread —
-/// allocation is fine here.
+/// each plugin's activation-time latency and folding the published
+/// external-instrument round-trip offsets — exactly like the live
+/// refresh, so offline renders place external takes at the same
+/// relative position as live playback (doc #260 finding #4). Runs on
+/// the bounce thread — allocation is fine here.
 pub(super) fn build_latency_comp(
+    shared: &Arc<SharedState>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
@@ -160,14 +170,58 @@ pub(super) fn build_latency_comp(
     let tracks_guard = tracks.read();
     let busses_guard = busses.read();
     let plugins_guard = plugins.read();
-    let chains = crate::latency::chain_latencies(&tracks_guard, &busses_guard, |id| {
+    let latency_of = |id: PluginInstanceId| {
         plugins_guard
             .get(&id)
             .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
             .unwrap_or(0)
+    };
+    let mut chains = crate::latency::chain_latencies(&tracks_guard, latency_of);
+    let offsets = shared.external_offsets.load();
+    crate::latency::add_external_offsets(&mut chains, |id| {
+        offsets.get(&id).copied().unwrap_or(0)
     });
-    let (max, delays) = crate::latency::compensation_delays(&chains);
-    LatencyComp::new(max, &delays)
+    let bus_chains = crate::latency::bus_chain_latencies(&busses_guard, latency_of);
+    let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
+    let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);
+    LatencyComp::new(track_max, &track_delays, bus_max, &bus_delays)
+}
+
+/// Effective master-chain latency for renders that include the master
+/// FX pass (`include_master_fx = true`): those paths must pre-roll and
+/// trim by this on top of [`build_latency_comp`]'s `max_latency()` so
+/// the export starts at t=0 with its full tail (doc #260 finding #8).
+/// 0 while the master FX are bypassed — the chunk render skips the
+/// chain then.
+pub(super) fn master_fx_latency(
+    shared: &Arc<SharedState>,
+    master: &Arc<RwLock<MasterBus>>,
+    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+) -> u64 {
+    let master_guard = master.read();
+    let plugins_guard = plugins.read();
+    crate::latency::master_chain_latency(
+        &master_guard.plugin_ids,
+        shared.master_fx_bypassed.load(Ordering::Relaxed),
+        |id| {
+            plugins_guard
+                .get(&id)
+                .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
+                .unwrap_or(0)
+        },
+    )
+}
+
+/// Split the remaining render range into this iteration's chunk:
+/// `.0` is the frame count to *process* — padded up to
+/// [`MIN_CLAP_FRAMES`] so a short tail chunk still honours the CLAP
+/// activation contract (`activate(…, min_frames=32, …)`) — and `.1` is
+/// the frame count actually *consumed* from the front of the rendered
+/// chunk (the padding frames are rendered and discarded). Always
+/// `emit <= render <= BOUNCE_CHUNK`.
+pub fn chunk_span(remaining: u64) -> (usize, usize) {
+    let emit = (remaining.min(BOUNCE_CHUNK as u64)) as usize;
+    (emit.max(MIN_CLAP_FRAMES), emit)
 }
 
 /// Reset every plugin so the bounce starts from a clean state. Without
@@ -302,9 +356,17 @@ pub(super) fn render_chunk(
     if include_master_fx {
         // A master-gain automation lane ramps across the chunk (start..end
         // sampled at the chunk boundaries); otherwise the static master
-        // volume applies as a constant.
-        let auto_start = crate::mixer::auto_master_volume(ctx.automation, pos);
-        let auto_end = crate::mixer::auto_master_volume(ctx.automation, pos + frames as u64);
+        // volume applies as a constant. Evaluated at the comp-delayed
+        // position — the summed mix at the master pass is max_latency()
+        // behind the raw render position — matching the live mixer
+        // (doc #260 finding #9).
+        let comp_shift = ctx.latency_comp.max_latency();
+        let auto_start =
+            crate::mixer::auto_master_volume(ctx.automation, pos.saturating_sub(comp_shift));
+        let auto_end = crate::mixer::auto_master_volume(
+            ctx.automation,
+            (pos + frames as u64).saturating_sub(comp_shift),
+        );
         if let (Some(g0), Some(g1)) = (auto_start, auto_end) {
             let inv = if frames > 0 { 1.0 / frames as f32 } else { 0.0 };
             for f in 0..frames {

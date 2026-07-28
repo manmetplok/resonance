@@ -18,7 +18,7 @@
 //! `AudioCommand::InputRateNegotiated` will eventually correct them.
 
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -60,6 +60,13 @@ struct UserData {
     shared: Arc<SharedState>,
     rec_producer: Option<ringbuf::HeapProd<f32>>,
     mon_producer: Arc<PlMutex<ringbuf::HeapProd<f32>>>,
+    /// Per-stream capture enable, independent of the global
+    /// `shared.recording` flag. The external-instrument latency ping
+    /// opens its own capture stream while recording is OFF and flips
+    /// this gate around its impulse (doc #260 finding #3); regular
+    /// recording streams pass `None` and keep gating on
+    /// `shared.recording` alone.
+    capture_gate: Option<Arc<AtomicBool>>,
     /// Negotiated channels — written by the param_changed callback,
     /// read by `process` to know how to split incoming samples.
     /// Stored in an `AtomicU16` so the param_changed and process
@@ -89,7 +96,9 @@ pub(crate) fn build(
     rec_producer: &mut Option<ringbuf::HeapProd<f32>>,
     mon_producer: Arc<PlMutex<ringbuf::HeapProd<f32>>>,
     sample_rate: u32,
+    quantum: u32,
     desired_channels: u16,
+    capture_gate: Option<Arc<AtomicBool>>,
 ) -> Result<(PipeWireInputHandle, u32, u16), String> {
     pw::init();
 
@@ -122,7 +131,10 @@ pub(crate) fn build(
         *pw::keys::MEDIA_ROLE => "Production",
         *pw::keys::NODE_NAME => "resonance-input",
         *pw::keys::APP_NAME => "resonance-app",
-        *pw::keys::NODE_LATENCY => format!("1024/{}", sample_rate).as_str(),
+        // Vote the engine quantum — the historical 1024 vote asked the
+        // graph for a *larger* cycle and was only masked by the pinned
+        // force-quantum config (doc #260 finding #14).
+        *pw::keys::NODE_LATENCY => format!("{}/{}", quantum, sample_rate).as_str(),
     };
     if let Some(name) = source_name {
         props.insert(*pw::keys::TARGET_OBJECT, name);
@@ -144,6 +156,7 @@ pub(crate) fn build(
         shared,
         rec_producer: rec_producer.take(),
         mon_producer,
+        capture_gate,
         channels: Arc::clone(&channels_atomic),
         rate: Arc::clone(&rate_atomic),
         notify: Arc::clone(&notify),
@@ -273,6 +286,31 @@ fn on_param_changed(
 /// atomics, and pushes into the corresponding ringbuf — the same
 /// contract `recording::drain_ring_to_buffers` consumes today.
 fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
+    // Publish this stream's capture-side latency (device -> stream, as
+    // reported by the graph) so the engine can answer round-trip
+    // queries (doc #260 finding #13). Cheap struct fill; runs on the RT
+    // thread by design (`pw_stream_get_time_n` is RT-safe).
+    unsafe {
+        let mut time = std::mem::zeroed::<pw::sys::pw_time>();
+        if pw::sys::pw_stream_get_time_n(
+            stream.as_raw_ptr(),
+            &mut time,
+            std::mem::size_of::<pw::sys::pw_time>(),
+        ) == 0
+        {
+            let engine_rate = user_data.rate.load(Ordering::Relaxed);
+            let samples = crate::platform::pw_delay_to_engine_samples(
+                time.delay,
+                time.rate.num,
+                time.rate.denom,
+                engine_rate,
+            );
+            user_data
+                .shared
+                .capture_latency_samples
+                .store(samples, Ordering::Relaxed);
+        }
+    }
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return;
     };
@@ -373,10 +411,22 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
 
 #[inline]
 fn push_to_ringbufs(user_data: &mut UserData, samples: &[f32], frame_stride: usize) {
-    if user_data.shared.recording.load(Ordering::Relaxed) {
+    let recording = user_data.shared.recording.load(Ordering::Relaxed);
+    let capture = recording
+        || user_data
+            .capture_gate
+            .as_ref()
+            .is_some_and(|g| g.load(Ordering::Relaxed));
+    if capture {
         if let Some(prod) = user_data.rec_producer.as_mut() {
-            let pushed = prod.push_slice(samples);
-            if pushed < samples.len() {
+            if recording {
+                // First push of a session latches the aligned take
+                // start (doc #260 finding #2).
+                user_data.shared.latch_recording_start();
+            }
+            // Whole frames only — a partial push on overflow would
+            // rotate the take's channels forever (finding #17).
+            if crate::mixer::push_recording_frames(prod, samples, frame_stride) {
                 user_data
                     .shared
                     .recording_overflow

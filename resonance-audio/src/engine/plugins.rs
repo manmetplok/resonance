@@ -14,9 +14,11 @@ use super::external_instrument::ExternalInstruments;
 use super::thread::{HandlerCtx, HandlerState};
 
 /// True for commands that can change a track's or bus's chain latency
-/// (plugin add/remove, routing, track/bus topology). The engine loop
-/// republishes the plugin-delay-compensation table after these run.
-pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
+/// (plugin add/remove, routing, track/bus topology, freeze / FX-bypass
+/// state). The engine loop republishes the plugin-delay-compensation
+/// table after these run. `pub` (via `__test_support`) so integration
+/// tests can pin the command set.
+pub fn affects_latency(cmd: &AudioCommand) -> bool {
     matches!(
         cmd,
         AudioCommand::AddPlugin { .. }
@@ -39,6 +41,26 @@ pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
             | AudioCommand::SetExternalInstrument { .. }
             | AudioCommand::ClearExternalInstrument { .. }
             | AudioCommand::SetExternalInstrumentLatencyOffset { .. }
+            // Freeze and FX bypass change which plugins actually run:
+            // frozen tracks play a pre-trimmed cache and bypassed chains
+            // are skipped, so their latency must leave the comp table
+            // (see `latency::chain_latencies`).
+            | AudioCommand::SetTrackFrozenSource { .. }
+            | AudioCommand::UnfreezeTrack { .. }
+            // Loading plugin state cycles the instance's activation and
+            // re-reads its latency (doc #260 finding #10) — a preset
+            // that implies a different latency (e.g. a longer IR) must
+            // land in the comp table.
+            | AudioCommand::LoadPluginState { .. }
+            | AudioCommand::SetTrackFxBypass { .. }
+            | AudioCommand::SetBusFxBypass { .. }
+            // Master-chain edits don't change per-track comp (master
+            // delays every path equally) but they feed the published
+            // master-latency figure the reference A/B monitor is
+            // aligned with (doc #260 finding #19).
+            | AudioCommand::AddPluginToMaster { .. }
+            | AudioCommand::RemovePluginFromMaster { .. }
+            | AudioCommand::SetMasterFxBypass { .. }
     )
 }
 
@@ -48,17 +70,35 @@ pub(crate) fn affects_latency(cmd: &AudioCommand) -> bool {
 /// Runs on the engine thread; delay lines are allocated here, never on
 /// the audio callback.
 pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
-    let mut chains = {
+    let (mut chains, bus_chains, master_latency) = {
         let tracks_guard = ctx.tracks.read();
         let busses_guard = ctx.busses.read();
+        let master_guard = ctx.master.read();
         let plugins_guard = ctx.plugins.read();
-        crate::latency::chain_latencies(&tracks_guard, &busses_guard, |id| {
+        let latency_of = |id: crate::types::PluginInstanceId| {
             plugins_guard
                 .get(&id)
                 .map(|m| super::try_lock_with_backoff(m).0.latency_samples() as u64)
                 .unwrap_or(0)
-        })
+        };
+        (
+            crate::latency::chain_latencies(&tracks_guard, latency_of),
+            crate::latency::bus_chain_latencies(&busses_guard, latency_of),
+            crate::latency::master_chain_latency(
+                &master_guard.plugin_ids,
+                ctx.shared
+                    .master_fx_bypassed
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                latency_of,
+            ),
+        )
     };
+    // Master latency isn't compensated per-track (it delays every path
+    // equally) but the reference A/B monitor aligns against it
+    // (doc #260 finding #19).
+    ctx.shared
+        .master_latency_samples
+        .store(master_latency, std::sync::atomic::Ordering::Relaxed);
     // External-instrument tracks add a manual round-trip latency offset on
     // top of their plugin chain so the rest of the mix is delayed to align
     // with the late hardware audio return.
@@ -68,12 +108,90 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
             .map(|c| c.latency_offset_samples)
             .unwrap_or(0)
     });
-    let (max, delays) = crate::latency::compensation_delays(&chains);
-    if ctx.latency_comp.load().delays_match(&delays) {
+    // Publish the offsets snapshot for the offline bounce/export
+    // threads, which build their own comp tables off the engine thread
+    // and must fold the same offsets (doc #260 finding #4). Refreshed
+    // here because every offsets change routes through this function
+    // (affects_latency covers the external-instrument commands and the
+    // ping applies its measurement via refresh too).
+    let offsets: std::collections::HashMap<crate::types::TrackId, i64> = external
+        .iter()
+        .map(|(&id, c)| (id, c.latency_offset_samples))
+        .collect();
+    ctx.shared.external_offsets.store(Arc::new(offsets));
+    // Surface the MAX_COMP_LATENCY clamp: beyond it, compensation
+    // silently stops matching the real chain latency and alignment
+    // degrades. Warn once per engagement (and re-arm when the chains
+    // drop back under the limit) via the engine's normal error surface
+    // (doc #260 finding #20).
+    let clamped = crate::latency::comp_latency_clamped(&chains)
+        || crate::latency::comp_latency_clamped(&bus_chains);
+    let was_engaged = ctx
+        .shared
+        .comp_clamp_engaged
+        .swap(clamped, std::sync::atomic::Ordering::Relaxed);
+    if clamped && !was_engaged {
+        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            "Plugin-delay compensation limit reached: a chain reports more than {} samples \
+             of latency; timing for that path is no longer fully compensated. Consider \
+             bypassing or removing the highest-latency plugin.",
+            crate::limits::MAX_COMP_LATENCY
+        )));
+    }
+    let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
+    let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);
+    if ctx
+        .latency_comp
+        .load()
+        .delays_match(&track_delays, &bus_delays, bus_max)
+    {
         return;
     }
-    ctx.latency_comp
-        .store(Arc::new(crate::latency::LatencyComp::new(max, &delays)));
+    ctx.latency_comp.store(Arc::new(crate::latency::LatencyComp::new(
+        track_max,
+        &track_delays,
+        bus_max,
+        &bus_delays,
+    )));
+}
+
+/// Service plugin-initiated host callbacks (doc #260 finding #10):
+/// `clap_host_latency.changed()` and `clap_host.request_restart()` both
+/// flag the instance's host data; this poll — run once per engine-loop
+/// iteration — consumes the flags and performs the CLAP-sanctioned
+/// deactivate → reactivate cycle, which re-reads the plugin's latency
+/// (it may only change across that boundary, and the bridge serves an
+/// activation-time cache while active — todo #1125). If any instance
+/// cycled, the PDC table is republished so the new latency takes
+/// effect.
+///
+/// Instances whose lock is held by the audio callback are skipped
+/// without consuming their flag; the next iteration (~16 ms) retries.
+pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalInstruments) {
+    let mut any_restarted = false;
+    {
+        let plugins_guard = ctx.plugins.read();
+        for (&instance_id, mutex) in plugins_guard.iter() {
+            let Some(mut inst) = mutex.try_lock() else {
+                continue;
+            };
+            if !inst.0.take_host_restart_request() {
+                continue;
+            }
+            if inst.0.restart() {
+                any_restarted = true;
+            } else {
+                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                    "Plugin instance {} failed to reactivate after a restart/latency-change \
+                     request; it is deactivated and will stay silent.",
+                    instance_id
+                )));
+            }
+        }
+    }
+    if any_restarted {
+        refresh_latency_comp(ctx, external);
+    }
 }
 
 pub(crate) fn handle_add_plugin(

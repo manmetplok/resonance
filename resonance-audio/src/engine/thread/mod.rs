@@ -218,7 +218,10 @@ pub(crate) fn engine_thread(
     automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     live_midi_tx: Sender<LiveMidiEvent>,
-    live_midi_rx: Receiver<LiveMidiEvent>,
+    // Events already picked up (and instrument-delivered) by the audio
+    // callback, forwarded here for recording + MIDI-thru bookkeeping
+    // (doc #260 finding #16).
+    live_midi_fwd_rx: Receiver<LiveMidiEvent>,
     live_control_tx: Sender<LiveControlEvent>,
     live_control_rx: Receiver<LiveControlEvent>,
     clock_tx: Sender<MidiClockEvent>,
@@ -317,11 +320,19 @@ pub(crate) fn engine_thread(
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
         }
 
-        // Drain any hardware MIDI input that's queued up since the
-        // previous iteration. Each event is dispatched into the same
-        // queue_note_on/off path as `AudioCommand::SendNoteOn`, plus
-        // optional record-into-clip and Thru-to-output.
-        for ev in live_midi_rx.try_iter() {
+        // Service plugin-initiated `clap_host_latency.changed()` /
+        // `request_restart()` callbacks: cycle the flagged instances'
+        // activation (the safe point at which latency may change),
+        // re-read their latency, and republish PDC if anything moved
+        // (doc #260 finding #10).
+        plugins::poll_plugin_host_requests(&ctx, &state.external_instruments);
+
+        // Drain hardware MIDI events the audio callback picked up since
+        // the previous iteration. Instrument delivery already happened
+        // on the audio thread (within one quantum — doc #260 finding
+        // #16); this pass only does the non-realtime bookkeeping:
+        // record-into-clip and Thru-to-output.
+        for ev in live_midi_fwd_rx.try_iter() {
             midi::handle_live_midi_event(&ctx, &mut state, ev);
         }
 
@@ -396,6 +407,28 @@ pub(crate) fn engine_thread(
                 new_tm.sync_bpm_at(playhead, ctx.sample_rate);
                 ctx.tempo_map.store(Arc::new(new_tm));
             }
+        }
+
+        // Apply the take start latched by the input callback's first
+        // push (doc #260 finding #2) before anything is drained against
+        // the old estimate. Performer sessions subtract the measured
+        // capture+playback latency so the take lands where the
+        // performer heard the mix; a realtime bounce keeps the raw
+        // latch — its take is aligned by the external round-trip shift
+        // instead (see `bounce_realtime` + `apply_take_shift`), which
+        // already covers the input side.
+        if !state.rec.start_latch_applied
+            && !ctx.shared.recording_start_pending.load(Ordering::Acquire)
+        {
+            let latched = ctx.shared.recording_start_latch.load(Ordering::Acquire);
+            let io = if state.pending_bounce.is_some() {
+                0
+            } else {
+                ctx.shared.capture_latency_samples.load(Ordering::Relaxed)
+                    + ctx.shared.playback_latency_samples.load(Ordering::Relaxed)
+            };
+            state.rec.start_sample = latched.saturating_sub(io);
+            state.rec.start_latch_applied = true;
         }
 
         // Drain recording ring buffer into per-track buffers

@@ -936,6 +936,13 @@ pub enum AudioCommand {
     /// active reference) and reply with `AudioEvent::ABMeterSnapshot`.
     /// Driven by the GUI's per-frame meter update.
     PollABMeters,
+    /// Ask the engine for the current I/O latency figures (graph-
+    /// reported capture / playback delay of the native PipeWire streams,
+    /// in samples at the engine rate) and reply with
+    /// `AudioEvent::IoLatencyReport` (doc #260 finding #13). Capture is
+    /// 0 while no input stream is open; both are 0 on the cpal fallback,
+    /// which cannot report latency.
+    QueryIoLatency,
     /// **Engine-internal** — not sent by the GUI. Posted by the reference
     /// analysis worker (via the engine's retry-command channel) once a
     /// freshly-loaded reference has been decoded and loudness-measured,

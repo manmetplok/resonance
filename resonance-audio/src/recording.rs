@@ -77,11 +77,46 @@ pub struct RecordingState {
     /// opens and recording begins. `restore_metronome` holds the
     /// metronome's pre-count-in state so it can be put back afterwards.
     pub precount: Option<PrecountState>,
+    /// Timeline shift applied to the takes of this session when they
+    /// are finalized, in samples (positive = content arrived that late
+    /// and the clip is placed that much earlier). Set by the realtime
+    /// bounce to the source external instrument's round-trip offset so
+    /// the bounced take lands where the live return sounded (doc #260
+    /// finding #4); 0 for normal recording.
+    pub take_shift_samples: i64,
+    /// Whether this session's latched (I/O-aligned) start position has
+    /// been applied to `start_sample` by the engine loop (doc #260
+    /// finding #2). Reset when a session opens; applied once the input
+    /// callback clears `SharedState::recording_start_pending`.
+    pub start_latch_applied: bool,
     /// Reusable per-track deinterleave scratch. Lives here rather than
     /// being a stack local in `drain_ring_to_buffers` so the engine
     /// thread doesn't allocate a fresh `Vec` 60× per second while
     /// recording.
     deint_scratch: Vec<f32>,
+}
+
+/// Shift a finalized take `shift` samples earlier on the timeline: the
+/// captured content arrived `shift` samples after the events that
+/// caused it (an external instrument's round trip), so placing the clip
+/// earlier by the same amount re-aligns content with the timeline. A
+/// clip that would start before 0 is pinned at 0 and the overflow is
+/// converted into leading trim so the audible alignment is preserved.
+/// Non-positive shifts are no-ops. Pure; unit-tested.
+pub fn apply_take_shift(
+    start_sample: SamplePos,
+    trim_start_frames: SamplePos,
+    shift: i64,
+) -> (SamplePos, SamplePos) {
+    if shift <= 0 {
+        return (start_sample, trim_start_frames);
+    }
+    let shift = shift as SamplePos;
+    if start_sample >= shift {
+        (start_sample - shift, trim_start_frames)
+    } else {
+        (0, trim_start_frames + (shift - start_sample))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -104,6 +139,8 @@ impl RecordingState {
             loop_out: 0,
             loop_record: false,
             precount: None,
+            take_shift_samples: 0,
+            start_latch_applied: true,
             deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
         }
     }
@@ -294,6 +331,12 @@ impl RecordingState {
                 } else {
                     (self.start_sample, 0, 0)
                 };
+            // Realtime-bounce external-instrument compensation: the
+            // captured return is uniformly late by the source's round
+            // trip, so the take is placed earlier by the same amount
+            // (doc #260 finding #4).
+            let (clip_start_sample, trim_start_frames) =
+                apply_take_shift(clip_start_sample, trim_start_frames, self.take_shift_samples);
 
             // Memory-map the finalized WAV file.
             let source = match ClipSource::open_wav(&track_buf.path) {

@@ -41,7 +41,8 @@ use crate::types::*;
 
 use super::super::SharedState;
 use super::render::{
-    build_latency_comp, render_chunk, reset_plugins, ChunkCtx, ChunkScratch, BOUNCE_CHUNK,
+    build_latency_comp, chunk_span, master_fx_latency, render_chunk, reset_plugins, ChunkCtx,
+    ChunkScratch,
 };
 
 // `StemSource` and `StemBitDepth` are pure protocol descriptors and live
@@ -224,8 +225,17 @@ pub fn render_stem(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(tracks, busses, plugins);
-    let comp_latency = latency_comp.max_latency();
+    let latency_comp = build_latency_comp(shared, tracks, busses, plugins);
+    // Stems that include the master FX chain (the master stem) are
+    // shifted by its latency on top of the track/bus comp; pre-rolling
+    // and trimming both keeps every stem mutually sample-aligned and
+    // preserves the master stem's tail (doc #260 finding #8).
+    let master_latency = if filter.include_master_fx {
+        master_fx_latency(shared, master, plugins)
+    } else {
+        0
+    };
+    let comp_latency = latency_comp.max_latency() + master_latency;
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
 
@@ -257,12 +267,14 @@ pub fn render_stem(
     let mut pos = render_start;
     let mut written: usize = 0;
     while pos < render_stop {
-        let frames = ((render_stop - pos) as usize).min(BOUNCE_CHUNK);
+        // Tail chunks are padded up to the CLAP activation minimum and
+        // only `emit` frames are consumed — see `chunk_span`.
+        let (render_frames, emit) = chunk_span(render_stop - pos);
         render_chunk(
             &ctx,
             &mut scratch,
             pos,
-            frames,
+            render_frames,
             &in_filter,
             filter.include_master_fx,
             respect_mute_solo,
@@ -270,13 +282,13 @@ pub fn render_stem(
         );
         // Drop the leading plugin-latency frames so the stem aligns with
         // the timeline (and with every other stem over this range).
-        let drop_now = skip_frames.min(frames);
+        let drop_now = skip_frames.min(emit);
         skip_frames -= drop_now;
-        let copy = (frames - drop_now).min(total_frames - written);
+        let copy = (emit - drop_now).min(total_frames - written);
         output[written * 2..(written + copy) * 2]
             .copy_from_slice(&scratch.mix_buf[drop_now * 2..(drop_now + copy) * 2]);
         written += copy;
-        pos += frames as u64;
+        pos += emit as u64;
     }
 
     Ok(output)

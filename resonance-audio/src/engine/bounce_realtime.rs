@@ -212,6 +212,19 @@ pub(crate) fn handle_bounce_track_realtime(
     // Record press.
     super::transport::begin_recording_stream(ctx, state, render_start);
 
+    // The captured return arrives one hardware round trip after the
+    // MIDI that caused it; shift the finalized take earlier by the
+    // source's configured/measured offset so the bounced clip lands
+    // where the live-monitored return sounded (doc #260 finding #4 —
+    // consistent with the live model in `latency::add_external_offsets`,
+    // which treats the return as that much more latent). Zero when the
+    // source has no offset configured.
+    state.rec.take_shift_samples = state
+        .external_instruments
+        .get(&source_track_id)
+        .map(|c| c.latency_offset_samples.max(0))
+        .unwrap_or(0);
+
     // If begin_recording_stream failed (input device unavailable, etc.)
     // it emits AudioEvent::Error and leaves `state.rec.input_stream`
     // unset. Detect that and unwind so we don't leave the user's mix in

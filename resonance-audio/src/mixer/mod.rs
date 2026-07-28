@@ -42,6 +42,7 @@ use std::sync::atomic::Ordering;
 
 use crate::engine::reference::ABMeters;
 use crate::engine::{AutomationSnapshot, SharedState};
+use crate::midi_hardware::LiveMidiEvent;
 use crate::types::*;
 
 pub use audition::mix_audition_overlay;
@@ -64,6 +65,34 @@ pub fn render_aux_for_test(
     frames: usize,
     sample_rate: u32,
 ) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
+    render_aux_with_comp_for_test(
+        tracks,
+        busses,
+        clips,
+        aux_sends,
+        frames,
+        sample_rate,
+        crate::latency::LatencyComp::empty(),
+        crate::engine::AutomationSnapshot::default(),
+    )
+}
+
+/// [`render_aux_for_test`] with an explicit compensation table and
+/// automation snapshot, so latency tests can drive the bus-stage / dry
+/// delay lines and the comp-delayed automation evaluation through the
+/// real render path with synthetic delays (no live CLAP plugin needed).
+#[doc(hidden)]
+#[allow(clippy::type_complexity)]
+pub fn render_aux_with_comp_for_test(
+    tracks: Vec<Track>,
+    busses: Vec<Bus>,
+    clips: Vec<AudioClip>,
+    aux_sends: Vec<AuxSend>,
+    frames: usize,
+    sample_rate: u32,
+    latency: crate::latency::LatencyComp,
+    automation: crate::engine::AutomationSnapshot,
+) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
     use indexmap::IndexMap;
 
     let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
@@ -74,7 +103,6 @@ pub fn render_aux_for_test(
     > = IndexMap::new();
     let midi_clips: Vec<MidiClip> = Vec::new();
     let tempo_map = TempoMap::default();
-    let latency = crate::latency::LatencyComp::empty();
     let active_busses = busses_guard.len();
 
     let mut data = vec![0.0f32; frames * 2];
@@ -92,7 +120,6 @@ pub fn render_aux_for_test(
         respect_mute_solo: false,
         freeze_raw: false,
     };
-    let automation = crate::engine::AutomationSnapshot::default();
 
     render_block(
         &mut data,
@@ -151,6 +178,23 @@ pub fn whole_frame_push_len(len: usize, vacant: usize, frame_stride: usize) -> u
     len.min(vacant) / frame_stride * frame_stride
 }
 
+/// Push interleaved capture samples into the recording ring in whole
+/// frames only — like the monitor path — so an overflow can never leave
+/// a partial frame behind and permanently rotate the take's channel
+/// alignment (doc #260 finding #17). Returns true when any samples were
+/// dropped so the caller can raise the overflow flag.
+#[inline]
+pub fn push_recording_frames(
+    prod: &mut ringbuf::HeapProd<f32>,
+    samples: &[f32],
+    frame_stride: usize,
+) -> bool {
+    use ringbuf::traits::{Observer, Producer};
+    let take = whole_frame_push_len(samples.len(), prod.vacant_len(), frame_stride.max(1));
+    let _ = prod.push_slice(&samples[..take]);
+    take < samples.len()
+}
+
 /// Whole-frame catch-up skip for the monitor ring: when `available`
 /// exceeds `needed` plus one quantum of jitter margin, skip down to
 /// that margin (never to exactly `needed`, which would re-overflow on
@@ -170,10 +214,156 @@ pub fn monitor_catchup_skip(
     }
 }
 
+/// Adaptive monitor-ring backlog drain for the native PipeWire backend
+/// (doc #260 finding #12). With input and output streams in the same
+/// graph on the same clock, pushes and reads are strictly 1:1 — the
+/// only backlog the ring *needs* is the intra-cycle ordering bound
+/// (`monitor_catchup_skip`'s one-quantum margin covers a read that
+/// runs before that cycle's push). A startup burst can still leave one
+/// sticky extra quantum that the margin skip never reclaims. This
+/// tracker watches for backlog that stays above `needed` for
+/// [`MONITOR_DRAIN_STREAK`] consecutive callbacks — only a stable
+/// scheduling order produces that — and then drains the excess down to
+/// `needed`, converging the ring to its true minimum (0 or 1 cycle
+/// depending on ordering). Any low cycle resets the streak, so jittery
+/// ordering keeps the full margin. Inactive on the cpal fallback,
+/// whose independent clock genuinely needs the standing margin.
+pub struct MonitorDrain {
+    native: bool,
+    high_streak: u32,
+}
+
+/// Consecutive high-backlog callbacks before the excess is drained:
+/// ~43 ms at 48 kHz / q128 — long enough to prove a stable scheduling
+/// order, short enough to reclaim the latency promptly after startup.
+pub const MONITOR_DRAIN_STREAK: u32 = 16;
+
+impl MonitorDrain {
+    pub fn new(native: bool) -> Self {
+        Self {
+            native,
+            high_streak: 0,
+        }
+    }
+
+    /// Whole-frame sample count to drain beyond the margin skip, given
+    /// the ring occupancy right before this callback's read. Non-zero
+    /// only on the native backend after a full high streak.
+    pub fn excess_drain(&mut self, available: usize, needed: usize, frame_stride: usize) -> usize {
+        if !self.native {
+            return 0;
+        }
+        if available > needed {
+            self.high_streak += 1;
+        } else {
+            self.high_streak = 0;
+            return 0;
+        }
+        if self.high_streak < MONITOR_DRAIN_STREAK {
+            return 0;
+        }
+        self.high_streak = 0;
+        (available - needed) / frame_stride.max(1) * frame_stride.max(1)
+    }
+}
+
 /// Whole-frame read length for the monitor ring.
 #[inline]
 pub fn monitor_read_len(needed: usize, occupied: usize, frame_stride: usize) -> usize {
     needed.min(occupied / frame_stride * frame_stride)
+}
+
+/// The instrument a live note on `track_id` plays: the first plugin of
+/// a MIDI-accepting track. Mirrors the engine thread's
+/// `handle_send_note_on` resolution; `None` for audio tracks or an
+/// empty chain (the event is still forwarded for MIDI-thru/recording).
+pub fn live_instrument_for(
+    tracks: &indexmap::IndexMap<TrackId, Track>,
+    track_id: TrackId,
+) -> Option<PluginInstanceId> {
+    let track = tracks.get(&track_id)?;
+    if !track.track_type.accepts_midi() {
+        return None;
+    }
+    track.plugins().first().copied()
+}
+
+/// Drain live hardware-MIDI events on the audio thread (doc #260
+/// finding #16): queue each note straight into its instrument with a
+/// real intra-block sample offset — so it renders in the *next* audio
+/// block (~1 quantum) instead of waiting for the ~16 ms engine-thread
+/// cadence that used to dominate live latency (and clamped every
+/// offset to 0 at small quanta) — then forward the event to the engine
+/// thread for recording + MIDI-thru bookkeeping.
+///
+/// Lock discipline: when the tracks/plugins read locks are contended
+/// (a UI edit in flight) the events simply stay in the channel for the
+/// next callback ~1 quantum later — never dropped, never delivered
+/// twice, and plugin/bookkeeping ordering never splits across threads.
+/// A contended *instrument mutex* parks the note in the mixer's
+/// [`MidiStash`], exactly like timeline MIDI.
+#[allow(clippy::too_many_arguments)]
+fn pickup_live_midi(
+    live_midi_rx: &crossbeam_channel::Receiver<LiveMidiEvent>,
+    live_midi_fwd: &crossbeam_channel::Sender<LiveMidiEvent>,
+    tracks: &parking_lot::RwLock<indexmap::IndexMap<TrackId, Track>>,
+    plugins: &parking_lot::RwLock<
+        indexmap::IndexMap<PluginInstanceId, parking_lot::Mutex<crate::clap_host::SyncClapInstance>>,
+    >,
+    midi_stash: &mut MidiStash,
+    sample_rate: u32,
+    frames: usize,
+) {
+    if live_midi_rx.is_empty() {
+        return;
+    }
+    let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read()) else {
+        // Contended: leave the events queued; the next callback (one
+        // quantum away) picks them up — still far inside the old
+        // engine-cadence latency budget.
+        return;
+    };
+    let now = std::time::Instant::now();
+    for ev in live_midi_rx.try_iter() {
+        let (track_id, is_note_on, note, velocity, arrival) = match &ev {
+            LiveMidiEvent::InboundNoteOn {
+                track_id,
+                note,
+                velocity,
+                arrival,
+            } => (*track_id, true, *note, *velocity, *arrival),
+            LiveMidiEvent::InboundNoteOff {
+                track_id,
+                note,
+                arrival,
+            } => (*track_id, false, *note, 0.0, *arrival),
+        };
+        if let Some(inst_id) = live_instrument_for(&tracks_guard, track_id) {
+            if let Some(mutex) = plugins_guard.get(&inst_id) {
+                let offset = crate::engine::midi::live_arrival_sample_offset(
+                    arrival,
+                    now,
+                    sample_rate,
+                    frames,
+                );
+                crate::engine::midi::deliver_or_stash(
+                    midi_stash,
+                    inst_id,
+                    mutex,
+                    PendingNoteEvent {
+                        is_note_on,
+                        note,
+                        velocity,
+                        sample_offset: offset,
+                    },
+                );
+            }
+        }
+        // Bookkeeping (record-into-clip, MIDI thru) stays on the engine
+        // thread; a full forward channel just drops the bookkeeping,
+        // never the audible note.
+        let _ = live_midi_fwd.try_send(ev);
+    }
 }
 
 /// Snapshot of the tempo map taken once per audio buffer. Held while
@@ -219,6 +409,9 @@ pub(crate) fn mix_audio(
     midi_stash: &mut MidiStash,
     monitor_cons: &mut ringbuf::HeapCons<f32>,
     monitor_temp: &mut [f32],
+    monitor_drain: &mut MonitorDrain,
+    live_midi_rx: &crossbeam_channel::Receiver<LiveMidiEvent>,
+    live_midi_fwd: &crossbeam_channel::Sender<LiveMidiEvent>,
     buf_frames: usize,
     quantum: usize,
     // A/B metering taps: the mix tap is fed the processed-mix output at the
@@ -228,6 +421,20 @@ pub(crate) fn mix_audio(
     ab_meters: &mut ABMeters,
 ) {
     resonance_common::flush_denormals();
+
+    // Live hardware-MIDI pickup runs first — before any early-exit
+    // branch (reference monitor, count-in, stopped) — so a live note
+    // reaches its instrument within one quantum no matter which branch
+    // renders this block (doc #260 finding #16).
+    pickup_live_midi(
+        live_midi_rx,
+        live_midi_fwd,
+        tracks,
+        plugins,
+        midi_stash,
+        sample_rate,
+        data.len() / channels.max(1),
+    );
 
     // Zero the output buffer
     data.fill(0.0);
@@ -257,11 +464,19 @@ pub(crate) fn mix_audio(
         && !shared.count_in_active.load(Ordering::Relaxed)
     {
         let playhead = shared.playhead.load(Ordering::Relaxed);
+        // Latency-match the reference against the mix (doc #260 finding
+        // #19): the processed mix at this output position is the
+        // timeline of `max comp latency + master-chain latency` ago, so
+        // in loop-to-mix mode the reference reads from that delayed
+        // position — toggling A/B then produces no timing jump. Free-run
+        // mode ignores the playhead entirely.
+        let ab_delay = latency_comp.load().max_latency()
+            + shared.master_latency_samples.load(Ordering::Relaxed);
         if shared.reference.render(
             &mut data[..output_frames * channels],
             channels,
             output_frames,
-            playhead,
+            playhead.saturating_sub(ab_delay),
         ) {
             // Meter the reference exactly as monitored — post loudness-match
             // / trim gain — so the panel's Delta against the mix is honest.
@@ -318,6 +533,13 @@ pub(crate) fn mix_audio(
     let catchup = monitor_catchup_skip(available, needed, quantum, frame_stride);
     if catchup > 0 {
         monitor_cons.skip(catchup);
+    }
+    // Native backend: drain the sticky post-startup quantum once the
+    // backlog has been stably above `needed` (doc #260 finding #12) —
+    // the margin skip above still bounds transients on every path.
+    let extra = monitor_drain.excess_drain(monitor_cons.occupied_len(), needed, frame_stride);
+    if extra > 0 {
+        monitor_cons.skip(extra);
     }
     let to_read = monitor_read_len(needed, monitor_cons.occupied_len(), frame_stride);
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
@@ -638,8 +860,13 @@ pub(crate) fn mix_audio(
     // Apply master volume, hard clip, and compute master peak levels.
     // A master-gain automation lane (evaluated at the buffer's end frame)
     // overrides the static fader; the pass ramps from the previous
-    // block's value so the sweep stays click-free.
-    let auto_master = auto_master_volume(auto_ref, playhead + output_frames as u64);
+    // block's value so the sweep stays click-free. Evaluated at the
+    // comp-delayed position: the mix reaching master is max_latency()
+    // behind the raw playhead, so a drawn master move lands on the
+    // audio it was drawn against (doc #260 finding #9).
+    let master_eval =
+        (playhead + output_frames as u64).saturating_sub(comp_ref.max_latency());
+    let auto_master = auto_master_volume(auto_ref, master_eval);
     apply_master_volume_and_peaks(data, channels, shared, auto_master);
 
     // Meter the processed mix (post master FX + volume) for the A/B panel.

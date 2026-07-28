@@ -766,6 +766,22 @@ pub(crate) fn render_block(
     let eval_start = playhead;
     let eval_end = playhead + frames as u64;
 
+    // Post-PDC parameters (fader / pan / mute, applied at sum time
+    // after the delay lines) act on audio whose timeline position is
+    // one comp stage older than the raw playhead: track/sub gains meet
+    // their audio `track_stage` late, bus gains a further `bus_stage`
+    // late. Evaluating their automation at the comp-delayed position
+    // makes a drawn move land on the audio it was drawn against
+    // (doc #260 finding #9). Pre-chain parameters (plugin params, MIDI)
+    // keep the raw positions. Zero-latency projects shift by 0 and stay
+    // bit-identical.
+    let track_gain_shift = latency_comp.track_stage();
+    let gain_eval_start = eval_start.saturating_sub(track_gain_shift);
+    let gain_eval_end = eval_end.saturating_sub(track_gain_shift);
+    let bus_gain_shift = latency_comp.max_latency();
+    let bus_eval_start = eval_start.saturating_sub(bus_gain_shift);
+    let bus_eval_end = eval_end.saturating_sub(bus_gain_shift);
+
     // Zero every active bus summing buffer at the start of the block so
     // tracks can accumulate into them.
     for (buf_l, buf_r) in bus_bufs.iter_mut().take(active_busses) {
@@ -786,13 +802,13 @@ pub(crate) fn render_block(
             AutomationTarget::TrackPan(track.id),
             track.volume(),
             track.pan(),
-            eval_start,
-            eval_end,
+            gain_eval_start,
+            gain_eval_end,
         );
         let auto_mute = auto_muted(
             automation,
             AutomationTarget::TrackMute(track.id),
-            eval_start,
+            gain_eval_start,
         );
         let Some(TrackDisposition {
             gain_l,
@@ -1086,13 +1102,13 @@ pub(crate) fn render_block(
                     AutomationTarget::TrackPan(sub_track.id),
                     sub_track.volume(),
                     sub_track.pan(),
-                    eval_start,
-                    eval_end,
+                    gain_eval_start,
+                    gain_eval_end,
                 );
                 let sub_auto_mute = auto_muted(
                     automation,
                     AutomationTarget::TrackMute(sub_track.id),
-                    eval_start,
+                    gain_eval_start,
                 );
                 let Some((sub_gain_l, sub_gain_r)) = strategy.sub_track_disposition(
                     sub_track,
@@ -1170,6 +1186,14 @@ pub(crate) fn render_block(
         }
     }
 
+    // Bus-stage equalization for master-direct signals: everything the
+    // track pass summed straight into the output (`data` holds exactly
+    // those contributions here — the bus pass below hasn't run yet) is
+    // delayed by the shared dry line so it arrives together with
+    // signals that traverse a bus chain (see `crate::latency`). No-op
+    // when no bus carries latency.
+    latency_comp.apply_dry(data, channels, frames, playhead);
+
     // Per-bus processing: plugin chain, volume/pan, peaks, sum to master.
     for (bus_idx, bus) in busses_guard.values().enumerate().take(active_busses) {
         let bus_auto_gain = auto_gain_ramp(
@@ -1178,11 +1202,11 @@ pub(crate) fn render_block(
             AutomationTarget::BusPan(bus.id),
             bus.volume(),
             bus.pan(),
-            eval_start,
-            eval_end,
+            bus_eval_start,
+            bus_eval_end,
         );
         let bus_auto_mute =
-            auto_muted(automation, AutomationTarget::BusMute(bus.id), eval_start);
+            auto_muted(automation, AutomationTarget::BusMute(bus.id), bus_eval_start);
         let Some((bus_gain_l, bus_gain_r)) =
             strategy.bus_disposition(bus, bus_auto_gain, bus_auto_mute)
         else {
@@ -1203,6 +1227,14 @@ pub(crate) fn render_block(
                 }
             }
         }
+
+        // Bus-stage equalization: pad this bus's chain up to the
+        // longest bus chain, so every path through *any* bus (main
+        // output or aux send) reaches master with the same bus-stage
+        // latency (see `crate::latency`). Runs before peaks / fader /
+        // send taps; every active bus is processed each block, so
+        // delayed tails keep flushing.
+        latency_comp.apply_bus(bus.id, &mut bus_buf_l[..frames], &mut bus_buf_r[..frames], playhead);
 
         // Compute post-fader peaks (live only).
         if strategy.is_live() {

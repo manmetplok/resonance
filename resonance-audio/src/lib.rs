@@ -15,6 +15,7 @@ mod input_handle;
 pub(crate) mod latency;
 #[cfg(target_os = "linux")]
 mod input_pipewire;
+mod output_pipewire;
 mod limits;
 pub(crate) mod midi_clock;
 mod midi_hardware;
@@ -47,21 +48,28 @@ pub use types::*;
 /// without forcing the parent module public.
 #[doc(hidden)]
 pub mod __test_support {
-    pub use crate::clap_host::{ClapBundle, SyncClapInstance};
+    pub use crate::clap_host::{ClapBundle, ClapInstance, SyncClapInstance};
+    /// Build a `ClapInstance` around a hand-rolled raw `clap_plugin` —
+    /// see `tests/clap_latency_tracking.rs` (doc #260 finding #10).
+    pub use crate::clap_host::__instance_from_raw_for_test;
     pub use crate::engine::{
-        encode_buffer_for_test, freeze_terminal_event, midi_render_range,
+        chunk_span, encode_buffer_for_test, freeze_terminal_event, midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
-        try_lock_with_backoff, AutomationSnapshot, ResolvedParamLane, FREEZE_CANCELLED_MSG,
-        SharedState,
+        try_lock_with_backoff, AutomationSnapshot, ResolvedParamLane, BOUNCE_CHUNK,
+        FREEZE_CANCELLED_MSG, MIN_CLAP_FRAMES, SharedState,
     };
     pub use crate::engine::{
         export_stems, render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter,
     };
     pub use crate::types::{StemBitDepth, StemSource, StemTarget};
+    pub use crate::engine::affects_latency;
     pub use crate::latency::{
-        add_external_offsets, chain_latencies, compensation_delays, LatencyComp,
+        add_external_offsets, bus_chain_latencies, chain_latencies, comp_latency_clamped,
+        compensation_delays, master_chain_latency, LatencyComp,
     };
     pub use crate::limits::MAX_COMP_LATENCY;
+    pub use crate::platform::{pw_delay_to_engine_samples, MonitorResampler};
+    pub use crate::recording::apply_take_shift;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
     pub use crate::midi_hardware::{
@@ -70,8 +78,10 @@ pub mod __test_support {
     };
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
-        monitor_catchup_skip, monitor_read_len, ramped_gain, recorded_monitor_gate,
-        render_aux_for_test, sum_to_output, sum_to_stereo, transport_pos_beats,
+        live_instrument_for, monitor_catchup_skip, monitor_read_len, ramped_gain,
+        recorded_monitor_gate, MonitorDrain, MONITOR_DRAIN_STREAK,
+        push_recording_frames, render_aux_for_test, render_aux_with_comp_for_test, sum_to_output,
+        sum_to_stereo, transport_pos_beats,
         whole_frame_push_len,
     };
     pub use crate::stream_errors::{
@@ -206,7 +216,8 @@ pub use engine::{
 /// opening a real audio device or MIDI port.
 #[doc(hidden)]
 pub use engine::{
-    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms, OnsetOutcome,
+    detect_impulse_onset, estimate_noise_floor, onset_to_engine_samples, onset_to_ms,
+    ping_deadline_reached, OnsetOutcome,
 };
 /// Exposed for `tests/external_instrument_handlers.rs` so it can construct an
 /// empty output registry and exercise the patch-send offline branch without
