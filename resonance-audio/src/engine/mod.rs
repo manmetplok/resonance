@@ -487,7 +487,7 @@ impl AudioEngine {
         // PipeWire attempt, then the cpal fallback) — each call
         // allocates a fresh scratch set and the losing attempt's set is
         // simply dropped with its backend.
-        let make_mixer = || -> (crate::output_pipewire::MixFn, ringbuf::HeapProd<f32>) {
+        let make_mixer = |native_backend: bool| -> (crate::output_pipewire::MixFn, ringbuf::HeapProd<f32>) {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
             let tracks_audio = Arc::clone(&tracks_audio);
@@ -543,6 +543,10 @@ impl AudioEngine {
             // feed path never allocates.
             let mut ab_meters = reference::ABMeters::new(audio_sample_rate as f32);
             ab_meters.reserve(audio_buf_frames);
+            // Native backend: the monitor ring may adaptively drain its
+            // sticky startup backlog (same graph clock); the cpal
+            // fallback keeps the standing margin (doc #260 finding #12).
+            let mut monitor_drain = mixer::MonitorDrain::new(native_backend);
 
             // Pre-fault every page of the audio-thread scratch so the cpal
             // callback isn't the first writer. `vec![0.0f32; N]` and
@@ -591,6 +595,7 @@ impl AudioEngine {
                         &mut midi_stash,
                         &mut monitor_cons,
                         &mut monitor_temp,
+                        &mut monitor_drain,
                         audio_buf_frames,
                         audio_quantum,
                         &mut ab_meters,
@@ -604,7 +609,7 @@ impl AudioEngine {
         // RESONANCE_FORCE_CPAL_OUTPUT escape hatch); its ALSA ring adds
         // 2+ periods of extra latency over the native stream.
         let build_cpal = |config: &cpal::StreamConfig| {
-            let (mut mix, prod) = make_mixer();
+            let (mut mix, prod) = make_mixer(false);
             let underrun_limiter = Arc::clone(&underrun_limiter);
             let result = device.build_output_stream(
                 config,
@@ -657,7 +662,7 @@ impl AudioEngine {
             let (s, p, fixed) = build_cpal_with_fallback()?;
             (Some(s), p, fixed)
         } else {
-            let (mix, prod) = make_mixer();
+            let (mix, prod) = make_mixer(true);
             match crate::output_pipewire::build(
                 None,
                 Arc::clone(&shared),
