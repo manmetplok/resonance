@@ -145,6 +145,14 @@ pub fn bus_chain_latencies(
         .collect()
 }
 
+/// True when any chain exceeds [`MAX_COMP_LATENCY`] — i.e. the clamp in
+/// [`compensation_delays`] is actually engaging and alignment for that
+/// chain is silently degraded. The engine surfaces a warning when this
+/// flips on (doc #260 finding #20). Pure; unit-tested.
+pub fn comp_latency_clamped(chains: &[(u64, u64)]) -> bool {
+    chains.iter().any(|&(_, l)| l > MAX_COMP_LATENCY)
+}
+
 /// Effective master-chain latency: the sum of the master plugins'
 /// reported latencies, 0 while the master FX are bypassed (the render
 /// paths skip the whole chain). Live playback deliberately leaves this
@@ -338,6 +346,15 @@ impl LatencyComp {
     /// up between the track stage and master.
     pub fn bus_stage(&self) -> u64 {
         self.bus_stage
+    }
+
+    /// The track-stage latency (`max_track_chain`): how late — relative
+    /// to its timeline position — a track's audio leaves the per-track
+    /// delay lines. Post-PDC parameters (fader/pan/mute automation)
+    /// must be evaluated this many samples behind the raw playhead to
+    /// act on the audio they were drawn against (doc #260 finding #9).
+    pub fn track_stage(&self) -> u64 {
+        self.max_latency - self.bus_stage
     }
 
     pub fn is_empty(&self) -> bool {

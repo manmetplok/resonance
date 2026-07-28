@@ -14,7 +14,8 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use resonance_audio::__test_support::{
     add_external_offsets, affects_latency, bus_chain_latencies, chain_latencies,
-    compensation_delays, render_aux_with_comp_for_test, LatencyComp, MAX_COMP_LATENCY,
+    compensation_delays, render_aux_with_comp_for_test, AutomationSnapshot, LatencyComp,
+    MAX_COMP_LATENCY,
 };
 use resonance_audio::types::{
     AudioCommand, AudioClip, AuxSend, Bus, BusId, ClipSource, FadeCurve, FrozenSource, SendId,
@@ -448,6 +449,7 @@ fn render_block_delays_master_direct_signal_by_bus_stage() {
         FRAMES,
         48_000,
         comp,
+        AutomationSnapshot::default(),
     );
     assert_eq!(nonzero_frames(&data), vec![5 + 4]);
 }
@@ -479,6 +481,7 @@ fn render_block_aligns_wet_send_with_dry_master_path() {
         FRAMES,
         48_000,
         comp,
+        AutomationSnapshot::default(),
     );
     // One single frame carries all the energy: dry + wet, together.
     assert_eq!(

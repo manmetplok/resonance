@@ -72,11 +72,13 @@ pub fn render_aux_for_test(
         frames,
         sample_rate,
         crate::latency::LatencyComp::empty(),
+        crate::engine::AutomationSnapshot::default(),
     )
 }
 
-/// [`render_aux_for_test`] with an explicit compensation table, so
-/// latency tests can drive the bus-stage / dry delay lines through the
+/// [`render_aux_for_test`] with an explicit compensation table and
+/// automation snapshot, so latency tests can drive the bus-stage / dry
+/// delay lines and the comp-delayed automation evaluation through the
 /// real render path with synthetic delays (no live CLAP plugin needed).
 #[doc(hidden)]
 #[allow(clippy::type_complexity)]
@@ -88,6 +90,7 @@ pub fn render_aux_with_comp_for_test(
     frames: usize,
     sample_rate: u32,
     latency: crate::latency::LatencyComp,
+    automation: crate::engine::AutomationSnapshot,
 ) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
     use indexmap::IndexMap;
 
@@ -116,7 +119,6 @@ pub fn render_aux_with_comp_for_test(
         respect_mute_solo: false,
         freeze_raw: false,
     };
-    let automation = crate::engine::AutomationSnapshot::default();
 
     render_block(
         &mut data,
@@ -679,8 +681,13 @@ pub(crate) fn mix_audio(
     // Apply master volume, hard clip, and compute master peak levels.
     // A master-gain automation lane (evaluated at the buffer's end frame)
     // overrides the static fader; the pass ramps from the previous
-    // block's value so the sweep stays click-free.
-    let auto_master = auto_master_volume(auto_ref, playhead + output_frames as u64);
+    // block's value so the sweep stays click-free. Evaluated at the
+    // comp-delayed position: the mix reaching master is max_latency()
+    // behind the raw playhead, so a drawn master move lands on the
+    // audio it was drawn against (doc #260 finding #9).
+    let master_eval =
+        (playhead + output_frames as u64).saturating_sub(comp_ref.max_latency());
+    let auto_master = auto_master_volume(auto_ref, master_eval);
     apply_master_volume_and_peaks(data, channels, shared, auto_master);
 
     // Meter the processed mix (post master FX + volume) for the A/B panel.
