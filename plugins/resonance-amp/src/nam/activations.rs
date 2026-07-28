@@ -265,10 +265,12 @@ pub enum Activation {
 impl Activation {
     /// Resolve a parsed config into a runtime activation.
     ///
-    /// `fast_tanh_mode` mirrors the reference core's `enable_fast_tanh()`
-    /// (always on in the NAM plugin): `Tanh` resolves to [`Activation::FastTanh`].
-    /// Model construction passes `true`, which keeps A1 models (config
-    /// activation `"Tanh"`) on today's bit-identical fast_tanh path.
+    /// `fast_tanh_mode` mirrors the reference core's `enable_fast_tanh()`:
+    /// when `true`, `Tanh` resolves to [`Activation::FastTanh`]. Model
+    /// construction passes `true` for LEGACY (A1) models — keeping them on
+    /// today's bit-identical fast_tanh path — and `false` under reference
+    /// semantics (A2), matching the reference tools' exact-tanh default
+    /// (`tools/render` never enables fast tanh).
     pub fn from_config(config: &ActivationConfig, fast_tanh_mode: bool) -> Self {
         match config.kind {
             ActivationKind::Identity => Self::Identity,

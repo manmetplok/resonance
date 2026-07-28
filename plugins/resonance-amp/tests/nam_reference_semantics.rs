@@ -209,21 +209,32 @@ fn a2_post_stack_head_is_rejected_with_a_clear_error() {
 // -- Hand-computed reference chaining + raw-input condition -------------------
 
 /// Two chained 1-wide stacks, kernel 1, ReLU, all-positive weights: every
-/// ReLU is the identity for x > 0 and the arithmetic is exact in f32.
+/// ReLU is the identity for x > 0 and the arithmetic is exact in f32
+/// (powers-of-two inputs, dyadic-rational weights).
+///
+/// The reference LayerArray ctor constructs its input rechannel
+/// UNCONDITIONALLY — a 1-to-1 rechannel is a learned conv, not an identity
+/// — so each 1-wide stack consumes 7 weights (rechannel, conv w, conv b,
+/// mixin, layer1x1 w, layer1x1 b, head_rechannel): 15 total with the head
+/// scale. The rechannel weights are deliberately != 1 so this pins their
+/// consumption *and* their arithmetic.
 ///
 /// Reference semantics (all values for input x > 0):
 ///   condition       = raw input x (every stack)
-///   stack 0: z0     = relu(1*x + 0 + 1*x)            = 2x
-///            hr0    = 1 * z0                          = 2x   (head chain)
-///            out0   = x + (1*z0 + 0)                  = 3x   (audio chain)
-///   stack 1: z1     = relu(1*out0 + 0 + 1*x)          = 4x
-///            skip1  = hr0 + z1                        = 6x   (seeded!)
-///            hr1    = 0.5 * skip1                     = 3x
-///   output          = hr1 * head_scale(1)             = 3x
+///   stack 0: a0     = 2 * x                           = 2x   (rechannel)
+///            z0     = relu(1*a0 + 0 + 1*x)            = 3x
+///            hr0    = 1 * z0                          = 3x   (head chain)
+///            out0   = a0 + (1*z0 + 0)                 = 5x   (audio chain)
+///   stack 1: a1     = 0.5 * out0                      = 2.5x (rechannel)
+///            z1     = relu(1*a1 + 0 + 1*x)            = 3.5x
+///            skip1  = hr0 + z1                        = 6.5x (seeded!)
+///            hr1    = 0.5 * skip1                     = 3.25x
+///   output          = hr1 * head_scale(1)             = 3.25x
 ///
-/// The legacy engine would produce 5x here (zeroed skip accumulators,
-/// summed head outputs, post-rechannel condition), so this pins all three
-/// reconciled wiring divergences at once.
+/// The legacy engine wires this differently on every count (skipped 1-to-1
+/// rechannels, zeroed skip accumulators, summed head outputs,
+/// post-rechannel condition), so this pins all the reconciled divergences
+/// at once.
 #[test]
 fn reference_head_chaining_and_raw_condition_hand_computed() {
     let cfg = json!({"layers": [
@@ -234,11 +245,11 @@ fn reference_head_chaining_and_raw_condition_hand_computed() {
          "channels": 1, "dilations": [1], "kernel_size": 1,
          "activation": "ReLU", "gating_mode": "none", "head_bias": false}
     ], "head": null, "head_scale": 1.0});
-    // Per stack (1-wide, kernel 1, no rechannel: prev_ch == channels == 1):
-    // conv w, conv bias, mixin, layer1x1 w, layer1x1 b, head_rechannel.
+    // Per stack (1-wide, kernel 1): rechannel, conv w, conv bias, mixin,
+    // layer1x1 w, layer1x1 b, head_rechannel.
     let weights = [
-        1.0f32, 0.0, 1.0, 1.0, 0.0, 1.0, // stack 0
-        1.0, 0.0, 1.0, 1.0, 0.0, 0.5, // stack 1
+        2.0f32, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, // stack 0
+        0.5, 1.0, 0.0, 1.0, 1.0, 0.0, 0.5, // stack 1
         1.0, // head_scale
     ];
     let mut model =
@@ -248,8 +259,8 @@ fn reference_head_chaining_and_raw_condition_hand_computed() {
         let out = model.process_sample(x);
         assert_eq!(
             out.to_bits(),
-            (3.0 * x).to_bits(),
-            "reference chain must yield 3x (got {out} for input {x})"
+            (3.25 * x).to_bits(),
+            "reference chain must yield 3.25x (got {out} for input {x})"
         );
     }
 }

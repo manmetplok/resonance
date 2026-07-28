@@ -61,20 +61,23 @@ fn assert_close(out: f32, expected: f32, what: &str) {
 // Single layer array, channels = bottleneck = 1, condition_size 1, one layer
 // with kernel 1 / dilation 1 (no memory), head_bias false, no head MLP.
 // A `gating_mode` key is an A2 marker, so these files run under REFERENCE
-// semantics (ba todo #1113): the condition is the raw input (identical to
-// the post-rechannel snapshot here — channels == 1, no rechannel), there
-// is NO extra activation between the skip accumulator and the head
-// rechannel, and `Tanh`/`Sigmoid` resolve to the exact functions. The
-// path per sample x is:
-//   z_top    = conv_w[0]*x + conv_b[0] + mixin[0]*x
-//   z_bottom = conv_w[1]*x + conv_b[1] + mixin[1]*x   (gated/blended only)
+// semantics (ba todo #1113): the input rechannel is ALWAYS consumed and
+// applied — even 1-to-1, it is a learned conv (reference LayerArray ctor)
+// — the condition is the raw input x, there is NO extra activation between
+// the skip accumulator and the head rechannel, and `Tanh`/`Sigmoid`
+// resolve to the exact functions. The path per sample x is:
+//   a        = rechannel * x
+//   z_top    = conv_w[0]*a + conv_b[0] + mixin[0]*x
+//   z_bottom = conv_w[1]*a + conv_b[1] + mixin[1]*x   (gated/blended only)
 //   z        = <gating>(z_top, z_bottom)
 //   out      = head_rechannel * z * head_scale
 // (the layer1x1 residual only feeds the unused post-layer activation).
 //
-// Gated/blended weight order (mid = 2): conv[2], conv bias[2], mixin[2],
-// layer1x1 w[1] + b[1], head_rechannel[1], head_scale[1] -> 10 weights.
-const TINY_WEIGHTS: [f32; 10] = [
+// Gated/blended weight order (mid = 2): rechannel[1], conv[2],
+// conv bias[2], mixin[2], layer1x1 w[1] + b[1], head_rechannel[1],
+// head_scale[1] -> 11 weights.
+const TINY_WEIGHTS: [f32; 11] = [
+    0.8, // rechannel (1x1, learned — deliberately != 1)
     0.7, -0.45, // conv w (top, bottom)
     0.05, 0.3, // conv bias (top, bottom)
     0.4, -0.15, // mixin (top, bottom)
@@ -105,10 +108,12 @@ fn tiny_config(gating_mode: &str, activation: &str, secondary: Option<&str>) -> 
     )
 }
 
-/// Pre-activation halves of the tiny model for input `x`.
+/// Pre-activation halves of the tiny model for input `x` (the rechanneled
+/// input feeds the conv; the mixin reads the raw-input condition).
 fn tiny_pre_activation(x: f32) -> (f32, f32) {
-    let [w0, w1, b0, b1, m0, m1, ..] = TINY_WEIGHTS;
-    (w0 * x + b0 + m0 * x, w1 * x + b1 + m1 * x)
+    let [r, w0, w1, b0, b1, m0, m1, ..] = TINY_WEIGHTS;
+    let a = r * x;
+    (w0 * a + b0 + m0 * x, w1 * a + b1 + m1 * x)
 }
 
 const TINY_INPUTS: [f32; 5] = [0.0, 0.25, -0.5, 0.8, -1.2];

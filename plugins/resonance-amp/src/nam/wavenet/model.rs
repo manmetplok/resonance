@@ -242,6 +242,30 @@ impl WaveNetModel {
                         s.condition_size, config.input_size
                     ));
                 }
+                // The declared input_size sizes the reference rechannel
+                // (`_rechannel(input_size, channels)`), so it must match
+                // what actually feeds the stack: the preceding stack's
+                // channels (the model input for stack 0). The engine
+                // consumes ch * prev_ch (actual) where the reference
+                // consumes channels * input_size (declared); they agree
+                // only for well-formed files, and a clear error beats
+                // silent weight misconsumption.
+                let fed_by = if si == 0 {
+                    config.input_size
+                } else {
+                    config.stacks[si - 1].channels
+                };
+                if s.input_size != fed_by {
+                    return Err(format!(
+                        "WaveNet stack {si}: input_size ({}) doesn't match {} ({fed_by})",
+                        s.input_size,
+                        if si == 0 {
+                            "the model input channels"
+                        } else {
+                            "the preceding stack's channels"
+                        }
+                    ));
+                }
                 if si > 0 {
                     let prev = &config.stacks[si - 1];
                     // Reference WaveNet ctor: the audio path chains through
@@ -411,7 +435,20 @@ impl WaveNetModel {
             };
 
             // --- Rechannel (1x1, no bias) ---
-            if prev_ch != ch {
+            // Reference semantics: the reference LayerArray ctor constructs
+            // `_rechannel(params.input_size, params.channels, false)`
+            // UNCONDITIONALLY and `set_weights_` always consumes its
+            // input_size*channels weights — a 1-to-1 rechannel is a learned
+            // conv, not an identity. Legacy keeps the historical
+            // skip-when-equal (bit-identical A1 path).
+            if reference {
+                let weight = reader.read(ch * prev_ch)?;
+                rechannels.push(Some(Conv1x1 {
+                    weight,
+                    out_ch: ch,
+                    in_ch: prev_ch,
+                }));
+            } else if prev_ch != ch {
                 let weight = reader.read(ch * prev_ch)?;
                 rechannels.push(Some(Conv1x1 {
                     weight,
