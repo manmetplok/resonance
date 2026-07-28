@@ -4,15 +4,14 @@
 //! Per LayerArray (stack): rechannel, layers (conv+bias, input_mixin, layer1x1), head_rechannel
 //! Then: head MLP layers, head_scale.
 
+use super::super::activations::Activation;
 use super::super::parse::{WaveNetConfig, WeightReader};
-use super::super::{fast_tanh, matvec, matvec_add, sigmoid, validate_matvec_dims, NamInference};
+use super::super::{matvec, matvec_add, validate_matvec_dims, NamInference};
 use super::conv_layer::{Conv1x1, Conv1x1Bias, WaveNetLayer};
 use super::head::DenseLayer;
 use super::ring::RingBuffer;
 
 pub struct WaveNetModel {
-    gated: bool,
-
     // Per-stack data
     rechannels: Vec<Option<Conv1x1>>,
     stacks: Vec<Vec<WaveNetLayer>>,
@@ -22,6 +21,9 @@ pub struct WaveNetModel {
     // Head MLP (may be empty)
     head_layers: Vec<DenseLayer>,
     head_scale: f32,
+    /// Activation for head MLP hidden layers, resolved from config at
+    /// construction (A1: fast tanh).
+    head_activation: Activation,
 
     // Pre-allocated scratch buffers (sized for max needed)
     activation: Vec<f32>,
@@ -55,6 +57,18 @@ impl WaveNetModel {
         for stack_cfg in &config.stacks {
             let ch = stack_cfg.channels;
             let mid_ch = if config.gated { ch * 2 } else { ch };
+
+            // Resolve activation dispatch once, at construction. fast_tanh
+            // mode maps the A1 "Tanh" config to the fast-tanh path, exactly
+            // as the previously hardcoded implementation (bit-identical).
+            let stack_activation = Activation::from_config(&stack_cfg.activation, true);
+            // The A1 gate is architecturally the fast sigmoid; configurable
+            // gated/secondary activations arrive with A2 gating support.
+            let gate_activation = if config.gated {
+                Some(Activation::FastSigmoid)
+            } else {
+                None
+            };
 
             // --- Rechannel (1x1, no bias) ---
             if prev_ch != ch {
@@ -124,6 +138,8 @@ impl WaveNetModel {
                     dilation,
                     channels: ch,
                     mid_ch,
+                    activation: stack_activation.clone(),
+                    gate_activation: gate_activation.clone(),
                 });
             }
 
@@ -182,6 +198,13 @@ impl WaveNetModel {
         } else {
             1.0
         };
+
+        // Head MLP hidden-layer activation (A1: "Tanh" -> fast tanh).
+        let head_activation = config
+            .stacks
+            .first()
+            .map(|s| Activation::from_config(&s.activation, true))
+            .unwrap_or(Activation::FastTanh);
 
         let max_head_buf = config
             .head
@@ -280,13 +303,13 @@ impl WaveNetModel {
         }
 
         Ok(Self {
-            gated: config.gated,
             rechannels,
             stacks,
             head_rechannels,
             ring_buffers,
             head_layers,
             head_scale,
+            head_activation,
             activation: scratch_activation,
             conv_out: scratch_conv_out,
             mixin_buf: vec![0.0; max_mid],
@@ -376,16 +399,22 @@ impl NamInference for WaveNetModel {
                     }
                 }
 
-                // Activation function
-                if self.gated {
-                    let half = ch; // bottleneck = ch
-                    for c in 0..half {
-                        self.activation[c] =
-                            fast_tanh(self.conv_out[c]) * sigmoid(self.conv_out[half + c]);
+                // Activation function (dispatch resolved at construction).
+                // A1 semantics preserved bit-identically: the gated path
+                // computes fast_tanh(z) * fast_sigmoid(g) per channel.
+                match &layer.gate_activation {
+                    Some(gate) => {
+                        let half = ch; // bottleneck = ch
+                        let (z, g) = self.conv_out.split_at_mut(half);
+                        layer.activation.apply(&mut z[..half]);
+                        gate.apply(&mut g[..half]);
+                        for c in 0..half {
+                            self.activation[c] = z[c] * g[c];
+                        }
                     }
-                } else {
-                    for c in 0..ch {
-                        self.activation[c] = fast_tanh(self.conv_out[c]);
+                    None => {
+                        self.activation[..ch].copy_from_slice(&self.conv_out[..ch]);
+                        layer.activation.apply(&mut self.activation[..ch]);
                     }
                 }
 
@@ -424,10 +453,9 @@ impl NamInference for WaveNetModel {
 
             // Head rechannel: project skip_accum to head_size and accumulate
             let hr = &self.head_rechannels[stack_idx];
-            // Apply tanh to skip_accum before head_rechannel
-            for c in 0..ch {
-                self.skip_accum[c] = fast_tanh(self.skip_accum[c]);
-            }
+            // Pre-activation on skip_accum before head_rechannel, using the
+            // stack's configured activation (A1: fast tanh, as before).
+            stack[0].activation.apply(&mut self.skip_accum[..ch]);
             matvec(
                 &hr.weight,
                 &self.skip_accum[..hr.in_ch],
@@ -470,9 +498,7 @@ impl NamInference for WaveNetModel {
                 *v += head_layer.bias[j];
             }
             if head_layer.has_activation {
-                for v in dst.iter_mut().take(head_layer.out_features) {
-                    *v = fast_tanh(*v);
-                }
+                self.head_activation.apply(&mut dst[..head_layer.out_features]);
             }
             current_size = head_layer.out_features;
             use_a = !use_a;

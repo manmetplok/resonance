@@ -1,6 +1,7 @@
 /// LSTM inference engine for NAM models.
+use super::activations::Activation;
 use super::parse::{LstmConfig, WeightReader};
-use super::{fast_tanh, matvec, matvec_add, sigmoid, validate_matvec_dims, NamInference};
+use super::{matvec, matvec_add, validate_matvec_dims, NamInference};
 
 struct LstmLayer {
     /// Input-to-hidden weights [4*hidden_size, input_size_for_layer] row-major.
@@ -23,6 +24,12 @@ pub struct LstmModel {
     output_bias: f32,
     /// Learned output scaling factor (last weight in the blob).
     head_scale: f32,
+
+    /// Gate activation (i/f/o gates). LSTM gate activations are fixed by the
+    /// architecture, not model config; NAM uses the fast sigmoid.
+    gate_activation: Activation,
+    /// Cell activation (g gate and cell-state output): NAM fast tanh.
+    cell_activation: Activation,
 
     // Pre-allocated state
     /// Hidden state per layer [num_layers][hidden_size].
@@ -109,6 +116,8 @@ impl LstmModel {
             output_weight,
             output_bias: output_bias_vec[0],
             head_scale,
+            gate_activation: Activation::FastSigmoid,
+            cell_activation: Activation::FastTanh,
             h,
             c: vec![vec![0.0; hs]; config.num_layers],
             gates,
@@ -144,17 +153,23 @@ impl NamInference for LstmModel {
                 self.gates[j] += layer.b_hh[j];
             }
 
-            // Apply gate activations (PyTorch ordering: i, f, g, o)
+            // Apply gate activations (PyTorch ordering: i, f, g, o) through
+            // the registry — same fast sigmoid / fast tanh as before.
+            self.gate_activation.apply(&mut self.gates[..hs]);
+            self.gate_activation.apply(&mut self.gates[hs..2 * hs]);
+            self.cell_activation.apply(&mut self.gates[2 * hs..3 * hs]);
+            self.gate_activation.apply(&mut self.gates[3 * hs..4 * hs]);
+
             let h = &mut self.h[layer_idx];
             let c = &mut self.c[layer_idx];
             for j in 0..hs {
-                let i_gate = sigmoid(self.gates[j]);
-                let f_gate = sigmoid(self.gates[hs + j]);
-                let g_gate = fast_tanh(self.gates[2 * hs + j]);
-                let o_gate = sigmoid(self.gates[3 * hs + j]);
+                let i_gate = self.gates[j];
+                let f_gate = self.gates[hs + j];
+                let g_gate = self.gates[2 * hs + j];
+                let o_gate = self.gates[3 * hs + j];
 
                 c[j] = f_gate * c[j] + i_gate * g_gate;
-                h[j] = o_gate * fast_tanh(c[j]);
+                h[j] = o_gate * self.cell_activation.scalar(c[j]);
             }
 
             // Output of this layer becomes input to the next
