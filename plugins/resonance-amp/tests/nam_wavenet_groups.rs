@@ -91,12 +91,13 @@ fn grouped_stack(
 
 // -- Weight-count pins for grouped variants -----------------------------------
 
-/// Non-gated, channels=4, bottleneck=4, condition=2, kernel 2, 2 layers,
-/// groups_input=2, groups_input_mixin=2, layer1x1.groups=4. Reference
-/// consumption (each grouped tensor shrinks to out*in*ks/g):
+/// Non-gated, channels=4, bottleneck=4, condition=1 (matching the mono
+/// input, as the shared construction validation requires without a
+/// condition_dsp), kernel 2, 2 layers, groups_input=2, layer1x1.groups=4.
+/// Reference consumption (each grouped tensor shrinks to out*in*ks/g):
 ///   rechannel          4*1              =  4
 ///   per layer: conv    4*4*2/2 = 16, bias 4,
-///              mixin   4*2/2   =  4,
+///              mixin   4*1     =  4,
 ///              layer1x1 4*4/4  =  4 + bias 4   -> 32 each, 2 layers = 64
 ///   head_rechannel     1*4 + 1(bias)    =  5
 ///   head_scale                          =  1
@@ -107,12 +108,12 @@ const GROUPED_TOTAL: usize = 74;
 fn grouped_construction_consumes_reference_weight_count() {
     let config = WaveNetConfig {
         input_size: 1,
-        stacks: vec![grouped_stack(4, 4, 2, vec![1, 2], 2, false, 2, 2, 4, true)],
+        stacks: vec![grouped_stack(4, 4, 1, vec![1, 2], 2, false, 2, 1, 4, true)],
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let weights = counted_weights(GROUPED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -126,10 +127,10 @@ fn grouped_construction_consumes_reference_weight_count() {
 
 /// Gated grouped variant: the conv/mixin output 2*bottleneck channels and
 /// the group count divides that doubled width. channels=4, bottleneck=4
-/// (mid 8), condition=2, 1 layer, kernel 2, groups 2/2/2:
+/// (mid 8), condition=1, 1 layer, kernel 2, conv/layer1x1 groups 2:
 ///   rechannel      4*1        =  4
 ///   conv           8*4*2/2    = 32, bias 8
-///   mixin          8*2/2      =  8
+///   mixin          8*1        =  8
 ///   layer1x1       4*4/2 + 4  = 12
 ///   head_rechannel 1*4 + 1    =  5
 ///   head_scale                =  1
@@ -138,12 +139,12 @@ fn grouped_construction_consumes_reference_weight_count() {
 fn gated_grouped_construction_consumes_reference_weight_count() {
     let config = WaveNetConfig {
         input_size: 1,
-        stacks: vec![grouped_stack(4, 4, 2, vec![1], 2, true, 2, 2, 2, true)],
+        stacks: vec![grouped_stack(4, 4, 1, vec![1], 2, true, 2, 1, 2, true)],
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let weights = counted_weights(70);
     let mut reader = WeightReader::new(&weights);
@@ -154,11 +155,7 @@ fn gated_grouped_construction_consumes_reference_weight_count() {
 
 /// The same grouped shape end-to-end through the .nam loader: the JSON
 /// groups fields (incl. the layer1x1 object) must reach construction, the
-/// exact reference count loads, and a short vector underflows. Loader-side
-/// the config runs under reference semantics (A2 markers), so
-/// condition_size matches input_size and the mixin stays ungrouped
-/// (mixin 4*1 = 4 per layer keeps the 74-weight total of GROUPED_TOTAL:
-/// the legacy literal's grouped mixin was 4*2/2 = 4 too).
+/// exact reference count loads, and a short vector underflows.
 const GROUPED_CONFIG: &str = r#"{
     "layers": [{
         "input_size": 1, "condition_size": 1, "head_size": 1,
@@ -204,7 +201,7 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
     // conv g=2, kernel 1: flat [g][i][j] = [w00, w01, w10, w11, w22, w23, w32, w33]
     let w = [0.5f32, 0.25, -0.3, 0.4, 0.6, -0.2, 0.15, 0.35];
     let b = [0.05f32, -0.02, 0.03, 0.01]; // conv bias
-    let m = [0.6f32, -0.5, 0.4, -0.3]; // mixin 4x1 (condition = channel 0)
+    let m = [0.6f32, -0.5, 0.4, -0.3]; // mixin 4x1 (condition = raw input)
     let h = [0.9f32, -0.7, 0.8, -0.6]; // head_rechannel 1x4, no bias
     let s = 2.0f32; // head_scale
 
@@ -243,7 +240,7 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -253,16 +250,17 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
     for &x in &[0.25f32, -0.5, 0.75] {
         let a = [r[0] * x, r[1] * x, r[2] * x, r[3] * x];
         // Group 0: outputs 0..2 from inputs 0..2; group 1: outputs 2..4
-        // from inputs 2..4. Mixin adds m_c * condition (channel 0 of the
-        // rechanneled input) after the conv bias — engine op order.
+        // from inputs 2..4. Mixin adds m_c * condition (the RAW model
+        // input) after the conv bias — engine op order.
         let z = [
-            ((w[0] * a[0] + w[1] * a[1]) + b[0]) + m[0] * a[0],
-            ((w[2] * a[0] + w[3] * a[1]) + b[1]) + m[1] * a[0],
-            ((w[4] * a[2] + w[5] * a[3]) + b[2]) + m[2] * a[0],
-            ((w[6] * a[2] + w[7] * a[3]) + b[3]) + m[3] * a[0],
+            ((w[0] * a[0] + w[1] * a[1]) + b[0]) + m[0] * x,
+            ((w[2] * a[0] + w[3] * a[1]) + b[1]) + m[1] * x,
+            ((w[4] * a[2] + w[5] * a[3]) + b[2]) + m[2] * x,
+            ((w[6] * a[2] + w[7] * a[3]) + b[3]) + m[3] * x,
         ];
-        // Layer activation, then the stack's skip pre-activation.
-        let t: Vec<f32> = z.iter().map(|&v| fast_tanh(fast_tanh(v))).collect();
+        // Layer activation; the skip feeds the head rechannel directly
+        // (no extra activation under reference structure).
+        let t: Vec<f32> = z.iter().map(|&v| fast_tanh(v)).collect();
         let expected = (h[0] * t[0] + h[1] * t[1] + h[2] * t[2] + h[3] * t[3]) * s;
         let out = model.process_sample(x);
         assert_eq!(
@@ -276,7 +274,11 @@ fn grouped_conv_output_is_bit_identical_to_hand_computed_reference() {
 /// Depthwise-grouped everything (2 channels, all three group counts = 2,
 /// condition_size 2, kernel 1) across TWO layers, so the grouped layer1x1
 /// demonstrably shapes the residual feeding layer 2 and the grouped mixin
-/// projects the 2-wide condition per-channel.
+/// projects the 2-wide condition per-channel. A multi-channel condition
+/// requires a condition_dsp under the shared reference validation, so the
+/// config carries a trivial Identity sub-network computing c(x) = [x, x]
+/// (its weights live in the nested object, leaving the outer stream
+/// untouched).
 #[test]
 fn grouped_mixin_and_layer1x1_are_bit_identical_to_hand_computed_reference() {
     let r = [0.3f32, -0.4]; // rechannel 2x1 (dense)
@@ -313,14 +315,29 @@ fn grouped_mixin_and_layer1x1_are_bit_identical_to_hand_computed_reference() {
     weights.push(s);
     assert_eq!(weights.len(), 25);
 
+    // Identity condition_dsp, c(x) = [x, x]: rechannel 1, conv 1, bias 0,
+    // mixin 0, layer1x1 w 0 + b 0, head_rechannel [1, 1], head_scale 1.
+    let nested = serde_json::json!({
+        "architecture": "WaveNet",
+        "sample_rate": 48000,
+        "config": {
+            "layers": [{
+                "input_size": 1, "condition_size": 1, "head_size": 2,
+                "channels": 1, "dilations": [1], "kernel_size": 1,
+                "activation": "Identity", "gated": false, "head_bias": false
+            }],
+            "head": null
+        },
+        "weights": [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+    });
     let config = WaveNetConfig {
         input_size: 1,
         stacks: vec![grouped_stack(2, 2, 2, vec![1, 1], 1, false, 2, 2, 2, false)],
         head: vec![],
         head_size: 1,
         has_layer1x1: true,
-        condition_dsp: None,
-        reference_semantics: false,
+        condition_dsp: Some(nested),
+        fast_activations: true,
     };
     let mut reader = WeightReader::new(&weights);
     let mut model = WaveNetModel::from_config_and_weights(config, &mut reader)
@@ -328,11 +345,12 @@ fn grouped_mixin_and_layer1x1_are_bit_identical_to_hand_computed_reference() {
     assert_eq!(reader.remaining(), 0);
 
     for &x in &[0.25f32, -0.5, 0.75] {
-        let a = [r[0] * x, r[1] * x]; // rechannel; also the condition signal
+        let a = [r[0] * x, r[1] * x]; // rechannel (audio path)
+        let cond = [x, x]; // condition_dsp output c(x) = [x, x]
         // Layer 1 (all convs depthwise-grouped: channel c sees channel c).
         let z1 = [
-            ((c1[0] * a[0]) + d1[0]) + m1[0] * a[0],
-            ((c1[1] * a[1]) + d1[1]) + m1[1] * a[1],
+            ((c1[0] * a[0]) + d1[0]) + m1[0] * cond[0],
+            ((c1[1] * a[1]) + d1[1]) + m1[1] * cond[1],
         ];
         let t1 = [fast_tanh(z1[0]), fast_tanh(z1[1])];
         // Grouped layer1x1 residual into layer 2's input.
@@ -340,14 +358,15 @@ fn grouped_mixin_and_layer1x1_are_bit_identical_to_hand_computed_reference() {
             a[0] + (l1[0] * t1[0] + p1[0]),
             a[1] + (l1[1] * t1[1] + p1[1]),
         ];
-        // Layer 2 (condition is still the stack input snapshot `a`).
+        // Layer 2 (the condition_dsp output conditions every layer).
         let z2 = [
-            ((c2[0] * a2[0]) + d2[0]) + m2[0] * a[0],
-            ((c2[1] * a2[1]) + d2[1]) + m2[1] * a[1],
+            ((c2[0] * a2[0]) + d2[0]) + m2[0] * cond[0],
+            ((c2[1] * a2[1]) + d2[1]) + m2[1] * cond[1],
         ];
         let t2 = [fast_tanh(z2[0]), fast_tanh(z2[1])];
-        // Skip accumulator + skip pre-activation + head rechannel + scale.
-        let sk = [fast_tanh(t1[0] + t2[0]), fast_tanh(t1[1] + t2[1])];
+        // Skip accumulator feeds the head rechannel directly (no extra
+        // activation under reference structure).
+        let sk = [t1[0] + t2[0], t1[1] + t2[1]];
         let expected = (h[0] * sk[0] + h[1] * sk[1]) * s;
         let out = model.process_sample(x);
         assert_eq!(

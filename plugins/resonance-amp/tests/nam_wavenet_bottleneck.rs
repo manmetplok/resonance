@@ -176,7 +176,7 @@ fn direct_construction_consumes_every_weight() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let weights = counted_weights(NONGATED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -193,7 +193,7 @@ fn direct_gated_construction_consumes_every_weight() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let weights = counted_weights(GATED_TOTAL);
     let mut reader = WeightReader::new(&weights);
@@ -406,7 +406,7 @@ fn bottleneck_without_layer1x1_is_rejected() {
         head_size: 1,
         has_layer1x1: false,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let weights = counted_weights(64);
     let mut reader = WeightReader::new(&weights);

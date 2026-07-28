@@ -144,21 +144,27 @@ pub fn grouped_matvec_add(
     }
 }
 
-/// Fast tanh approximation using a degree-7/6 Padé approximant.
-/// Accurate to ~20 bits across the full range — more than sufficient
-/// for neural network inference on audio signals.
+/// Fast tanh — the EXACT rational approximation of the
+/// NeuralAmpModelerCore reference (`nam::activations::fast_tanh`,
+/// NAM/activations.h), term for term with the reference's own float
+/// literals. The official NAM plugin runs with `enable_fast_tanh()`, so
+/// A1-flavor files must use this precise formula for correct-vs-plugin
+/// output (ba todo #1116; the engine's previous Padé-approximant fast tanh
+/// deviated from the plugin by up to ~4e-3 at signal level).
+#[allow(clippy::excessive_precision)]
 #[inline(always)]
 pub fn fast_tanh(x: f32) -> f32 {
-    // Clamp to avoid overflow in x^6/x^7 terms
-    let x = x.clamp(-5.0, 5.0);
+    let ax = x.abs();
     let x2 = x * x;
-    let num = x * (135135.0 + x2 * (17325.0 + x2 * (378.0 + x2)));
-    let den = 135135.0 + x2 * (62370.0 + x2 * (3150.0 + x2 * 28.0));
-    num / den
+    (x * (2.45550750702956f32 + 2.45550750702956f32 * ax
+        + (0.893229853513558f32 + 0.821226666969744f32 * ax) * x2))
+        / (2.44506634652299f32
+            + (2.44506634652299f32 + x2) * (x + 0.814642734961073f32 * x * ax).abs())
 }
 
-/// Fast sigmoid derived from fast_tanh: sigmoid(x) = 0.5 + 0.5 * tanh(x/2).
+/// Fast sigmoid derived from fast_tanh, in the reference's exact form
+/// (`fast_sigmoid` in NAM/activations.h): 0.5 * (fast_tanh(x * 0.5) + 1).
 #[inline(always)]
 pub fn sigmoid(x: f32) -> f32 {
-    0.5 + 0.5 * fast_tanh(x * 0.5)
+    0.5 * (fast_tanh(x * 0.5) + 1.0)
 }

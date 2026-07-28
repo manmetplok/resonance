@@ -41,13 +41,12 @@ fn fixture_weights(file: &Value) -> Vec<f32> {
 }
 
 /// Minimal single-stack, single-layer, kernel-1 ungated ReLU config (new
-/// format, so layer1x1 is active). Under REFERENCE semantics (which a
-/// `condition_dsp` marker forces, for the nested net too) the 1-to-1 input
-/// rechannel is always consumed, so the order is: rechannel (1), conv (1),
-/// conv bias (1), input_mixin (1), layer1x1 w+b (2), head rechannel (1),
-/// head_scale (1) = 8 weights. (Legacy skips the equal-width rechannel:
-/// 7 weights.) With positive inputs and weights every ReLU is the identity,
-/// so outputs are exact in f32.
+/// format, so layer1x1 is active). The 1-to-1 input rechannel is always
+/// consumed (reference structure, with or without a condition_dsp), so the
+/// order is: rechannel (1), conv (1), conv bias (1), input_mixin (1),
+/// layer1x1 w+b (2), head rechannel (1), head_scale (1) = 8 weights. With
+/// positive inputs and weights every ReLU is the identity, so outputs are
+/// exact in f32.
 fn tiny_config(input_size: usize, condition_size: usize, head_size: usize) -> Value {
     json!({
         "layers": [{
@@ -108,14 +107,9 @@ const NESTED_WEIGHTS: [f32; 8] = [0.5, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 2.0];
 /// Outer net O with weights [rechannel=2, conv=1, bias=0, mixin=1, l1x1=0,
 /// l1x1_b=0, head=1, head_scale=1]: with condition c(x),
 /// z = relu(1*(2x) + 0 + 1*c(x)), output O(x) = z. With condition_dsp:
-/// c(x) = 3x so O(x) = 5x. (Legacy semantics — no condition_dsp possible —
-/// consume no rechannel and read the post-rechannel snapshot condition.)
+/// c(x) = 3x so O(x) = 5x. Without one, the condition is the raw input:
+/// c(x) = x so O(x) = 3x.
 const OUTER_WEIGHTS: [f32; 8] = [2.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
-
-/// Legacy (no condition_dsp) variant of `OUTER_WEIGHTS`: no A2 marker, so
-/// the equal-width rechannel is skipped — 7 weights, condition = the
-/// post-rechannel snapshot x: z = relu(x + x) = 2x, O(x) = relu(2x) = 2x.
-const LEGACY_OUTER_WEIGHTS: [f32; 7] = [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
 
 // -- Hand-computed wiring -----------------------------------------------------
 
@@ -134,20 +128,20 @@ fn condition_dsp_output_feeds_input_mixin() {
     assert_eq!(model.process_sample(0.25), 1.25);
 }
 
-/// Absent condition_dsp: the condition stays the engine's post-rechannel
-/// snapshot — O(x) = 2x, today's A1 behavior — and an explicit JSON `null`
-/// parses identically to the key being absent.
+/// Absent condition_dsp: the condition is the RAW model input (reference
+/// `_process_condition` passthrough) — O(x) = 3x — and an explicit JSON
+/// `null` parses identically to the key being absent.
 #[test]
 fn absent_condition_dsp_is_passthrough() {
     let (mut plain, remaining) =
-        build(tiny_config(1, 1, 1), &LEGACY_OUTER_WEIGHTS).expect("construction");
+        build(tiny_config(1, 1, 1), &OUTER_WEIGHTS).expect("construction");
     assert_eq!(remaining, 0);
-    assert_eq!(plain.process_sample(0.5), 1.0);
+    assert_eq!(plain.process_sample(0.5), 1.5);
 
     let cfg_null = parse_wavenet_config(with_condition_dsp(tiny_config(1, 1, 1), Value::Null))
         .expect("null condition_dsp parses");
     assert!(cfg_null.condition_dsp.is_none(), "null == absent");
-    let mut reader = WeightReader::new(&LEGACY_OUTER_WEIGHTS);
+    let mut reader = WeightReader::new(&OUTER_WEIGHTS);
     let mut from_null =
         WaveNetModel::from_config_and_weights(cfg_null, &mut reader).expect("construction");
     for i in 1..16 {
@@ -215,12 +209,12 @@ fn nested_weight_surplus_is_rejected() {
 /// `process_sample_into` exposes the full multi-channel, head-scaled output
 /// (reference `wave_net_output_channels`: last array's head width without a
 /// head MLP). Single-stack net with head_size 2, head rechannel weights
-/// [1.0, 0.5]: out = [2x, x].
+/// [1.0, 0.5]: z = relu(1*(1*x) + x) = 2x, out = [2x, x].
 #[test]
 fn multi_channel_output_matches_hand_computation() {
-    // conv=1, bias=0, mixin=1, l1x1 w=0 b=0, head rechannel [1.0, 0.5],
-    // head_scale=1.
-    let weights = [1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.5, 1.0];
+    // rechannel=1, conv=1, bias=0, mixin=1, l1x1 w=0 b=0, head rechannel
+    // [1.0, 0.5], head_scale=1.
+    let weights = [1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.5, 1.0];
     let (mut model, remaining) = build(tiny_config(1, 1, 2), &weights).expect("construction");
     assert_eq!(remaining, 0);
     assert_eq!(model.out_channels(), 2);

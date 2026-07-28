@@ -98,10 +98,8 @@ pub struct WaveNetModel {
     /// raw input sample into the condition signal before it feeds the
     /// stacks (reference `WaveNet::_process_condition`). Its weights come
     /// from the nested model object's own weight array, never from the
-    /// outer flat stream. `None` = the condition is the raw input under
-    /// reference semantics (the reference passthrough), or the per-stack
-    /// post-rechannel snapshot under legacy semantics (the engine's A1
-    /// condition source, kept bit-identical).
+    /// outer flat stream. `None` = the condition is the raw input (the
+    /// reference `_process_condition` passthrough).
     condition_dsp: Option<Box<WaveNetModel>>,
     /// Nested condition output, `condition_dsp.out_channels()` wide
     /// (empty when there is no condition_dsp). Preallocated; refreshed
@@ -120,18 +118,16 @@ pub struct WaveNetModel {
     /// 1 for the main (audio) model; nested condition_dsp models are
     /// multi-channel.
     out_channels: usize,
-    /// Forward-pass semantics (see
-    /// [`super::super::parse::WaveNetConfig::reference_semantics`]):
-    /// `false` = the historical engine wiring, bit-for-bit for A1 configs;
-    /// `true` = reference NeuralAmpModelerCore wiring (raw-input/
-    /// condition_dsp condition for every stack, chained head accumulators
-    /// with the model output taken from the last stack only, no extra skip
-    /// activation, identity residual for inactive layer1x1, exact
-    /// activations).
-    reference_semantics: bool,
 
-    // Per-stack data
-    rechannels: Vec<Option<Conv1x1>>,
+    // Per-stack data. Every model runs the reference NeuralAmpModelerCore
+    // forward pass (ba todo #1116): raw-input/condition_dsp condition for
+    // every stack, unconditionally consumed learned input rechannels,
+    // chained head accumulators with the model output taken from the last
+    // stack only, no extra skip activation, and an identity residual for
+    // layers without a layer1x1. The only per-file variation left is the
+    // ACTIVATION FLAVOR (see
+    // [`super::super::parse::WaveNetConfig::fast_activations`]).
+    rechannels: Vec<Conv1x1>,
     stacks: Vec<Vec<WaveNetLayer>>,
     head_rechannels: Vec<HeadRechannel>,
     ring_buffers: Vec<Vec<RingBuffer>>,
@@ -205,93 +201,83 @@ impl WaveNetModel {
             }
         }
 
-        let reference = config.reference_semantics;
-        // Legacy A1 files resolve `Tanh`/`Sigmoid` to the fast
-        // approximations (the historical engine sound, also what the
-        // official NAM plugin's `enable_fast_tanh()` does); reference-
-        // semantics (A2) models use the exact functions, matching how the
-        // reference fixture outputs were rendered (`tools/render` never
-        // enables fast tanh).
-        let fast = !reference;
+        // Activation flavor (the ONLY per-file semantic left, ba todo
+        // #1116): files expressible in the pre-A2 surface resolve
+        // `Tanh`/`Sigmoid` to the fast approximations — the official NAM
+        // plugin runs with `enable_fast_tanh()`, so correct-vs-plugin for
+        // A1 files means reference structure + fast activations. A2-marked
+        // files (and forced-exact nested/container submodels) use the
+        // exact functions, matching how the A2 fixture outputs were
+        // rendered (`tools/render` never enables fast tanh).
+        let fast = config.fast_activations;
 
-        if reference {
-            // The engine feeds one scalar sample per process call; a
-            // multi-channel reference model cannot be driven correctly.
-            if config.input_size != 1 {
+        // The engine feeds one scalar sample per process call; a
+        // multi-channel reference model cannot be driven correctly.
+        if config.input_size != 1 {
+            return Err(format!(
+                "WaveNet: only mono models are supported (input_size {})",
+                config.input_size
+            ));
+        }
+        for (si, s) in config.stacks.iter().enumerate() {
+            // Without a condition_dsp the condition is the raw model
+            // input (reference `_process_condition` passthrough), so
+            // every stack's input mixin must expect exactly that width.
+            if config.condition_dsp.is_none() && s.condition_size != config.input_size {
                 return Err(format!(
-                    "WaveNet: only mono models are supported (input_size {})",
-                    config.input_size
+                    "WaveNet stack {si}: condition_size ({}) must match the model input channels ({}) without a condition_dsp",
+                    s.condition_size, config.input_size
                 ));
             }
-            // Post-stack head MLPs only reach here through forced reference
-            // semantics (container submodels); the A2 `head` object is
-            // already rejected at parse.
-            if !config.head.is_empty() {
-                return Err(
-                    "WaveNet config: a post-stack 'head' is not supported for A2 models"
-                        .to_string(),
-                );
-            }
-            for (si, s) in config.stacks.iter().enumerate() {
-                // Without a condition_dsp the condition is the raw model
-                // input (reference `_process_condition` passthrough), so
-                // every stack's input mixin must expect exactly that width.
-                if config.condition_dsp.is_none() && s.condition_size != config.input_size {
-                    return Err(format!(
-                        "WaveNet stack {si}: condition_size ({}) must match the model input channels ({}) without a condition_dsp",
-                        s.condition_size, config.input_size
-                    ));
-                }
-                // The declared input_size sizes the reference rechannel
-                // (`_rechannel(input_size, channels)`), so it must match
-                // what actually feeds the stack: the preceding stack's
-                // channels (the model input for stack 0). The engine
-                // consumes ch * prev_ch (actual) where the reference
-                // consumes channels * input_size (declared); they agree
-                // only for well-formed files, and a clear error beats
-                // silent weight misconsumption.
-                let fed_by = if si == 0 {
-                    config.input_size
-                } else {
-                    config.stacks[si - 1].channels
-                };
-                if s.input_size != fed_by {
-                    return Err(format!(
-                        "WaveNet stack {si}: input_size ({}) doesn't match {} ({fed_by})",
-                        s.input_size,
-                        if si == 0 {
-                            "the model input channels"
-                        } else {
-                            "the preceding stack's channels"
-                        }
-                    ));
-                }
-                if si > 0 {
-                    let prev = &config.stacks[si - 1];
-                    // Reference WaveNet ctor: the audio path chains through
-                    // stacks whose channels must match the preceding
-                    // stack's head_size.
-                    if s.channels != prev.head_size {
-                        return Err(format!(
-                            "WaveNet: channels of stack {si} ({}) doesn't match head_size of preceding stack ({})",
-                            s.channels, prev.head_size
-                        ));
-                    }
-                    // The head path chains too: this stack's skip
-                    // accumulator is seeded with the preceding stack's
-                    // head-rechannel output, so the widths must agree
-                    // (the reference memcpy assumes it).
-                    let skip_ch = if s.head1x1.active {
-                        s.head1x1.out_channels
+            // The declared input_size sizes the reference rechannel
+            // (`_rechannel(input_size, channels)`), so it must match
+            // what actually feeds the stack: the preceding stack's
+            // channels (the model input for stack 0). The engine
+            // consumes ch * prev_ch (actual) where the reference
+            // consumes channels * input_size (declared); they agree
+            // only for well-formed files, and a clear error beats
+            // silent weight misconsumption.
+            let fed_by = if si == 0 {
+                config.input_size
+            } else {
+                config.stacks[si - 1].channels
+            };
+            if s.input_size != fed_by {
+                return Err(format!(
+                    "WaveNet stack {si}: input_size ({}) doesn't match {} ({fed_by})",
+                    s.input_size,
+                    if si == 0 {
+                        "the model input channels"
                     } else {
-                        s.bottleneck
-                    };
-                    if skip_ch != prev.head_size {
-                        return Err(format!(
-                            "WaveNet stack {si}: head accumulator width ({skip_ch}) doesn't match head_size of preceding stack ({})",
-                            prev.head_size
-                        ));
+                        "the preceding stack's channels"
                     }
+                ));
+            }
+            if si > 0 {
+                let prev = &config.stacks[si - 1];
+                // Reference WaveNet ctor: the audio path chains through
+                // stacks whose channels must match the preceding
+                // stack's head_size.
+                if s.channels != prev.head_size {
+                    return Err(format!(
+                        "WaveNet: channels of stack {si} ({}) doesn't match head_size of preceding stack ({})",
+                        s.channels, prev.head_size
+                    ));
+                }
+                // The head path chains too: this stack's skip
+                // accumulator is seeded with the preceding stack's
+                // head-rechannel output, so the widths must agree
+                // (the reference memcpy assumes it).
+                let skip_ch = if s.head1x1.active {
+                    s.head1x1.out_channels
+                } else {
+                    s.bottleneck
+                };
+                if skip_ch != prev.head_size {
+                    return Err(format!(
+                        "WaveNet stack {si}: head accumulator width ({skip_ch}) doesn't match head_size of preceding stack ({})",
+                        prev.head_size
+                    ));
                 }
             }
         }
@@ -435,29 +421,18 @@ impl WaveNetModel {
             };
 
             // --- Rechannel (1x1, no bias) ---
-            // Reference semantics: the reference LayerArray ctor constructs
+            // The reference LayerArray ctor constructs
             // `_rechannel(params.input_size, params.channels, false)`
             // UNCONDITIONALLY and `set_weights_` always consumes its
             // input_size*channels weights — a 1-to-1 rechannel is a learned
-            // conv, not an identity. Legacy keeps the historical
-            // skip-when-equal (bit-identical A1 path).
-            if reference {
-                let weight = reader.read(ch * prev_ch)?;
-                rechannels.push(Some(Conv1x1 {
-                    weight,
-                    out_ch: ch,
-                    in_ch: prev_ch,
-                }));
-            } else if prev_ch != ch {
-                let weight = reader.read(ch * prev_ch)?;
-                rechannels.push(Some(Conv1x1 {
-                    weight,
-                    out_ch: ch,
-                    in_ch: prev_ch,
-                }));
-            } else {
-                rechannels.push(None);
-            }
+            // conv, not an identity (trainers export its weights even for
+            // equal widths).
+            let weight = reader.read(ch * prev_ch)?;
+            rechannels.push(Conv1x1 {
+                weight,
+                out_ch: ch,
+                in_ch: prev_ch,
+            });
 
             // --- Layers ---
             let mut layers = Vec::with_capacity(stack_cfg.dilations.len());
@@ -477,8 +452,8 @@ impl WaveNetModel {
                 };
                 // Secondary (gate/blend) activation: config-driven, with the
                 // reference backward-compat `Sigmoid` default resolving to
-                // the fast sigmoid in legacy mode (bit-identical A1 gated
-                // path) and the exact sigmoid under reference semantics.
+                // the fast sigmoid for A1-flavor files and the exact
+                // sigmoid for A2-marked ones.
                 let gating = match mode {
                     GatingMode::None => LayerGating::None,
                     GatingMode::Gated | GatingMode::Blended => {
@@ -656,10 +631,10 @@ impl WaveNetModel {
                     groups_input: g_in,
                     groups_input_mixin: g_mixin,
                     // Resolve activation dispatch once, at construction.
-                    // Legacy mode maps the A1 "Tanh" config to the
-                    // fast-tanh path, exactly as the previously hardcoded
-                    // implementation (bit-identical); reference semantics
-                    // use the exact functions.
+                    // A1-flavor files map the "Tanh" config to the
+                    // fast-tanh path (matching the official plugin's
+                    // enable_fast_tanh); A2-marked files use the exact
+                    // functions.
                     activation: Activation::from_config(layer_activation_cfg(layer_idx), fast),
                     gating,
                     conv_pre_film,
@@ -772,8 +747,9 @@ impl WaveNetModel {
         };
 
         // Head MLP hidden-layer activation (A1: "Tanh" -> fast tanh; taken
-        // from the first stack's first layer activation, as before). The
-        // head MLP is legacy-only (reference semantics reject it above).
+        // from the first stack's first layer activation, as before). Only
+        // configs carrying a legacy MLP-shaped head reach this path (the
+        // A2-style post-stack head is rejected at parse).
         let head_activation = config
             .stacks
             .first()
@@ -835,16 +811,14 @@ impl WaveNetModel {
         let scratch_film_ss = vec![0.0f32; max_film_ss];
 
         for (si, rc) in rechannels.iter().enumerate() {
-            if let Some(ref rc) = rc {
-                if !validate_matvec_dims(
-                    &rc.weight,
-                    &scratch_activation[..rc.in_ch],
-                    &scratch_activation[..rc.out_ch],
-                    rc.out_ch,
-                    rc.in_ch,
-                ) {
-                    return Err(format!("WaveNet stack {si}: rechannel dimension mismatch"));
-                }
+            if !validate_matvec_dims(
+                &rc.weight,
+                &scratch_activation[..rc.in_ch],
+                &scratch_activation[..rc.out_ch],
+                rc.out_ch,
+                rc.in_ch,
+            ) {
+                return Err(format!("WaveNet stack {si}: rechannel dimension mismatch"));
             }
         }
         for (si, stack) in stacks.iter().enumerate() {
@@ -976,7 +950,6 @@ impl WaveNetModel {
             in_channels: config.input_size,
             head_size,
             out_channels,
-            reference_semantics: reference,
             rechannels,
             stacks,
             head_rechannels,
@@ -1051,38 +1024,32 @@ impl WaveNetModel {
             let ch = stack[0].channels;
             let bottleneck = stack[0].bottleneck;
 
-            // Rechannel if needed
-            if let Some(ref rc) = self.rechannels[stack_idx] {
-                matvec(
-                    &rc.weight,
-                    &self.activation[..rc.in_ch],
-                    rc.out_ch,
-                    rc.in_ch,
-                    &mut self.rechannel_buf,
-                );
-                self.activation[..rc.out_ch].copy_from_slice(&self.rechannel_buf[..rc.out_ch]);
-            }
+            // Rechannel (always present; the reference constructs and
+            // applies it unconditionally, a 1-to-1 rechannel included).
+            let rc = &self.rechannels[stack_idx];
+            matvec(
+                &rc.weight,
+                &self.activation[..rc.in_ch],
+                rc.out_ch,
+                rc.in_ch,
+                &mut self.rechannel_buf,
+            );
+            self.activation[..rc.out_ch].copy_from_slice(&self.rechannel_buf[..rc.out_ch]);
 
             // Save the condition snapshot the layers' input_mixin and FiLM
             // sites read (all of them index rechannel_buf). With a
             // condition_dsp its per-sample output IS the condition for
             // every stack (reference passes `_condition_output` to each
-            // LayerArray). Without one:
-            //  - reference semantics: the condition is the RAW model input
-            //    for every stack (reference `_process_condition` copies
-            //    `_condition_input` through; construction validated
-            //    condition_size == input_size == 1);
-            //  - legacy: the post-rechannel activation snapshot (the
-            //    #1113-recorded engine-ism; layers modify activation
-            //    in-place, so it must be saved here) — unchanged,
-            //    bit-identical A1 behavior.
+            // LayerArray). Without one, the condition is the RAW model
+            // input for every stack (reference `_process_condition` copies
+            // `_condition_input` through; construction validated
+            // condition_size == input_size == 1).
             match &self.condition_dsp {
                 Some(_) => {
                     let n = self.condition_buf.len();
                     self.rechannel_buf[..n].copy_from_slice(&self.condition_buf);
                 }
-                None if self.reference_semantics => self.rechannel_buf[0] = input,
-                None => self.rechannel_buf[..ch].copy_from_slice(&self.activation[..ch]),
+                None => self.rechannel_buf[0] = input,
             }
 
             // Skip accumulator for this stack. Its width follows the
@@ -1091,17 +1058,16 @@ impl WaveNetModel {
             // layers of a stack share one head1x1 config (per-layer-array in
             // the reference), so the width is uniform within the stack.
             //
-            // Reference semantics CHAIN the stacks' head paths
-            // (`LayerArray::Process` with head inputs): stack 0 starts at
-            // zero, and every later stack starts from the preceding
-            // stack's head-rechannel output (`head_input` here, widths
-            // validated equal at construction). Legacy always starts at
-            // zero and sums the per-stack head-rechannel outputs instead.
+            // The stacks' head paths CHAIN (reference `LayerArray::Process`
+            // with head inputs): stack 0 starts at zero, and every later
+            // stack starts from the preceding stack's head-rechannel
+            // output (`head_input` here, widths validated equal at
+            // construction).
             let skip_ch = stack[0]
                 .head1x1
                 .as_ref()
                 .map_or(bottleneck, |h| h.out_ch);
-            if self.reference_semantics && stack_idx > 0 {
+            if stack_idx > 0 {
                 let (seed, _) = self.head_input.split_at(skip_ch);
                 self.skip_accum[..skip_ch].copy_from_slice(seed);
             } else {
@@ -1348,18 +1314,10 @@ impl WaveNetModel {
                         }
                     }
                     None => {
-                        // No layer1x1. Reference semantics: the residual is
-                        // the identity — the next layer's input is the raw
-                        // layer input alone (`_output_next_layer = input`
-                        // in Layer::Process), which already sits in
-                        // `self.activation`. Legacy (old-format) semantics
-                        // add the activated z (bottleneck == channels,
-                        // enforced at construction).
-                        if !self.reference_semantics {
-                            for c in 0..ch {
-                                self.activation[c] += self.conv_out[c];
-                            }
-                        }
+                        // No layer1x1: the residual is the identity — the
+                        // next layer's input is the raw layer input alone
+                        // (`_output_next_layer = input` in Layer::Process),
+                        // which already sits in `self.activation`.
                     }
                 }
             }
@@ -1369,18 +1327,11 @@ impl WaveNetModel {
             let hr = &self.head_rechannels[stack_idx];
             match &mut self.head_rings[stack_idx] {
                 None => {
-                    // Kernel-1 path (A1 / head_kernel_size == 1, memoryless).
-                    // Legacy semantics apply a pre-activation on skip_accum
-                    // before the head_rechannel, using the stack's
-                    // configured activation (A1: fast tanh) — the
-                    // historical engine head path, kept bit-identical. The
-                    // reference has NO such activation
+                    // Kernel-1 path (A1 / head_kernel_size == 1,
+                    // memoryless). The reference applies NO activation here
                     // (`_head_rechannel.Process(_head_inputs)` directly in
                     // LayerArray::ProcessInner): the per-layer skip
                     // contributions are already activated z.
-                    if !self.reference_semantics {
-                        stack[0].activation.apply(&mut self.skip_accum[..skip_ch]);
-                    }
                     matvec(
                         &hr.taps[0],
                         &self.skip_accum[..hr.in_ch],
@@ -1420,20 +1371,13 @@ impl WaveNetModel {
                     }
                 }
             }
-            // Reference semantics: `head_input` holds the current stack's
-            // head-rechannel output alone — it seeds the next stack's skip
-            // accumulator, and after the last stack it IS the model output
-            // (reference `WaveNet::process` reads only
-            // `_layer_arrays.back().GetHeadOutputs()`). Legacy sums every
-            // stack's head-rechannel output instead.
-            if self.reference_semantics {
-                for c in 0..hr.out_ch {
-                    self.head_input[c] = self.head_buf_a[c] + hr.bias[c];
-                }
-            } else {
-                for c in 0..hr.out_ch {
-                    self.head_input[c] += self.head_buf_a[c] + hr.bias[c];
-                }
+            // `head_input` holds the current stack's head-rechannel output
+            // alone — it seeds the next stack's skip accumulator, and
+            // after the last stack it IS the model output (reference
+            // `WaveNet::process` reads only
+            // `_layer_arrays.back().GetHeadOutputs()`).
+            for c in 0..hr.out_ch {
+                self.head_input[c] = self.head_buf_a[c] + hr.bias[c];
             }
         }
 

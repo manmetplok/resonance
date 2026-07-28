@@ -182,10 +182,11 @@ fn blended_honors_configured_blend_activation() {
 
 /// `gating_mode: "gated"` with no secondary must equal an explicit
 /// `"Sigmoid"` secondary bit-for-bit (the reference backward-compat
-/// default; both run under reference semantics with the exact sigmoid).
-/// The legacy boolean `gated: true` carries NO A2 marker and stays on the
-/// historical A1 path (fast_tanh * fast_sigmoid, skip pre-activation) —
-/// the #1113 semantic gate — so it must NOT match the reference pair.
+/// default; both are A2-marked, so both use the exact sigmoid).
+/// The legacy boolean `gated: true` carries NO A2 marker and keeps the A1
+/// ACTIVATION FLAVOR (fast_tanh * fast_sigmoid) — the gate's only
+/// remaining effect since #1116 (structure is shared) — so it must NOT
+/// match the exact-flavor pair.
 #[test]
 fn a1_gated_default_and_explicit_sigmoid_secondary_are_bit_identical() {
     let base = r#""input_size": 1, "condition_size": 1, "head_size": 1,
@@ -231,15 +232,15 @@ fn a1_gated_default_and_explicit_sigmoid_secondary_are_bit_identical() {
     }
     assert!(
         legacy_differs,
-        "legacy `gated: true` must stay on the historical A1 path, distinct from reference semantics"
+        "`gated: true` must keep the fast A1 activation flavor, distinct from the exact flavor"
     );
 }
 
 /// A single `gating_mode: "none"` string must be bit-identical to the
-/// per-layer `["none", "none"]` array (both are A2 markers, both run under
-/// reference semantics). Omitting gating entirely is the A1 surface and
-/// stays on the legacy path — the #1113 semantic gate — so it must NOT
-/// match.
+/// per-layer `["none", "none"]` array (both are A2 markers, both use the
+/// exact activations). Omitting gating entirely is the A1 surface and
+/// keeps the fast Tanh flavor — the gate's only remaining effect since
+/// #1116 — so it must NOT match.
 #[test]
 fn gating_mode_none_is_bit_identical_to_per_layer_none_array() {
     let base = r#""input_size": 1, "condition_size": 1, "head_size": 1,
@@ -261,13 +262,13 @@ fn gating_mode_none_is_bit_identical_to_per_layer_none_array() {
 
     let mut a = load_nam("none_explicit", &new_format_json(&with_mode, &weights)).unwrap();
     let mut b = load_nam("none_array", &new_format_json(&with_array, &weights)).unwrap();
-    let mut legacy = load_nam("none_implicit", &new_format_json(&without, &weights)).unwrap();
+    let mut fast_flavor = load_nam("none_implicit", &new_format_json(&without, &weights)).unwrap();
     let mut legacy_differs = false;
     for i in 0..16 {
         let x = ((i as f32) * 0.53).cos() * 0.6;
         let ra = a.process_sample(x);
         let rb = b.process_sample(x);
-        let rl = legacy.process_sample(x);
+        let rl = fast_flavor.process_sample(x);
         assert!(ra.is_finite());
         assert!(rl.is_finite());
         assert_eq!(ra.to_bits(), rb.to_bits());
@@ -275,7 +276,7 @@ fn gating_mode_none_is_bit_identical_to_per_layer_none_array() {
     }
     assert!(
         legacy_differs,
-        "an A1 file without gating fields must stay on the legacy path, distinct from reference semantics"
+        "an A1 file without gating fields must keep the fast Tanh flavor, distinct from the exact flavor"
     );
 }
 
@@ -316,7 +317,7 @@ fn mixed_per_layer_gating_consumes_reference_weight_count() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     // rechannel 2 + layer0 (mid 2: conv 8 + bias 2 + mixin 2 + l1x1 6 = 18)
     // + layer1 (mid 4: conv 16 + bias 4 + mixin 4 + l1x1 6 = 30)
@@ -429,7 +430,7 @@ fn fixture_typed_gating_vectors_drive_construction() {
         head_size: 1,
         has_layer1x1: true,
         condition_dsp: None,
-        reference_semantics: false,
+        fast_activations: true,
     };
     let weights = counted_weights(count);
     let mut reader = WeightReader::new(&weights);
