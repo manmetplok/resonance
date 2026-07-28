@@ -60,7 +60,8 @@ pub mod __test_support {
     pub use crate::types::{StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
     pub use crate::latency::{
-        add_external_offsets, chain_latencies, compensation_delays, LatencyComp,
+        add_external_offsets, bus_chain_latencies, chain_latencies, compensation_delays,
+        LatencyComp,
     };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
@@ -72,7 +73,8 @@ pub mod __test_support {
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
         monitor_catchup_skip, monitor_read_len, ramped_gain, recorded_monitor_gate,
-        render_aux_for_test, sum_to_output, sum_to_stereo, transport_pos_beats,
+        render_aux_for_test, render_aux_with_comp_for_test, sum_to_output, sum_to_stereo,
+        transport_pos_beats,
         whole_frame_push_len,
     };
     pub use crate::stream_errors::{

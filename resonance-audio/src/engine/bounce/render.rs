@@ -160,14 +160,17 @@ pub(super) fn build_latency_comp(
     let tracks_guard = tracks.read();
     let busses_guard = busses.read();
     let plugins_guard = plugins.read();
-    let chains = crate::latency::chain_latencies(&tracks_guard, &busses_guard, |id| {
+    let latency_of = |id: PluginInstanceId| {
         plugins_guard
             .get(&id)
             .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
             .unwrap_or(0)
-    });
-    let (max, delays) = crate::latency::compensation_delays(&chains);
-    LatencyComp::new(max, &delays)
+    };
+    let chains = crate::latency::chain_latencies(&tracks_guard, latency_of);
+    let bus_chains = crate::latency::bus_chain_latencies(&busses_guard, latency_of);
+    let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
+    let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);
+    LatencyComp::new(track_max, &track_delays, bus_max, &bus_delays)
 }
 
 /// Reset every plugin so the bounce starts from a clean state. Without

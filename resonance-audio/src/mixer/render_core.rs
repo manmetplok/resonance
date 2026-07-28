@@ -1170,6 +1170,14 @@ pub(crate) fn render_block(
         }
     }
 
+    // Bus-stage equalization for master-direct signals: everything the
+    // track pass summed straight into the output (`data` holds exactly
+    // those contributions here — the bus pass below hasn't run yet) is
+    // delayed by the shared dry line so it arrives together with
+    // signals that traverse a bus chain (see `crate::latency`). No-op
+    // when no bus carries latency.
+    latency_comp.apply_dry(data, channels, frames, playhead);
+
     // Per-bus processing: plugin chain, volume/pan, peaks, sum to master.
     for (bus_idx, bus) in busses_guard.values().enumerate().take(active_busses) {
         let bus_auto_gain = auto_gain_ramp(
@@ -1203,6 +1211,14 @@ pub(crate) fn render_block(
                 }
             }
         }
+
+        // Bus-stage equalization: pad this bus's chain up to the
+        // longest bus chain, so every path through *any* bus (main
+        // output or aux send) reaches master with the same bus-stage
+        // latency (see `crate::latency`). Runs before peaks / fader /
+        // send taps; every active bus is processed each block, so
+        // delayed tails keep flushing.
+        latency_comp.apply_bus(bus.id, &mut bus_buf_l[..frames], &mut bus_buf_r[..frames], playhead);
 
         // Compute post-fader peaks (live only).
         if strategy.is_live() {
