@@ -43,6 +43,13 @@ fn fixture_path(name: &str) -> String {
     format!("{}/tests/fixtures/a2/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+fn lstm_fixture_path() -> String {
+    format!(
+        "{}/tests/fixtures/lstm/lstm.nam",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 /// An A1-shaped model (no A2 markers), so the fast-activation A1 flavor
 /// is audited alongside the exact-flavor A2 fixtures (both share the
 /// reference forward structure since ba todo #1116).
@@ -96,6 +103,9 @@ fn process_sample_never_allocates_across_all_model_kinds() {
         .expect("legacy A1 model loads");
     models.push(("legacy A1".to_string(), legacy.model));
     let _ = std::fs::remove_file(&legacy_path);
+    // The recurrent architecture too (real NAM LSTM export, ba todo #1115).
+    let lstm = load_model_from_file(&lstm_fixture_path()).expect("LSTM fixture loads");
+    models.push(("lstm.nam".to_string(), lstm.model));
 
     for (name, model) in &mut models {
         // Warm up (also covers reset + the first samples, which fill the
