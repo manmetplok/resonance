@@ -917,6 +917,17 @@ source = "git+https://github.com/prokopyl/clack.git?rev=4541f03792635dfdc6be9441
 dependencies = [
  "bitflags 2.11.0",
  "clack-common",
+ "clack-host",
+ "clack-plugin",
+ "clap-sys",
+]
+
+[[package]]
+name = "clack-host"
+version = "0.1.0"
+source = "git+https://github.com/prokopyl/clack.git?rev=4541f03792635dfdc6be9441a01b786e9b4ccf18#4541f03792635dfdc6be9441a01b786e9b4ccf18"
+dependencies = [
+ "clack-common",
  "clack-plugin",
  "clap-sys",
 ]
@@ -5233,6 +5244,7 @@ name = "resonance-plugin"
 version = "0.1.0"
 dependencies = [
  "clack-extensions",
+ "clack-host",
  "clack-plugin",
  "iced",
  "parking_lot",

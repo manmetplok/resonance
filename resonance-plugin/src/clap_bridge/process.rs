@@ -34,6 +34,15 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             audio_config.max_frames_count,
         );
 
+        // Capture the plugin's latency now that it is fully initialized —
+        // some plugins (e.g. resonance-mastering) only build their DSP chain
+        // inside `initialize()`, so any earlier query would read 0. The
+        // plugin object moves into the audio processor below, so the
+        // main-thread latency extension can no longer reach it; the host's
+        // single post-activation `latency.get()` is served from this cached
+        // value instead (CLAP only defines the query while active).
+        main_thread.last_latency = plugin.latency_samples();
+
         let max_frames = audio_config.max_frames_count as usize;
         let port_count = shared.output_ports.len();
         let output_scratch = (0..port_count)

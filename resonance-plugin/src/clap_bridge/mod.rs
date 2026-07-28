@@ -227,10 +227,19 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
 impl<'a, P: ResonancePlugin> PluginLatencyImpl for ClapMainThread<'a, P> {
     fn get(&mut self) -> u32 {
         if let Some(plugin) = &self.plugin {
+            // Inactive: the plugin lives on the main thread — ask it
+            // directly. Note that before the first activation some plugins
+            // report 0 here because their DSP chain is only built in
+            // `initialize()`; the CLAP spec only defines this query while
+            // the plugin is active.
             let lat = plugin.latency_samples();
             self.last_latency = lat;
             lat
         } else {
+            // Active: the plugin object moved into the audio processor.
+            // Serve the value captured post-`initialize()` during
+            // `activate` — this is the path the host's activation-time
+            // query takes.
             self.last_latency
         }
     }
