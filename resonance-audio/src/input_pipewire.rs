@@ -411,13 +411,19 @@ fn on_process(stream: &pw::stream::Stream, user_data: &mut UserData) {
 
 #[inline]
 fn push_to_ringbufs(user_data: &mut UserData, samples: &[f32], frame_stride: usize) {
-    let capture = user_data.shared.recording.load(Ordering::Relaxed)
+    let recording = user_data.shared.recording.load(Ordering::Relaxed);
+    let capture = recording
         || user_data
             .capture_gate
             .as_ref()
             .is_some_and(|g| g.load(Ordering::Relaxed));
     if capture {
         if let Some(prod) = user_data.rec_producer.as_mut() {
+            if recording {
+                // First push of a session latches the aligned take
+                // start (doc #260 finding #2).
+                user_data.shared.latch_recording_start();
+            }
             // Whole frames only — a partial push on overflow would
             // rotate the take's channels forever (finding #17).
             if crate::mixer::push_recording_frames(prod, samples, frame_stride) {

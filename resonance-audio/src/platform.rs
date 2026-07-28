@@ -533,10 +533,16 @@ fn build_input_stream_cpal(
         let mut monitor_resampler = (sample_rate != engine_sample_rate)
             .then(|| MonitorResampler::new(sample_rate, engine_sample_rate, stride));
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            let capture = shared.recording.load(Ordering::Relaxed)
+            let recording = shared.recording.load(Ordering::Relaxed);
+            let capture = recording
                 || capture_gate.as_ref().is_some_and(|g| g.load(Ordering::Relaxed));
             if capture {
                 if let Some(ref mut prod) = rec_producer {
+                    if recording {
+                        // First push of a session latches the aligned
+                        // take start (doc #260 finding #2).
+                        shared.latch_recording_start();
+                    }
                     // Whole frames only — a partial push on overflow
                     // would rotate the take's channels (finding #17).
                     if crate::mixer::push_recording_frames(prod, data, stride) {

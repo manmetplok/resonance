@@ -177,6 +177,18 @@ pub struct SharedState {
     /// cycle by the output process callback; 0 on the cpal fallback
     /// (which cannot report it — part of why it is a fallback).
     pub playback_latency_samples: AtomicU64,
+    /// True from the moment a recording session arms its flags until
+    /// the input callback pushes the session's first frames. That push
+    /// latches the take's aligned start position into
+    /// `recording_start_latch` (see [`SharedState::latch_recording_start`]),
+    /// eliminating the stream-open / engine-cadence variance that used
+    /// to land inside takes (doc #260 finding #2).
+    pub recording_start_pending: AtomicBool,
+    /// The raw playhead latched at the session's first captured frame.
+    /// The engine loop turns it into the take's aligned start (minus
+    /// measured I/O latency for performer sessions), so recorded audio
+    /// lands where the performer heard the mix.
+    pub recording_start_latch: AtomicU64,
     /// Master-chain latency in samples (0 while master FX are
     /// bypassed), published by the engine thread's comp refresh. The
     /// audio callback reads it to latency-match the reference A/B
@@ -238,6 +250,35 @@ pub struct SharedState {
     pub audition_finished: AtomicBool,
 }
 
+impl SharedState {
+    /// Called by the capture callbacks on every recording push: on the
+    /// *first* push of a session (armed via `recording_start_pending`)
+    /// latch the raw playhead at that instant into
+    /// `recording_start_latch`. That is the first moment capture data
+    /// actually flows — after the stream-open delay, independent of the
+    /// engine thread's wake cadence — so the stream-open gap can never
+    /// land inside a take (doc #260 finding #2). The engine loop then
+    /// derives the take's aligned start from it (subtracting the
+    /// measured capture+playback latency for performer sessions).
+    /// Subsequent pushes are a single relaxed load + failed CAS.
+    pub fn latch_recording_start(&self) {
+        if self
+            .recording_start_pending
+            .compare_exchange(
+                true,
+                false,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            let playhead = self.playhead.load(std::sync::atomic::Ordering::Relaxed);
+            self.recording_start_latch
+                .store(playhead, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 impl Default for SharedState {
     fn default() -> Self {
         Self {
@@ -264,6 +305,8 @@ impl Default for SharedState {
             master_latency_samples: AtomicU64::new(0),
             capture_latency_samples: AtomicU64::new(0),
             playback_latency_samples: AtomicU64::new(0),
+            recording_start_pending: AtomicBool::new(false),
+            recording_start_latch: AtomicU64::new(0),
             reference: reference::ReferenceMonitor::default(),
             mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),

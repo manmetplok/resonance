@@ -84,6 +84,11 @@ pub struct RecordingState {
     /// the bounced take lands where the live return sounded (doc #260
     /// finding #4); 0 for normal recording.
     pub take_shift_samples: i64,
+    /// Whether this session's latched (I/O-aligned) start position has
+    /// been applied to `start_sample` by the engine loop (doc #260
+    /// finding #2). Reset when a session opens; applied once the input
+    /// callback clears `SharedState::recording_start_pending`.
+    pub start_latch_applied: bool,
     /// Reusable per-track deinterleave scratch. Lives here rather than
     /// being a stack local in `drain_ring_to_buffers` so the engine
     /// thread doesn't allocate a fresh `Vec` 60× per second while
@@ -135,6 +140,7 @@ impl RecordingState {
             loop_record: false,
             precount: None,
             take_shift_samples: 0,
+            start_latch_applied: true,
             deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
         }
     }

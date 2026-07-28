@@ -402,6 +402,28 @@ pub(crate) fn engine_thread(
             }
         }
 
+        // Apply the take start latched by the input callback's first
+        // push (doc #260 finding #2) before anything is drained against
+        // the old estimate. Performer sessions subtract the measured
+        // capture+playback latency so the take lands where the
+        // performer heard the mix; a realtime bounce keeps the raw
+        // latch — its take is aligned by the external round-trip shift
+        // instead (see `bounce_realtime` + `apply_take_shift`), which
+        // already covers the input side.
+        if !state.rec.start_latch_applied
+            && !ctx.shared.recording_start_pending.load(Ordering::Acquire)
+        {
+            let latched = ctx.shared.recording_start_latch.load(Ordering::Acquire);
+            let io = if state.pending_bounce.is_some() {
+                0
+            } else {
+                ctx.shared.capture_latency_samples.load(Ordering::Relaxed)
+                    + ctx.shared.playback_latency_samples.load(Ordering::Relaxed)
+            };
+            state.rec.start_sample = latched.saturating_sub(io);
+            state.rec.start_latch_applied = true;
+        }
+
         // Drain recording ring buffer into per-track buffers
         if ctx.shared.recording.load(Ordering::Relaxed) {
             state.rec.drain_ring_to_buffers();
