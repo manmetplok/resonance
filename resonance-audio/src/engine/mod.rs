@@ -165,6 +165,11 @@ pub struct SharedState {
     /// bounce/export threads so their latency comp folds the same
     /// offsets the live mixer compensates (doc #260 finding #4).
     pub external_offsets: arc_swap::ArcSwap<std::collections::HashMap<TrackId, i64>>,
+    /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
+    /// (the comp clamp is engaging and alignment for that chain is
+    /// degraded). Used to emit the warning once per engagement instead
+    /// of on every comp refresh (doc #260 finding #20).
+    pub comp_clamp_engaged: AtomicBool,
     /// Reference A/B monitor snapshot. Published by the control thread
     /// (`reference::ReferencePlayer::publish`) and read lock-free by the
     /// audio callback to replace the post-master output with the active
@@ -237,6 +242,7 @@ impl Default for SharedState {
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
+            comp_clamp_engaged: AtomicBool::new(false),
             reference: reference::ReferenceMonitor::default(),
             mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),

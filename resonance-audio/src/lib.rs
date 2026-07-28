@@ -61,8 +61,8 @@ pub mod __test_support {
     pub use crate::types::{StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
     pub use crate::latency::{
-        add_external_offsets, bus_chain_latencies, chain_latencies, compensation_delays,
-        master_chain_latency, LatencyComp,
+        add_external_offsets, bus_chain_latencies, chain_latencies, comp_latency_clamped,
+        compensation_delays, master_chain_latency, LatencyComp,
     };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::recording::apply_take_shift;

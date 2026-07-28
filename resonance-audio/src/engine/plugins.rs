@@ -93,6 +93,25 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
         .map(|(&id, c)| (id, c.latency_offset_samples))
         .collect();
     ctx.shared.external_offsets.store(Arc::new(offsets));
+    // Surface the MAX_COMP_LATENCY clamp: beyond it, compensation
+    // silently stops matching the real chain latency and alignment
+    // degrades. Warn once per engagement (and re-arm when the chains
+    // drop back under the limit) via the engine's normal error surface
+    // (doc #260 finding #20).
+    let clamped = crate::latency::comp_latency_clamped(&chains)
+        || crate::latency::comp_latency_clamped(&bus_chains);
+    let was_engaged = ctx
+        .shared
+        .comp_clamp_engaged
+        .swap(clamped, std::sync::atomic::Ordering::Relaxed);
+    if clamped && !was_engaged {
+        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            "Plugin-delay compensation limit reached: a chain reports more than {} samples \
+             of latency; timing for that path is no longer fully compensated. Consider \
+             bypassing or removing the highest-latency plugin.",
+            crate::limits::MAX_COMP_LATENCY
+        )));
+    }
     let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
     let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);
     if ctx

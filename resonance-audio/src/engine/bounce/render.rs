@@ -356,9 +356,17 @@ pub(super) fn render_chunk(
     if include_master_fx {
         // A master-gain automation lane ramps across the chunk (start..end
         // sampled at the chunk boundaries); otherwise the static master
-        // volume applies as a constant.
-        let auto_start = crate::mixer::auto_master_volume(ctx.automation, pos);
-        let auto_end = crate::mixer::auto_master_volume(ctx.automation, pos + frames as u64);
+        // volume applies as a constant. Evaluated at the comp-delayed
+        // position — the summed mix at the master pass is max_latency()
+        // behind the raw render position — matching the live mixer
+        // (doc #260 finding #9).
+        let comp_shift = ctx.latency_comp.max_latency();
+        let auto_start =
+            crate::mixer::auto_master_volume(ctx.automation, pos.saturating_sub(comp_shift));
+        let auto_end = crate::mixer::auto_master_volume(
+            ctx.automation,
+            (pos + frames as u64).saturating_sub(comp_shift),
+        );
         if let (Some(g0), Some(g1)) = (auto_start, auto_end) {
             let inv = if frames > 0 { 1.0 / frames as f32 } else { 0.0 };
             for f in 0..frames {
