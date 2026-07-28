@@ -175,6 +175,23 @@ pub fn whole_frame_push_len(len: usize, vacant: usize, frame_stride: usize) -> u
     len.min(vacant) / frame_stride * frame_stride
 }
 
+/// Push interleaved capture samples into the recording ring in whole
+/// frames only — like the monitor path — so an overflow can never leave
+/// a partial frame behind and permanently rotate the take's channel
+/// alignment (doc #260 finding #17). Returns true when any samples were
+/// dropped so the caller can raise the overflow flag.
+#[inline]
+pub fn push_recording_frames(
+    prod: &mut ringbuf::HeapProd<f32>,
+    samples: &[f32],
+    frame_stride: usize,
+) -> bool {
+    use ringbuf::traits::{Observer, Producer};
+    let take = whole_frame_push_len(samples.len(), prod.vacant_len(), frame_stride.max(1));
+    let _ = prod.push_slice(&samples[..take]);
+    take < samples.len()
+}
+
 /// Whole-frame catch-up skip for the monitor ring: when `available`
 /// exceeds `needed` plus one quantum of jitter margin, skip down to
 /// that margin (never to exactly `needed`, which would re-overflow on
