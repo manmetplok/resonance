@@ -1,4 +1,5 @@
 /// NAM (Neural Amp Modeler) model inference.
+pub mod activations;
 pub mod lstm;
 pub mod parse;
 pub mod wavenet;
@@ -54,21 +55,116 @@ pub fn matvec_add(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32])
     }
 }
 
-/// Fast tanh approximation using a degree-7/6 Padé approximant.
-/// Accurate to ~20 bits across the full range — more than sufficient
-/// for neural network inference on audio signals.
-#[inline(always)]
-pub fn fast_tanh(x: f32) -> f32 {
-    // Clamp to avoid overflow in x^6/x^7 terms
-    let x = x.clamp(-5.0, 5.0);
-    let x2 = x * x;
-    let num = x * (135135.0 + x2 * (17325.0 + x2 * (378.0 + x2)));
-    let den = 135135.0 + x2 * (62370.0 + x2 * (3150.0 + x2 * 28.0));
-    num / den
+/// Validate buffer dimensions for a grouped matrix-vector operation. The
+/// compact grouped weight holds `rows * cols / groups` values (each group is
+/// a `[rows/groups x cols/groups]` row-major block); `groups == 1` is the
+/// dense case of [`validate_matvec_dims`].
+pub fn validate_grouped_matvec_dims(
+    a: &[f32],
+    x: &[f32],
+    y: &[f32],
+    rows: usize,
+    cols: usize,
+    groups: usize,
+) -> bool {
+    groups >= 1
+        && rows.is_multiple_of(groups)
+        && cols.is_multiple_of(groups)
+        && a.len() >= rows * cols / groups
+        && x.len() >= cols
+        && y.len() >= rows
 }
 
-/// Fast sigmoid derived from fast_tanh: sigmoid(x) = 0.5 + 0.5 * tanh(x/2).
+/// Grouped matrix-vector multiply: `y = blockdiag(A_0, ..., A_{G-1}) * x`.
+///
+/// Mirrors the reference NAM grouped `Conv1D`/`Conv1x1` semantics
+/// (NAM/conv1d.cpp, NAM/dsp.cpp): the `cols` input channels and `rows`
+/// output channels are split into `groups` contiguous blocks, and output
+/// block g sees only input block g. `a` is the compact grouped weight —
+/// `groups` concatenated row-major `[rows/groups x cols/groups]` matrices,
+/// exactly the flat `[g][i][j]` order the reference consumes.
+///
+/// `groups == 1` dispatches to the dense [`matvec`] unchanged, so ungrouped
+/// (A1) models keep the historical code path bit-for-bit.
+#[inline(always)]
+pub fn grouped_matvec(
+    a: &[f32],
+    x: &[f32],
+    rows: usize,
+    cols: usize,
+    groups: usize,
+    y: &mut [f32],
+) {
+    if groups <= 1 {
+        matvec(a, x, rows, cols, y);
+        return;
+    }
+    let opg = rows / groups;
+    let ipg = cols / groups;
+    let block = opg * ipg;
+    for g in 0..groups {
+        matvec(
+            &a[g * block..(g + 1) * block],
+            &x[g * ipg..(g + 1) * ipg],
+            opg,
+            ipg,
+            &mut y[g * opg..(g + 1) * opg],
+        );
+    }
+}
+
+/// Grouped matrix-vector multiply-add: `y += blockdiag(A_0, ..., A_{G-1}) * x`.
+///
+/// Same layout and grouping semantics as [`grouped_matvec`]; `groups == 1`
+/// dispatches to the dense [`matvec_add`] unchanged.
+#[inline(always)]
+pub fn grouped_matvec_add(
+    a: &[f32],
+    x: &[f32],
+    rows: usize,
+    cols: usize,
+    groups: usize,
+    y: &mut [f32],
+) {
+    if groups <= 1 {
+        matvec_add(a, x, rows, cols, y);
+        return;
+    }
+    let opg = rows / groups;
+    let ipg = cols / groups;
+    let block = opg * ipg;
+    for g in 0..groups {
+        matvec_add(
+            &a[g * block..(g + 1) * block],
+            &x[g * ipg..(g + 1) * ipg],
+            opg,
+            ipg,
+            &mut y[g * opg..(g + 1) * opg],
+        );
+    }
+}
+
+/// Fast tanh — the EXACT rational approximation of the
+/// NeuralAmpModelerCore reference (`nam::activations::fast_tanh`,
+/// NAM/activations.h), term for term with the reference's own float
+/// literals. The official NAM plugin runs with `enable_fast_tanh()`, so
+/// A1-flavor files must use this precise formula for correct-vs-plugin
+/// output (ba todo #1116; the engine's previous Padé-approximant fast tanh
+/// deviated from the plugin by up to ~4e-3 at signal level).
+#[allow(clippy::excessive_precision)]
+#[inline(always)]
+pub fn fast_tanh(x: f32) -> f32 {
+    let ax = x.abs();
+    let x2 = x * x;
+    (x * (2.45550750702956f32 + 2.45550750702956f32 * ax
+        + (0.893229853513558f32 + 0.821226666969744f32 * ax) * x2))
+        / (2.44506634652299f32
+            + (2.44506634652299f32 + x2) * (x + 0.814642734961073f32 * x * ax).abs())
+}
+
+/// Fast sigmoid derived from fast_tanh, in the reference's exact form
+/// (`fast_sigmoid` in NAM/activations.h): 0.5 * (fast_tanh(x * 0.5) + 1).
 #[inline(always)]
 pub fn sigmoid(x: f32) -> f32 {
-    0.5 + 0.5 * fast_tanh(x * 0.5)
+    0.5 * (fast_tanh(x * 0.5) + 1.0)
 }

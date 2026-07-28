@@ -1,38 +1,69 @@
 /// LSTM inference engine for NAM models.
+///
+/// Mirrors the reference `NAM/lstm.cpp` (NeuralAmpModelerCore) exactly,
+/// including its weight layout, which is NOT PyTorch's: the trainer export
+/// concatenates each cell's input-to-hidden and hidden-to-hidden matrices
+/// into one `[4*hidden, input+hidden]` row-major matrix, sums the two bias
+/// vectors into one `[4*hidden]` bias, and then stores LEARNED initial
+/// hidden and cell states (`h0`, `c0`) per cell. The head is a plain
+/// `[1, hidden]` dense with bias and NO trailing head-scale weight (the
+/// reference constructor asserts the weight vector is fully consumed).
+///
+/// Gate math (reference `LSTMCell::process_`, gate order i, f, g, o):
+///
+/// ```text
+/// ifgo = W * [x; h] + b
+/// c    = sigmoid(f) * c + sigmoid(i) * tanh(g)
+/// h    = sigmoid(o) * tanh(c)
+/// ```
+///
+/// Activation flavor: the official NAM plugin runs
+/// `nam::activations::Activation::enable_fast_tanh()`, which switches the
+/// reference cell to `fast_sigmoid` / `fast_tanh` — that is what "correct"
+/// means for LSTM files in practice, so this engine uses the fast flavor
+/// (the same reference rational formulas, see `activations.rs`).
+/// Parity pin: `tests/nam_lstm_reference_parity.rs`.
+use super::activations::Activation;
 use super::parse::{LstmConfig, WeightReader};
-use super::{fast_tanh, matvec, matvec_add, sigmoid, validate_matvec_dims, NamInference};
+use super::{matvec, NamInference};
 
-struct LstmLayer {
-    /// Input-to-hidden weights [4*hidden_size, input_size_for_layer] row-major.
-    w_ih: Vec<f32>,
-    /// Hidden-to-hidden weights [4*hidden_size, hidden_size] row-major.
-    w_hh: Vec<f32>,
-    /// Input-to-hidden bias [4*hidden_size].
-    b_ih: Vec<f32>,
-    /// Hidden-to-hidden bias [4*hidden_size].
-    b_hh: Vec<f32>,
+struct LstmCell {
+    /// Combined weights `[4*hidden_size, input_size + hidden_size]`,
+    /// row-major (input columns first, then hidden columns).
+    w: Vec<f32>,
+    /// Combined bias `[4*hidden_size]` (the export sums b_ih + b_hh).
+    b: Vec<f32>,
+    /// Learned initial hidden state `[hidden_size]`.
+    h0: Vec<f32>,
+    /// Learned initial cell state `[hidden_size]`.
+    c0: Vec<f32>,
+    /// Current hidden state `[hidden_size]`.
+    h: Vec<f32>,
+    /// Current cell state `[hidden_size]`.
+    c: Vec<f32>,
     input_size: usize,
 }
 
 pub struct LstmModel {
     hidden_size: usize,
-    layers: Vec<LstmLayer>,
+    layers: Vec<LstmCell>,
 
     /// Output dense layer: weight [1, hidden_size], bias [1].
     output_weight: Vec<f32>,
     output_bias: f32,
-    /// Learned output scaling factor (last weight in the blob).
-    head_scale: f32,
 
-    // Pre-allocated state
-    /// Hidden state per layer [num_layers][hidden_size].
-    h: Vec<Vec<f32>>,
-    /// Cell state per layer [num_layers][hidden_size].
-    c: Vec<Vec<f32>>,
-    /// Scratch buffer for gate computation [4 * hidden_size].
+    /// Gate activation (i/f/o gates). LSTM gate activations are fixed by the
+    /// architecture, not model config; the NAM plugin runs the fast sigmoid.
+    gate_activation: Activation,
+    /// Cell activation (g gate and cell-state output): NAM fast tanh.
+    cell_activation: Activation,
+
+    // Pre-allocated scratch
+    /// Concatenated `[x; h]` input to the current cell
+    /// `[max input_size + hidden_size]`.
+    xh: Vec<f32>,
+    /// Gate pre-activations for the current cell `[4 * hidden_size]`.
     gates: Vec<f32>,
-    /// Scratch buffer holding the input to the current layer.
-    input_buf: Vec<f32>,
 }
 
 impl LstmModel {
@@ -41,78 +72,54 @@ impl LstmModel {
         reader: &mut WeightReader,
     ) -> Result<Self, String> {
         let hs = config.hidden_size;
+        if hs == 0 || config.num_layers == 0 {
+            return Err("LSTM config: hidden_size and num_layers must be nonzero".into());
+        }
         let mut layers = Vec::with_capacity(config.num_layers);
 
         for i in 0..config.num_layers {
             let layer_input = if i == 0 { config.input_size } else { hs };
 
-            // PyTorch LSTM weight ordering: w_ih, w_hh, b_ih, b_hh per layer
-            let w_ih = reader.read(4 * hs * layer_input)?;
-            let w_hh = reader.read(4 * hs * hs)?;
-            let b_ih = reader.read(4 * hs)?;
-            let b_hh = reader.read(4 * hs)?;
+            // Reference layout per cell: combined W [4hs, in+hs] row-major,
+            // combined bias [4hs], learned initial h [hs], learned initial
+            // c [hs] (NAM/lstm.cpp LSTMCell constructor order).
+            let w = reader.read(4 * hs * (layer_input + hs))?;
+            let b = reader.read(4 * hs)?;
+            let h0 = reader.read(hs)?;
+            let c0 = reader.read(hs)?;
 
-            layers.push(LstmLayer {
-                w_ih,
-                w_hh,
-                b_ih,
-                b_hh,
+            layers.push(LstmCell {
+                w,
+                b,
+                h: h0.clone(),
+                c: c0.clone(),
+                h0,
+                c0,
                 input_size: layer_input,
             });
         }
 
-        // Output dense layer
+        // Output dense layer: weight [1, hs] + bias [1]. The reference
+        // consumes exactly these and asserts nothing is left — there is no
+        // trailing head-scale weight in the LSTM export.
         let output_weight = reader.read(hs)?;
-        let output_bias_vec = reader.read(1)?;
+        let output_bias = reader.read(1)?[0];
 
-        // Head scale (last weight in the blob, like WaveNet)
-        let head_scale = if reader.remaining() >= 1 {
-            reader.read(1)?[0]
-        } else {
-            1.0
-        };
-
-        let gates = vec![0.0; 4 * hs];
-        let input_buf = vec![0.0; hs.max(config.input_size)];
-        let h = vec![vec![0.0; hs]; config.num_layers];
-
-        // Validate matvec dimensions for all LSTM layers at load time.
-        for (i, layer) in layers.iter().enumerate() {
-            let x_buf = if i == 0 {
-                &input_buf[..layer.input_size]
-            } else {
-                &h[0][..]
-            };
-            if !validate_matvec_dims(&layer.w_ih, x_buf, &gates, 4 * hs, layer.input_size) {
-                return Err(format!(
-                    "LSTM layer {}: w_ih dimension mismatch (w_ih={}, input_size={}, gates={})",
-                    i,
-                    layer.w_ih.len(),
-                    layer.input_size,
-                    gates.len()
-                ));
-            }
-            if !validate_matvec_dims(&layer.w_hh, &h[0], &gates, 4 * hs, hs) {
-                return Err(format!(
-                    "LSTM layer {}: w_hh dimension mismatch (w_hh={}, hs={}, gates={})",
-                    i,
-                    layer.w_hh.len(),
-                    hs,
-                    gates.len()
-                ));
-            }
-        }
+        let max_input = layers
+            .iter()
+            .map(|l| l.input_size)
+            .max()
+            .unwrap_or(config.input_size);
 
         Ok(Self {
             hidden_size: hs,
             layers,
             output_weight,
-            output_bias: output_bias_vec[0],
-            head_scale,
-            h,
-            c: vec![vec![0.0; hs]; config.num_layers],
-            gates,
-            input_buf,
+            output_bias,
+            gate_activation: Activation::FastSigmoid,
+            cell_activation: Activation::FastTanh,
+            xh: vec![0.0; max_input + hs],
+            gates: vec![0.0; 4 * hs],
         })
     }
 }
@@ -121,62 +128,60 @@ impl NamInference for LstmModel {
     fn process_sample(&mut self, input: f32) -> f32 {
         let hs = self.hidden_size;
 
-        // First layer input is the scalar input
-        self.input_buf[0] = input;
-        let mut input_len = self.layers[0].input_size;
+        // First cell input is the scalar sample. Any extra input slots
+        // (input_size > 1) stay zero, like the reference's `_input` vector,
+        // which only ever receives the mono channel.
+        self.xh[0] = input;
+        let first_input = self.layers[0].input_size;
+        self.xh[1..first_input].fill(0.0);
 
         for layer_idx in 0..self.layers.len() {
             let layer = &self.layers[layer_idx];
+            let xh_len = layer.input_size + hs;
 
-            // gates = W_ih * x + b_ih + W_hh * h + b_hh
-            matvec(
-                &layer.w_ih,
-                &self.input_buf[..input_len],
-                4 * hs,
-                layer.input_size,
-                &mut self.gates,
-            );
+            // xh = [x; h] — x was written by the previous iteration (or the
+            // scalar input above); append this cell's hidden state.
+            self.xh[layer.input_size..xh_len].copy_from_slice(&layer.h);
+
+            // ifgo = W * xh + b
+            matvec(&layer.w, &self.xh[..xh_len], 4 * hs, xh_len, &mut self.gates);
             for j in 0..4 * hs {
-                self.gates[j] += layer.b_ih[j];
-            }
-            matvec_add(&layer.w_hh, &self.h[layer_idx], 4 * hs, hs, &mut self.gates);
-            for j in 0..4 * hs {
-                self.gates[j] += layer.b_hh[j];
+                self.gates[j] += layer.b[j];
             }
 
-            // Apply gate activations (PyTorch ordering: i, f, g, o)
-            let h = &mut self.h[layer_idx];
-            let c = &mut self.c[layer_idx];
+            // Elementwise state update, gate order i, f, g, o:
+            //   c = sigmoid(f) * c + sigmoid(i) * tanh(g)
+            //   h = sigmoid(o) * tanh(c)
+            let layer = &mut self.layers[layer_idx];
             for j in 0..hs {
-                let i_gate = sigmoid(self.gates[j]);
-                let f_gate = sigmoid(self.gates[hs + j]);
-                let g_gate = fast_tanh(self.gates[2 * hs + j]);
-                let o_gate = sigmoid(self.gates[3 * hs + j]);
+                let i_gate = self.gate_activation.scalar(self.gates[j]);
+                let f_gate = self.gate_activation.scalar(self.gates[hs + j]);
+                let g_gate = self.cell_activation.scalar(self.gates[2 * hs + j]);
+                let o_gate = self.gate_activation.scalar(self.gates[3 * hs + j]);
 
-                c[j] = f_gate * c[j] + i_gate * g_gate;
-                h[j] = o_gate * fast_tanh(c[j]);
+                layer.c[j] = f_gate * layer.c[j] + i_gate * g_gate;
+                layer.h[j] = o_gate * self.cell_activation.scalar(layer.c[j]);
             }
 
-            // Output of this layer becomes input to the next
-            self.input_buf[..hs].copy_from_slice(h);
-            input_len = hs;
+            // This cell's hidden state is the next cell's input.
+            self.xh[..hs].copy_from_slice(&self.layers[layer_idx].h);
         }
 
-        // Output dense layer: dot(weight, h_last) + bias
-        let h_last = &self.h[self.layers.len() - 1];
+        // Output dense layer: dot(weight, h_last) + bias.
+        let h_last = &self.layers[self.layers.len() - 1].h;
         let mut out = self.output_bias;
-        for (w, h) in self.output_weight.iter().zip(h_last.iter()).take(hs) {
+        for (w, h) in self.output_weight.iter().zip(h_last.iter()) {
             out += w * h;
         }
-        out * self.head_scale
+        out
     }
 
     fn reset(&mut self) {
-        for h in &mut self.h {
-            h.fill(0.0);
-        }
-        for c in &mut self.c {
-            c.fill(0.0);
+        // Back to the learned initial states — the state a freshly
+        // constructed reference model starts its prewarm from.
+        for layer in &mut self.layers {
+            layer.h.copy_from_slice(&layer.h0);
+            layer.c.copy_from_slice(&layer.c0);
         }
     }
 }
