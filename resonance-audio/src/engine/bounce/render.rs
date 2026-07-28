@@ -156,9 +156,13 @@ pub(super) struct ChunkCtx<'a> {
 }
 
 /// Build a fresh compensation table from the current topology, reading
-/// each plugin's activation-time latency. Runs on the bounce thread —
-/// allocation is fine here.
+/// each plugin's activation-time latency and folding the published
+/// external-instrument round-trip offsets — exactly like the live
+/// refresh, so offline renders place external takes at the same
+/// relative position as live playback (doc #260 finding #4). Runs on
+/// the bounce thread — allocation is fine here.
 pub(super) fn build_latency_comp(
+    shared: &Arc<SharedState>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
@@ -172,7 +176,11 @@ pub(super) fn build_latency_comp(
             .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
             .unwrap_or(0)
     };
-    let chains = crate::latency::chain_latencies(&tracks_guard, latency_of);
+    let mut chains = crate::latency::chain_latencies(&tracks_guard, latency_of);
+    let offsets = shared.external_offsets.load();
+    crate::latency::add_external_offsets(&mut chains, |id| {
+        offsets.get(&id).copied().unwrap_or(0)
+    });
     let bus_chains = crate::latency::bus_chain_latencies(&busses_guard, latency_of);
     let (track_max, track_delays) = crate::latency::compensation_delays(&chains);
     let (bus_max, bus_delays) = crate::latency::compensation_delays(&bus_chains);

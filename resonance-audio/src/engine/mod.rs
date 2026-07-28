@@ -158,6 +158,13 @@ pub struct SharedState {
     /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+    /// External-instrument round-trip offsets per track
+    /// (`latency_offset_samples`, positive = the hardware return
+    /// arrives that late). Published by the engine control thread
+    /// whenever the comp table is refreshed and read by the offline
+    /// bounce/export threads so their latency comp folds the same
+    /// offsets the live mixer compensates (doc #260 finding #4).
+    pub external_offsets: arc_swap::ArcSwap<std::collections::HashMap<TrackId, i64>>,
     /// Reference A/B monitor snapshot. Published by the control thread
     /// (`reference::ReferencePlayer::publish`) and read lock-free by the
     /// audio callback to replace the post-master output with the active
@@ -229,6 +236,7 @@ impl Default for SharedState {
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
+            external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
             reference: reference::ReferenceMonitor::default(),
             mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),
