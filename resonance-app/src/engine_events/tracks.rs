@@ -39,6 +39,7 @@ pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
     }
     r.registry.tracks.push(track);
     r.compose.refresh_track_count(&r.registry.tracks);
+    r.apply_pending_control_track(track_id);
 }
 
 pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
@@ -54,6 +55,9 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
     }
     r.registry.tracks.push(track);
     r.compose.refresh_track_count(&r.registry.tracks);
+    // A control-endpoint `track.add` (todo #1152) may have deferred
+    // this track's name / drum type to the mirror — apply it now.
+    r.apply_pending_control_track(track_id);
 }
 
 pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
@@ -69,6 +73,7 @@ pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
     }
     r.registry.tracks.push(track);
     r.compose.refresh_track_count(&r.registry.tracks);
+    r.apply_pending_control_track(track_id);
 }
 
 pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {

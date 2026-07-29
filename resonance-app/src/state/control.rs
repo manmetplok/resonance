@@ -7,8 +7,19 @@
 
 use crate::control_jobs::JobBoard;
 use crate::control_socket::{ConnId, ControlServer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// Track kind a `track.add` control request creates (todo #1152).
+/// Drums are instrument tracks with the Drum instrument type; the wire
+/// bus/unknown kinds are rejected before this is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlTrackKind {
+    Instrument,
+    Drums,
+    Vocal,
+    Audio,
+}
 
 /// Per-connection session state, created on `Connected` and dropped on
 /// `Disconnected`.
@@ -40,4 +51,43 @@ pub struct ControlEndpointState {
     /// the update loop starts and resolves jobs, the per-connection
     /// reader threads block on it to serve `job.wait`.
     pub jobs: Arc<JobBoard>,
+    /// Tracks added via `track.add` (todo #1152) whose name / drum
+    /// instrument type still need applying once the engine echo mirrors
+    /// the track into the registry (the mirror ignores the engine's name
+    /// and always builds a synth track). Keyed by the app-allocated id;
+    /// drained by `apply_pending_control_track`.
+    pub pending_tracks: HashMap<resonance_audio::types::TrackId, PendingControlTrack>,
+}
+
+/// Deferred post-mirror setup for a control-added track.
+#[derive(Debug, Clone)]
+pub struct PendingControlTrack {
+    pub kind: ControlTrackKind,
+    pub name: Option<String>,
+}
+
+impl crate::Resonance {
+    /// If `track_id` was added via the control endpoint and is now
+    /// mirrored in the registry, apply its deferred name and (for a
+    /// `drums` add) Drum instrument type, then clear the pending entry.
+    /// Called right after the add (in case the echo already landed) and
+    /// from the `*TrackAdded` engine-event handlers.
+    pub fn apply_pending_control_track(&mut self, track_id: resonance_audio::types::TrackId) {
+        let Some(pending) = self.control.pending_tracks.get(&track_id).cloned() else {
+            return;
+        };
+        if !self.registry.tracks.iter().any(|t| t.id == track_id) {
+            return; // not mirrored yet; the echo handler will call again
+        }
+        self.registry.with_track_mut(track_id, |t| {
+            if let Some(name) = pending.name {
+                t.name = name;
+            }
+            if matches!(pending.kind, ControlTrackKind::Drums) {
+                t.instrument_type = crate::state::InstrumentType::Drum;
+                t.instrument_icon = crate::state::InstrumentIcon::Drum;
+            }
+        });
+        self.control.pending_tracks.remove(&track_id);
+    }
 }

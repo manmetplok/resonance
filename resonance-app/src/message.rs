@@ -258,6 +258,18 @@ pub enum TrackMessage {
     /// the menu entry that dispatches it is a separate view todo.
     AddExternalInstrumentTrack,
     AddVocalTrack,
+    /// Add a track with a caller-allocated id (control endpoint, doc
+    /// #265, todo #1152). Unlike the GUI adds, the id is allocated
+    /// app-side and passed to the engine as `id_hint` so the control
+    /// reply can return the real `track_id` immediately; `drums` comes
+    /// up as an instrument track whose instrument type is set to Drum
+    /// when the engine echo mirrors it. Undoable as one step, like the
+    /// other adds.
+    AddControlTrack {
+        id: TrackId,
+        kind: crate::state::ControlTrackKind,
+        name: Option<String>,
+    },
     /// User clicked delete on a track — may require confirmation if it
     /// has content.
     RequestRemoveTrack(TrackId),
