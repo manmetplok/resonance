@@ -162,6 +162,122 @@ pub(super) fn roll_vocal_melody(
     )
 }
 
+// ---------------------------------------------------------------------------
+// Control endpoint (ba doc #265, todo #1156)
+// ---------------------------------------------------------------------------
+
+/// Whether a track has a vocal lane in any section — used by the control
+/// endpoint to turn a "no lane" case into a precise error before it
+/// synthesizes a mutating message.
+pub(crate) fn track_has_vocal_lane(r: &crate::Resonance, track_id: TrackId) -> bool {
+    r.compose.definitions.iter().any(|d| {
+        matches!(
+            d.lane_generators.get(&track_id).map(|c| &c.kind),
+            Some(LaneGeneratorKind::Vocal(_))
+        )
+    })
+}
+
+/// The first section (in placement order, then creation order) whose
+/// `track_id` lane is a vocal generator. The control lyric/render methods
+/// address a track; this picks the lane they act on when the caller
+/// didn't (couldn't) name a section.
+pub(crate) fn first_vocal_definition(r: &crate::Resonance, track_id: TrackId) -> Option<u64> {
+    let mut placed: Vec<(u32, u64)> = r
+        .compose
+        .placements
+        .iter()
+        .filter_map(|p| {
+            let is_vocal = r
+                .compose
+                .find_definition(p.definition_id)
+                .and_then(|d| d.lane_generators.get(&track_id))
+                .is_some_and(|c| matches!(c.kind, LaneGeneratorKind::Vocal(_)));
+            is_vocal.then_some((p.start_bar, p.definition_id))
+        })
+        .collect();
+    placed.sort_by_key(|(bar, _)| *bar);
+    if let Some((_, def)) = placed.first() {
+        return Some(*def);
+    }
+    // Fall back to an unplaced vocal lane in creation order.
+    r.compose
+        .definitions
+        .iter()
+        .find(|d| {
+            matches!(
+                d.lane_generators.get(&track_id).map(|c| &c.kind),
+                Some(LaneGeneratorKind::Vocal(_))
+            )
+        })
+        .map(|d| d.id)
+}
+
+/// `vocal.set_lyrics`: replace the lane's whole draft from bulk text.
+pub(crate) fn control_set_lyrics(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    text: &str,
+) {
+    super::lane_inspector::update_vocal(r, definition_id, track_id, |p| {
+        super::vocal_lyrics::rebuild_draft_from_bulk(p, text);
+    });
+    super::vocal_lyrics::sync_bulk_lyrics_from_draft(r, definition_id, track_id);
+}
+
+/// `vocal.set_line`: replace one 0-based lyric line. Returns `false`
+/// (leaving state untouched) when the index is out of range.
+pub(crate) fn control_set_line(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    line_index: usize,
+    text: &str,
+) -> bool {
+    let in_range = r
+        .compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .and_then(|c| match &c.kind {
+            LaneGeneratorKind::Vocal(p) => Some(line_index < p.draft.len()),
+            _ => None,
+        })
+        .unwrap_or(false);
+    if !in_range {
+        return false;
+    }
+    super::lane_inspector::update_vocal(r, definition_id, track_id, |p| {
+        if let Some(line) = p.draft.get_mut(line_index) {
+            line.text = text.to_owned();
+            line.syllables =
+                resonance_music_theory::count_syllables(text).min(255) as u8;
+            // A hand-set line is locked so a later re-roll preserves it,
+            // matching the per-line editor's behaviour.
+            line.locked = true;
+        }
+    });
+    super::vocal_lyrics::sync_bulk_lyrics_from_draft(r, definition_id, track_id);
+    true
+}
+
+/// `vocal.render`: set the lane's voicebank and kick off the SVS render
+/// for one lane. Returns the async render `Task` (or `Task::none()` when
+/// the lane can't render yet — the caller has already validated the lane
+/// exists; a `Task::none()` here means empty draft / no chords, surfaced
+/// as `compose.last_error`).
+pub(crate) fn control_render(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    voicebank: resonance_music_theory::VocalVoicebank,
+) -> Task<Message> {
+    super::lane_inspector::update_vocal(r, definition_id, track_id, |p| {
+        p.voicebank = voicebank;
+    });
+    roll_vocal_melody(r, definition_id, track_id)
+}
+
 /// Shared off-thread vocal render path. Tears down the prior audio
 /// clip, bumps the in-flight epoch (stale-result protection against
 /// back-to-back presses), and spawns the SVS pipeline on a blocking
