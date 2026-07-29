@@ -5123,6 +5123,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resonance-control"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "resonance-delay"
 version = "0.1.0"
 dependencies = [
