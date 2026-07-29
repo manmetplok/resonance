@@ -88,5 +88,13 @@ bounded time and returns the final status; if it is still running, poll
 
 ## Composing a song with Claude
 
-See ba doc #267 "Composing with Claude" for the end-to-end walkthrough
-(the same flow the acceptance test in `tests/` exercises).
+See ba doc #267 "Composing with Claude" for the full end-to-end
+walkthrough — `claude mcp add` registration, the tool-by-tool compose
+flow (project → harmony → generate → notes → vocals → play → export WAV →
+save), and troubleshooting.
+
+The same sequence is exercised headlessly, without the GUI, by the
+acceptance test `resonance-app/tests/e2e_compose_via_control.rs` (epic
+#200, todo #1160): it drives the control protocol through the whole flow
+and asserts the real AudioEngine bounce writes a non-empty WAV. Run it
+with `cargo test -p resonance-app --test e2e_compose_via_control`.
