@@ -23,6 +23,7 @@ pub mod midi_editor;
 pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod relink_dialog;
+pub(crate) mod remote_indicator;
 pub mod performance;
 pub mod piano_roll;
 pub(crate) mod selection_bar;
