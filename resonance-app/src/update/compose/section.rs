@@ -42,7 +42,9 @@ fn default_section_name(state: &ComposeState) -> String {
     format!("Section {}", state.definitions.len() + 1)
 }
 
-fn next_default_color(state: &ComposeState) -> [u8; 3] {
+/// Next color from the auto-rotating palette; also used by the control
+/// endpoint's `section.create` (which has no color in its params).
+pub(crate) fn next_default_color(state: &ComposeState) -> [u8; 3] {
     SECTION_PALETTE[state.definitions.len() % SECTION_PALETTE.len()]
 }
 
@@ -347,6 +349,35 @@ pub(super) fn handle_set_scale(
         def.scale = scale;
         r.compose.last_error = None;
     }
+}
+
+/// Delete a definition together with every placement referencing it, in
+/// one undoable step (control endpoint `section.delete`, ba todo #1153).
+/// The GUI path ([`handle_delete_definition`]) instead refuses while
+/// placements exist.
+pub(super) fn handle_delete_with_placements(r: &mut crate::Resonance, definition_id: u64) {
+    if r.compose.find_definition(definition_id).is_none() {
+        return;
+    }
+    r.compose.placements.retain(|p| p.definition_id != definition_id);
+    if r
+        .compose
+        .selected_placement_id
+        .is_some_and(|id| r.compose.find_placement(id).is_none())
+    {
+        r.compose.selected_placement_id = r.compose.placements.first().map(|p| p.id);
+    }
+    if let Some(chord_id) = r.compose.selected_chord_id {
+        let selected_here = r
+            .compose
+            .find_definition(definition_id)
+            .is_some_and(|d| d.chords.iter().any(|c| c.id == chord_id));
+        if selected_here {
+            r.compose.selected_chord_id = None;
+        }
+    }
+    r.compose.definitions.retain(|d| d.id != definition_id);
+    r.compose.last_error = None;
 }
 
 pub(super) fn handle_delete_definition(r: &mut crate::Resonance, definition_id: u64) {

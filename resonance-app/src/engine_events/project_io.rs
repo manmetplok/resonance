@@ -160,6 +160,20 @@ pub(super) fn all_cleared(r: &mut Resonance) {
                     r.pool.missing_assets().map(|a| a.id).collect();
                 r.relink.open_modal(targets);
             }
+
+            // A control-initiated `project.new` (doc #265, todo #1151)
+            // resolves here: the engine confirmed the clear and the
+            // fresh project replayed. Untitled case only — a template
+            // instantiation always lands with no path, while disk loads
+            // (which restore one) resolve their own `ProjectLoad` token
+            // in the `ProjectLoaded` arm instead. No-op when no control
+            // job carries the token.
+            if r.io.project_path.is_none() {
+                r.control.jobs.complete_token(
+                    &crate::control_jobs::JobToken::ProjectNew,
+                    serde_json::json!({ "path": null, "revision": r.revision() }),
+                );
+            }
         }
     }
 }

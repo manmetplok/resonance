@@ -77,6 +77,14 @@ impl Resonance {
         self.io.has_active_project = active;
     }
 
+    /// Test-only: whether an offline bounce / render is in flight. Lets
+    /// the control `render.mixdown` tests (doc #265, todo #1157) confirm
+    /// the engine command fired (or, for a guard hit, that it did not).
+    #[doc(hidden)]
+    pub fn test_is_bouncing(&self) -> bool {
+        self.io.bouncing
+    }
+
     /// Test-only: anchor the project at `path` so `can_record_undo`
     /// (which needs a saved-path to replay snapshots against) is true.
     /// Lets reducer tests exercise undo/redo round-trips without going
@@ -84,6 +92,15 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_set_project_path(&mut self, path: std::path::PathBuf) {
         self.io.project_path = Some(path);
+    }
+
+    /// Test-only: mark the open project dirty (or clean) so the
+    /// control-endpoint destructive-op guards (`needs_confirmation` on
+    /// `project.new`/`project.open` with unsaved changes, doc #265) can
+    /// be exercised without performing a real edit.
+    #[doc(hidden)]
+    pub fn test_set_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
     }
 
     /// Test-only: serialize the current GUI state to the on-disk

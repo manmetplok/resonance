@@ -18,6 +18,19 @@ pub enum WorkspaceGroup {
     Tracks,
 }
 
+/// One chord slot in a wholesale grid replacement
+/// ([`ComposeMessage::ReplaceSectionChords`]). Beats are section-relative,
+/// on the whole-beat chord grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionChordSpec {
+    /// Existing chord id to keep (stable across the replacement), or
+    /// `None` to allocate a fresh one.
+    pub id: Option<u64>,
+    pub start_beat: u32,
+    pub duration_beats: u32,
+    pub chord: Chord,
+}
+
 #[derive(Debug, Clone)]
 pub enum ComposeMessage {
     /// Drum-groups messages — project-scoped group management plus the
@@ -152,6 +165,92 @@ pub enum ComposeMessage {
     DeleteChord {
         definition_id: u64,
         chord_id: u64,
+    },
+    /// Replace a section definition's whole chord grid in one undoable
+    /// step. Used by the control endpoint's `harmony.*` methods (ba doc
+    /// #265, todo #1153) so a progression apply — or a chord edit that
+    /// changes symbol, position, and length at once — is a single undo
+    /// entry with a single lane-regeneration cascade.
+    ReplaceSectionChords {
+        definition_id: u64,
+        chords: Vec<SectionChordSpec>,
+    },
+
+    /// Delete a section definition together with every placement that
+    /// references it, in one undoable step. Used by the control
+    /// endpoint's `section.delete` (ba doc #265, todo #1153); the GUI
+    /// path (`DeleteSectionDefinition`) instead refuses while placements
+    /// exist.
+    DeleteSectionWithPlacements {
+        definition_id: u64,
+    },
+
+    /// Install a Bass / Melody / Pad generator on a track within a
+    /// section and derive its MIDI onto every placement — one undoable
+    /// step. Used by the control endpoint's `generate.part` (ba doc
+    /// #265, todo #1154). Carries the fully-built lane config the caller
+    /// assembled from the wire params.
+    GenerateSectionPart {
+        definition_id: u64,
+        track_id: TrackId,
+        config: Box<crate::compose::LaneGeneratorConfig>,
+    },
+
+    /// Assign a drum pattern to a section, (re)seed + generate its
+    /// groups, and materialize the drum clips — one undoable step. Used
+    /// by the control endpoint's `generate.drums` (ba doc #265, todo
+    /// #1154). `pattern_id` selects the pattern (defaulting to the
+    /// section's primary, then the project default); `seed` seeds the
+    /// groups deterministically when set.
+    GenerateSectionDrums {
+        definition_id: u64,
+        pattern_id: Option<u64>,
+        seed: Option<u64>,
+    },
+
+    /// Replace a vocal lane's full lyric draft from bulk text (one line
+    /// per lyric line) — one undoable step. Used by the control
+    /// endpoint's `vocal.set_lyrics` (ba doc #265, todo #1156).
+    ControlSetVocalLyrics {
+        definition_id: u64,
+        track_id: TrackId,
+        text: String,
+    },
+
+    /// Replace a single lyric line (0-based) on a vocal lane — one
+    /// undoable step. Used by the control endpoint's `vocal.set_line`
+    /// (ba doc #265, todo #1156).
+    ControlSetVocalLine {
+        definition_id: u64,
+        track_id: TrackId,
+        line_index: usize,
+        text: String,
+    },
+
+    /// Set (or replace) a per-word pronunciation override in the project
+    /// dictionary — one undoable step. Used by the control endpoint's
+    /// `vocal.set_pronunciation` (ba doc #265, todo #1156). Phonemes are
+    /// already canonicalised to `&'static str`.
+    ControlSetPronunciation {
+        word: String,
+        phonemes: Vec<&'static str>,
+    },
+
+    /// Remove a per-word pronunciation override from the project
+    /// dictionary — one undoable step. Used by the control endpoint's
+    /// `vocal.clear_pronunciation` (ba doc #265, todo #1156).
+    ControlClearPronunciation {
+        word: String,
+    },
+
+    /// Kick off an SVS render for one vocal lane — the state-mutating
+    /// part (voicebank selection, epoch bump) is undoable; the async
+    /// audio arrives later via `VocalAudioReady`. Used by the control
+    /// endpoint's `vocal.render` (ba doc #265, todo #1156).
+    ControlRenderVocal {
+        definition_id: u64,
+        track_id: TrackId,
+        voicebank: VocalVoicebank,
     },
 
     // ---- Chord lane inspector ----

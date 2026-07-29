@@ -177,9 +177,15 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         Space::new().width(0).into()
     };
 
+    // Remote-control-active indicator (todo #1159): sits just right of
+    // the title cluster, in the chrome row (spacing 0) so its hidden
+    // zero-width state causes no layout shift.
+    let remote = super::remote_indicator::view(r.control_client_count());
+
     let chrome_row = row![
         Space::new().width(SHELL_HPAD),
         left,
+        remote,
         Space::new().width(Length::Fill),
         tabs,
         Space::new().width(Length::Fill),

@@ -19,6 +19,8 @@ pub mod chord_sheet_pdf;
 pub mod commands;
 pub mod chord_track;
 pub mod compose;
+pub mod control_jobs;
+pub mod control_socket;
 pub mod demo;
 pub mod engine_events;
 pub mod focus;
@@ -248,6 +250,16 @@ pub struct Resonance {
     pub(crate) freeze: crate::state::FreezeState,
     /// True when the project has been modified since the last save.
     pub(crate) dirty: bool,
+    /// Monotonic edit counter (doc #265, todo #1147): bumped once per
+    /// committed undoable transaction (immediate records, each coalesced
+    /// step, gesture commits, and undo/redo restores). Every mutating
+    /// control-protocol reply carries it so remote clients can detect
+    /// concurrent GUI edits; it never resets while the app runs.
+    pub(crate) revision: u64,
+    /// Unix-socket control endpoint (doc #265, todo #1147): listener
+    /// lifecycle handle plus per-connection handshake sessions. Transient
+    /// — never persisted, never in the undo snapshot.
+    pub(crate) control: crate::state::ControlEndpointState,
     /// When set, the "unsaved changes" quit-confirmation dialog is shown.
     /// Holds the window id so we can close it if the user confirms.
     pub(crate) confirm_quit: Option<iced::window::Id>,
@@ -596,6 +608,8 @@ impl Resonance {
             export_dialog: None,
             freeze: crate::state::FreezeState::default(),
             dirty: false,
+            revision: 0,
+            control: crate::state::ControlEndpointState::default(),
             confirm_quit: None,
             quit_after_save: None,
             settings,
@@ -612,6 +626,48 @@ impl Resonance {
         app.refresh_transport_labels();
 
         (app, iced::Task::none())
+    }
+
+    /// [`Resonance::new`] plus the unix-socket control endpoint (ba doc
+    /// #265, todo #1147). This is what the binary uses; tests call
+    /// `new()` directly so they never bind the per-user socket path.
+    pub fn new_with_control() -> (Self, iced::Task<Message>) {
+        let (mut app, task) = Self::new();
+        app.start_control_server();
+        (app, task)
+    }
+
+    /// Bind the control socket and start its listener thread, wiring the
+    /// bridge channel that `subscription()` streams into `update()` as
+    /// `Message::Control`. No-op when `RESONANCE_NO_CONTROL=1`; a bind
+    /// failure (e.g. another live instance owns the socket) logs and
+    /// leaves the endpoint off — the app itself keeps running.
+    pub fn start_control_server(&mut self) {
+        if control_socket::control_disabled() {
+            return;
+        }
+        let (tx, rx) = iced::futures::channel::mpsc::unbounded();
+        let jobs = std::sync::Arc::clone(&self.control.jobs);
+        match control_socket::spawn(control_socket::socket_path(), tx, jobs) {
+            Ok(server) => {
+                control_socket::install_bridge(rx);
+                self.control.server = Some(server);
+            }
+            Err(e) => eprintln!("control endpoint disabled: {e}"),
+        }
+    }
+
+    /// Number of connected control clients. Feeds the window chrome's
+    /// remote-control indicator (todo #1159) and the integration tests.
+    pub fn control_client_count(&self) -> usize {
+        self.control.sessions.len()
+    }
+
+    /// The monotonic edit counter carried by every mutating
+    /// control-protocol reply (doc #265): bumped once per committed
+    /// undoable transaction, including undo/redo restores.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Re-derive the transport stat-block label strings from current

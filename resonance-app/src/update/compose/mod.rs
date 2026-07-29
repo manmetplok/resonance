@@ -24,12 +24,14 @@ mod lane_inspector;
 pub(crate) mod regenerate;
 mod section;
 mod vocal_lyrics;
-mod vocal_render;
+pub(crate) mod vocal_render;
 
 /// Pure drum-note builder — exposed so integration tests in `tests/` can
 /// assert the materialized `MidiNote` sequence for an arrangement's
 /// resolved spans without booting a whole `Resonance`.
 pub use drum_groups::build_drum_notes;
+
+pub(crate) use section::next_default_color;
 
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
@@ -90,6 +92,47 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::DeleteSectionDefinition { definition_id } => {
             section::handle_delete_definition(r, definition_id)
         }
+        ComposeMessage::DeleteSectionWithPlacements { definition_id } => {
+            section::handle_delete_with_placements(r, definition_id)
+        }
+        ComposeMessage::GenerateSectionPart {
+            definition_id,
+            track_id,
+            config,
+        } => return control_generate_part(r, definition_id, track_id, *config).1,
+        ComposeMessage::GenerateSectionDrums {
+            definition_id,
+            pattern_id,
+            seed,
+        } => {
+            let _ =
+                drum_groups::control_generate_drums(r, definition_id, pattern_id, seed);
+        }
+        ComposeMessage::ControlSetVocalLyrics {
+            definition_id,
+            track_id,
+            text,
+        } => vocal_render::control_set_lyrics(r, definition_id, track_id, &text),
+        ComposeMessage::ControlSetVocalLine {
+            definition_id,
+            track_id,
+            line_index,
+            text,
+        } => {
+            let _ =
+                vocal_render::control_set_line(r, definition_id, track_id, line_index, &text);
+        }
+        ComposeMessage::ControlSetPronunciation { word, phonemes } => {
+            control_set_pronunciation(r, word, phonemes);
+        }
+        ComposeMessage::ControlClearPronunciation { word } => {
+            control_clear_pronunciation(r, &word);
+        }
+        ComposeMessage::ControlRenderVocal {
+            definition_id,
+            track_id,
+            voicebank,
+        } => return vocal_render::control_render(r, definition_id, track_id, voicebank),
 
         // Placement CRUD
         ComposeMessage::PlaceSection {
@@ -170,6 +213,10 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             chord_id,
             duration_beats,
         } => chord::handle_resize(r, definition_id, chord_id, duration_beats, time_sig_num),
+        ComposeMessage::ReplaceSectionChords {
+            definition_id,
+            chords,
+        } => chord::handle_replace(r, definition_id, chords, time_sig_num),
         ComposeMessage::DeleteChord {
             definition_id,
             chord_id,
@@ -188,13 +235,106 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         // Vocal audio render completion (dispatched from the background
         // SVS task that `lane_inspector::handle` queued).
         ComposeMessage::VocalAudioReady(data) => {
+            // Resolve a control-initiated vocal render job (doc #265,
+            // todo #1156) before the install consumes `data`. No-op when
+            // no control job carries the token (a GUI-driven render).
+            let token = crate::control_jobs::JobToken::VocalRender {
+                definition_id: data.definition_id,
+                track_id: data.track_id,
+            };
+            r.control.jobs.complete_token(
+                &token,
+                serde_json::json!({
+                    "track_ids": [data.track_id],
+                    "revision": r.revision(),
+                }),
+            );
             vocal_render::handle_vocal_audio_ready(r, *data);
         }
         ComposeMessage::VocalAudioFailed { error } => {
+            // A vocal render carries no lane identity on failure, so fail
+            // the newest live vocal-render job regardless of lane. In
+            // practice control renders are serialized (one at a time
+            // through the update loop) so this resolves the right one.
+            r.control.jobs.fail_newest_vocal_render(error.clone());
             r.compose.last_error = Some(error);
         }
     }
     Task::none()
+}
+
+/// Outcome of a control-endpoint melodic-part generation
+/// ([`control_generate_part`]).
+pub(crate) enum ControlPartOutcome {
+    /// The lane was generated; MIDI clips now exist across the section's
+    /// placements.
+    Generated,
+    /// The section has no chords, so there is nothing to derive from.
+    NoChords,
+    /// The section definition id was not found.
+    NoSection,
+}
+
+/// Install a Bass / Melody / Pad generator on `track_id` within
+/// `definition_id` and derive its notes onto every placement of the
+/// section (control endpoint `generate.part`, ba todo #1154).
+///
+/// `config` is the fully-built [`LaneGeneratorConfig`] (kind + params +
+/// seed) the caller assembled from the wire params; this reuses the
+/// exact `regenerate_lane` path the lane inspector drives, so the
+/// generated clips match the GUI's. Returns [`ControlPartOutcome::NoChords`]
+/// without touching the lane when the section has no chords (the
+/// generators read the chord grid and would silently produce nothing).
+pub(crate) fn control_generate_part(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+    config: crate::compose::LaneGeneratorConfig,
+) -> (ControlPartOutcome, Task<Message>) {
+    let Some(def) = r.compose.find_definition(definition_id) else {
+        return (ControlPartOutcome::NoSection, Task::none());
+    };
+    if def.chords.is_empty() {
+        return (ControlPartOutcome::NoChords, Task::none());
+    }
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        def.lane_generators.insert(track_id, config);
+    }
+    let task = regenerate::regenerate_lane(r, definition_id, track_id);
+    r.compose.last_error = None;
+    (ControlPartOutcome::Generated, task)
+}
+
+/// `vocal.set_pronunciation`: set (or replace) a per-word override in
+/// the project pronunciation dictionary. Phonemes are already
+/// canonicalised. Word match is case-insensitive (the dictionary key is
+/// the cleaned, lowercased spelling).
+fn control_set_pronunciation(
+    r: &mut crate::Resonance,
+    word: String,
+    phonemes: Vec<&'static str>,
+) {
+    use crate::compose::vocal_svs::{clean_word, DictionaryEntry, DictionaryScope};
+    let key = clean_word(&word);
+    let dict = &mut r.compose.pronunciation.project_dictionary;
+    dict.retain(|e| e.word != key);
+    dict.push(DictionaryEntry::from_canonical(
+        &word,
+        phonemes,
+        DictionaryScope::Project,
+    ));
+    r.compose.last_error = None;
+}
+
+/// `vocal.clear_pronunciation`: remove a per-word project override.
+fn control_clear_pronunciation(r: &mut crate::Resonance, word: &str) {
+    use crate::compose::vocal_svs::clean_word;
+    let key = clean_word(word);
+    r.compose
+        .pronunciation
+        .project_dictionary
+        .retain(|e| e.word != key);
+    r.compose.last_error = None;
 }
 
 /// Ensure the bulk-lyrics text-editor buffer exists for the currently

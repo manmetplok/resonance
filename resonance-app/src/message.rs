@@ -4,6 +4,7 @@
 /// sub-state layout of [`crate::Resonance`]. Each sub-enum is handled by a
 /// dedicated arm of the top-level match in `update.rs`.
 use crate::compose::ComposeMessage;
+use crate::control_socket::ControlMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
@@ -76,6 +77,14 @@ pub enum Message {
     /// fans out into a [`PoolMessage::ImportAndPlace`]. Handled by
     /// `update::drag::handle`.
     Drag(DragMessage),
+    /// Control-endpoint traffic from the unix-socket threads (ba doc
+    /// #265, todo #1147): client connect/disconnect events and parsed
+    /// JSON-RPC requests, delivered in arrival order through the bridge
+    /// subscription. Handled by `update::control::handle`, which replies
+    /// over the request's reply channel; mutating methods are executed by
+    /// synthesizing ordinary domain messages back through `update()`, so
+    /// this envelope itself carries no undo weight.
+    Control(ControlMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
     Tick,
@@ -151,7 +160,20 @@ pub enum TransportMessage {
     CommitBpm,
     ToggleMetronome,
     CycleTimeSignature,
+    /// Set the time signature directly (control endpoint, doc #265 —
+    /// the GUI cycles via [`Self::CycleTimeSignature`]). Undoable like
+    /// the cycle path.
+    SetTimeSignature { numerator: u8, denominator: u8 },
     ToggleLoop,
+    /// Set the loop range directly in samples (control endpoint, doc
+    /// #265 — the GUI drags via the loop-drag gesture messages).
+    /// `enabled: None` leaves the loop toggle unchanged. Undoable like
+    /// [`Self::ToggleLoop`].
+    SetLoopRange {
+        loop_in: u64,
+        loop_out: u64,
+        enabled: Option<bool>,
+    },
     StartLoopDrag(LoopDragTarget),
     UpdateLoopDrag(f32),
     EndLoopDrag,
@@ -236,6 +258,18 @@ pub enum TrackMessage {
     /// the menu entry that dispatches it is a separate view todo.
     AddExternalInstrumentTrack,
     AddVocalTrack,
+    /// Add a track with a caller-allocated id (control endpoint, doc
+    /// #265, todo #1152). Unlike the GUI adds, the id is allocated
+    /// app-side and passed to the engine as `id_hint` so the control
+    /// reply can return the real `track_id` immediately; `drums` comes
+    /// up as an instrument track whose instrument type is set to Drum
+    /// when the engine echo mirrors it. Undoable as one step, like the
+    /// other adds.
+    AddControlTrack {
+        id: TrackId,
+        kind: crate::state::ControlTrackKind,
+        name: Option<String>,
+    },
     /// User clicked delete on a track — may require confirmation if it
     /// has content.
     RequestRemoveTrack(TrackId),
@@ -573,6 +607,19 @@ pub enum ClipMessage {
 #[derive(Debug, Clone)]
 pub enum MidiClipMessage {
     DeleteMidiClip(ClipId),
+    /// Create an empty MIDI clip with a caller-allocated id (control
+    /// endpoint `notes.create_clip`, doc #265, todo #1155). The id is
+    /// allocated app-side (derived-clip range) and carried to the engine
+    /// via `LoadMidiClipDirect`, which echoes `MidiClipCreated { id }`;
+    /// so the control reply returns the id immediately. Undoable
+    /// (Record) like a clip deletion.
+    CreateEmptyClip {
+        clip_id: ClipId,
+        track_id: resonance_audio::types::TrackId,
+        start_sample: resonance_audio::types::SamplePos,
+        duration_ticks: u64,
+        name: String,
+    },
     StartMidiClipDrag {
         clip_id: ClipId,
         grab_offset_x: f32,
@@ -622,6 +669,15 @@ pub enum MidiEditorMessage {
         clip_id: ClipId,
         note_index: usize,
         new_duration_ticks: u64,
+    },
+    /// Set one note's velocity in place (control endpoint `notes.edit`,
+    /// doc #265, todo #1155). The piano roll has no velocity-drag yet, so
+    /// this variant exists for the control surface; undoable + frozen-
+    /// input-gated exactly like the other single-note edits.
+    SetNoteVelocity {
+        clip_id: ClipId,
+        note_index: usize,
+        velocity: f32,
     },
     /// Replace the selection with a single note, or clear it (`None`).
     /// Used by a plain click and by the vocal roll's single-select path.

@@ -44,6 +44,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
 
         // Timer tick, pure UI, engine runtime, project I/O.
         Message::Tick => UndoAction::Skip,
+        // Control-endpoint envelope (doc #265, todo #1147): connect /
+        // disconnect events and request execution carry no undo weight
+        // at this level. Mutating control methods synthesize ordinary
+        // domain messages that re-enter `update()` individually and are
+        // classified there.
+        Message::Control(_) => UndoAction::Skip,
         Message::Viewport(_) => UndoAction::Skip,
         Message::Ui(_) => UndoAction::Skip,
         Message::ProjectIo(_) => UndoAction::Skip,
@@ -153,6 +159,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             TransportMessage::CommitBpm
             | TransportMessage::ToggleMetronome
             | TransportMessage::CycleTimeSignature
+            // Direct control-endpoint setters (doc #265): undoable like
+            // their GUI counterparts (cycle / loop toggle+drag).
+            | TransportMessage::SetTimeSignature { .. }
+            | TransportMessage::SetLoopRange { .. }
             | TransportMessage::ToggleLoop => UndoAction::Record,
         },
 
@@ -347,7 +357,8 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             MidiClipMessage::UpdateMidiClipDrag(_, _) | MidiClipMessage::UpdateMidiClipTrim(_) => {
                 UndoAction::Skip
             }
-            MidiClipMessage::DeleteMidiClip(_) => UndoAction::Record,
+            MidiClipMessage::DeleteMidiClip(_)
+            | MidiClipMessage::CreateEmptyClip { .. } => UndoAction::Record,
         },
 
         Message::MidiEditor(e) => match e {
@@ -356,6 +367,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::RemoveSelectedNotes { .. }
             | MidiEditorMessage::MoveNote { .. }
             | MidiEditorMessage::ResizeNote { .. }
+            | MidiEditorMessage::SetNoteVelocity { .. }
             | MidiEditorMessage::ToggleSlur { .. }
             // Bulk timing edits (doc #163): each rewrites the clip's note
             // array, so the pre-dispatch snapshot of the prior notes is

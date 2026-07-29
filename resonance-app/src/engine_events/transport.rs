@@ -38,11 +38,27 @@ pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
 
 pub(super) fn bounce_complete(r: &mut Resonance, path: String) {
     r.io.bouncing = false;
+    // Resolve a control-initiated `render.mixdown` job (doc #265, todo
+    // #1157). The engine echoes the requested path verbatim, so the
+    // token matches exactly the job that asked for this file. No-op when
+    // no control job carries the token (an ordinary GUI bounce).
+    let result = crate::update::control::mixdown_result(&path, r.sample_rate);
+    r.control.jobs.complete_token(
+        &crate::control_jobs::JobToken::Export {
+            path: std::path::PathBuf::from(&path),
+        },
+        result,
+    );
     eprintln!("Bounce complete: {path}");
 }
 
 pub(super) fn bounce_error(r: &mut Resonance, e: String) {
     r.io.bouncing = false;
+    // `BounceError` carries no path, but only one bounce runs at a time
+    // (the render busy-guard forbids a second), so failing every live
+    // control export job resolves the one in flight (todo #1157). No-op
+    // when none is control-initiated.
+    r.control.jobs.fail_export_jobs(e.clone());
     r.error_message = Some(format!("Bounce failed: {e}"));
 }
 

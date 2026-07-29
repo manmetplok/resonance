@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 resonance-audio = { path = "../resonance-audio" }
 resonance-common = { path = "../resonance-common" }
+resonance-control = { path = "../resonance-control" }
 resonance-metering = { path = "../resonance-metering" }
 resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin", features = ["ui"] }
@@ -13,6 +14,7 @@ resonance-svs = { path = "../resonance-svs" }
 iced = { workspace = true, features = ["canvas", "wgpu", "tokio", "lazy", "advanced"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 rfd.workspace = true
+crossbeam-channel.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true

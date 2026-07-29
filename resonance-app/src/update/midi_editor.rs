@@ -75,6 +75,17 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
                 new_duration_ticks,
             });
         }
+        MidiEditorMessage::SetNoteVelocity {
+            clip_id,
+            note_index,
+            velocity,
+        } => {
+            let _ = r.engine.send(AudioCommand::SetMidiNoteVelocity {
+                clip_id,
+                note_index,
+                velocity,
+            });
+        }
         MidiEditorMessage::SelectNote { note_index } => {
             if let Some(ref mut editor) = r.interaction.editing_midi_clip {
                 editor.select_single(note_index);

@@ -504,6 +504,10 @@ impl crate::Resonance {
         let current = self.snapshot_for_undo();
         self.undo.push_redo(current);
         self.begin_restore_from_snapshot(snapshot);
+        // An undo changes the song like any committed edit — remote
+        // control clients detect it through the revision counter
+        // (doc #265, todo #1147).
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 
@@ -518,6 +522,9 @@ impl crate::Resonance {
         let current = self.snapshot_for_undo();
         self.undo.push_undo(current);
         self.begin_restore_from_snapshot(snapshot);
+        // Symmetric to `try_undo`: a redo is a committed edit for remote
+        // revision-tracking purposes.
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 }

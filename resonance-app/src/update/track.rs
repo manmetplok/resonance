@@ -98,6 +98,42 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             });
             r.mixer.add_track_menu_open = false;
         }
+        TrackMessage::AddControlTrack { id, kind, name } => {
+            use crate::state::ControlTrackKind;
+            // Id-hinted add so the control reply can return `id`
+            // immediately; the engine echoes `*TrackAdded { id }` which
+            // mirrors the track into the registry. Drums queue a
+            // deferred instrument-type set for that echo.
+            let cmd = match kind {
+                ControlTrackKind::Vocal => AudioCommand::AddVocalTrack {
+                    id_hint: Some(id),
+                    name: name.clone(),
+                },
+                ControlTrackKind::Audio => AudioCommand::AddTrack {
+                    id_hint: Some(id),
+                    name: name.clone(),
+                },
+                ControlTrackKind::Instrument | ControlTrackKind::Drums => {
+                    AudioCommand::AddInstrumentTrack {
+                        id_hint: Some(id),
+                        name: name.clone(),
+                    }
+                }
+            };
+            let _ = r.engine.send(cmd);
+            // Defer name + drum-type application to the engine echo (the
+            // registry mirror ignores the engine's name and always makes
+            // a synth track); apply now too, in case the echo already
+            // landed (tests drive it synchronously).
+            r.control.pending_tracks.insert(
+                id,
+                crate::state::PendingControlTrack {
+                    kind,
+                    name: name.clone(),
+                },
+            );
+            r.apply_pending_control_track(id);
+        }
         TrackMessage::RequestRemoveTrack(id) => {
             let has_audio = r.clips.iter().any(|c| c.track_id == id);
             let has_midi = r.midi_clips.iter().any(|c| c.track_id == id);

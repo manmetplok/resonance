@@ -21,6 +21,147 @@ impl Resonance {
         &self.midi_quantize
     }
 
+    /// Test-only: the [`LaneGeneratorKindTag`] configured on a track
+    /// within a section definition, or `None` when the lane is manual
+    /// (no generator). Drives the `generate.part` control-endpoint tests
+    /// (ba todo #1154).
+    ///
+    /// [`LaneGeneratorKindTag`]: crate::compose::LaneGeneratorKindTag
+    #[doc(hidden)]
+    pub fn test_lane_generator_tag(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<crate::compose::LaneGeneratorKindTag> {
+        use crate::compose::{LaneGeneratorKind, LaneGeneratorKindTag};
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .map(|cfg| match &cfg.kind {
+                LaneGeneratorKind::Bass(_) => LaneGeneratorKindTag::Bass,
+                LaneGeneratorKind::Melody(_) => LaneGeneratorKindTag::Melody,
+                LaneGeneratorKind::Pad(_) => LaneGeneratorKindTag::Pad,
+                LaneGeneratorKind::Vocal(_) => LaneGeneratorKindTag::Vocal,
+                // Drum lanes have no melodic tag; report Manual so the
+                // control tests never see a drum lane where a melodic one
+                // is expected.
+                LaneGeneratorKind::Drum(_) => LaneGeneratorKindTag::Manual,
+            })
+    }
+
+    /// Test-only: number of derived MIDI clips generated for a track
+    /// (across all sections + placements). A `generate.part` call
+    /// produces one per placement of the target section.
+    #[doc(hidden)]
+    pub fn test_derived_clip_count(&self, track_id: resonance_audio::types::TrackId) -> usize {
+        self.compose
+            .derived_clips
+            .keys()
+            .filter(|(_, _, t)| *t == track_id)
+            .count()
+    }
+
+    /// Test-only: the primary drum pattern id assigned to a section's
+    /// arrangement, or `None` when the arrangement is empty.
+    #[doc(hidden)]
+    pub fn test_section_primary_pattern(&self, definition_id: u64) -> Option<u64> {
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.primary_pattern_id())
+    }
+
+    /// Test-only: push a drum instrument track (the default
+    /// [`test_add_track`](Self::test_add_track) makes a synth). Needed by
+    /// the `generate.drums` control tests, which require an
+    /// `InstrumentType::Drum` target.
+    #[doc(hidden)]
+    pub fn test_add_drum_track(&mut self, track_id: resonance_audio::types::TrackId) {
+        let order = self.registry.tracks.len();
+        let mut track = crate::state::TrackState::new_instrument(track_id, order);
+        track.instrument_type = crate::state::InstrumentType::Drum;
+        self.registry.tracks.push(track);
+        self.registry.resort_tracks();
+        self.compose.refresh_track_count(&self.registry.tracks);
+    }
+
+    /// Test-only: install a Vocal lane generator (default params, so
+    /// TIGER voicebank) on a track within a section definition, seeding
+    /// its draft. Drives the `vocal.*` control-endpoint tests (ba todo
+    /// #1156).
+    #[doc(hidden)]
+    pub fn test_install_vocal_lane(
+        &mut self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) {
+        use crate::compose::{LaneGeneratorConfig, LaneGeneratorKind};
+        if let Some(def) = self.compose.find_definition_mut(definition_id) {
+            def.lane_generators.insert(
+                track_id,
+                LaneGeneratorConfig {
+                    kind: LaneGeneratorKind::Vocal(resonance_music_theory::VocalParams::default()),
+                    seed: 1,
+                },
+            );
+        }
+    }
+
+    /// Test-only: the lyric lines of a track's vocal lane in a section
+    /// (draft text, in order). Empty when the lane isn't a vocal
+    /// generator.
+    #[doc(hidden)]
+    pub fn test_vocal_lines(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<String> {
+        use crate::compose::LaneGeneratorKind;
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .and_then(|c| match &c.kind {
+                LaneGeneratorKind::Vocal(p) => {
+                    Some(p.draft.iter().map(|l| l.text.clone()).collect())
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// Test-only: the voicebank set on a track's vocal lane in a section.
+    #[doc(hidden)]
+    pub fn test_vocal_voicebank(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<resonance_music_theory::VocalVoicebank> {
+        use crate::compose::LaneGeneratorKind;
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .and_then(|c| match &c.kind {
+                LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
+                _ => None,
+            })
+    }
+
+    /// Test-only: the project pronunciation dictionary as
+    /// `(word, phonemes)` pairs.
+    #[doc(hidden)]
+    pub fn test_pronunciation_dictionary(&self) -> Vec<(String, Vec<String>)> {
+        self.compose
+            .pronunciation
+            .project_dictionary
+            .iter()
+            .map(|e| {
+                (
+                    e.word.clone(),
+                    e.phonemes.iter().map(|p| (*p).to_owned()).collect(),
+                )
+            })
+            .collect()
+    }
+
     /// Test-only: remove a track's lane-generator config from every
     /// compose section definition, turning a configured compose lane
     /// back into an unconfigured one (placeholder row in the vocal
@@ -30,6 +171,20 @@ impl Resonance {
         for def in &mut self.compose.definitions {
             def.lane_generators.remove(&track_id);
         }
+    }
+
+    /// Test-only: append an entry to the project pronunciation
+    /// dictionary (doc #265 introspection tests; the dictionary-manager
+    /// modal is the user-facing mutation path).
+    #[doc(hidden)]
+    pub fn test_push_dictionary_entry(&mut self, word: &str, phonemes: Vec<&'static str>) {
+        self.compose.pronunciation.project_dictionary.push(
+            crate::compose::vocal_svs::DictionaryEntry {
+                word: word.to_owned(),
+                phonemes,
+                scope: crate::compose::vocal_svs::DictionaryScope::Project,
+            },
+        );
     }
 
     /// Test-only: read-only view of the reference-track (A/B) state.
