@@ -44,6 +44,7 @@ pub const METHODS: &[&str] = &[
 /// Params for `transport.seek`: a musical (`bar` [+ `beat`]) or `sample`
 /// position, flattened into the params object.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SeekParams {
     #[serde(flatten)]
     pub position: PositionSpec,
@@ -51,6 +52,7 @@ pub struct SeekParams {
 
 /// Params for `transport.loop_set`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LoopSetParams {
     pub start: PositionSpec,
     pub end: PositionSpec,
@@ -61,12 +63,14 @@ pub struct LoopSetParams {
 
 /// Params for `transport.set_tempo`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetTempoParams {
     pub bpm: f64,
 }
 
 /// Params for `transport.set_time_signature`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetTimeSignatureParams {
     pub numerator: u8,
     pub denominator: u8,
@@ -74,6 +78,7 @@ pub struct SetTimeSignatureParams {
 
 /// Params for `transport.set_key`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetKeyParams {
     /// Pitch name, e.g. `"A"`, `"F#"`.
     pub tonic: String,
@@ -83,6 +88,7 @@ pub struct SetKeyParams {
 
 /// Result of every `transport.*` method: the transport after the call.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TransportResult {
     pub state: TransportState,
     pub playhead: SongPosition,

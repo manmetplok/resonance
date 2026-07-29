@@ -11,6 +11,7 @@ pub const METHODS: &[&str] = &[HELLO];
 
 /// Params for `control.hello`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HelloParams {
     /// The client's [`crate::PROTOCOL_VERSION`].
     pub protocol_version: u32,
@@ -18,6 +19,7 @@ pub struct HelloParams {
 
 /// Result of `control.hello`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HelloResult {
     /// The app's own version string (crate version).
     pub app_version: String,

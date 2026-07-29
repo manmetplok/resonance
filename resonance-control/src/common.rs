@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// A resolved song position: both musical (1-based bar, 1-based beat
 /// within the bar, fractional) and absolute sample time.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SongPosition {
     pub bar: u32,
     pub beat: f64,
@@ -18,6 +19,7 @@ pub struct SongPosition {
 /// A client-supplied position: either musical (`bar` [+ `beat`]) or
 /// `sample`. Servers resolve it and echo back a full [`SongPosition`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PositionSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar: Option<u32>,
@@ -54,6 +56,7 @@ impl PositionSpec {
 /// A half-open beat range within a clip or section, used to window
 /// note queries.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BeatRange {
     pub start_beat: f64,
     pub end_beat: f64,
@@ -61,6 +64,7 @@ pub struct BeatRange {
 
 /// A time signature, e.g. `{"numerator":4,"denominator":4}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TimeSignature {
     pub numerator: u8,
     pub denominator: u8,
@@ -69,6 +73,7 @@ pub struct TimeSignature {
 /// A key/scale, e.g. `{"tonic":"A","scale":"minor"}`. `tonic` is a pitch
 /// name (`"A"`, `"F#"`, ...); `scale` is a lowercase scale name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct KeyScale {
     pub tonic: String,
     pub scale: String,
@@ -76,6 +81,7 @@ pub struct KeyScale {
 
 /// Track kinds, lowercase on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TrackKind {
     Instrument,
@@ -90,6 +96,7 @@ pub enum TrackKind {
 
 /// Transport states, lowercase on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TransportState {
     Stopped,
@@ -104,6 +111,7 @@ pub enum TransportState {
 /// transaction, so clients can detect concurrent GUI edits. Richer
 /// mutation results embed a `revision` field of their own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MutationAck {
     pub revision: u64,
 }

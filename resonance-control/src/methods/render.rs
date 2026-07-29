@@ -20,6 +20,7 @@ pub const METHODS: &[&str] = &[MIXDOWN, STEMS];
 
 /// A render time range; omitted ends default to song start/end.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RangeSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<PositionSpec>,
@@ -29,6 +30,7 @@ pub struct RangeSpec {
 
 /// Params for `render.mixdown`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MixdownParams {
     /// Absolute path of the WAV file to write.
     pub path: String,
@@ -42,6 +44,7 @@ pub struct MixdownParams {
 
 /// Job payload once a `render.mixdown` job completes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MixdownResult {
     /// Absolute path of the written WAV file.
     pub path: String,
@@ -51,6 +54,7 @@ pub struct MixdownResult {
 
 /// Params for `render.stems`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StemsParams {
     /// Absolute path of the directory to write stem WAVs into.
     pub dir: String,
@@ -64,6 +68,7 @@ pub struct StemsParams {
 
 /// Job payload once a `render.stems` job completes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StemsResult {
     /// Absolute paths of the written stem files.
     pub paths: Vec<String>,
