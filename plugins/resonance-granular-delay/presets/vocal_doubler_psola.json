@@ -1,0 +1,33 @@
+{
+  "params": {
+    "sync": 0,
+    "division": 4,
+    "time_ms": 340.0,
+    "time_mode": 2,
+    "feedback": 0.3,
+    "fb_route": 0,
+    "fb_pitch": 0,
+    "grain_size_ms": 60.0,
+    "density_hz": 22.0,
+    "density_sync": 0,
+    "scheduler": 2,
+    "pitch": -5.0,
+    "pitch_quantize": 1,
+    "spread_cents": 0.0,
+    "root": 0,
+    "scale": 1,
+    "texture": 0.5,
+    "spray_ms": 5.0,
+    "size_jitter": 0.0,
+    "level_jitter": 0.0,
+    "reverse_prob": 0.0,
+    "freeze": 0,
+    "filter_type": 0,
+    "filter_hz": 9000.0,
+    "diffusion": 0.0,
+    "pan_spread": 0.3,
+    "width": 1.0,
+    "mix": 0.35,
+    "quality": 1
+  }
+}

@@ -25,6 +25,7 @@ use resonance_plugin::*;
 pub mod dsp;
 pub mod params;
 pub mod pitch_sync;
+pub mod presets;
 pub mod quantize;
 pub mod sync;
 pub mod viz;
