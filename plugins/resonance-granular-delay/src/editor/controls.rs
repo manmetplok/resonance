@@ -9,11 +9,14 @@
 //! built once, never per frame) and are unit-tested in
 //! tests/editor_groups.rs: the groups cover every declared parameter
 //! index exactly once and every label list matches its param's range.
-//! The bespoke `draw` below renders those same groups per the
-//! prototype's 'default' state; conditional disclosure (sync↔division
-//! swap, Root/Scale reveal, route-gated shimmer) is the next todo —
-//! until then every control renders unconditionally so all 29 params
-//! stay reachable.
+//! The bespoke `draw` below renders those groups per the prototype,
+//! with the req-4 conditional disclosure (ba todo #1142) layered on —
+//! sync swaps the Time knob for the division stepper in-place,
+//! Quantize = Scale reveals Root/Scale in reserved space, and the
+//! SHIMMER chip greys out on the Output-only route. All disclosure is
+//! a pure function of the param values; every param stays reachable
+//! in some param state and nothing is orphaned (division/time are the
+//! two faces of the same tap).
 
 use egui::Ui;
 use wayland_plugin_gui::egui;
@@ -211,13 +214,17 @@ fn caption(ui: &mut Ui, text: &str) {
     );
 }
 
-/// TIME: Time macro knob + division stepper (the in-place sync swap is
-/// the disclosure todo — both render for now so division stays
-/// reachable), time-mode segmented below.
+/// TIME: with SYNC off the Time macro knob; with SYNC on it swaps
+/// in-place for the division stepper (ba todo #1142, design doc #264
+/// req-4 — both widgets share the same cell, so no layout jump).
+/// Time-mode segmented below.
 fn draw_time(ui: &mut Ui, params: &GranularDelayParams, bpm: f32) {
-    ui.horizontal(|ui| {
-        macro_knob(ui, params, 2);
-        division_stepper(ui, params, 1, bpm);
+    ui.vertical_centered(|ui| {
+        if params.sync.value() {
+            division_stepper(ui, params, 1, bpm);
+        } else {
+            macro_knob(ui, params, 2);
+        }
     });
     ui.add_space(2.0);
     ui.vertical_centered(|ui| {
@@ -269,8 +276,9 @@ fn draw_grains(ui: &mut Ui, params: &GranularDelayParams) {
 }
 
 /// PITCH: bipolar Pitch macro + Spread texture knob, Quantize
-/// segmented, Root/Scale selects (always rendered until the disclosure
-/// todo gates them behind Quantize == Scale).
+/// segmented; the Root/Scale selects reveal only in Scale mode
+/// (ba todo #1142, req-4). Their row space stays reserved so the
+/// reveal never reflows the strip.
 fn draw_pitch(ui: &mut Ui, params: &GranularDelayParams) {
     ui.horizontal(|ui| {
         macro_knob(ui, params, 11);
@@ -281,10 +289,15 @@ fn draw_pitch(ui: &mut Ui, params: &GranularDelayParams) {
         caption(ui, "quantize");
     });
     ui.add_space(2.0);
-    ui.horizontal(|ui| {
-        param_choice(ui, params, 27, ROOT_LABELS, 52.0);
-        param_choice(ui, params, 28, SCALE_LABELS, 92.0);
-    });
+    if params.pitch_quantize.value() == 2 {
+        ui.horizontal(|ui| {
+            param_choice(ui, params, 27, ROOT_LABELS, 52.0);
+            param_choice(ui, params, 28, SCALE_LABELS, 92.0);
+        });
+    } else {
+        // Reserved footprint of the collapsed Root/Scale row.
+        ui.allocate_exact_size(egui::vec2(150.0, 18.0), egui::Sense::hover());
+    }
 }
 
 /// FEEDBACK: Feedback macro knob (warm over-unity zone), vertical
@@ -296,7 +309,11 @@ fn draw_feedback(ui: &mut Ui, params: &GranularDelayParams) {
             ui.add_space(4.0);
             param_segmented_vertical(ui, params, 5, FB_ROUTE_LABELS);
             ui.add_space(4.0);
-            param_chip(ui, params, 6, "SHIMMER", true);
+            // Shimmer has no effect on the Output-only route: the chip
+            // renders disabled (greyed, ignores input) there (ba todo
+            // #1142, req-4).
+            let shimmer_enabled = params.fb_route.value() != 1;
+            param_chip(ui, params, 6, "SHIMMER", shimmer_enabled);
         });
         ui.add_space(4.0);
         ui.vertical(|ui| {
