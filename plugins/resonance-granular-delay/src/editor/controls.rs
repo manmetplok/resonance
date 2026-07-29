@@ -13,7 +13,9 @@ use crate::params::GranularDelayParams;
 use crate::sync::DIVISION_LABELS;
 
 use super::theme;
-use super::widgets::{param_choice, param_knob, param_toggle};
+use super::widgets::{
+    feedback_knob, macro_knob, param_choice, param_toggle, texture_knob,
+};
 
 /// One titled group of parameter controls.
 pub struct ParamGroup {
@@ -111,6 +113,11 @@ pub fn control_kind(index: usize) -> ControlKind {
 /// Feedback/Space/Output share the third.
 pub const GROUP_ROWS: &[&[usize]] = &[&[0, 2], &[1], &[3, 4, 5]];
 
+/// Macro-tier params (design doc #264 req-3): Time, Size, Density,
+/// Pitch, Feedback, Mix render as 56 px macro knobs; every other
+/// continuous param is a 38 px texture knob.
+pub const MACRO_PARAMS: &[usize] = &[2, 7, 8, 11, 4, 25];
+
 /// Draw the whole control surface.
 pub fn draw(ui: &mut egui::Ui, params: &GranularDelayParams) {
     for row in GROUP_ROWS {
@@ -129,7 +136,16 @@ pub fn draw(ui: &mut egui::Ui, params: &GranularDelayParams) {
                         ui.horizontal(|ui| {
                             for &index in group.params {
                                 match control_kind(index) {
-                                    ControlKind::Knob => param_knob(ui, params, index),
+                                    // Feedback carries the warm over-
+                                    // unity zone; the macro tier gets
+                                    // 56 px knobs (ba todo #1138).
+                                    ControlKind::Knob if index == 4 => {
+                                        feedback_knob(ui, params, index)
+                                    }
+                                    ControlKind::Knob if MACRO_PARAMS.contains(&index) => {
+                                        macro_knob(ui, params, index)
+                                    }
+                                    ControlKind::Knob => texture_knob(ui, params, index),
                                     ControlKind::Toggle => param_toggle(ui, params, index),
                                     ControlKind::Choice(labels) => {
                                         param_choice(ui, params, index, labels)
