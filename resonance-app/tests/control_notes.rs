@@ -263,6 +263,67 @@ fn delete_removes_the_note_and_is_undoable() {
     assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
 }
 
+// ---------------- frozen-track rejection (DoD) ----------------
+
+#[test]
+fn edits_on_a_frozen_track_are_rejected_busy_with_no_change() {
+    use resonance_app::state::FreezeStatus;
+    use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
+
+    let mut app = app_with_clip(vec![note(60, 0, 1, 0.8), note(64, 1, 1, 0.8)]);
+    let cache = FreezeCacheRef::new(
+        "freeze_1.wav".to_owned(),
+        SR,
+        32,
+        1,
+        FreezeCacheStatus::Frozen,
+    );
+    app.test_set_freeze_status(TRACK, FreezeStatus::Frozen { cache_ref: cache });
+
+    let revision_before = app.revision();
+    let notes_before = notes_of(&mut app, CLIP).notes.len();
+
+    // insert / edit / delete must each be rejected with a stable `busy`
+    // kind — not swallowed by the frozen-input gate and falsely acked —
+    // and must not mutate the clip or bump the revision.
+    let cases = [
+        (
+            "notes.insert",
+            serde_json::json!({ "clip_id": CLIP, "pitch": 62, "start_beat": 0.5, "duration_beats": 1.0 }),
+        ),
+        (
+            "notes.edit",
+            serde_json::json!({ "clip_id": CLIP, "index": 0, "pitch": 67 }),
+        ),
+        (
+            "notes.delete",
+            serde_json::json!({ "clip_id": CLIP, "index": 0 }),
+        ),
+    ];
+    for (method, params) in cases {
+        let response = call(&mut app, method, params);
+        let error = response
+            .error
+            .unwrap_or_else(|| panic!("{method} on a frozen track must be rejected"));
+        assert_eq!(error.kind(), ErrorKind::Busy, "{method}");
+        assert!(error.message.contains("frozen"), "{method}: {}", error.message);
+    }
+
+    // Nothing changed: same note count, same revision.
+    assert_eq!(notes_of(&mut app, CLIP).notes.len(), notes_before);
+    assert_eq!(app.revision(), revision_before);
+
+    // Once unfrozen, the same edit goes through.
+    app.test_set_freeze_status(TRACK, FreezeStatus::Idle);
+    let response = call(
+        &mut app,
+        "notes.delete",
+        serde_json::json!({ "clip_id": CLIP, "index": 0 }),
+    );
+    assert!(response.result::<MutationAck>().is_ok());
+    assert_eq!(app.revision(), revision_before + 1);
+}
+
 // ---------------- notes.create_clip ----------------
 
 #[test]

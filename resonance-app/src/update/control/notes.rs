@@ -59,6 +59,21 @@ fn find_clip(app: &Resonance, clip_id: u64) -> Option<&MidiClipState> {
     app.midi_clips.iter().find(|c| c.id == clip_id)
 }
 
+/// A `busy` error when `track_id` is frozen (Frozen or Stale), else
+/// `None`. Note edits on a frozen track are swallowed by the
+/// `frozen_input_edit_target` gate in `update()` (which flips the freeze
+/// to Stale and returns `Task::none()`), so acking success there would
+/// falsely report an edit that never happened. The gate still backstops
+/// the non-frozen path; this pre-check just makes the rejection visible
+/// to the remote client (doc #265 DoD).
+fn frozen_reject(app: &Resonance, track_id: resonance_audio::types::TrackId) -> Option<RpcError> {
+    app.freeze.status(track_id).is_frozen().then(|| {
+        RpcError::busy(format!(
+            "track {track_id} is frozen; unfreeze it before editing its notes"
+        ))
+    })
+}
+
 /// Reject with `not_found`, distinguishing an audio clip (wrong kind)
 /// from a genuinely missing id.
 fn clip_not_found(app: &Resonance, request: &Request, clip_id: u64) -> (Response, Task<Message>) {
@@ -103,6 +118,9 @@ fn insert(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let Some(clip) = find_clip(app, params.clip_id.0) else {
         return clip_not_found(app, request, params.clip_id.0);
     };
+    if let Some(e) = frozen_reject(app, clip.track_id) {
+        return reject(request, e);
+    }
     if params.pitch > 127 {
         return reject(
             request,
@@ -161,6 +179,9 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let Some(clip) = find_clip(app, params.clip_id.0) else {
         return clip_not_found(app, request, params.clip_id.0);
     };
+    if let Some(e) = frozen_reject(app, clip.track_id) {
+        return reject(request, e);
+    }
     let Some(existing) = clip.notes.get(params.index).cloned() else {
         return reject(
             request,
@@ -269,6 +290,9 @@ fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let Some(clip) = find_clip(app, params.clip_id.0) else {
         return clip_not_found(app, request, params.clip_id.0);
     };
+    if let Some(e) = frozen_reject(app, clip.track_id) {
+        return reject(request, e);
+    }
     if params.index >= clip.notes.len() {
         return reject(
             request,
