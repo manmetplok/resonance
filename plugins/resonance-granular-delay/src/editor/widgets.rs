@@ -43,12 +43,23 @@ pub fn knob_cell(size: f32) -> egui::Vec2 {
 /// Macro-tier (56 px) knob bound to a param; bipolar centre-out arc
 /// when the param range spans zero (Pitch).
 pub fn macro_knob(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
-    knob_param(ui, params, index, MACRO_KNOB_SIZE, None);
+    knob_param(ui, params, index, MACRO_KNOB_SIZE, None, None);
 }
 
 /// Texture-tier (38 px) knob bound to a param.
 pub fn texture_knob(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
-    knob_param(ui, params, index, TEXTURE_KNOB_SIZE, None);
+    knob_param(ui, params, index, TEXTURE_KNOB_SIZE, None, None);
+}
+
+/// Texture-tier knob with a custom (short) caption for the 38 px cell
+/// (e.g. `SIZE J` instead of the param's full `Size Jitter`).
+pub fn texture_knob_labeled(
+    ui: &mut Ui,
+    params: &GranularDelayParams,
+    index: usize,
+    label: &str,
+) {
+    knob_param(ui, params, index, TEXTURE_KNOB_SIZE, None, Some(label));
 }
 
 /// Macro knob with the 100–110 % over-unity arc zone marked in the
@@ -59,7 +70,7 @@ pub fn feedback_knob(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
     let span = (p.max_plain() as f32 - min).max(f32::EPSILON);
     // Over-unity begins at plain 1.0 (100 %).
     let warm_from = ((1.0 - min) / span).clamp(0.0, 1.0);
-    knob_param(ui, params, index, MACRO_KNOB_SIZE, Some(warm_from));
+    knob_param(ui, params, index, MACRO_KNOB_SIZE, Some(warm_from), None);
 }
 
 /// Shared param-bound knob body: linear plain↔unit mapping, drag to
@@ -70,6 +81,7 @@ fn knob_param(
     index: usize,
     size: f32,
     warm_from: Option<f32>,
+    label: Option<&str>,
 ) {
     let p = params.param_at(index);
     let min = p.min_plain() as f32;
@@ -81,7 +93,7 @@ fn knob_param(
 
     if let Some(unit) = draw_knob(
         ui,
-        p.name(),
+        label.unwrap_or(p.name()),
         (val - min) / span,
         &display,
         (p.default_plain() as f32 - min) / span,
@@ -585,49 +597,32 @@ pub fn freeze_latch(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy bindings (grouped strip; replaced by the signal-flow layout todo)
+// Combo binding (Root/Scale selects)
 // ---------------------------------------------------------------------------
 
-/// Labelled toggle for boolean parameters.
-pub fn param_toggle(ui: &mut Ui, params: &GranularDelayParams, index: usize) {
-    let p = params.param_at(index);
-    let on = p.get_plain() >= 0.5;
-    ui.vertical(|ui| {
-        ui.set_width(64.0);
-        ui.label(egui::RichText::new(p.name()).small().color(theme::TEXT_3));
-        let (text, color) = if on {
-            (egui::RichText::new("ON").strong().color(theme::ACCENT), true)
-        } else {
-            (egui::RichText::new("off").color(theme::TEXT_3), false)
-        };
-        if ui.selectable_label(color, text).clicked() {
-            p.set_plain(if on { 0.0 } else { 1.0 });
-        }
-    });
-}
-
-/// Labelled combo box for enumerated parameters. `labels` must be a
-/// cached static list (view-performance rules: no per-frame option
-/// building) covering the param's plain range `0..labels.len()`.
+/// Compact combo box for enumerated parameters (the Root/Scale
+/// selects). `labels` must be a cached static list (view-performance
+/// rules: no per-frame option building) covering the param's plain
+/// range `0..labels.len()`.
 pub fn param_choice(
     ui: &mut Ui,
     params: &GranularDelayParams,
     index: usize,
     labels: &'static [&'static str],
+    width: f32,
 ) {
     let p = params.param_at(index);
     let current = (p.get_plain().round() as usize).min(labels.len().saturating_sub(1));
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new(p.name()).small().color(theme::TEXT_3));
-        egui::ComboBox::from_id_salt(p.id())
-            .width(96.0)
-            .selected_text(labels[current])
-            .show_ui(ui, |ui| {
-                for (i, label) in labels.iter().enumerate() {
-                    if ui.selectable_label(i == current, *label).clicked() {
-                        p.set_plain(i as f64);
-                    }
+    egui::ComboBox::from_id_salt(p.id())
+        .width(width)
+        .selected_text(
+            egui::RichText::new(labels[current]).size(10.0),
+        )
+        .show_ui(ui, |ui| {
+            for (i, label) in labels.iter().enumerate() {
+                if ui.selectable_label(i == current, *label).clicked() {
+                    p.set_plain(i as f64);
                 }
-            });
-    });
+            }
+        });
 }
