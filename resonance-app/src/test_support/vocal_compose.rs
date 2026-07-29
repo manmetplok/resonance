@@ -32,6 +32,20 @@ impl Resonance {
         }
     }
 
+    /// Test-only: append an entry to the project pronunciation
+    /// dictionary (doc #265 introspection tests; the dictionary-manager
+    /// modal is the user-facing mutation path).
+    #[doc(hidden)]
+    pub fn test_push_dictionary_entry(&mut self, word: &str, phonemes: Vec<&'static str>) {
+        self.compose.pronunciation.project_dictionary.push(
+            crate::compose::vocal_svs::DictionaryEntry {
+                word: word.to_owned(),
+                phonemes,
+                scope: crate::compose::vocal_svs::DictionaryScope::Project,
+            },
+        );
+    }
+
     /// Test-only: read-only view of the reference-track (A/B) state.
     #[doc(hidden)]
     pub fn test_reference(&self) -> &crate::reference::ReferenceState {

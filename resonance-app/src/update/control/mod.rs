@@ -32,6 +32,8 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod song;
+
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
 pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
     match message {
@@ -91,6 +93,12 @@ pub fn execute(
             ),
             Task::none(),
         );
+    }
+
+    // Read-only introspection (todo #1148): the `song.*` views plus the
+    // plugin catalog. Executed against `&Resonance` — never mutates.
+    if let Some(response) = song::try_handle(app, request) {
+        return (response, Task::none());
     }
 
     if is_protocol_method(method) {
