@@ -54,13 +54,9 @@ impl EditorApp for GranularEditorApp {
         egui::Panel::bottom("granular_strip")
             .exact_size(STRIP_H)
             .show_inside(ui, |ui| {
-                // The strip rework (signal-flow layout) is a separate
-                // todo; until then the existing grouped surface may
-                // overflow the band — keep it reachable via scroll.
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add_space(6.0);
-                    controls::draw(ui, &self.params);
-                });
+                // Signal-flow strip (ba todo #1141): fits the 246 px
+                // band at the 1320 px window width.
+                controls::draw(ui, &self.params, &self.viz);
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
