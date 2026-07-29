@@ -77,6 +77,14 @@ impl Resonance {
         self.io.has_active_project = active;
     }
 
+    /// Test-only: whether an offline bounce / render is in flight. Lets
+    /// the control `render.mixdown` tests (doc #265, todo #1157) confirm
+    /// the engine command fired (or, for a guard hit, that it did not).
+    #[doc(hidden)]
+    pub fn test_is_bouncing(&self) -> bool {
+        self.io.bouncing
+    }
+
     /// Test-only: anchor the project at `path` so `can_record_undo`
     /// (which needs a saved-path to replay snapshots against) is true.
     /// Lets reducer tests exercise undo/redo round-trips without going

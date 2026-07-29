@@ -36,9 +36,12 @@ mod generate;
 mod harmony;
 mod job;
 mod project;
+mod render;
 mod section;
 mod song;
 mod vocal;
+
+pub(crate) use render::mixdown_result;
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
 pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
@@ -140,6 +143,13 @@ pub fn execute(
     }
     // Vocals (todo #1156): lyrics, pronunciation, and the SVS render job.
     if let Some(handled) = vocal::try_handle(app, request) {
+        return handled;
+    }
+
+    // Offline render (todo #1157): `render.mixdown` bounces the master
+    // mix to a WAV file at an explicit path, as a job. Mutating dispatch
+    // (it drives an engine command) — the task must reach the runtime.
+    if let Some(handled) = render::try_handle(app, conn, request) {
         return handled;
     }
 

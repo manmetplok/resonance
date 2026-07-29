@@ -241,6 +241,30 @@ impl JobBoard {
             .max()
     }
 
+    /// Fail every live [`JobToken::Export`] job with `error`. The engine's
+    /// `BounceError` event carries no path to correlate on, but the
+    /// render busy-guard forbids more than one bounce at a time, so at
+    /// most one export job is ever live (todo #1157). Returns whether any
+    /// matched.
+    pub fn fail_export_jobs(&self, error: impl Into<String>) -> bool {
+        let ids: Vec<u64> = {
+            let table = self.table.lock().expect("job table poisoned");
+            table
+                .jobs
+                .iter()
+                .filter(|(_, e)| {
+                    !e.state.is_terminal() && matches!(e.token, Some(JobToken::Export { .. }))
+                })
+                .map(|(id, _)| *id)
+                .collect()
+        };
+        let error = error.into();
+        for id in &ids {
+            self.fail(*id, error.clone());
+        }
+        !ids.is_empty()
+    }
+
     /// The job's current status, `None` for an unknown id. Marks a
     /// terminal status as fetched (eviction priority).
     pub fn status(&self, id: u64) -> Option<JobStatus> {
