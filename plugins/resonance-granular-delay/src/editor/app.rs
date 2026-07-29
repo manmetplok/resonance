@@ -29,6 +29,8 @@ pub(crate) struct GranularEditorApp {
     /// Index into [`crate::presets::PRESETS`] of the preset last loaded
     /// through the header combo (display only — edits do not clear it).
     selected_preset: Option<usize>,
+    /// Hero canvas gesture in flight (ba todo #1144).
+    hero_drag: Option<hero::HeroDrag>,
 }
 
 impl GranularEditorApp {
@@ -37,6 +39,7 @@ impl GranularEditorApp {
             params,
             viz,
             selected_preset: None,
+            hero_drag: None,
         }
     }
 }
@@ -60,11 +63,11 @@ impl EditorApp for GranularEditorApp {
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            // Hero buffer view (ba todo #1139): the returned layout
-            // carries the tap hit-rect for the direct-manipulation
-            // todo.
+            // Hero buffer view (ba todo #1139) + direct manipulation
+            // (ba todo #1144): tap drag = time, cloud drag = pitch,
+            // scroll = density.
             let layout = hero::draw(ui, &self.params, &self.viz);
-            ui.allocate_rect(layout.canvas, egui::Sense::hover());
+            hero::interact(ui, &self.params, &self.viz, &layout, &mut self.hero_drag);
         });
     }
 }
