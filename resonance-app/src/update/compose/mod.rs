@@ -95,6 +95,19 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::DeleteSectionWithPlacements { definition_id } => {
             section::handle_delete_with_placements(r, definition_id)
         }
+        ComposeMessage::GenerateSectionPart {
+            definition_id,
+            track_id,
+            config,
+        } => return control_generate_part(r, definition_id, track_id, *config).1,
+        ComposeMessage::GenerateSectionDrums {
+            definition_id,
+            pattern_id,
+            seed,
+        } => {
+            let _ =
+                drum_groups::control_generate_drums(r, definition_id, pattern_id, seed);
+        }
 
         // Placement CRUD
         ComposeMessage::PlaceSection {
@@ -204,6 +217,48 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Outcome of a control-endpoint melodic-part generation
+/// ([`control_generate_part`]).
+pub(crate) enum ControlPartOutcome {
+    /// The lane was generated; MIDI clips now exist across the section's
+    /// placements.
+    Generated,
+    /// The section has no chords, so there is nothing to derive from.
+    NoChords,
+    /// The section definition id was not found.
+    NoSection,
+}
+
+/// Install a Bass / Melody / Pad generator on `track_id` within
+/// `definition_id` and derive its notes onto every placement of the
+/// section (control endpoint `generate.part`, ba todo #1154).
+///
+/// `config` is the fully-built [`LaneGeneratorConfig`] (kind + params +
+/// seed) the caller assembled from the wire params; this reuses the
+/// exact `regenerate_lane` path the lane inspector drives, so the
+/// generated clips match the GUI's. Returns [`ControlPartOutcome::NoChords`]
+/// without touching the lane when the section has no chords (the
+/// generators read the chord grid and would silently produce nothing).
+pub(crate) fn control_generate_part(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+    config: crate::compose::LaneGeneratorConfig,
+) -> (ControlPartOutcome, Task<Message>) {
+    let Some(def) = r.compose.find_definition(definition_id) else {
+        return (ControlPartOutcome::NoSection, Task::none());
+    };
+    if def.chords.is_empty() {
+        return (ControlPartOutcome::NoChords, Task::none());
+    }
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        def.lane_generators.insert(track_id, config);
+    }
+    let task = regenerate::regenerate_lane(r, definition_id, track_id);
+    r.compose.last_error = None;
+    (ControlPartOutcome::Generated, task)
 }
 
 /// Ensure the bulk-lyrics text-editor buffer exists for the currently

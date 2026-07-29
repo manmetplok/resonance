@@ -32,6 +32,7 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod generate;
 mod harmony;
 mod job;
 mod section;
@@ -122,6 +123,11 @@ pub fn execute(
         return handled;
     }
     if let Some(handled) = harmony::try_handle(app, request) {
+        return handled;
+    }
+    // Generators (todo #1154): generate.part / generate.drums into a
+    // section + track.
+    if let Some(handled) = generate::try_handle(app, request) {
         return handled;
     }
 
