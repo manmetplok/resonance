@@ -39,6 +39,7 @@ mod project;
 mod render;
 mod section;
 mod song;
+mod transport;
 mod vocal;
 
 pub(crate) use render::mixdown_result;
@@ -153,6 +154,12 @@ pub fn execute(
         return handled;
     }
 
+    // Mutating transport namespace (todo #1150): synthesizes the
+    // existing TransportMessage variants through the full update path.
+    if let Some(result) = transport::try_handle(app, request) {
+        return result;
+    }
+
     if is_protocol_method(method) {
         // Known in protocol v1, but its namespace todo hasn't landed
         // yet. Stable `unsupported` kind either way; the message tells a
@@ -230,6 +237,18 @@ fn is_protocol_method(method: &str) -> bool {
 /// control handler returns it, `update.rs` forwards it).
 pub(crate) fn run_via_update(app: &mut Resonance, message: Message) -> Task<Message> {
     app.update(message)
+}
+
+/// Parse params for a method whose params are entirely optional:
+/// absent/null params mean "defaults". (`Request::params` alone maps
+/// absent to JSON `null`, which serde refuses to turn into a struct.)
+pub(super) fn optional_params<T: serde::de::DeserializeOwned + Default>(
+    request: &Request,
+) -> Result<T, RpcError> {
+    match &request.params {
+        None | Some(serde_json::Value::Null) => Ok(T::default()),
+        Some(_) => request.params(),
+    }
 }
 
 /// The `{revision}` acknowledgement every mutating reply carries,

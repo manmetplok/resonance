@@ -159,6 +159,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             TransportMessage::CommitBpm
             | TransportMessage::ToggleMetronome
             | TransportMessage::CycleTimeSignature
+            // Direct control-endpoint setters (doc #265): undoable like
+            // their GUI counterparts (cycle / loop toggle+drag).
+            | TransportMessage::SetTimeSignature { .. }
+            | TransportMessage::SetLoopRange { .. }
             | TransportMessage::ToggleLoop => UndoAction::Record,
         },
 

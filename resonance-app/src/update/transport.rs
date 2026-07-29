@@ -121,6 +121,43 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
             // though the transport bar updated.
             r.rebuild_and_send_tempo();
         }
+        TransportMessage::SetTimeSignature {
+            numerator,
+            denominator,
+        } => {
+            r.transport.time_sig_num = numerator;
+            r.transport.time_sig_den = denominator;
+            let _ = r.engine.send(AudioCommand::SetTimeSignature {
+                numerator,
+                denominator,
+            });
+            if let Some(first) = r.signature_events.first_mut() {
+                if first.bar == 0 {
+                    first.numerator = numerator;
+                    first.denominator = denominator;
+                }
+            }
+            // Same tempo-map rebuild + resend as CycleTimeSignature so
+            // the signature lane and bar table stay in sync.
+            r.rebuild_and_send_tempo();
+        }
+        TransportMessage::SetLoopRange {
+            loop_in,
+            loop_out,
+            enabled,
+        } => {
+            r.transport.loop_in = loop_in.min(loop_out);
+            r.transport.loop_out = loop_in.max(loop_out);
+            r.transport.loop_range_set = true;
+            if let Some(enabled) = enabled {
+                r.transport.loop_enabled = enabled;
+            }
+            let _ = r.engine.send(AudioCommand::SetLoopRange {
+                enabled: r.transport.loop_enabled,
+                loop_in: r.transport.loop_in,
+                loop_out: r.transport.loop_out,
+            });
+        }
         TransportMessage::ToggleLoop => {
             r.transport.loop_enabled = !r.transport.loop_enabled;
             if r.transport.loop_enabled && !r.transport.loop_range_set {
