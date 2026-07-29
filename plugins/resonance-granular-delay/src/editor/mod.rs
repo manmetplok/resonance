@@ -15,6 +15,9 @@
 mod app;
 pub mod controls;
 mod factory;
+// Public: the hero layout/mapping helpers (ba todo #1139) are shared
+// with the grain-cloud and direct-manipulation todos.
+pub mod hero;
 mod theme;
 // Public: the lavender widget kit (ba todo #1138) is the editor's
 // building-block API for the signal-flow strip and hero todos.
