@@ -26,11 +26,18 @@ const STRIP_H: f32 = 246.0;
 pub(crate) struct GranularEditorApp {
     pub(crate) params: Arc<GranularDelayParams>,
     pub(crate) viz: Arc<GranularViz>,
+    /// Index into [`crate::presets::PRESETS`] of the preset last loaded
+    /// through the header combo (display only — edits do not clear it).
+    selected_preset: Option<usize>,
 }
 
 impl GranularEditorApp {
     pub fn new(params: Arc<GranularDelayParams>, viz: Arc<GranularViz>) -> Self {
-        Self { params, viz }
+        Self {
+            params,
+            viz,
+            selected_preset: None,
+        }
     }
 }
 
@@ -66,6 +73,69 @@ impl EditorApp for GranularEditorApp {
     }
 }
 
+/// Tone of a non-interactive header status pill.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChipTone {
+    /// Idle/inactive.
+    Dim,
+    /// Lit lavender (grain activity, division).
+    Accent,
+    /// Lit mint (voice lock).
+    Good,
+    /// Lit amber (freeze).
+    Warm,
+}
+
+/// Small status pill (prototype header chips) — display only.
+fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
+    let font = egui::FontId::monospace(9.0);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font.clone(), theme::TEXT_1);
+    let size = egui::vec2(galley.size().x + 14.0, 18.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    let (fill, stroke, text) = match tone {
+        ChipTone::Dim => (theme::BG_1, theme::LINE_2, theme::TEXT_3),
+        ChipTone::Accent => (
+            theme::ACCENT_DIM,
+            theme::ACCENT.gamma_multiply(0.6),
+            theme::ACCENT_SOFT,
+        ),
+        ChipTone::Good => (
+            theme::GOOD.gamma_multiply(0.12),
+            theme::GOOD.gamma_multiply(0.5),
+            theme::GOOD,
+        ),
+        ChipTone::Warm => (
+            theme::WARM.gamma_multiply(0.12),
+            theme::WARM.gamma_multiply(0.55),
+            theme::WARM,
+        ),
+    };
+    painter.rect_filled(rect, theme::RADIUS_CHIP, fill);
+    painter.rect_stroke(
+        rect,
+        theme::RADIUS_CHIP,
+        egui::Stroke::new(1.0, stroke),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        font,
+        text,
+    );
+}
+
+/// The 46 px header (ba todo #1140, design doc #264 req-6/req-8):
+/// title → preset combo → live viz readouts → right-aligned
+/// GRAINS/VOICE/FREEZE status chips. Pure function of params + viz
+/// reads (plus the last-loaded preset name).
 fn draw_header(ui: &mut egui::Ui, app: &mut GranularEditorApp) {
     ui.horizontal_centered(|ui| {
         ui.add_space(12.0);
@@ -74,68 +144,91 @@ fn draw_header(ui: &mut egui::Ui, app: &mut GranularEditorApp) {
                 .strong()
                 .color(theme::ACCENT),
         );
-        ui.add_space(16.0);
+        ui.add_space(14.0);
         ui.separator();
         ui.add_space(8.0);
 
-        // Tempo + effective-delay readout (the Repitch glide / Fade
-        // commit value, ba todo #1076).
+        // Preset combo (parity with the compressor editor): loads the
+        // factory snapshot through the shared loader on select.
+        let selected_text = app
+            .selected_preset
+            .and_then(|i| crate::presets::PRESETS.get(i))
+            .map_or("— preset —", |e| e.name);
+        egui::ComboBox::from_id_salt("granular_preset_combo")
+            .width(190.0)
+            .selected_text(selected_text)
+            .show_ui(ui, |ui| {
+                for (i, entry) in crate::presets::PRESETS.iter().enumerate() {
+                    let selected = app.selected_preset == Some(i);
+                    if ui.selectable_label(selected, entry.name).clicked()
+                        && crate::presets::load_preset(&app.params, entry.json)
+                    {
+                        app.selected_preset = Some(i);
+                    }
+                }
+            });
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        // Live readouts from the viz atomics: BPM (when the host
+        // provides one), the effective delay (Repitch glide / Fade
+        // commit value, ba todo #1076) and the division chip while
+        // synced.
         let bpm = app.viz.read_bpm();
         if bpm > 0.0 {
             ui.label(egui::RichText::new(format!("{bpm:.1} BPM")).color(theme::TEXT_1));
-            ui.add_space(12.0);
+            ui.add_space(10.0);
         }
         let delay_ms = app.viz.read_delay_ms();
         ui.label(egui::RichText::new(format!("{delay_ms:.1} ms")).color(theme::TEXT_2));
         if app.params.sync.value() {
-            let div = app.params.division.value() as usize;
-            if let Some(label) = DIVISION_LABELS.get(div) {
+            if let Some(label) = DIVISION_LABELS.get(app.params.division.value() as usize) {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new(*label).color(theme::ACCENT));
+                status_chip(ui, label, ChipTone::Accent);
             }
         }
 
-        // Voice-lock indicator (ba todo #1082): shown while the
-        // Pitch-Sync scheduler is selected; lit with the tracked
-        // fundamental while the PSOLA path is engaged.
-        if app.params.scheduler.value() == 2 {
-            ui.add_space(12.0);
-            ui.separator();
-            ui.add_space(8.0);
-            let engaged = app.viz.read_engaged();
-            let hz = app.viz.read_period_hz();
-            let (color, text) = if engaged && hz > 0.0 {
-                (theme::GOOD, format!("VOICE {hz:.0} Hz"))
-            } else {
-                (theme::TEXT_3, "voice —".to_string())
-            };
-            ui.label(egui::RichText::new(text).color(color));
-            let voices = app.viz.read_psola_voices();
-            if voices > 0 {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(format!("{voices}v")).color(theme::TEXT_2));
-            }
-        }
-
-        // Grain-count readout.
-        ui.add_space(12.0);
-        let grains = app.viz.read_active_grains();
-        ui.label(egui::RichText::new(format!("{grains} grains")).color(theme::TEXT_2));
-
-        // Freeze indicator (right-aligned; warm amber = the audio-domain
-        // freeze token, design doc #264).
+        // Right-aligned status chips: FREEZE (warm when latched),
+        // VOICE (Pitch-Sync scheduler only; mint while the PSOLA path
+        // is engaged, em dash while unvoiced), GRAINS n (accent while
+        // grains sound).
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(12.0);
             let frozen = app.params.freeze.value();
-            let (dot_color, text_color, label) = if frozen {
-                (theme::WARM, theme::WARM, "FREEZE")
-            } else {
-                (theme::LINE, theme::TEXT_3, "freeze")
-            };
-            ui.label(egui::RichText::new(label).strong().color(text_color));
-            ui.add_space(4.0);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), 5.0, dot_color);
+            status_chip(
+                ui,
+                "FREEZE",
+                if frozen { ChipTone::Warm } else { ChipTone::Dim },
+            );
+            ui.add_space(6.0);
+
+            if app.params.scheduler.value() == 2 {
+                let engaged = app.viz.read_engaged();
+                let hz = app.viz.read_period_hz();
+                let voices = app.viz.read_psola_voices();
+                if engaged && hz > 0.0 {
+                    status_chip(
+                        ui,
+                        &format!("VOICE {hz:.0} Hz · {voices}v"),
+                        ChipTone::Good,
+                    );
+                } else {
+                    status_chip(ui, "VOICE —", ChipTone::Dim);
+                }
+                ui.add_space(6.0);
+            }
+
+            let grains = app.viz.read_active_grains();
+            status_chip(
+                ui,
+                &format!("GRAINS {grains}"),
+                if grains > 0 {
+                    ChipTone::Accent
+                } else {
+                    ChipTone::Dim
+                },
+            );
         });
     });
 }
