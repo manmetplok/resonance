@@ -17,8 +17,10 @@ use crate::viz::GranularViz;
 
 use super::app::GranularEditorApp;
 
-const WINDOW_W: u32 = 1240;
-const WINDOW_H: u32 = 560;
+// 1320×700 (ba todo #1136, design doc #264): in family with reverb's
+// 1320×660; the extra height carries the ~400 px hero buffer view.
+const WINDOW_W: u32 = 1320;
+const WINDOW_H: u32 = 700;
 
 pub struct GranularEditorFactory {
     params: Arc<GranularDelayParams>,
@@ -52,7 +54,7 @@ impl EditorFactory for GranularEditorFactory {
                 title: "Resonance Granular Delay".to_string(),
                 app_id: "com.resonance.granular-delay".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
-                min_size: (1000, 480),
+                min_size: (1000, 560),
                 resizable: true,
             },
         )
