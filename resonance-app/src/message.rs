@@ -4,6 +4,7 @@
 /// sub-state layout of [`crate::Resonance`]. Each sub-enum is handled by a
 /// dedicated arm of the top-level match in `update.rs`.
 use crate::compose::ComposeMessage;
+use crate::control_socket::ControlMessage;
 use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
@@ -76,6 +77,14 @@ pub enum Message {
     /// fans out into a [`PoolMessage::ImportAndPlace`]. Handled by
     /// `update::drag::handle`.
     Drag(DragMessage),
+    /// Control-endpoint traffic from the unix-socket threads (ba doc
+    /// #265, todo #1147): client connect/disconnect events and parsed
+    /// JSON-RPC requests, delivered in arrival order through the bridge
+    /// subscription. Handled by `update::control::handle`, which replies
+    /// over the request's reply channel; mutating methods are executed by
+    /// synthesizing ordinary domain messages back through `update()`, so
+    /// this envelope itself carries no undo weight.
+    Control(ControlMessage),
     /// Timer tick driving VU meters and auto-follow. Kept at top level to
     /// avoid wrapping cost on the hot path.
     Tick,

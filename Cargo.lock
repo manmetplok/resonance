@@ -5048,6 +5048,7 @@ name = "resonance-app"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "crossbeam-channel",
  "dirs",
  "hound",
  "iced",
@@ -5055,6 +5056,7 @@ dependencies = [
  "printpdf",
  "resonance-audio",
  "resonance-common",
+ "resonance-control",
  "resonance-metering",
  "resonance-music-theory",
  "resonance-plugin",

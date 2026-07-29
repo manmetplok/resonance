@@ -110,6 +110,11 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         Message::Relink(_) => true,
         // Timer tick: harmless, drives VU meters — allow.
         Message::Tick => false,
+        // Control-endpoint envelope: always allow so every request gets
+        // a reply (a swallowed envelope would wedge the remote client).
+        // Mutating control methods synthesize domain messages that
+        // re-enter `update()` and hit this gate individually.
+        Message::Control(_) => false,
         // Window close request: always allow so the app can exit.
         Message::WindowCloseRequested(_) => false,
         // Undo/redo need a project to be meaningful — block otherwise.
@@ -130,6 +135,11 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         // need to keep flowing — the bounce relies on `BounceProgress`
         // / `TrackBounceCompleted` events to clear the modal.
         Message::ProjectIo(_) | Message::Tick | Message::WindowCloseRequested(_) => false,
+        // Control-endpoint envelope: keep flowing so requests are always
+        // answered (read-only introspection stays valid mid-render);
+        // synthesized mutating messages re-enter `update()` and are
+        // blocked by this gate individually.
+        Message::Control(_) => false,
         // Everything else: block.
         Message::Compose(_)
         | Message::Transport(_)
@@ -185,6 +195,10 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         // flowing — the freeze relies on the tick to drain `FreezeProgress`
         // / `FreezeCompleted` events that advance the batch and clear state.
         Message::ProjectIo(_) | Message::Tick | Message::WindowCloseRequested(_) => false,
+        // Control-endpoint envelope: keep flowing so requests are always
+        // answered; synthesized mutating messages re-enter `update()`
+        // and are blocked by this gate individually.
+        Message::Control(_) => false,
         // Everything else: block.
         Message::Compose(_)
         | Message::Transport(_)

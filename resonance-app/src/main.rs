@@ -12,7 +12,10 @@ fn main() -> iced::Result {
         let _ = STARTUP_TAB.set(tab);
     }
 
-    let mut app = iced::application(Resonance::new, Resonance::update, Resonance::view)
+    // `new_with_control` = `new()` + the unix-socket control endpoint
+    // (ba doc #265). Tests construct via `new()` and never bind the
+    // per-user socket.
+    let mut app = iced::application(Resonance::new_with_control, Resonance::update, Resonance::view)
         .title("Resonance")
         .font(theme::ICON_FONT_BYTES);
     for face in theme::UI_FONT_FACES {

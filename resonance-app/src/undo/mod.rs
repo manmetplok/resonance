@@ -54,6 +54,21 @@ impl crate::Resonance {
             self.dirty = true;
         }
 
+        // Bump the control-protocol revision counter (doc #265, todo
+        // #1147) once per committed undoable change: immediate records,
+        // each coalesced step (every one is a committed state change,
+        // even when it merges into one undo entry), and the Commit that
+        // closes a Begin…Commit gesture. Begin itself doesn't bump — the
+        // transaction commits on gesture end. Unlike the history stack
+        // this is not gated on `can_record_undo`: the state mutation
+        // happens regardless, and remote clients need to see it.
+        match action {
+            UndoAction::Record | UndoAction::RecordCoalesced(_) | UndoAction::Commit => {
+                self.revision = self.revision.wrapping_add(1);
+            }
+            UndoAction::Begin | UndoAction::Skip => {}
+        }
+
         // Skip every history-mutating branch when the app isn't in a
         // state where a snapshot could be restored (no active project,
         // no saved path, mid-restore). Commit still runs on gesture end
