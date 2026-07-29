@@ -1,0 +1,141 @@
+//! Transport and global-timeline test hooks: tempo map / tempo and
+//! signature events, playing/recording flags, playhead, loop state,
+//! view mode and the Performance-mode footer.
+
+use crate::state;
+use crate::Resonance;
+
+impl Resonance {
+    #[doc(hidden)]
+    pub fn test_tempo_map(&self) -> &resonance_audio::types::TempoMap {
+        &self.tempo_map
+    }
+
+    #[doc(hidden)]
+    pub fn test_tempo_events(&self) -> &[state::TempoEvent] {
+        &self.tempo_events
+    }
+
+    #[doc(hidden)]
+    pub fn test_signature_events(&self) -> &[state::SignatureEvent] {
+        &self.signature_events
+    }
+
+    #[doc(hidden)]
+    pub fn test_transport_bpm(&self) -> f32 {
+        self.transport.bpm
+    }
+
+    #[doc(hidden)]
+    pub fn test_transport_time_sig(&self) -> (u8, u8) {
+        (self.transport.time_sig_num, self.transport.time_sig_den)
+    }
+
+    #[doc(hidden)]
+    pub fn test_selected_global_event(&self) -> Option<state::SelectedGlobalEvent> {
+        self.interaction.selected_global_event
+    }
+
+    /// Test-only: rebuild the GUI-side tempo map from the current
+    /// `tempo_events` / `signature_events`. Mirrors what the global-
+    /// track reducers call after a tempo edit; surfaced so tests can
+    /// seed a custom tempo map without going through the message path.
+    #[doc(hidden)]
+    pub fn test_rebuild_tempo_map(&mut self) {
+        self.rebuild_tempo_map();
+    }
+
+    /// Test-only: push a tempo event so the rebuilt tempo map has the
+    /// requested ramp/step. Caller must follow with
+    /// `test_rebuild_tempo_map` (and usually `test_set_sample_rate`).
+    #[doc(hidden)]
+    pub fn test_push_tempo_event(&mut self, event: state::TempoEvent) {
+        self.tempo_events.push(event);
+    }
+
+    /// Test-only: the currently active top-level [`ViewMode`].
+    #[doc(hidden)]
+    pub fn test_view_mode(&self) -> state::ViewMode {
+        self.view_mode
+    }
+
+    /// Test-only: directly set the active view (bypassing the reducer)
+    /// to establish a starting tab for Performance-mode toggle tests.
+    #[doc(hidden)]
+    pub fn test_set_view_mode(&mut self, mode: state::ViewMode) {
+        self.view_mode = mode;
+    }
+
+    /// Test-only: whether the transport reports as playing. Used to
+    /// assert that entering/leaving Performance mode never starts or
+    /// stops playback.
+    #[doc(hidden)]
+    pub fn test_transport_playing(&self) -> bool {
+        self.transport.playing
+    }
+
+    /// Test-only: force the transport's playing flag so a test can prove
+    /// a view switch preserves it (no engine round-trip involved).
+    #[doc(hidden)]
+    pub fn test_set_transport_playing(&mut self, playing: bool) {
+        self.transport.playing = playing;
+    }
+
+    /// Test-only: arm/disarm the first track's record flag so a test can
+    /// assert that record-arm never auto-opens Performance mode.
+    #[doc(hidden)]
+    pub fn test_arm_first_track(&mut self, armed: bool) {
+        if let Some(track) = self.registry.tracks.first_mut() {
+            track.record_armed = armed;
+        }
+    }
+
+    /// Test-only: read the Performance-mode footer selection (instrument
+    /// tuning + capo, epic #11 / todo #312).
+    #[doc(hidden)]
+    pub fn test_performance(&self) -> &crate::state::PerformanceState {
+        &self.performance
+    }
+
+    /// Test-only: mutable access to the Performance-mode footer selection,
+    /// so a persistence test can seed a tuning / capo before serializing.
+    #[doc(hidden)]
+    pub fn test_performance_mut(&mut self) -> &mut crate::state::PerformanceState {
+        &mut self.performance
+    }
+
+    /// Test-only: replay just the Performance-mode footer block of a saved
+    /// [`crate::project::ProjectFile`] into this app, exercising the same
+    /// restore path a full project load runs (ba todo #312).
+    #[doc(hidden)]
+    pub fn test_restore_performance(&mut self, file: &crate::project::ProjectFile) {
+        crate::update::project_io::restore_performance(self, file);
+    }
+
+    /// Test-only: force the transport's recording flag so a test can render
+    /// the Performance status bar in its recording state.
+    #[doc(hidden)]
+    pub fn test_set_transport_recording(&mut self, recording: bool) {
+        self.transport.recording = recording;
+    }
+
+    /// Test-only: the current transport playhead sample. Marker
+    /// navigation reducers move this in lockstep with the `SeekTo`
+    /// command sent to the engine.
+    #[doc(hidden)]
+    pub fn test_playhead(&self) -> u64 {
+        self.transport.playhead
+    }
+
+    /// Test-only: the transport loop range / enabled flags
+    /// `(loop_in, loop_out, loop_enabled)`. `LoopToRegion` sets these in
+    /// lockstep with the `SetLoopRange` command sent to the engine.
+    #[doc(hidden)]
+    pub fn test_loop_state(&self) -> (u64, u64, bool) {
+        (
+            self.transport.loop_in,
+            self.transport.loop_out,
+            self.transport.loop_enabled,
+        )
+    }
+}

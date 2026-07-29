@@ -1,0 +1,331 @@
+//! Mixer, plugin, freeze and external-instrument test hooks: aux
+//! sends, MIDI map, plugin params, freeze lifecycle, and the device
+//! definition registry.
+
+use crate::state;
+use crate::Resonance;
+
+impl Resonance {
+    /// Test-only: read the mirrored aux-send graph. Driven from
+    /// `tests/aux_send_mirror.rs` to assert events reconstruct state.
+    #[doc(hidden)]
+    pub fn test_aux_sends(&self) -> &[resonance_audio::types::AuxSend] {
+        &self.aux.sends
+    }
+
+    /// Test-only: seed the aux-send mirror directly so a handler test can
+    /// exercise the "edit an existing send" upsert path without first
+    /// driving the create round trip. Mirrors what an `AuxSendChanged`
+    /// echo would produce.
+    #[doc(hidden)]
+    pub fn test_seed_aux_send(&mut self, send: resonance_audio::types::AuxSend) {
+        self.aux.upsert(send);
+    }
+
+    /// Test-only: read the most recent aux-send rejection forwarded to
+    /// the UI (`None` once a later send succeeds).
+    #[doc(hidden)]
+    pub fn test_aux_last_rejection(&self) -> Option<&state::AuxSendRejection> {
+        self.aux.last_rejection.as_ref()
+    }
+
+    /// Test-only: drive the freeze-cache rehydrate path a disk load runs
+    /// (ba todo #577) without constructing a whole `LoadedProject` or
+    /// pumping the ClearAll → AllCleared round-trip. `freezes` is each
+    /// track's persisted [`crate::state::FreezeStatus`] source — the
+    /// per-track [`resonance_common::TrackFreezeState`] paired with its id.
+    #[doc(hidden)]
+    pub fn test_rehydrate_frozen_tracks(
+        &mut self,
+        project_dir: &std::path::Path,
+        freezes: &[(
+            resonance_audio::types::TrackId,
+            resonance_common::TrackFreezeState,
+        )],
+    ) {
+        self.rehydrate_frozen_tracks(project_dir, freezes);
+    }
+
+    /// Test-only: read the GUI-side MIDI control-surface mapping, so the
+    /// engine-event mirroring tests can assert bindings / learn state.
+    #[doc(hidden)]
+    pub fn test_midi_map(&self) -> &state::MidiMapState {
+        &self.midi_map
+    }
+
+    /// Test-only: arm MIDI Learn for `target` (the UI-side step that
+    /// normally precedes a `MidiLearnCaptured` event), so a test can then
+    /// verify the capture handler clears learn mode.
+    #[doc(hidden)]
+    pub fn test_arm_midi_learn(&mut self, target: resonance_common::MidiTarget) {
+        self.midi_map.learn_target = Some(target);
+    }
+
+    /// Test-only: push a plugin slot onto a track's chain (bypassing the
+    /// engine round-trip) and index it, so the freeze fingerprint /
+    /// plugin-param gating tests have a real chain to operate on.
+    #[doc(hidden)]
+    pub fn test_push_track_plugin(
+        &mut self,
+        track_id: resonance_audio::types::TrackId,
+        plugin: state::PluginSlotState,
+    ) {
+        let instance_id = plugin.instance_id;
+        if let Some(track) = self.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+            track.plugins.push(plugin);
+            self.insert_plugin_index(instance_id, state::PluginLocator::Track(track_id));
+        }
+    }
+
+    /// Test-only: set a plugin param's current value directly (no engine
+    /// round-trip), so a fingerprint test can mutate an input and recompute.
+    #[doc(hidden)]
+    pub fn test_set_plugin_param(
+        &mut self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+        param_id: u32,
+        value: f64,
+    ) {
+        self.with_plugin_mut(instance_id, |p| {
+            if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
+                param.current_value = value;
+            }
+        });
+    }
+
+    /// Test-only: read a plugin param's current value (no engine round-trip).
+    #[doc(hidden)]
+    pub fn test_plugin_param(
+        &mut self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+        param_id: u32,
+    ) -> Option<f64> {
+        self.with_plugin_mut(instance_id, |p| {
+            p.params
+                .iter()
+                .find(|pp| pp.id == param_id)
+                .map(|pp| pp.current_value)
+        })
+        .flatten()
+    }
+
+    /// Test-only: recompute the resonance-common freeze input fingerprint
+    /// for a track (ba todo #576).
+    #[doc(hidden)]
+    pub fn test_freeze_fingerprint(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        self.compute_track_freeze_fingerprint(track_id)
+    }
+
+    /// Test-only: recompute the fingerprint and downgrade a still-`Frozen`
+    /// track to `Stale` if its inputs drifted. Returns whether it
+    /// transitioned (ba todo #576).
+    #[doc(hidden)]
+    pub fn test_revalidate_frozen_track(
+        &mut self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> bool {
+        self.revalidate_frozen_track(track_id)
+    }
+
+    /// Test-only: read a track's freeze status (defaults to idle).
+    #[doc(hidden)]
+    pub fn test_freeze_status(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> crate::state::FreezeStatus {
+        self.freeze.status(track_id)
+    }
+
+    /// Test-only: force a track's freeze status, mirroring what the engine
+    /// freeze-event mirror (ba todo #575) would set on completion.
+    #[doc(hidden)]
+    pub fn test_set_freeze_status(
+        &mut self,
+        track_id: resonance_audio::types::TrackId,
+        status: crate::state::FreezeStatus,
+    ) {
+        self.freeze.set(track_id, status);
+    }
+
+    /// Test-only: read the active freeze batch queue, if any.
+    #[doc(hidden)]
+    pub fn test_freeze_queue(&self) -> Option<&crate::state::FreezeQueue> {
+        self.freeze.queue.as_ref()
+    }
+
+    /// Test-only: advance the freeze batch to the next track, as the
+    /// engine completion mirror (ba todo #575) will once it lands. Returns
+    /// `true` when a next freeze was started.
+    #[doc(hidden)]
+    pub fn test_advance_freeze_queue(&mut self) -> bool {
+        crate::update::freeze::advance_freeze_queue(self)
+    }
+
+    /// Test-only: drive an undo-restore reconciliation directly with a
+    /// target freeze map, exercising `apply_freeze_restore` without the
+    /// full snapshot/replay pipeline.
+    #[doc(hidden)]
+    pub fn test_apply_freeze_restore(
+        &mut self,
+        target: std::collections::HashMap<
+            resonance_audio::types::TrackId,
+            crate::state::FreezeStatus,
+        >,
+    ) {
+        self.apply_freeze_restore(target);
+    }
+
+    /// Test-only: drive the clip fade/gain undo re-apply directly with a
+    /// target map, exercising `apply_clip_fade_gain_restore` (the shared
+    /// re-sync used by both restore paths) without the full
+    /// snapshot/replay pipeline. Mirrors `test_apply_freeze_restore`.
+    #[doc(hidden)]
+    pub fn test_apply_clip_fade_gain_restore(
+        &mut self,
+        map: &std::collections::HashMap<resonance_audio::types::ClipId, crate::undo::ClipFadeGain>,
+    ) {
+        self.apply_clip_fade_gain_restore(map);
+    }
+
+    /// Test-only: read the external-instrument state mirror for a track, if
+    /// it's in external-instrument mode. Used by the external-instrument
+    /// reducer tests to assert config + offline-flag mutations.
+    #[doc(hidden)]
+    pub fn test_external_instrument(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<state::ExternalInstrumentState> {
+        self.external_instruments.get(&track_id).cloned()
+    }
+
+    /// Test-only: layer extra device definitions from `dir` into the device
+    /// registry, exactly as the user `device_definitions` folder is scanned at
+    /// startup. Lets a persistence test register a user-authored preset without
+    /// a real user data dir. (epic #40, doc #201 §5.)
+    #[doc(hidden)]
+    pub fn test_scan_device_dir(&mut self, dir: &std::path::Path) {
+        self.device_registry.scan_dir(dir);
+    }
+
+    /// Test-only: derive the lifecycle [`state::ExternalInstrumentStatus`] for
+    /// a track from its external-instrument state + owning `TrackState`.
+    /// `None` when the track isn't external or doesn't exist.
+    #[doc(hidden)]
+    pub fn test_external_instrument_status(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<state::ExternalInstrumentStatus> {
+        let ext = self.external_instruments.get(&track_id)?;
+        let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
+        Some(ext.status(track))
+    }
+
+    /// Test-only: compute the Mixer Inspector's lazy-region fingerprint for a
+    /// track, exactly as `view()` does (same collapse state, same track). The
+    /// inspector's onboarding card and device-offline alert render *inside*
+    /// the `lazy(fp, …)` region, so this hash MUST change whenever any state
+    /// those bodies depend on changes — otherwise the retained UI reuses a
+    /// stale tree across an offline/recovery transition and the alert never
+    /// appears (or never clears). Regression guard for ba todo #459.
+    /// `None` when the track doesn't exist.
+    #[doc(hidden)]
+    pub fn test_inspector_fingerprint(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
+        let routing_collapsed = self
+            .mixer
+            .collapsed_inspector_groups
+            .contains(&state::MixerInspectorGroup::Routing);
+        let chain_collapsed = self
+            .mixer
+            .collapsed_inspector_groups
+            .contains(&state::MixerInspectorGroup::Chain);
+        Some(crate::view::mixer::inspector::inspector_fingerprint(
+            self,
+            track,
+            routing_collapsed,
+            chain_collapsed,
+        ))
+    }
+
+    /// Test-only: drive the GUI external-instrument map (and engine) back to
+    /// `extras`, the same restore path both undo replays use. Pairs with
+    /// [`Self::test_snapshot_undo_extras`] to exercise a config round-trip.
+    #[doc(hidden)]
+    pub fn test_restore_external_instruments(&mut self, extras: &crate::undo::UndoExtras) {
+        self.restore_external_instruments(extras);
+    }
+
+    /// Test-only: the ordered automation-parameter-picker labels the mixer
+    /// strip for `track_id` would show (epic #40, doc #201 §5). Resolves the
+    /// track's selected external-instrument device preset to its definition's
+    /// named params exactly as the strip view does, so a test can assert the
+    /// device params appear (grouped) only when a preset is selected and are
+    /// hidden otherwise. A closed `pick_list` renders only its placeholder,
+    /// so this mirrors the option list the dropdown would present.
+    #[doc(hidden)]
+    pub fn test_automation_picker_labels(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<String> {
+        let device_params: &[resonance_common::DeviceParam] = self
+            .external_instruments
+            .get(&track_id)
+            .and_then(|ext| ext.device_id.as_deref())
+            .and_then(|id| self.device_registry.get(id))
+            .map(|def| def.params.as_slice())
+            .unwrap_or(&[]);
+        let plugins = self
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == track_id)
+            .map(|t| t.plugins.as_slice())
+            .unwrap_or(&[]);
+        crate::view::mixer::automation::track_choice_labels(track_id, plugins, device_params)
+    }
+
+    /// Test-only: return the `id`s of every definition currently in the
+    /// device-definition registry (bundled + user), in registry order. Used
+    /// to assert that a `RescanDefinitions` dispatch picks up new files.
+    #[doc(hidden)]
+    pub fn test_device_registry_ids(&self) -> Vec<String> {
+        self.device_registry
+            .list()
+            .iter()
+            .map(|d| d.id.clone())
+            .collect()
+    }
+
+    /// Test-only: scan a user-definitions directory directly into the device
+    /// registry and rebuild the cached pick-list options, bypassing
+    /// `user_definitions_dir()` (which depends on `$XDG_DATA_HOME`). Used by
+    /// tests that need to verify re-scan behaviour without touching the real
+    /// user data directory.
+    #[doc(hidden)]
+    pub fn test_rescan_definitions_from(&mut self, user_dir: &std::path::Path) {
+        let mut registry = resonance_common::DeviceDefinitionRegistry::default();
+        registry.scan_bundled();
+        registry.scan_dir(user_dir);
+        self.view_caches.rebuild_device_choices(&registry.list());
+        self.device_registry = registry;
+    }
+
+    /// Test-only: return the ids offered by the device-preset pick-list cache
+    /// (the `device_choices` options), excluding the `None` "(no device)"
+    /// entry. Useful to assert that the cache is in sync with the registry
+    /// after a re-scan.
+    #[doc(hidden)]
+    pub fn test_device_choice_ids(&self) -> Vec<String> {
+        self.view_caches
+            .device_choices
+            .iter()
+            .filter_map(|c| c.id.clone())
+            .collect()
+    }
+}
