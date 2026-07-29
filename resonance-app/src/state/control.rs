@@ -7,7 +7,7 @@
 
 use crate::control_jobs::JobBoard;
 use crate::control_socket::{ConnId, ControlServer};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Track kind a `track.add` control request creates (todo #1152).

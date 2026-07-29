@@ -35,6 +35,7 @@ use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 mod generate;
 mod harmony;
 mod job;
+mod notes;
 mod project;
 mod render;
 mod section;
@@ -164,6 +165,12 @@ pub fn execute(
     // Mutating track/mixer namespace (todo #1152): add/rename/delete
     // tracks, volume/pan/mute/solo, add built-in instrument/FX.
     if let Some(result) = track::try_handle(app, request) {
+        return result;
+    }
+
+    // Piano-roll note editing (todo #1155): notes.insert/edit/delete +
+    // create_clip, synthesizing MidiEditor / MidiClip messages.
+    if let Some(result) = notes::try_handle(app, request) {
         return result;
     }
 

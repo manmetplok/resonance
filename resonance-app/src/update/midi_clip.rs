@@ -13,6 +13,28 @@ pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
                 r.interaction.selected_midi_clip = None;
             }
         }
+        MidiClipMessage::CreateEmptyClip {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            name,
+        } => {
+            // Id-hinted create: the engine loads the clip under `clip_id`
+            // (empty note list) and echoes `MidiClipCreated { clip_id }`,
+            // which mirrors it into `r.midi_clips`. Same path the compose
+            // generators use for their derived clips.
+            let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
+                clip_id,
+                track_id,
+                start_sample,
+                duration_ticks,
+                notes: Vec::new(),
+                name,
+                trim_start_ticks: 0,
+                trim_end_ticks: 0,
+            });
+        }
         MidiClipMessage::StartMidiClipDrag {
             clip_id,
             grab_offset_x,
