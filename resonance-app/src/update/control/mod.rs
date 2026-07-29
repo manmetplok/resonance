@@ -39,6 +39,7 @@ mod project;
 mod render;
 mod section;
 mod song;
+mod track;
 mod transport;
 mod vocal;
 
@@ -157,6 +158,12 @@ pub fn execute(
     // Mutating transport namespace (todo #1150): synthesizes the
     // existing TransportMessage variants through the full update path.
     if let Some(result) = transport::try_handle(app, request) {
+        return result;
+    }
+
+    // Mutating track/mixer namespace (todo #1152): add/rename/delete
+    // tracks, volume/pan/mute/solo, add built-in instrument/FX.
+    if let Some(result) = track::try_handle(app, request) {
         return result;
     }
 
