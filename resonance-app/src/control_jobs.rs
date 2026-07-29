@@ -46,6 +46,11 @@ pub enum JobToken {
     ProjectSave,
     /// Completes on `ProjectIoMessage::ProjectLoaded`.
     ProjectLoad,
+    /// A `project.new` instantiation (todo #1151): completes once the
+    /// engine confirms the clear and the fresh project replays
+    /// (`engine_events::project_io::all_cleared`, untitled path only);
+    /// fails on `ProjectIoMessage::TemplateLoaded(Err)`.
+    ProjectNew,
     /// Completes when the SVS render for this lane lands (todo #1156).
     VocalRender { definition_id: u64, track_id: u64 },
     /// Completes on bounce/export completion (todo #1157).

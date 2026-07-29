@@ -35,6 +35,7 @@ use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 mod generate;
 mod harmony;
 mod job;
+mod project;
 mod section;
 mod song;
 
@@ -114,6 +115,12 @@ pub fn execute(
     // blocking form on its reader threads).
     if let Some(response) = job::try_handle(app, request) {
         return (response, Task::none());
+    }
+
+    // Project lifecycle (todo #1151): new/open/save/save-as with explicit
+    // paths, as jobs. Mutating — the returned task must reach the runtime.
+    if let Some((response, task)) = project::try_handle(app, conn, request) {
+        return (response, task);
     }
 
     // Mutating compose namespaces (todo #1153): `section.*` sections +

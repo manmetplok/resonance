@@ -123,7 +123,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 let path = r.io.project_path.as_ref().map(|p| p.display().to_string());
                 r.control.jobs.complete_token(
                     &crate::control_jobs::JobToken::ProjectSave,
-                    serde_json::json!({ "path": path }),
+                    serde_json::json!({ "path": path, "revision": r.revision() }),
                 );
             }
             if autosave {
@@ -172,7 +172,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 let path = r.io.project_path.as_ref().map(|p| p.display().to_string());
                 r.control.jobs.complete_token(
                     &crate::control_jobs::JobToken::ProjectLoad,
-                    serde_json::json!({ "path": path }),
+                    serde_json::json!({ "path": path, "revision": r.revision() }),
                 );
             }
             let _ = r.engine.send(AudioCommand::Stop);
@@ -201,6 +201,11 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             instantiate::begin_instantiate(r, loaded);
         }
         ProjectIoMessage::TemplateLoaded(Err(e)) => {
+            // Fail a control-initiated `project.new` from a user template
+            // (todo #1151). No-op when no control job carries the token.
+            r.control
+                .jobs
+                .fail_token(&crate::control_jobs::JobToken::ProjectNew, e.clone());
             r.error_message = Some(format!("Open template failed: {e}"));
         }
         ProjectIoMessage::ExportChordSheet => {

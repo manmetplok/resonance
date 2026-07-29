@@ -68,6 +68,36 @@ fn missing_params_parse_as_unit() {
 }
 
 #[test]
+fn missing_params_parse_as_all_default_structs() {
+    use resonance_control::methods::project::NewParams;
+
+    // Omitted params fall back to `{}` for structs whose fields are all
+    // optional/defaulted (e.g. a bare `project.new`).
+    let request = Request::without_params(1i64, "project.new");
+    let params: NewParams = request.params().unwrap();
+    assert_eq!(params, NewParams::default());
+
+    // Explicit params must still be well-formed: the `{}` fallback only
+    // applies when params were omitted entirely.
+    let bad = Request::new(2i64, "project.new", &json!(42)).unwrap();
+    let err = bad.params::<NewParams>().unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidParams);
+}
+
+#[test]
+fn new_params_accept_the_template_id_alias() {
+    use resonance_control::methods::project::NewParams;
+
+    let params: NewParams = serde_json::from_value(json!({"template_id": "beatmaking"})).unwrap();
+    assert_eq!(params.template.as_deref(), Some("beatmaking"));
+    // Canonical serialization stays on the primary field name.
+    assert_eq!(
+        serde_json::to_value(&params).unwrap(),
+        json!({"template": "beatmaking", "confirm": false})
+    );
+}
+
+#[test]
 fn response_success_roundtrip() {
     let response = Response::success(9i64, &json!({"revision": 5})).unwrap();
     let wire = serde_json::to_value(&response).unwrap();

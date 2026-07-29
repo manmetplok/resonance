@@ -98,9 +98,20 @@ impl Request {
     /// [`ErrorKind::InvalidParams`] error ready to send back.
     pub fn params<T: DeserializeOwned>(&self) -> Result<T, RpcError> {
         let value = self.params.clone().unwrap_or(Value::Null);
-        serde_json::from_value(value).map_err(|e| {
-            RpcError::invalid_params(format!("invalid params for {}: {e}", self.method))
-        })
+        serde_json::from_value(value)
+            .or_else(|first_error| {
+                // Omitted params: `()` parses from the `null` above; structs
+                // whose fields are all optional/defaulted parse from `{}`.
+                if self.params.is_none() {
+                    serde_json::from_value(Value::Object(serde_json::Map::new()))
+                        .map_err(|_| first_error)
+                } else {
+                    Err(first_error)
+                }
+            })
+            .map_err(|e| {
+                RpcError::invalid_params(format!("invalid params for {}: {e}", self.method))
+            })
     }
 }
 
