@@ -16,6 +16,8 @@ mod app;
 pub mod controls;
 mod factory;
 mod theme;
-mod widgets;
+// Public: the lavender widget kit (ba todo #1138) is the editor's
+// building-block API for the signal-flow strip and hero todos.
+pub mod widgets;
 
 pub use factory::GranularEditorFactory;
