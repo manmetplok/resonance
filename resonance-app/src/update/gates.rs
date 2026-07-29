@@ -253,6 +253,7 @@ fn midi_editor_edit_clip(
         | RemoveSelectedNotes { clip_id, .. }
         | MoveNote { clip_id, .. }
         | ResizeNote { clip_id, .. }
+        | SetNoteVelocity { clip_id, .. }
         | ToggleSlur { clip_id, .. } => Some(*clip_id),
         // Open / close / select / preview / scroll don't change note data.
         // The selection variants (toggle / marquee / select-all / clear)

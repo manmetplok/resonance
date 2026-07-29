@@ -357,7 +357,8 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             MidiClipMessage::UpdateMidiClipDrag(_, _) | MidiClipMessage::UpdateMidiClipTrim(_) => {
                 UndoAction::Skip
             }
-            MidiClipMessage::DeleteMidiClip(_) => UndoAction::Record,
+            MidiClipMessage::DeleteMidiClip(_)
+            | MidiClipMessage::CreateEmptyClip { .. } => UndoAction::Record,
         },
 
         Message::MidiEditor(e) => match e {
@@ -366,6 +367,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::RemoveSelectedNotes { .. }
             | MidiEditorMessage::MoveNote { .. }
             | MidiEditorMessage::ResizeNote { .. }
+            | MidiEditorMessage::SetNoteVelocity { .. }
             | MidiEditorMessage::ToggleSlur { .. }
             // Bulk timing edits (doc #163): each rewrites the clip's note
             // array, so the pre-dispatch snapshot of the prior notes is

@@ -607,6 +607,19 @@ pub enum ClipMessage {
 #[derive(Debug, Clone)]
 pub enum MidiClipMessage {
     DeleteMidiClip(ClipId),
+    /// Create an empty MIDI clip with a caller-allocated id (control
+    /// endpoint `notes.create_clip`, doc #265, todo #1155). The id is
+    /// allocated app-side (derived-clip range) and carried to the engine
+    /// via `LoadMidiClipDirect`, which echoes `MidiClipCreated { id }`;
+    /// so the control reply returns the id immediately. Undoable
+    /// (Record) like a clip deletion.
+    CreateEmptyClip {
+        clip_id: ClipId,
+        track_id: resonance_audio::types::TrackId,
+        start_sample: resonance_audio::types::SamplePos,
+        duration_ticks: u64,
+        name: String,
+    },
     StartMidiClipDrag {
         clip_id: ClipId,
         grab_offset_x: f32,
@@ -656,6 +669,15 @@ pub enum MidiEditorMessage {
         clip_id: ClipId,
         note_index: usize,
         new_duration_ticks: u64,
+    },
+    /// Set one note's velocity in place (control endpoint `notes.edit`,
+    /// doc #265, todo #1155). The piano roll has no velocity-drag yet, so
+    /// this variant exists for the control surface; undoable + frozen-
+    /// input-gated exactly like the other single-note edits.
+    SetNoteVelocity {
+        clip_id: ClipId,
+        note_index: usize,
+        velocity: f32,
     },
     /// Replace the selection with a single note, or clear it (`None`).
     /// Used by a plain click and by the vocal roll's single-select path.
