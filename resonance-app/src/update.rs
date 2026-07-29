@@ -11,6 +11,7 @@ pub mod bus;
 pub mod chord_track;
 pub mod clips;
 pub mod compose;
+pub mod control;
 pub mod drag;
 pub mod export;
 pub mod external_instrument;
@@ -128,6 +129,7 @@ impl crate::Resonance {
             Message::Ui(m) => ui::handle(self, m),
             Message::Browser(m) => browser::handle(self, m),
             Message::Drag(m) => drag::handle(self, m),
+            Message::Control(m) => control::handle(self, m),
             Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {
                 if self.dirty && self.io.has_active_project {
@@ -260,6 +262,16 @@ impl crate::Resonance {
         });
 
         let mut subs = vec![tick, keys, close_requests, file_drops];
+
+        // Control-endpoint bridge (doc #265, todo #1147): stream every
+        // socket-thread event (connects, disconnects, parsed requests)
+        // into `update()` as `Message::Control`. Only attached when the
+        // listener actually started, so a disabled endpoint costs
+        // nothing; `Subscription::run` keys the recipe on the builder fn,
+        // so the stream is created once and lives for the whole app run.
+        if self.control.server.is_some() {
+            subs.push(Subscription::run(crate::control_socket::bridge_stream));
+        }
 
         // Audio file drop for the Arrange view: when an audio file is
         // dragged from the OS onto the arrangement window, drop it onto a

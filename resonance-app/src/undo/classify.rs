@@ -44,6 +44,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
 
         // Timer tick, pure UI, engine runtime, project I/O.
         Message::Tick => UndoAction::Skip,
+        // Control-endpoint envelope (doc #265, todo #1147): connect /
+        // disconnect events and request execution carry no undo weight
+        // at this level. Mutating control methods synthesize ordinary
+        // domain messages that re-enter `update()` individually and are
+        // classified there.
+        Message::Control(_) => UndoAction::Skip,
         Message::Viewport(_) => UndoAction::Skip,
         Message::Ui(_) => UndoAction::Skip,
         Message::ProjectIo(_) => UndoAction::Skip,
