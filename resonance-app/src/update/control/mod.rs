@@ -32,7 +32,9 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod harmony;
 mod job;
+mod section;
 mod song;
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
@@ -113,6 +115,16 @@ pub fn execute(
         return (response, Task::none());
     }
 
+    // Mutating compose namespaces (todo #1153): `section.*` sections +
+    // placements, `harmony.*` chords + progression apply. Both synthesize
+    // ComposeMessage values routed through `run_via_update`.
+    if let Some(handled) = section::try_handle(app, request) {
+        return handled;
+    }
+    if let Some(handled) = harmony::try_handle(app, request) {
+        return handled;
+    }
+
     if is_protocol_method(method) {
         // Known in protocol v1, but its namespace todo hasn't landed
         // yet. Stable `unsupported` kind either way; the message tells a
@@ -188,18 +200,40 @@ fn is_protocol_method(method: &str) -> bool {
 /// commit. This is the only way a mutating control method may touch
 /// state; the returned [`Task`] must be handed back to the runtime (the
 /// control handler returns it, `update.rs` forwards it).
-#[allow(dead_code)] // First mutating namespace lands in todo #1150.
 pub(crate) fn run_via_update(app: &mut Resonance, message: Message) -> Task<Message> {
     app.update(message)
 }
 
 /// The `{revision}` acknowledgement every mutating reply carries,
 /// snapshotting the app's monotonic undoable-transaction counter.
-#[allow(dead_code)] // First mutating namespace lands in todo #1150.
 pub(crate) fn mutation_ack(app: &Resonance) -> resonance_control::MutationAck {
     resonance_control::MutationAck {
         revision: app.revision(),
     }
+}
+
+/// Why a mutating control method cannot run right now, or `None` when
+/// the app can take the edit. Mirrors the pre-dispatch gates that would
+/// otherwise silently swallow a synthesized domain message (startup
+/// modal / offline bounce / freeze render) — a remote client must see a
+/// stable `busy` error instead of a no-op that claims success.
+pub(crate) fn mutation_gate_error(app: &Resonance) -> Option<RpcError> {
+    if !app.io.has_active_project {
+        return Some(RpcError::busy(
+            "no active project — open or create one first",
+        ));
+    }
+    if app.bounce_in_progress.is_some() {
+        return Some(RpcError::busy(
+            "an offline bounce is rendering; retry when it finishes",
+        ));
+    }
+    if app.freeze.any_in_flight() {
+        return Some(RpcError::busy(
+            "a track freeze is rendering; retry when it finishes",
+        ));
+    }
+    None
 }
 
 /// A success reply for `request`; falls back to an internal error if the
