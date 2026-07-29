@@ -138,6 +138,7 @@ fn done_job_carries_the_method_result_payload() {
     let mixdown = render::MixdownResult {
         path: "/tmp/mix.wav".to_owned(),
         duration_s: 42.5,
+        sample_rate: 48_000,
     };
     let status = JobStatus {
         job_id: JobId(3),
@@ -149,7 +150,7 @@ fn done_job_carries_the_method_result_payload() {
     let wire = serde_json::to_value(&status).unwrap();
     assert_eq!(
         wire["result"],
-        json!({"path": "/tmp/mix.wav", "duration_s": 42.5})
+        json!({"path": "/tmp/mix.wav", "duration_s": 42.5, "sample_rate": 48_000})
     );
     let back: render::MixdownResult = serde_json::from_value(wire["result"].clone()).unwrap();
     assert_eq!(back, mixdown);

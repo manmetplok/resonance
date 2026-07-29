@@ -47,6 +47,8 @@ pub struct MixdownResult {
     pub path: String,
     /// Rendered audio length in seconds.
     pub duration_s: f64,
+    /// Sample rate of the written WAV file.
+    pub sample_rate: u32,
 }
 
 /// Params for `render.stems`.
