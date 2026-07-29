@@ -315,6 +315,25 @@ impl Grain {
     };
 }
 
+/// Read-only view of one sounding grain (metering aid, ba todo #1135):
+/// a plain-scalar snapshot for editors/visualizers, decoupled from the
+/// pool's internal [`Grain`] layout.
+#[derive(Debug, Clone, Copy)]
+pub struct GrainView {
+    /// Fractional read position in the source buffer, absolute samples
+    /// (wraps through the caller's power-of-two mask).
+    pub read_pos: f64,
+    /// Playback rate in source samples per output sample (negative for
+    /// reversed grains).
+    pub rate: f64,
+    /// Total grain duration in output samples.
+    pub dur_samples: f64,
+    /// Current enveloped level: window value × grain gain (overlap
+    /// compensation × level jitter) × steal-release ramp. May exceed 1
+    /// for sparse clouds (overlap-compensation boost).
+    pub level: f32,
+}
+
 /// Real-time grain engine: fixed pool, scheduler, overlap-compensated
 /// gain and voice stealing. See the module docs for the reuse contract.
 pub struct GrainEngine {
@@ -441,6 +460,23 @@ impl GrainEngine {
     /// Allocation-free inspection aid for metering and tests.
     pub fn active_rates(&self) -> impl Iterator<Item = f64> + '_ {
         self.grains.iter().filter(|g| g.active).map(|g| g.rate)
+    }
+
+    /// Read-only views of the currently sounding grains (allocation-free
+    /// metering aid, ba todo #1135): read position, rate, duration and
+    /// the grain's current enveloped level (window × gain × steal-release
+    /// ramp) — everything an editor needs to draw the live grain cloud.
+    pub fn active_grain_views(&self) -> impl Iterator<Item = GrainView> + '_ {
+        self.grains.iter().filter(|g| g.active).map(|g| GrainView {
+            read_pos: g.read_pos,
+            rate: g.rate,
+            dur_samples: g.dur,
+            level: self
+                .window
+                .evaluate((g.env_phase * g.inv_dur) as f32, g.texture)
+                * g.gain
+                * g.release_gain,
+        })
     }
 
     /// Largest onset-alignment lag magnitude applied since

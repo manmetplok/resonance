@@ -30,7 +30,7 @@ pub use dynamics::{soft_knee_gain_reduction_db, Ballistics};
 pub use eq::BandType;
 pub use filter::OnePole;
 pub use formant::{formant_pitch_shift, FormantShifter};
-pub use granular::{GrainEngine, GrainParams, InterpQuality, SchedulerMode, MAX_GRAINS};
+pub use granular::{GrainEngine, GrainParams, GrainView, InterpQuality, SchedulerMode, MAX_GRAINS};
 pub use interp::{
     bspline6, hermite4, read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped,
 };
