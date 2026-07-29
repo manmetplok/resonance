@@ -9,6 +9,7 @@
 // - `midi_io` stays public — it's a small, stable utility surface for
 //   reading/writing .mid files used by project save/load.
 pub(crate) mod clap_host;
+pub(crate) mod cycle_load;
 pub(crate) mod decode;
 mod engine;
 mod input_handle;
@@ -86,6 +87,10 @@ pub mod __test_support {
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
+    };
+    pub use crate::cycle_load::{
+        format_cycle_load_line, CycleLoadMeter, CycleLoadReport, LOAD_EMA_ALPHA,
+        QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, VERBOSE_REPORT_INTERVAL,
     };
     /// Re-exported so app-side handler tests can name the command receiver
     /// returned by [`AudioEngine::for_test_capture`](crate::AudioEngine::for_test_capture).

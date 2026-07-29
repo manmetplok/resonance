@@ -151,6 +151,41 @@ fn any_low_cycle_resets_the_streak() {
 }
 
 #[test]
+fn post_drain_shortfall_locks_the_drain_out_for_the_session() {
+    let stride = 2;
+    let needed = 128 * stride;
+    let mut d = MonitorDrain::new(true);
+    // Converge to zero margin once…
+    for _ in 0..MONITOR_DRAIN_STREAK - 1 {
+        assert_eq!(d.excess_drain(needed + 256, needed, stride), 0);
+    }
+    assert_eq!(d.excess_drain(needed + 256, needed, stride), 256);
+    // …then an ordering flip drops a quantum (the mixer reports it):
+    d.note_shortfall();
+    // The backlog rebuilds, stays stably high — but the drain never
+    // fires again, so the standing margin absorbs further flips.
+    for _ in 0..MONITOR_DRAIN_STREAK * 3 {
+        assert_eq!(d.excess_drain(needed + 256, needed, stride), 0);
+    }
+}
+
+#[test]
+fn startup_shortfall_before_any_drain_does_not_lock_out() {
+    let stride = 2;
+    let needed = 128 * stride;
+    let mut d = MonitorDrain::new(true);
+    // Ring still filling at startup: shortfalls happen before any
+    // drain and say nothing about ordering stability.
+    d.note_shortfall();
+    d.note_shortfall();
+    for _ in 0..MONITOR_DRAIN_STREAK - 1 {
+        assert_eq!(d.excess_drain(needed + 256, needed, stride), 0);
+    }
+    // The latency win is kept: the sticky startup quantum still drains.
+    assert_eq!(d.excess_drain(needed + 256, needed, stride), 256);
+}
+
+#[test]
 fn drain_rounds_down_to_whole_frames() {
     let stride = 4;
     let needed = 32 * stride;

@@ -195,6 +195,30 @@ pub struct SharedState {
     /// monitor against the PDC-delayed, master-processed mix
     /// (doc #260 finding #19).
     pub master_latency_samples: AtomicU64,
+    /// Smoothed per-cycle DSP load as a fraction of the cycle budget
+    /// (AtomicU32 bit-punned f32), published every mix call by
+    /// [`crate::cycle_load::CycleLoadMeter`]. ~0.01 means the mixer
+    /// uses 1% of its realtime budget; ≥1.0 means it outran a cycle.
+    pub dsp_load_ema_bits: AtomicU32,
+    /// Highest single-cycle DSP load in the current report window
+    /// (bit-punned f32). Reset each time the meter emits a summary.
+    pub dsp_load_peak_bits: AtomicU32,
+    /// Lifetime count of cycles whose mix call outran the cycle budget
+    /// — each one is a guaranteed audible xrun regardless of what the
+    /// graph reports.
+    pub dsp_overrun_cycles: AtomicU64,
+    /// Lifetime count of cycles where a monitoring mix read fewer
+    /// monitor frames than it needed (the input stream's push for the
+    /// cycle hadn't landed) — a quantum of dropped live input each,
+    /// audible as a click/stutter in the monitored signal only.
+    /// Counted by `mix_audio`, folded into the load meter's report.
+    pub monitor_shortfall_cycles: AtomicU64,
+    /// Lifetime count of playing cycles the arrangement render skipped
+    /// because a state lock (tracks/busses/clips/midi-clips/plugins)
+    /// was write-held at callback time — a full quantum of silence in
+    /// the mix each, audible as a stutter with no graph xrun. Counted
+    /// by `mix_audio`'s contended branch, folded into the load report.
+    pub render_skip_cycles: AtomicU64,
     /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
     /// (the comp clamp is engaging and alignment for that chain is
     /// degraded). Used to emit the warning once per engagement instead
@@ -301,6 +325,11 @@ impl Default for SharedState {
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
+            dsp_load_ema_bits: AtomicU32::new(0),
+            dsp_load_peak_bits: AtomicU32::new(0),
+            dsp_overrun_cycles: AtomicU64::new(0),
+            monitor_shortfall_cycles: AtomicU64::new(0),
+            render_skip_cycles: AtomicU64::new(0),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
             capture_latency_samples: AtomicU64::new(0),
@@ -622,8 +651,16 @@ impl AudioEngine {
                 prefault_f32(r);
             }
             prefault_f32(&mut monitor_temp);
+            // Per-cycle DSP load meter (see `cycle_load`): quiet by
+            // default (reports only over-budget cycles / monitor
+            // shortfalls / near-budget peaks), verbose with
+            // RESONANCE_AUDIO_STATS=1.
+            let mut load_meter = crate::cycle_load::CycleLoadMeter::new(
+                std::env::var_os("RESONANCE_AUDIO_STATS").is_some(),
+            );
             let mix: crate::output_pipewire::MixFn =
                 Box::new(move |data: &mut [f32], channels: usize| {
+                    let mix_start = std::time::Instant::now();
                     mixer::mix_audio(
                         data,
                         channels,
@@ -653,6 +690,16 @@ impl AudioEngine {
                         audio_quantum,
                         &mut ab_meters,
                     );
+                    let mix_end = std::time::Instant::now();
+                    if let Some(report) = load_meter.record(
+                        mix_end,
+                        mix_end - mix_start,
+                        data.len() / channels.max(1),
+                        audio_sample_rate,
+                        &shared_audio,
+                    ) {
+                        eprintln!("{}", crate::cycle_load::format_cycle_load_line(&report));
+                    }
                 });
             (mix, prod)
         };

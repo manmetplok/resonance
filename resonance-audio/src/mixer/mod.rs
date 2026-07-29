@@ -228,9 +228,29 @@ pub fn monitor_catchup_skip(
 /// depending on ordering). Any low cycle resets the streak, so jittery
 /// ordering keeps the full margin. Inactive on the cpal fallback,
 /// whose independent clock genuinely needs the standing margin.
+///
+/// Zero margin is a gamble on that ordering staying stable: the input
+/// and output streams run on independent RT data loops with no
+/// ordering edge between them, so a cycle where the output callback
+/// runs before that cycle's input push finds the ring empty and drops
+/// a full quantum of monitored input — an audible click with no graph
+/// xrun anywhere. On a graph where that happens the drain would
+/// restore the vulnerability ~43 ms later, clicking on every
+/// subsequent flip. So the first shortfall *after* a drain
+/// ([`Self::note_shortfall`]) locks the drain out for the rest of the
+/// session: the standing one-quantum margin absorbs all further flips,
+/// trading +1 quantum of monitor latency for silence-free monitoring.
+/// Shortfalls before any drain (the ring filling at startup) don't
+/// lock out — they're not evidence about ordering stability, and
+/// locking on them would forfeit the latency win on every session.
 pub struct MonitorDrain {
     native: bool,
     high_streak: u32,
+    /// True once this session has drained to zero margin at least once.
+    drained: bool,
+    /// True once a post-drain shortfall proved the scheduling order
+    /// unstable; no further drains this session.
+    locked_out: bool,
 }
 
 /// Consecutive high-backlog callbacks before the excess is drained:
@@ -243,14 +263,17 @@ impl MonitorDrain {
         Self {
             native,
             high_streak: 0,
+            drained: false,
+            locked_out: false,
         }
     }
 
     /// Whole-frame sample count to drain beyond the margin skip, given
     /// the ring occupancy right before this callback's read. Non-zero
-    /// only on the native backend after a full high streak.
+    /// only on the native backend after a full high streak, and never
+    /// again after a post-drain shortfall locked the drain out.
     pub fn excess_drain(&mut self, available: usize, needed: usize, frame_stride: usize) -> usize {
-        if !self.native {
+        if !self.native || self.locked_out {
             return 0;
         }
         if available > needed {
@@ -263,7 +286,21 @@ impl MonitorDrain {
             return 0;
         }
         self.high_streak = 0;
-        (available - needed) / frame_stride.max(1) * frame_stride.max(1)
+        let drain = (available - needed) / frame_stride.max(1) * frame_stride.max(1);
+        if drain > 0 {
+            self.drained = true;
+        }
+        drain
+    }
+
+    /// The mixer read came up short while monitoring. After at least
+    /// one drain that means the zero-margin gamble lost on this graph:
+    /// lock the drain out so the standing margin absorbs further
+    /// ordering flips.
+    pub fn note_shortfall(&mut self) {
+        if self.drained {
+            self.locked_out = true;
+        }
     }
 }
 
@@ -544,6 +581,21 @@ pub(crate) fn mix_audio(
     let to_read = monitor_read_len(needed, monitor_cons.occupied_len(), frame_stride);
     let monitor_samples = monitor_cons.pop_slice(&mut monitor_temp[..to_read]);
     let monitor_frames = monitor_samples / frame_stride;
+    // A short read while monitoring is a quantum of dropped live input
+    // (the input stream's push for this cycle hadn't landed) — audible
+    // as a click in the monitored signal even though every stream met
+    // its graph deadline. Counted for the cycle-load report, and fed
+    // back to the drain so a post-drain shortfall re-establishes the
+    // standing margin for the rest of the session.
+    if monitor_frames < frames
+        && input_channels > 0
+        && shared.monitoring.load(Ordering::Relaxed)
+    {
+        shared
+            .monitor_shortfall_cycles
+            .fetch_add(1, Ordering::Relaxed);
+        monitor_drain.note_shortfall();
+    }
 
     // The arrangement render below has several early-exit branches (count-in,
     // not-playing, lock-contended). Wrap them in a labeled block so each one
@@ -663,6 +715,7 @@ pub(crate) fn mix_audio(
     )
     else {
         // Lock contended -- advance playhead to avoid desync, output silence this buffer
+        shared.render_skip_cycles.fetch_add(1, Ordering::Relaxed);
         let new_playhead = advance_playhead_silent(shared, playhead, output_frames as u64);
         shared.playhead.store(new_playhead, Ordering::Relaxed);
         break 'arrangement;
