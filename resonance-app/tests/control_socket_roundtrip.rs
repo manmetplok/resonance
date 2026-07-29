@@ -42,7 +42,8 @@ fn socket_hello_and_stub_method_round_trip() {
     let path = dir.path().join("control.sock");
 
     let (tx, mut rx) = iced::futures::channel::mpsc::unbounded();
-    let server = control_socket::spawn(path.clone(), tx).expect("bind control socket");
+    let jobs = std::sync::Arc::new(resonance_app::control_jobs::JobBoard::default());
+    let server = control_socket::spawn(path.clone(), tx, jobs).expect("bind control socket");
     assert!(path.exists(), "socket file exists while serving");
 
     // Raw client: hello, then a known-but-unimplemented method, then an
@@ -129,7 +130,8 @@ fn stale_socket_is_replaced_on_bind() {
     assert!(path.exists(), "stale socket file left on disk");
 
     let (tx, mut rx) = iced::futures::channel::mpsc::unbounded();
-    let server = control_socket::spawn(path.clone(), tx).expect("stale socket replaced");
+    let jobs = std::sync::Arc::new(resonance_app::control_jobs::JobBoard::default());
+    let server = control_socket::spawn(path.clone(), tx, jobs).expect("stale socket replaced");
 
     // The rebound listener actually accepts.
     let _client = UnixStream::connect(&path).expect("connect to rebound socket");

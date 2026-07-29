@@ -32,6 +32,7 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod job;
 mod song;
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
@@ -43,6 +44,10 @@ pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
         }
         ControlMessage::Disconnected { conn } => {
             app.control.sessions.remove(&conn);
+            // Drop the connection's jobs (todo #1149): nobody can query
+            // them anymore, and a reader blocked in `job.wait` on one
+            // of them resolves to `not_found`.
+            app.control.jobs.on_disconnect(conn);
             Task::none()
         }
         ControlMessage::Request(request) => {
@@ -98,6 +103,13 @@ pub fn execute(
     // Read-only introspection (todo #1148): the `song.*` views plus the
     // plugin catalog. Executed against `&Resonance` — never mutates.
     if let Some(response) = song::try_handle(app, request) {
+        return (response, Task::none());
+    }
+
+    // Job registry (todo #1149): `job.status` (and the update-loop
+    // fallback for `job.wait` — the socket transport serves the
+    // blocking form on its reader threads).
+    if let Some(response) = job::try_handle(app, request) {
         return (response, Task::none());
     }
 

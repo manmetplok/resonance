@@ -22,6 +22,7 @@
 //! Protocol framing and envelope types come from the `resonance-control`
 //! crate — the single source of truth both sides compile against.
 
+use crate::control_jobs::JobBoard;
 use iced::futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use iced::futures::stream::BoxStream;
 use resonance_control::{FramingError, MessageReader, Request, Response, RpcError};
@@ -207,10 +208,13 @@ impl Drop for ControlServer {
 
 /// Bind `path` and start the accept loop, forwarding connection events
 /// and parsed requests into `bridge` (the update loop's subscription
-/// channel). Returns the lifecycle handle to keep in app state.
+/// channel). `jobs` is the shared job ledger the reader threads use to
+/// serve `job.wait` without touching the update loop (todo #1149).
+/// Returns the lifecycle handle to keep in app state.
 pub fn spawn(
     path: PathBuf,
     bridge: UnboundedSender<ControlMessage>,
+    jobs: Arc<JobBoard>,
 ) -> io::Result<ControlServer> {
     prepare_parent_dir(&path)?;
     let listener = bind_or_replace_stale(&path)?;
@@ -218,13 +222,14 @@ pub fn spawn(
     let accept_shutdown = Arc::clone(&shutdown);
     std::thread::Builder::new()
         .name("control-accept".into())
-        .spawn(move || accept_loop(listener, bridge, accept_shutdown))?;
+        .spawn(move || accept_loop(listener, bridge, jobs, accept_shutdown))?;
     Ok(ControlServer { path, shutdown })
 }
 
 fn accept_loop(
     listener: UnixListener,
     bridge: UnboundedSender<ControlMessage>,
+    jobs: Arc<JobBoard>,
     shutdown: Arc<AtomicBool>,
 ) {
     let mut next_conn: ConnId = 0;
@@ -246,9 +251,10 @@ fn accept_loop(
             break;
         }
         let conn_bridge = bridge.clone();
+        let conn_jobs = Arc::clone(&jobs);
         let spawned = std::thread::Builder::new()
             .name(format!("control-conn-{conn}"))
-            .spawn(move || serve_connection(stream, conn, conn_bridge));
+            .spawn(move || serve_connection(stream, conn, conn_bridge, conn_jobs));
         if spawned.is_err() {
             let _ = bridge.unbounded_send(ControlMessage::Disconnected { conn });
         }
@@ -259,7 +265,12 @@ fn accept_loop(
 /// writer thread. The reader parses requests and forwards them over the
 /// bridge; the writer serializes every [`Response`] sent through the
 /// connection's [`ReplySender`] back onto the socket.
-fn serve_connection(stream: UnixStream, conn: ConnId, bridge: UnboundedSender<ControlMessage>) {
+fn serve_connection(
+    stream: UnixStream,
+    conn: ConnId,
+    bridge: UnboundedSender<ControlMessage>,
+    jobs: Arc<JobBoard>,
+) {
     let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Response>();
 
     let writer_stream = match stream.try_clone() {
@@ -291,6 +302,16 @@ fn serve_connection(stream: UnixStream, conn: ConnId, bridge: UnboundedSender<Co
     loop {
         match reader.read_message::<Request>() {
             Ok(Some(request)) => {
+                // `job.wait` blocks — serve it here on the reader
+                // thread against the shared job board, never through
+                // the update loop (doc #265). Subsequent requests on
+                // this connection queue behind the wait, matching the
+                // one-outstanding-request shape of a blocking call;
+                // other connections are unaffected.
+                if request.method == resonance_control::job::WAIT {
+                    let _ = reply_tx.send(job_wait_response(&jobs, &request));
+                    continue;
+                }
                 let message = ControlMessage::Request(ControlRequest {
                     conn,
                     request,
@@ -315,6 +336,33 @@ fn serve_connection(stream: UnixStream, conn: ConnId, bridge: UnboundedSender<Co
     }
     drop(reply_tx);
     let _ = bridge.unbounded_send(ControlMessage::Disconnected { conn });
+}
+
+/// Serve one `job.wait` on the reader thread: block on the job board
+/// until the job is terminal or the timeout elapses, replying with the
+/// then-current status either way (`not_found` for an unknown or
+/// dropped job).
+fn job_wait_response(jobs: &JobBoard, request: &Request) -> Response {
+    use resonance_control::job::WaitParams;
+    let params: WaitParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return Response::failure(Some(request.id.clone()), e),
+    };
+    let timeout = params
+        .timeout_ms
+        .map(std::time::Duration::from_millis);
+    match jobs.wait(params.job_id.0, timeout) {
+        Some(status) => Response::success(request.id.clone(), &status).unwrap_or_else(|e| {
+            Response::failure(
+                Some(request.id.clone()),
+                RpcError::internal(format!("failed to encode job status: {e}")),
+            )
+        }),
+        None => Response::failure(
+            Some(request.id.clone()),
+            RpcError::not_found(format!("no job with id {}", params.job_id)),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
