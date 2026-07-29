@@ -982,3 +982,84 @@ fn emit_span_notes(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Control endpoint (ba doc #265, todo #1154)
+// ---------------------------------------------------------------------------
+
+/// Outcome of a control-endpoint drum generation.
+pub(crate) enum ControlDrumOutcome {
+    /// Drums were (re)generated onto the section's arrangement.
+    Generated,
+    /// No drum pattern exists in the bank to generate from.
+    NoPattern,
+}
+
+/// Assign a drum pattern to `definition_id` as its primary arrangement
+/// entry, re-seed and regenerate that pattern's groups, then materialize
+/// the drum clips (control endpoint `generate.drums`, ba todo #1154).
+///
+/// `pattern_id` selects the pattern to use; when `None` the section's
+/// current primary pattern is reused, falling back to the project
+/// default and then the first pattern in the bank. `seed`, when given,
+/// seeds every group in the chosen pattern deterministically; otherwise
+/// each group's seed advances (a fresh random-ish roll).
+///
+/// The heavy lifting reuses the same `generate_group_pattern` +
+/// `materialize_drum_clips` path the GUI's "Generate" button drives, so
+/// the drum tracks receive exactly the material the compose lane would
+/// render. Returns [`ControlDrumOutcome::NoPattern`] when the bank is
+/// empty (nothing to generate).
+pub(crate) fn control_generate_drums(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    pattern_id: Option<u64>,
+    seed: Option<u64>,
+) -> ControlDrumOutcome {
+    let chosen = pattern_id
+        .filter(|id| r.compose.drum_patterns.iter().any(|p| p.id == *id))
+        .or_else(|| {
+            r.compose
+                .find_definition(definition_id)
+                .and_then(|d| d.primary_pattern_id())
+        })
+        .or(r.compose.default_drum_pattern_id)
+        .or_else(|| r.compose.drum_patterns.first().map(|p| p.id));
+    let Some(chosen) = chosen else {
+        return ControlDrumOutcome::NoPattern;
+    };
+
+    // Pin the pattern as the section's primary arrangement entry so the
+    // materializer renders it across the section's bars.
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        def.set_primary_pattern(Some(chosen));
+    }
+
+    // Re-roll the chosen pattern's groups: deterministic when a seed is
+    // supplied, advancing otherwise (mirrors GenerateAllGroups' per-group
+    // `next_seed`).
+    if let Some(pattern) = r.compose.drum_patterns.iter_mut().find(|p| p.id == chosen) {
+        for (i, g) in pattern.groups.iter_mut().enumerate() {
+            g.seed = match seed {
+                Some(s) => s.wrapping_add(i as u64).wrapping_mul(0x9E3779B97F4A7C15),
+                None => next_seed(g.seed),
+            };
+            generate_group_pattern(g);
+        }
+    }
+
+    materialize_drum_clips(r);
+    r.compose.last_error = None;
+    let _ = chosen;
+    ControlDrumOutcome::Generated
+}
+
+/// Find a drum pattern by (case-insensitive, trimmed) name.
+pub(crate) fn pattern_id_by_name(r: &crate::Resonance, name: &str) -> Option<u64> {
+    let wanted = name.trim().to_ascii_lowercase();
+    r.compose
+        .drum_patterns
+        .iter()
+        .find(|p| p.name.trim().to_ascii_lowercase() == wanted)
+        .map(|p| p.id)
+}
