@@ -1,0 +1,10 @@
+[package]
+name = "resonance-control"
+version = "0.1.0"
+edition = "2021"
+description = "Versioned control protocol shared by resonance-app and resonance-mcp: JSON-RPC 2.0 envelope, method param/result types, job states, and newline-delimited framing over a unix socket"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
