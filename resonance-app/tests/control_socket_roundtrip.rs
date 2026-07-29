@@ -96,9 +96,10 @@ fn socket_hello_and_stub_method_round_trip() {
         .expect("read stub reply")
         .expect("stub reply present");
     assert_eq!(second.id, Some(2i64.into()));
-    let error = second.error.expect("stub is unsupported");
-    assert_eq!(error.kind(), ErrorKind::Unsupported);
-    assert!(error.message.contains("not implemented yet"));
+    // song.summary is a real view since todo #1148 — a raw socket
+    // client gets the introspection JSON back.
+    let summary: serde_json::Value = second.result().expect("song.summary succeeds");
+    assert!(summary.get("revision").is_some());
 
     let third: Response = reader
         .read_message()

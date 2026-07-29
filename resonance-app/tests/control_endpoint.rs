@@ -87,12 +87,11 @@ fn incompatible_version_rejects_connection() {
     assert!(error.message.contains("incompatible"));
 
     // ...but the handshake itself stays answerable: a corrected hello
-    // rehabilitates the connection.
+    // rehabilitates the connection (song.summary answers again, #1148).
     let response = roundtrip(&mut app, 7, hello_request(3, PROTOCOL_VERSION));
     assert!(response.result::<HelloResult>().is_ok());
     let response = roundtrip(&mut app, 7, Request::without_params(4, "song.summary"));
-    let error = response.error.expect("still a stub");
-    assert!(error.message.contains("not implemented yet"));
+    assert!(response.result::<serde_json::Value>().is_ok());
 }
 
 // ---------------- dispatch skeleton ----------------
@@ -100,7 +99,9 @@ fn incompatible_version_rejects_connection() {
 #[test]
 fn known_method_without_impl_is_unsupported_stub() {
     let mut app = app();
-    let response = roundtrip(&mut app, 1, Request::without_params(1, "song.summary"));
+    // transport.* is in-protocol but lands in todo #1150; until then the
+    // skeleton must answer with the stable `unsupported` stub.
+    let response = roundtrip(&mut app, 1, Request::without_params(1, "transport.play"));
     let error = response.error.expect("stub replies with an error");
     assert_eq!(error.kind(), ErrorKind::Unsupported);
     assert!(error.message.contains("not implemented yet"));
