@@ -84,6 +84,84 @@ impl Resonance {
         self.compose.refresh_track_count(&self.registry.tracks);
     }
 
+    /// Test-only: install a Vocal lane generator (default params, so
+    /// TIGER voicebank) on a track within a section definition, seeding
+    /// its draft. Drives the `vocal.*` control-endpoint tests (ba todo
+    /// #1156).
+    #[doc(hidden)]
+    pub fn test_install_vocal_lane(
+        &mut self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) {
+        use crate::compose::{LaneGeneratorConfig, LaneGeneratorKind};
+        if let Some(def) = self.compose.find_definition_mut(definition_id) {
+            def.lane_generators.insert(
+                track_id,
+                LaneGeneratorConfig {
+                    kind: LaneGeneratorKind::Vocal(resonance_music_theory::VocalParams::default()),
+                    seed: 1,
+                },
+            );
+        }
+    }
+
+    /// Test-only: the lyric lines of a track's vocal lane in a section
+    /// (draft text, in order). Empty when the lane isn't a vocal
+    /// generator.
+    #[doc(hidden)]
+    pub fn test_vocal_lines(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<String> {
+        use crate::compose::LaneGeneratorKind;
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .and_then(|c| match &c.kind {
+                LaneGeneratorKind::Vocal(p) => {
+                    Some(p.draft.iter().map(|l| l.text.clone()).collect())
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// Test-only: the voicebank set on a track's vocal lane in a section.
+    #[doc(hidden)]
+    pub fn test_vocal_voicebank(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<resonance_music_theory::VocalVoicebank> {
+        use crate::compose::LaneGeneratorKind;
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .and_then(|c| match &c.kind {
+                LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
+                _ => None,
+            })
+    }
+
+    /// Test-only: the project pronunciation dictionary as
+    /// `(word, phonemes)` pairs.
+    #[doc(hidden)]
+    pub fn test_pronunciation_dictionary(&self) -> Vec<(String, Vec<String>)> {
+        self.compose
+            .pronunciation
+            .project_dictionary
+            .iter()
+            .map(|e| {
+                (
+                    e.word.clone(),
+                    e.phonemes.iter().map(|p| (*p).to_owned()).collect(),
+                )
+            })
+            .collect()
+    }
+
     /// Test-only: remove a track's lane-generator config from every
     /// compose section definition, turning a configured compose lane
     /// back into an unconfigured one (placeholder row in the vocal

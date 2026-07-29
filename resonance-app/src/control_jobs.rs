@@ -199,6 +199,33 @@ impl JobBoard {
         }
     }
 
+    /// Fail the newest live `VocalRender` job, whatever its lane. The
+    /// `VocalAudioFailed` message (todo #1156) carries no lane identity,
+    /// and control renders run one at a time through the update loop, so
+    /// the newest live vocal-render job is the one that just failed.
+    /// No-op when none is live (a GUI-driven render).
+    pub fn fail_newest_vocal_render(&self, error: impl Into<String>) -> bool {
+        let id = {
+            let table = self.table.lock().expect("job table poisoned");
+            table
+                .jobs
+                .iter()
+                .filter(|(_, e)| {
+                    !e.state.is_terminal()
+                        && matches!(e.token, Some(JobToken::VocalRender { .. }))
+                })
+                .map(|(id, _)| *id)
+                .max()
+        };
+        match id {
+            Some(id) => {
+                self.fail(id, error);
+                true
+            }
+            None => false,
+        }
+    }
+
     fn newest_live_with_token(&self, token: &JobToken) -> Option<u64> {
         let table = self.table.lock().expect("job table poisoned");
         table

@@ -37,6 +37,7 @@ mod harmony;
 mod job;
 mod section;
 mod song;
+mod vocal;
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
 pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
@@ -128,6 +129,10 @@ pub fn execute(
     // Generators (todo #1154): generate.part / generate.drums into a
     // section + track.
     if let Some(handled) = generate::try_handle(app, request) {
+        return handled;
+    }
+    // Vocals (todo #1156): lyrics, pronunciation, and the SVS render job.
+    if let Some(handled) = vocal::try_handle(app, request) {
         return handled;
     }
 

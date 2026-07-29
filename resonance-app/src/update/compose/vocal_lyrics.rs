@@ -104,7 +104,11 @@ pub(super) fn handle_bulk_lyrics_action(
 /// trailing lines are stripped, blank lines in the middle are skipped.
 /// `params.lines` is bumped to match so re-rolls operate on the same
 /// shape.
-fn rebuild_draft_from_bulk(p: &mut VocalParams, body: &str) {
+///
+/// `pub(crate)` so the control endpoint's `vocal.set_lyrics`
+/// (todo #1156) can reuse the exact bulk-text → draft parse the GUI
+/// editor uses.
+pub(crate) fn rebuild_draft_from_bulk(p: &mut VocalParams, body: &str) {
     use resonance_music_theory::LyricLine;
 
     let pattern: &[u8] = match p.rhyme {

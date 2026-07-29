@@ -24,7 +24,7 @@ mod lane_inspector;
 pub(crate) mod regenerate;
 mod section;
 mod vocal_lyrics;
-mod vocal_render;
+pub(crate) mod vocal_render;
 
 /// Pure drum-note builder — exposed so integration tests in `tests/` can
 /// assert the materialized `MidiNote` sequence for an arrangement's
@@ -108,6 +108,31 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             let _ =
                 drum_groups::control_generate_drums(r, definition_id, pattern_id, seed);
         }
+        ComposeMessage::ControlSetVocalLyrics {
+            definition_id,
+            track_id,
+            text,
+        } => vocal_render::control_set_lyrics(r, definition_id, track_id, &text),
+        ComposeMessage::ControlSetVocalLine {
+            definition_id,
+            track_id,
+            line_index,
+            text,
+        } => {
+            let _ =
+                vocal_render::control_set_line(r, definition_id, track_id, line_index, &text);
+        }
+        ComposeMessage::ControlSetPronunciation { word, phonemes } => {
+            control_set_pronunciation(r, word, phonemes);
+        }
+        ComposeMessage::ControlClearPronunciation { word } => {
+            control_clear_pronunciation(r, &word);
+        }
+        ComposeMessage::ControlRenderVocal {
+            definition_id,
+            track_id,
+            voicebank,
+        } => return vocal_render::control_render(r, definition_id, track_id, voicebank),
 
         // Placement CRUD
         ComposeMessage::PlaceSection {
@@ -210,9 +235,28 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         // Vocal audio render completion (dispatched from the background
         // SVS task that `lane_inspector::handle` queued).
         ComposeMessage::VocalAudioReady(data) => {
+            // Resolve a control-initiated vocal render job (doc #265,
+            // todo #1156) before the install consumes `data`. No-op when
+            // no control job carries the token (a GUI-driven render).
+            let token = crate::control_jobs::JobToken::VocalRender {
+                definition_id: data.definition_id,
+                track_id: data.track_id,
+            };
+            r.control.jobs.complete_token(
+                &token,
+                serde_json::json!({
+                    "track_ids": [data.track_id],
+                    "revision": r.revision(),
+                }),
+            );
             vocal_render::handle_vocal_audio_ready(r, *data);
         }
         ComposeMessage::VocalAudioFailed { error } => {
+            // A vocal render carries no lane identity on failure, so fail
+            // the newest live vocal-render job regardless of lane. In
+            // practice control renders are serialized (one at a time
+            // through the update loop) so this resolves the right one.
+            r.control.jobs.fail_newest_vocal_render(error.clone());
             r.compose.last_error = Some(error);
         }
     }
@@ -259,6 +303,38 @@ pub(crate) fn control_generate_part(
     let task = regenerate::regenerate_lane(r, definition_id, track_id);
     r.compose.last_error = None;
     (ControlPartOutcome::Generated, task)
+}
+
+/// `vocal.set_pronunciation`: set (or replace) a per-word override in
+/// the project pronunciation dictionary. Phonemes are already
+/// canonicalised. Word match is case-insensitive (the dictionary key is
+/// the cleaned, lowercased spelling).
+fn control_set_pronunciation(
+    r: &mut crate::Resonance,
+    word: String,
+    phonemes: Vec<&'static str>,
+) {
+    use crate::compose::vocal_svs::{clean_word, DictionaryEntry, DictionaryScope};
+    let key = clean_word(&word);
+    let dict = &mut r.compose.pronunciation.project_dictionary;
+    dict.retain(|e| e.word != key);
+    dict.push(DictionaryEntry::from_canonical(
+        &word,
+        phonemes,
+        DictionaryScope::Project,
+    ));
+    r.compose.last_error = None;
+}
+
+/// `vocal.clear_pronunciation`: remove a per-word project override.
+fn control_clear_pronunciation(r: &mut crate::Resonance, word: &str) {
+    use crate::compose::vocal_svs::clean_word;
+    let key = clean_word(word);
+    r.compose
+        .pronunciation
+        .project_dictionary
+        .retain(|e| e.word != key);
+    r.compose.last_error = None;
 }
 
 /// Ensure the bulk-lyrics text-editor buffer exists for the currently

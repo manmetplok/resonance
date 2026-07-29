@@ -208,6 +208,51 @@ pub enum ComposeMessage {
         seed: Option<u64>,
     },
 
+    /// Replace a vocal lane's full lyric draft from bulk text (one line
+    /// per lyric line) — one undoable step. Used by the control
+    /// endpoint's `vocal.set_lyrics` (ba doc #265, todo #1156).
+    ControlSetVocalLyrics {
+        definition_id: u64,
+        track_id: TrackId,
+        text: String,
+    },
+
+    /// Replace a single lyric line (0-based) on a vocal lane — one
+    /// undoable step. Used by the control endpoint's `vocal.set_line`
+    /// (ba doc #265, todo #1156).
+    ControlSetVocalLine {
+        definition_id: u64,
+        track_id: TrackId,
+        line_index: usize,
+        text: String,
+    },
+
+    /// Set (or replace) a per-word pronunciation override in the project
+    /// dictionary — one undoable step. Used by the control endpoint's
+    /// `vocal.set_pronunciation` (ba doc #265, todo #1156). Phonemes are
+    /// already canonicalised to `&'static str`.
+    ControlSetPronunciation {
+        word: String,
+        phonemes: Vec<&'static str>,
+    },
+
+    /// Remove a per-word pronunciation override from the project
+    /// dictionary — one undoable step. Used by the control endpoint's
+    /// `vocal.clear_pronunciation` (ba doc #265, todo #1156).
+    ControlClearPronunciation {
+        word: String,
+    },
+
+    /// Kick off an SVS render for one vocal lane — the state-mutating
+    /// part (voicebank selection, epoch bump) is undoable; the async
+    /// audio arrives later via `VocalAudioReady`. Used by the control
+    /// endpoint's `vocal.render` (ba doc #265, todo #1156).
+    ControlRenderVocal {
+        definition_id: u64,
+        track_id: TrackId,
+        voicebank: VocalVoicebank,
+    },
+
     // ---- Chord lane inspector ----
     ChordInspector {
         definition_id: u64,
