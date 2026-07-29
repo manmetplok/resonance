@@ -18,6 +18,19 @@ pub enum WorkspaceGroup {
     Tracks,
 }
 
+/// One chord slot in a wholesale grid replacement
+/// ([`ComposeMessage::ReplaceSectionChords`]). Beats are section-relative,
+/// on the whole-beat chord grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionChordSpec {
+    /// Existing chord id to keep (stable across the replacement), or
+    /// `None` to allocate a fresh one.
+    pub id: Option<u64>,
+    pub start_beat: u32,
+    pub duration_beats: u32,
+    pub chord: Chord,
+}
+
 #[derive(Debug, Clone)]
 pub enum ComposeMessage {
     /// Drum-groups messages — project-scoped group management plus the
@@ -152,6 +165,24 @@ pub enum ComposeMessage {
     DeleteChord {
         definition_id: u64,
         chord_id: u64,
+    },
+    /// Replace a section definition's whole chord grid in one undoable
+    /// step. Used by the control endpoint's `harmony.*` methods (ba doc
+    /// #265, todo #1153) so a progression apply — or a chord edit that
+    /// changes symbol, position, and length at once — is a single undo
+    /// entry with a single lane-regeneration cascade.
+    ReplaceSectionChords {
+        definition_id: u64,
+        chords: Vec<SectionChordSpec>,
+    },
+
+    /// Delete a section definition together with every placement that
+    /// references it, in one undoable step. Used by the control
+    /// endpoint's `section.delete` (ba doc #265, todo #1153); the GUI
+    /// path (`DeleteSectionDefinition`) instead refuses while placements
+    /// exist.
+    DeleteSectionWithPlacements {
+        definition_id: u64,
     },
 
     // ---- Chord lane inspector ----

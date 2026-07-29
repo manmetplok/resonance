@@ -5,8 +5,10 @@
 //! socket threads themselves live in [`crate::control_socket`]; the
 //! request handlers in `update/control`.
 
+use crate::control_jobs::JobBoard;
 use crate::control_socket::{ConnId, ControlServer};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Per-connection session state, created on `Connected` and dropped on
 /// `Disconnected`.
@@ -34,4 +36,8 @@ pub struct ControlEndpointState {
     pub server: Option<ControlServer>,
     /// Live client connections keyed by connection id.
     pub sessions: HashMap<ConnId, ControlSession>,
+    /// Async job ledger (todo #1149), shared with the socket threads:
+    /// the update loop starts and resolves jobs, the per-connection
+    /// reader threads block on it to serve `job.wait`.
+    pub jobs: Arc<JobBoard>,
 }

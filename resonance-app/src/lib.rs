@@ -19,6 +19,7 @@ pub mod chord_sheet_pdf;
 pub mod commands;
 pub mod chord_track;
 pub mod compose;
+pub mod control_jobs;
 pub mod control_socket;
 pub mod demo;
 pub mod engine_events;
@@ -646,7 +647,8 @@ impl Resonance {
             return;
         }
         let (tx, rx) = iced::futures::channel::mpsc::unbounded();
-        match control_socket::spawn(control_socket::socket_path(), tx) {
+        let jobs = std::sync::Arc::clone(&self.control.jobs);
+        match control_socket::spawn(control_socket::socket_path(), tx, jobs) {
             Ok(server) => {
                 control_socket::install_bridge(rx);
                 self.control.server = Some(server);

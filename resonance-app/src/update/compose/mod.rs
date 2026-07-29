@@ -31,6 +31,8 @@ mod vocal_render;
 /// resolved spans without booting a whole `Resonance`.
 pub use drum_groups::build_drum_notes;
 
+pub(crate) use section::next_default_color;
+
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
 
@@ -89,6 +91,9 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         } => section::handle_set_scale(r, definition_id, scale),
         ComposeMessage::DeleteSectionDefinition { definition_id } => {
             section::handle_delete_definition(r, definition_id)
+        }
+        ComposeMessage::DeleteSectionWithPlacements { definition_id } => {
+            section::handle_delete_with_placements(r, definition_id)
         }
 
         // Placement CRUD
@@ -170,6 +175,10 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             chord_id,
             duration_beats,
         } => chord::handle_resize(r, definition_id, chord_id, duration_beats, time_sig_num),
+        ComposeMessage::ReplaceSectionChords {
+            definition_id,
+            chords,
+        } => chord::handle_replace(r, definition_id, chords, time_sig_num),
         ComposeMessage::DeleteChord {
             definition_id,
             chord_id,

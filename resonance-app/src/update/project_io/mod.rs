@@ -115,6 +115,17 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             r.io.save_state = None;
             r.io.saving = false;
+            // Resolve a control-initiated save job (doc #265, todo
+            // #1149) — manual saves only: an autosave completing must
+            // never satisfy a client's project.save. No-op when no
+            // control job carries the token.
+            if !autosave {
+                let path = r.io.project_path.as_ref().map(|p| p.display().to_string());
+                r.control.jobs.complete_token(
+                    &crate::control_jobs::JobToken::ProjectSave,
+                    serde_json::json!({ "path": path }),
+                );
+            }
             if autosave {
                 // An autosave is a recovery snapshot, not a commit: it
                 // must leave `dirty` set (the project still differs from
@@ -137,6 +148,12 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::ProjectSaved(Err(e), autosave) => {
             r.io.save_state = None;
             r.io.saving = false;
+            if !autosave {
+                r.control.jobs.fail_token(
+                    &crate::control_jobs::JobToken::ProjectSave,
+                    e.clone(),
+                );
+            }
             if autosave {
                 // A failed autosave must never interrupt the user with a
                 // modal — the timer will try again. Log and move on.
@@ -147,6 +164,17 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::ProjectLoaded(Ok(loaded)) => {
+            // Resolve a control-initiated load job (todo #1149). Keyed
+            // off this existing completion message per doc #265; the
+            // engine replay that follows is synchronous within this
+            // dispatch's task chain.
+            {
+                let path = r.io.project_path.as_ref().map(|p| p.display().to_string());
+                r.control.jobs.complete_token(
+                    &crate::control_jobs::JobToken::ProjectLoad,
+                    serde_json::json!({ "path": path }),
+                );
+            }
             let _ = r.engine.send(AudioCommand::Stop);
             r.transport.playing = false;
             r.transport.recording = false;
@@ -163,6 +191,10 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::ProjectLoaded(Err(e)) => {
+            r.control.jobs.fail_token(
+                &crate::control_jobs::JobToken::ProjectLoad,
+                e.clone(),
+            );
             r.error_message = Some(format!("Load failed: {e}"));
         }
         ProjectIoMessage::TemplateLoaded(Ok(loaded)) => {

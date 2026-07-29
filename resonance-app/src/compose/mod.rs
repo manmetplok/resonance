@@ -29,7 +29,7 @@ pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{
     DrumVoiceMode, LaneGeneratorConfig, LaneGeneratorKind, LaneGeneratorKindTag,
 };
-pub use messages::{ComposeMessage, WorkspaceGroup};
+pub use messages::{ComposeMessage, SectionChordSpec, WorkspaceGroup};
 pub use section::{
     ChordState, EditSectionForm, EntryLength, NewSectionForm, PatternEntry, SectionDefinitionState,
     SectionPlacementState, SelectedLane,
