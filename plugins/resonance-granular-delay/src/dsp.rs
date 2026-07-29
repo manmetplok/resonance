@@ -560,6 +560,12 @@ impl GranularDsp {
 
     /// Render one block in place. `left`/`right` arrive carrying the dry
     /// input and leave carrying the equal-power dry/wet mix.
+    ///
+    /// Orchestration only (ba todo #1132): each stage lives in a
+    /// dedicated method below, in render order — buffer write, time-mode
+    /// resolution, pitch-sync state, grain rendering, the decor/PSOLA
+    /// blends, feedback and the output mix. Everything remains
+    /// allocation-free and lock-free on this path.
     pub fn process_block(
         &mut self,
         left: &mut [f32],
@@ -572,7 +578,6 @@ impl GranularDsp {
         if frames == 0 {
             return;
         }
-        let sr = f64::from(self.sample_rate);
 
         // Damping cutoff: block-rate coefficient update from the
         // smoothed value, sample-rate application (doc #252 §5).
@@ -581,28 +586,63 @@ impl GranularDsp {
         self.fb_chain_l.filter.set_cutoff(cutoff, self.sample_rate);
         self.fb_chain_r.filter.set_cutoff(cutoff, self.sample_rate);
 
-        // --- 1. Write into the circular buffer (ba todo #1074): the
-        // dry input, plus — on the Wet→Buffer route — the conditioned
-        // wet bus of the previous block, so each recirculation is
-        // re-granulated. The Output-only route keeps the buffer clean.
-        //
-        // Freeze (ba todo #1075) gates this whole write — dry *and*
-        // feedback, so a frozen buffer cannot run away no matter the
-        // loop gain. `freeze_xf` ramps per sample; while in between the
-        // write is an equal-power blend of the held content and the
-        // incoming signal (the engage ramp thereby morphs the recorded
-        // stream into the lap-old material ahead of the stop point, and
-        // resume morphs back out of it, so the boundary is always
-        // splice-free), and once fully frozen the write head stops
-        // (samples are neither written nor consumed for head advance)
-        // and the buffer is left bit-untouched. Because the head is
-        // static, grain read origins (`write_pos - delay`) become
-        // absolute buffer offsets — grains do not chase a stopped head.
-        let base = self.write_pos as usize;
         let wet_to_buffer = matches!(
             params.fb_route,
             FbRoute::WetToBuffer | FbRoute::PingPong
         );
+
+        let advanced = self.write_input(left, right, frames, wet_to_buffer, params);
+        let plan = self.resolve_time_mode(frames, params);
+        let (engaged, psola_render) = self.resolve_pitch_sync(params, advanced, &plan);
+        let gates = self.resolve_engine_gates(params, wet_to_buffer, smoothers);
+        let grain_params = self.base_grain_params(params, engaged, advanced, frames);
+        let head_adv = grain_params.head_advance as f64;
+
+        self.render_grains(frames, params, &grain_params, &plan, &gates);
+        self.blend_decor(frames, gates.decor_gate, smoothers);
+        if psola_render {
+            self.render_psola(frames, engaged, &plan, params, head_adv);
+        }
+        self.apply_fade_gain(frames, &plan, gates.fb_render, psola_render);
+        if psola_render {
+            self.blend_voice(frames, engaged);
+        }
+        self.run_feedback(frames, params, gates.unity_tap, &plan, smoothers);
+        self.mix_output(left, right, frames, smoothers);
+
+        // The write head advances only by the samples actually written
+        // (it stops while frozen); the recirc clock always advances.
+        self.write_pos += advanced as u64;
+        self.fb_pos += frames as u64;
+    }
+
+    /// Stage 1 — write into the circular buffer (ba todo #1074): the
+    /// dry input, plus — on the Wet→Buffer route — the conditioned
+    /// wet bus of the previous block, so each recirculation is
+    /// re-granulated. The Output-only route keeps the buffer clean.
+    /// Returns the number of samples actually written (the head advance).
+    ///
+    /// Freeze (ba todo #1075) gates this whole write — dry *and*
+    /// feedback, so a frozen buffer cannot run away no matter the
+    /// loop gain. `freeze_xf` ramps per sample; while in between the
+    /// write is an equal-power blend of the held content and the
+    /// incoming signal (the engage ramp thereby morphs the recorded
+    /// stream into the lap-old material ahead of the stop point, and
+    /// resume morphs back out of it, so the boundary is always
+    /// splice-free), and once fully frozen the write head stops
+    /// (samples are neither written nor consumed for head advance)
+    /// and the buffer is left bit-untouched. Because the head is
+    /// static, grain read origins (`write_pos - delay`) become
+    /// absolute buffer offsets — grains do not chase a stopped head.
+    fn write_input(
+        &mut self,
+        left: &[f32],
+        right: &[f32],
+        frames: usize,
+        wet_to_buffer: bool,
+        params: &BlockParams,
+    ) -> usize {
+        let base = self.write_pos as usize;
         let freeze_target: f32 = if params.freeze { 1.0 } else { 0.0 };
         let freeze_step = 1.0 / (FREEZE_RAMP_SECONDS * self.sample_rate).max(1.0);
         let mut advanced = 0usize;
@@ -640,12 +680,15 @@ impl GranularDsp {
             }
             advanced += 1;
         }
+        advanced
+    }
 
-        // --- 1b. Time-mode resolution (ba todo #1076, doc #252 §5):
-        // decide the per-sample effective delay (and, in Fade mode, the
-        // per-sample wet gain) this block renders with. Per-Grain
-        // passes the target straight through — bit-identical to the
-        // pre-#1076 behaviour.
+    /// Stage 1b — time-mode resolution (ba todo #1076, doc #252 §5):
+    /// decide the per-sample effective delay (and, in Fade mode, the
+    /// per-sample wet gain) this block renders with. Per-Grain
+    /// passes the target straight through — bit-identical to the
+    /// pre-#1076 behaviour.
+    fn resolve_time_mode(&mut self, frames: usize, params: &BlockParams) -> TimePlan {
         let target = params.delay_seconds;
         let target64 = f64::from(target);
         if !self.time_primed {
@@ -717,24 +760,37 @@ impl GranularDsp {
                 }
             }
         }
-        let time_varying = fade_varying || repitch_slewing;
+        TimePlan {
+            swap_at,
+            fade_varying,
+            repitch_slewing,
+        }
+    }
 
-        // --- 1c. Pitch-sync scheduler state (ba todo #1082, doc #252
-        // §4): feed the tracker the written input, then decide whether
-        // the Voice/Mono path is engaged this block — the tracker must
-        // be voiced AND a stored pitch mark must lie near the delay
-        // tap (so a freshly engaged mode without marker history simply
-        // stays on the async cloud until the buffer has been analysed).
-        // While frozen nothing is fed: the marker ring holds, the last
-        // known period stands, and spawning continues from it against
-        // the stalled head — the frozen drone keeps its pitch lattice.
+    /// Stage 1c — pitch-sync scheduler state (ba todo #1082, doc #252
+    /// §4): feed the tracker the written input, then decide whether
+    /// the Voice/Mono path is engaged this block — the tracker must
+    /// be voiced AND a stored pitch mark must lie near the delay
+    /// tap (so a freshly engaged mode without marker history simply
+    /// stays on the async cloud until the buffer has been analysed).
+    /// While frozen nothing is fed: the marker ring holds, the last
+    /// known period stands, and spawning continues from it against
+    /// the stalled head — the frozen drone keeps its pitch lattice.
+    /// Returns `(engaged, psola_render)`.
+    fn resolve_pitch_sync(
+        &mut self,
+        params: &BlockParams,
+        advanced: usize,
+        plan: &TimePlan,
+    ) -> (bool, bool) {
+        let sr = f64::from(self.sample_rate);
         let mut engaged = false;
         if params.pitch_sync {
             self.psola.sync_to(self.write_pos);
             if advanced > 0 {
                 self.psola.feed(&self.track_in[..advanced]);
             }
-            let tap_seconds = if time_varying {
+            let tap_seconds = if plan.time_varying() {
                 self.time_delay_buf[0]
             } else {
                 self.eff_delay as f32
@@ -745,28 +801,67 @@ impl GranularDsp {
         self.psola_engaged = engaged;
         let psola_render =
             params.pitch_sync || self.voice_xf > 0.0 || self.psola.active_voices() > 0;
+        (engaged, psola_render)
+    }
 
-        // --- 2. Granulate behind the write head into the wet bus. -----
-        self.wet_l[..frames].fill(0.0);
-        self.wet_r[..frames].fill(0.0);
-        self.wet_r_decor[..frames].fill(0.0);
-        self.discard[..frames].fill(0.0);
+    /// Per-block engine dispositions, fixed before the render loop.
+    ///
+    /// Decorrelated engine (ba todo #1077): engaged while Pan Spread >
+    /// 0; draining (no new spawns, live grains finish) while the fade
+    /// or its tail is still audible; otherwise skipped entirely.
+    ///
+    /// Feedback tap (ba todo #1078): rendered while the un-transposed
+    /// tap is engaged or while stale grains drain (density 0) — a
+    /// toggle never resumes stale grains and the settled state costs
+    /// nothing.
+    fn resolve_engine_gates(
+        &self,
+        params: &BlockParams,
+        wet_to_buffer: bool,
+        smoothers: &GranularSmoothers,
+    ) -> EngineGates {
+        let decor_gate = params.pan_spread > 0.0;
+        let decor_render = decor_gate
+            || smoothers.decor.current() > 0.0
+            || self.engine_r_decor.active_grains() > 0;
+        let transpose_engaged =
+            params.pitch_semitones != 0.0 || params.detune_spread_cents > 0.0;
+        let unity_tap = wet_to_buffer && !params.fb_pitch && transpose_engaged;
+        let fb_render = unity_tap
+            || self.fb_engine_l.active_grains() > 0
+            || self.fb_engine_r.active_grains() > 0;
+        EngineGates {
+            unity_tap,
+            fb_render,
+            decor_gate,
+            decor_render,
+        }
+    }
 
-        // Quality-tier resolution (ba todo #1083): all four ingredients
-        // are engine-side and grain-latched (or click-free by
-        // construction), so a tier switch only affects grains spawned
-        // from here on. Every engine — audible pair, decorrelated
-        // right, feedback tap — inherits the tier, so the whole cloud
-        // shares one character; the PSOLA voice pool deliberately does
-        // not (unity-rate marker-snapped reads neither alias nor
-        // resample, so tiers have nothing to improve there).
+    /// The block-invariant grain parameters shared by every engine.
+    ///
+    /// Quality-tier resolution (ba todo #1083): all four ingredients
+    /// are engine-side and grain-latched (or click-free by
+    /// construction), so a tier switch only affects grains spawned
+    /// from here on. Every engine — audible pair, decorrelated
+    /// right, feedback tap — inherits the tier, so the whole cloud
+    /// shares one character; the PSOLA voice pool deliberately does
+    /// not (unity-rate marker-snapped reads neither alias nor
+    /// resample, so tiers have nothing to improve there).
+    fn base_grain_params(
+        &self,
+        params: &BlockParams,
+        engaged: bool,
+        advanced: usize,
+        frames: usize,
+    ) -> GrainParams {
         let (interp, lofi_quantize, max_polyphony, anti_alias) = match params.quality {
             QualityTier::LoFi => (InterpQuality::Linear, true, LOFI_MAX_GRAINS, false),
             QualityTier::Normal => (InterpQuality::Hermite4, false, MAX_GRAINS, false),
             QualityTier::Hq => (InterpQuality::Bspline6, false, MAX_GRAINS, true),
         };
 
-        let grain_params = GrainParams {
+        GrainParams {
             // Voice/Mono engaged (ba todo #1082): the async cloud — and
             // its decorrelated and feedback-tap companions, which
             // inherit this density — drains until silent (no new
@@ -805,58 +900,61 @@ impl GranularDsp {
             // alignment fields); default the rest so this literal stays
             // source-compatible as the engine evolves.
             ..GrainParams::default()
-        };
+        }
+    }
+
+    /// Stage 2 — granulate behind the write head into the wet buses:
+    /// the lock-stepped audible pair, the decorrelated right engine
+    /// (ba todo #1077) and the un-transposed feedback tap (ba todo
+    /// #1078), sliced for pitch quantization and the Repitch slew.
+    ///
+    /// Per-grain transpose quantization (ba todo #1078): with
+    /// quantization on, the engines' own detune draw is bypassed
+    /// (spread passed as 0) and the block renders in short slices,
+    /// each with its own plugin-side drawn and quantized effective
+    /// transpose (base Pitch + alternating-sign random Spread), so
+    /// grains latch (near-)independent quantized values at spawn.
+    /// The Repitch slew (ba todo #1076) uses the same short slices
+    /// so the gliding origin and rate offset stay smooth; a Fade
+    /// swap splits the block at the (silent) swap sample. Otherwise
+    /// the whole block is one slice; engine output is
+    /// slice-invariant (onset scheduling carries across process
+    /// calls), so behaviour is then unchanged.
+    fn render_grains(
+        &mut self,
+        frames: usize,
+        params: &BlockParams,
+        grain_params: &GrainParams,
+        plan: &TimePlan,
+        gates: &EngineGates,
+    ) {
+        let sr = f64::from(self.sample_rate);
+        let target64 = f64::from(params.delay_seconds);
+        let time_varying = plan.time_varying();
+
+        self.wet_l[..frames].fill(0.0);
+        self.wet_r[..frames].fill(0.0);
+        self.wet_r_decor[..frames].fill(0.0);
+        self.discard[..frames].fill(0.0);
 
         let write_pos = self.write_pos as f64;
         let head_adv = grain_params.head_advance as f64;
 
-        // Decorrelated-engine disposition (ba todo #1077), fixed before
-        // rendering: engaged while Pan Spread > 0; draining (no new
-        // spawns, live grains finish) while the fade or its tail is
-        // still audible; otherwise skipped entirely.
-        let decor_gate = params.pan_spread > 0.0;
-        let decor_render = decor_gate
-            || smoothers.decor.current() > 0.0
-            || self.engine_r_decor.active_grains() > 0;
-
-        // Per-grain transpose quantization (ba todo #1078): with
-        // quantization on, the engines' own detune draw is bypassed
-        // (spread passed as 0) and the block renders in short slices,
-        // each with its own plugin-side drawn and quantized effective
-        // transpose (base Pitch + alternating-sign random Spread), so
-        // grains latch (near-)independent quantized values at spawn.
-        // The Repitch slew (ba todo #1076) uses the same short slices
-        // so the gliding origin and rate offset stay smooth; a Fade
-        // swap splits the block at the (silent) swap sample. Otherwise
-        // the whole block is one slice; engine output is
-        // slice-invariant (onset scheduling carries across process
-        // calls), so behaviour is then unchanged.
         let quantize_on = params.quantize != PitchQuantize::Off;
-        let slice_len = if quantize_on || repitch_slewing {
+        let slice_len = if quantize_on || plan.repitch_slewing {
             QUANT_SLICE
         } else {
             frames
         };
 
-        // Feedback-tap disposition (ba todo #1078), fixed before the
-        // loop like the decorrelated engine's: rendered while the
-        // un-transposed tap is engaged or while stale grains drain
-        // (density 0) — a toggle never resumes stale grains and the
-        // settled state costs nothing.
-        let transpose_engaged =
-            params.pitch_semitones != 0.0 || params.detune_spread_cents > 0.0;
-        let unity_tap = wet_to_buffer && !params.fb_pitch && transpose_engaged;
-        let fb_render = unity_tap
-            || self.fb_engine_l.active_grains() > 0
-            || self.fb_engine_r.active_grains() > 0;
-        if fb_render {
+        if gates.fb_render {
             self.fbw_l[..frames].fill(0.0);
             self.fbw_r[..frames].fill(0.0);
         }
 
         let mut off = 0usize;
         while off < frames {
-            if off == swap_at {
+            if off == plan.swap_at {
                 // The Fade swap lands here, on the silent sample: hard-
                 // retire the old tap's in-flight grains (click-free —
                 // the wet gain is exactly 0 at this sample) so the new
@@ -869,8 +967,8 @@ impl GranularDsp {
                 self.fb_engine_r.reset();
             }
             let mut n = (frames - off).min(slice_len);
-            if swap_at > off && swap_at < off + n {
-                n = swap_at - off;
+            if plan.swap_at > off && plan.swap_at < off + n {
+                n = plan.swap_at - off;
             }
             let slice_delay = if time_varying {
                 self.time_delay_buf[off]
@@ -881,7 +979,7 @@ impl GranularDsp {
             // glide with the moving read origin, so they take the
             // matching playback-rate multiplier `1 − d(delay)/dt`
             // (delay growing ⇒ rate < 1 ⇒ pitch down, and vice versa).
-            let repitch_semis = if repitch_slewing {
+            let repitch_semis = if plan.repitch_slewing {
                 let step_samples =
                     (target64 - f64::from(slice_delay)) * self.repitch_coeff * sr;
                 let m = (1.0 - step_samples).clamp(REPITCH_RATE_MIN, REPITCH_RATE_MAX);
@@ -927,9 +1025,9 @@ impl GranularDsp {
             // crossfades (equal-power, smoothed) from the lock-stepped
             // cloud to it. Once drained and the fade has settled it
             // costs nothing.
-            if decor_render {
+            if gates.decor_render {
                 let drain_params;
-                let dgp = if decor_gate {
+                let dgp = if gates.decor_gate {
                     &gp
                 } else {
                     drain_params = GrainParams {
@@ -955,14 +1053,14 @@ impl GranularDsp {
             // slice loop (slice-invariant) so the tap follows the
             // per-slice time-mode position and the Fade swap reset
             // (ba todo #1076).
-            if fb_render {
+            if gates.fb_render {
                 let mut fgp = gp.clone();
                 // Zero the musical transpose (and any quantized draw)
                 // but keep the physical Repitch glide — the tap rides
                 // the same moving origin as the audible cloud.
                 fgp.pitch_semitones = repitch_semis;
                 fgp.detune_spread_cents = 0.0;
-                if !unity_tap {
+                if !gates.unity_tap {
                     fgp.density_hz = 0.0; // drain, output unused
                 }
                 {
@@ -978,6 +1076,17 @@ impl GranularDsp {
             }
             off += n;
         }
+    }
+
+    /// Stage 2b (blend) — fold the decorrelated right engine's bus into
+    /// the right wet bus with the smoothed equal-power crossfade
+    /// (ba todo #1077).
+    fn blend_decor(
+        &mut self,
+        frames: usize,
+        decor_gate: bool,
+        smoothers: &mut GranularSmoothers,
+    ) {
         if !decor_gate && smoothers.decor.current() == 0.0 {
             // Fully settled in lock-stepped mode: no blend work.
             smoothers.decor.skip(frames as u32);
@@ -989,115 +1098,142 @@ impl GranularDsp {
                 self.wet_r[i] = self.wet_r[i] * g_lock + self.wet_r_decor[i] * g_decor;
             }
         }
+    }
 
-        // --- 2c-v. Pitch-synchronous PSOLA bus (ba todo #1082, doc
-        // #252 §4). Engaged: onsets snap to the pitch mark nearest the
-        // tap, voices are two-period Hann segments at unity rate, and
-        // transposition is onset spacing (period / α) — formants
-        // preserved, no AM beating. Disengaging: the granulator keeps
-        // spawning at the nominal tap with the last known period while
-        // the crossfade drains, so the fallback handover never gaps.
-        // Idle with no live voices it costs nothing.
-        if psola_render {
-            self.psola_l[..frames].fill(0.0);
-            self.psola_r[..frames].fill(0.0);
-            let spawn = if engaged {
-                SpawnMode::Marker
-            } else if self.voice_xf > 0.0 {
-                SpawnMode::Nominal
-            } else {
-                SpawnMode::None
-            };
-            // The musical transpose (quantized like the async cloud's)
-            // sets the output marker density; per-grain detune spread
-            // does not apply to the mono voice lattice.
-            let mut semis = params.pitch_semitones;
-            if params.quantize != PitchQuantize::Off {
-                semis = quantize_transpose(semis, params.quantize, params.scale);
-            }
-            let alpha = f64::from(semis / 12.0).exp2();
-            let tap_seconds = if time_varying {
-                self.time_delay_buf[0]
-            } else {
-                self.eff_delay as f32
-            };
-            let delay_samples = f64::from(tap_seconds) * sr;
-            let (psl, psr) = (&mut self.psola_l[..frames], &mut self.psola_r[..frames]);
-            self.psola.render(
-                &self.buf_l,
-                &self.buf_r,
-                self.write_pos,
-                head_adv,
-                delay_samples,
-                alpha,
-                spawn,
-                psl,
-                psr,
-            );
+    /// Stage 2c-v — pitch-synchronous PSOLA bus (ba todo #1082, doc
+    /// #252 §4). Engaged: onsets snap to the pitch mark nearest the
+    /// tap, voices are two-period Hann segments at unity rate, and
+    /// transposition is onset spacing (period / α) — formants
+    /// preserved, no AM beating. Disengaging: the granulator keeps
+    /// spawning at the nominal tap with the last known period while
+    /// the crossfade drains, so the fallback handover never gaps.
+    /// Idle with no live voices it costs nothing (the caller skips it).
+    fn render_psola(
+        &mut self,
+        frames: usize,
+        engaged: bool,
+        plan: &TimePlan,
+        params: &BlockParams,
+        head_adv: f64,
+    ) {
+        let sr = f64::from(self.sample_rate);
+        self.psola_l[..frames].fill(0.0);
+        self.psola_r[..frames].fill(0.0);
+        let spawn = if engaged {
+            SpawnMode::Marker
+        } else if self.voice_xf > 0.0 {
+            SpawnMode::Nominal
+        } else {
+            SpawnMode::None
+        };
+        // The musical transpose (quantized like the async cloud's)
+        // sets the output marker density; per-grain detune spread
+        // does not apply to the mono voice lattice.
+        let mut semis = params.pitch_semitones;
+        if params.quantize != PitchQuantize::Off {
+            semis = quantize_transpose(semis, params.quantize, params.scale);
         }
+        let alpha = f64::from(semis / 12.0).exp2();
+        let tap_seconds = if plan.time_varying() {
+            self.time_delay_buf[0]
+        } else {
+            self.eff_delay as f32
+        };
+        let delay_samples = f64::from(tap_seconds) * sr;
+        let (psl, psr) = (&mut self.psola_l[..frames], &mut self.psola_r[..frames]);
+        self.psola.render(
+            &self.buf_l,
+            &self.buf_r,
+            self.write_pos,
+            head_adv,
+            delay_samples,
+            alpha,
+            spawn,
+            psl,
+            psr,
+        );
+    }
 
-        // --- 2d. Fade time mode (ba todo #1076): the SwapFader's
-        // per-sample gain windows the whole granulated wet — audible
-        // cloud and feedback tap alike — through the tap swap: out over
-        // ~10 ms, swap on the silent sample (where the engines were
-        // hard-reset), back in over ~10 ms at the new origin. Applied
-        // before the feedback stage so recirculations carry the faded
-        // wet coherently.
-        if fade_varying {
+    /// Stage 2d — Fade time mode (ba todo #1076): the SwapFader's
+    /// per-sample gain windows the whole granulated wet — audible
+    /// cloud and feedback tap alike — through the tap swap: out over
+    /// ~10 ms, swap on the silent sample (where the engines were
+    /// hard-reset), back in over ~10 ms at the new origin. Applied
+    /// before the feedback stage so recirculations carry the faded
+    /// wet coherently.
+    fn apply_fade_gain(
+        &mut self,
+        frames: usize,
+        plan: &TimePlan,
+        fb_render: bool,
+        psola_render: bool,
+    ) {
+        if !plan.fade_varying {
+            return;
+        }
+        for i in 0..frames {
+            let g = self.time_gain_buf[i];
+            self.wet_l[i] *= g;
+            self.wet_r[i] *= g;
+        }
+        if fb_render {
             for i in 0..frames {
                 let g = self.time_gain_buf[i];
-                self.wet_l[i] *= g;
-                self.wet_r[i] *= g;
-            }
-            if fb_render {
-                for i in 0..frames {
-                    let g = self.time_gain_buf[i];
-                    self.fbw_l[i] *= g;
-                    self.fbw_r[i] *= g;
-                }
-            }
-            if psola_render {
-                for i in 0..frames {
-                    let g = self.time_gain_buf[i];
-                    self.psola_l[i] *= g;
-                    self.psola_r[i] *= g;
-                }
+                self.fbw_l[i] *= g;
+                self.fbw_r[i] *= g;
             }
         }
-
-        // --- 2e. Voice/Mono blend (ba todo #1082): equal-power
-        // crossfade between the async grain cloud and the PSOLA bus,
-        // ramped per sample over [`VOICE_FADE_SECONDS`], so
-        // voiced/unvoiced handovers (and enabling/disabling the mode)
-        // are transparent. Applied before the feedback stage so
-        // recirculations carry the blended wet.
         if psola_render {
-            let step = 1.0 / (VOICE_FADE_SECONDS * self.sample_rate).max(1.0);
-            let target_xf: f32 = if engaged { 1.0 } else { 0.0 };
             for i in 0..frames {
-                if self.voice_xf < target_xf {
-                    self.voice_xf = (self.voice_xf + step).min(1.0);
-                } else if self.voice_xf > target_xf {
-                    self.voice_xf = (self.voice_xf - step).max(0.0);
-                }
-                if self.voice_xf > 0.0 {
-                    let phase = std::f32::consts::FRAC_PI_2 * self.voice_xf;
-                    let (g_voice, g_async) = phase.sin_cos();
-                    self.wet_l[i] = self.wet_l[i] * g_async + self.psola_l[i] * g_voice;
-                    self.wet_r[i] = self.wet_r[i] * g_async + self.psola_r[i] * g_voice;
-                }
+                let g = self.time_gain_buf[i];
+                self.psola_l[i] *= g;
+                self.psola_r[i] *= g;
             }
         }
+    }
 
-        // --- 3. Feedback conditioning (ba todo #1074): wet × feedback →
-        // damping filter → tanh soft clip → DC blocker. The tanh bounds
-        // the recirculated signal regardless of loop gain, which is what
-        // keeps the over-unity (up to 110 %) range stable; the DC
-        // blocker stops offset accumulating across recirculations.
-        // The recirc ring runs on its own clock (`fb_pos`): identical
-        // to the write head while streaming, but it keeps ticking while
-        // frozen so Output-only repeats stay on their own time axis
-        // instead of stalling with the stopped head (ba todo #1075).
+    /// Stage 2e — Voice/Mono blend (ba todo #1082): equal-power
+    /// crossfade between the async grain cloud and the PSOLA bus,
+    /// ramped per sample over [`VOICE_FADE_SECONDS`], so
+    /// voiced/unvoiced handovers (and enabling/disabling the mode)
+    /// are transparent. Applied before the feedback stage so
+    /// recirculations carry the blended wet.
+    fn blend_voice(&mut self, frames: usize, engaged: bool) {
+        let step = 1.0 / (VOICE_FADE_SECONDS * self.sample_rate).max(1.0);
+        let target_xf: f32 = if engaged { 1.0 } else { 0.0 };
+        for i in 0..frames {
+            if self.voice_xf < target_xf {
+                self.voice_xf = (self.voice_xf + step).min(1.0);
+            } else if self.voice_xf > target_xf {
+                self.voice_xf = (self.voice_xf - step).max(0.0);
+            }
+            if self.voice_xf > 0.0 {
+                let phase = std::f32::consts::FRAC_PI_2 * self.voice_xf;
+                let (g_voice, g_async) = phase.sin_cos();
+                self.wet_l[i] = self.wet_l[i] * g_async + self.psola_l[i] * g_voice;
+                self.wet_r[i] = self.wet_r[i] * g_async + self.psola_r[i] * g_voice;
+            }
+        }
+    }
+
+    /// Stage 3 — feedback conditioning (ba todo #1074): wet × feedback →
+    /// damping filter → tanh soft clip → DC blocker. The tanh bounds
+    /// the recirculated signal regardless of loop gain, which is what
+    /// keeps the over-unity (up to 110 %) range stable; the DC
+    /// blocker stops offset accumulating across recirculations.
+    /// The recirc ring runs on its own clock (`fb_pos`): identical
+    /// to the write head while streaming, but it keeps ticking while
+    /// frozen so Output-only repeats stay on their own time axis
+    /// instead of stalling with the stopped head (ba todo #1075).
+    fn run_feedback(
+        &mut self,
+        frames: usize,
+        params: &BlockParams,
+        unity_tap: bool,
+        plan: &TimePlan,
+        smoothers: &mut GranularSmoothers,
+    ) {
+        let sr = f64::from(self.sample_rate);
         let fb_base = self.fb_pos as usize;
         match params.fb_route {
             FbRoute::WetToBuffer | FbRoute::PingPong => {
@@ -1130,7 +1266,7 @@ impl GranularDsp {
                 }
                 self.fb_len = frames;
             }
-            FbRoute::OutputOnly if time_varying => {
+            FbRoute::OutputOnly if plan.time_varying() => {
                 // Clean repeats with the recirc read tap following the
                 // time mode too (ba todo #1076): the tap reads the ring
                 // at the per-sample effective delay with a fractional
@@ -1144,7 +1280,7 @@ impl GranularDsp {
                     let idx = (fb_base + i) & self.mask;
                     let d = (f64::from(self.time_delay_buf[i]) * sr).max(1.0);
                     let pos = (fb_base + i) as f64 - d;
-                    let tap_gain = if fade_varying { self.time_gain_buf[i] } else { 1.0 };
+                    let tap_gain = if plan.fade_varying { self.time_gain_buf[i] } else { 1.0 };
                     let fl = self.fb_chain_l.process(
                         read_hermite_wrapped(&self.fb_ring_l, pos) * tap_gain * g,
                         params.filter_is_highpass,
@@ -1185,13 +1321,21 @@ impl GranularDsp {
                 self.fb_len = 0;
             }
         }
+    }
 
-        // --- 4. M/S width on the wet sum only (ba todo #1077, doc #252
-        // §5), then the equal-power dry/wet mix (doc #252 §9); the dry
-        // path stays bit-exact regardless of the stereo processing.
-        // Width sits *after* the feedback tap, so the loop recirculates
-        // the un-widened wet and the width control cannot destabilise
-        // it. Width 0 collapses the wet to its mid signal (L == R).
+    /// Stage 4 — M/S width on the wet sum only (ba todo #1077, doc #252
+    /// §5), then the equal-power dry/wet mix (doc #252 §9); the dry
+    /// path stays bit-exact regardless of the stereo processing.
+    /// Width sits *after* the feedback tap, so the loop recirculates
+    /// the un-widened wet and the width control cannot destabilise
+    /// it. Width 0 collapses the wet to its mid signal (L == R).
+    fn mix_output(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        frames: usize,
+        smoothers: &mut GranularSmoothers,
+    ) {
         for i in 0..frames {
             let width = smoothers.width.next().clamp(0.0, 1.5);
             let mid = 0.5 * (self.wet_l[i] + self.wet_r[i]);
@@ -1202,10 +1346,45 @@ impl GranularDsp {
             left[i] = left[i] * dry_gain + (mid + side) * wet_gain;
             right[i] = right[i] * dry_gain + (mid - side) * wet_gain;
         }
-
-        // The write head advances only by the samples actually written
-        // (it stops while frozen); the recirc clock always advances.
-        self.write_pos += advanced as u64;
-        self.fb_pos += frames as u64;
     }
+}
+
+/// Per-block time-mode resolution (stage 1b, ba todo #1076): how the
+/// effective delay behaves across this block.
+struct TimePlan {
+    /// Sample index where a Fade swap lands this block (`usize::MAX`
+    /// when none): the silent sample where every engine is hard-reset.
+    swap_at: usize,
+    /// A Fade transition is in flight: `time_gain_buf` and
+    /// `time_delay_buf` carry the per-sample wet gain and delay.
+    fade_varying: bool,
+    /// The Repitch slew is active: `time_delay_buf` carries the gliding
+    /// per-sample delay.
+    repitch_slewing: bool,
+}
+
+impl TimePlan {
+    /// The per-sample delay buffer is live (Fade in flight or Repitch
+    /// slewing); otherwise `eff_delay` holds for the whole block.
+    fn time_varying(&self) -> bool {
+        self.fade_varying || self.repitch_slewing
+    }
+}
+
+/// Per-block engine dispositions, fixed before the render loop (see
+/// [`GranularDsp::resolve_engine_gates`]).
+struct EngineGates {
+    /// The un-transposed feedback tap is engaged: FB Pitch off on a
+    /// granulated-feedback route while a transpose is engaged
+    /// (ba todo #1078).
+    unity_tap: bool,
+    /// The feedback-tap engine pair renders this block (engaged, or
+    /// stale grains still draining).
+    fb_render: bool,
+    /// Pan Spread > 0: the decorrelated right engine spawns
+    /// (ba todo #1077).
+    decor_gate: bool,
+    /// The decorrelated engine renders this block (engaged, fade tail
+    /// audible, or grains still draining).
+    decor_render: bool,
 }
