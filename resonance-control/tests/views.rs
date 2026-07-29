@@ -127,6 +127,7 @@ fn track_detail_flattens_the_summary_fields() {
     let detail = TrackDetail {
         summary: track_summary(),
         effects: vec!["resonance-eq".to_owned()],
+        frozen: false,
         clips: vec![ClipView {
             id: ClipId(7),
             name: Some("Bass groove".to_owned()),

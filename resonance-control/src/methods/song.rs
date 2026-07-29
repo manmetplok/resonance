@@ -140,6 +140,13 @@ pub struct TrackDetail {
     /// Insert chain (effects; the instrument is `summary.instrument`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<String>,
+    /// True while the track plays from a freeze cache (valid or stale).
+    /// Edits to a frozen track's inputs (notes, lyrics, instrument,
+    /// plugin params) are rejected by the app, so a client seeing
+    /// `frozen: true` knows why its mutations bounce. Additive within
+    /// v1; absent means `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub frozen: bool,
     pub clips: Vec<ClipView>,
 }
 

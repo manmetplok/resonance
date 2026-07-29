@@ -504,6 +504,10 @@ fn track_detail(app: &Resonance, t: &TrackState) -> TrackDetail {
     TrackDetail {
         summary: track_summary(app, t),
         effects: effect_chain(t),
+        // Cache attached (valid or stale): the #576 frozen-input
+        // classifier rejects note/lyric/instrument/param edits, so the
+        // client needs to see why its mutations bounce.
+        frozen: app.freeze.status(t.id).is_frozen(),
         clips,
     }
 }

@@ -320,6 +320,65 @@ fn tracks_reports_clips_and_effect_chain() {
 }
 
 #[test]
+fn tracks_reports_frozen_state() {
+    use resonance_app::state::FreezeStatus;
+    use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
+
+    let mut app = app();
+    let cache = FreezeCacheRef::new(
+        "freeze_1.wav".to_owned(),
+        SR,
+        32,
+        1,
+        FreezeCacheStatus::Frozen,
+    );
+    app.test_set_freeze_status(INSTRUMENT, FreezeStatus::Frozen { cache_ref: cache.clone() });
+
+    let response = roundtrip(&mut app, Request::without_params(1, "song.tracks"));
+    let view: TracksView = response.result().expect("tracks succeeds");
+    let by_id = |raw: u64| {
+        view.tracks
+            .iter()
+            .find(|t| u64::from(t.summary.id) == raw)
+            .expect("track present")
+    };
+    assert!(by_id(INSTRUMENT).frozen, "frozen cache -> frozen on the wire");
+    assert!(!by_id(AUDIO).frozen, "unfrozen tracks report false");
+
+    // Stale (inputs drifted, cache still attached) also rejects edits
+    // (#576), so it reads as frozen too.
+    app.test_set_freeze_status(INSTRUMENT, FreezeStatus::Stale { cache_ref: cache });
+    let response = roundtrip(&mut app, Request::without_params(2, "song.tracks"));
+    let view: TracksView = response.result().expect("tracks succeeds");
+    assert!(by_id_of(&view, INSTRUMENT).frozen);
+
+    // A mid-render track has no cache yet -> not frozen on the wire.
+    app.test_set_freeze_status(INSTRUMENT, FreezeStatus::Freezing { fraction: 0.5 });
+    let response = roundtrip(&mut app, Request::without_params(3, "song.tracks"));
+    let view: TracksView = response.result().expect("tracks succeeds");
+    assert!(!by_id_of(&view, INSTRUMENT).frozen);
+
+    // The JSON stays compact: `frozen` is omitted entirely when false.
+    let json: serde_json::Value = roundtrip(&mut app, Request::without_params(4, "song.tracks"))
+        .result()
+        .expect("tracks succeeds");
+    let audio = json["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == serde_json::json!(AUDIO))
+        .unwrap();
+    assert!(audio.get("frozen").is_none());
+}
+
+fn by_id_of(view: &TracksView, raw: u64) -> &resonance_control::methods::song::TrackDetail {
+    view.tracks
+        .iter()
+        .find(|t| u64::from(t.summary.id) == raw)
+        .expect("track present")
+}
+
+#[test]
 fn tracks_unknown_id_is_not_found() {
     let mut app = app();
     let response = roundtrip(
