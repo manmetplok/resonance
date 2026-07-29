@@ -185,6 +185,29 @@ pub enum ComposeMessage {
         definition_id: u64,
     },
 
+    /// Install a Bass / Melody / Pad generator on a track within a
+    /// section and derive its MIDI onto every placement — one undoable
+    /// step. Used by the control endpoint's `generate.part` (ba doc
+    /// #265, todo #1154). Carries the fully-built lane config the caller
+    /// assembled from the wire params.
+    GenerateSectionPart {
+        definition_id: u64,
+        track_id: TrackId,
+        config: Box<crate::compose::LaneGeneratorConfig>,
+    },
+
+    /// Assign a drum pattern to a section, (re)seed + generate its
+    /// groups, and materialize the drum clips — one undoable step. Used
+    /// by the control endpoint's `generate.drums` (ba doc #265, todo
+    /// #1154). `pattern_id` selects the pattern (defaulting to the
+    /// section's primary, then the project default); `seed` seeds the
+    /// groups deterministically when set.
+    GenerateSectionDrums {
+        definition_id: u64,
+        pattern_id: Option<u64>,
+        seed: Option<u64>,
+    },
+
     // ---- Chord lane inspector ----
     ChordInspector {
         definition_id: u64,

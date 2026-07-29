@@ -21,6 +21,69 @@ impl Resonance {
         &self.midi_quantize
     }
 
+    /// Test-only: the [`LaneGeneratorKindTag`] configured on a track
+    /// within a section definition, or `None` when the lane is manual
+    /// (no generator). Drives the `generate.part` control-endpoint tests
+    /// (ba todo #1154).
+    ///
+    /// [`LaneGeneratorKindTag`]: crate::compose::LaneGeneratorKindTag
+    #[doc(hidden)]
+    pub fn test_lane_generator_tag(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<crate::compose::LaneGeneratorKindTag> {
+        use crate::compose::{LaneGeneratorKind, LaneGeneratorKindTag};
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .map(|cfg| match &cfg.kind {
+                LaneGeneratorKind::Bass(_) => LaneGeneratorKindTag::Bass,
+                LaneGeneratorKind::Melody(_) => LaneGeneratorKindTag::Melody,
+                LaneGeneratorKind::Pad(_) => LaneGeneratorKindTag::Pad,
+                LaneGeneratorKind::Vocal(_) => LaneGeneratorKindTag::Vocal,
+                // Drum lanes have no melodic tag; report Manual so the
+                // control tests never see a drum lane where a melodic one
+                // is expected.
+                LaneGeneratorKind::Drum(_) => LaneGeneratorKindTag::Manual,
+            })
+    }
+
+    /// Test-only: number of derived MIDI clips generated for a track
+    /// (across all sections + placements). A `generate.part` call
+    /// produces one per placement of the target section.
+    #[doc(hidden)]
+    pub fn test_derived_clip_count(&self, track_id: resonance_audio::types::TrackId) -> usize {
+        self.compose
+            .derived_clips
+            .keys()
+            .filter(|(_, _, t)| *t == track_id)
+            .count()
+    }
+
+    /// Test-only: the primary drum pattern id assigned to a section's
+    /// arrangement, or `None` when the arrangement is empty.
+    #[doc(hidden)]
+    pub fn test_section_primary_pattern(&self, definition_id: u64) -> Option<u64> {
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.primary_pattern_id())
+    }
+
+    /// Test-only: push a drum instrument track (the default
+    /// [`test_add_track`](Self::test_add_track) makes a synth). Needed by
+    /// the `generate.drums` control tests, which require an
+    /// `InstrumentType::Drum` target.
+    #[doc(hidden)]
+    pub fn test_add_drum_track(&mut self, track_id: resonance_audio::types::TrackId) {
+        let order = self.registry.tracks.len();
+        let mut track = crate::state::TrackState::new_instrument(track_id, order);
+        track.instrument_type = crate::state::InstrumentType::Drum;
+        self.registry.tracks.push(track);
+        self.registry.resort_tracks();
+        self.compose.refresh_track_count(&self.registry.tracks);
+    }
+
     /// Test-only: remove a track's lane-generator config from every
     /// compose section definition, turning a configured compose lane
     /// back into an unconfigured one (placeholder row in the vocal
