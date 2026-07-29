@@ -19,3 +19,6 @@ resonance-music-theory = { path = "../../resonance-music-theory" }
 
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
 egui = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
