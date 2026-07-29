@@ -5183,6 +5183,7 @@ dependencies = [
  "resonance-dsp",
  "resonance-music-theory",
  "resonance-plugin",
+ "serde_json",
  "wayland-plugin-gui",
 ]
 

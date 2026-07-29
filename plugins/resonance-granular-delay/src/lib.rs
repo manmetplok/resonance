@@ -25,6 +25,7 @@ use resonance_plugin::*;
 pub mod dsp;
 pub mod params;
 pub mod pitch_sync;
+pub mod presets;
 pub mod quantize;
 pub mod sync;
 pub mod viz;
@@ -293,6 +294,9 @@ impl ResonancePlugin for ResonanceGranularDelay {
             dsp.active_grains(),
             dsp.psola_active_voices(),
         );
+        // Grain-snapshot slots + coarse buffer peaks for the editor's
+        // hero cloud (ba todo #1135) — same cadence, same contract.
+        dsp.publish_viz(&self.viz, &block, self.smoothers.feedback.current());
     }
 
     #[cfg(feature = "editor")]

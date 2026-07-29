@@ -85,6 +85,18 @@ impl Voice {
     };
 }
 
+/// Read-only view of one sounding PSOLA voice (metering aid, ba todo
+/// #1135), mirroring `resonance_dsp::GrainView` for the editor's cloud.
+#[derive(Debug, Clone, Copy)]
+pub struct VoiceView {
+    /// Fractional read position, absolute write-stream samples.
+    pub read_pos: f64,
+    /// Total duration in output samples (two tracked periods).
+    pub dur_samples: f64,
+    /// Current Hann-enveloped level (window × the 1/α overlap gain).
+    pub level: f32,
+}
+
 /// Streaming PSOLA granulator: tracker, marker ring and voice pool.
 pub struct PitchSyncGranulator {
     tracker: PitchTracker,
@@ -209,6 +221,17 @@ impl PitchSyncGranulator {
     /// Currently sounding voices.
     pub fn active_voices(&self) -> usize {
         self.voices.iter().filter(|v| v.active).count()
+    }
+
+    /// Read-only views of the currently sounding voices (allocation-free
+    /// metering aid, ba todo #1135): read position, duration and the
+    /// current Hann-enveloped level, for the editor's grain-cloud view.
+    pub fn active_voice_views(&self) -> impl Iterator<Item = VoiceView> + '_ {
+        self.voices.iter().filter(|v| v.active).map(|v| VoiceView {
+            read_pos: v.read_pos,
+            dur_samples: v.dur,
+            level: (0.5 - 0.5 * ((std::f64::consts::TAU * v.env / v.dur) as f32).cos()) * v.gain,
+        })
     }
 
     /// Total onsets spawned (metering/test aid).

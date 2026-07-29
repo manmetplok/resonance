@@ -1,11 +1,7 @@
-//! Editor palette — the shared classic palette from
-//! `wayland_plugin_gui::theme`, matching the other effect editors
-//! (ux-guidelines.md: no per-plugin design pass).
+//! Editor palette — the canonical lavender design-system tokens from
+//! `wayland_plugin_gui::theme` (design doc #264 req-7): the granular
+//! delay migrated off the legacy classic palette in ba todo #1136, per
+//! the migration note in `wayland_plugin_gui::theme`. Only design-system
+//! v1 lavender tokens — no per-plugin raw colors.
 
-use wayland_plugin_gui::egui;
-
-pub use wayland_plugin_gui::theme::classic::*;
-
-pub fn apply(ctx: &egui::Context) {
-    apply_with_selection(ctx, ACCENT_DIM);
-}
+pub use wayland_plugin_gui::theme::lavender::*;
