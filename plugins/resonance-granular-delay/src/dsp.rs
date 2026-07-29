@@ -22,6 +22,7 @@ use resonance_music_theory::Scale;
 use crate::params::GranularSmoothers;
 use crate::pitch_sync::{PitchSyncGranulator, SpawnMode};
 use crate::quantize::{quantize_transpose, PitchQuantize};
+use crate::viz::{GrainSnapshot, GranularViz, GRAIN_SLOTS, PEAK_BINS};
 
 /// Maximum delay time the ring buffer is sized for at activation.
 pub const MAX_DELAY_SECONDS: f32 = 4.0;
@@ -82,6 +83,21 @@ pub const REPITCH_TAU_SECONDS: f32 = 0.100;
 /// Delay-target changes below this are ignored by the Fade swap
 /// trigger, seconds — keeps host tempo jitter from re-arming fades.
 const TIME_EPSILON_SECONDS: f32 = 1.0e-4;
+
+/// Deepest feedback generation the viz publisher synthesizes ghost
+/// entries for (ba todo #1135): each sounding grain spawns ghost
+/// snapshots one delay further back per generation, levels scaled by
+/// the loop gain per pass, until the slots run out or the ghosts fall
+/// below [`GHOST_LEVEL_FLOOR`]. The encoding allows up to 7.
+const GHOST_GENERATIONS: u8 = 3;
+
+/// Ghost entries dimmer than this are not published — at low feedback
+/// the recirculation is inaudible and the slots are better spent on
+/// sounding grains.
+const GHOST_LEVEL_FLOOR: f32 = 0.02;
+
+/// Loop gain below which no ghost generations are synthesized at all.
+const GHOST_FEEDBACK_FLOOR: f32 = 0.05;
 
 /// Once the Repitch slew is within this of the target it snaps,
 /// seconds (sub-sample at any supported rate).
@@ -362,12 +378,24 @@ pub struct GranularDsp {
     /// the write is an equal-power blend of held content and incoming
     /// signal while in between (ba todo #1075).
     freeze_xf: f32,
+    /// Coarse absolute-peak bins over the source ring (ba todo #1135):
+    /// bin `((pos >> peak_shift) & (PEAK_BINS − 1))` accumulates the
+    /// peak of the samples written there; a bin resets when the write
+    /// head first enters it. Published to the viz at block rate for
+    /// the editor's backdrop silhouette.
+    peak_bins: [f32; PEAK_BINS],
+    /// `log2(samples per peak bin)` — the ring length and bin count are
+    /// both powers of two, so binning is a shift + mask.
+    peak_shift: u32,
+    /// Bin the write head last accumulated into (`usize::MAX` = none).
+    peak_last_bin: usize,
 }
 
 impl GranularDsp {
     pub fn new(sample_rate: f32, max_block: usize) -> Self {
         let ring_len = ((MAX_DELAY_SECONDS * sample_rate) as usize + 1).next_power_of_two();
         let max_block = max_block.max(1);
+        let peak_shift = (ring_len / PEAK_BINS).max(1).trailing_zeros();
         Self {
             sample_rate,
             buf_l: vec![0.0; ring_len],
@@ -410,6 +438,9 @@ impl GranularDsp {
             time_primed: false,
             repitch_coeff: 1.0 - (-1.0 / f64::from(REPITCH_TAU_SECONDS * sample_rate)).exp(),
             freeze_xf: 0.0,
+            peak_bins: [0.0; PEAK_BINS],
+            peak_shift,
+            peak_last_bin: usize::MAX,
         }
     }
 
@@ -499,6 +530,8 @@ impl GranularDsp {
         self.eff_delay = 0.0;
         self.time_primed = false;
         self.freeze_xf = 0.0;
+        self.peak_bins = [0.0; PEAK_BINS];
+        self.peak_last_bin = usize::MAX;
     }
 
     /// Current effective delay-tap position, seconds (test/metering
@@ -556,6 +589,124 @@ impl GranularDsp {
     /// Absolute write-head position in samples (test/metering aid).
     pub fn write_head(&self) -> u64 {
         self.write_pos
+    }
+
+    /// Viz publisher (ba todo #1135, design doc #264 req-1): pack the
+    /// currently sounding grains and the coarse buffer peaks into the
+    /// shared [`GranularViz`] atomics, at block rate next to
+    /// `store_block`. Allocation-free and lock-free: fixed stack
+    /// scratch, one relaxed `u64` store per slot.
+    ///
+    /// Published, one entry per *logical* grain (the L/R engines are
+    /// lock-stepped, so `engine_l` is authoritative for the audible
+    /// cloud):
+    /// 1. the audible cloud (`engine_l`), generation 0;
+    /// 2. the decorrelated right cloud while it sounds (ba todo #1077);
+    /// 3. PSOLA voices (voiced flag; pitch = the quantized musical
+    ///    transpose, since voices realize it by onset spacing);
+    /// 4. synthesized feedback-recirculation ghosts on the granulated
+    ///    feedback routes: per generation `g`, each sounding entry
+    ///    re-appears one delay further back with its level scaled by
+    ///    the loop gain per pass, and — with Shimmer engaged — its
+    ///    pitch shifted by `g` more transpositions (the snapshot pitch
+    ///    therefore already includes recirculation transposition).
+    ///
+    /// If more than [`GRAIN_SLOTS`] entries sound, the first 64 in the
+    /// order above are kept (stable strategy: audible cloud first).
+    pub fn publish_viz(&self, viz: &GranularViz, params: &BlockParams, feedback_gain: f32) {
+        let ms_per_sample = 1000.0 / f64::from(self.sample_rate);
+        let head = self.write_pos as f64;
+
+        // 1–3: the sounding entries, into fixed stack scratch.
+        let mut base = [GrainSnapshot::default(); GRAIN_SLOTS];
+        let mut n = 0usize;
+        for v in self
+            .engine_l
+            .active_grain_views()
+            .chain(self.engine_r_decor.active_grain_views())
+        {
+            if n == GRAIN_SLOTS {
+                break;
+            }
+            base[n] = GrainSnapshot {
+                position_ms: ((head - v.read_pos) * ms_per_sample) as f32,
+                pitch_semitones: (12.0 * v.rate.abs().max(1e-9).log2()) as f32,
+                size_ms: (v.dur_samples * ms_per_sample) as f32,
+                level: v.level.clamp(0.0, 1.0),
+                reversed: v.rate < 0.0,
+                voiced: false,
+                generation: 0,
+            };
+            n += 1;
+        }
+        // PSOLA voices: unity-rate reads — the musical transpose is
+        // realized by onset spacing, so publish the quantized semis.
+        let mut voice_semis = params.pitch_semitones;
+        if params.quantize != PitchQuantize::Off {
+            voice_semis = quantize_transpose(voice_semis, params.quantize, params.scale);
+        }
+        for v in self.psola.active_voice_views() {
+            if n == GRAIN_SLOTS {
+                break;
+            }
+            base[n] = GrainSnapshot {
+                position_ms: ((head - v.read_pos) * ms_per_sample) as f32,
+                pitch_semitones: voice_semis,
+                size_ms: (v.dur_samples * ms_per_sample) as f32,
+                level: v.level.clamp(0.0, 1.0),
+                reversed: false,
+                voiced: true,
+                generation: 0,
+            };
+            n += 1;
+        }
+        for (slot, snap) in base[..n].iter().enumerate() {
+            viz.store_grain(slot, snap);
+        }
+
+        // 4: recirculation ghosts (granulated-feedback routes only —
+        // Output-only repeats never re-enter the grain buffer).
+        let mut total = n;
+        let recirc = matches!(params.fb_route, FbRoute::WetToBuffer | FbRoute::PingPong);
+        if recirc && feedback_gain > GHOST_FEEDBACK_FLOOR {
+            let delay_ms = (self.eff_delay * 1000.0) as f32;
+            let shimmer_semis = if params.fb_pitch {
+                params.pitch_semitones
+            } else {
+                0.0
+            };
+            'ghosts: for gen in 1..=GHOST_GENERATIONS {
+                let gain = feedback_gain.powi(i32::from(gen));
+                for b in &base[..n] {
+                    if total == GRAIN_SLOTS {
+                        break 'ghosts;
+                    }
+                    let level = b.level * gain;
+                    if level < GHOST_LEVEL_FLOOR {
+                        continue;
+                    }
+                    viz.store_grain(
+                        total,
+                        &GrainSnapshot {
+                            position_ms: b.position_ms + f32::from(gen) * delay_ms,
+                            pitch_semitones: b.pitch_semitones
+                                + f32::from(gen) * shimmer_semis,
+                            level,
+                            generation: gen,
+                            ..*b
+                        },
+                    );
+                    total += 1;
+                }
+            }
+        }
+        viz.clear_grains_from(total);
+
+        // Coarse backdrop peaks: fixed-position bins + the head bin so
+        // the editor can rotate them into oldest → newest order.
+        let head_bin = ((self.write_pos >> self.peak_shift) as usize) & (PEAK_BINS - 1);
+        let bin_ms = ((1u64 << self.peak_shift) as f64 * ms_per_sample) as f32;
+        viz.store_peaks(&self.peak_bins, head_bin, bin_ms);
     }
 
     /// Render one block in place. `left`/`right` arrive carrying the dry
@@ -677,6 +828,18 @@ impl GranularDsp {
             } else {
                 self.buf_l[idx] = in_l;
                 self.buf_r[idx] = in_r;
+            }
+            // Coarse peak mip of the written content (ba todo #1135):
+            // shift + mask binning, bin reset on head entry. While
+            // frozen nothing is written, so the backdrop holds.
+            let bin = ((base + advanced) >> self.peak_shift) & (PEAK_BINS - 1);
+            if bin != self.peak_last_bin {
+                self.peak_bins[bin] = 0.0;
+                self.peak_last_bin = bin;
+            }
+            let mag = self.buf_l[idx].abs().max(self.buf_r[idx].abs());
+            if mag > self.peak_bins[bin] {
+                self.peak_bins[bin] = mag;
             }
             advanced += 1;
         }
