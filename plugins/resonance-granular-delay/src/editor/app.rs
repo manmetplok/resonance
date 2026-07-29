@@ -1,7 +1,7 @@
 //! The egui app: the three-band shell of the redesigned editor
 //! (ba todo #1136, design doc #264) — a 46 px header, the central hero
-//! buffer-view band (~400 px; placeholder empty state until the hero
-//! scaffold todo lands) and the 246 px control strip.
+//! buffer-view band (~400 px, `hero.rs`, ba todo #1139) and the 246 px
+//! control strip.
 //!
 //! `GranularEditorApp` is the `EditorApp` the runtime drives each
 //! frame. The header carries the title and live readouts (effective
@@ -17,7 +17,7 @@ use crate::params::GranularDelayParams;
 use crate::sync::DIVISION_LABELS;
 use crate::viz::GranularViz;
 
-use super::{controls, theme};
+use super::{controls, hero, theme};
 
 /// Band heights of the three-band layout (design doc #264).
 const HEADER_H: f32 = 46.0;
@@ -56,33 +56,14 @@ impl EditorApp for GranularEditorApp {
                 });
             });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| draw_hero_placeholder(ui));
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            // Hero buffer view (ba todo #1139): the returned layout
+            // carries the tap hit-rect for the direct-manipulation
+            // todo.
+            let layout = hero::draw(ui, &self.params, &self.viz);
+            ui.allocate_rect(layout.canvas, egui::Sense::hover());
+        });
     }
-}
-
-/// Central hero band placeholder (ba todo #1136): the design's empty
-/// state — a flat buffer line and the silence hint — until the hero
-/// scaffold todo draws the real buffer view here.
-fn draw_hero_placeholder(ui: &mut egui::Ui) {
-    let rect = ui.available_rect_before_wrap();
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, theme::RADIUS_PANEL, theme::BG_1);
-    let y = rect.center().y;
-    painter.line_segment(
-        [
-            egui::pos2(rect.left() + 16.0, y),
-            egui::pos2(rect.right() - 16.0, y),
-        ],
-        egui::Stroke::new(1.0, theme::LINE),
-    );
-    painter.text(
-        egui::pos2(rect.center().x, y + 16.0),
-        egui::Align2::CENTER_TOP,
-        "silence — the cloud appears when audio reaches the buffer",
-        egui::FontId::proportional(11.5),
-        theme::TEXT_3,
-    );
-    ui.allocate_rect(rect, egui::Sense::hover());
 }
 
 fn draw_header(ui: &mut egui::Ui, app: &mut GranularEditorApp) {
