@@ -25,6 +25,7 @@ pub const METHODS: &[&str] = &[NEW, OPEN, SAVE, SAVE_AS];
 
 /// Params for `project.new`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct NewParams {
     /// Optional template name; omitted means an empty project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,6 +37,7 @@ pub struct NewParams {
 
 /// Params for `project.open`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct OpenParams {
     /// Absolute path to the project (`.rproj` directory).
     pub path: String,
@@ -46,6 +48,7 @@ pub struct OpenParams {
 
 /// Params for `project.save`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SaveParams {
     /// Target path; required only when the project has never been saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,6 +60,7 @@ pub struct SaveParams {
 
 /// Params for `project.save_as`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SaveAsParams {
     /// Absolute target path.
     pub path: String,
@@ -68,6 +72,7 @@ pub struct SaveAsParams {
 /// Job payload once a `project.*` job completes: where the project
 /// lives now (absent for an unsaved `project.new`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProjectResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,

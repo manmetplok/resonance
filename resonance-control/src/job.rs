@@ -20,6 +20,7 @@ pub const METHODS: &[&str] = &[STATUS, WAIT];
 
 /// Job lifecycle states, lowercase on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
     Pending,
@@ -37,6 +38,7 @@ impl JobState {
 
 /// Immediate result of any job-launching method: `{"job_id":7}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct JobStarted {
     pub job_id: JobId,
 }
@@ -47,6 +49,7 @@ pub struct JobStarted {
 /// `done` (e.g. [`crate::methods::render::MixdownResult`]); `error` is a
 /// human-readable failure message once `state` is `error`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct JobStatus {
     pub job_id: JobId,
     pub state: JobState,
@@ -61,12 +64,14 @@ pub struct JobStatus {
 
 /// Params for `job.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StatusParams {
     pub job_id: JobId,
 }
 
 /// Params for `job.wait`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WaitParams {
     pub job_id: JobId,
     /// Maximum time to block; omitted means wait indefinitely.

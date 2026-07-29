@@ -27,6 +27,7 @@ fn default_velocity() -> u8 {
 
 /// Params for `notes.insert`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InsertParams {
     pub clip_id: ClipId,
     /// MIDI note number (60 = C4).
@@ -41,6 +42,7 @@ pub struct InsertParams {
 
 /// Result of `notes.insert`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InsertResult {
     /// Index of the inserted note in the clip's note list.
     pub index: usize,
@@ -49,6 +51,7 @@ pub struct InsertResult {
 
 /// Params for `notes.edit`; omitted fields stay unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EditParams {
     pub clip_id: ClipId,
     pub index: usize,
@@ -64,6 +67,7 @@ pub struct EditParams {
 
 /// Params for `notes.delete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DeleteParams {
     pub clip_id: ClipId,
     pub index: usize,
@@ -72,6 +76,7 @@ pub struct DeleteParams {
 /// Params for `notes.create_clip`. Position the clip either inside a
 /// section placement (`placement_id`) or at an explicit `start_bar`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateClipParams {
     pub track_id: TrackId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,6 +93,7 @@ pub struct CreateClipParams {
 
 /// Result of `notes.create_clip`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateClipResult {
     pub clip_id: ClipId,
     pub revision: u64,

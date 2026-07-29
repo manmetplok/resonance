@@ -8,3 +8,11 @@ description = "Versioned control protocol shared by resonance-app and resonance-
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+schemars = { workspace = true, optional = true }
+
+[features]
+# Derive `schemars::JsonSchema` on every param/result/view type so
+# clients (the `resonance-mcp` MCP server) can publish JSON schemas
+# generated from the exact wire types. Purely additive: no behavior
+# change for the app or the protocol.
+schemars = ["dep:schemars"]

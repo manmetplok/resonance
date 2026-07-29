@@ -16,6 +16,7 @@ pub const METHODS: &[&str] = &[PART, DRUMS];
 
 /// Melodic generator roles, lowercase on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum GenerateRole {
     Pad,
@@ -25,6 +26,7 @@ pub enum GenerateRole {
 
 /// Params for `generate.part`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PartParams {
     pub section_id: SectionDefinitionId,
     pub track_id: TrackId,
@@ -47,6 +49,7 @@ pub struct PartParams {
 
 /// Params for `generate.drums`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DrumsParams {
     pub section_id: SectionDefinitionId,
     pub track_id: TrackId,
@@ -59,6 +62,7 @@ pub struct DrumsParams {
 
 /// Result of `generate.part` / `generate.drums`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GenerateResult {
     /// The clip the material landed in, when the generator produced one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

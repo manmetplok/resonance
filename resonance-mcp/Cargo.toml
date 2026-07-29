@@ -1,0 +1,24 @@
+[package]
+name = "resonance-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP stdio server exposing a running resonance app's control surface (unix-socket JSON-RPC, see resonance-control) as typed MCP tools for AI clients like Claude Code"
+
+[dependencies]
+resonance-control = { path = "../resonance-control", features = ["schemars"] }
+# Official Rust MCP SDK (ba doc #266): pinned major, stdio transport.
+rmcp = { version = "3.0.0", features = ["transport-io"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "resonance-mcp"
+path = "src/main.rs"

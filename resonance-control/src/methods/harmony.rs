@@ -22,6 +22,7 @@ pub const METHODS: &[&str] = &[ADD_CHORD, EDIT_CHORD, DELETE_CHORD, APPLY_PROGRE
 
 /// Params for `harmony.add_chord`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AddChordParams {
     pub section_id: SectionDefinitionId,
     /// Section-relative beat the chord starts on (0-based).
@@ -33,6 +34,7 @@ pub struct AddChordParams {
 
 /// Result of `harmony.add_chord`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AddChordResult {
     pub chord_id: ChordId,
     pub revision: u64,
@@ -40,6 +42,7 @@ pub struct AddChordResult {
 
 /// Params for `harmony.edit_chord`; omitted fields stay unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EditChordParams {
     pub section_id: SectionDefinitionId,
     pub chord_id: ChordId,
@@ -53,6 +56,7 @@ pub struct EditChordParams {
 
 /// Params for `harmony.delete_chord`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DeleteChordParams {
     pub section_id: SectionDefinitionId,
     pub chord_id: ChordId,
@@ -65,6 +69,7 @@ pub struct DeleteChordParams {
 /// named `preset`. The progression replaces the section's existing
 /// chords.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ApplyProgressionParams {
     pub section_id: SectionDefinitionId,
     /// Explicit chord symbols, laid out left to right.
@@ -104,6 +109,7 @@ impl ApplyProgressionParams {
 
 /// Result of `harmony.apply_progression`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ApplyProgressionResult {
     /// Ids of the chords now on the grid, in order.
     pub chord_ids: Vec<ChordId>,

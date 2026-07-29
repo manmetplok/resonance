@@ -38,6 +38,7 @@ pub const METHODS: &[&str] = &[
 
 /// Params for `section.create`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateParams {
     pub name: String,
     pub length_bars: u32,
@@ -47,6 +48,7 @@ pub struct CreateParams {
 
 /// Result of `section.create`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateResult {
     pub section_id: SectionDefinitionId,
     pub revision: u64,
@@ -54,6 +56,7 @@ pub struct CreateResult {
 
 /// Params for `section.rename`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RenameParams {
     pub section_id: SectionDefinitionId,
     pub name: String,
@@ -61,6 +64,7 @@ pub struct RenameParams {
 
 /// Params for `section.resize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResizeParams {
     pub section_id: SectionDefinitionId,
     pub length_bars: u32,
@@ -68,6 +72,7 @@ pub struct ResizeParams {
 
 /// Params for `section.delete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DeleteParams {
     pub section_id: SectionDefinitionId,
     /// Required (`true`); the error otherwise summarizes what would be lost.
@@ -77,6 +82,7 @@ pub struct DeleteParams {
 
 /// Params for `section.place`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PlaceParams {
     pub definition_id: SectionDefinitionId,
     /// 1-based bar to place the section at.
@@ -85,6 +91,7 @@ pub struct PlaceParams {
 
 /// Result of `section.place`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PlaceResult {
     pub placement_id: SectionPlacementId,
     pub revision: u64,
@@ -92,12 +99,14 @@ pub struct PlaceResult {
 
 /// Params for `section.remove_placement`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RemovePlacementParams {
     pub placement_id: SectionPlacementId,
 }
 
 /// Params for `section.set_scale`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetScaleParams {
     pub section_id: SectionDefinitionId,
     pub scale: KeyScale,

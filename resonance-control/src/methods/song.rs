@@ -23,6 +23,7 @@ pub const METHODS: &[&str] = &[SUMMARY, SECTIONS, TRACKS, NOTES, VOCAL];
 
 /// Params for `song.tracks`; omit `track_id` for all tracks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TracksParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
@@ -30,6 +31,7 @@ pub struct TracksParams {
 
 /// Params for `song.notes`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct NotesParams {
     pub clip_id: ClipId,
     /// Restrict to notes overlapping this clip-relative beat range.
@@ -39,6 +41,7 @@ pub struct NotesParams {
 
 /// Params for `song.vocal`; omit `track_id` for the first vocal track.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct VocalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
@@ -46,6 +49,7 @@ pub struct VocalParams {
 
 /// Result of `song.summary`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SongSummary {
     pub tempo_bpm: f64,
     pub time_signature: TimeSignature,
@@ -67,6 +71,7 @@ pub struct SongSummary {
 
 /// One placed section in the arrangement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SectionPlacementView {
     pub id: SectionPlacementId,
     pub definition_id: SectionDefinitionId,
@@ -79,6 +84,7 @@ pub struct SectionPlacementView {
 
 /// Compact per-track line in [`SongSummary`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TrackSummary {
     pub id: TrackId,
     pub name: String,
@@ -97,6 +103,7 @@ pub struct TrackSummary {
 
 /// Result of `song.sections`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SectionsView {
     pub definitions: Vec<SectionDefinitionView>,
     pub placements: Vec<SectionPlacementView>,
@@ -105,6 +112,7 @@ pub struct SectionsView {
 
 /// A section definition with its chord grid.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SectionDefinitionView {
     pub id: SectionDefinitionId,
     pub name: String,
@@ -116,6 +124,7 @@ pub struct SectionDefinitionView {
 
 /// One chord on a section's grid, e.g. `{"id":3,"start_beat":0.0,"duration_beats":4.0,"symbol":"Am7"}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ChordView {
     pub id: ChordId,
     /// Section-relative beat the chord starts on (0-based).
@@ -127,6 +136,7 @@ pub struct ChordView {
 
 /// Result of `song.tracks`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TracksView {
     pub tracks: Vec<TrackDetail>,
     pub revision: u64,
@@ -134,6 +144,7 @@ pub struct TracksView {
 
 /// Per-track detail: the summary fields plus plugin chain and clips.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TrackDetail {
     #[serde(flatten)]
     pub summary: TrackSummary,
@@ -152,6 +163,7 @@ pub struct TrackDetail {
 
 /// One clip on a track.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ClipView {
     pub id: ClipId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,6 +178,7 @@ pub struct ClipView {
 
 /// Result of `song.notes`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct NotesView {
     pub clip_id: ClipId,
     pub notes: Vec<NoteView>,
@@ -174,6 +187,7 @@ pub struct NotesView {
 
 /// One note, with both MIDI number and name, tick and beat positions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct NoteView {
     /// Stable note id where the app assigns one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,6 +208,7 @@ pub struct NoteView {
 
 /// Result of `song.vocal`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct VocalView {
     pub track_id: TrackId,
     pub lines: Vec<LyricLineView>,
@@ -207,6 +222,7 @@ pub struct VocalView {
 
 /// One lyric line with its per-syllable phonemes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LyricLineView {
     /// 0-based line index (`vocal.set_line` addresses lines by this).
     pub index: usize,
@@ -216,6 +232,7 @@ pub struct LyricLineView {
 
 /// One syllable of a lyric line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SyllableView {
     pub text: String,
     /// Lowercase phonemes, e.g. `["l", "ih"]`.
@@ -224,6 +241,7 @@ pub struct SyllableView {
 
 /// SVS render state of a vocal track, lowercase on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum VocalRenderState {
     /// No render exists yet.
