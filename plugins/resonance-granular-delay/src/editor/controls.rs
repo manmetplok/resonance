@@ -124,7 +124,7 @@ pub fn draw(ui: &mut egui::Ui, params: &GranularDelayParams) {
                             egui::RichText::new(group.name.to_uppercase())
                                 .small()
                                 .strong()
-                                .color(theme::TEXT_DIM),
+                                .color(theme::TEXT_3),
                         );
                         ui.horizontal(|ui| {
                             for &index in group.params {
