@@ -160,7 +160,20 @@ pub enum TransportMessage {
     CommitBpm,
     ToggleMetronome,
     CycleTimeSignature,
+    /// Set the time signature directly (control endpoint, doc #265 —
+    /// the GUI cycles via [`Self::CycleTimeSignature`]). Undoable like
+    /// the cycle path.
+    SetTimeSignature { numerator: u8, denominator: u8 },
     ToggleLoop,
+    /// Set the loop range directly in samples (control endpoint, doc
+    /// #265 — the GUI drags via the loop-drag gesture messages).
+    /// `enabled: None` leaves the loop toggle unchanged. Undoable like
+    /// [`Self::ToggleLoop`].
+    SetLoopRange {
+        loop_in: u64,
+        loop_out: u64,
+        enabled: Option<bool>,
+    },
     StartLoopDrag(LoopDragTarget),
     UpdateLoopDrag(f32),
     EndLoopDrag,

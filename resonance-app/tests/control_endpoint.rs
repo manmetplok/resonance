@@ -97,14 +97,41 @@ fn incompatible_version_rejects_connection() {
 // ---------------- dispatch skeleton ----------------
 
 #[test]
-fn known_method_without_impl_is_unsupported_stub() {
+fn every_advertised_capability_is_answered() {
     let mut app = app();
-    // transport.* is in-protocol but lands in todo #1150; until then the
-    // skeleton must answer with the stable `unsupported` stub.
-    let response = roundtrip(&mut app, 1, Request::without_params(1, "transport.play"));
-    let error = response.error.expect("stub replies with an error");
-    assert_eq!(error.kind(), ErrorKind::Unsupported);
-    assert!(error.message.contains("not implemented yet"));
+    // Every method in the hello capability list must produce a reply
+    // that is either a result or a *stable* error kind — implemented
+    // namespaces answer for real, pending ones reply with the
+    // `unsupported` "not implemented yet" stub, and methods with
+    // required params reject them precisely. `method_not_found` for an
+    // advertised method would mean capabilities and dispatch drifted.
+    for (i, method) in resonance_control::methods::capabilities().iter().enumerate() {
+        let response = roundtrip(
+            &mut app,
+            1,
+            Request::without_params(i as i64, *method),
+        );
+        let Some(error) = response.error else {
+            continue; // implemented and succeeded
+        };
+        assert_ne!(
+            error.code,
+            codes::METHOD_NOT_FOUND,
+            "{method} is advertised but unroutable"
+        );
+        assert!(
+            matches!(
+                error.kind(),
+                ErrorKind::Unsupported
+                    | ErrorKind::InvalidParams
+                    | ErrorKind::NotFound
+                    | ErrorKind::NeedsConfirmation
+                    | ErrorKind::Busy
+            ),
+            "{method} replied with unstable error kind {:?}",
+            error.kind()
+        );
+    }
 }
 
 #[test]

@@ -22,6 +22,22 @@ impl Resonance {
     }
 
     #[doc(hidden)]
+    /// Test-only: the transport playhead in samples.
+    #[doc(hidden)]
+    pub fn test_transport_playhead(&self) -> u64 {
+        self.transport.playhead
+    }
+
+    /// Test-only: the loop range `(loop_in, loop_out, enabled)`.
+    #[doc(hidden)]
+    pub fn test_loop_range(&self) -> (u64, u64, bool) {
+        (
+            self.transport.loop_in,
+            self.transport.loop_out,
+            self.transport.loop_enabled,
+        )
+    }
+
     pub fn test_transport_bpm(&self) -> f32 {
         self.transport.bpm
     }

@@ -103,17 +103,7 @@ fn sections(app: &Resonance, request: &Request) -> Response {
     super::success(request, &result)
 }
 
-/// Parse params for a method whose params are entirely optional:
-/// absent/null params mean "defaults". (`Request::params` alone maps
-/// absent to JSON `null`, which serde refuses to turn into a struct.)
-fn optional_params<T: serde::de::DeserializeOwned + Default>(
-    request: &Request,
-) -> Result<T, RpcError> {
-    match &request.params {
-        None | Some(serde_json::Value::Null) => Ok(T::default()),
-        Some(_) => request.params(),
-    }
-}
+use super::optional_params;
 
 fn tracks(app: &Resonance, request: &Request) -> Response {
     let params: TracksParams = match optional_params(request) {
@@ -308,7 +298,7 @@ fn plugin_catalog(app: &Resonance, request: &Request) -> Response {
 
 /// Resolve a sample position into the protocol's bar/beat/sample triple
 /// (1-based bar, 1-based fractional beat).
-fn song_position(app: &Resonance, sample: u64) -> SongPosition {
+pub(super) fn song_position(app: &Resonance, sample: u64) -> SongPosition {
     let (bar, beat, frac) = app.tempo_map.position_to_bars(sample, app.sample_rate);
     SongPosition {
         bar,
@@ -317,7 +307,7 @@ fn song_position(app: &Resonance, sample: u64) -> SongPosition {
     }
 }
 
-fn transport_state(app: &Resonance) -> TransportState {
+pub(super) fn transport_state(app: &Resonance) -> TransportState {
     if app.transport.recording {
         TransportState::Recording
     } else if app.transport.playing {
