@@ -86,6 +86,15 @@ impl Resonance {
         self.io.project_path = Some(path);
     }
 
+    /// Test-only: mark the open project dirty (or clean) so the
+    /// control-endpoint destructive-op guards (`needs_confirmation` on
+    /// `project.new`/`project.open` with unsaved changes, doc #265) can
+    /// be exercised without performing a real edit.
+    #[doc(hidden)]
+    pub fn test_set_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
+    }
+
     /// Test-only: serialize the current GUI state to the on-disk
     /// [`crate::project::ProjectFile`] shape, so a persistence test can
     /// inspect (or round-trip) the reference A/B block without writing to

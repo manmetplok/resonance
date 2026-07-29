@@ -26,8 +26,14 @@ pub const METHODS: &[&str] = &[NEW, OPEN, SAVE, SAVE_AS];
 /// Params for `project.new`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewParams {
-    /// Optional template name; omitted means an empty project.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional template: a built-in template slug (e.g. `"empty"`,
+    /// `"beatmaking"`) or a user template name; omitted means an empty
+    /// project. `template_id` is accepted as an alias.
+    #[serde(
+        default,
+        alias = "template_id",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub template: Option<String>,
     /// Required (`true`) when the current project has unsaved changes.
     #[serde(default)]
