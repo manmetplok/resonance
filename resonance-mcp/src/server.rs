@@ -65,14 +65,16 @@ impl ResonanceMcp {
     /// Every tool this server exposes: the per-namespace routers from
     /// [`crate::tools`], summed.
     pub fn combined_router() -> ToolRouter<Self> {
-        Self::router_song()
+        let mut router = Self::router_song()
             + Self::router_project()
             + Self::router_transport()
             + Self::router_trackmix()
             + Self::router_arrange()
             + Self::router_compose()
             + Self::router_vocal()
-            + Self::router_render()
+            + Self::router_render();
+        normalize_schemas(&mut router);
+        router
     }
 
     /// Call `method` and report the raw result as pretty JSON text.
@@ -208,6 +210,56 @@ fn status_value(status: JobStatus) -> Value {
 /// Pretty-print a result value for the text channel.
 pub(crate) fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+/// Rust integer/float `format` values that `schemars` emits but that are
+/// not standard JSON Schema (its core defines no numeric formats). Strict
+/// MCP clients — Claude Code / the Anthropic API — warn about and drop
+/// them ("unknown format \"uint64\" ignored ..."). `type` + `minimum`
+/// already constrain the values, so removing the format is lossless.
+const NONSTANDARD_NUMERIC_FORMATS: &[&str] = &[
+    "uint", "uint8", "uint16", "uint32", "uint64", "uint128", "int", "int8", "int16", "int32",
+    "int64", "int128", "float", "double",
+];
+
+/// Normalize every tool's input and output schema so the published
+/// surface is standard-compliant and warning-free in strict clients:
+/// strip the non-standard numeric `format` annotations schemars adds.
+/// The `ToolRouter`/`Tool` fields are public, so we rewrite in place.
+fn normalize_schemas(router: &mut ToolRouter<ResonanceMcp>) {
+    for route in router.map.values_mut() {
+        let tool = &mut route.attr;
+        let mut input = (*tool.input_schema).clone();
+        strip_nonstandard_formats(&mut input);
+        tool.input_schema = Arc::new(input);
+        if let Some(output) = tool.output_schema.take() {
+            let mut out = (*output).clone();
+            strip_nonstandard_formats(&mut out);
+            tool.output_schema = Some(Arc::new(out));
+        }
+    }
+}
+
+/// Recursively drop `format` keys carrying a [`NONSTANDARD_NUMERIC_FORMATS`]
+/// value, everywhere in a JSON Schema object (`properties`, `items`,
+/// `$defs`, nested schemas, ...).
+fn strip_nonstandard_formats(map: &mut serde_json::Map<String, Value>) {
+    if let Some(Value::String(fmt)) = map.get("format") {
+        if NONSTANDARD_NUMERIC_FORMATS.contains(&fmt.as_str()) {
+            map.remove("format");
+        }
+    }
+    for value in map.values_mut() {
+        strip_formats_in_value(value);
+    }
+}
+
+fn strip_formats_in_value(value: &mut Value) {
+    match value {
+        Value::Object(child) => strip_nonstandard_formats(child),
+        Value::Array(items) => items.iter_mut().for_each(strip_formats_in_value),
+        _ => {}
+    }
 }
 
 #[rmcp::tool_handler(router = Self::combined_router())]
