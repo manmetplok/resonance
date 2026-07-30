@@ -57,9 +57,23 @@ pub struct JobStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(schema_with = "any_json_value_schema"))]
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Schema for [`JobStatus::result`]. schemars renders a bare
+/// `serde_json::Value` as the JSON Schema boolean `true` ("any"), which
+/// strict MCP clients (Claude Code / the Anthropic API) reject at
+/// `outputSchema.properties.result`. Emit an equivalent *object* schema
+/// ("any JSON, shape depends on the job kind") instead.
+#[cfg(feature = "schemars")]
+fn any_json_value_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "Job-specific result payload once `state` is `done`; \
+shape depends on the job kind (e.g. a mixdown/save path or a rendered clip id)."
+    })
 }
 
 /// Params for `job.status`.
