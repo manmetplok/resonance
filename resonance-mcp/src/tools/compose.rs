@@ -52,11 +52,25 @@ impl ResonanceMcp {
     #[tool(
         description = "Generate a drum pattern for one section onto a drums track. Only that \
                        section's drums change — other sections keep their material even when \
-                       they started from the same pattern. Optional pattern names a style; \
-                       omitted uses the section's arrangement default. Call it once per \
-                       section to give each its own groove. Returns clip_ids, one per \
-                       placement of the section in arrangement order, and clip_id as the \
-                       first of them.",
+                       they started from the same pattern, so call it once per section to give \
+                       each its own groove. \
+                       \
+                       pattern names the groove. It resolves against the project's own pattern \
+                       bank first, then a built-in library: halftime (backbeat on 3), \
+                       four-on-floor, industrial (rigid gated 16ths), breakbeat (syncopated, \
+                       ghosted), blast, sparse (kick on 1, snare on 3), toms (tom-led, no \
+                       hats), build (one-bar ramp into 16ths), fill (tom fill onto a crash). \
+                       Built-ins install exactly as authored, so they are reproducible and \
+                       seed does not change them; omitting pattern rolls the section's \
+                       existing bank pattern instead, where seed does apply. \
+                       \
+                       density (0.0..=1.0, default 1.0) sets how busy the result is: on a \
+                       built-in it thins the groove toward the strong beats without losing any \
+                       voice, so the same name at 0.3 / 0.6 / 1.0 across three sections reads \
+                       as one idea getting busier. \
+                       \
+                       Returns clip_ids, one per placement of the section in arrangement \
+                       order, and clip_id as the first of them.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<generate::GenerateResult>()
     )]

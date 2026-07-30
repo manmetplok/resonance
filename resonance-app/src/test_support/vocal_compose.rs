@@ -76,6 +76,20 @@ impl Resonance {
             .count()
     }
 
+    /// Test-only: rename the project's first drum pattern, returning its
+    /// id. Lets a test stand a user-authored pattern next to a built-in
+    /// of the same name and assert which one wins.
+    #[doc(hidden)]
+    pub fn test_rename_first_drum_pattern(&mut self, name: &str) -> u64 {
+        let pattern = self
+            .compose
+            .drum_patterns
+            .first_mut()
+            .expect("the project has at least one drum pattern");
+        pattern.name = name.to_owned();
+        pattern.id
+    }
+
     /// Test-only: the primary drum pattern id assigned to a section's
     /// arrangement, or `None` when the arrangement is empty.
     #[doc(hidden)]

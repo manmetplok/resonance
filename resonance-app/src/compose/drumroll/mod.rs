@@ -1,11 +1,16 @@
 pub mod drum_map;
 pub mod groups;
+pub mod library;
 pub mod pattern;
 
 pub use drum_map::DrumPadMap;
 pub use groups::{
     default_drum_groups, default_kit_pads, grid_label, DrumGroup, DrumGroupPad, KitPadInfo,
     GROUP_PALETTE,
+};
+pub use library::{
+    apply_density, builtin_pattern_catalog, builtin_pattern_names, instantiate_builtin,
+    is_builtin_pattern,
 };
 pub use pattern::{default_drum_patterns, legacy_groups_to_pattern, DrumPattern};
 
