@@ -425,10 +425,8 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
 /// view) and the vocal-audio clip map (so the next Generate Vocal correctly
 /// tears down old clips rather than stacking on top of them).
 fn replay_vocal(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedProject) {
-    let samples_per_beat = r.sample_rate as f64 * 60.0 / r.transport.bpm as f64;
-    let samples_per_bar = (samples_per_beat * r.transport.time_sig_num as f64) as u64;
     r.compose
-        .rebuild_derived_clips(&r.midi_clips, samples_per_bar);
+        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map);
 
     // Rebuild the vocal audio clip map so subsequent regen tear-downs
     // find the loaded clips and clean them up — otherwise the next
@@ -451,7 +449,7 @@ fn replay_vocal(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedProject
         &r.clips,
         &audio_clip_paths,
         &vocal_track_ids,
-        samples_per_bar,
+        &r.tempo_map,
     );
 
     r.transport.loop_range_set = r.transport.loop_enabled;

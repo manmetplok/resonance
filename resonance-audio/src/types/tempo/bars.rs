@@ -304,6 +304,36 @@ impl TempoMap {
         }
     }
 
+    /// Recover the 0-based bar index whose start sample coincides with
+    /// `sample_pos`, within `tolerance` samples, or `None` if the position
+    /// is not on (or adjacent to) a bar boundary.
+    ///
+    /// This is the tempo-map-aware inverse of [`Self::bar_to_sample`] used
+    /// to re-associate a loaded clip with the bar it was generated for.
+    /// Unlike a `sample % samples_per_bar == 0` test against a truncated
+    /// scalar, it accounts for tempo changes and absorbs the sub-sample
+    /// rounding in the bar table, so a clip placed with `bar_to_sample(N)`
+    /// round-trips back to bar `N` exactly.
+    ///
+    /// The candidate bar is found by [`Self::bar_index_at`] (the last bar
+    /// entry at or before `sample_pos`); both it and the following bar are
+    /// checked so a position rounded a hair *past* a boundary still matches.
+    pub fn bar_at_sample_exact(&self, sample_pos: u64, tolerance: u64) -> Option<u32> {
+        let idx = match self.bar_index_at(sample_pos) {
+            Some(i) => i as u32,
+            // No bar table (never rebuilt): fall back to the flat-BPM
+            // conversion that `bar_to_sample` itself uses in this case.
+            None => self.sample_to_bar(sample_pos, self.table_sample_rate).0,
+        };
+        for bar in [idx, idx + 1] {
+            let bar_sample = self.bar_to_sample(bar);
+            if bar_sample.abs_diff(sample_pos) <= tolerance {
+                return Some(bar);
+            }
+        }
+        None
+    }
+
     /// Return the time signature numerator active at a given 0-based bar.
     pub fn numerator_at_bar(&self, bar: u32) -> u8 {
         if let Some(entry) = self.bar_table.get(bar as usize) {

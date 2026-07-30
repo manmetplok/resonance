@@ -20,8 +20,6 @@ use crate::message::Message;
 use crate::state::InstrumentType;
 use crate::util::{next_seed, seed_from_id};
 
-use super::regenerate::compose_samples_per_bar;
-
 pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<Message> {
     match msg {
         DrumGroupsMessage::SelectGroup { group_id } => {
@@ -771,7 +769,6 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
     }
 
     let time_sig_num = r.transport.time_sig_num.max(1);
-    let samples_per_bar = compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
 
     // Snapshot one tuple per placement so we don't reborrow `r.compose`
     // inside the engine-send loop. Resolves each section's *arrangement*
@@ -804,7 +801,7 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
     for (definition_id, placement_id, start_bar, length_bars, def_name, section_spans)
         in placements
     {
-        let start_sample = start_bar as u64 * samples_per_bar;
+        let start_sample = r.tempo_map.bar_to_sample(start_bar);
         let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
         let notes = build_drum_notes(&section_spans, time_sig_num);
 
