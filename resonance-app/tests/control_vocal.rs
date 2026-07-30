@@ -304,6 +304,7 @@ fn render_returns_a_job_and_sets_the_default_voicebank() {
         "vocal.render",
         &proto::RenderParams {
             track_id: Some(track),
+            section_id: None,
             voicebank: None,
         },
     );
@@ -336,6 +337,7 @@ fn render_accepts_an_explicit_voicebank() {
         "vocal.render",
         &proto::RenderParams {
             track_id: Some(track),
+            section_id: None,
             voicebank: Some("Meiji".to_owned()),
         },
     );
@@ -351,6 +353,7 @@ fn render_accepts_an_explicit_voicebank() {
         "vocal.render",
         &proto::RenderParams {
             track_id: Some(track),
+            section_id: None,
             voicebank: Some("nightingale".to_owned()),
         },
     );
@@ -367,6 +370,7 @@ fn render_without_a_vocal_lane_errors() {
         "vocal.render",
         &proto::RenderParams {
             track_id: None,
+            section_id: None,
             voicebank: None,
         },
     );
@@ -379,6 +383,7 @@ fn render_without_a_vocal_lane_errors() {
         "vocal.render",
         &proto::RenderParams {
             track_id: Some(ProtoTrackId(35)),
+            section_id: None,
             voicebank: None,
         },
     );
@@ -406,6 +411,7 @@ fn render_with_empty_draft_fails_the_job() {
         "vocal.render",
         &proto::RenderParams {
             track_id: Some(track),
+            section_id: None,
             voicebank: None,
         },
     );

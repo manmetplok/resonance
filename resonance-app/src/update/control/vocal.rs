@@ -347,14 +347,15 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         },
     };
 
-    let definition_id = match first_vocal_definition(app, track_id) {
-        Some(id) => id,
-        None => {
-            return fail(
-                request,
-                RpcError::not_found(format!("track {track_id} has no vocal lane to render")),
-            )
-        }
+    // Which of the track's lanes: an explicit section, else the first in
+    // placement order. Routed through the same resolver the rest of the
+    // namespace uses, so the error shapes match and — the point of
+    // accepting `section_id` at all — a track that sings in several
+    // sections can re-render any of them, not only its first (ba doc
+    // #271 V2).
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
+        Ok(id) => id,
+        Err(e) => return fail(request, e),
     };
 
     // Pre-flight the conditions `rerender_vocal_audio` silently no-ops

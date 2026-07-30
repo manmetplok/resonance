@@ -278,6 +278,7 @@ fn render_sings_the_authored_notes_and_never_rewrites_them() {
         "vocal.render",
         &proto::RenderParams {
             track_id: Some(ProtoTrackId(TRACK)),
+            section_id: None,
             voicebank: None,
         },
     );
@@ -312,6 +313,7 @@ fn render_without_notes_points_at_generate() {
         "vocal.render",
         &proto::RenderParams {
             track_id: Some(ProtoTrackId(TRACK)),
+            section_id: None,
             voicebank: None,
         },
     );

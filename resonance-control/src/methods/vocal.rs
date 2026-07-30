@@ -97,6 +97,13 @@ pub struct ClearPronunciationParams {
 pub struct RenderParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
+    /// Which of the track's vocal lanes to render. Omitted resolves the
+    /// track's first vocal lane in placement order — the same rule the
+    /// rest of the namespace uses. Without this a track that sings in
+    /// several sections could only ever re-render its first lane, so
+    /// every other lane stayed frozen at its first render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
     /// Voicebank name; defaults to the app default (Lilia).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voicebank: Option<String>,
