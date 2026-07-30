@@ -82,6 +82,59 @@ fn add_synth_track(app: &mut Resonance, id: u64) -> ProtoTrackId {
     ProtoTrackId(id)
 }
 
+/// Like [`section_with_chords`] but with a caller-chosen name, so two
+/// sections can be told apart in the clips they derive.
+fn section_named(app: &mut Resonance, name: &str) -> SectionDefinitionId {
+    let section_id = call(
+        app,
+        "section.create",
+        &section_proto::CreateParams {
+            name: name.to_owned(),
+            length_bars: 4,
+            scale: None,
+            place: true,
+        },
+    )
+    .result::<section_proto::CreateResult>()
+    .expect("section.create succeeds")
+    .section_id;
+
+    let mut params = harmony_proto::ApplyProgressionParams::for_section(section_id);
+    params.key = Some(KeyScale {
+        tonic: "A".to_owned(),
+        scale: "minor".to_owned(),
+    });
+    params.numerals = Some(["i", "iv", "v", "i"].into_iter().map(str::to_owned).collect());
+    call(app, "harmony.apply_progression", &params)
+        .result::<harmony_proto::ApplyProgressionResult>()
+        .expect("progression applies");
+    section_id
+}
+
+/// Drain the captured engine traffic into the notes each derived clip
+/// received, keyed by the owning section's name (the materializer names
+/// clips `"<section> · <track>"`). Keying by name rather than start
+/// sample keeps two sections distinguishable even when they are placed
+/// at the same bar.
+fn drum_writes(
+    rx: &resonance_audio::__test_support::Receiver<AudioCommand>,
+) -> std::collections::BTreeMap<String, Vec<(u8, u64, u64)>> {
+    let mut by_section = std::collections::BTreeMap::new();
+    while let Ok(cmd) = rx.try_recv() {
+        if let AudioCommand::LoadMidiClipDirect { notes, name, .. } = cmd {
+            let section = name.split(" · ").next().unwrap_or(&name).to_owned();
+            by_section.insert(
+                section,
+                notes
+                    .iter()
+                    .map(|n| (n.note, n.start_tick, n.duration_ticks))
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+    by_section
+}
+
 // ---------------- generate.part ----------------
 
 #[test]
@@ -488,6 +541,69 @@ fn drums_generates_onto_a_drum_track() {
     assert!(
         app.test_section_primary_pattern(u64::from(section_id)).is_some(),
         "a drum pattern is pinned to the section"
+    );
+}
+
+/// Drum patterns are project-global, so re-rolling one in place used to
+/// rewrite every section that rendered it: generating drums for the
+/// chorus silently replaced the verse's notes, including sections that
+/// had never named a pattern at all and were only rendering the
+/// fallback. Generating for one section must leave the others
+/// note-identical (doc #270 §4).
+#[test]
+fn generating_drums_for_one_section_leaves_the_others_alone() {
+    let mut app = app_with_project();
+    let verse = section_named(&mut app, "Verse");
+    let chorus = section_named(&mut app, "Chorus");
+    app.test_add_drum_track(40);
+
+    let rx = app.test_capture_engine();
+    call(&mut app, "generate.drums", &proto::DrumsParams {
+        section_id: verse,
+        track_id: ProtoTrackId(40),
+        pattern: None,
+        seed: Some(1),
+    })
+    .result::<GenerateResult>()
+    .expect("first generate succeeds");
+    let after_first = drum_writes(&rx);
+    let verse_before = after_first
+        .get("Verse")
+        .expect("the verse clip was written")
+        .clone();
+    assert!(!verse_before.is_empty(), "the verse got drum notes");
+
+    // Generate for the *other* section with a different seed.
+    call(&mut app, "generate.drums", &proto::DrumsParams {
+        section_id: chorus,
+        track_id: ProtoTrackId(40),
+        pattern: None,
+        seed: Some(999),
+    })
+    .result::<GenerateResult>()
+    .expect("second generate succeeds");
+    let after_second = drum_writes(&rx);
+
+    // The verse clip is rewritten by the whole-project rebuild, but must
+    // carry identical material.
+    assert_eq!(
+        after_second.get("Verse"),
+        Some(&verse_before),
+        "generating the chorus changed the verse's notes"
+    );
+
+    // The two sections now own distinct patterns, so they can differ.
+    let verse_pattern = app.test_section_primary_pattern(u64::from(verse));
+    let chorus_pattern = app.test_section_primary_pattern(u64::from(chorus));
+    assert!(verse_pattern.is_some() && chorus_pattern.is_some());
+    assert_ne!(
+        verse_pattern, chorus_pattern,
+        "each section owns its own pattern after generating"
+    );
+    assert_ne!(
+        after_second.get("Chorus"),
+        Some(&verse_before),
+        "the chorus got its own material"
     );
 }
 

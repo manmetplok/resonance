@@ -51,7 +51,14 @@ pub struct PartParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DrumsParams {
+    /// The section to generate for. Only this section's drum material
+    /// changes; sections sharing its pattern keep theirs.
     pub section_id: SectionDefinitionId,
+    /// The drum track to generate onto. Must be a drum track — the
+    /// wrong kind is a precise error rather than a silent no-op. The
+    /// section's drum material is rendered to the project's drum
+    /// tracks, so on a project with a single drum track this is that
+    /// track.
     pub track_id: TrackId,
     /// Named pattern/style; omitted picks the section's arrangement default.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -50,10 +50,13 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Generate a drum pattern for a section into a drums track. Optional \
-                       pattern names a style; omitted uses the section's arrangement default. \
-                       Returns clip_ids, one per placement of the section in arrangement order, \
-                       and clip_id as the first of them.",
+        description = "Generate a drum pattern for one section onto a drums track. Only that \
+                       section's drums change — other sections keep their material even when \
+                       they started from the same pattern. Optional pattern names a style; \
+                       omitted uses the section's arrangement default. Call it once per \
+                       section to give each its own groove. Returns clip_ids, one per \
+                       placement of the section in arrangement order, and clip_id as the \
+                       first of them.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<generate::GenerateResult>()
     )]

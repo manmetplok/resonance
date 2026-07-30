@@ -1007,6 +1007,15 @@ pub(crate) enum ControlDrumOutcome {
 /// the drum tracks receive exactly the material the compose lane would
 /// render. Returns [`ControlDrumOutcome::NoPattern`] when the bank is
 /// empty (nothing to generate).
+///
+/// **Scoping.** Patterns are project-global, so re-rolling the chosen
+/// pattern's groups in place would rewrite every other section that
+/// renders it — generating drums for the chorus silently rewrote the
+/// verse. When the pattern is shared, this takes a private copy for the
+/// section first and re-rolls that, leaving every other section's
+/// material bit-for-bit unchanged. `materialize_drum_clips` still
+/// rebuilds the whole project's drum clips, but from an otherwise
+/// untouched model, so the rebuild is a no-op everywhere else.
 pub(crate) fn control_generate_drums(
     r: &mut crate::Resonance,
     definition_id: u64,
@@ -1026,16 +1035,24 @@ pub(crate) fn control_generate_drums(
         return ControlDrumOutcome::NoPattern;
     };
 
+    // Take a private copy before re-rolling anything the rest of the
+    // project renders (see "Scoping" above).
+    let target = if pattern_is_shared(r, definition_id, chosen) {
+        clone_pattern_for_section(r, definition_id, chosen)
+    } else {
+        chosen
+    };
+
     // Pin the pattern as the section's primary arrangement entry so the
     // materializer renders it across the section's bars.
     if let Some(def) = r.compose.find_definition_mut(definition_id) {
-        def.set_primary_pattern(Some(chosen));
+        def.set_primary_pattern(Some(target));
     }
 
-    // Re-roll the chosen pattern's groups: deterministic when a seed is
+    // Re-roll the target pattern's groups: deterministic when a seed is
     // supplied, advancing otherwise (mirrors GenerateAllGroups' per-group
     // `next_seed`).
-    if let Some(pattern) = r.compose.drum_patterns.iter_mut().find(|p| p.id == chosen) {
+    if let Some(pattern) = r.compose.drum_patterns.iter_mut().find(|p| p.id == target) {
         for (i, g) in pattern.groups.iter_mut().enumerate() {
             g.seed = match seed {
                 Some(s) => s.wrapping_add(i as u64).wrapping_mul(0x9E3779B97F4A7C15),
@@ -1047,8 +1064,62 @@ pub(crate) fn control_generate_drums(
 
     materialize_drum_clips(r);
     r.compose.last_error = None;
-    let _ = chosen;
     ControlDrumOutcome::Generated
+}
+
+/// Does any section *other* than `definition_id` render `pattern_id`?
+///
+/// Counts both explicit arrangement references (as a main pattern or as
+/// an entry's fill) and the implicit fallback a section with no
+/// arrangement of its own takes — that fallback is why generating drums
+/// for one section could rewrite sections that had never named a
+/// pattern at all.
+fn pattern_is_shared(r: &crate::Resonance, definition_id: u64, pattern_id: u64) -> bool {
+    r.compose
+        .definitions
+        .iter()
+        .filter(|d| d.id != definition_id)
+        .any(|d| {
+            if d.arrangement.is_empty() {
+                r.compose.pattern_for_definition(d).map(|p| p.id) == Some(pattern_id)
+            } else {
+                d.arrangement
+                    .iter()
+                    .any(|e| e.pattern_id == pattern_id || e.fill == Some(pattern_id))
+            }
+        })
+}
+
+/// Copy `source_id` into a pattern the section owns outright, named
+/// after it. Group ids are reassigned so editing either pattern's steps
+/// leaves the other alone — the same discipline as the GUI's
+/// `DuplicatePattern`. Returns the source id unchanged if it has gone
+/// missing.
+fn clone_pattern_for_section(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    source_id: u64,
+) -> u64 {
+    let Some(src) = r.compose.find_pattern(source_id).cloned() else {
+        return source_id;
+    };
+    let new_id = r.compose.fresh_id();
+    let mut groups = src.groups.clone();
+    for g in groups.iter_mut() {
+        g.id = r.compose.fresh_id();
+    }
+    let name = match r.compose.find_definition(definition_id) {
+        Some(def) => format!("{} drums", def.name),
+        None => format!("{} copy", src.name),
+    };
+    r.compose.drum_patterns.push(DrumPattern {
+        id: new_id,
+        name,
+        color: src.color,
+        groups,
+        length_bars: src.length_bars,
+    });
+    new_id
 }
 
 /// Find a drum pattern by (case-insensitive, trimmed) name.
