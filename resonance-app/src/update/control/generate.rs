@@ -184,11 +184,23 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         return fail(request, e);
     }
 
+    if let Some(d) = params.density {
+        if !d.is_finite() || !(0.0..=1.0).contains(&d) {
+            return fail(
+                request,
+                RpcError::invalid_params(format!("density must be within 0.0..=1.0 (got {d})")),
+            );
+        }
+    }
+
     // Resolve a named pattern up front so an unknown name is a precise
-    // error, not a silent fall-through to the default.
-    let pattern_id = match &params.pattern {
+    // error, not a silent fall-through to the default. The project's own
+    // bank wins over the built-in library, so a user pattern named
+    // "halftime" stays theirs.
+    let (pattern_id, builtin) = match &params.pattern {
         Some(name) => match pattern_id_by_name(app, name) {
-            Some(id) => Some(id),
+            Some(id) => (Some(id), None),
+            None if crate::compose::is_builtin_pattern(name) => (None, Some(name.clone())),
             None => {
                 let known: Vec<String> = app
                     .compose
@@ -199,18 +211,25 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                 return fail(
                     request,
                     RpcError::not_found(format!(
-                        "no drum pattern named {name:?} (have: {})",
-                        known.join(", ")
+                        "no drum pattern named {name:?} (project: {}; built-in: {})",
+                        known.join(", "),
+                        crate::compose::builtin_pattern_names().join(", ")
                     )),
                 );
             }
         },
-        None => None,
+        None => (None, None),
     };
-    if app.compose.drum_patterns.is_empty() {
+    // An empty bank is only a problem when nothing else can supply the
+    // groove — a built-in brings its own.
+    if builtin.is_none() && app.compose.drum_patterns.is_empty() {
         return fail(
             request,
-            RpcError::unsupported("the project has no drum pattern to generate from"),
+            RpcError::unsupported(format!(
+                "the project has no drum pattern to generate from; name a built-in groove \
+                 instead (one of: {})",
+                crate::compose::builtin_pattern_names().join(", ")
+            )),
         );
     }
 
@@ -219,6 +238,8 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Message::Compose(ComposeMessage::GenerateSectionDrums {
             definition_id,
             pattern_id,
+            builtin,
+            density: params.density,
             seed: params.seed,
         }),
     );

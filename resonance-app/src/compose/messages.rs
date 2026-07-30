@@ -224,6 +224,12 @@ pub enum ComposeMessage {
     GenerateSectionDrums {
         definition_id: u64,
         pattern_id: Option<u64>,
+        /// A built-in groove name to install as authored, instead of
+        /// rolling a bank pattern. Mutually exclusive with `pattern_id`.
+        builtin: Option<String>,
+        /// `0.0..=1.0`; thins a built-in's authored steps, or drives the
+        /// Euclidean generator for a bank pattern.
+        density: Option<f32>,
         seed: Option<u64>,
     },
 

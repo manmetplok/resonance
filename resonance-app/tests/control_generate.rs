@@ -530,6 +530,7 @@ fn drums_generates_onto_a_drum_track() {
         section_id,
         track_id: ProtoTrackId(20),
         pattern: None,
+        density: None,
         seed: Some(99),
     };
     let response = call(&mut app, "generate.drums", &params);
@@ -562,6 +563,7 @@ fn generating_drums_for_one_section_leaves_the_others_alone() {
         section_id: verse,
         track_id: ProtoTrackId(40),
         pattern: None,
+        density: None,
         seed: Some(1),
     })
     .result::<GenerateResult>()
@@ -578,6 +580,7 @@ fn generating_drums_for_one_section_leaves_the_others_alone() {
         section_id: chorus,
         track_id: ProtoTrackId(40),
         pattern: None,
+        density: None,
         seed: Some(999),
     })
     .result::<GenerateResult>()
@@ -607,6 +610,175 @@ fn generating_drums_for_one_section_leaves_the_others_alone() {
     );
 }
 
+/// A built-in groove is reachable by name in any project, installs the
+/// authored steps rather than a Euclidean roll, and stays scoped to its
+/// section (ba doc #270 §5).
+#[test]
+fn a_builtin_groove_can_be_named_and_lands_as_authored() {
+    let mut app = app_with_project();
+    let section_id = section_named(&mut app, "Chorus");
+    app.test_add_drum_track(50);
+
+    let rx = app.test_capture_engine();
+    call(&mut app, "generate.drums", &proto::DrumsParams {
+        section_id,
+        track_id: ProtoTrackId(50),
+        pattern: Some("four-on-floor".to_owned()),
+        density: None,
+        seed: None,
+    })
+    .result::<GenerateResult>()
+    .expect("a built-in groove generates");
+
+    let notes = drum_writes(&rx);
+    let chorus = notes.get("Chorus").expect("the chorus clip was written");
+    // Four-on-the-floor means a kick on every beat: ticks 0, 480, 960,
+    // 1440 in a 4/4 bar at 480 TPQ. Anything Euclidean would scatter.
+    let kick_ticks: Vec<u64> = chorus
+        .iter()
+        .filter(|(note, _, _)| *note == resonance_common::drum_map::KICK)
+        .map(|(_, tick, _)| *tick)
+        .take(4)
+        .collect();
+    assert_eq!(kick_ticks, vec![0, 480, 960, 1440], "kick on every beat");
+}
+
+/// Naming a built-in twice, for two sections, gives each its own pattern
+/// — so thinning one does not touch the other.
+#[test]
+fn builtin_grooves_are_scoped_per_section() {
+    let mut app = app_with_project();
+    let verse = section_named(&mut app, "Verse");
+    let chorus = section_named(&mut app, "Chorus");
+    app.test_add_drum_track(51);
+
+    let rx = app.test_capture_engine();
+    for (section, density) in [(verse, Some(0.25f32)), (chorus, None)] {
+        call(&mut app, "generate.drums", &proto::DrumsParams {
+            section_id: section,
+            track_id: ProtoTrackId(51),
+            pattern: Some("four-on-floor".to_owned()),
+            density,
+            seed: None,
+        })
+        .result::<GenerateResult>()
+        .expect("a built-in groove generates");
+    }
+
+    let written = drum_writes(&rx);
+    let verse_notes = written.get("Verse").expect("verse clip");
+    let chorus_notes = written.get("Chorus").expect("chorus clip");
+    assert!(
+        verse_notes.len() < chorus_notes.len(),
+        "the thinned verse ({}) is sparser than the full chorus ({})",
+        verse_notes.len(),
+        chorus_notes.len()
+    );
+    assert_ne!(
+        app.test_section_primary_pattern(u64::from(verse)),
+        app.test_section_primary_pattern(u64::from(chorus)),
+        "each section owns its own instance of the groove"
+    );
+}
+
+/// Density is a real knob across a build, and monotonic.
+#[test]
+fn density_scales_a_builtin_across_a_build() {
+    let counts: Vec<usize> = [0.25f32, 0.5, 1.0]
+        .into_iter()
+        .map(|d| {
+            let mut app = app_with_project();
+            let section_id = section_named(&mut app, "Build");
+            app.test_add_drum_track(52);
+            let rx = app.test_capture_engine();
+            call(&mut app, "generate.drums", &proto::DrumsParams {
+                section_id,
+                track_id: ProtoTrackId(52),
+                pattern: Some("industrial".to_owned()),
+                density: Some(d),
+                seed: None,
+            })
+            .result::<GenerateResult>()
+            .expect("generates");
+            drum_writes(&rx).get("Build").map(|n| n.len()).unwrap_or(0)
+        })
+        .collect();
+
+    assert!(counts[0] > 0, "even the thinnest density still plays");
+    assert!(
+        counts[0] < counts[1] && counts[1] < counts[2],
+        "density scales the groove monotonically: {counts:?}"
+    );
+}
+
+/// A project pattern of the same name wins over the built-in, so a user
+/// who authored "halftime" keeps theirs.
+#[test]
+fn a_project_pattern_wins_over_a_builtin_of_the_same_name() {
+    let mut app = app_with_project();
+    let section_id = section_named(&mut app, "Verse");
+    app.test_add_drum_track(53);
+    let renamed = app.test_rename_first_drum_pattern("halftime");
+
+    call(&mut app, "generate.drums", &proto::DrumsParams {
+        section_id,
+        track_id: ProtoTrackId(53),
+        pattern: Some("halftime".to_owned()),
+        density: None,
+        seed: Some(4),
+    })
+    .result::<GenerateResult>()
+    .expect("generates");
+
+    assert_eq!(
+        app.test_section_primary_pattern(u64::from(section_id)),
+        Some(renamed),
+        "the project's own pattern was used, not the built-in"
+    );
+}
+
+#[test]
+fn an_unknown_pattern_lists_both_project_and_builtin_names() {
+    let mut app = app_with_project();
+    let section_id = section_named(&mut app, "Verse");
+    app.test_add_drum_track(54);
+
+    let message = expect_error(
+        call(&mut app, "generate.drums", &proto::DrumsParams {
+            section_id,
+            track_id: ProtoTrackId(54),
+            pattern: Some("gabber".to_owned()),
+            density: None,
+            seed: None,
+        }),
+        ErrorKind::NotFound,
+    );
+    assert!(message.contains("built-in"), "{message}");
+    assert!(message.contains("halftime"), "{message}");
+    assert!(message.contains("Main"), "{message}");
+}
+
+#[test]
+fn density_out_of_range_is_rejected() {
+    let mut app = app_with_project();
+    let section_id = section_named(&mut app, "Verse");
+    app.test_add_drum_track(55);
+
+    for d in [-0.1f32, 1.5] {
+        let message = expect_error(
+            call(&mut app, "generate.drums", &proto::DrumsParams {
+                section_id,
+                track_id: ProtoTrackId(55),
+                pattern: Some("sparse".to_owned()),
+                density: Some(d),
+                seed: None,
+            }),
+            ErrorKind::InvalidParams,
+        );
+        assert!(message.contains("density"), "{message}");
+    }
+}
+
 #[test]
 fn drums_rejects_non_drum_track_and_unknown_pattern() {
     let mut app = app_with_project();
@@ -618,6 +790,7 @@ fn drums_rejects_non_drum_track_and_unknown_pattern() {
         section_id,
         track_id: ProtoTrackId(21),
         pattern: None,
+        density: None,
         seed: None,
     };
     let message = expect_error(call(&mut app, "generate.drums", &params), ErrorKind::InvalidParams);
@@ -629,6 +802,7 @@ fn drums_rejects_non_drum_track_and_unknown_pattern() {
         section_id,
         track_id: ProtoTrackId(22),
         pattern: Some("nonexistent-pattern".to_owned()),
+        density: None,
         seed: None,
     };
     let message = expect_error(call(&mut app, "generate.drums", &params), ErrorKind::NotFound);
@@ -639,6 +813,7 @@ fn drums_rejects_non_drum_track_and_unknown_pattern() {
         section_id,
         track_id: ProtoTrackId(999),
         pattern: None,
+        density: None,
         seed: None,
     };
     expect_error(call(&mut app, "generate.drums", &params), ErrorKind::NotFound);
@@ -648,6 +823,7 @@ fn drums_rejects_non_drum_track_and_unknown_pattern() {
         section_id: SectionDefinitionId(999_999),
         track_id: ProtoTrackId(22),
         pattern: None,
+        density: None,
         seed: None,
     };
     expect_error(call(&mut app, "generate.drums", &params), ErrorKind::NotFound);
@@ -668,6 +844,7 @@ fn drums_named_pattern_is_pinned() {
             section_id,
             track_id: ProtoTrackId(23),
             pattern: None,
+            density: None,
             seed: Some(1),
         });
         app.test_section_primary_pattern(u64::from(section_id))
@@ -677,6 +854,7 @@ fn drums_named_pattern_is_pinned() {
             section_id,
             track_id: ProtoTrackId(23),
             pattern: None,
+            density: None,
             seed: Some(2),
         });
         app.test_section_primary_pattern(u64::from(section_id))

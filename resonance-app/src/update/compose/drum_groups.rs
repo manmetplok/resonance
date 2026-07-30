@@ -1016,12 +1016,24 @@ pub(crate) enum ControlDrumOutcome {
 /// material bit-for-bit unchanged. `materialize_drum_clips` still
 /// rebuilds the whole project's drum clips, but from an otherwise
 /// untouched model, so the rebuild is a no-op everywhere else.
+/// **Built-in grooves.** When `builtin` names one of the library
+/// templates (ba doc #270 §5), it is installed for this section as
+/// authored and *not* re-rolled: `generate_group_pattern` replaces every
+/// step with a Euclidean scatter from the group's density, which is a
+/// fine variation but cannot express "four on the floor" or a backbeat
+/// on 3. Scaling for those comes from `density`, which thins the
+/// authored steps by metrical weight instead of regenerating them.
 pub(crate) fn control_generate_drums(
     r: &mut crate::Resonance,
     definition_id: u64,
     pattern_id: Option<u64>,
+    builtin: Option<String>,
+    density: Option<f32>,
     seed: Option<u64>,
 ) -> ControlDrumOutcome {
+    if let Some(name) = builtin {
+        return install_builtin_pattern(r, definition_id, &name, density);
+    }
     let chosen = pattern_id
         .filter(|id| r.compose.drum_patterns.iter().any(|p| p.id == *id))
         .or_else(|| {
@@ -1058,8 +1070,57 @@ pub(crate) fn control_generate_drums(
                 Some(s) => s.wrapping_add(i as u64).wrapping_mul(0x9E3779B97F4A7C15),
                 None => next_seed(g.seed),
             };
+            // An explicit density drives the roll itself here — this
+            // path *is* the Euclidean generator, so density is its
+            // natural input rather than a post-pass.
+            if let Some(d) = density {
+                g.density = d.clamp(0.0, 1.0);
+            }
             generate_group_pattern(g);
         }
+    }
+
+    materialize_drum_clips(r);
+    r.compose.last_error = None;
+    ControlDrumOutcome::Generated
+}
+
+/// Install a built-in groove as this section's pattern, as authored.
+///
+/// Always a fresh instance owned by the section: two sections asking for
+/// "halftime" get one pattern each, so thinning one to `density: 0.3`
+/// for a quiet verse leaves the other alone — the same isolation
+/// [`clone_pattern_for_section`] gives bank patterns.
+fn install_builtin_pattern(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    name: &str,
+    density: Option<f32>,
+) -> ControlDrumOutcome {
+    let section_name = r
+        .compose
+        .find_definition(definition_id)
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| name.to_string());
+    let display_name = format!("{section_name} \u{00b7} {name}");
+    let color = GROUP_PALETTE[r.compose.drum_patterns.len() % GROUP_PALETTE.len()];
+
+    let mut next_id = r.compose.peek_next_id();
+    let Some(mut pattern) =
+        crate::compose::instantiate_builtin(name, &display_name, color, &mut next_id)
+    else {
+        return ControlDrumOutcome::NoPattern;
+    };
+    r.compose.set_next_id(next_id);
+
+    if let Some(d) = density {
+        crate::compose::apply_density(&mut pattern, d);
+    }
+
+    let pattern_id = pattern.id;
+    r.compose.drum_patterns.push(pattern);
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        def.set_primary_pattern(Some(pattern_id));
     }
 
     materialize_drum_clips(r);

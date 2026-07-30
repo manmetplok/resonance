@@ -109,10 +109,18 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::GenerateSectionDrums {
             definition_id,
             pattern_id,
+            builtin,
+            density,
             seed,
         } => {
-            let _ =
-                drum_groups::control_generate_drums(r, definition_id, pattern_id, seed);
+            let _ = drum_groups::control_generate_drums(
+                r,
+                definition_id,
+                pattern_id,
+                builtin,
+                density,
+                seed,
+            );
         }
         ComposeMessage::ControlGenerateVocal {
             definition_id,

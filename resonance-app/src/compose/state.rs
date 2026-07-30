@@ -318,6 +318,23 @@ impl ComposeState {
         self.next_id
     }
 
+    /// Borrow the id counter for a builder that allocates several ids at
+    /// once (`default_drum_patterns`, `instantiate_builtin`), then hand
+    /// it back with [`set_next_id`](Self::set_next_id). Keeps those
+    /// builders free of a `&mut ComposeState` borrow without giving them
+    /// their own counter to drift out of sync.
+    pub fn peek_next_id(&self) -> u64 {
+        self.next_id
+    }
+
+    /// Commit a counter borrowed via [`peek_next_id`](Self::peek_next_id).
+    /// Only ever moves forward, so a caller that allocated nothing — or
+    /// one that ran against a stale copy — cannot rewind the allocator
+    /// onto ids already in use.
+    pub fn set_next_id(&mut self, next_id: u64) {
+        self.next_id = self.next_id.max(next_id);
+    }
+
     /// Expression curves for the vocal lane `(definition_id, track_id)`, or
     /// `None` if the lane has no entry yet (treat as untouched).
     pub fn expression_curves(

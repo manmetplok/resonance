@@ -23,7 +23,10 @@ pub use arrangement::{
     entry_span_label, entry_stepper_label, entry_stepper_value, resolve_arrangement,
     step_entry_length, ArrangementCoverage, ArrangementSpan, ResolvedArrangement,
 };
-pub use drumroll::{DrumGroup, DrumGroupPad, DrumPattern, DrumrollViewState};
+pub use drumroll::{
+    apply_density, builtin_pattern_catalog, builtin_pattern_names, instantiate_builtin,
+    is_builtin_pattern, DrumGroup, DrumGroupPad, DrumPattern, DrumrollViewState,
+};
 pub use expression::{Breakpoint, CurveStatus, ExpressionCurve, ExpressionCurves};
 pub use generate::{DeriveKind, GenerateParams};
 pub use lane_generator::{

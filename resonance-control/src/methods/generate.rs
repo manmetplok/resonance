@@ -48,7 +48,7 @@ pub struct PartParams {
 }
 
 /// Params for `generate.drums`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DrumsParams {
     /// The section to generate for. Only this section's drum material
@@ -60,9 +60,24 @@ pub struct DrumsParams {
     /// tracks, so on a project with a single drum track this is that
     /// track.
     pub track_id: TrackId,
-    /// Named pattern/style; omitted picks the section's arrangement default.
+    /// Named pattern/style; omitted picks the section's arrangement
+    /// default. Resolves against the project's own pattern bank first,
+    /// then the built-in groove library (halftime, four-on-floor,
+    /// industrial, breakbeat, blast, sparse, toms, build, fill) — so a
+    /// pattern you authored always wins over a built-in of the same
+    /// name. The not-found error lists both sets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
+    /// How busy the result is, `0.0..=1.0`, default `1.0`.
+    ///
+    /// For a built-in groove this thins the authored steps toward the
+    /// strong beats — the 16ths go first, then the off-8ths — so the
+    /// same named groove at 0.3, 0.6 and 1.0 across three sections reads
+    /// as one idea getting busier. Every voice keeps at least its first
+    /// hit, so a kick stays a kick at any density. For a pattern from
+    /// the project bank it drives the Euclidean generator directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
 }
