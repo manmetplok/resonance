@@ -22,8 +22,8 @@ use iced::Task;
 use crate::state::MidiClipState;
 use resonance_audio::types::TrackType;
 use resonance_control::methods::notes::{
-    self, CreateClipParams, CreateClipResult, DeleteParams, EditParams, InsertParams,
-    InsertResult, MoveClipParams,
+    self, CreateClipParams, CreateClipResult, DeleteParams, EditParams, InsertManyParams,
+    InsertManyResult, InsertParams, InsertResult, MoveClipParams, NoteSpec, ReplaceAllParams,
 };
 use resonance_control::{MutationAck, Request, Response, RpcError};
 
@@ -42,6 +42,8 @@ pub(super) fn try_handle(
         notes::DELETE => delete(app, request),
         notes::CREATE_CLIP => create_clip(app, request),
         notes::MOVE_CLIP => move_clip(app, request),
+        notes::INSERT_MANY => insert_many(app, request),
+        notes::REPLACE_ALL => replace_all(app, request),
         _ => return None,
     };
     Some(out)
@@ -524,4 +526,135 @@ fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         }),
     );
     (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// notes.insert_many / notes.replace_all
+// ---------------------------------------------------------------------------
+
+/// `notes.insert_many` (ba doc #269 FR-5): add every submitted note in
+/// ONE undoable transaction.
+///
+/// Every control mutation is its own undoable transaction
+/// (`run_via_update` -> `record_undo`), so a 468-note melody written
+/// note-by-note left 468 undo entries — undo was effectively unusable —
+/// and multiplied the read-after-write window by the note count.
+fn insert_many(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: InsertManyParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    bulk_write(app, request, params.clip_id.0, &params.notes, false)
+}
+
+/// `notes.replace_all` (ba doc #269 FR-5): make the submitted notes the
+/// clip's entire note list, in ONE undoable transaction. Clearing and
+/// rewriting together also sidesteps the highest-index-first ordering
+/// trap of an N-delete loop.
+fn replace_all(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: ReplaceAllParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    bulk_write(app, request, params.clip_id.0, &params.notes, true)
+}
+
+/// The shared body of the two bulk writes: validate every note up front
+/// (so a bad batch mutates nothing), build the clip's final sorted note
+/// array, dispatch it as one `SetClipNotes`, and mirror it optimistically
+/// so the next `song.notes` sees all of it (the #1166 read-your-own-
+/// writes machinery, reused rather than reinvented).
+fn bulk_write(
+    app: &mut Resonance,
+    request: &Request,
+    clip_id: u64,
+    specs: &[NoteSpec],
+    replace: bool,
+) -> (Response, Task<Message>) {
+    let Some(clip) = find_clip(app, clip_id) else {
+        return clip_not_found(app, request, clip_id);
+    };
+    if let Some(e) = frozen_reject(app, clip.track_id) {
+        return reject(request, e);
+    }
+
+    let mut incoming = Vec::with_capacity(specs.len());
+    for (i, spec) in specs.iter().enumerate() {
+        match build_note(spec) {
+            Ok(note) => incoming.push(note),
+            // Point at the offending entry: in a 400-note batch
+            // "duration must be positive" alone is not actionable.
+            Err(e) => {
+                return reject(
+                    request,
+                    RpcError::invalid_params(format!("notes[{i}]: {}", e.message)),
+                )
+            }
+        }
+    }
+
+    // Existing notes survive an insert_many and are dropped by a
+    // replace_all. The final array is sorted by start_tick, the order
+    // the single-note insert path maintains, so the reported indices
+    // address the same notes `song.notes` reports.
+    //
+    // Each entry is tagged with its submission index (`None` for a kept
+    // note) so the merge itself yields the mapping — sorting first and
+    // reconstructing afterwards cannot distinguish a kept note from a
+    // submitted one at the same tick.
+    let mut tagged: Vec<(resonance_audio::types::MidiNote, Option<usize>)> = if replace {
+        Vec::with_capacity(incoming.len())
+    } else {
+        clip.notes.iter().cloned().map(|n| (n, None)).collect()
+    };
+    tagged.extend(incoming.into_iter().enumerate().map(|(i, n)| (n, Some(i))));
+    // Stable, so notes sharing a start_tick keep this order: kept notes
+    // first, then the submitted ones in submission order.
+    tagged.sort_by_key(|(n, _)| n.start_tick);
+
+    let mut indices = vec![0usize; specs.len()];
+    for (position, (_, origin)) in tagged.iter().enumerate() {
+        if let Some(i) = origin {
+            indices[*i] = position;
+        }
+    }
+    let final_notes: Vec<resonance_audio::types::MidiNote> =
+        tagged.into_iter().map(|(n, _)| n).collect();
+
+    let task = super::run_via_update(
+        app,
+        Message::MidiEditor(MidiEditorMessage::SetClipNotes {
+            clip_id,
+            notes: final_notes.clone(),
+        }),
+    );
+    crate::engine_events::midi::optimistic_set_notes(app, clip_id, final_notes);
+
+    let result = InsertManyResult {
+        indices,
+        revision: app.revision(),
+    };
+    (super::success(request, &result), task)
+}
+
+/// Validate one wire note and convert it to the engine's shape.
+fn build_note(spec: &NoteSpec) -> Result<resonance_audio::types::MidiNote, RpcError> {
+    if spec.pitch > 127 {
+        return Err(RpcError::invalid_params(format!(
+            "pitch {} out of MIDI range 0..=127",
+            spec.pitch
+        )));
+    }
+    check_velocity(spec.velocity)?;
+    let start_tick = beats_to_ticks(spec.start_beat)?;
+    let duration_ticks = beats_to_ticks(spec.duration_beats)?;
+    if duration_ticks == 0 {
+        return Err(RpcError::invalid_params("duration must be positive"));
+    }
+    Ok(resonance_audio::types::MidiNote {
+        note: spec.pitch,
+        velocity: spec.velocity as f32 / 127.0,
+        start_tick,
+        duration_ticks,
+    })
 }

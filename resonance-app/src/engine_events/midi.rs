@@ -196,6 +196,12 @@ fn take_pending_removed(r: &mut Resonance, clip_id: ClipId) -> bool {
     take_pending_if(r, clip_id, |t| matches!(t, PendingNoteEcho::Removed))
 }
 
+/// Drain the front `Replaced` token for `clip_id` (a bulk control
+/// write). Returns true when consumed.
+fn take_pending_replaced(r: &mut Resonance, clip_id: ClipId) -> bool {
+    take_pending_if(r, clip_id, |t| matches!(t, PendingNoteEcho::Replaced))
+}
+
 // ---------------------------------------------------------------------------
 // Optimistic control mirror (ba doc #265, Bug 2b): apply an edit to
 // `midi_clips` synchronously AND record the token its engine echo will
@@ -240,6 +246,23 @@ pub(crate) fn optimistic_resize_note(
 ) {
     apply_note_resize(r, clip_id, note_index, new_duration_ticks);
     push_pending(r, clip_id, PendingNoteEcho::Updated);
+}
+
+/// Mirror a control `notes.insert_many` / `notes.replace_all`: make
+/// `notes` the clip's note array now and enqueue the `Replaced` token.
+/// `notes` must already be sorted by `start_tick` — the same order the
+/// single-note inserts maintain, so reported indices stay meaningful.
+/// The lyric side-table is padded/truncated to match, as the bulk echo
+/// handler does.
+pub(crate) fn optimistic_set_notes(r: &mut Resonance, clip_id: ClipId, notes: Vec<MidiNote>) {
+    if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+        let new_len = notes.len();
+        clip.notes = notes;
+        if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
+            lyrics.resize(new_len, String::new());
+        }
+    }
+    push_pending(r, clip_id, PendingNoteEcho::Replaced);
 }
 
 /// Mirror a control `notes.edit` velocity change and enqueue the token.
@@ -371,6 +394,13 @@ pub(crate) fn apply_note_velocity(
 /// table was never populated), pad with blanks / truncate so
 /// `lyrics.len() == notes.len()` holds afterwards.
 pub(super) fn notes_edited(r: &mut Resonance, clip_id: ClipId, notes: Vec<MidiNote>) {
+    // A control `notes.insert_many` / `notes.replace_all` already applied
+    // this array optimistically (doc #269 FR-5). Drain its token and
+    // skip: the echo carries the engine's state from before any *later*
+    // mirrored single-note edit, so re-applying it would roll that back.
+    if take_pending_replaced(r, clip_id) {
+        return;
+    }
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         let new_len = notes.len();
         clip.notes = notes;

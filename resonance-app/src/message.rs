@@ -688,6 +688,16 @@ pub enum MidiEditorMessage {
         note_index: usize,
         velocity: f32,
     },
+    /// Replace a clip's whole note array in one edit (control endpoints
+    /// `notes.insert_many` / `notes.replace_all`, ba doc #269 FR-5).
+    /// The caller passes the final, sorted array; the engine stores it
+    /// and echoes one `MidiNotesEdited`. One undo entry and one engine
+    /// round trip for the whole batch — writing a 400-note part
+    /// note-by-note would cost 400 of each.
+    SetClipNotes {
+        clip_id: ClipId,
+        notes: Vec<resonance_audio::types::MidiNote>,
+    },
     /// Replace the selection with a single note, or clear it (`None`).
     /// Used by a plain click and by the vocal roll's single-select path.
     SelectNote {

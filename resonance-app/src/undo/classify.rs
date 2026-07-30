@@ -370,6 +370,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::ResizeNote { .. }
             | MidiEditorMessage::SetNoteVelocity { .. }
             | MidiEditorMessage::ToggleSlur { .. }
+            // Bulk control write (doc #269 FR-5): the pre-dispatch
+            // snapshot of the prior notes makes the whole batch one
+            // undo step — the entire point of the method.
+            | MidiEditorMessage::SetClipNotes { .. }
             // Bulk timing edits (doc #163): each rewrites the clip's note
             // array, so the pre-dispatch snapshot of the prior notes is
             // the single undo step. Humanize draws its seed in the handler,
