@@ -102,6 +102,12 @@ pub struct Resonance {
     pub(crate) clips: Vec<ClipState>,
     /// MIDI clips on the timeline.
     pub(crate) midi_clips: Vec<MidiClipState>,
+    /// Control-originated note edits mirrored into `midi_clips`
+    /// optimistically and awaiting their engine echo (ba doc #265, Bug
+    /// 2b: read-your-own-writes for `notes.*`). Keyed per clip; the
+    /// matching `MidiNote*` echo drains one entry and no-ops. Empty for
+    /// GUI edits.
+    pub(crate) control_pending_note_echoes: state::PendingNoteEchoes,
     /// App-side groove library: templates extracted from clips via the
     /// engine's `ExtractGrooveFromClip` command. Populated purely from
     /// `GrooveExtracted` engine events (ba todo #390) so the Compose /
@@ -551,6 +557,7 @@ impl Resonance {
             performance: state::PerformanceState::default(),
             clips: Vec::new(),
             midi_clips: Vec::new(),
+            control_pending_note_echoes: state::PendingNoteEchoes::default(),
             groove_library: Vec::new(),
             compose: compose::ComposeState::default(),
             automation: state::AutomationState::default(),

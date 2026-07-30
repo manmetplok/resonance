@@ -69,30 +69,58 @@ pub(super) fn clip_deleted(r: &mut Resonance, clip_id: ClipId) {
 }
 
 pub(super) fn note_added(r: &mut Resonance, clip_id: ClipId, note: MidiNote) {
-    if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
-        let pos = clip
-            .notes
-            .partition_point(|n| n.start_tick <= note.start_tick);
-        clip.notes.insert(pos, note);
-        // Keep the lyric side-table aligned — insert a blank lyric
-        // at the same index so subsequent indices still reference the
-        // right note. If the side-table is shorter than the notes vec
-        // (e.g. a clip created by raw `AddMidiNote` before any vocal
-        // edit), pad with empty strings up to `pos` first so the
-        // newly inserted entry lands at the correct position and the
-        // post-insert length matches `clip.notes.len()`.
-        if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
-            if lyrics.len() < pos {
-                lyrics.resize(pos, String::new());
-            }
-            lyrics.insert(pos, String::new());
-            // Post-condition: lyrics.len() == clip.notes.len().
-            debug_assert_eq!(lyrics.len(), clip.notes.len());
-        }
+    // Read-your-own-writes (Bug 2b): a control `notes.insert` already
+    // mirrored this note into `midi_clips` at handler time and left a
+    // matching `Added` token. Drain it and skip so the note isn't added
+    // twice. GUI edits leave no token, so their echo inserts as before.
+    if take_pending_added(r, clip_id, &note) {
+        return;
     }
+    insert_note_sorted(r, clip_id, note);
+}
+
+/// Insert `note` into `clip_id` keeping the note vector sorted by
+/// `start_tick`, and keep the parallel lyric side-table index-aligned.
+/// Shared by the `MidiNoteAdded` echo and the optimistic control mirror.
+pub(crate) fn insert_note_sorted(r: &mut Resonance, clip_id: ClipId, note: MidiNote) -> usize {
+    let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) else {
+        return 0;
+    };
+    let pos = clip
+        .notes
+        .partition_point(|n| n.start_tick <= note.start_tick);
+    clip.notes.insert(pos, note);
+    // Keep the lyric side-table aligned — insert a blank lyric
+    // at the same index so subsequent indices still reference the
+    // right note. If the side-table is shorter than the notes vec
+    // (e.g. a clip created by raw `AddMidiNote` before any vocal
+    // edit), pad with empty strings up to `pos` first so the
+    // newly inserted entry lands at the correct position and the
+    // post-insert length matches `clip.notes.len()`.
+    if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
+        if lyrics.len() < pos {
+            lyrics.resize(pos, String::new());
+        }
+        lyrics.insert(pos, String::new());
+        // Post-condition: lyrics.len() == clip.notes.len().
+        debug_assert_eq!(lyrics.len(), r.midi_clips.iter().find(|c| c.id == clip_id).map_or(pos, |c| c.notes.len()));
+    }
+    pos
 }
 
 pub(super) fn note_removed(r: &mut Resonance, clip_id: ClipId, note_index: usize) {
+    // Read-your-own-writes (Bug 2b): a control `notes.delete` already
+    // removed this note at handler time; drain its `Removed` token and
+    // skip so the echo doesn't remove a second (now index-shifted) note.
+    if take_pending_removed(r, clip_id) {
+        return;
+    }
+    remove_note_at(r, clip_id, note_index);
+}
+
+/// Remove the note at `note_index` from `clip_id`, keeping the lyric
+/// side-table aligned. Shared by the echo and the optimistic mirror.
+pub(crate) fn remove_note_at(r: &mut Resonance, clip_id: ClipId, note_index: usize) {
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
             clip.notes.remove(note_index);
@@ -105,7 +133,146 @@ pub(super) fn note_removed(r: &mut Resonance, clip_id: ClipId, note_index: usize
     }
 }
 
+// ---------------------------------------------------------------------------
+// Control read-your-own-writes token queue (ba doc #265, Bug 2b)
+// ---------------------------------------------------------------------------
+
+use crate::state::{note_matches, PendingNoteEcho};
+
+/// Enqueue a pending-echo token for a control-originated optimistic edit.
+pub(crate) fn push_pending(r: &mut Resonance, clip_id: ClipId, token: PendingNoteEcho) {
+    r.control_pending_note_echoes
+        .entry(clip_id)
+        .or_default()
+        .push_back(token);
+}
+
+/// Drain the front token for `clip_id` when the predicate accepts it.
+/// Returns true when a token was consumed.
+fn take_pending_if(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    accept: impl Fn(&PendingNoteEcho) -> bool,
+) -> bool {
+    if let Some(queue) = r.control_pending_note_echoes.get_mut(&clip_id) {
+        if queue.front().is_some_and(|t| accept(t)) {
+            queue.pop_front();
+            if queue.is_empty() {
+                r.control_pending_note_echoes.remove(&clip_id);
+            }
+            return true;
+        }
+    }
+    false
+}
+
+/// Drain the front token for `clip_id` when it is an `Added` whose note
+/// equals `note` (value match — the engine echoes the exact note the
+/// control handler optimistically inserted). Returns true when consumed.
+fn take_pending_added(r: &mut Resonance, clip_id: ClipId, note: &MidiNote) -> bool {
+    if let Some(queue) = r.control_pending_note_echoes.get_mut(&clip_id) {
+        if let Some(PendingNoteEcho::Added(pending)) = queue.front() {
+            if note_matches(pending, note) {
+                queue.pop_front();
+                if queue.is_empty() {
+                    r.control_pending_note_echoes.remove(&clip_id);
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Drain the front `Updated` token for `clip_id` (move/resize/velocity).
+/// Returns true when consumed.
+fn take_pending_updated(r: &mut Resonance, clip_id: ClipId) -> bool {
+    take_pending_if(r, clip_id, |t| matches!(t, PendingNoteEcho::Updated))
+}
+
+/// Drain the front `Removed` token for `clip_id`. Returns true when
+/// consumed.
+fn take_pending_removed(r: &mut Resonance, clip_id: ClipId) -> bool {
+    take_pending_if(r, clip_id, |t| matches!(t, PendingNoteEcho::Removed))
+}
+
+// ---------------------------------------------------------------------------
+// Optimistic control mirror (ba doc #265, Bug 2b): apply an edit to
+// `midi_clips` synchronously AND record the token its engine echo will
+// drain, so a control `notes.*` mutation is visible to the next request
+// without racing the round trip. Each returns the same value the reply
+// would report (an insert index where relevant).
+// ---------------------------------------------------------------------------
+
+/// Mirror a control `notes.insert`: insert the note now and enqueue the
+/// `Added` token. Returns the sorted index it landed at.
+pub(crate) fn optimistic_add_note(r: &mut Resonance, clip_id: ClipId, note: MidiNote) -> usize {
+    let index = insert_note_sorted(r, clip_id, note.clone());
+    push_pending(r, clip_id, PendingNoteEcho::Added(note));
+    index
+}
+
+/// Mirror a control `notes.delete`: remove the note now and enqueue the
+/// `Removed` token.
+pub(crate) fn optimistic_remove_note(r: &mut Resonance, clip_id: ClipId, note_index: usize) {
+    remove_note_at(r, clip_id, note_index);
+    push_pending(r, clip_id, PendingNoteEcho::Removed);
+}
+
+/// Mirror a control `notes.edit` move and enqueue the `Updated` token.
+pub(crate) fn optimistic_move_note(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    note_index: usize,
+    new_start_tick: u64,
+    new_note: u8,
+) {
+    apply_note_move(r, clip_id, note_index, new_start_tick, new_note);
+    push_pending(r, clip_id, PendingNoteEcho::Updated);
+}
+
+/// Mirror a control `notes.edit` resize and enqueue the `Updated` token.
+pub(crate) fn optimistic_resize_note(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    note_index: usize,
+    new_duration_ticks: u64,
+) {
+    apply_note_resize(r, clip_id, note_index, new_duration_ticks);
+    push_pending(r, clip_id, PendingNoteEcho::Updated);
+}
+
+/// Mirror a control `notes.edit` velocity change and enqueue the token.
+pub(crate) fn optimistic_set_velocity(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    note_index: usize,
+    velocity: f32,
+) {
+    apply_note_velocity(r, clip_id, note_index, velocity);
+    push_pending(r, clip_id, PendingNoteEcho::Updated);
+}
+
 pub(super) fn note_moved(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    note_index: usize,
+    new_start_tick: u64,
+    new_note: u8,
+) {
+    // A control `notes.edit` move already applied this optimistically;
+    // re-applying the same value would be harmless, but drain the token
+    // and skip to keep the queue in step (Bug 2b).
+    if take_pending_updated(r, clip_id) {
+        return;
+    }
+    apply_note_move(r, clip_id, note_index, new_start_tick, new_note);
+}
+
+/// Move the `note_index`-th note of `clip_id` to `(new_start_tick,
+/// new_note)`, re-sorting by start_tick and permuting the lyric
+/// side-table to match. Shared by the echo and the optimistic mirror.
+pub(crate) fn apply_note_move(
     r: &mut Resonance,
     clip_id: ClipId,
     note_index: usize,
@@ -144,6 +311,20 @@ pub(super) fn note_resized(
     note_index: usize,
     new_duration_ticks: u64,
 ) {
+    if take_pending_updated(r, clip_id) {
+        return;
+    }
+    apply_note_resize(r, clip_id, note_index, new_duration_ticks);
+}
+
+/// Set the duration of the `note_index`-th note of `clip_id`. Shared by
+/// the echo and the optimistic mirror.
+pub(crate) fn apply_note_resize(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    note_index: usize,
+    new_duration_ticks: u64,
+) {
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
             clip.notes[note_index].duration_ticks = new_duration_ticks;
@@ -152,6 +333,20 @@ pub(super) fn note_resized(
 }
 
 pub(super) fn note_velocity_set(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    note_index: usize,
+    velocity: f32,
+) {
+    if take_pending_updated(r, clip_id) {
+        return;
+    }
+    apply_note_velocity(r, clip_id, note_index, velocity);
+}
+
+/// Set the velocity of the `note_index`-th note of `clip_id`. Shared by
+/// the echo and the optimistic mirror.
+pub(crate) fn apply_note_velocity(
     r: &mut Resonance,
     clip_id: ClipId,
     note_index: usize,

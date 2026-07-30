@@ -142,23 +142,37 @@ fn insert(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         return reject(request, RpcError::invalid_params("duration must be positive"));
     }
 
-    // The engine inserts keeping the notes sorted by start_tick; the
-    // `MidiNoteAdded` handler mirrors that with `partition_point`. Report
-    // the same index so the client can address the new note immediately,
-    // before the async echo lands.
-    let index = clip
-        .notes
-        .partition_point(|n| n.start_tick <= start_tick);
+    let velocity = params.velocity as f32 / 127.0;
+    let clip_id = params.clip_id.0;
 
+    // Route the edit through the full update path (gates / undo / engine
+    // command). The undo snapshot is taken pre-dispatch, so the note is
+    // not yet in it.
     let task = super::run_via_update(
         app,
         Message::MidiEditor(MidiEditorMessage::AddNote {
-            clip_id: params.clip_id.0,
+            clip_id,
             note: params.pitch,
             start_tick,
             duration_ticks,
-            velocity: params.velocity as f32 / 127.0,
+            velocity,
         }),
+    );
+
+    // Read-your-own-writes (Bug 2b): mirror the note into `app.midi_clips`
+    // synchronously so the very next `song.notes` on this connection sees
+    // it, instead of racing the async `MidiNoteAdded` echo (which is now
+    // suppressed for this optimistic insert). The reported index is the
+    // sorted position the mirror actually used.
+    let index = crate::engine_events::midi::optimistic_add_note(
+        app,
+        clip_id,
+        resonance_audio::types::MidiNote {
+            note: params.pitch,
+            velocity,
+            start_tick,
+            duration_ticks,
+        },
     );
     let result = InsertResult {
         index,
@@ -234,6 +248,14 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let index = params.index;
     let mut tasks = Vec::new();
 
+    // Each dispatched sub-edit is also mirrored into `app.midi_clips`
+    // synchronously (Bug 2b) so the change is visible to the next
+    // `song.notes`; the matching echo is suppressed. The mirror uses the
+    // same `note_index` as the dispatched message, faithful to the engine
+    // command (multi-field edits address the note by its original index,
+    // exactly as the engine does).
+    use crate::engine_events::midi;
+
     let want_pitch = params.pitch.unwrap_or(existing.note);
     let want_start = start_tick.unwrap_or(existing.start_tick);
     if params.pitch.is_some() || start_tick.is_some() {
@@ -247,6 +269,7 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                     new_note: want_pitch,
                 }),
             ));
+            midi::optimistic_move_note(app, clip_id, index, want_start, want_pitch);
         }
     }
     if let Some(dur) = duration_ticks {
@@ -259,6 +282,7 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                     new_duration_ticks: dur,
                 }),
             ));
+            midi::optimistic_resize_note(app, clip_id, index, dur);
         }
     }
     if let Some(v) = params.velocity {
@@ -272,6 +296,7 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                     velocity: want,
                 }),
             ));
+            midi::optimistic_set_velocity(app, clip_id, index, want);
         }
     }
 
@@ -311,6 +336,11 @@ fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             note_index: params.index,
         }),
     );
+    // Read-your-own-writes (Bug 2b): remove the note from `app.midi_clips`
+    // now so the next `song.notes` reflects the deletion; the
+    // `MidiNoteRemoved` echo is suppressed so it can't remove a second,
+    // index-shifted note.
+    crate::engine_events::midi::optimistic_remove_note(app, params.clip_id.0, params.index);
     (ack(app, request), task)
 }
 

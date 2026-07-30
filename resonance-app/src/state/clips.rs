@@ -2,6 +2,53 @@
 //! interaction code carries while the user is moving or resizing a clip.
 
 use resonance_audio::types::*;
+use std::collections::HashMap;
+
+/// One control-originated MIDI-note edit that was applied to
+/// `app.midi_clips` optimistically (synchronously, at handler time) and
+/// is still awaiting its `MidiNote*` engine echo.
+///
+/// Read-your-own-writes (ba doc #265, Bug 2b): a `notes.*` mutation over
+/// the control socket must be visible to the very next `song.notes` on
+/// the same connection, but the app-side note vector is normally only
+/// updated when the engine echoes the edit back — a round trip that a
+/// follow-up request races. The control handler therefore mirrors the
+/// edit into `app.midi_clips` immediately and records a token here; when
+/// the matching echo later arrives it is a no-op (the state already
+/// reflects it), so the note is neither duplicated (`Added`) nor applied
+/// twice at a now-shifted index (`Removed`).
+///
+/// GUI note edits never enqueue a token, so their echoes apply exactly as
+/// before — the suppression is scoped to the optimistic control path.
+#[derive(Debug, Clone)]
+pub enum PendingNoteEcho {
+    /// An `AddNote` mirrored at handler time; the `MidiNoteAdded` echo
+    /// carrying an equal note is skipped.
+    Added(MidiNote),
+    /// A `RemoveNote` mirrored at handler time; the next `MidiNoteRemoved`
+    /// echo for this clip is skipped.
+    Removed,
+    /// A `MoveNote` / `ResizeNote` / `SetNoteVelocity` mirrored at handler
+    /// time; the matching echo re-applies the same value and is skipped
+    /// (harmless either way, but skipped for consistency and to keep the
+    /// queue drained).
+    Updated,
+}
+
+/// Value equality for note-add reconciliation: an echoed `MidiNoteAdded`
+/// matches an optimistic `Added` token when every field is equal
+/// (velocity within a tick of float error).
+pub fn note_matches(a: &MidiNote, b: &MidiNote) -> bool {
+    a.note == b.note
+        && a.start_tick == b.start_tick
+        && a.duration_ticks == b.duration_ticks
+        && (a.velocity - b.velocity).abs() <= f32::EPSILON
+}
+
+/// Per-clip FIFO of pending control-originated note echoes, keyed by clip
+/// id. Echoes for a clip arrive in the order the commands were sent
+/// (single engine channel), matching the order the tokens were enqueued.
+pub type PendingNoteEchoes = HashMap<ClipId, std::collections::VecDeque<PendingNoteEcho>>;
 
 #[derive(Debug, Clone)]
 pub struct ClipDragState {
