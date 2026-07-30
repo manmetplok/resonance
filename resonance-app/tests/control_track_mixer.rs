@@ -6,7 +6,7 @@
 
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
-use resonance_app::state::{PluginSlotState, ViewMode};
+use resonance_app::state::ViewMode;
 use resonance_app::{Resonance, STARTUP_TAB};
 use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
 use resonance_control::methods::song::TracksView;
@@ -235,6 +235,128 @@ fn add_instrument_and_effect_by_catalog_id() {
         c,
         AudioCommand::AddPlugin { clap_plugin_id, .. } if clap_plugin_id == "com.resonance.eq"
     )));
+}
+
+/// Drive the engine echo that mirrors an added plugin into track state,
+/// the way the real engine does after `AudioCommand::AddPlugin`.
+fn echo_plugin_added(app: &mut Resonance, track_id: u64, instance_id: u64, plugin_id: &str) {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id,
+        instance_id,
+        plugin_name: plugin_id.to_owned(),
+        clap_plugin_id: plugin_id.to_owned(),
+        clap_file_path: format!("/plugins/{plugin_id}.clap"),
+        params: Vec::new(),
+        has_gui: false,
+        output_port_count: 1,
+        output_port_names: vec!["Main".to_owned()],
+    });
+}
+
+fn track_view(app: &mut Resonance, track_id: u64) -> resonance_control::methods::song::TrackDetail {
+    tracks_view(app)
+        .tracks
+        .into_iter()
+        .find(|t| u64::from(t.summary.id) == track_id)
+        .expect("track present in song.tracks")
+}
+
+/// An effect appended to an instrument track that has no instrument must
+/// be reported as an effect, not as the track's instrument. `add_effect`
+/// appends, so it lands at slot 0 — classifying by position reported the
+/// amp sim as the instrument and returned an empty effects array, which
+/// left an agent unable to see or undo what it had done (doc #270 §2).
+#[test]
+fn effect_on_empty_instrument_track_is_not_reported_as_the_instrument() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+
+    let before = track_view(&mut app, id);
+    assert_eq!(before.summary.instrument, None);
+    assert!(before.effects.is_empty());
+
+    echo_plugin_added(&mut app, id, 1, "com.resonance.eq");
+
+    let after = track_view(&mut app, id);
+    assert_eq!(after.summary.instrument, None, "an effect is not an instrument");
+    assert_eq!(after.effects, vec!["com.resonance.eq".to_owned()]);
+}
+
+/// Chain order does not decide the role either: an instrument added
+/// after an effect is still the instrument, and the effect stays in the
+/// chain rather than being swallowed by the slot-0 skip.
+#[test]
+fn instrument_is_found_wherever_it_sits_in_the_chain() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+
+    echo_plugin_added(&mut app, id, 1, "com.resonance.eq");
+    echo_plugin_added(&mut app, id, 2, "com.resonance.wavetable");
+
+    let view = track_view(&mut app, id);
+    assert_eq!(
+        view.summary.instrument,
+        Some("com.resonance.wavetable".to_owned())
+    );
+    assert_eq!(view.effects, vec!["com.resonance.eq".to_owned()]);
+}
+
+/// The usual ordering still reports the same way, and the effects array
+/// is present (not elided) once an insert is added.
+#[test]
+fn instrument_then_effect_reports_both() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+
+    echo_plugin_added(&mut app, id, 1, "com.resonance.wavetable");
+    echo_plugin_added(&mut app, id, 2, "com.resonance.eq");
+
+    let view = track_view(&mut app, id);
+    assert_eq!(
+        view.summary.instrument,
+        Some("com.resonance.wavetable".to_owned())
+    );
+    assert_eq!(view.effects, vec!["com.resonance.eq".to_owned()]);
+}
+
+/// A plugin the scanner has never seen — a project whose instrument is
+/// no longer installed — still reports as the instrument it occupies,
+/// rather than silently becoming an effect.
+#[test]
+fn unknown_plugin_in_slot_zero_is_still_the_instrument() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+
+    echo_plugin_added(&mut app, id, 1, "com.thirdparty.uninstalled");
+    echo_plugin_added(&mut app, id, 2, "com.resonance.eq");
+
+    let view = track_view(&mut app, id);
+    assert_eq!(
+        view.summary.instrument,
+        Some("com.thirdparty.uninstalled".to_owned())
+    );
+    assert_eq!(view.effects, vec!["com.resonance.eq".to_owned()]);
+}
+
+/// `song.tracks` always carries both fields, so a client can tell "no
+/// instrument" from "field omitted" and can inspect an empty chain.
+#[test]
+fn instrument_and_effects_are_always_present_in_the_wire_form() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+
+    let view = track_view(&mut app, id);
+    let json = serde_json::to_value(&view).expect("TrackDetail serializes");
+    assert_eq!(json.get("instrument"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        json.get("effects"),
+        Some(&serde_json::Value::Array(Vec::new()))
+    );
 }
 
 #[test]

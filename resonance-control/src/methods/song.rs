@@ -89,8 +89,10 @@ pub struct TrackSummary {
     pub id: TrackId,
     pub name: String,
     pub kind: TrackKind,
-    /// Instrument/plugin summary, e.g. `"resonance-wavetable"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Instrument/plugin summary, e.g. `"resonance-wavetable"`. Always
+    /// present: an explicit `null` says the track has no sound source,
+    /// which a client cannot distinguish from an omitted field.
+    #[serde(default)]
     pub instrument: Option<String>,
     pub muted: bool,
     pub soloed: bool,
@@ -149,7 +151,9 @@ pub struct TrackDetail {
     #[serde(flatten)]
     pub summary: TrackSummary,
     /// Insert chain (effects; the instrument is `summary.instrument`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Always present so the chain stays inspectable — an empty array
+    /// means "no inserts", not "the field was elided".
+    #[serde(default)]
     pub effects: Vec<String>,
     /// True while the track plays from a freeze cache (valid or stale).
     /// Edits to a frozen track's inputs (notes, lyrics, instrument,
