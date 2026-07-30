@@ -2,13 +2,13 @@
 //!
 //! # One lane per (section, track)
 //!
-//! Lyrics and the SVS voice live per **(section definition, track)**
-//! vocal lane, created by `section.set_lane_generator` with kind
-//! `vocal`. The lane-addressed mutations here take an optional
-//! `section_id` to pick one; omitting it keeps the historical
-//! behaviour of resolving the track's **first** vocal lane in placement
-//! order. `song.vocal` lists a track's lanes with their ids, so a
-//! client can tell which lane a write will hit.
+//! A vocal lane must first be installed with `section.set_lane_generator`
+//! (`kind = vocal`); nothing else creates one. Lyrics and the SVS voice
+//! live per **(section definition, track)** vocal lane. The lane-addressed
+//! mutations here take an optional `section_id` to pick one; omitting it
+//! resolves the track's **first** vocal lane in placement order.
+//! `song.vocal` lists a track's lanes with their ids, so a client can tell
+//! which lane a write will hit.
 
 use crate::ids::{SectionDefinitionId, TrackId};
 use serde::{Deserialize, Serialize};

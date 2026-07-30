@@ -1,4 +1,8 @@
 //! `vocal_*` — lyrics, pronunciation overrides, and SVS rendering.
+//!
+//! Every lane-addressed tool here needs a vocal lane on the track first;
+//! `section_set_lane_generator` with kind `vocal` is what creates one
+//! (ba doc #268).
 
 use crate::server::ResonanceMcp;
 use rmcp::handler::server::tool::schema_for_output;
@@ -19,9 +23,10 @@ impl ResonanceMcp {
         description = "Replace a vocal track's full lyric text (one line per lyric line). \
                        Phonemes are derived automatically (G2P); check them with song_vocal \
                        and fix words with vocal_set_pronunciation. Re-render afterwards with \
-                       vocal_render. Lyrics live per (section, track) vocal lane: pass \
-                       section_id (a definition_id from song_vocal's lanes) to pick one, or \
-                       omit it to write the track's FIRST vocal lane.",
+                       vocal_render. Lyrics live per (section, track) vocal lane, created \
+                       with section_set_lane_generator kind \"vocal\": pass section_id (a \
+                       definition_id from song_vocal's lanes) to pick one, or omit it to write \
+                       the track's FIRST vocal lane.",
         annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false)
     )]
     async fn vocal_set_lyrics(
@@ -33,8 +38,9 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Replace one lyric line, addressed by its 0-based line_index from \
-                       song_vocal. Like vocal_set_lyrics, section_id picks which vocal lane; \
-                       omitted it writes the track's FIRST lane.",
+                       song_vocal. Like vocal_set_lyrics, section_id picks which vocal lane \
+                       (lyrics live per (section, track) lane); omitted it writes the track's \
+                       FIRST lane.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn vocal_set_line(
@@ -72,8 +78,9 @@ impl ResonanceMcp {
         description = "Render the singing voice (SVS). Omit track_id to render every vocal \
                        track; voicebank defaults to the app default (Lilia). Runs as a job — \
                        this tool waits up to 2 minutes and returns the final status; if still \
-                       running, poll job_status with the returned job_id. Needs notes AND \
-                       lyrics on the vocal track first.",
+                       running, poll job_status with the returned job_id. Needs a vocal lane \
+                       (section_set_lane_generator kind \"vocal\") with notes AND lyrics on the \
+                       vocal track first.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]
