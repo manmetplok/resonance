@@ -19,7 +19,9 @@ impl ResonanceMcp {
         description = "Replace a vocal track's full lyric text (one line per lyric line). \
                        Phonemes are derived automatically (G2P); check them with song_vocal \
                        and fix words with vocal_set_pronunciation. Re-render afterwards with \
-                       vocal_render.",
+                       vocal_render. Lyrics live per (section, track) vocal lane: pass \
+                       section_id (a definition_id from song_vocal's lanes) to pick one, or \
+                       omit it to write the track's FIRST vocal lane.",
         annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false)
     )]
     async fn vocal_set_lyrics(
@@ -31,7 +33,8 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Replace one lyric line, addressed by its 0-based line_index from \
-                       song_vocal.",
+                       song_vocal. Like vocal_set_lyrics, section_id picks which vocal lane; \
+                       omitted it writes the track's FIRST lane.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn vocal_set_line(
