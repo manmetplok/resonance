@@ -357,18 +357,22 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         }
     };
 
-    // Pre-flight the conditions `roll_vocal_melody` silently no-ops on
-    // (empty draft, no chords) so they surface as a precise error rather
-    // than a job that never resolves.
+    // Pre-flight the conditions `rerender_vocal_audio` silently no-ops
+    // on so they surface as a precise error rather than a job that never
+    // resolves. The section's chords are deliberately NOT among them:
+    // render synthesises the notes already in the lane's clip and never
+    // derives from the chord grid, so a chordless section with authored
+    // notes is a legitimate render (ba doc #271 V1).
+    if !lane_has_notes(app, definition_id, track_id) {
+        return fail(
+            request,
+            RpcError::invalid_params(
+                "vocal lane has no notes to sing; generate a melody (vocal.generate) or write \
+                 notes into its clip (notes.*) before rendering",
+            ),
+        );
+    }
     if let Some(def) = app.compose.find_definition(definition_id) {
-        if def.chords.is_empty() {
-            return fail(
-                request,
-                RpcError::invalid_params(
-                    "section has no chords; add chords (harmony.*) before rendering vocals",
-                ),
-            );
-        }
         let empty_draft = def
             .lane_generators
             .get(&track_id)
@@ -423,6 +427,28 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Does the lane have a MIDI clip holding at least one note?
+///
+/// Resolves the clip the same way `rerender_vocal_audio` does — the
+/// derived clip of any placement of the section — so the pre-flight and
+/// the render agree on what "has notes" means.
+fn lane_has_notes(app: &Resonance, definition_id: u64, track_id: u64) -> bool {
+    app.compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .filter_map(|p| {
+            app.compose
+                .derived_clips
+                .get(&(definition_id, p.id, track_id))
+        })
+        .any(|clip_id| {
+            app.midi_clips
+                .iter()
+                .any(|c| c.id == *clip_id && !c.notes.is_empty())
+        })
+}
 
 /// Resolve the vocal lane a track addresses (its first in placement
 /// order), or a precise error when the track has none.

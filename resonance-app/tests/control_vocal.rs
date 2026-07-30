@@ -269,10 +269,29 @@ fn job_status(app: &mut Resonance, job_id: resonance_control::ids::JobId) -> Job
         .expect("job.status succeeds")
 }
 
+/// `vocal.render` sings the lane's existing notes and no longer
+/// generates them (doc #271 V1), so a lane must be generated before it
+/// can be rendered — the flow `vocal.generate` was added for.
+fn generate_lane(app: &mut Resonance, track: ProtoTrackId) {
+    call(
+        app,
+        "vocal.generate",
+        &proto::GenerateParams {
+            track_id: track,
+            section_id: None,
+            seed: Some(1),
+            lyrics: false,
+        },
+    )
+    .result::<proto::GenerateResult>()
+    .expect("vocal.generate succeeds");
+}
+
 #[test]
 fn render_returns_a_job_and_sets_the_default_voicebank() {
     let mut app = app_with_project();
     let (def, track) = vocal_section(&mut app, 33);
+    generate_lane(&mut app, track);
     // The lane starts on the code default (TIGER); render with no
     // voicebank must switch it to the app default (Lilia, doc #265).
     assert_eq!(
@@ -310,6 +329,7 @@ fn render_returns_a_job_and_sets_the_default_voicebank() {
 fn render_accepts_an_explicit_voicebank() {
     let mut app = app_with_project();
     let (def, track) = vocal_section(&mut app, 34);
+    generate_lane(&mut app, track);
 
     let response = call(
         &mut app,
