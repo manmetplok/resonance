@@ -52,7 +52,7 @@ fn set_lyrics(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         Err(e) => return fail(request, e),
     };
     let track_id: u64 = params.track_id.into();
-    let definition_id = match resolve_vocal_lane(app, track_id) {
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
         Ok(id) => id,
         Err(e) => return fail(request, e),
     };
@@ -73,7 +73,7 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
         Err(e) => return fail(request, e),
     };
     let track_id: u64 = params.track_id.into();
-    let definition_id = match resolve_vocal_lane(app, track_id) {
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
         Ok(id) => id,
         Err(e) => return fail(request, e),
     };
@@ -311,7 +311,29 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 
 /// Resolve the vocal lane a track addresses (its first in placement
 /// order), or a precise error when the track has none.
-fn resolve_vocal_lane(app: &Resonance, track_id: u64) -> Result<u64, RpcError> {
+fn resolve_vocal_lane(
+    app: &Resonance,
+    track_id: u64,
+    section_id: Option<resonance_control::ids::SectionDefinitionId>,
+) -> Result<u64, RpcError> {
+    // An explicit section addresses one lane (ba doc #269 FR-3): the
+    // track may sing in several sections, and without this the writes
+    // all landed on the first lane in placement order.
+    if let Some(section_id) = section_id {
+        let definition_id: u64 = section_id.into();
+        let Some(def) = app.compose.find_definition(definition_id) else {
+            return Err(RpcError::not_found(format!(
+                "no section definition with id {definition_id}"
+            )));
+        };
+        return match def.lane_generators.get(&track_id).map(|c| &c.kind) {
+            Some(crate::compose::LaneGeneratorKind::Vocal(_)) => Ok(definition_id),
+            _ => Err(RpcError::invalid_params(format!(
+                "section {definition_id} ({:?}) has no vocal lane on track {track_id}",
+                def.name
+            ))),
+        };
+    }
     first_vocal_definition(app, track_id).ok_or_else(|| {
         if app.registry.tracks.iter().any(|t| t.id == track_id) {
             RpcError::invalid_params(format!(
