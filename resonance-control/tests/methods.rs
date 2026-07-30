@@ -5,7 +5,8 @@ use resonance_control::common::{MutationAck, PositionSpec};
 use resonance_control::ids::{ClipId, JobId, SectionDefinitionId, TrackId};
 use resonance_control::job::{JobStarted, JobState, JobStatus, WaitParams};
 use resonance_control::methods::{
-    self, control, generate, harmony, mixer, notes, project, render, track, transport, vocal,
+    self, control, generate, harmony, mixer, notes, project, render, section, track, transport,
+    vocal,
 };
 use resonance_control::PROTOCOL_VERSION;
 use serde_json::json;
@@ -208,6 +209,47 @@ fn enum_params_use_lowercase_strings() {
 
     let kind: track::PluginKind = serde_json::from_value(json!("effect")).unwrap();
     assert_eq!(kind, track::PluginKind::Effect);
+}
+
+#[test]
+fn set_lane_generator_params_roundtrip() {
+    assert!(section::METHODS.contains(&section::SET_LANE_GENERATOR));
+    assert!(methods::capabilities().contains(&"section.set_lane_generator"));
+
+    // Minimal: kind only, options/seed omitted.
+    let minimal: section::SetLaneGeneratorParams = serde_json::from_value(json!({
+        "section_id": 3, "track_id": 5, "kind": "vocal"
+    }))
+    .unwrap();
+    assert_eq!(minimal.kind, section::LaneKind::Vocal);
+    assert!(minimal.seed.is_none() && minimal.options.is_none());
+    assert_eq!(
+        serde_json::to_value(&minimal).unwrap(),
+        json!({"section_id": 3, "track_id": 5, "kind": "vocal"})
+    );
+
+    // Full: snake_case kind, seed, and a per-kind options passthrough.
+    let full: section::SetLaneGeneratorParams = serde_json::from_value(json!({
+        "section_id": 1, "track_id": 2, "kind": "bass", "seed": 9,
+        "options": {"octave": 2}
+    }))
+    .unwrap();
+    assert_eq!(full.kind, section::LaneKind::Bass);
+    assert_eq!(full.seed, Some(9));
+    assert_eq!(full.options.as_ref().unwrap()["octave"], json!(2));
+
+    for (kind, wire) in [
+        (section::LaneKind::Manual, "manual"),
+        (section::LaneKind::Bass, "bass"),
+        (section::LaneKind::Melody, "melody"),
+        (section::LaneKind::Pad, "pad"),
+        (section::LaneKind::Vocal, "vocal"),
+    ] {
+        assert_eq!(serde_json::to_value(kind).unwrap(), json!(wire));
+    }
+
+    let result = section::SetLaneGeneratorResult { revision: 7 };
+    assert_eq!(serde_json::to_value(result).unwrap(), json!({"revision": 7}));
 }
 
 #[test]

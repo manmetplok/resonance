@@ -1,4 +1,11 @@
 //! `vocal.*` — lyrics, pronunciation, and SVS rendering.
+//!
+//! A vocal lane must first be installed with `section.set_lane_generator`
+//! (`kind = vocal`); nothing else creates one. Lyrics and the SVS voice
+//! live per **(section definition, track)** vocal lane, and every method
+//! here that takes a `track_id` resolves that track's **first** vocal lane
+//! in placement order. A song that sings across four sections therefore
+//! needs **four vocal tracks** — one `vocal` lane per `(section, track)`.
 
 use crate::ids::TrackId;
 use serde::{Deserialize, Serialize};
