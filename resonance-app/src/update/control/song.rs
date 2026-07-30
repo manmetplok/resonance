@@ -234,6 +234,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
     // arrangement in placement order (each definition once) so the
     // lines read in song order.
     let mut lines = Vec::new();
+    let mut lanes = Vec::new();
     for definition in definitions_in_placement_order(app) {
         let Some(config) = definition.lane_generators.get(&track.id) else {
             continue;
@@ -241,6 +242,32 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         let LaneGeneratorKind::Vocal(vocal_params) = &config.kind else {
             continue;
         };
+        // Per-lane identity + the render pre-flight counts (ba doc #269
+        // FR-3/FR-7). Without these a client cannot tell which lane a
+        // write landed on, and a notes/syllables mismatch only surfaces
+        // as a render-time failure.
+        let syllable_count = resonance_music_theory::g2p::resolve_draft_with_dict(
+            &vocal_params.draft,
+            &dictionary,
+        )
+        .len();
+        let note_count = lane_note_count(app, definition.id, track.id);
+        lanes.push(song::VocalLaneView {
+            definition_id: definition.id.into(),
+            name: definition.name.clone(),
+            start_bar: app
+                .compose
+                .placements
+                .iter()
+                .filter(|p| p.definition_id == definition.id)
+                .map(|p| p.start_bar)
+                .min()
+                // Placement bars are 0-based in the app, 1-based on the wire.
+                .map(|bar| bar + 1),
+            note_count,
+            syllable_count,
+            counts_mismatch: note_count > 0 && syllable_count > 0 && note_count != syllable_count,
+        });
         for line in &vocal_params.draft {
             let syllables =
                 resonance_music_theory::g2p::resolve_draft_with_dict(
@@ -263,6 +290,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
 
     let result = VocalView {
         track_id: resonance_control::ids::TrackId(track.id),
+        lanes,
         lines,
         pronunciation_overrides,
         render_state: vocal_render_state(app, track.id),
@@ -527,6 +555,24 @@ fn song_end_sample(app: &Resonance) -> u64 {
         }
     }
     end
+}
+
+/// Notes in a vocal lane's derived clip — what the SVS render actually
+/// sings (ba doc #269 FR-7). A lane is derived once per placement of its
+/// section, and every placement carries the same material, so the first
+/// entry found for `(definition, track)` is the lane's note count. `0`
+/// means the lane has not been generated yet.
+fn lane_note_count(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+) -> usize {
+    app.compose
+        .derived_clips
+        .iter()
+        .find(|((def, _, track), _)| *def == definition_id && *track == track_id)
+        .and_then(|(_, clip_id)| app.midi_clips.iter().find(|c| c.id == *clip_id))
+        .map_or(0, |clip| clip.notes.len())
 }
 
 /// SVS render state of a vocal track, from the vocal-audio registry:

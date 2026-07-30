@@ -59,6 +59,7 @@ fn create_section(app: &mut Resonance, name: &str, length_bars: u32) -> u64 {
             name: name.to_owned(),
             length_bars,
             scale: None,
+            place: true,
         },
     );
     let result: section_proto::CreateResult = response.result().expect("section.create succeeds");
@@ -110,6 +111,91 @@ fn create_reports_id_and_auto_places() {
 }
 
 #[test]
+fn place_false_creates_the_definition_only() {
+    // ba doc #269 FR-6: the implicit placement made create-then-place
+    // fail as an overlap, so a client could not build its own
+    // arrangement without a remove-placement pass in between.
+    let mut app = app_with_project();
+    let response = call(
+        &mut app,
+        "section.create",
+        &section_proto::CreateParams {
+            name: "Bridge".to_owned(),
+            length_bars: 4,
+            scale: None,
+            place: false,
+        },
+    );
+    let id: u64 = response
+        .result::<section_proto::CreateResult>()
+        .expect("create succeeds")
+        .section_id
+        .into();
+
+    let view = sections_view(&mut app);
+    assert!(
+        view.definitions.iter().any(|d| u64::from(d.id) == id),
+        "the definition exists"
+    );
+    assert!(
+        !view
+            .placements
+            .iter()
+            .any(|p| u64::from(p.definition_id) == id),
+        "but nothing was placed"
+    );
+
+    // And the deliberate placement the implicit one used to block now
+    // lands where the client asked for it.
+    let response = call(
+        &mut app,
+        "section.place",
+        &section_proto::PlaceParams {
+            definition_id: id.into(),
+            start_bar: 9,
+        },
+    );
+    response
+        .result::<section_proto::PlaceResult>()
+        .expect("section.place succeeds after place: false");
+    let view = sections_view(&mut app);
+    let placement = view
+        .placements
+        .iter()
+        .find(|p| u64::from(p.definition_id) == id)
+        .expect("placement visible");
+    assert_eq!(placement.start_bar, 9);
+}
+
+#[test]
+fn place_defaults_to_true_when_omitted() {
+    // Absent `place` on the wire keeps the historical behaviour, so
+    // existing clients are unaffected.
+    let mut app = app_with_project();
+    let response = roundtrip(
+        &mut app,
+        Request::new(
+            1,
+            "section.create",
+            &serde_json::json!({ "name": "Verse", "length_bars": 4 }),
+        )
+        .expect("params serialize"),
+    );
+    let id: u64 = response
+        .result::<section_proto::CreateResult>()
+        .expect("create succeeds")
+        .section_id
+        .into();
+    let view = sections_view(&mut app);
+    assert!(
+        view.placements
+            .iter()
+            .any(|p| u64::from(p.definition_id) == id),
+        "an omitted place still auto-places"
+    );
+}
+
+#[test]
 fn create_with_scale_sets_it() {
     let mut app = app_with_project();
     let response = call(
@@ -119,6 +205,7 @@ fn create_with_scale_sets_it() {
             name: "Chorus".to_owned(),
             length_bars: 8,
             scale: Some(key("A", "minor")),
+            place: true,
         },
     );
     let result: section_proto::CreateResult = response.result().expect("create succeeds");
@@ -144,6 +231,7 @@ fn create_validates_params() {
             name: "  ".to_owned(),
             length_bars: 4,
             scale: None,
+            place: true,
         },
     );
     expect_error(response, ErrorKind::InvalidParams);
@@ -155,6 +243,7 @@ fn create_validates_params() {
             name: "Verse".to_owned(),
             length_bars: 0,
             scale: None,
+            place: true,
         },
     );
     expect_error(response, ErrorKind::InvalidParams);
@@ -171,6 +260,7 @@ fn mutations_without_project_are_busy() {
             name: "Verse".to_owned(),
             length_bars: 4,
             scale: None,
+            place: true,
         },
     );
     let message = expect_error(response, ErrorKind::Busy);

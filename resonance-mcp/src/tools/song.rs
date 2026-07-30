@@ -71,7 +71,13 @@ impl ResonanceMcp {
         description = "A vocal track's lyric lines with per-syllable phonemes, the project's \
                        pronunciation overrides, and the SVS render state \
                        (not_rendered/rendering/rendered/stale/error). Omit track_id for the \
-                       first vocal track. Read-only.",
+                       first vocal track. `lanes` lists the track's vocal lanes — one per \
+                       (section, track) — with the section's definition_id and name, its \
+                       start_bar, and note_count vs syllable_count: SVS needs one syllable per \
+                       note, so counts_mismatch is the pre-flight check before vocal_render. \
+                       Pass a lane's definition_id as section_id to vocal_set_lyrics / \
+                       vocal_set_line to write that specific lane. The top-level lines/ \
+                       render_state describe the FIRST lane. Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<song::VocalView>()
     )]

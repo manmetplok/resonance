@@ -211,6 +211,13 @@ pub struct NoteView {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct VocalView {
     pub track_id: TrackId,
+    /// Every vocal lane on this track, in placement order. Lyrics live
+    /// per `(section definition, track)` lane, and the top-level fields
+    /// below describe only the **first** one — the lane the `vocal.*`
+    /// mutations resolve to when they are given no `section_id`. Without
+    /// this list a client could not tell which lane a write had hit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lanes: Vec<VocalLaneView>,
     pub lines: Vec<LyricLineView>,
     /// Project-wide pronunciation overrides: word -> phoneme list
     /// (lowercase ARPAbet-style phonemes).
@@ -218,6 +225,37 @@ pub struct VocalView {
     pub pronunciation_overrides: BTreeMap<String, Vec<String>>,
     pub render_state: VocalRenderState,
     pub revision: u64,
+}
+
+/// One vocal lane — a `(section definition, track)` pair carrying a
+/// Vocal lane generator (ba doc #269 FR-3/FR-7).
+///
+/// `note_count` and `syllable_count` are the pre-flight check for a
+/// render: SVS needs one syllable per note, so a mismatch here is a
+/// render-time failure a client can see and fix first. The counts can
+/// disagree with a by-eye reading because the engine's G2P decides
+/// syllabification (`"don't"` is one syllable, `"remember"` is three).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VocalLaneView {
+    /// The section definition this lane belongs to — pass it as
+    /// `section_id` to a `vocal.*` mutation to address this lane.
+    pub definition_id: SectionDefinitionId,
+    /// The section's name, e.g. `"Verse"`.
+    pub name: String,
+    /// 1-based bar of the lane's first placement; `None` when the
+    /// definition is not placed on the timeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_bar: Option<u32>,
+    /// Notes in the lane's derived clip; `0` means nothing is generated
+    /// yet, so a render would have nothing to sing.
+    pub note_count: usize,
+    /// Syllables across the lane's lyric draft, as the engine's G2P
+    /// splits them.
+    pub syllable_count: usize,
+    /// `note_count != syllable_count` while both are non-zero — the
+    /// condition that makes an SVS render fail or mis-align.
+    pub counts_mismatch: bool,
 }
 
 /// One lyric line with its per-syllable phonemes.

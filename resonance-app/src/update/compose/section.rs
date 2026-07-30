@@ -143,6 +143,7 @@ pub(super) fn handle_confirm_create(r: &mut crate::Resonance) {
             name,
             length_bars,
             color: form.color,
+            place: true,
         },
     );
 }
@@ -245,6 +246,7 @@ pub(super) fn handle_create(
     name: String,
     length_bars: u32,
     color: [u8; 3],
+    place: bool,
 ) {
     if length_bars == 0 {
         r.compose.last_error = Some("Section length must be at least 1 bar".into());
@@ -274,15 +276,17 @@ pub(super) fn handle_create(
         ),
         arrangement: Vec::new(),
     });
-    let start_bar = first_free_bar(&r.compose, length_bars);
-    let placement_id = r.compose.fresh_id();
-    r.compose.placements.push(SectionPlacementState {
-        id: placement_id,
-        definition_id: id,
-        start_bar,
-    });
-    r.compose.placements.sort_by_key(|p| p.start_bar);
-    r.compose.selected_placement_id = Some(placement_id);
+    if place {
+        let start_bar = first_free_bar(&r.compose, length_bars);
+        let placement_id = r.compose.fresh_id();
+        r.compose.placements.push(SectionPlacementState {
+            id: placement_id,
+            definition_id: id,
+            start_bar,
+        });
+        r.compose.placements.sort_by_key(|p| p.start_bar);
+        r.compose.selected_placement_id = Some(placement_id);
+    }
     r.compose.last_error = None;
 }
 

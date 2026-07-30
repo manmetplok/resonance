@@ -24,8 +24,8 @@ pub(crate) use clips::{
     handle_apply_groove_to_clip, handle_create_midi_clip, handle_delete_midi_clip,
     handle_extract_groove_from_clip, handle_humanize_midi_notes, handle_load_midi_clip_direct,
     handle_move_midi_clip, handle_move_midi_note, handle_quantize_midi_notes,
-    handle_remove_midi_note, handle_resize_midi_note, handle_set_midi_note_velocity,
-    handle_trim_midi_clip,
+    handle_remove_midi_note, handle_resize_midi_note, handle_set_midi_clip_notes,
+    handle_set_midi_note_velocity, handle_trim_midi_clip,
 };
 
 /// Test surface for the bulk MIDI-edit handlers (quantize / humanize /

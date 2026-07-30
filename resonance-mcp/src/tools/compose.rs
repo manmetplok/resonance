@@ -95,4 +95,50 @@ impl ResonanceMcp {
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(notes::CREATE_CLIP, &params).await
     }
+
+    #[tool(
+        description = "Move an existing MIDI clip to a new timeline position: give either a \
+                       1-based start_bar or a placement_id to anchor it to that section \
+                       placement's start. The target snaps to the bar grid, so this also \
+                       re-grids a clip whose start drifted. Track, length and notes are \
+                       unchanged.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn notes_move_clip(
+        &self,
+        Parameters(params): Parameters<notes::MoveClipParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(notes::MOVE_CLIP, &params).await
+    }
+
+    #[tool(
+        description = "Insert a BATCH of notes into a MIDI clip as one undoable edit. Prefer \
+                       this over repeated notes_insert: each call is its own undo entry, so a \
+                       400-note part written note-by-note leaves 400 of them. Each note is \
+                       {pitch, start_beat, duration_beats, velocity?}. Returns the index each \
+                       submitted note landed at, in the order given.",
+        annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<notes::InsertManyResult>()
+    )]
+    async fn notes_insert_many(
+        &self,
+        Parameters(params): Parameters<notes::InsertManyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(notes::INSERT_MANY, &params).await
+    }
+
+    #[tool(
+        description = "Replace a MIDI clip's ENTIRE note list with the given notes, as one \
+                       undoable edit. Destructive: every existing note in the clip is dropped. \
+                       Use it to rewrite a part wholesale instead of deleting note-by-note. \
+                       Returns the index each submitted note landed at, in the order given.",
+        annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<notes::InsertManyResult>()
+    )]
+    async fn notes_replace_all(
+        &self,
+        Parameters(params): Parameters<notes::ReplaceAllParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(notes::REPLACE_ALL, &params).await
+    }
 }

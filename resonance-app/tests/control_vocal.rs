@@ -58,6 +58,7 @@ fn vocal_section(app: &mut Resonance, track_raw: u64) -> (u64, ProtoTrackId) {
             name: "Verse".to_owned(),
             length_bars: 4,
             scale: None,
+            place: true,
         },
     );
     let section_id = response
@@ -91,6 +92,7 @@ fn set_lyrics_replaces_the_draft() {
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
             track_id: track,
+            section_id: None,
             text: "hello world\nsecond line\nthird line".to_owned(),
         },
     );
@@ -111,6 +113,7 @@ fn set_line_replaces_one_line() {
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
             track_id: track,
+            section_id: None,
             text: "line one\nline two".to_owned(),
         },
     );
@@ -120,6 +123,7 @@ fn set_line_replaces_one_line() {
         "vocal.set_line",
         &proto::SetLineParams {
             track_id: track,
+            section_id: None,
             line_index: 1,
             text: "replaced two".to_owned(),
         },
@@ -133,6 +137,7 @@ fn set_line_replaces_one_line() {
         "vocal.set_line",
         &proto::SetLineParams {
             track_id: track,
+            section_id: None,
             line_index: 9,
             text: "nope".to_owned(),
         },
@@ -151,6 +156,7 @@ fn lyrics_on_a_non_vocal_track_error() {
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
             track_id: ProtoTrackId(32),
+            section_id: None,
             text: "x".to_owned(),
         },
     );
@@ -163,6 +169,7 @@ fn lyrics_on_a_non_vocal_track_error() {
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
             track_id: ProtoTrackId(999),
+            section_id: None,
             text: "x".to_owned(),
         },
     );
@@ -368,6 +375,7 @@ fn render_with_empty_draft_fails_the_job() {
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
             track_id: track,
+            section_id: None,
             text: String::new(),
         },
     );
@@ -397,6 +405,7 @@ fn vocal_without_project_is_busy() {
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
             track_id: ProtoTrackId(1),
+            section_id: None,
             text: "x".to_owned(),
         },
     );

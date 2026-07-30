@@ -464,6 +464,24 @@ pub fn quantize_midi_notes_in_place(
     }
 }
 
+/// Engine-thread handler for [`AudioCommand::SetMidiClipNotes`]:
+/// replace a clip's whole note array atomically and echo the result as
+/// one `MidiNotesEdited` (ba doc #269 FR-5). The caller supplies the
+/// final array — merging and sorting are the app's job, so the engine
+/// stays a dumb, single-writer store. No-op (and no event) if the clip
+/// is missing.
+pub(crate) fn handle_set_midi_clip_notes(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    notes: Vec<MidiNote>,
+) {
+    let mut guard = ctx.midi_clips.write();
+    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+        clip.notes = notes.clone();
+        let _ = ctx.event_tx.send(AudioEvent::MidiNotesEdited { clip_id, notes });
+    }
+}
+
 /// Humanize the selected notes in `clip_id` and emit one bulk
 /// `MidiNotesEdited`. No-op (and no event) if the clip is missing.
 pub fn humanize_midi_notes_in_place(

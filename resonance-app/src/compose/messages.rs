@@ -81,6 +81,12 @@ pub enum ComposeMessage {
         name: String,
         length_bars: u32,
         color: [u8; 3],
+        /// Also place the new definition after the last placement. True
+        /// for the GUI dialog (a section the user just made should show
+        /// up on the timeline); the control endpoint's `section.create`
+        /// exposes it as `place` so a client can build a definition
+        /// library first and place it deliberately (ba doc #269 FR-6).
+        place: bool,
     },
     RenameSection {
         definition_id: u64,
@@ -196,6 +202,19 @@ pub enum ComposeMessage {
         config: Box<crate::compose::LaneGeneratorConfig>,
     },
 
+    /// Install (or clear) the generator on a `(section definition,
+    /// track)` lane — one undoable step, with **no** MIDI derive. Used
+    /// by the control endpoint's `section.set_lane_generator` (ba doc
+    /// #268, todo #1168). `None` is the Manual kind: remove the lane's
+    /// generator entry. Unlike [`ComposeMessage::GenerateSectionPart`]
+    /// this neither requires chords nor generates notes — a vocal lane
+    /// is filled in later via `vocal.set_lyrics` / `vocal.render`.
+    SetLaneGenerator {
+        definition_id: u64,
+        track_id: TrackId,
+        config: Option<Box<crate::compose::LaneGeneratorConfig>>,
+    },
+
     /// Assign a drum pattern to a section, (re)seed + generate its
     /// groups, and materialize the drum clips — one undoable step. Used
     /// by the control endpoint's `generate.drums` (ba doc #265, todo
@@ -206,6 +225,18 @@ pub enum ComposeMessage {
         definition_id: u64,
         pattern_id: Option<u64>,
         seed: Option<u64>,
+    },
+
+    /// Generate a vocal lane's melody — and, unless `lyrics` is false, a
+    /// fresh lyric draft — into its derived clip, as one undoable step.
+    /// Used by the control endpoint's `vocal.generate` (ba doc #269
+    /// FR-2). `seed` pins the result; `None` advances the lane's seed the
+    /// way the GUI's generate button does.
+    ControlGenerateVocal {
+        definition_id: u64,
+        track_id: TrackId,
+        seed: Option<u64>,
+        lyrics: bool,
     },
 
     /// Replace a vocal lane's full lyric draft from bulk text (one line

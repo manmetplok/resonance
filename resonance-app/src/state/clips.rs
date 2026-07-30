@@ -33,6 +33,12 @@ pub enum PendingNoteEcho {
     /// (harmless either way, but skipped for consistency and to keep the
     /// queue drained).
     Updated,
+    /// A bulk `SetClipNotes` mirrored at handler time (control
+    /// `notes.insert_many` / `notes.replace_all`, doc #269 FR-5); the
+    /// clip's `MidiNotesEdited` echo is skipped. Without this the echo —
+    /// which carries the engine's array from before any *later* mirrored
+    /// single-note edit — would roll that edit back.
+    Replaced,
 }
 
 /// Value equality for note-add reconciliation: an echoed `MidiNoteAdded`

@@ -207,7 +207,7 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 // Track-kind guards
 // ---------------------------------------------------------------------------
 
-fn require_instrument_track(app: &Resonance, track_id: u64) -> Option<RpcError> {
+pub(super) fn require_instrument_track(app: &Resonance, track_id: u64) -> Option<RpcError> {
     match track_kind(app, track_id) {
         None => Some(missing_track(track_id)),
         Some((TrackType::Instrument, InstrumentType::Synth)) => None,
@@ -218,6 +218,27 @@ fn require_instrument_track(app: &Resonance, track_id: u64) -> Option<RpcError> 
             "track {track_id} is not a synth instrument track"
         ))),
     }
+}
+
+/// A Vocal generator only makes sense on a vocal track — that is the
+/// track type the SVS render path reads (`section.set_lane_generator`,
+/// ba doc #268).
+pub(super) fn require_vocal_track(app: &Resonance, track_id: u64) -> Option<RpcError> {
+    match track_kind(app, track_id) {
+        None => Some(missing_track(track_id)),
+        Some((TrackType::Vocal, _)) => None,
+        Some(_) => Some(RpcError::invalid_params(format!(
+            "track {track_id} is not a vocal track; a vocal lane generator needs one"
+        ))),
+    }
+}
+
+/// Existence only — for the kinds that impose no track-type constraint
+/// (clearing a lane back to Manual).
+pub(super) fn require_track(app: &Resonance, track_id: u64) -> Option<RpcError> {
+    track_kind(app, track_id)
+        .is_none()
+        .then(|| missing_track(track_id))
 }
 
 fn require_drum_track(app: &Resonance, track_id: u64) -> Option<RpcError> {

@@ -14,8 +14,11 @@ use resonance_control::methods::{harmony, section};
 impl ResonanceMcp {
     #[tool(
         description = "Create a section definition (e.g. \"Verse\", 8 bars, optional \
-                       key/scale). Returns section_id. Definitions carry the chord grid; put \
-                       them on the timeline with section_place.",
+                       key/scale). Returns section_id. Definitions carry the chord grid. NOTE: \
+                       this ALSO places the section on the timeline after the last existing \
+                       placement, so a follow-up section_place is rejected as overlapping. To \
+                       build the definitions first and position them yourself, pass \
+                       place: false and then call section_place.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<section::CreateResult>()
     )]
@@ -98,6 +101,26 @@ impl ResonanceMcp {
         Parameters(params): Parameters<section::SetScaleParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke(section::SET_SCALE, &params).await
+    }
+
+    #[tool(
+        description = "Configure (or with kind \"manual\", clear) the generator on one \
+                       (section, track) lane: bass/melody/pad for synth instrument tracks, \
+                       vocal for a vocal track. Installs the generator only — it derives no \
+                       notes; use generate_part to generate melodic MIDI now. This is the ONLY \
+                       way to create the vocal lane every vocal_* tool needs. Lyrics live per \
+                       (section, track) vocal lane and vocal_set_lyrics targets a track's FIRST \
+                       vocal lane, so a song that sings in four sections needs four vocal \
+                       tracks — one vocal lane each.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<section::SetLaneGeneratorResult>()
+    )]
+    async fn section_set_lane_generator(
+        &self,
+        Parameters(params): Parameters<section::SetLaneGeneratorParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(section::SET_LANE_GENERATOR, &params)
+            .await
     }
 
     #[tool(

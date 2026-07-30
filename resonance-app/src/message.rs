@@ -620,6 +620,15 @@ pub enum MidiClipMessage {
         duration_ticks: u64,
         name: String,
     },
+    /// Move an existing MIDI clip to an absolute timeline position
+    /// (control endpoint `notes.move_clip`, ba doc #269 FR-4). The GUI
+    /// reaches the same engine command through the drag messages below;
+    /// this variant exists because a remote client has no drag gesture,
+    /// only a target bar. Undoable (Record).
+    MoveClipTo {
+        clip_id: ClipId,
+        new_start_sample: resonance_audio::types::SamplePos,
+    },
     StartMidiClipDrag {
         clip_id: ClipId,
         grab_offset_x: f32,
@@ -678,6 +687,16 @@ pub enum MidiEditorMessage {
         clip_id: ClipId,
         note_index: usize,
         velocity: f32,
+    },
+    /// Replace a clip's whole note array in one edit (control endpoints
+    /// `notes.insert_many` / `notes.replace_all`, ba doc #269 FR-5).
+    /// The caller passes the final, sorted array; the engine stores it
+    /// and echoes one `MidiNotesEdited`. One undo entry and one engine
+    /// round trip for the whole batch — writing a 400-note part
+    /// note-by-note would cost 400 of each.
+    SetClipNotes {
+        clip_id: ClipId,
+        notes: Vec<resonance_audio::types::MidiNote>,
     },
     /// Replace the selection with a single note, or clear it (`None`).
     /// Used by a plain click and by the vocal roll's single-select path.

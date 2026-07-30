@@ -36,6 +36,13 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
                 },
             });
         }
+        MidiEditorMessage::SetClipNotes { clip_id, notes } => {
+            // The app already mirrored these notes (the control handler
+            // needs read-your-own-writes); this hands the engine the
+            // same authoritative array, and its single MidiNotesEdited
+            // echo is drained by the pending-echo token.
+            let _ = r.engine.send(AudioCommand::SetMidiClipNotes { clip_id, notes });
+        }
         MidiEditorMessage::RemoveNote {
             clip_id,
             note_index,

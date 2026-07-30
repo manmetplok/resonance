@@ -76,7 +76,8 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             name,
             length_bars,
             color,
-        } => section::handle_create(r, name, length_bars, color),
+            place,
+        } => section::handle_create(r, name, length_bars, color, place),
         ComposeMessage::RenameSection {
             definition_id,
             name,
@@ -100,6 +101,11 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             config,
         } => return control_generate_part(r, definition_id, track_id, *config).1,
+        ComposeMessage::SetLaneGenerator {
+            definition_id,
+            track_id,
+            config,
+        } => control_set_lane_generator(r, definition_id, track_id, config.map(|c| *c)),
         ComposeMessage::GenerateSectionDrums {
             definition_id,
             pattern_id,
@@ -108,6 +114,12 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             let _ =
                 drum_groups::control_generate_drums(r, definition_id, pattern_id, seed);
         }
+        ComposeMessage::ControlGenerateVocal {
+            definition_id,
+            track_id,
+            seed,
+            lyrics,
+        } => return control_generate_vocal(r, definition_id, track_id, seed, lyrics),
         ComposeMessage::ControlSetVocalLyrics {
             definition_id,
             track_id,
@@ -303,6 +315,90 @@ pub(crate) fn control_generate_part(
     let task = regenerate::regenerate_lane(r, definition_id, track_id);
     r.compose.last_error = None;
     (ControlPartOutcome::Generated, task)
+}
+
+/// Install (or clear) the generator on a `(section definition, track)`
+/// lane, without deriving any MIDI (control endpoint
+/// `section.set_lane_generator`, ba doc #268 / todo #1168).
+///
+/// `config` is the fully-built [`crate::compose::LaneGeneratorConfig`]
+/// the caller assembled from the wire params; `None` is the Manual kind
+/// and removes the lane's entry. This is deliberately the *whole*
+/// mutation: unlike [`control_generate_part`] there is no chord gate and
+/// no `regenerate_lane` call, because a vocal lane carries no
+/// chord-derived material at install time (its melody and lyrics arrive
+/// later via `vocal.*`) and the melodic kinds keep `generate.part` for
+/// the generate-now verb.
+///
+/// Mirrors the GUI's `lane_inspector::set_generator` insert/remove.
+pub(crate) fn control_set_lane_generator(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+    config: Option<crate::compose::LaneGeneratorConfig>,
+) {
+    if let Some(def) = r.compose.find_definition_mut(definition_id) {
+        match config {
+            Some(config) => {
+                def.lane_generators.insert(track_id, config);
+            }
+            None => {
+                def.lane_generators.remove(&track_id);
+            }
+        }
+        r.compose.last_error = None;
+    }
+}
+
+/// `vocal.generate` (ba doc #269 FR-2): generate a vocal lane's melody
+/// into its derived clip, optionally rolling fresh lyrics first.
+///
+/// Reuses the exact paths the lane inspector's generate buttons drive,
+/// so material produced over the wire matches the GUI's:
+/// `roll_vocal_lyrics` + `roll_vocal_melody` for the full generate, and
+/// `roll_vocal_melody` alone for melody-only.
+///
+/// `lyrics = false` leaves an existing draft alone — generation writes
+/// both melody and lyrics from the lane's theme brief by default, which
+/// would silently discard lyrics a client had just written.
+///
+/// An explicit `seed` is installed on the lane config before generating
+/// (reproducible); `None` bumps it, as the GUI buttons do, so repeated
+/// calls give new material.
+pub(crate) fn control_generate_vocal(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+    seed: Option<u64>,
+    lyrics: bool,
+) -> Task<Message> {
+    if let Some(seed) = seed {
+        if let Some(cfg) = r
+            .compose
+            .find_definition_mut(definition_id)
+            .and_then(|d| d.lane_generators.get_mut(&track_id))
+        {
+            cfg.seed = seed;
+        }
+    }
+    if lyrics {
+        // Seed already pinned above when explicit: mix 0 leaves it be.
+        let mix = if seed.is_some() { 0 } else { 0xBF58476D1CE4E5B9 };
+        vocal_render::roll_vocal_lyrics(r, definition_id, track_id, mix);
+        vocal_lyrics::sync_bulk_lyrics_from_draft(r, definition_id, track_id);
+    }
+    if seed.is_none() {
+        if let Some(cfg) = r
+            .compose
+            .find_definition_mut(definition_id)
+            .and_then(|d| d.lane_generators.get_mut(&track_id))
+        {
+            cfg.seed = crate::util::bump_seed(cfg.seed, 0x94D049BB133111EB);
+        }
+    }
+    let task = vocal_render::roll_vocal_melody(r, definition_id, track_id);
+    r.compose.last_error = None;
+    task
 }
 
 /// `vocal.set_pronunciation`: set (or replace) a per-word override in

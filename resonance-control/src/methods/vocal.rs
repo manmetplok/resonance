@@ -1,6 +1,16 @@
 //! `vocal.*` — lyrics, pronunciation, and SVS rendering.
+//!
+//! # One lane per (section, track)
+//!
+//! A vocal lane must first be installed with `section.set_lane_generator`
+//! (`kind = vocal`); nothing else creates one. Lyrics and the SVS voice
+//! live per **(section definition, track)** vocal lane. The lane-addressed
+//! mutations here take an optional `section_id` to pick one; omitting it
+//! resolves the track's **first** vocal lane in placement order.
+//! `song.vocal` lists a track's lanes with their ids, so a client can tell
+//! which lane a write will hit.
 
-use crate::ids::TrackId;
+use crate::ids::{ClipId, SectionDefinitionId, TrackId};
 use serde::{Deserialize, Serialize};
 
 /// `vocal.set_lyrics` — replace a vocal track's full lyric text
@@ -18,6 +28,9 @@ pub const CLEAR_PRONUNCIATION: &str = "vocal.clear_pronunciation";
 /// `vocal.render` — kick off an SVS render
 /// ([`RenderParams`] -> [`crate::job::JobStarted`]).
 pub const RENDER: &str = "vocal.render";
+/// `vocal.generate` — generate a vocal lane's melody (and lyrics) into
+/// its derived clip ([`GenerateParams`] -> [`GenerateResult`]).
+pub const GENERATE: &str = "vocal.generate";
 
 /// All `vocal.*` method names.
 pub const METHODS: &[&str] = &[
@@ -26,6 +39,7 @@ pub const METHODS: &[&str] = &[
     SET_PRONUNCIATION,
     CLEAR_PRONUNCIATION,
     RENDER,
+    GENERATE,
 ];
 
 /// Params for `vocal.set_lyrics`: bulk text, one line per lyric line.
@@ -33,6 +47,11 @@ pub const METHODS: &[&str] = &[
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetLyricsParams {
     pub track_id: TrackId,
+    /// Which of the track's vocal lanes to write (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first
+    /// vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
     pub text: String,
 }
 
@@ -41,12 +60,18 @@ pub struct SetLyricsParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetLineParams {
     pub track_id: TrackId,
-    /// 0-based line index (see `song.vocal`).
+    /// Which of the track's vocal lanes to write (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first
+    /// vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+    /// 0-based line index within the resolved lane (see `song.vocal`).
     pub line_index: usize,
     pub text: String,
 }
 
-/// Params for `vocal.set_pronunciation`.
+/// Params for `vocal.set_pronunciation`. Pronunciation overrides are
+/// project-wide, not per lane, so this takes no `section_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetPronunciationParams {
@@ -56,7 +81,8 @@ pub struct SetPronunciationParams {
     pub phonemes: Vec<String>,
 }
 
-/// Params for `vocal.clear_pronunciation`.
+/// Params for `vocal.clear_pronunciation`. Project-wide, like
+/// [`SetPronunciationParams`] — no `section_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ClearPronunciationParams {
@@ -64,7 +90,8 @@ pub struct ClearPronunciationParams {
 }
 
 /// Params for `vocal.render`. Omit `track_id` to render every vocal
-/// track; the job's payload is [`RenderJobResult`].
+/// track; the job's payload is [`RenderJobResult`]. A render covers all
+/// of a track's lanes, so this takes no `section_id`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RenderParams {
@@ -73,6 +100,50 @@ pub struct RenderParams {
     /// Voicebank name; defaults to the app default (Lilia).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voicebank: Option<String>,
+}
+
+/// Params for `vocal.generate`.
+///
+/// `generate.part` refuses vocal tracks (drums have their own method,
+/// vocals their own namespace), and vocal rendering reads its notes from
+/// the lane's **derived clip** — so without this method a vocal lane had
+/// no notes and `vocal.render` had nothing to sing (doc #269 FR-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GenerateParams {
+    pub track_id: TrackId,
+    /// Which of the track's vocal lanes to generate. Omitted resolves
+    /// the track's first vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+    /// Explicit RNG seed for a reproducible result; omitted advances the
+    /// lane's seed, so repeated calls give different material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    /// Also roll a fresh lyric draft from the lane's theme brief.
+    /// Defaults to `true`, matching the GUI's "generate" button. Pass
+    /// `false` to generate the **melody only** and leave lyrics you
+    /// wrote with `vocal.set_lyrics` untouched — generation writes both
+    /// by default, so doing it the other way round silently discards
+    /// them.
+    #[serde(default = "default_lyrics")]
+    pub lyrics: bool,
+}
+
+fn default_lyrics() -> bool {
+    true
+}
+
+/// Result of `vocal.generate`: the lane's derived MIDI clip, ready for
+/// `song.notes` / `notes.*` edits and then `vocal.render`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GenerateResult {
+    /// The derived clip at the lane's first placement. A lane derives
+    /// one clip per placement of its section, all carrying the same
+    /// material.
+    pub clip_id: ClipId,
+    pub revision: u64,
 }
 
 /// Job payload once a `vocal.render` job completes.

@@ -15,13 +15,16 @@
 
 use std::collections::HashSet;
 
-use crate::compose::ComposeMessage;
+use crate::compose::{ComposeMessage, LaneGeneratorConfig, LaneGeneratorKind};
 use crate::message::Message;
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::section as proto;
 use resonance_control::{KeyScale, Request, Response, RpcError};
-use resonance_music_theory::{parse_chord, ChordQuality, Mode, PitchClass, Scale};
+use resonance_music_theory::{
+    parse_chord, BassParams, ChordQuality, MelodyParams, Mode, PadParams, PitchClass, Scale,
+    VocalParams,
+};
 
 pub(super) fn try_handle(
     app: &mut Resonance,
@@ -35,6 +38,7 @@ pub(super) fn try_handle(
         proto::PLACE => place(app, request),
         proto::REMOVE_PLACEMENT => remove_placement(app, request),
         proto::SET_SCALE => set_scale(app, request),
+        proto::SET_LANE_GENERATOR => set_lane_generator(app, request),
         _ => return None,
     };
     Some(handled)
@@ -72,6 +76,11 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             name,
             length_bars: params.length_bars,
             color,
+            // Defaults to true (the historical implicit placement); a
+            // client that wants to position sections itself passes
+            // `place: false` and follows up with `section.place`
+            // (ba doc #269 FR-6).
+            place: params.place,
         }),
     );
     if let Some(error) = take_compose_error(app) {
@@ -267,6 +276,105 @@ fn set_scale(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         }),
     );
     ack_or_error(app, request, task)
+}
+
+/// `section.set_lane_generator` (ba doc #268): configure — or with
+/// `manual`, clear — the generator on a `(section definition, track)`
+/// lane. Idempotent, and unlike `generate.part` it neither requires
+/// chords nor derives any MIDI; it is the only way to install the Vocal
+/// lane the whole `vocal.*` namespace requires.
+fn set_lane_generator(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: proto::SetLaneGeneratorParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return fail(request, e),
+    };
+    let definition_id: u64 = params.section_id.into();
+    if let Some(e) = definition_missing(app, definition_id) {
+        return fail(request, e);
+    }
+    let track_id: u64 = params.track_id.into();
+    // Kind decides the track a lane may live on: vocal generators only
+    // on a vocal track, the melodic kinds only on a synth instrument
+    // track. Manual only needs the track to exist — it is a removal.
+    if let Some(e) = match params.kind {
+        proto::LaneKind::Manual => super::generate::require_track(app, track_id),
+        proto::LaneKind::Vocal => super::generate::require_vocal_track(app, track_id),
+        _ => super::generate::require_instrument_track(app, track_id),
+    } {
+        return fail(request, e);
+    }
+
+    let config = match build_lane_config(definition_id, &params) {
+        Ok(c) => c,
+        Err(e) => return fail(request, e),
+    };
+    let task = super::run_via_update(
+        app,
+        Message::Compose(ComposeMessage::SetLaneGenerator {
+            definition_id,
+            track_id,
+            config: config.map(Box::new),
+        }),
+    );
+    if let Some(error) = take_compose_error(app) {
+        return fail(request, RpcError::invalid_params(error));
+    }
+    let result = proto::SetLaneGeneratorResult {
+        revision: app.revision(),
+    };
+    (super::success(request, &result), task)
+}
+
+/// Build the lane config for `section.set_lane_generator`, or `None` for
+/// `manual` (which removes the lane's generator).
+///
+/// The seed is explicit for reproducibility, else the GUI's
+/// deterministic per-kind default derived from the section id — the same
+/// multipliers `lane_inspector::set_generator` uses, so a lane installed
+/// over the wire regenerates identically to one installed by hand.
+fn build_lane_config(
+    definition_id: u64,
+    params: &proto::SetLaneGeneratorParams,
+) -> Result<Option<LaneGeneratorConfig>, RpcError> {
+    use crate::util::seed_from_id;
+    let options = params.options.as_ref();
+    let (kind, default_seed) = match params.kind {
+        proto::LaneKind::Manual => return Ok(None),
+        proto::LaneKind::Bass => (
+            LaneGeneratorKind::Bass(parse_options::<BassParams>(params.kind, options)?),
+            seed_from_id(definition_id),
+        ),
+        proto::LaneKind::Melody => (
+            LaneGeneratorKind::Melody(parse_options::<MelodyParams>(params.kind, options)?),
+            definition_id.wrapping_mul(0x517CC1B727220A95),
+        ),
+        proto::LaneKind::Pad => (
+            LaneGeneratorKind::Pad(parse_options::<PadParams>(params.kind, options)?),
+            definition_id.wrapping_mul(0x6C62272E07BB0142),
+        ),
+        proto::LaneKind::Vocal => (
+            LaneGeneratorKind::Vocal(parse_options::<VocalParams>(params.kind, options)?),
+            definition_id.wrapping_mul(0xBF58476D1CE4E5B9),
+        ),
+    };
+    Ok(Some(LaneGeneratorConfig {
+        kind,
+        seed: params.seed.unwrap_or(default_seed),
+    }))
+}
+
+/// Deserialize the optional per-kind `options` object into the matching
+/// params struct; absent/null uses the generator defaults.
+fn parse_options<T: serde::de::DeserializeOwned + Default>(
+    kind: proto::LaneKind,
+    options: Option<&serde_json::Value>,
+) -> Result<T, RpcError> {
+    match options {
+        None | Some(serde_json::Value::Null) => Ok(T::default()),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
+            RpcError::invalid_params(format!("invalid options for kind {kind:?}: {e}"))
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------

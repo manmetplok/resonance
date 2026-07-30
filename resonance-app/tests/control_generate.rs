@@ -51,6 +51,7 @@ fn section_with_chords(app: &mut Resonance) -> SectionDefinitionId {
             name: "Verse".to_owned(),
             length_bars: 4,
             scale: None,
+            place: true,
         },
     );
     let section_id = response
@@ -169,6 +170,7 @@ fn part_requires_chords_and_a_synth_track() {
             name: "Empty".to_owned(),
             length_bars: 4,
             scale: None,
+            place: true,
         },
     );
     let empty = response

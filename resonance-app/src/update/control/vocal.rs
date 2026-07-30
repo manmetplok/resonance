@@ -37,6 +37,7 @@ pub(super) fn try_handle(
         proto::SET_PRONUNCIATION => set_pronunciation(app, request),
         proto::CLEAR_PRONUNCIATION => clear_pronunciation(app, request),
         proto::RENDER => render(app, request),
+        proto::GENERATE => generate(app, request),
         _ => return None,
     };
     Some(handled)
@@ -52,7 +53,7 @@ fn set_lyrics(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         Err(e) => return fail(request, e),
     };
     let track_id: u64 = params.track_id.into();
-    let definition_id = match resolve_vocal_lane(app, track_id) {
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
         Ok(id) => id,
         Err(e) => return fail(request, e),
     };
@@ -73,7 +74,7 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
         Err(e) => return fail(request, e),
     };
     let track_id: u64 = params.track_id.into();
-    let definition_id = match resolve_vocal_lane(app, track_id) {
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
         Ok(id) => id,
         Err(e) => return fail(request, e),
     };
@@ -107,6 +108,120 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
         }),
     );
     ack(app, request, task)
+}
+
+// ---------------------------------------------------------------------------
+// Generate
+// ---------------------------------------------------------------------------
+
+/// `vocal.generate` (ba doc #269 FR-2): generate the lane's melody — and
+/// by default a fresh lyric draft — into its derived clip.
+///
+/// `generate.part` refuses vocal tracks, and the SVS render reads notes
+/// from `compose.derived_clips`, so before this method a vocal lane
+/// reachable over the wire still had no notes: `render_state` stayed
+/// `not_rendered` with `clip_count = 0` and there was nothing to sing.
+fn generate(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: proto::GenerateParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return fail(request, e),
+    };
+    let track_id: u64 = params.track_id.into();
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
+        Ok(id) => id,
+        Err(e) => return fail(request, e),
+    };
+    // The vocal melody is derived from the section's chord grid; with no
+    // chords the generator silently produces nothing, so refuse up front
+    // (mirroring generate.part's gate) rather than acking an empty lane.
+    let has_chords = app
+        .compose
+        .find_definition(definition_id)
+        .is_some_and(|d| !d.chords.is_empty());
+    if !has_chords {
+        return fail(
+            request,
+            RpcError::invalid_params(
+                "the lane's section has no chords to generate from; add chords (harmony.*) first",
+            ),
+        );
+    }
+    // Melody-only on an empty draft would derive nothing: the melody is
+    // laid out one note per syllable.
+    if !params.lyrics && lane_draft_is_empty(app, definition_id, track_id) {
+        return fail(
+            request,
+            RpcError::invalid_params(
+                "the lane has no lyrics to sing; write them with vocal.set_lyrics or call \
+                 vocal.generate with lyrics: true",
+            ),
+        );
+    }
+
+    let task = super::run_via_update(
+        app,
+        Message::Compose(ComposeMessage::ControlGenerateVocal {
+            definition_id,
+            track_id,
+            seed: params.seed,
+            lyrics: params.lyrics,
+        }),
+    );
+    if let Some(error) = app.compose.last_error.take() {
+        return fail(request, RpcError::invalid_params(error));
+    }
+    let Some(clip_id) = first_derived_clip(app, definition_id, track_id) else {
+        return fail(
+            request,
+            RpcError::internal("the vocal lane generated no clip"),
+        );
+    };
+    let result = proto::GenerateResult {
+        clip_id: resonance_control::ids::ClipId(clip_id),
+        revision: app.revision(),
+    };
+    (super::success(request, &result), task)
+}
+
+/// True when the lane carries no lyric lines to sing.
+fn lane_draft_is_empty(app: &Resonance, definition_id: u64, track_id: u64) -> bool {
+    app.compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .and_then(|c| match &c.kind {
+            crate::compose::LaneGeneratorKind::Vocal(p) => Some(p.draft.is_empty()),
+            _ => None,
+        })
+        .unwrap_or(true)
+}
+
+/// The lane's derived clip at its first placement, in placement order —
+/// a lane derives one clip per placement, all with the same material.
+fn first_derived_clip(app: &Resonance, definition_id: u64, track_id: u64) -> Option<u64> {
+    let mut placed: Vec<(u32, u64)> = app
+        .compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .filter_map(|p| {
+            app.compose
+                .derived_clips
+                .get(&(definition_id, p.id, track_id))
+                .map(|clip| (p.start_bar, *clip))
+        })
+        .collect();
+    placed.sort_by_key(|(bar, _)| *bar);
+    placed
+        .first()
+        .map(|(_, clip)| *clip)
+        // An unplaced lane still derives into the definition's own entry.
+        .or_else(|| {
+            app.compose
+                .derived_clips
+                .iter()
+                .find(|((def, _, track), _)| *def == definition_id && *track == track_id)
+                .map(|(_, clip)| *clip)
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +426,29 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 
 /// Resolve the vocal lane a track addresses (its first in placement
 /// order), or a precise error when the track has none.
-fn resolve_vocal_lane(app: &Resonance, track_id: u64) -> Result<u64, RpcError> {
+fn resolve_vocal_lane(
+    app: &Resonance,
+    track_id: u64,
+    section_id: Option<resonance_control::ids::SectionDefinitionId>,
+) -> Result<u64, RpcError> {
+    // An explicit section addresses one lane (ba doc #269 FR-3): the
+    // track may sing in several sections, and without this the writes
+    // all landed on the first lane in placement order.
+    if let Some(section_id) = section_id {
+        let definition_id: u64 = section_id.into();
+        let Some(def) = app.compose.find_definition(definition_id) else {
+            return Err(RpcError::not_found(format!(
+                "no section definition with id {definition_id}"
+            )));
+        };
+        return match def.lane_generators.get(&track_id).map(|c| &c.kind) {
+            Some(crate::compose::LaneGeneratorKind::Vocal(_)) => Ok(definition_id),
+            _ => Err(RpcError::invalid_params(format!(
+                "section {definition_id} ({:?}) has no vocal lane on track {track_id}",
+                def.name
+            ))),
+        };
+    }
     first_vocal_definition(app, track_id).ok_or_else(|| {
         if app.registry.tracks.iter().any(|t| t.id == track_id) {
             RpcError::invalid_params(format!(
