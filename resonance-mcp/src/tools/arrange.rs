@@ -101,6 +101,26 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Configure (or with kind \"manual\", clear) the generator on one \
+                       (section, track) lane: bass/melody/pad for synth instrument tracks, \
+                       vocal for a vocal track. Installs the generator only — it derives no \
+                       notes; use generate_part to generate melodic MIDI now. This is the ONLY \
+                       way to create the vocal lane every vocal_* tool needs. Lyrics live per \
+                       (section, track) vocal lane and vocal_set_lyrics targets a track's FIRST \
+                       vocal lane, so a song that sings in four sections needs four vocal \
+                       tracks — one vocal lane each.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<section::SetLaneGeneratorResult>()
+    )]
+    async fn section_set_lane_generator(
+        &self,
+        Parameters(params): Parameters<section::SetLaneGeneratorParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(section::SET_LANE_GENERATOR, &params)
+            .await
+    }
+
+    #[tool(
         description = "Add one chord to a section's grid: 0-based start_beat within the \
                        section, duration in beats, symbol like \"Am7\". Returns chord_id. For \
                        whole progressions prefer harmony_apply_progression.",
