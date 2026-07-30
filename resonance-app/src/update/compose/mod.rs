@@ -76,7 +76,8 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             name,
             length_bars,
             color,
-        } => section::handle_create(r, name, length_bars, color),
+            place,
+        } => section::handle_create(r, name, length_bars, color, place),
         ComposeMessage::RenameSection {
             definition_id,
             name,

@@ -81,6 +81,12 @@ pub enum ComposeMessage {
         name: String,
         length_bars: u32,
         color: [u8; 3],
+        /// Also place the new definition after the last placement. True
+        /// for the GUI dialog (a section the user just made should show
+        /// up on the timeline); the control endpoint's `section.create`
+        /// exposes it as `place` so a client can build a definition
+        /// library first and place it deliberately (ba doc #269 FR-6).
+        place: bool,
     },
     RenameSection {
         definition_id: u64,

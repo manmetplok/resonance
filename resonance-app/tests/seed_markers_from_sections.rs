@@ -40,6 +40,7 @@ fn create_section(app: &mut Resonance, name: &str, length_bars: u32, color: [u8;
         name: name.to_string(),
         length_bars,
         color,
+        place: true,
     }));
     // The fresh definition is the one id that wasn't there before.
     app.compose_state()

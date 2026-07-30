@@ -58,6 +58,7 @@ fn vocal_section(app: &mut Resonance, track_raw: u64) -> (u64, ProtoTrackId) {
             name: "Verse".to_owned(),
             length_bars: 4,
             scale: None,
+            place: true,
         },
     );
     let section_id = response

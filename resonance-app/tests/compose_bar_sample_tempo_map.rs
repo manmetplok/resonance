@@ -65,6 +65,7 @@ fn section_with_chords(app: &mut Resonance) -> SectionDefinitionId {
             name: "Verse".to_owned(),
             length_bars: 4,
             scale: None,
+            place: true,
         },
     );
     let section_id = response

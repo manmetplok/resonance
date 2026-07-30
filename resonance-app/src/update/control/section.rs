@@ -72,6 +72,11 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             name,
             length_bars: params.length_bars,
             color,
+            // Defaults to true (the historical implicit placement); a
+            // client that wants to position sections itself passes
+            // `place: false` and follows up with `section.place`
+            // (ba doc #269 FR-6).
+            place: params.place,
         }),
     );
     if let Some(error) = take_compose_error(app) {
