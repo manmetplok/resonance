@@ -49,6 +49,21 @@ impl Resonance {
             })
     }
 
+    /// Test-only: the seed on a lane's generator config, so
+    /// `section.set_lane_generator`'s explicit-seed path is observable
+    /// (ba todo #1168).
+    #[doc(hidden)]
+    pub fn test_lane_generator_seed(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        self.compose
+            .find_definition(definition_id)
+            .and_then(|d| d.lane_generators.get(&track_id))
+            .map(|cfg| cfg.seed)
+    }
+
     /// Test-only: number of derived MIDI clips generated for a track
     /// (across all sections + placements). A `generate.part` call
     /// produces one per placement of the target section.

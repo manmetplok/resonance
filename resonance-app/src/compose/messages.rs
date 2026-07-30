@@ -196,6 +196,19 @@ pub enum ComposeMessage {
         config: Box<crate::compose::LaneGeneratorConfig>,
     },
 
+    /// Install (or clear) the generator on a `(section definition,
+    /// track)` lane — one undoable step, with **no** MIDI derive. Used
+    /// by the control endpoint's `section.set_lane_generator` (ba doc
+    /// #268, todo #1168). `None` is the Manual kind: remove the lane's
+    /// generator entry. Unlike [`ComposeMessage::GenerateSectionPart`]
+    /// this neither requires chords nor generates notes — a vocal lane
+    /// is filled in later via `vocal.set_lyrics` / `vocal.render`.
+    SetLaneGenerator {
+        definition_id: u64,
+        track_id: TrackId,
+        config: Option<Box<crate::compose::LaneGeneratorConfig>>,
+    },
+
     /// Assign a drum pattern to a section, (re)seed + generate its
     /// groups, and materialize the drum clips — one undoable step. Used
     /// by the control endpoint's `generate.drums` (ba doc #265, todo
