@@ -131,6 +131,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::MoveMidiNote { .. }
         | AudioCommand::ResizeMidiNote { .. }
         | AudioCommand::SetMidiNoteVelocity { .. }
+        | AudioCommand::SetMidiClipNotes { .. }
         | AudioCommand::QuantizeMidiNotes { .. }
         | AudioCommand::HumanizeMidiNotes { .. }
         | AudioCommand::ApplyGrooveToClip { .. }

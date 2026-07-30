@@ -469,6 +469,17 @@ pub enum AudioCommand {
         velocity: f32,
     },
 
+    /// Replace `clip_id`'s entire note array in one atomic edit; emits a
+    /// single `AudioEvent::MidiNotesEdited` carrying the result. The
+    /// bulk write behind the control endpoint's `notes.insert_many` /
+    /// `notes.replace_all` (ba doc #269 FR-5), where issuing N single
+    /// `AddMidiNote` commands would cost N undo entries and N echoes.
+    /// The caller passes the final array; the engine does no merging.
+    SetMidiClipNotes {
+        clip_id: ClipId,
+        notes: Vec<MidiNote>,
+    },
+
     // -- Bulk MIDI note edits (quantize / humanize / groove) --
     /// Quantize the notes at `indices` in `clip_id` toward `grid`, using
     /// the engine's authoritative tempo map. Applied atomically; emits a

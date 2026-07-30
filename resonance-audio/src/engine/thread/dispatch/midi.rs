@@ -92,6 +92,9 @@ pub(super) fn dispatch_midi(
             note_index,
             velocity,
         } => midi::handle_set_midi_note_velocity(ctx, clip_id, note_index, velocity),
+        AudioCommand::SetMidiClipNotes { clip_id, notes } => {
+            midi::handle_set_midi_clip_notes(ctx, clip_id, notes)
+        }
         AudioCommand::QuantizeMidiNotes {
             clip_id,
             indices,
