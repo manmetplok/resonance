@@ -11,7 +11,7 @@ mod clips;
 mod dispatch;
 mod external_instrument;
 mod freeze;
-mod midi;
+pub(crate) mod midi;
 mod midi_map;
 pub mod performance;
 mod plugins;
