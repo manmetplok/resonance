@@ -270,6 +270,78 @@ fn add_plugin_errors_are_precise() {
     assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
 }
 
+/// The "valid ids" list must match the verb that was called. Listing
+/// effects as the valid ids for add_instrument is what led an agent to
+/// conclude the app ships no instruments at all (doc #270 §1).
+#[test]
+fn valid_ids_are_scoped_to_the_verb() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+
+    let message = call(
+        &mut app,
+        "track.add_instrument",
+        serde_json::json!({ "track_id": id, "plugin_id": "com.nope" }),
+    )
+    .error
+    .expect("unknown plugin rejected")
+    .message;
+    assert!(message.contains("com.resonance.wavetable"), "{message}");
+    assert!(!message.contains("com.resonance.eq"), "{message}");
+
+    let message = call(
+        &mut app,
+        "track.add_effect",
+        serde_json::json!({ "track_id": id, "plugin_id": "com.nope" }),
+    )
+    .error
+    .expect("unknown plugin rejected")
+    .message;
+    assert!(message.contains("com.resonance.eq"), "{message}");
+    assert!(!message.contains("com.resonance.wavetable"), "{message}");
+}
+
+/// With nothing of the requested kind in the catalog, the error says why
+/// — an unbuilt checkout, not a wrong id. Without this the caller sees
+/// "valid ids: []" and has no way to tell the two apart.
+#[test]
+fn empty_catalog_points_at_the_bundle_step() {
+    let mut app = app();
+    // Only an effect was scanned: no instrument is installable.
+    app.test_apply_engine_event(AudioEvent::PluginsScanned {
+        plugins: vec![ScannedPlugin {
+            clap_file_path: "/plugins/eq.clap".to_owned(),
+            clap_plugin_id: "com.resonance.eq".to_owned(),
+            name: "Resonance EQ".to_owned(),
+            vendor: "Resonance".to_owned(),
+            is_instrument: false,
+        }],
+    });
+    let id = add_track(&mut app, "instrument", None);
+
+    let message = call(
+        &mut app,
+        "track.add_instrument",
+        serde_json::json!({ "track_id": id, "plugin_id": "resonance-wavetable" }),
+    )
+    .error
+    .expect("unknown plugin rejected")
+    .message;
+    assert!(message.contains("bundle.sh"), "{message}");
+
+    // An effect is still installable, so that error keeps its plain form.
+    let message = call(
+        &mut app,
+        "track.add_effect",
+        serde_json::json!({ "track_id": id, "plugin_id": "com.nope" }),
+    )
+    .error
+    .expect("unknown plugin rejected")
+    .message;
+    assert!(!message.contains("bundle.sh"), "{message}");
+}
+
 // ---------------- mixer.* ----------------
 
 #[test]
