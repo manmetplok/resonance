@@ -51,9 +51,6 @@ fn set_lyrics(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let track_id: u64 = params.track_id.into();
     let definition_id = match resolve_vocal_lane(app, track_id) {
         Ok(id) => id,
@@ -75,9 +72,6 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let track_id: u64 = params.track_id.into();
     let definition_id = match resolve_vocal_lane(app, track_id) {
         Ok(id) => id,
@@ -124,9 +118,6 @@ fn set_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Task<
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     if params.word.trim().is_empty() {
         return fail(request, RpcError::invalid_params("word cannot be empty"));
     }
@@ -169,9 +160,6 @@ fn clear_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Tas
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let key = crate::compose::vocal_svs::clean_word(&params.word);
     let present = app
         .compose
@@ -201,9 +189,6 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     // Doc #265: default voicebank is Lilia when the client doesn't name
     // one, overriding the VocalParams code default (TIGER).
     let voicebank = match &params.voicebank {

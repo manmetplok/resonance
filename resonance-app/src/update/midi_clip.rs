@@ -30,10 +30,31 @@ pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
                 start_sample,
                 duration_ticks,
                 notes: Vec::new(),
-                name,
+                name: name.clone(),
                 trim_start_ticks: 0,
                 trim_end_ticks: 0,
             });
+            // Mirror the empty clip into `r.midi_clips` synchronously (ba
+            // todo #1162): the control `notes.create_clip` returns
+            // `clip_id` immediately, and a follow-up `notes.insert` on the
+            // very next request resolves the target through
+            // `r.midi_clips` — before the async `MidiClipCreated` echo can
+            // land. Without this the insert failed `not_found` for an id
+            // the create just handed out. The echo's `clip_created` handler
+            // is idempotent (skips an id already present), so the round
+            // trip stays a no-op once it arrives.
+            if !r.midi_clips.iter().any(|c| c.id == clip_id) {
+                r.midi_clips.push(crate::state::MidiClipState {
+                    id: clip_id,
+                    track_id,
+                    start_sample,
+                    duration_ticks,
+                    name,
+                    notes: Vec::new(),
+                    trim_start_ticks: 0,
+                    trim_end_ticks: 0,
+                });
+            }
         }
         MidiClipMessage::StartMidiClipDrag {
             clip_id,

@@ -55,9 +55,6 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = super::section::definition_missing(app, definition_id) {
         return fail(request, e);
@@ -149,9 +146,6 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = super::section::definition_missing(app, definition_id) {
         return fail(request, e);
