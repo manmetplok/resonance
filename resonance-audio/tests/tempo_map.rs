@@ -264,6 +264,53 @@ fn position_to_bars_constant_tempo() {
 }
 
 #[test]
+fn position_to_bars_past_end_of_bar_table() {
+    // The bar table stops at last-event + 200 bars, so a project with no
+    // events past bar 0 tabulates bars 1..=200 only. Positions beyond it
+    // must still report a real bar with an in-range beat rather than
+    // pinning to the last entry and letting the beat count run away.
+    let tm = make_tempo_map(&[(0, 120.0)], &[(0, 4, 4)]);
+    assert_eq!(tm.bar_count(), 200);
+
+    // One bar = 96000 samples at 120 BPM 4/4. Bar 241 starts at bar
+    // index 240.
+    let (bar, beat, frac) = tm.position_to_bars(240 * 96000, SR);
+    assert_eq!((bar, beat), (241, 1));
+    assert!(frac < 1e-9, "frac {frac}");
+
+    // Beat 3 of bar 241.
+    let (bar, beat, _) = tm.position_to_bars(240 * 96000 + 2 * 24000, SR);
+    assert_eq!((bar, beat), (241, 3));
+
+    // The last tabulated bar still reads correctly.
+    let (bar, beat, _) = tm.position_to_bars(199 * 96000 + 24000, SR);
+    assert_eq!((bar, beat), (200, 2));
+
+    // Round-trips against the inverse, which already extrapolated.
+    for bar_idx in [200u32, 240, 512] {
+        let (bar, beat, _) = tm.position_to_bars(tm.bar_to_sample(bar_idx), SR);
+        assert_eq!((bar, beat), (bar_idx + 1, 1), "bar_idx {bar_idx}");
+    }
+}
+
+#[test]
+fn position_to_bars_past_end_after_tempo_change() {
+    // The extrapolation runs at the last tabulated entry's tempo and meter.
+    // With a 3/4 change at bar 4 and 60 BPM from bar 8, the table ends at
+    // bar 208 and every bar past it is 3 beats of 48000 samples.
+    let tm = make_tempo_map(&[(0, 120.0), (8, 60.0)], &[(0, 4, 4), (4, 3, 4)]);
+    assert_eq!(tm.bar_count(), 208);
+
+    let last_start = tm.bar_to_sample(207);
+    let bar_samples = 3 * 48000;
+    let (bar, beat, _) = tm.position_to_bars(last_start + 10 * bar_samples, SR);
+    assert_eq!((bar, beat), (218, 1));
+
+    let (bar, beat, _) = tm.position_to_bars(last_start + 10 * bar_samples + 48000, SR);
+    assert_eq!((bar, beat), (218, 2));
+}
+
+#[test]
 fn position_to_bars_with_tempo_change() {
     // 150 BPM for bar 0, 120 BPM from bar 1 onwards
     let tm = make_tempo_map(&[(0, 150.0), (1, 120.0)], &[(0, 4, 4)]);

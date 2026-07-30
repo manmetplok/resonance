@@ -100,10 +100,21 @@ impl TempoMap {
             let beat = beat_frac.floor() as u8 + 1;
             (bar, beat, beat_frac.fract())
         } else {
+            // Last tabulated bar, or past it. `rebuild_bar_table` stops at a
+            // fixed horizon (last event + 200 bars), so a position beyond the
+            // table must roll the surplus beats up into whole bars — counting
+            // beats from the last entry forever would report that entry's bar
+            // with an unbounded beat. Extrapolates at the last entry's tempo
+            // and meter, matching `bar_to_sample`'s inverse.
             let spb = sample_rate as f64 * 60.0 / entry.bpm as f64;
-            let beat_frac = (sample_pos - entry.sample) as f64 / spb;
-            let beat = beat_frac.floor() as u8 + 1;
-            (bar, beat, beat_frac.fract())
+            if !spb.is_finite() || spb <= 0.0 || num_beats <= 0.0 {
+                return (bar, 1, 0.0);
+            }
+            let beats_past = (sample_pos - entry.sample) as f64 / spb;
+            let bars_past = (beats_past / num_beats).floor();
+            let beat_frac = beats_past - bars_past * num_beats;
+            let bar = bar + bars_past as u32;
+            (bar, beat_frac.floor() as u8 + 1, beat_frac.fract())
         }
     }
 
