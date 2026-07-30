@@ -56,6 +56,26 @@ pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
                 });
             }
         }
+        MidiClipMessage::MoveClipTo {
+            clip_id,
+            new_start_sample,
+        } => {
+            // Absolute reposition (control `notes.move_clip`). Mirror the
+            // new start into app state and tell the engine, mirroring
+            // what `end_midi_clip_drag` does at the end of a GUI drag;
+            // the `MidiClipMoved` echo re-applies the same value, so the
+            // round trip is idempotent. The track is unchanged — moving
+            // a clip between tracks is a separate concern.
+            if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
+                clip.start_sample = new_start_sample;
+                let new_track_id = clip.track_id;
+                let _ = r.engine.send(AudioCommand::MoveMidiClip {
+                    clip_id,
+                    new_start_sample,
+                    new_track_id,
+                });
+            }
+        }
         MidiClipMessage::StartMidiClipDrag {
             clip_id,
             grab_offset_x,

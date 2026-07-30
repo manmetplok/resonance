@@ -620,6 +620,15 @@ pub enum MidiClipMessage {
         duration_ticks: u64,
         name: String,
     },
+    /// Move an existing MIDI clip to an absolute timeline position
+    /// (control endpoint `notes.move_clip`, ba doc #269 FR-4). The GUI
+    /// reaches the same engine command through the drag messages below;
+    /// this variant exists because a remote client has no drag gesture,
+    /// only a target bar. Undoable (Record).
+    MoveClipTo {
+        clip_id: ClipId,
+        new_start_sample: resonance_audio::types::SamplePos,
+    },
     StartMidiClipDrag {
         clip_id: ClipId,
         grab_offset_x: f32,

@@ -358,7 +358,8 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
                 UndoAction::Skip
             }
             MidiClipMessage::DeleteMidiClip(_)
-            | MidiClipMessage::CreateEmptyClip { .. } => UndoAction::Record,
+            | MidiClipMessage::CreateEmptyClip { .. }
+            | MidiClipMessage::MoveClipTo { .. } => UndoAction::Record,
         },
 
         Message::MidiEditor(e) => match e {

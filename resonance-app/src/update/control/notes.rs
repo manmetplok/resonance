@@ -23,7 +23,7 @@ use crate::state::MidiClipState;
 use resonance_audio::types::TrackType;
 use resonance_control::methods::notes::{
     self, CreateClipParams, CreateClipResult, DeleteParams, EditParams, InsertParams,
-    InsertResult,
+    InsertResult, MoveClipParams,
 };
 use resonance_control::{MutationAck, Request, Response, RpcError};
 
@@ -41,6 +41,7 @@ pub(super) fn try_handle(
         notes::EDIT => edit(app, request),
         notes::DELETE => delete(app, request),
         notes::CREATE_CLIP => create_clip(app, request),
+        notes::MOVE_CLIP => move_clip(app, request),
         _ => return None,
     };
     Some(out)
@@ -454,4 +455,73 @@ fn create_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
         revision: app.revision(),
     };
     (super::success(request, &result), task)
+}
+
+// ---------------------------------------------------------------------------
+// notes.move_clip
+// ---------------------------------------------------------------------------
+
+/// `notes.move_clip` (ba doc #269 FR-4): reposition an existing MIDI
+/// clip. Nothing else on the wire could change a clip's start, so a
+/// client could not correct its own `notes.create_clip` position mistake
+/// except by deleting and rebuilding the clip.
+///
+/// The target resolves through `tempo_map.bar_to_sample` exactly as
+/// `notes.create_clip` does, so the move also re-grids a clip whose
+/// start drifted off the bar line.
+fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: MoveClipParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(clip) = find_clip(app, params.clip_id.0) else {
+        return clip_not_found(app, request, params.clip_id.0);
+    };
+    if let Some(e) = frozen_reject(app, clip.track_id) {
+        return reject(request, e);
+    }
+
+    // Exactly one target: a bare bar, or a placement to anchor to.
+    let bar = match (params.start_bar, params.placement_id) {
+        (Some(bar), None) => {
+            if bar < 1 {
+                return reject(request, RpcError::invalid_params("start_bar is 1-based"));
+            }
+            bar - 1
+        }
+        (None, Some(pid)) => {
+            let Some(placement) = app.compose.placements.iter().find(|p| p.id == u64::from(pid))
+            else {
+                return reject(
+                    request,
+                    RpcError::not_found(format!("no section placement with id {pid}")),
+                );
+            };
+            placement.start_bar
+        }
+        (Some(_), Some(_)) => {
+            return reject(
+                request,
+                RpcError::invalid_params(
+                    "give exactly one of start_bar or placement_id, not both",
+                ),
+            )
+        }
+        (None, None) => {
+            return reject(
+                request,
+                RpcError::invalid_params("notes.move_clip needs start_bar or placement_id"),
+            )
+        }
+    };
+
+    let new_start_sample = app.tempo_map.bar_to_sample(bar);
+    let task = super::run_via_update(
+        app,
+        Message::MidiClip(crate::message::MidiClipMessage::MoveClipTo {
+            clip_id: params.clip_id.0,
+            new_start_sample,
+        }),
+    );
+    (ack(app, request), task)
 }
