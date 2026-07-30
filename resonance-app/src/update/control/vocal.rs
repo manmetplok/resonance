@@ -304,11 +304,13 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    // Doc #265: default voicebank is Lilia when the client doesn't name
-    // one, overriding the VocalParams code default (TIGER).
-    let voicebank = match &params.voicebank {
+    // An explicitly named voicebank is parsed up front so a typo fails
+    // before any job starts. `None` is resolved per lane further down —
+    // it must not blanket-default, or every plain render would reset the
+    // lane (ba doc #271).
+    let requested = match &params.voicebank {
         Some(name) => match parse_voicebank(name) {
-            Some(vb) => vb,
+            Some(vb) => Some(vb),
             None => {
                 let known: Vec<&str> =
                     VocalVoicebank::ALL.iter().map(|vb| vb.as_str()).collect();
@@ -321,7 +323,7 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                 );
             }
         },
-        None => VocalVoicebank::Lilia,
+        None => None,
     };
 
     // Which lane(s): a specific track, or every vocal track when omitted.
@@ -357,6 +359,20 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(id) => id,
         Err(e) => return fail(request, e),
     };
+
+    // Resolve an omitted voicebank against the lane rather than against
+    // a constant. Blanket-defaulting to Lilia meant every render that
+    // left the argument out silently reset the lane, so a song with a
+    // TIGER character and a Lilia character lost the split on the next
+    // plain render (ba doc #271). A lane still holding the untouched
+    // `VocalParams` code default has never chosen one, so it still picks
+    // up doc #265's Lilia; anything explicitly set wins.
+    let voicebank = requested.unwrap_or_else(|| {
+        match lane_voicebank(app, definition_id, track_id) {
+            Some(vb) if vb != default_lane_voicebank() => vb,
+            _ => VocalVoicebank::Lilia,
+        }
+    });
 
     // Pre-flight the conditions `rerender_vocal_audio` silently no-ops
     // on so they surface as a precise error rather than a job that never
@@ -428,6 +444,28 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// The voicebank currently stored on a vocal lane.
+fn lane_voicebank(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: u64,
+) -> Option<VocalVoicebank> {
+    app.compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .and_then(|c| match &c.kind {
+            crate::compose::LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
+            _ => None,
+        })
+}
+
+/// The voicebank a freshly-installed vocal lane carries — i.e. "the user
+/// has not chosen one". Read from `VocalParams::default()` so this stays
+/// true if that default is ever changed.
+fn default_lane_voicebank() -> VocalVoicebank {
+    resonance_music_theory::VocalParams::default().voicebank
+}
 
 /// Does the lane have a MIDI clip holding at least one note?
 ///
