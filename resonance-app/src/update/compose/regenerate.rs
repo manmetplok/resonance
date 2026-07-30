@@ -236,7 +236,6 @@ pub(super) fn regenerate_lane(
     };
 
     let time_sig_num = r.transport.time_sig_num;
-    let samples_per_bar = compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
     let duration_ticks = def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
 
     let track_name = r
@@ -267,7 +266,7 @@ pub(super) fn regenerate_lane(
         }
 
         let clip_id = r.compose.fresh_derived_clip_id();
-        let start_sample = start_bar as u64 * samples_per_bar;
+        let start_sample = r.tempo_map.bar_to_sample(start_bar);
         let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
@@ -285,11 +284,6 @@ pub(super) fn regenerate_lane(
 
     r.compose.last_error = None;
     iced::Task::none()
-}
-
-pub(super) fn compose_samples_per_bar(sample_rate: u32, bpm: f32, time_sig_num: u8) -> u64 {
-    let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
-    (samples_per_beat * time_sig_num as f64) as u64
 }
 
 /// Overlay the global chord track's user-pinned regions onto a section
@@ -319,9 +313,7 @@ pub(crate) fn apply_chord_track_harmony(
         return;
     };
 
-    let samples_per_bar =
-        compose_samples_per_bar(r.sample_rate, r.transport.bpm, r.transport.time_sig_num);
-    let section_start_sample = start_bar as u64 * samples_per_bar;
+    let section_start_sample = r.tempo_map.bar_to_sample(start_bar);
     let samples_per_beat = r.sample_rate as f64 * 60.0 / r.transport.bpm as f64;
 
     def.chords = generate::overlay_pinned_chords(
@@ -430,15 +422,9 @@ fn regenerate_drum_motif_voices(
         .map(|p| p.start_bar)
         .collect();
 
-    let samples_per_bar = compose_samples_per_bar(
-        r.sample_rate,
-        r.transport.bpm,
-        r.transport.time_sig_num,
-    );
-
     for start_bar in placement_starts {
-        let section_start = (start_bar as u64) * samples_per_bar;
-        let section_end = ((start_bar + length_bars) as u64) * samples_per_bar;
+        let section_start = r.tempo_map.bar_to_sample(start_bar);
+        let section_end = r.tempo_map.bar_to_sample(start_bar + length_bars);
 
         let clip_ids: Vec<u64> = r
             .midi_clips

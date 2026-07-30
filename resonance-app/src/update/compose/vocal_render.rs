@@ -101,8 +101,6 @@ pub(super) fn roll_vocal_melody(
     }
 
     let time_sig_num = r.transport.time_sig_num;
-    let samples_per_bar =
-        super::regenerate::compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
     let duration_ticks = def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
 
     let track_name = r
@@ -134,7 +132,7 @@ pub(super) fn roll_vocal_melody(
 
     let placement_starts: Vec<(u64, u64)> = placements
         .iter()
-        .map(|(pid, start_bar)| (*pid, *start_bar as u64 * samples_per_bar))
+        .map(|(pid, start_bar)| (*pid, r.tempo_map.bar_to_sample(*start_bar)))
         .collect();
     let initial_lyrics: Vec<String> = vec![String::new(); midi_notes.len()];
     VocalMidiInstall {
@@ -444,12 +442,9 @@ pub(super) fn rerender_vocal_audio(
         .cloned()
         .unwrap_or_else(|| vec![String::new(); midi_notes.len()]);
 
-    let time_sig_num = r.transport.time_sig_num;
-    let samples_per_bar =
-        super::regenerate::compose_samples_per_bar(r.sample_rate, r.transport.bpm, time_sig_num);
     let placement_starts: Vec<(u64, u64)> = placements
         .iter()
-        .map(|(pid, start_bar)| (*pid, *start_bar as u64 * samples_per_bar))
+        .map(|(pid, start_bar)| (*pid, r.tempo_map.bar_to_sample(*start_bar)))
         .collect();
 
     enqueue_vocal_render(

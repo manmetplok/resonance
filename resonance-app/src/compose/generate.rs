@@ -56,9 +56,9 @@ impl Default for GenerateParams {
 /// region keep their generated symbol, and non-pinned regions never
 /// override (only explicit user pins constrain regeneration).
 ///
-/// `section_start_sample` is where the section sits on the timeline and
-/// `samples_per_beat` is the compose grid's fixed samples-per-beat (the
-/// same constant `compose_samples_per_bar` is built from). Together they
+/// `section_start_sample` is where the section sits on the timeline
+/// (`tempo_map.bar_to_sample(start_bar)`) and `samples_per_beat` is the
+/// compose grid's samples-per-beat. Together they
 /// map each section beat onto the absolute sample axis the chord track is
 /// positioned on, so a pinned region is matched against the very beat the
 /// generator will voice.

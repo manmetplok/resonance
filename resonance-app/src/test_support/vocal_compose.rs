@@ -287,6 +287,26 @@ impl Resonance {
         id
     }
 
+    /// Test-only: snapshot every arrangement placement as
+    /// `(placement_id, definition_id, start_bar)`. Lets the compose
+    /// bar↔sample tests (ba todo #1163) pin exactly which bar a derived
+    /// clip should land on.
+    #[doc(hidden)]
+    pub fn test_placements(&self) -> Vec<(u64, u64, u32)> {
+        self.compose
+            .placements
+            .iter()
+            .map(|p| (p.id, p.definition_id, p.start_bar))
+            .collect()
+    }
+
+    /// Test-only: drop every arrangement placement so a test can install
+    /// a single placement at a known bar (ba todo #1163).
+    #[doc(hidden)]
+    pub fn test_clear_placements(&mut self) {
+        self.compose.placements.clear();
+    }
+
     /// Test-only: run the chord-track harmony overlay for a section
     /// definition exactly as lane regeneration does, returning the
     /// effective `(chords, scale)` the generators would consume. Lets

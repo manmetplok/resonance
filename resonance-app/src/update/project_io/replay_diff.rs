@@ -150,10 +150,8 @@ pub fn try_diff_replay(
     // Rebuild runtime-only caches that aren't captured in the snapshot.
     // Mirrors the tail end of `replay_loaded_project` so the Compose tab
     // shows the right derived MIDI / vocal audio clips after the restore.
-    let samples_per_beat = r.sample_rate as f64 * 60.0 / r.transport.bpm as f64;
-    let samples_per_bar = (samples_per_beat * r.transport.time_sig_num as f64) as u64;
     r.compose
-        .rebuild_derived_clips(&r.midi_clips, samples_per_bar);
+        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map);
 
     use std::collections::HashSet;
     let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
@@ -171,7 +169,7 @@ pub fn try_diff_replay(
         .map(|pc| (pc.id, project_dir.join(&pc.audio_file)))
         .collect();
     r.compose
-        .rebuild_vocal_audio_clips(&r.clips, &audio_clip_paths, &vocal_track_ids, samples_per_bar);
+        .rebuild_vocal_audio_clips(&r.clips, &audio_clip_paths, &vocal_track_ids, &r.tempo_map);
 
     true
 }

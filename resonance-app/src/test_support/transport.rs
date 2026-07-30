@@ -69,6 +69,18 @@ impl Resonance {
         self.tempo_events.push(event);
     }
 
+    /// Test-only: set a flat project tempo (single bar-0 event) and
+    /// rebuild the tempo map / bar table off the current sample rate.
+    /// Used by the compose bar↔sample tests (ba todo #1163) to establish
+    /// a tempo whose samples-per-bar is non-integral (e.g. 108 BPM at
+    /// 48 kHz = 106666.67 samples/bar).
+    #[doc(hidden)]
+    pub fn test_set_flat_tempo(&mut self, bpm: f32) {
+        self.transport.bpm = bpm;
+        self.tempo_events = vec![state::TempoEvent { bar: 0, bpm }];
+        self.rebuild_tempo_map();
+    }
+
     /// Test-only: the currently active top-level [`ViewMode`].
     #[doc(hidden)]
     pub fn test_view_mode(&self) -> state::ViewMode {

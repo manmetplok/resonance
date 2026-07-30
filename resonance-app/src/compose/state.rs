@@ -29,6 +29,15 @@ use super::vocal_svs::SvsRenderCache;
 /// above this base is always safe.
 pub const DERIVED_CLIP_ID_BASE: u64 = 1 << 40;
 
+/// Sample tolerance when re-associating a loaded clip with the bar it was
+/// generated for (see [`ComposeState::rebuild_derived_clips`]). Generation
+/// and recovery both go through [`resonance_audio::types::TempoMap::bar_to_sample`],
+/// so a correct round-trip is exact; this small window only absorbs the
+/// sub-sample rounding baked into the bar table (and any tiny drift from a
+/// save/load at a slightly different sample rate). Kept far below a beat so
+/// a hand-placed clip that merely sits *near* a bar is never claimed.
+const DERIVED_CLIP_BAR_TOLERANCE_SAMPLES: u64 = 2;
+
 /// Bundle of the three vocal-render side tables. Grouping these together
 /// keeps the audio clip install map, the per-clip lyric annotations, and
 /// the render-epoch table next to each other since they're managed as a
@@ -622,30 +631,35 @@ impl ComposeState {
     pub fn rebuild_derived_clips(
         &mut self,
         midi_clips: &[crate::state::MidiClipState],
-        samples_per_bar: u64,
+        tempo_map: &resonance_audio::types::TempoMap,
     ) {
         self.derived_clips.clear();
 
-        if samples_per_bar > 0 {
-            for clip in midi_clips {
-                if clip.start_sample % samples_per_bar != 0 {
-                    continue;
+        for clip in midi_clips {
+            // Recover the clip's bar via the tempo map — the inverse of the
+            // `bar_to_sample` placement in `regenerate`/`drum_groups`. Using
+            // `%` against a truncated samples-per-bar scalar (as this once
+            // did) drops the clip whenever the true samples-per-bar is
+            // non-integral, orphaning the derived lane on load; it is also
+            // simply wrong under any tempo change.
+            let Some(start_bar) =
+                tempo_map.bar_at_sample_exact(clip.start_sample, DERIVED_CLIP_BAR_TOLERANCE_SAMPLES)
+            else {
+                continue;
+            };
+            let entry = self.placements.iter().find_map(|p| {
+                if p.start_bar != start_bar {
+                    return None;
                 }
-                let start_bar = (clip.start_sample / samples_per_bar) as u32;
-                let entry = self.placements.iter().find_map(|p| {
-                    if p.start_bar != start_bar {
-                        return None;
-                    }
-                    let def = self.definitions.iter().find(|d| d.id == p.definition_id)?;
-                    if !def.lane_generators.contains_key(&clip.track_id) {
-                        return None;
-                    }
-                    Some((def.id, p.id))
-                });
-                if let Some((def_id, placement_id)) = entry {
-                    self.derived_clips
-                        .insert((def_id, placement_id, clip.track_id), clip.id);
+                let def = self.definitions.iter().find(|d| d.id == p.definition_id)?;
+                if !def.lane_generators.contains_key(&clip.track_id) {
+                    return None;
                 }
+                Some((def.id, p.id))
+            });
+            if let Some((def_id, placement_id)) = entry {
+                self.derived_clips
+                    .insert((def_id, placement_id, clip.track_id), clip.id);
             }
         }
 
@@ -677,22 +691,21 @@ impl ComposeState {
         audio_clips: &[crate::state::ClipState],
         audio_clip_paths: &std::collections::HashMap<resonance_audio::types::ClipId, std::path::PathBuf>,
         vocal_track_ids: &std::collections::HashSet<TrackId>,
-        samples_per_bar: u64,
+        tempo_map: &resonance_audio::types::TempoMap,
     ) {
         self.vocal_audio.clips.clear();
-
-        if samples_per_bar == 0 {
-            return;
-        }
 
         for clip in audio_clips {
             if !vocal_track_ids.contains(&clip.track_id) {
                 continue;
             }
-            if clip.start_sample % samples_per_bar != 0 {
+            // Same tempo-map-aware bar recovery as `rebuild_derived_clips`
+            // (see there): never `%` against a truncated scalar.
+            let Some(start_bar) =
+                tempo_map.bar_at_sample_exact(clip.start_sample, DERIVED_CLIP_BAR_TOLERANCE_SAMPLES)
+            else {
                 continue;
-            }
-            let start_bar = (clip.start_sample / samples_per_bar) as u32;
+            };
             let entry = self.placements.iter().find_map(|p| {
                 if p.start_bar != start_bar {
                     return None;
