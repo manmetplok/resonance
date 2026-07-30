@@ -227,6 +227,18 @@ pub enum ComposeMessage {
         seed: Option<u64>,
     },
 
+    /// Generate a vocal lane's melody — and, unless `lyrics` is false, a
+    /// fresh lyric draft — into its derived clip, as one undoable step.
+    /// Used by the control endpoint's `vocal.generate` (ba doc #269
+    /// FR-2). `seed` pins the result; `None` advances the lane's seed the
+    /// way the GUI's generate button does.
+    ControlGenerateVocal {
+        definition_id: u64,
+        track_id: TrackId,
+        seed: Option<u64>,
+        lyrics: bool,
+    },
+
     /// Replace a vocal lane's full lyric draft from bulk text (one line
     /// per lyric line) — one undoable step. Used by the control
     /// endpoint's `vocal.set_lyrics` (ba doc #265, todo #1156).
