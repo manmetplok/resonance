@@ -108,7 +108,9 @@ impl EmbellishmentStyle {
     }
 }
 
+/// Every field defaults — see [`super::bass::BassParams`] for why.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MelodyParams {
     pub style: MelodyStyle,
     pub register: (u8, u8),

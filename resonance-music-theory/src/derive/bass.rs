@@ -108,7 +108,12 @@ impl BassMotifPhrase {
 }
 
 
+/// Every field defaults, so a partial object sets one knob and leaves
+/// the rest at the generator defaults — what a `generate.part` caller
+/// passing `options` expects, and what an older project file that
+/// predates a field needs.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BassParams {
     pub style: BassStyle,
     /// MIDI floor for the bass root. Default E1 (28).
