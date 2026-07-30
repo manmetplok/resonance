@@ -5,7 +5,9 @@ use crate::scale::Scale;
 
 use super::{GeneratedNote, TimedChord};
 
+/// Every field defaults — see [`super::bass::BassParams`] for why.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PadParams {
     /// Inclusive MIDI range the pad voicings must stay inside.
     pub register: (u8, u8),

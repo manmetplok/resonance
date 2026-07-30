@@ -14,10 +14,31 @@ impl ResonanceMcp {
     #[tool(
         description = "Generate a pad, bass or lead part from a section's chord grid into a \
                        track (role: pad | bass | lead). The section needs chords first \
-                       (harmony_apply_progression). Optional seed makes output reproducible; \
-                       options passes role-specific generator parameters. Returns clip_ids, one \
-                       per placement of the section in arrangement order, and clip_id as the \
-                       first of them — no follow-up song_tracks call needed.",
+                       (harmony_apply_progression). Optional seed makes output reproducible. \
+                       \
+                       options is a role-specific object; every field is optional and any \
+                       subset works. Without it you get the plain default (bass = a root on \
+                       every beat), so set style to get a real part. \
+                       bass: style (RootHold | RootPulse | RootFifth | Octave | Walking | \
+                       Motif, default RootPulse), base_note (MIDI floor, default 28 = E1), \
+                       velocity (0..1, default 0.85), and for style Motif: motif_mode \
+                       (SameIntervals | Augmented | RhythmOnly | FirstNoteOnly), motif_phrase \
+                       (Simple | MirrorMelody | Restricted). \
+                       lead: style (ArpUp | ArpDown | ArpUpDown | Motif, default ArpUp), \
+                       register ([low, high] MIDI, default [67, 88]), note_value_ticks (480 = \
+                       quarters, 240 = 8ths default, 120 = 16ths), rest_density (0..1, default \
+                       0), velocity (default 0.8), fill_vocal_gaps (sound only where the \
+                       section's vocal lane is silent), and for style Motif: complexity (0..1, \
+                       default 0.5), articulation (0 legato .. 1 staccato, default 0.3), \
+                       contour (Auto | Arch | Descending | Ascending | Wave), phrase_len (2 | \
+                       4 | 8, default 4), motif_len (0 = auto), leap_chance (default 0.21), \
+                       embellishment (Auto | Folk | PopBallad | Jazz). \
+                       pad: register ([low, high] MIDI, default [52, 76]), velocity (default \
+                       0.7). \
+                       \
+                       Returns clip_ids, one per placement of the section in arrangement \
+                       order, and clip_id as the first of them — no follow-up song_tracks \
+                       call needed.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<generate::GenerateResult>()
     )]

@@ -278,6 +278,80 @@ fn part_accepts_per_role_options() {
     expect_error(response, ErrorKind::InvalidParams);
 }
 
+/// Every option named in the `generate_part` tool description must be
+/// settable on its own. A caller reading the docs sets one knob — the
+/// bass style, a register — and should not have to restate the whole
+/// params struct to be understood (doc #270 §6).
+#[test]
+fn documented_options_are_accepted_one_at_a_time() {
+    let mut app = app_with_project();
+    let section_id = section_with_chords(&mut app);
+    let bass = add_synth_track(&mut app, 30);
+    let lead = add_synth_track(&mut app, 31);
+    let pad = add_synth_track(&mut app, 32);
+
+    let cases: &[(GenerateRole, ProtoTrackId, serde_json::Value)] = &[
+        (GenerateRole::Bass, bass, serde_json::json!({ "style": "RootHold" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "style": "RootPulse" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "style": "RootFifth" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "style": "Octave" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "style": "Walking" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "style": "Motif" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "base_note": 24 })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "velocity": 0.6 })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "motif_mode": "SameIntervals" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "motif_mode": "Augmented" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "motif_mode": "RhythmOnly" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "motif_mode": "FirstNoteOnly" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "motif_phrase": "Simple" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "motif_phrase": "MirrorMelody" })),
+        (GenerateRole::Bass, bass, serde_json::json!({ "motif_phrase": "Restricted" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "style": "ArpUp" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "style": "ArpDown" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "style": "ArpUpDown" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "style": "Motif" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "register": [60, 84] })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "note_value_ticks": 120 })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "rest_density": 0.25 })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "complexity": 0.8 })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "articulation": 0.3 })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "phrase_len": 8 })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "motif_len": 0 })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "leap_chance": 0.4 })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "fill_vocal_gaps": true })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "contour": "Auto" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "contour": "Arch" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "contour": "Descending" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "contour": "Ascending" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "contour": "Wave" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "embellishment": "Auto" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "embellishment": "Folk" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "embellishment": "PopBallad" })),
+        (GenerateRole::Lead, lead, serde_json::json!({ "embellishment": "Jazz" })),
+        (GenerateRole::Pad, pad, serde_json::json!({ "register": [52, 76] })),
+        (GenerateRole::Pad, pad, serde_json::json!({ "velocity": 0.7 })),
+    ];
+
+    for (role, track_id, options) in cases {
+        let params = proto::PartParams {
+            section_id,
+            track_id: *track_id,
+            role: *role,
+            chord_count: None,
+            beats_per_chord: None,
+            sevenths: None,
+            seed: Some(5),
+            options: Some(options.clone()),
+        };
+        let response = call(&mut app, "generate.part", &params);
+        assert!(
+            response.error.is_none(),
+            "options {options} rejected for {role:?}: {}",
+            response.error.map(|e| e.message).unwrap_or_default()
+        );
+    }
+}
+
 #[test]
 fn part_requires_chords_and_a_synth_track() {
     let mut app = app_with_project();
