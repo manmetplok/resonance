@@ -215,13 +215,26 @@ fn add_plugin(
         let valid: Vec<&str> = app
             .available_plugins
             .iter()
+            .filter(|p| p.is_instrument == matches!(role, PluginRole::Instrument))
             .map(|p| p.clap_plugin_id.as_str())
             .collect();
+        // An empty list here is nearly always an unbuilt checkout rather
+        // than a wrong id: the first-party plugins are CLAP bundles the
+        // scanner only sees once they are built. Without this the caller
+        // sees "valid ids: []" and reasonably concludes the app ships no
+        // instruments at all (ba doc #270 §1).
+        let hint = if valid.is_empty() {
+            " — the catalog holds none of this kind, which usually means the \
+             first-party plugins have not been built; run scripts/bundle.sh \
+             and rescan"
+        } else {
+            ""
+        };
         return reject(
             request,
             RpcError::not_found(format!(
-                "unknown plugin id {:?}; valid ids: {:?}",
-                params.plugin_id, valid
+                "unknown plugin id {:?}; valid ids: {:?}{}",
+                params.plugin_id, valid, hint
             )),
         );
     };

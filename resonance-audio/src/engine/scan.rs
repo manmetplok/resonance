@@ -130,5 +130,26 @@ pub(crate) fn scan_plugins(
         }
     }
 
+    // A checkout whose plugins were never bundled scans clean and finds
+    // nothing first-party, leaving an instrument-less DAW with no hint
+    // that a build step was missed — the catalog just looks empty, which
+    // reads as "this app ships no instruments" (ba doc #270 §1). Say so
+    // once per scan, naming the fix and where we looked.
+    if !scanned.iter().any(|p| p.is_instrument) {
+        let dirs: Vec<String> = scan_dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect();
+        eprintln!(
+            "plugins: no instruments found ({} plugin(s) scanned in [{}]). \
+             The first-party plugins under plugins/ are CLAP bundles that must be \
+             built first: run scripts/bundle.sh, then rescan. Until then \
+             instrument tracks have no sound source and track.add_instrument has \
+             nothing to offer.",
+            scanned.len(),
+            dirs.join(", ")
+        );
+    }
+
     let _ = event_tx.send(AudioEvent::PluginsScanned { plugins: scanned });
 }
