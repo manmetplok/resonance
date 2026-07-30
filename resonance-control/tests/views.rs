@@ -6,7 +6,7 @@ use resonance_control::ids::{ChordId, ClipId, SectionDefinitionId, SectionPlacem
 use resonance_control::methods::song::{
     ChordView, ClipView, LyricLineView, NoteView, NotesView, SectionDefinitionView,
     SectionPlacementView, SectionsView, SongSummary, SyllableView, TrackDetail, TrackSummary,
-    TracksView, VocalRenderState, VocalView,
+    TracksView, VocalLaneView, VocalRenderState, VocalView,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -193,6 +193,14 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
     overrides.insert("lilia".to_owned(), vec!["l".to_owned(), "ih".to_owned()]);
     let view = VocalView {
         track_id: TrackId(9),
+        lanes: vec![VocalLaneView {
+            definition_id: SectionDefinitionId(3),
+            name: "Verse".to_owned(),
+            start_bar: Some(1),
+            note_count: 4,
+            syllable_count: 3,
+            counts_mismatch: true,
+        }],
         lines: vec![LyricLineView {
             index: 0,
             text: "hello world".to_owned(),
@@ -208,8 +216,19 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
     let wire = serde_json::to_value(&view).unwrap();
     assert_eq!(wire["render_state"], json!("not_rendered"));
     assert_eq!(wire["pronunciation_overrides"]["lilia"], json!(["l", "ih"]));
+    assert_eq!(wire["lanes"][0]["definition_id"], json!(3));
+    assert_eq!(wire["lanes"][0]["counts_mismatch"], json!(true));
     let back: VocalView = serde_json::from_value(wire).unwrap();
     assert_eq!(back, view);
+
+    // `lanes` is skipped when empty, and an older reply without it still
+    // deserializes (the top-level fields kept their meaning).
+    let mut legacy = view.clone();
+    legacy.lanes.clear();
+    let wire = serde_json::to_value(&legacy).unwrap();
+    assert!(wire.get("lanes").is_none(), "empty lanes is omitted");
+    let back: VocalView = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, legacy);
 }
 
 #[test]

@@ -1,6 +1,16 @@
 //! `vocal.*` — lyrics, pronunciation, and SVS rendering.
+//!
+//! # One lane per (section, track)
+//!
+//! Lyrics and the SVS voice live per **(section definition, track)**
+//! vocal lane, created by `section.set_lane_generator` with kind
+//! `vocal`. The lane-addressed mutations here take an optional
+//! `section_id` to pick one; omitting it keeps the historical
+//! behaviour of resolving the track's **first** vocal lane in placement
+//! order. `song.vocal` lists a track's lanes with their ids, so a
+//! client can tell which lane a write will hit.
 
-use crate::ids::TrackId;
+use crate::ids::{SectionDefinitionId, TrackId};
 use serde::{Deserialize, Serialize};
 
 /// `vocal.set_lyrics` — replace a vocal track's full lyric text
@@ -33,6 +43,11 @@ pub const METHODS: &[&str] = &[
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetLyricsParams {
     pub track_id: TrackId,
+    /// Which of the track's vocal lanes to write (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first
+    /// vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
     pub text: String,
 }
 
@@ -41,12 +56,18 @@ pub struct SetLyricsParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetLineParams {
     pub track_id: TrackId,
-    /// 0-based line index (see `song.vocal`).
+    /// Which of the track's vocal lanes to write (`definition_id` from
+    /// `song.vocal`'s `lanes`). Omitted resolves the track's first
+    /// vocal lane in placement order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+    /// 0-based line index within the resolved lane (see `song.vocal`).
     pub line_index: usize,
     pub text: String,
 }
 
-/// Params for `vocal.set_pronunciation`.
+/// Params for `vocal.set_pronunciation`. Pronunciation overrides are
+/// project-wide, not per lane, so this takes no `section_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetPronunciationParams {
@@ -56,7 +77,8 @@ pub struct SetPronunciationParams {
     pub phonemes: Vec<String>,
 }
 
-/// Params for `vocal.clear_pronunciation`.
+/// Params for `vocal.clear_pronunciation`. Project-wide, like
+/// [`SetPronunciationParams`] — no `section_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ClearPronunciationParams {
@@ -64,7 +86,8 @@ pub struct ClearPronunciationParams {
 }
 
 /// Params for `vocal.render`. Omit `track_id` to render every vocal
-/// track; the job's payload is [`RenderJobResult`].
+/// track; the job's payload is [`RenderJobResult`]. A render covers all
+/// of a track's lanes, so this takes no `section_id`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RenderParams {
