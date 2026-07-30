@@ -257,8 +257,14 @@ pub struct VocalLaneView {
     /// Syllables across the lane's lyric draft, as the engine's G2P
     /// splits them.
     pub syllable_count: usize,
-    /// `note_count != syllable_count` while both are non-zero — the
-    /// condition that makes an SVS render fail or mis-align.
+    /// The lane has lyrics whose syllable count does not match its note
+    /// count — the condition that makes an SVS render fail or mis-align.
+    ///
+    /// True when `syllable_count > 0 && note_count != syllable_count`,
+    /// so a lane with lyrics and **no** notes flags too: that is the
+    /// case that renders nothing the client expects, and it used to be
+    /// reported as `false`. Distinguish "not generated yet" by
+    /// `note_count == 0` rather than by this flag.
     pub counts_mismatch: bool,
 }
 

@@ -236,7 +236,7 @@ fn an_unplaced_lane_reports_no_start_bar() {
 }
 
 #[test]
-fn counts_are_reported_per_lane_and_flag_no_mismatch_while_ungenerated() {
+fn counts_are_reported_per_lane_and_flag_lyrics_without_notes() {
     let (mut app, verse, _chorus) = two_lane_app();
     // Two lines of one syllable each, so the count is the engine's, not
     // a guess: the whole point of reporting it is that G2P decides
@@ -255,13 +255,55 @@ fn counts_are_reported_per_lane_and_flag_no_mismatch_while_ungenerated() {
     let lane = &view.lanes[0];
     assert_eq!(u64::from(lane.definition_id), verse);
     assert_eq!(lane.syllable_count, 2);
-    // Nothing generated yet, so there is no mismatch to report — a
-    // note_count of 0 is "not generated", not "wrong".
+    // Lyrics with nothing generated to sing them IS the mismatch worth
+    // flagging: a render here produces nothing the client asked for.
+    // This used to report `false` (the flag required note_count > 0),
+    // which gave false confidence right before a render — doc #271.
+    // "Not generated yet" stays legible as note_count == 0.
     assert_eq!(lane.note_count, 0);
-    assert!(!lane.counts_mismatch);
+    assert!(lane.counts_mismatch);
     // The counts are per lane: the Chorus lane still carries its own
     // (default) draft and reports its own, different, count.
     assert_ne!(view.lanes[1].syllable_count, lane.syllable_count);
+}
+
+/// A lane whose clip exists but is not in the derived-clip map must
+/// still report its notes.
+///
+/// `lane_note_count` consulted only that map, so a lane reported
+/// `note_count: 0` while `song.notes` on its clip returned notes — which
+/// reads as "not generated" and silenced the mismatch flag (doc #271).
+#[test]
+fn note_count_finds_the_lane_clip_without_the_derived_map() {
+    let (mut app, verse, _chorus) = two_lane_app();
+
+    // A MIDI clip on the lane's track at the section's placement bar,
+    // mirrored the way the engine echo does — but with the derived-clip
+    // map left empty, as a stale or half-rebuilt map would be.
+    let start = app.test_tempo_map().bar_to_sample(0);
+    app.test_apply_engine_event(resonance_audio::types::AudioEvent::MidiClipCreated {
+        clip_id: 900_001,
+        track_id: TRACK,
+        start_sample: start,
+        duration_ticks: 4 * 4 * resonance_audio::types::TICKS_PER_QUARTER_NOTE,
+        name: "Verse · Vox".to_owned(),
+        notes: vec![resonance_audio::types::MidiNote {
+            note: 62,
+            velocity: 0.8,
+            start_tick: 0,
+            duration_ticks: 480,
+        }],
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+
+    let view = vocal_view(&mut app);
+    let lane = view
+        .lanes
+        .iter()
+        .find(|l| u64::from(l.definition_id) == verse)
+        .expect("the verse lane is listed");
+    assert_eq!(lane.note_count, 1, "the lane's notes are counted");
 }
 
 // ---------------- FR-3 part 2: section_id addressing ----------------

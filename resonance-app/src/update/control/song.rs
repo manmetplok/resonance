@@ -266,7 +266,13 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
                 .map(|bar| bar + 1),
             note_count,
             syllable_count,
-            counts_mismatch: note_count > 0 && syllable_count > 0 && note_count != syllable_count,
+            // A lane with lyrics but no notes is the case that most
+            // needs flagging — it renders nothing a client expects —
+            // and it was precisely the case the old `note_count > 0`
+            // guard hid, reporting `counts_mismatch: false` and giving
+            // false confidence right before a render (ba doc #271).
+            // "Not generated yet" stays legible as `note_count == 0`.
+            counts_mismatch: syllable_count > 0 && note_count != syllable_count,
         });
         for line in &vocal_params.draft {
             let syllables =
@@ -597,11 +603,33 @@ fn lane_note_count(
     definition_id: u64,
     track_id: resonance_audio::types::TrackId,
 ) -> usize {
-    app.compose
+    // Prefer the derived-clip map, but do not trust it as the only
+    // answer: a lane whose map entry is missing or points at a clip that
+    // is no longer in `midi_clips` reported 0 notes while `song.notes`
+    // on that lane's clip plainly returned some, which reads as "not
+    // generated" and silenced the mismatch flag (ba doc #271).
+    let mapped = app
+        .compose
         .derived_clips
         .iter()
-        .find(|((def, _, track), _)| *def == definition_id && *track == track_id)
-        .and_then(|(_, clip_id)| app.midi_clips.iter().find(|c| c.id == *clip_id))
+        .filter(|((def, _, track), _)| *def == definition_id && *track == track_id)
+        .find_map(|(_, clip_id)| app.midi_clips.iter().find(|c| c.id == *clip_id));
+    if let Some(clip) = mapped {
+        return clip.notes.len();
+    }
+    // Fall back to the rule `rebuild_derived_clips` uses to recover the
+    // mapping after a load: a MIDI clip on this track starting at one of
+    // the section's placement bars is this lane's clip.
+    app.compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .find_map(|p| {
+            let start = app.tempo_map.bar_to_sample(p.start_bar);
+            app.midi_clips
+                .iter()
+                .find(|c| c.track_id == track_id && c.start_sample == start)
+        })
         .map_or(0, |clip| clip.notes.len())
 }
 
