@@ -20,6 +20,26 @@ const VOCAL_RENDER_WAIT_MS: u64 = 120_000;
 #[tool_router(router = router_vocal, vis = "pub(crate)")]
 impl ResonanceMcp {
     #[tool(
+        description = "Generate a vocal lane: a melody into its MIDI clip and, unless \
+                       lyrics: false, a fresh lyric draft from the lane's theme brief. This is \
+                       what puts notes on a vocal lane — generate_part refuses vocal tracks, \
+                       and vocal_render has nothing to sing without it. Needs a vocal lane \
+                       (section_set_lane_generator kind \"vocal\") on a section that already \
+                       has chords. section_id picks the lane; seed makes the result \
+                       reproducible. Pass lyrics: false to keep lyrics you wrote with \
+                       vocal_set_lyrics — the default regenerates them. Returns the clip_id to \
+                       inspect with song_notes and edit with notes_*, then vocal_render.",
+        annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<vocal::GenerateResult>()
+    )]
+    async fn vocal_generate(
+        &self,
+        Parameters(params): Parameters<vocal::GenerateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(vocal::GENERATE, &params).await
+    }
+
+    #[tool(
         description = "Replace a vocal track's full lyric text (one line per lyric line). \
                        Phonemes are derived automatically (G2P); check them with song_vocal \
                        and fix words with vocal_set_pronunciation. Re-render afterwards with \
