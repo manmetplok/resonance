@@ -95,4 +95,19 @@ impl ResonanceMcp {
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(notes::CREATE_CLIP, &params).await
     }
+
+    #[tool(
+        description = "Move an existing MIDI clip to a new timeline position: give either a \
+                       1-based start_bar or a placement_id to anchor it to that section \
+                       placement's start. The target snaps to the bar grid, so this also \
+                       re-grids a clip whose start drifted. Track, length and notes are \
+                       unchanged.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn notes_move_clip(
+        &self,
+        Parameters(params): Parameters<notes::MoveClipParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(notes::MOVE_CLIP, &params).await
+    }
 }
