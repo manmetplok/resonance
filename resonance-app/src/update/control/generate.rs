@@ -15,10 +15,13 @@
 //! dispatch so failures come back as precise JSON-RPC errors and the
 //! synthesized message only ever runs on valid input.
 //!
-//! The generators write **derived** MIDI clips (internal ids reused
-//! across placements), not addressable project clips, so
-//! [`GenerateResult`] carries `clip_id: None` — the material is read back
-//! via `song.tracks` / `song.notes`.
+//! The generators write **derived** MIDI clips — one per placement of
+//! the target section, rebuilt wholesale on every regenerate rather than
+//! edited in place. Their ids are nonetheless the ids `song.tracks` and
+//! `song.notes` address, so [`GenerateResult`] reports them: `clip_ids`
+//! in arrangement order, and `clip_id` as the first, which is the only
+//! one for a section placed once. A caller no longer has to re-read
+//! `song.tracks` just to find out where its own material landed.
 
 use crate::compose::{ComposeMessage, LaneGeneratorConfig, LaneGeneratorKind};
 use crate::message::Message;
@@ -101,11 +104,37 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     if let Some(error) = app.compose.last_error.take() {
         return fail(request, RpcError::invalid_params(error));
     }
-    let result = GenerateResult {
-        clip_id: None,
-        revision: app.revision(),
-    };
+    let result = GenerateResult::new(generated_clips(app, definition_id, track_id), app.revision());
     (super::success(request, &result), task)
+}
+
+/// The derived clips holding this `(section, track)` lane's material,
+/// one per placement of the section, ordered by the placement's start
+/// bar. Read after the generate has run through the update path, which
+/// repopulates the derived-clip map synchronously.
+fn generated_clips(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: u64,
+) -> Vec<resonance_control::ids::ClipId> {
+    let mut placements: Vec<(u32, u64)> = app
+        .compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .map(|p| (p.start_bar, p.id))
+        .collect();
+    placements.sort_unstable();
+    placements
+        .iter()
+        .filter_map(|(_, placement_id)| {
+            app.compose
+                .derived_clips
+                .get(&(definition_id, *placement_id, track_id))
+                .copied()
+        })
+        .map(resonance_control::ids::ClipId)
+        .collect()
 }
 
 /// Build a melodic lane-generator kind from the wire role, deserializing
@@ -196,10 +225,7 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     if let Some(error) = app.compose.last_error.take() {
         return fail(request, RpcError::invalid_params(error));
     }
-    let result = GenerateResult {
-        clip_id: None,
-        revision: app.revision(),
-    };
+    let result = GenerateResult::new(generated_clips(app, definition_id, track_id), app.revision());
     (super::success(request, &result), task)
 }
 

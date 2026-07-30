@@ -61,11 +61,30 @@ pub struct DrumsParams {
 }
 
 /// Result of `generate.part` / `generate.drums`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GenerateResult {
-    /// The clip the material landed in, when the generator produced one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The clip the material landed in — the first of [`Self::clip_ids`],
+    /// which is the only one for a section placed once. Always present:
+    /// `null` means the generator produced no clip.
+    #[serde(default)]
     pub clip_id: Option<ClipId>,
+    /// Every clip written, one per placement of the target section, in
+    /// arrangement order. A section placed three times yields three
+    /// clips holding the same material.
+    #[serde(default)]
+    pub clip_ids: Vec<ClipId>,
     pub revision: u64,
+}
+
+impl GenerateResult {
+    /// Build a result from the clips the generator wrote, in
+    /// arrangement order.
+    pub fn new(clip_ids: Vec<ClipId>, revision: u64) -> Self {
+        Self {
+            clip_id: clip_ids.first().copied(),
+            clip_ids,
+            revision,
+        }
+    }
 }

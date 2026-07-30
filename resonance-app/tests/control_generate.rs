@@ -7,7 +7,7 @@ use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender}
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance, STARTUP_TAB};
-use resonance_audio::types::TrackType;
+use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
 use resonance_control::ids::{SectionDefinitionId, TrackId as ProtoTrackId};
 use resonance_control::methods::generate::{self as proto, GenerateResult, GenerateRole};
 use resonance_control::methods::harmony as harmony_proto;
@@ -103,8 +103,10 @@ fn part_installs_generator_and_derives_clips() {
         };
         let response = call(&mut app, "generate.part", &params);
         let result: GenerateResult = response.result().expect("generate.part succeeds");
-        // Derived clips aren't addressable project clips.
-        assert!(result.clip_id.is_none());
+        // The derived clip the material landed in, reported back so the
+        // caller doesn't have to re-read song.tracks to find it.
+        assert_eq!(result.clip_ids.len(), 1, "one placement, one clip");
+        assert_eq!(result.clip_id, result.clip_ids.first().copied());
     }
 
     // The section has one auto placement, so exactly one derived clip
@@ -115,6 +117,123 @@ fn part_installs_generator_and_derives_clips() {
     assert_eq!(
         app.test_lane_generator_tag(u64::from(section_id), 10),
         Some(LaneGeneratorKindTag::Pad)
+    );
+}
+
+/// The clip ids a generate reports must be the ids the read side
+/// addresses — otherwise they are decoration and the caller still has to
+/// re-read song.tracks to find its own material (doc #270 §10).
+#[test]
+fn reported_clip_id_resolves_in_song_notes() {
+    let mut app = app_with_project();
+    let section_id = section_with_chords(&mut app);
+    let track = add_synth_track(&mut app, 11);
+
+    let params = proto::PartParams {
+        section_id,
+        track_id: track,
+        role: GenerateRole::Bass,
+        chord_count: None,
+        beats_per_chord: None,
+        sevenths: None,
+        seed: Some(7),
+        options: None,
+    };
+    let rx = app.test_capture_engine();
+    let result: GenerateResult = call(&mut app, "generate.part", &params)
+        .result()
+        .expect("generate.part succeeds");
+    let clip_id = result.clip_id.expect("a clip was reported");
+
+    // The reported id must be the one actually handed to the engine.
+    let mut loaded = Vec::new();
+    while let Ok(cmd) = rx.try_recv() {
+        if let AudioCommand::LoadMidiClipDirect {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            notes,
+            name,
+            trim_start_ticks,
+            trim_end_ticks,
+        } = cmd
+        {
+            loaded.push(AudioEvent::MidiClipCreated {
+                clip_id,
+                track_id,
+                start_sample,
+                duration_ticks,
+                name,
+                notes,
+                trim_start_ticks,
+                trim_end_ticks,
+            });
+        }
+    }
+    assert_eq!(loaded.len(), 1, "one clip written to the engine");
+    let AudioEvent::MidiClipCreated { clip_id: sent, .. } = &loaded[0] else {
+        unreachable!()
+    };
+    assert_eq!(*sent, u64::from(clip_id), "reported id is the engine's id");
+
+    // Drive the echo the real engine sends back, then read the clip.
+    for event in loaded {
+        app.test_apply_engine_event(event);
+    }
+    let notes: resonance_control::methods::song::NotesView = call(
+        &mut app,
+        "song.notes",
+        &resonance_control::methods::song::NotesParams {
+            clip_id,
+            range: None,
+        },
+    )
+    .result()
+    .expect("song.notes resolves the reported clip");
+    assert_eq!(notes.clip_id, clip_id);
+    assert!(!notes.notes.is_empty(), "the bass generator wrote notes");
+}
+
+/// A section placed more than once derives one clip per placement, and
+/// all of them come back in arrangement order.
+#[test]
+fn every_placement_of_a_section_reports_its_clip() {
+    let mut app = app_with_project();
+    let section_id = section_with_chords(&mut app);
+    let track = add_synth_track(&mut app, 13);
+
+    // section_with_chords already placed it once; place it again later.
+    call(
+        &mut app,
+        "section.place",
+        &section_proto::PlaceParams {
+            definition_id: section_id,
+            start_bar: 9,
+        },
+    )
+    .result::<section_proto::PlaceResult>()
+    .expect("second placement succeeds");
+
+    let params = proto::PartParams {
+        section_id,
+        track_id: track,
+        role: GenerateRole::Pad,
+        chord_count: None,
+        beats_per_chord: None,
+        sevenths: None,
+        seed: Some(3),
+        options: None,
+    };
+    let result: GenerateResult = call(&mut app, "generate.part", &params)
+        .result()
+        .expect("generate.part succeeds");
+
+    assert_eq!(result.clip_ids.len(), 2, "one clip per placement");
+    assert_eq!(result.clip_id, result.clip_ids.first().copied());
+    assert_ne!(
+        result.clip_ids[0], result.clip_ids[1],
+        "placements get distinct clips"
     );
 }
 
@@ -288,7 +407,8 @@ fn drums_generates_onto_a_drum_track() {
     };
     let response = call(&mut app, "generate.drums", &params);
     let result: GenerateResult = response.result().expect("generate.drums succeeds");
-    assert!(result.clip_id.is_none());
+    assert_eq!(result.clip_ids.len(), 1, "one placement, one clip");
+    assert_eq!(result.clip_id, result.clip_ids.first().copied());
 
     // The section now has a primary drum pattern assigned.
     assert!(

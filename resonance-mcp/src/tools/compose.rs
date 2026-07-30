@@ -15,8 +15,9 @@ impl ResonanceMcp {
         description = "Generate a pad, bass or lead part from a section's chord grid into a \
                        track (role: pad | bass | lead). The section needs chords first \
                        (harmony_apply_progression). Optional seed makes output reproducible; \
-                       options passes role-specific generator parameters. Returns the clip the \
-                       material landed in.",
+                       options passes role-specific generator parameters. Returns clip_ids, one \
+                       per placement of the section in arrangement order, and clip_id as the \
+                       first of them — no follow-up song_tracks call needed.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<generate::GenerateResult>()
     )]
@@ -30,7 +31,8 @@ impl ResonanceMcp {
     #[tool(
         description = "Generate a drum pattern for a section into a drums track. Optional \
                        pattern names a style; omitted uses the section's arrangement default. \
-                       Returns the clip the pattern landed in.",
+                       Returns clip_ids, one per placement of the section in arrangement order, \
+                       and clip_id as the first of them.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<generate::GenerateResult>()
     )]
