@@ -6,6 +6,14 @@ use crate::ids::{SectionDefinitionId, SectionPlacementId};
 use serde::{Deserialize, Serialize};
 
 /// `section.create` — create a definition ([`CreateParams`] -> [`CreateResult`]).
+///
+/// Also **places** the new definition on the timeline, after the last
+/// existing placement, unless [`CreateParams::place`] is `false`. That
+/// implicit placement is not implied by the name and is the first thing
+/// a client trips over: `section.create` then `section.place` fails
+/// "Placement would overlap an existing section", because the section is
+/// already there. Pass `place: false` to build a definition library and
+/// position every section deliberately.
 pub const CREATE: &str = "section.create";
 /// `section.rename` — rename a definition ([`RenameParams`] -> `MutationAck`).
 pub const RENAME: &str = "section.rename";
@@ -44,6 +52,17 @@ pub struct CreateParams {
     pub length_bars: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<KeyScale>,
+    /// Also place the definition on the timeline, after the last
+    /// existing placement. Defaults to `true` (the historical
+    /// behaviour). Pass `false` to create the definition only, then
+    /// position it with `section.place` — otherwise that `section.place`
+    /// is rejected as overlapping the implicit placement.
+    #[serde(default = "default_place")]
+    pub place: bool,
+}
+
+fn default_place() -> bool {
+    true
 }
 
 /// Result of `section.create`.
