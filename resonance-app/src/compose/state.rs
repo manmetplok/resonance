@@ -663,11 +663,23 @@ impl ComposeState {
             }
         }
 
-        let max_used = midi_clips
-            .iter()
-            .map(|c| c.id)
-            .filter(|id| *id >= DERIVED_CLIP_ID_BASE)
-            .max();
+        self.reserve_derived_clip_ids(midi_clips.iter().map(|c| c.id));
+    }
+
+    /// Bump `next_derived_clip_id` past every id in `ids` that lives in
+    /// the derived range, so a later allocation cannot collide with a
+    /// clip that already exists.
+    ///
+    /// Must be fed **every** kind of derived clip, not just MIDI. The
+    /// SVS-rendered vocal *audio* clips draw from the same counter (see
+    /// `fresh_derived_clip_id`), and for a while only the MIDI clips
+    /// were counted: after a load the allocator happily re-issued the id
+    /// of a live vocal audio clip, so one id was simultaneously a MIDI
+    /// clip on one track and an audio clip on another, and a client
+    /// holding an id across a render silently addressed the wrong object
+    /// — or one of a different type (ba doc #271 V5).
+    pub(crate) fn reserve_derived_clip_ids(&mut self, ids: impl Iterator<Item = ClipId>) {
+        let max_used = ids.filter(|id| *id >= DERIVED_CLIP_ID_BASE).max();
         if let Some(m) = max_used {
             self.next_derived_clip_id = self.next_derived_clip_id.max(m.saturating_add(1));
         }
@@ -694,6 +706,11 @@ impl ComposeState {
         tempo_map: &resonance_audio::types::TempoMap,
     ) {
         self.vocal_audio.clips.clear();
+
+        // Reserve before the track filter below: an audio clip in the
+        // derived range must never be re-issued, whether or not this
+        // rebuild claims it as a vocal lane's clip.
+        self.reserve_derived_clip_ids(audio_clips.iter().map(|c| c.id));
 
         for clip in audio_clips {
             if !vocal_track_ids.contains(&clip.track_id) {
