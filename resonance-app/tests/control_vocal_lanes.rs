@@ -96,6 +96,98 @@ fn vocal_view(app: &mut Resonance) -> VocalView {
     .expect("song.vocal succeeds")
 }
 
+/// Give a section a chord grid, so `vocal.generate` can derive a melody
+/// for its lane.
+fn add_chords(app: &mut Resonance, def: u64) {
+    let mut params = resonance_control::methods::harmony::ApplyProgressionParams::for_section(
+        SectionDefinitionId(def),
+    );
+    params.key = Some(resonance_control::KeyScale {
+        tonic: "A".to_owned(),
+        scale: "minor".to_owned(),
+    });
+    params.numerals = Some(
+        ["i", "iv", "v", "i"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    );
+    call(app, "harmony.apply_progression", &params)
+        .result::<resonance_control::methods::harmony::ApplyProgressionResult>()
+        .expect("progression applies");
+}
+
+fn render(app: &mut Resonance, section_id: Option<u64>) -> Response {
+    call(
+        app,
+        "vocal.render",
+        &proto::RenderParams {
+            track_id: Some(ProtoTrackId(TRACK)),
+            section_id: section_id.map(SectionDefinitionId),
+            voicebank: None,
+        },
+    )
+}
+
+/// `vocal.render` used to hardcode the track's first vocal lane, so a
+/// track singing in several sections could only ever re-render its
+/// first — every other lane stayed frozen at its first render (doc #271
+/// V2). An explicit `section_id` must reach the lane it names.
+#[test]
+fn render_targets_the_lane_named_by_section_id() {
+    let (mut app, verse, chorus) = two_lane_app();
+    add_chords(&mut app, chorus);
+
+    // Only the chorus lane has notes.
+    call(
+        &mut app,
+        "vocal.generate",
+        &proto::GenerateParams {
+            track_id: ProtoTrackId(TRACK),
+            section_id: Some(SectionDefinitionId(chorus)),
+            seed: Some(3),
+            lyrics: false,
+        },
+    )
+    .result::<proto::GenerateResult>()
+    .expect("vocal.generate on the chorus lane succeeds");
+
+    // Naming the chorus renders it.
+    render(&mut app, Some(chorus))
+        .result::<resonance_control::job::JobStarted>()
+        .expect("the named lane renders");
+
+    // Omitting section_id still resolves the first lane in placement
+    // order (the verse), which has no notes — so the old behaviour is
+    // intact and demonstrably a different lane.
+    let message = expect_error(render(&mut app, None), ErrorKind::InvalidParams);
+    assert!(message.contains("no notes"), "unexpected: {message}");
+
+    // A section the track does not sing in is a precise error, not a
+    // silent fallback to the first lane.
+    let orphan = {
+        let response = call(
+            &mut app,
+            "section.create",
+            &section_proto::CreateParams {
+                name: "Instrumental".to_owned(),
+                length_bars: 4,
+                scale: None,
+                place: false,
+            },
+        );
+        u64::from(
+            response
+                .result::<section_proto::CreateResult>()
+                .expect("section.create succeeds")
+                .section_id,
+        )
+    };
+    let message = expect_error(render(&mut app, Some(orphan)), ErrorKind::InvalidParams);
+    assert!(message.contains("no vocal lane"), "unexpected: {message}");
+    let _ = verse;
+}
+
 // ---------------- FR-3/FR-7: song.vocal lane identity ----------------
 
 #[test]

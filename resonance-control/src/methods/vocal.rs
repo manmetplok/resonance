@@ -89,15 +89,28 @@ pub struct ClearPronunciationParams {
     pub word: String,
 }
 
-/// Params for `vocal.render`. Omit `track_id` to render every vocal
-/// track; the job's payload is [`RenderJobResult`]. A render covers all
-/// of a track's lanes, so this takes no `section_id`.
+/// Params for `vocal.render`. A render covers **one lane**: omitting
+/// `track_id` resolves the project's first vocal track and omitting
+/// `section_id` that track's first lane, so render each lane you want
+/// updated. The job's payload is [`RenderJobResult`].
+///
+/// Render synthesises the notes already in the lane's clip; it never
+/// generates or rewrites them (`vocal.generate` does that).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RenderParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
-    /// Voicebank name; defaults to the app default (Lilia).
+    /// Which of the track's vocal lanes to render. Omitted resolves the
+    /// track's first vocal lane in placement order — the same rule the
+    /// rest of the namespace uses. Without this a track that sings in
+    /// several sections could only ever re-render its first lane, so
+    /// every other lane stayed frozen at its first render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<SectionDefinitionId>,
+    /// Voicebank name. Omitted keeps the lane's current voicebank
+    /// (falling back to the app default, Lilia, for a lane that has
+    /// never chosen one) — so a plain re-render never resets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voicebank: Option<String>,
 }

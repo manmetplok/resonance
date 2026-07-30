@@ -304,11 +304,13 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    // Doc #265: default voicebank is Lilia when the client doesn't name
-    // one, overriding the VocalParams code default (TIGER).
-    let voicebank = match &params.voicebank {
+    // An explicitly named voicebank is parsed up front so a typo fails
+    // before any job starts. `None` is resolved per lane further down —
+    // it must not blanket-default, or every plain render would reset the
+    // lane (ba doc #271).
+    let requested = match &params.voicebank {
         Some(name) => match parse_voicebank(name) {
-            Some(vb) => vb,
+            Some(vb) => Some(vb),
             None => {
                 let known: Vec<&str> =
                     VocalVoicebank::ALL.iter().map(|vb| vb.as_str()).collect();
@@ -321,7 +323,7 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                 );
             }
         },
-        None => VocalVoicebank::Lilia,
+        None => None,
     };
 
     // Which lane(s): a specific track, or every vocal track when omitted.
@@ -347,28 +349,47 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         },
     };
 
-    let definition_id = match first_vocal_definition(app, track_id) {
-        Some(id) => id,
-        None => {
-            return fail(
-                request,
-                RpcError::not_found(format!("track {track_id} has no vocal lane to render")),
-            )
-        }
+    // Which of the track's lanes: an explicit section, else the first in
+    // placement order. Routed through the same resolver the rest of the
+    // namespace uses, so the error shapes match and — the point of
+    // accepting `section_id` at all — a track that sings in several
+    // sections can re-render any of them, not only its first (ba doc
+    // #271 V2).
+    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
+        Ok(id) => id,
+        Err(e) => return fail(request, e),
     };
 
-    // Pre-flight the conditions `roll_vocal_melody` silently no-ops on
-    // (empty draft, no chords) so they surface as a precise error rather
-    // than a job that never resolves.
-    if let Some(def) = app.compose.find_definition(definition_id) {
-        if def.chords.is_empty() {
-            return fail(
-                request,
-                RpcError::invalid_params(
-                    "section has no chords; add chords (harmony.*) before rendering vocals",
-                ),
-            );
+    // Resolve an omitted voicebank against the lane rather than against
+    // a constant. Blanket-defaulting to Lilia meant every render that
+    // left the argument out silently reset the lane, so a song with a
+    // TIGER character and a Lilia character lost the split on the next
+    // plain render (ba doc #271). A lane still holding the untouched
+    // `VocalParams` code default has never chosen one, so it still picks
+    // up doc #265's Lilia; anything explicitly set wins.
+    let voicebank = requested.unwrap_or_else(|| {
+        match lane_voicebank(app, definition_id, track_id) {
+            Some(vb) if vb != default_lane_voicebank() => vb,
+            _ => VocalVoicebank::Lilia,
         }
+    });
+
+    // Pre-flight the conditions `rerender_vocal_audio` silently no-ops
+    // on so they surface as a precise error rather than a job that never
+    // resolves. The section's chords are deliberately NOT among them:
+    // render synthesises the notes already in the lane's clip and never
+    // derives from the chord grid, so a chordless section with authored
+    // notes is a legitimate render (ba doc #271 V1).
+    if !lane_has_notes(app, definition_id, track_id) {
+        return fail(
+            request,
+            RpcError::invalid_params(
+                "vocal lane has no notes to sing; generate a melody (vocal.generate) or write \
+                 notes into its clip (notes.*) before rendering",
+            ),
+        );
+    }
+    if let Some(def) = app.compose.find_definition(definition_id) {
         let empty_draft = def
             .lane_generators
             .get(&track_id)
@@ -423,6 +444,50 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// The voicebank currently stored on a vocal lane.
+fn lane_voicebank(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: u64,
+) -> Option<VocalVoicebank> {
+    app.compose
+        .find_definition(definition_id)
+        .and_then(|d| d.lane_generators.get(&track_id))
+        .and_then(|c| match &c.kind {
+            crate::compose::LaneGeneratorKind::Vocal(p) => Some(p.voicebank),
+            _ => None,
+        })
+}
+
+/// The voicebank a freshly-installed vocal lane carries — i.e. "the user
+/// has not chosen one". Read from `VocalParams::default()` so this stays
+/// true if that default is ever changed.
+fn default_lane_voicebank() -> VocalVoicebank {
+    resonance_music_theory::VocalParams::default().voicebank
+}
+
+/// Does the lane have a MIDI clip holding at least one note?
+///
+/// Resolves the clip the same way `rerender_vocal_audio` does — the
+/// derived clip of any placement of the section — so the pre-flight and
+/// the render agree on what "has notes" means.
+fn lane_has_notes(app: &Resonance, definition_id: u64, track_id: u64) -> bool {
+    app.compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .filter_map(|p| {
+            app.compose
+                .derived_clips
+                .get(&(definition_id, p.id, track_id))
+        })
+        .any(|clip_id| {
+            app.midi_clips
+                .iter()
+                .any(|c| c.id == *clip_id && !c.notes.is_empty())
+        })
+}
 
 /// Resolve the vocal lane a track addresses (its first in placement
 /// order), or a precise error when the track has none.

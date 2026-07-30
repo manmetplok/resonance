@@ -259,11 +259,26 @@ pub(crate) fn control_set_line(
     true
 }
 
-/// `vocal.render`: set the lane's voicebank and kick off the SVS render
-/// for one lane. Returns the async render `Task` (or `Task::none()` when
-/// the lane can't render yet — the caller has already validated the lane
-/// exists; a `Task::none()` here means empty draft / no chords, surfaced
-/// as `compose.last_error`).
+/// `vocal.render`: set the lane's voicebank and synthesise the notes
+/// currently in the lane's MIDI clip. Returns the async render `Task`
+/// (or `Task::none()` when the lane can't render yet — the caller has
+/// already validated the lane exists; a `Task::none()` here means no
+/// generated clip / no notes, surfaced as `compose.last_error`).
+///
+/// **Renders, never generates.** This drives `rerender_vocal_audio`
+/// (notes-only), not `roll_vocal_melody` (full regenerate) — the same
+/// split the GUI exposes as "Re-render audio" versus "Generate". Wired
+/// to the generate path, `vocal.render` silently discarded whatever the
+/// client had authored into the clip and re-derived a melody from the
+/// lane's seed, so three different authored note sets rendered to
+/// byte-identical audio while every call reported success (ba doc #271
+/// V1). Melody generation belongs to `vocal.generate`, which exists for
+/// exactly that (doc #269 FR-2).
+///
+/// Lyrics still come from the lane's live draft: `enqueue_vocal_render`
+/// resolves them out of `VocalParams::draft`, and the clip's
+/// `clip_lyrics` entry is only a per-note annotation overlay — so a
+/// `vocal.set_lyrics` between generate and render is picked up here.
 pub(crate) fn control_render(
     r: &mut crate::Resonance,
     definition_id: u64,
@@ -273,7 +288,7 @@ pub(crate) fn control_render(
     super::lane_inspector::update_vocal(r, definition_id, track_id, |p| {
         p.voicebank = voicebank;
     });
-    roll_vocal_melody(r, definition_id, track_id)
+    rerender_vocal_audio(r, definition_id, track_id)
 }
 
 /// Shared off-thread vocal render path. Tears down the prior audio

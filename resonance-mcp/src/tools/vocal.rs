@@ -95,12 +95,17 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Render the singing voice (SVS). Omit track_id to render every vocal \
-                       track; voicebank defaults to the app default (Lilia). Runs as a job — \
-                       this tool waits up to 2 minutes and returns the final status; if still \
-                       running, poll job_status with the returned job_id. Needs a vocal lane \
-                       (section_set_lane_generator kind \"vocal\") with notes AND lyrics on the \
-                       vocal track first.",
+        description = "Render the singing voice (SVS) for ONE vocal lane: it synthesises the \
+                       notes currently in that lane's MIDI clip and never changes them, so \
+                       author with vocal_generate + notes_* first and render last. Omitting \
+                       track_id picks the project's first vocal track, and omitting section_id \
+                       picks that track's first lane in placement order — pass section_id to \
+                       render any other lane, otherwise a track that sings in several sections \
+                       only ever re-renders its first. Call it once per lane. voicebank \
+                       defaults to the app default (Lilia). Runs as a job — this tool waits up \
+                       to 2 minutes and returns the final status; if still running, poll \
+                       job_status with the returned job_id. Needs a vocal lane \
+                       (section_set_lane_generator kind \"vocal\") with notes AND lyrics.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]

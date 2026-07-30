@@ -24,10 +24,11 @@
 //! track.add (instrument x2 + drums + vocal) -> section.create ->
 //! harmony.apply_progression -> section.place -> generate.part (lead) +
 //! generate.drums -> notes.create_clip + notes.insert (hand-placed
-//! notes) -> vocal.set_lyrics + vocal.render (job) -> transport.play +
-//! song.summary sanity check -> render.mixdown -> assert WAV exists /
-//! non-empty -> project.save. The song.summary revision is spot-checked
-//! to confirm each mutation landed in the undoable history.
+//! notes) -> vocal.set_lyrics + vocal.generate + vocal.render (job) ->
+//! transport.play + song.summary sanity check -> render.mixdown ->
+//! assert WAV exists / non-empty -> project.save. The song.summary
+//! revision is spot-checked to confirm each mutation landed in the
+//! undoable history.
 
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{Message, ProjectIoMessage};
@@ -348,6 +349,16 @@ fn compose_a_song_end_to_end_through_the_control_protocol() {
         "vocal.set_lyrics",
         json!({ "track_id": vocal, "text": "la la la la\nsing a little song" }),
     );
+    // Put a melody on the lane. `vocal.render` sings the notes already
+    // in the lane's clip and never generates them (doc #271 V1), so this
+    // is the real client flow: generate, then render.
+    let _: Value = ok(
+        &mut app,
+        705,
+        "vocal.generate",
+        json!({ "track_id": vocal, "seed": 11, "lyrics": false }),
+    );
+
     // Kick off the SVS render job. The voicebank model dir is absent
     // under test, so the job stays live rather than completing — the
     // acceptance is that it is TRACKED (not errored), which is the
