@@ -49,9 +49,6 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let name = params.name.trim().to_owned();
     if name.is_empty() {
         return fail(request, RpcError::invalid_params("section name cannot be empty"));
@@ -111,9 +108,6 @@ fn rename(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     if let Some(e) = definition_missing(app, params.section_id.into()) {
         return fail(request, e);
     }
@@ -136,9 +130,6 @@ fn resize(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     if let Some(e) = definition_missing(app, params.section_id.into()) {
         return fail(request, e);
     }
@@ -163,9 +154,6 @@ fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let definition_id: u64 = params.section_id.into();
     let Some(def) = app.compose.find_definition(definition_id) else {
         return fail(
@@ -203,9 +191,6 @@ fn place(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     if let Some(e) = definition_missing(app, params.definition_id.into()) {
         return fail(request, e);
     }
@@ -248,9 +233,6 @@ fn remove_placement(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     let placement_id: u64 = params.placement_id.into();
     if app.compose.find_placement(placement_id).is_none() {
         return fail(
@@ -270,9 +252,6 @@ fn set_scale(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         Ok(p) => p,
         Err(e) => return fail(request, e),
     };
-    if let Some(e) = super::mutation_gate_error(app) {
-        return fail(request, e);
-    }
     if let Some(e) = definition_missing(app, params.section_id.into()) {
         return fail(request, e);
     }

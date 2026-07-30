@@ -130,6 +130,25 @@ pub fn execute(
         return (response, task);
     }
 
+    // Mutation gate (todo #1161): every namespace below this line
+    // mutates project state, so it needs an active, non-busy project.
+    // Enforcing it here — once, structurally — instead of inside each
+    // handler means a newly added mutating namespace cannot silently
+    // no-op and claim success (the bug the per-handler convention kept
+    // reintroducing). The read-only views (`song.*`, `job.*`,
+    // `control.hello`) and the project-lifecycle methods (`project.*`,
+    // which create/open the very project this gate checks for) ran
+    // *above* and are intentionally not gated.
+    //
+    // Restricted to *known* protocol methods so an unknown method still
+    // falls through to `method_not_found` rather than being masked by a
+    // `busy` — the gate answers "can't right now", not "no such method".
+    if is_protocol_method(method) && !is_read_only_method(method) {
+        if let Some(error) = mutation_gate_error(app) {
+            return (failure(request, error), Task::none());
+        }
+    }
+
     // Mutating compose namespaces (todo #1153): `section.*` sections +
     // placements, `harmony.*` chords + progression apply. Both synthesize
     // ComposeMessage values routed through `run_via_update`.
@@ -228,6 +247,24 @@ fn hello(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
             .collect(),
     };
     success(request, &result)
+}
+
+/// True when `method` needs no active project and so bypasses
+/// [`mutation_gate_error`] (todo #1161): the read-only introspection
+/// (`control.hello`, `song.*`, `job.*`) plus the project-lifecycle
+/// methods (`project.*`), which are the ones that *establish* the
+/// project the gate otherwise requires. Every other method mutates the
+/// current project and is gated.
+///
+/// The `notes.*` create/insert/etc., `transport.*`, `track.*` /
+/// `mixer.*`, `section.*`, `harmony.*`, `generate.*`, `vocal.*` and
+/// `render.*` namespaces are all mutating and deliberately absent.
+pub(crate) fn is_read_only_method(method: &str) -> bool {
+    use resonance_control::methods;
+    method == HELLO
+        || methods::song::METHODS.contains(&method)
+        || methods::project::METHODS.contains(&method)
+        || resonance_control::job::METHODS.contains(&method)
 }
 
 /// True when `method` is part of protocol v1 (i.e. listed in the
