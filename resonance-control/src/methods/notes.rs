@@ -17,9 +17,12 @@ pub const DELETE: &str = "notes.delete";
 /// `notes.create_clip` — create an empty MIDI clip on a track
 /// ([`CreateClipParams`] -> [`CreateClipResult`]).
 pub const CREATE_CLIP: &str = "notes.create_clip";
+/// `notes.move_clip` — reposition a MIDI clip on the timeline
+/// ([`MoveClipParams`] -> `MutationAck`).
+pub const MOVE_CLIP: &str = "notes.move_clip";
 
 /// All `notes.*` method names.
-pub const METHODS: &[&str] = &[INSERT, EDIT, DELETE, CREATE_CLIP];
+pub const METHODS: &[&str] = &[INSERT, EDIT, DELETE, CREATE_CLIP, MOVE_CLIP];
 
 fn default_velocity() -> u8 {
     100
@@ -97,4 +100,23 @@ pub struct CreateClipParams {
 pub struct CreateClipResult {
     pub clip_id: ClipId,
     pub revision: u64,
+}
+
+/// Params for `notes.move_clip`: reposition an existing MIDI clip on the
+/// timeline. Give **exactly one** of `start_bar` (1-based) or
+/// `placement_id` (anchor the clip to a section placement's start).
+///
+/// The target is snapped to the tempo map's bar grid, so this also
+/// re-grids a clip whose start drifted. The clip's track, length and
+/// notes are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct MoveClipParams {
+    pub clip_id: ClipId,
+    /// 1-based target bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_bar: Option<u32>,
+    /// Move the clip to this section placement's start bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_id: Option<SectionPlacementId>,
 }
