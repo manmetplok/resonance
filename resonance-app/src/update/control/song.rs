@@ -459,10 +459,41 @@ fn track_kind(t: &TrackState) -> TrackKind {
     }
 }
 
+/// Chain index of the track's instrument, if it has one.
+///
+/// Classified by what the plugin *is* — the scanner records
+/// `is_instrument` from the CLAP descriptor — not by where it sits.
+/// Position alone gets this wrong: `track.add_effect` appends, so an
+/// effect added to a chain-empty instrument track lands at slot 0 and
+/// would otherwise be reported as that track's instrument while the
+/// effects array came back empty.
+fn instrument_slot(app: &Resonance, t: &TrackState) -> Option<usize> {
+    if t.track_type != TrackType::Instrument {
+        return None;
+    }
+    let scanned = |id: &str| app.available_plugins.iter().find(|p| p.clap_plugin_id == id);
+    if let Some(i) = t
+        .plugins
+        .iter()
+        .position(|p| scanned(&p.clap_plugin_id).is_some_and(|s| s.is_instrument))
+    {
+        return Some(i);
+    }
+    // Nothing the scanner knows to be an instrument. Fall back to slot 0
+    // only when the scanner doesn't know that plugin at all — a project
+    // whose instrument is no longer installed still reports the slot it
+    // occupies — never when the scanner positively classified it as an
+    // effect.
+    match t.plugins.first() {
+        Some(p) if scanned(&p.clap_plugin_id).is_none() => Some(0),
+        _ => None,
+    }
+}
+
 /// The track's sound source, compact: the external-instrument device
 /// (`"external:<device-id>"`) when the track drives outboard hardware,
-/// else the instrument plugin's stable CLAP id (slot 0 on instrument
-/// tracks). `None` for audio tracks and empty instrument tracks.
+/// else the instrument plugin's stable CLAP id. `None` for audio tracks
+/// and for instrument tracks holding no instrument.
 fn instrument_summary(app: &Resonance, t: &TrackState) -> Option<String> {
     if let Some(ext) = app.external_instruments.get(&t.id) {
         return Some(format!(
@@ -470,22 +501,21 @@ fn instrument_summary(app: &Resonance, t: &TrackState) -> Option<String> {
             ext.device_id.as_deref().unwrap_or("unconfigured")
         ));
     }
-    if t.track_type == TrackType::Instrument {
-        return t.plugins.first().map(|p| p.clap_plugin_id.clone());
-    }
-    None
+    instrument_slot(app, t)
+        .and_then(|i| t.plugins.get(i))
+        .map(|p| p.clap_plugin_id.clone())
 }
 
-/// Effect chain as stable CLAP plugin ids. On instrument tracks slot 0
-/// is the instrument (reported via [`instrument_summary`]); everything
-/// after it is an insert effect. On other tracks the whole chain is
-/// effects.
-fn effect_chain(t: &TrackState) -> Vec<String> {
-    let skip = usize::from(t.track_type == TrackType::Instrument && !t.plugins.is_empty());
+/// Effect chain as stable CLAP plugin ids, in chain order: every plugin
+/// except the one [`instrument_slot`] identified as the instrument. On
+/// non-instrument tracks the whole chain is effects.
+fn effect_chain(app: &Resonance, t: &TrackState) -> Vec<String> {
+    let instrument = instrument_slot(app, t);
     t.plugins
         .iter()
-        .skip(skip)
-        .map(|p| p.clap_plugin_id.clone())
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != instrument)
+        .map(|(_, p)| p.clap_plugin_id.clone())
         .collect()
 }
 
@@ -521,7 +551,7 @@ fn track_detail(app: &Resonance, t: &TrackState) -> TrackDetail {
     clips.sort_by_key(|c| c.start.sample);
     TrackDetail {
         summary: track_summary(app, t),
-        effects: effect_chain(t),
+        effects: effect_chain(app, t),
         // Cache attached (valid or stale): the #576 frozen-input
         // classifier rejects note/lyric/instrument/param edits, so the
         // client needs to see why its mutations bounce.
