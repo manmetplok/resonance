@@ -39,6 +39,7 @@ pub(super) fn try_handle(app: &Resonance, request: &Request) -> Option<Response>
         song::NOTES => notes(app, request),
         song::VOCAL => vocal(app, request),
         track::PLUGINS => plugin_catalog(app, request),
+        track::PLUGIN_PARAMS => plugin_params(app, request),
         _ => return None,
     };
     Some(response)
@@ -324,6 +325,117 @@ fn plugin_catalog(app: &Resonance, request: &Request) -> Response {
         })
         .collect();
     super::success(request, &PluginCatalog { plugins })
+}
+
+/// `track.plugin_params` — the plugins on one track and their
+/// parameters (ba doc #272 V-3).
+///
+/// Until this existed a client could attach a plugin but never configure
+/// it, so every instrument played its default patch: a pad, a lead and a
+/// sub drone were the same wavetable with different notes, and the only
+/// lever was track volume.
+///
+/// Plugins are addressed by the CLAP id `song.tracks` already reports,
+/// with `occurrence` disambiguating a track that carries the same plugin
+/// twice.
+fn plugin_params(app: &Resonance, request: &Request) -> Response {
+    let params: track::PluginParamsParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return super::failure(request, e),
+    };
+    let Some(t) = app.registry.tracks.iter().find(|t| t.id == params.track_id.0) else {
+        return super::failure(
+            request,
+            RpcError::not_found(format!("no track with id {}", params.track_id)),
+        );
+    };
+
+    let entries = plugin_entries(app, t);
+    let plugins: Vec<track::PluginParamsEntry> = match &params.plugin_id {
+        None => entries,
+        Some(wanted) => {
+            let occurrence = params.occurrence.unwrap_or(0);
+            let matched: Vec<track::PluginParamsEntry> = entries
+                .into_iter()
+                .filter(|e| &e.plugin_id == wanted && e.occurrence == occurrence)
+                .collect();
+            if matched.is_empty() {
+                return super::failure(request, unknown_plugin_on_track(app, t, wanted, occurrence));
+            }
+            matched
+        }
+    };
+
+    let result = track::PluginParamsView {
+        track_id: params.track_id,
+        plugins,
+        revision: app.revision(),
+    };
+    super::success(request, &result)
+}
+
+/// The track's plugins as wire entries, in chain order, each tagged with
+/// its role and its occurrence index among same-id siblings.
+pub(super) fn plugin_entries(app: &Resonance, t: &TrackState) -> Vec<track::PluginParamsEntry> {
+    let instrument = instrument_slot(app, t);
+    let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    t.plugins
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let occurrence = seen
+                .entry(p.clap_plugin_id.as_str())
+                .and_modify(|n| *n += 1)
+                .or_insert(0);
+            track::PluginParamsEntry {
+                plugin_id: p.clap_plugin_id.clone(),
+                name: p.plugin_name.clone(),
+                occurrence: *occurrence,
+                kind: if Some(i) == instrument {
+                    PluginKind::Instrument
+                } else {
+                    PluginKind::Effect
+                },
+                params: p
+                    .params
+                    .iter()
+                    .map(|param| track::PluginParamView {
+                        id: param.id,
+                        name: param.name.clone(),
+                        value: param.current_value,
+                        min: param.min_value,
+                        max: param.max_value,
+                        default: param.default_value,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// "No such plugin on this track", listing what the track does carry so
+/// the caller can correct the id rather than guess.
+pub(super) fn unknown_plugin_on_track(
+    app: &Resonance,
+    t: &TrackState,
+    wanted: &str,
+    occurrence: u32,
+) -> RpcError {
+    let present: Vec<String> = plugin_entries(app, t)
+        .iter()
+        .map(|e| {
+            if e.occurrence == 0 {
+                e.plugin_id.clone()
+            } else {
+                format!("{} (occurrence {})", e.plugin_id, e.occurrence)
+            }
+        })
+        .collect();
+    RpcError::not_found(format!(
+        "track {} has no plugin {wanted:?} at occurrence {occurrence}; it carries: [{}]",
+        t.id,
+        present.join(", ")
+    ))
 }
 
 // ---------------------------------------------------------------------------

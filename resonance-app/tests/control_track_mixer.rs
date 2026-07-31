@@ -200,6 +200,232 @@ fn delete_requires_confirm_and_reverts_with_undo() {
     assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
 }
 
+// ---------------- track.plugin_params / set_plugin_param ----------------
+
+/// Mirror the engine echo for a plugin that exposes real parameters.
+fn echo_plugin_with_params(
+    app: &mut Resonance,
+    track_id: u64,
+    instance_id: u64,
+    plugin_id: &str,
+    params: Vec<resonance_audio::types::ParamInfo>,
+) {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id,
+        instance_id,
+        plugin_name: plugin_id.to_owned(),
+        clap_plugin_id: plugin_id.to_owned(),
+        clap_file_path: format!("/plugins/{plugin_id}.clap"),
+        params,
+        has_gui: false,
+        output_port_count: 1,
+        output_port_names: vec!["Main".to_owned()],
+    });
+}
+
+fn param(
+    id: u32,
+    name: &str,
+    current: f64,
+    min: f64,
+    max: f64,
+) -> resonance_audio::types::ParamInfo {
+    resonance_audio::types::ParamInfo {
+        id,
+        name: name.to_owned(),
+        min_value: min,
+        max_value: max,
+        default_value: current,
+        current_value: current,
+    }
+}
+
+fn plugin_params(
+    app: &mut Resonance,
+    params: serde_json::Value,
+) -> resonance_control::methods::track::PluginParamsView {
+    call(app, "track.plugin_params", params)
+        .result()
+        .expect("track.plugin_params succeeds")
+}
+
+/// Until this existed a client could attach a plugin but never configure
+/// it, so every instrument played its default patch (doc #272 V-3).
+#[test]
+fn plugin_params_are_readable_and_settable() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+    echo_plugin_with_params(
+        &mut app,
+        id,
+        1,
+        "com.resonance.wavetable",
+        vec![
+            param(0, "Cutoff", 0.5, 0.0, 1.0),
+            param(1, "Resonance", 0.2, 0.0, 1.0),
+        ],
+    );
+
+    let view = plugin_params(&mut app, serde_json::json!({ "track_id": id }));
+    assert_eq!(view.plugins.len(), 1);
+    let entry = &view.plugins[0];
+    assert_eq!(entry.plugin_id, "com.resonance.wavetable");
+    assert_eq!(entry.kind, resonance_control::methods::track::PluginKind::Instrument);
+    let cutoff = entry
+        .params
+        .iter()
+        .find(|p| p.name == "Cutoff")
+        .expect("Cutoff is listed");
+    assert_eq!((cutoff.value, cutoff.min, cutoff.max), (0.5, 0.0, 1.0));
+
+    // Set it by name; omitting plugin_id targets the instrument.
+    let before = app.revision();
+    let ack: MutationAck = call(
+        &mut app,
+        "track.set_plugin_param",
+        serde_json::json!({ "track_id": id, "param": "cutoff", "value": 0.8 }),
+    )
+    .result()
+    .expect("set succeeds");
+    assert_eq!(ack.revision, before + 1, "a committed edit bumps revision");
+
+    let view = plugin_params(&mut app, serde_json::json!({ "track_id": id }));
+    let cutoff = view.plugins[0]
+        .params
+        .iter()
+        .find(|p| p.name == "Cutoff")
+        .expect("Cutoff still listed");
+    assert_eq!(cutoff.value, 0.8, "the new value reads back");
+
+    // And by numeric CLAP id.
+    let _: MutationAck = call(
+        &mut app,
+        "track.set_plugin_param",
+        serde_json::json!({ "track_id": id, "param": "1", "value": 0.9 }),
+    )
+    .result()
+    .expect("set by numeric id succeeds");
+    let view = plugin_params(&mut app, serde_json::json!({ "track_id": id }));
+    let res = view.plugins[0]
+        .params
+        .iter()
+        .find(|p| p.id == 1)
+        .expect("param 1 listed");
+    assert_eq!(res.value, 0.9);
+}
+
+/// Out-of-range is rejected with the range, not silently clamped — a
+/// quietly-moved value is how a mix ends up wrong with nothing to point
+/// at.
+#[test]
+fn an_out_of_range_value_is_rejected_with_the_range() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+    echo_plugin_with_params(
+        &mut app,
+        id,
+        1,
+        "com.resonance.wavetable",
+        vec![param(0, "Cutoff", 0.5, 0.0, 1.0)],
+    );
+
+    for bad in [-0.1, 1.5] {
+        let error = call(
+            &mut app,
+            "track.set_plugin_param",
+            serde_json::json!({ "track_id": id, "param": "Cutoff", "value": bad }),
+        )
+        .error
+        .expect("out of range rejected");
+        assert_eq!(error.kind(), ErrorKind::InvalidParams);
+        assert!(error.message.contains("0..=1"), "{}", error.message);
+    }
+
+    // The value never moved.
+    let view = plugin_params(&mut app, serde_json::json!({ "track_id": id }));
+    assert_eq!(view.plugins[0].params[0].value, 0.5);
+}
+
+#[test]
+fn unknown_plugins_and_params_are_precise() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+    echo_plugin_with_params(
+        &mut app,
+        id,
+        1,
+        "com.resonance.wavetable",
+        vec![param(0, "Cutoff", 0.5, 0.0, 1.0)],
+    );
+
+    let error = call(
+        &mut app,
+        "track.set_plugin_param",
+        serde_json::json!({
+            "track_id": id, "plugin_id": "com.nope", "param": "Cutoff", "value": 0.5
+        }),
+    )
+    .error
+    .expect("unknown plugin rejected");
+    assert_eq!(error.kind(), ErrorKind::NotFound);
+    assert!(error.message.contains("com.resonance.wavetable"), "{}", error.message);
+
+    let error = call(
+        &mut app,
+        "track.set_plugin_param",
+        serde_json::json!({ "track_id": id, "param": "Wobble", "value": 0.5 }),
+    )
+    .error
+    .expect("unknown param rejected");
+    assert_eq!(error.kind(), ErrorKind::NotFound);
+    assert!(error.message.contains("Cutoff"), "{}", error.message);
+}
+
+/// A track carrying the same effect twice addresses each by occurrence.
+#[test]
+fn occurrence_addresses_duplicate_plugins() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+    echo_plugin_with_params(
+        &mut app,
+        id,
+        1,
+        "com.resonance.eq",
+        vec![param(0, "Gain", 0.0, -12.0, 12.0)],
+    );
+    echo_plugin_with_params(
+        &mut app,
+        id,
+        2,
+        "com.resonance.eq",
+        vec![param(0, "Gain", 0.0, -12.0, 12.0)],
+    );
+
+    let view = plugin_params(&mut app, serde_json::json!({ "track_id": id }));
+    assert_eq!(view.plugins.len(), 2);
+    assert_eq!(view.plugins[0].occurrence, 0);
+    assert_eq!(view.plugins[1].occurrence, 1);
+
+    let _: MutationAck = call(
+        &mut app,
+        "track.set_plugin_param",
+        serde_json::json!({
+            "track_id": id, "plugin_id": "com.resonance.eq", "occurrence": 1,
+            "param": "Gain", "value": 6.0
+        }),
+    )
+    .result()
+    .expect("set on the second instance succeeds");
+
+    let view = plugin_params(&mut app, serde_json::json!({ "track_id": id }));
+    assert_eq!(view.plugins[0].params[0].value, 0.0, "first instance untouched");
+    assert_eq!(view.plugins[1].params[0].value, 6.0, "second instance set");
+}
+
 // ---------------- track.add_instrument / add_effect ----------------
 
 #[test]

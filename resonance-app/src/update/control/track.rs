@@ -39,6 +39,7 @@ pub(super) fn try_handle(
         track::DELETE => delete(app, request),
         track::ADD_INSTRUMENT => add_instrument(app, request),
         track::ADD_EFFECT => add_effect(app, request),
+        track::SET_PLUGIN_PARAM => set_plugin_param(app, request),
         mixer::SET_VOLUME => set_volume(app, request),
         mixer::SET_PAN => set_pan(app, request),
         mixer::SET_MUTE => set_mute(app, request),
@@ -256,6 +257,139 @@ fn add_plugin(
         Message::Plugin(PluginMessage::AddPluginToTrack(params.track_id.0, plugin)),
     );
     (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// track.set_plugin_param
+// ---------------------------------------------------------------------------
+
+/// Set one parameter on one plugin (ba doc #272 V-3).
+///
+/// Routes the same `PluginMessage::SetPluginParam` the GUI's plugin
+/// panel sends, so the edit reaches the engine and is undoable.
+/// Successive sets of the *same* parameter coalesce into one undo entry
+/// (a knob drag is one gesture), but each still bumps `revision` — a
+/// remote client polling the counter sees every committed change.
+///
+/// Addressing mirrors `track.plugin_params`: the CLAP id `song.tracks`
+/// reports, plus `occurrence` for a track carrying the same plugin
+/// twice.
+fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track::SetPluginParamParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    if !params.value.is_finite() {
+        return reject(
+            request,
+            RpcError::invalid_params(format!("value must be finite (got {})", params.value)),
+        );
+    }
+    let Some(t) = find_track(app, params.track_id.0).cloned() else {
+        return not_found_track(request, params.track_id.0);
+    };
+
+    // Resolve the plugin: an explicit id, else the track's instrument —
+    // the common case for "make this synth sound different".
+    let entries = super::song::plugin_entries(app, &t);
+    let occurrence = params.occurrence.unwrap_or(0);
+    let entry = match &params.plugin_id {
+        Some(id) => entries
+            .iter()
+            .find(|e| &e.plugin_id == id && e.occurrence == occurrence),
+        None => entries
+            .iter()
+            .find(|e| e.kind == track::PluginKind::Instrument),
+    };
+    let Some(entry) = entry else {
+        let error = match &params.plugin_id {
+            Some(id) => super::song::unknown_plugin_on_track(app, &t, id, occurrence),
+            None => RpcError::invalid_params(format!(
+                "track {} has no instrument; name a plugin_id (it carries: [{}])",
+                t.id,
+                entries
+                    .iter()
+                    .map(|e| e.plugin_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        };
+        return reject(request, error);
+    };
+
+    // Resolve the parameter by name first, then by numeric CLAP id — a
+    // client reading `track.plugin_params` has both, and a name is what
+    // it will usually have to hand.
+    let wanted = params.param.trim();
+    let param = entry
+        .params
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(wanted))
+        .or_else(|| {
+            wanted
+                .parse::<u32>()
+                .ok()
+                .and_then(|id| entry.params.iter().find(|p| p.id == id))
+        });
+    let Some(param) = param else {
+        let known: Vec<&str> = entry.params.iter().map(|p| p.name.as_str()).collect();
+        return reject(
+            request,
+            RpcError::not_found(format!(
+                "plugin {:?} has no parameter {wanted:?} (has: [{}])",
+                entry.plugin_id,
+                known.join(", ")
+            )),
+        );
+    };
+
+    // Reject rather than clamp: silently moving a value the caller asked
+    // for is how a mix ends up subtly wrong with nothing to point at.
+    if params.value < param.min || params.value > param.max {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "{} must be within {}..={} (got {})",
+                param.name, param.min, param.max, params.value
+            )),
+        );
+    }
+
+    // The instance id is the engine's handle; it is not on the wire, so
+    // recover it from the same chain position the entry came from.
+    let Some(instance_id) = instance_for(&t, &entry.plugin_id, entry.occurrence) else {
+        return reject(
+            request,
+            RpcError::not_found(format!(
+                "plugin {:?} vanished from track {} between lookup and set",
+                entry.plugin_id, t.id
+            )),
+        );
+    };
+
+    let task = super::run_via_update(
+        app,
+        Message::Plugin(PluginMessage::SetPluginParam(
+            instance_id,
+            param.id,
+            params.value,
+        )),
+    );
+    (ack(app, request), task)
+}
+
+/// The engine instance id of the `occurrence`-th plugin with this CLAP
+/// id on the track.
+fn instance_for(
+    t: &TrackState,
+    plugin_id: &str,
+    occurrence: u32,
+) -> Option<resonance_audio::types::PluginInstanceId> {
+    t.plugins
+        .iter()
+        .filter(|p| p.clap_plugin_id == plugin_id)
+        .nth(occurrence as usize)
+        .map(|p| p.instance_id)
 }
 
 // ---------------------------------------------------------------------------
