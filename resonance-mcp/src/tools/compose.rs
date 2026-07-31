@@ -56,7 +56,9 @@ impl ResonanceMcp {
                        each its own groove. \
                        \
                        pattern names the groove. It resolves against the project's own pattern \
-                       bank first, then a built-in library: halftime (backbeat on 3), \
+                       bank first, then a built-in library: silence (no drums — pins the \
+                       section drumless, otherwise an un-generated section picks up the \
+                       project default), halftime (backbeat on 3), \
                        four-on-floor, industrial (rigid gated 16ths), breakbeat (syncopated, \
                        ghosted), blast, sparse (kick on 1, snare on 3), toms (tom-led, no \
                        hats), build (one-bar ramp into 16ths), fill (tom fill onto a crash). \
