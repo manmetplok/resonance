@@ -124,14 +124,27 @@ impl SectionDefinitionState {
         self.arrangement.first().map(|e| e.pattern_id)
     }
 
-    /// Collapse the arrangement to a single-pattern entry, or clear it
-    /// back to "use the default" when `pattern_id` is `None`. Back-compat
-    /// shim for the old `drum_pattern_id = …` assignment; richer
-    /// multi-entry arrangements are built directly via the `arrangement`
-    /// field.
+    /// Collapse the arrangement to a single-pattern entry covering the
+    /// whole section, or clear it back to "use the default" when
+    /// `pattern_id` is `None`. Back-compat shim for the old
+    /// `drum_pattern_id = …` assignment; richer multi-entry arrangements
+    /// are built directly via the `arrangement` field.
+    ///
+    /// The entry spans [`Self::length_bars`] rather than playing the
+    /// pattern once. [`PatternEntry::once`] is `RepeatN(1)`, which
+    /// resolves to `1 * pattern.length_bars` — one bar for the usual
+    /// one-bar pattern — so assigning a pattern used to give a section
+    /// a single bar of drums followed by silence, while a section with
+    /// no arrangement at all fell through to the whole-section fallback
+    /// and filled completely. Ask for drums, get one bar; say nothing,
+    /// get the lot (ba doc #272 V-2a).
     pub fn set_primary_pattern(&mut self, pattern_id: Option<u64>) {
         self.arrangement = match pattern_id {
-            Some(id) => vec![PatternEntry::once(id)],
+            Some(id) => vec![PatternEntry {
+                pattern_id: id,
+                length: EntryLength::Bars(self.length_bars.max(1)),
+                fill: None,
+            }],
             None => Vec::new(),
         };
     }
