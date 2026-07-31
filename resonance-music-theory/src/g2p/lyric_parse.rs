@@ -64,6 +64,10 @@ pub(crate) fn tokenize_line(text: &str) -> Vec<LyricToken> {
         // hint lives outside the phonemic word so we strip it before
         // syllable + cleanup processing.
         let (word_body, variant_idx) = extract_variant_hint(&word_raw);
+        // Hand-typed `re-so-lu-tion` is the same instruction as
+        // `re·so·lu·tion`; normalise before counting so a lyric written
+        // with plain ASCII hyphens splits across notes too.
+        let word_body = super::syllabify::normalize_hyphen_marks(&word_body);
         let trimmed = word_body.trim_matches(|c: char| {
             !c.is_alphabetic() && c != '\'' && c != '\u{00B7}'
         });

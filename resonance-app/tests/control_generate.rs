@@ -551,6 +551,11 @@ fn drums_generates_onto_a_drum_track() {
 /// had never named a pattern at all and were only rendering the
 /// fallback. Generating for one section must leave the others
 /// note-identical (doc #270 §4).
+///
+/// A control generate is now also *scoped* to the named section (bug 4 of
+/// the control-API report), so the verse is no longer rewritten at all —
+/// a strictly stronger form of "left alone". The assertion below accepts
+/// either: absent from the write stream, or present and identical.
 #[test]
 fn generating_drums_for_one_section_leaves_the_others_alone() {
     let mut app = app_with_project();
@@ -587,13 +592,14 @@ fn generating_drums_for_one_section_leaves_the_others_alone() {
     .expect("second generate succeeds");
     let after_second = drum_writes(&rx);
 
-    // The verse clip is rewritten by the whole-project rebuild, but must
-    // carry identical material.
-    assert_eq!(
-        after_second.get("Verse"),
-        Some(&verse_before),
-        "generating the chorus changed the verse's notes"
-    );
+    // The verse must either not be rewritten at all (the scoped path) or
+    // be rewritten with identical material — never with different notes.
+    if let Some(verse_after) = after_second.get("Verse") {
+        assert_eq!(
+            verse_after, &verse_before,
+            "generating the chorus changed the verse's notes"
+        );
+    }
 
     // The two sections now own distinct patterns, so they can differ.
     let verse_pattern = app.test_section_primary_pattern(u64::from(verse));

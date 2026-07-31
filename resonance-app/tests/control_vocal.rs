@@ -91,6 +91,7 @@ fn set_lyrics_replaces_the_draft() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: track,
             section_id: None,
             text: "hello world\nsecond line\nthird line".to_owned(),
@@ -98,10 +99,68 @@ fn set_lyrics_replaces_the_draft() {
     );
     let _: MutationAck = response.result().expect("set_lyrics succeeds");
 
+    // Stored with syllable breaks inserted: SVS sings one syllable per
+    // note, so `hello` has to occupy two notes, not one. Line structure
+    // and single-syllable words are untouched.
     assert_eq!(
         app.test_vocal_lines(def, 30),
-        vec!["hello world", "second line", "third line"]
+        vec!["hel\u{00B7}lo world", "se\u{00B7}cond line", "third line"]
     );
+}
+
+#[test]
+fn set_lyrics_syllabifies_by_default() {
+    // The intelligibility fix, at the wire boundary: a nine-phoneme word
+    // arriving unbroken must not be stored as one syllable — that puts
+    // every phoneme on a single note and the word is sung as a smear.
+    let mut app = app_with_project();
+    let (def, track) = vocal_section(&mut app, 37);
+
+    let _ = call(
+        &mut app,
+        "vocal.set_lyrics",
+        &proto::SetLyricsParams {
+            syllabify: true,
+            track_id: track,
+            section_id: None,
+            text: "I still dream in the wrong resolution".to_owned(),
+        },
+    );
+    assert_eq!(
+        app.test_vocal_lines(def, 37),
+        vec!["I still dream in the wrong re\u{00B7}so\u{00B7}lu\u{00B7}tion"]
+    );
+
+    // A caller may break words itself with plain ASCII hyphens; they are
+    // normalised to `·` and never re-split.
+    let _ = call(
+        &mut app,
+        "vocal.set_lyrics",
+        &proto::SetLyricsParams {
+            syllabify: true,
+            track_id: track,
+            section_id: None,
+            text: "res-o-lution".to_owned(),
+        },
+    );
+    assert_eq!(
+        app.test_vocal_lines(def, 37),
+        vec!["res\u{00B7}o\u{00B7}lution"]
+    );
+
+    // Opting out stores the text as typed (bar the `-` → `·` notation
+    // normalisation), for a caller placing every break itself.
+    let _ = call(
+        &mut app,
+        "vocal.set_lyrics",
+        &proto::SetLyricsParams {
+            syllabify: false,
+            track_id: track,
+            section_id: None,
+            text: "resolution".to_owned(),
+        },
+    );
+    assert_eq!(app.test_vocal_lines(def, 37), vec!["resolution"]);
 }
 
 #[test]
@@ -112,6 +171,7 @@ fn set_line_replaces_one_line() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: track,
             section_id: None,
             text: "line one\nline two".to_owned(),
@@ -122,6 +182,7 @@ fn set_line_replaces_one_line() {
         &mut app,
         "vocal.set_line",
         &proto::SetLineParams {
+            syllabify: true,
             track_id: track,
             section_id: None,
             line_index: 1,
@@ -129,13 +190,18 @@ fn set_line_replaces_one_line() {
         },
     );
     let _: MutationAck = response.result().expect("set_line succeeds");
-    assert_eq!(app.test_vocal_lines(def, 31), vec!["line one", "replaced two"]);
+    // `replaced` is two syllables, so the stored line carries a break.
+    assert_eq!(
+        app.test_vocal_lines(def, 31),
+        vec!["line one", "re\u{00B7}placed two"]
+    );
 
     // Out of range.
     let response = call(
         &mut app,
         "vocal.set_line",
         &proto::SetLineParams {
+            syllabify: true,
             track_id: track,
             section_id: None,
             line_index: 9,
@@ -155,6 +221,7 @@ fn lyrics_on_a_non_vocal_track_error() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(32),
             section_id: None,
             text: "x".to_owned(),
@@ -168,6 +235,7 @@ fn lyrics_on_a_non_vocal_track_error() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(999),
             section_id: None,
             text: "x".to_owned(),
@@ -447,6 +515,7 @@ fn render_with_empty_draft_fails_the_job() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: track,
             section_id: None,
             text: String::new(),
@@ -478,6 +547,7 @@ fn vocal_without_project_is_busy() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(1),
             section_id: None,
             text: "x".to_owned(),

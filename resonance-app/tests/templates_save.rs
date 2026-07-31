@@ -48,6 +48,7 @@ fn project_with_content() -> ProjectFile {
             clap_plugin_id: "track.id".to_string(),
             clap_file_path: "track.clap".to_string(),
             state_file: "plugins/plugin_1.bin".to_string(),
+            params: Vec::new(),
         }],
         track_type: "audio".to_string(),
         output_bus: None,
@@ -77,6 +78,7 @@ fn project_with_content() -> ProjectFile {
             clap_plugin_id: "bus.id".to_string(),
             clap_file_path: "bus.clap".to_string(),
             state_file: "plugins/plugin_2.bin".to_string(),
+            params: Vec::new(),
         }],
     }];
 
@@ -86,6 +88,7 @@ fn project_with_content() -> ProjectFile {
         clap_plugin_id: "master.id".to_string(),
         clap_file_path: "master.clap".to_string(),
         state_file: "plugins/plugin_3.bin".to_string(),
+        params: Vec::new(),
     }];
 
     project.tempo_events = vec![

@@ -425,8 +425,13 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
 /// view) and the vocal-audio clip map (so the next Generate Vocal correctly
 /// tears down old clips rather than stacking on top of them).
 fn replay_vocal(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedProject) {
+    // Drum lanes carry no `lane_generators` entry, so the rebuild needs
+    // the drum-track set to claim their clips too — without it the first
+    // `generate.drums` after a load duplicates every drum clip instead of
+    // replacing it (see `rebuild_derived_clips`).
+    let drum_track_ids = crate::compose::ComposeState::drum_track_ids(&r.registry.tracks);
     r.compose
-        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map);
+        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map, &drum_track_ids);
 
     // Rebuild the vocal audio clip map so subsequent regen tear-downs
     // find the loaded clips and clean them up — otherwise the next

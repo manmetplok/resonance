@@ -256,30 +256,27 @@ pub(super) fn regenerate_lane(
         .collect();
 
     for (placement_id, start_bar) in placements {
-        if let Some(old_id) =
-            r.compose
-                .derived_clips
-                .remove(&(definition_id, placement_id, track_id))
-        {
-            let _ = r.engine
-                .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
-        }
-
-        let clip_id = r.compose.fresh_derived_clip_id();
         let start_sample = r.tempo_map.bar_to_sample(start_bar);
-        let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
-            clip_id,
-            track_id,
-            start_sample,
-            duration_ticks,
-            notes: notes.clone(),
-            name: name.clone(),
-            trim_start_ticks: 0,
-            trim_end_ticks: 0,
-        });
-        r.compose
-            .derived_clips
-            .insert((definition_id, placement_id, track_id), clip_id);
+        // Tear down + re-install through the shared helper, which also
+        // mirrors the clip into `r.midi_clips` so the id `generate.part`
+        // reports back is immediately resolvable by `song.notes` (ba todo
+        // #1162; see `install_derived_midi_clip`).
+        super::install_derived_midi_clip(
+            r,
+            super::DerivedMidiClip {
+                definition_id,
+                placement_id,
+                track_id,
+                start_sample,
+                duration_ticks,
+                notes: notes.clone(),
+                name: &name,
+                // `generate.part` reports these ids in its reply, so they
+                // must resolve on the caller's next request rather than
+                // after the engine echo (ba todo #1162).
+                visibility: super::ClipVisibility::Immediate,
+            },
+        );
     }
 
     r.compose.last_error = None;

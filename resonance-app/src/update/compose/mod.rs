@@ -33,6 +33,100 @@ pub use drum_groups::build_drum_notes;
 
 pub(crate) use section::next_default_color;
 
+/// When the freshly installed clip becomes visible in `r.midi_clips`.
+///
+/// The engine always echoes `LoadMidiClipDirect` back as
+/// `MidiClipCreated`, and `engine_events::midi::clip_created` mirrors it
+/// into `r.midi_clips` — so for a GUI edit, which only has to be right by
+/// the next repaint, [`Self::OnEcho`] is the whole story.
+///
+/// A control-endpoint generate cannot wait for that round trip: it
+/// returns the clip id in its reply and the client's *very next* request
+/// may address it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClipVisibility {
+    /// Mirror into `r.midi_clips` now, before the reply is sent.
+    Immediate,
+    /// Leave it to the engine's `MidiClipCreated` echo.
+    OnEcho,
+}
+
+/// One derived MIDI clip about to be installed on the timeline.
+pub(crate) struct DerivedMidiClip<'a> {
+    pub definition_id: u64,
+    pub placement_id: u64,
+    pub track_id: resonance_audio::types::TrackId,
+    pub start_sample: u64,
+    pub duration_ticks: u64,
+    pub notes: Vec<resonance_audio::types::MidiNote>,
+    pub name: &'a str,
+    pub visibility: ClipVisibility,
+}
+
+/// Replace the derived clip on `(definition, placement, track)`: tear the
+/// previous one down (engine + app mirror), allocate a fresh derived id,
+/// send `LoadMidiClipDirect`, and register the new clip in
+/// `compose.derived_clips`. Returns the new clip id.
+///
+/// **Why [`ClipVisibility::Immediate`] exists (ba todo #1162):** the
+/// engine's `MidiClipCreated` echo is asynchronous, but `generate.part` /
+/// `generate.drums` return the clip id in their reply *synchronously*.
+/// Without a mirror, a client that did `id = generate.drums(...)` then
+/// `song.notes(id)` on the very next request got `no MIDI clip with id
+/// ...` for roughly the length of one engine round trip (~0.3 s
+/// measured), and only a sleep made it work. `notes.create_clip`
+/// (`update/midi_clip.rs`) and the vocal installer already did this; the
+/// two generators did not. The echo's `clip_created` handler skips ids
+/// already present, so the round trip stays an idempotent no-op once it
+/// lands.
+///
+/// Removing the torn-down clip from `r.midi_clips` is unconditional: a
+/// stale mirror entry would otherwise keep a deleted clip visible to
+/// `song.*` (and get re-serialized into the next save) forever, whichever
+/// way the replacement became visible.
+pub(crate) fn install_derived_midi_clip(
+    r: &mut crate::Resonance,
+    clip: DerivedMidiClip<'_>,
+) -> resonance_audio::types::ClipId {
+    use resonance_audio::types::AudioCommand;
+
+    let key = (clip.definition_id, clip.placement_id, clip.track_id);
+    if let Some(old_id) = r.compose.derived_clips.remove(&key) {
+        let _ = r
+            .engine
+            .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
+        r.midi_clips.retain(|c| c.id != old_id);
+    }
+
+    let clip_id = r.compose.fresh_derived_clip_id();
+    let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
+        clip_id,
+        track_id: clip.track_id,
+        start_sample: clip.start_sample,
+        duration_ticks: clip.duration_ticks,
+        notes: clip.notes.clone(),
+        name: clip.name.to_owned(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+    r.compose.derived_clips.insert(key, clip_id);
+    if clip.visibility == ClipVisibility::Immediate
+        && !r.midi_clips.iter().any(|c| c.id == clip_id)
+    {
+        r.midi_clips.push(crate::state::MidiClipState {
+            id: clip_id,
+            track_id: clip.track_id,
+            start_sample: clip.start_sample,
+            duration_ticks: clip.duration_ticks,
+            name: clip.name.to_owned(),
+            notes: clip.notes,
+            trim_start_ticks: 0,
+            trim_end_ticks: 0,
+        });
+    }
+    clip_id
+}
+
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
 

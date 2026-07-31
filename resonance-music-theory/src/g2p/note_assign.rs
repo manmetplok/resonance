@@ -96,7 +96,13 @@ pub struct AssignedSyllable {
 /// CMU, then slice the resulting phoneme stream across the word's
 /// syllables. This matches how the SVS model expects phonemes to land
 /// on note boundaries when one word spans multiple notes (e.g.
-/// `hou·ses` → note 1 gets `[hh aw z]`, note 2 gets `[ah z]`).
+/// `hou·ses` → note 1 gets `[hh aw]`, note 2 gets `[s ax z]`).
+///
+/// **A word with no `·` is one syllable and therefore one note**, so an
+/// unbroken `resolution` puts all nine of its phonemes on a single note
+/// and is sung as a smear. Ingest points normalise this away with
+/// [`auto_syllabify_text`](super::auto_syllabify_text); this resolver
+/// deliberately does not second-guess the breaks it is handed.
 ///
 /// Power-user escape hatch: `[hh ah l ow]` in the lyric is taken
 /// verbatim as phonemes for one syllable, bypassing CMU. Use

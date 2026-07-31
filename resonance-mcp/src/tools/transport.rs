@@ -103,8 +103,11 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Set the global key, e.g. tonic \"A\", scale \"minor\". If the song keeps \
-                       key per-section instead, this reports unsupported — use section_set_scale.",
+        description = "Set the global key: tonic is a pitch name (\"A\", \"F#\", \"Bb\"), scale \
+                       is one of chromatic, major, minor, dorian, phrygian, lydian, mixolydian, \
+                       locrian, \"harmonic minor\", \"melodic minor\" — an unknown value is \
+                       rejected with the full list. If the song keeps key per-section instead, \
+                       this reports unsupported — use section_set_scale.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<transport::TransportResult>()
     )]

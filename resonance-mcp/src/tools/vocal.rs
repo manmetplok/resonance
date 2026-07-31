@@ -40,11 +40,26 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Replace a vocal track's full lyric text (one line per lyric line). \
-                       Phonemes are derived automatically (G2P); check them with song_vocal \
-                       and fix words with vocal_set_pronunciation. Re-render afterwards with \
-                       vocal_render. Lyrics live per (section, track) vocal lane, created \
-                       with section_set_lane_generator kind \"vocal\": pass section_id (a \
+        description = "Replace a vocal track's full lyric text, one line per \\n-separated line. \
+                       \
+                       SVS sings ONE SYLLABLE PER NOTE, so the syllable count — not the word \
+                       count — is what has to match the lane's notes. You may write breaks \
+                       yourself with - or · (\"re-so-lu-tion\"); by default (syllabify: true) \
+                       words you did not break are split for you, and your own breaks and [..] \
+                       phoneme blocks are left alone. Pass syllabify: false only when you want \
+                       the text stored exactly as typed, and then expect to place every break \
+                       yourself — an unbroken multi-syllable word crams all its phonemes onto \
+                       one note and is heard as a smear, not as the word. \
+                       \
+                       ALWAYS re-read song_vocal after writing. It is the cheapest verification \
+                       available: syllable_count vs note_count with counts_mismatch, plus the \
+                       per-note phoneme/duration budget that says which notes are too short to \
+                       articulate what you gave them. A mismatch otherwise only surfaces as a \
+                       bad render. Phonemes are derived automatically (G2P); fix individual \
+                       words with vocal_set_pronunciation, then re-render with vocal_render. \
+                       \
+                       Lyrics live per (section, track) vocal lane, created with \
+                       section_set_lane_generator kind \"vocal\": pass section_id (a \
                        definition_id from song_vocal's lanes) to pick one, or omit it to write \
                        the track's FIRST vocal lane.",
         annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false)
@@ -57,10 +72,14 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Replace one lyric line, addressed by its 0-based line_index from \
-                       song_vocal. Like vocal_set_lyrics, section_id picks which vocal lane \
-                       (lyrics live per (section, track) lane); omitted it writes the track's \
-                       FIRST lane.",
+        description = "Replace ONE lyric line, addressed by its 0-based line_index from \
+                       song_vocal — the surgical alternative to rewriting the whole lane with \
+                       vocal_set_lyrics. Same syllable rules: one syllable sings on one note, \
+                       breaks may be written as - or ·, and syllabify (default true) splits the \
+                       words you did not break. Like vocal_set_lyrics, section_id picks which \
+                       vocal lane (lyrics live per (section, track) lane); omitted it writes the \
+                       track's FIRST lane. Re-read song_vocal afterwards to confirm the lane's \
+                       counts still line up.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn vocal_set_line(
@@ -105,7 +124,10 @@ impl ResonanceMcp {
                        defaults to the app default (Lilia). Runs as a job — this tool waits up \
                        to 2 minutes and returns the final status; if still running, poll \
                        job_status with the returned job_id. Needs a vocal lane \
-                       (section_set_lane_generator kind \"vocal\") with notes AND lyrics.",
+                       (section_set_lane_generator kind \"vocal\") with notes AND lyrics — \
+                       pre-flight it with song_vocal and only render lanes whose \
+                       counts_mismatch is false, since SVS is the most expensive operation on \
+                       this surface.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]

@@ -258,14 +258,21 @@ async fn reconnects_after_dropped_socket() {
 
 #[tokio::test]
 async fn combined_router_exposes_every_control_method() {
-    // One MCP tool per control method (song.* + job.* included), so the
-    // published surface can't silently drop a protocol method.
+    // One MCP tool per control method — control.hello and job.* included
+    // — so the published surface can't silently drop a protocol method.
     let router = ResonanceMcp::combined_router();
-    let tool_count = router.map.len();
-    let method_count = resonance_control::methods::capabilities().len()
-        - resonance_control::methods::control::METHODS.len(); // hello has no tool
+    let tools: std::collections::BTreeSet<String> = router
+        .list_all()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    // `a.b` -> `a_b` is the whole naming rule.
+    let expected: std::collections::BTreeSet<String> = resonance_control::methods::capabilities()
+        .into_iter()
+        .map(|m| m.replacen('.', "_", 1))
+        .collect();
     assert_eq!(
-        tool_count, method_count,
-        "tool count {tool_count} != control method count {method_count}"
+        tools, expected,
+        "published tool names diverged from the control method list"
     );
 }

@@ -92,8 +92,14 @@ fn last_tick_by_section(
 }
 
 /// A section pinned to the "silence" groove stays drumless — including
-/// after a later generate elsewhere re-materialises every clip, which is
-/// the path that used to refill it from the project default.
+/// after a later generate elsewhere, which used to refill it from the
+/// project default.
+///
+/// A control generate is now scoped to the section it names (bug 4 of the
+/// control-API report), so the intro is not rewritten at all — a stronger
+/// guarantee than "rewritten, but still empty". The assertion accepts
+/// either, and fails on the one thing that matters: the intro coming back
+/// with notes in it.
 #[test]
 fn a_section_pinned_to_silence_stays_drumless() {
     let mut app = app_with_project();
@@ -111,8 +117,8 @@ fn a_section_pinned_to_silence_stays_drumless() {
     .result::<GenerateResult>()
     .expect("silence generates");
 
-    // Generating a different section rebuilds every drum clip; the
-    // pinned-silent one must not come back with the default groove.
+    // Generate a different section; the pinned-silent one must not come
+    // back with the default groove.
     let rx = app.test_capture_engine();
     call(&mut app, "generate.drums", &proto::DrumsParams {
         section_id: verse,
@@ -136,10 +142,9 @@ fn a_section_pinned_to_silence_stays_drumless() {
         }
     }
     assert!(saw_verse, "sanity: the verse was written");
-    assert_eq!(
-        intro_notes,
-        Some(0),
-        "a section pinned to silence must render no drum notes"
+    assert!(
+        matches!(intro_notes, None | Some(0)),
+        "a section pinned to silence must render no drum notes (got {intro_notes:?})"
     );
 }
 

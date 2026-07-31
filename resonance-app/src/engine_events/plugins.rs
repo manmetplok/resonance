@@ -71,6 +71,8 @@ pub(super) fn track_added(
         r.pending_preset_plugin_states = None;
     }
 
+    apply_pending_param_overrides(r, instance_id);
+
     // Seed the undo plugin-state cache with the plugin's initial CLAP
     // state. Snapshots taken before the user interacts with the plugin
     // will have the default blob to restore to, avoiding "undo resets
@@ -79,6 +81,54 @@ pub(super) fn track_added(
         .send(AudioCommand::SavePluginState { instance_id });
 
     ensure_subtracks(r, track_id, output_port_count, &output_port_names);
+}
+
+/// Re-apply the parameter values a project load parked for this plugin
+/// instance (see [`Resonance::pending_plugin_param_overrides`]).
+///
+/// Called from every `PluginAdded` handler — track, bus, master —
+/// *after* the handler has written the event's `params` into the slot,
+/// because that write is exactly what would otherwise clobber the
+/// restored values with the plugin's instantiation-time defaults. This
+/// was the visible half of "plugin parameters are not persisted": a
+/// param set to 777 came back as its 8000 default after save + reopen,
+/// while mixer volume (a plain scalar mirrored straight from the file)
+/// survived.
+///
+/// Both halves are updated: the app-side mirror that `song.tracks` /
+/// `track.plugin_params` / the mixer panel / automation read, and the
+/// engine, via the same `SetPluginParam` command a live edit uses — so
+/// the restored value reaches the DSP on exactly the same terms as one
+/// the user just typed. Ordering is safe: the load already queued
+/// `LoadPluginState` before this event could be produced, so the
+/// per-param sends land after the state blob and win over it.
+///
+/// Ids not present on the instantiated plugin are skipped: a plugin that
+/// dropped or renumbered a parameter between versions must not have a
+/// stale id pushed at it.
+fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceId) {
+    let Some(overrides) = r.pending_plugin_param_overrides.remove(&instance_id) else {
+        return;
+    };
+    let applied = r
+        .with_plugin_mut(instance_id, |slot| {
+            let mut applied = Vec::new();
+            for (param_id, value) in &overrides {
+                if let Some(param) = slot.params.iter_mut().find(|p| p.id == *param_id) {
+                    param.current_value = *value;
+                    applied.push((*param_id, *value));
+                }
+            }
+            applied
+        })
+        .unwrap_or_default();
+    for (param_id, value) in applied {
+        let _ = r.engine.send(AudioCommand::SetPluginParam {
+            instance_id,
+            param_id,
+            value,
+        });
+    }
 }
 
 /// Ensure each output port of a multi-output plugin is represented as a
@@ -220,6 +270,7 @@ pub(super) fn bus_added(
     if inserted {
         r.insert_plugin_index(instance_id, PluginLocator::Bus(bus_id));
     }
+    apply_pending_param_overrides(r, instance_id);
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }
@@ -266,6 +317,7 @@ pub(super) fn master_added(
         ));
         r.insert_plugin_index(instance_id, PluginLocator::Master);
     }
+    apply_pending_param_overrides(r, instance_id);
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }

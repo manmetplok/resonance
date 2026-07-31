@@ -137,6 +137,126 @@ fn missing_phonemes(voicebank: VocalVoicebank) -> &'static [&'static str] {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Articulation timing
+// ---------------------------------------------------------------------------
+//
+// How long each phone needs to be *heard* as itself. Two consumers share
+// this table and must not disagree: the segment builder
+// (`segment::duration`) hands out the real `ph_dur` slices, and the
+// intelligibility report (`validate::articulation_report`) tells a client
+// over the wire whether a note is long enough before they bounce audio.
+//
+// A uniform per-consonant duration is the wrong model. A `t` burst is
+// perceptually complete in ~30 ms while an `s` needs 3-4× that before the
+// frication is identifiable, and a schwa vowel squeezed under ~50 ms stops
+// carrying a formant target at all. With one number for every consonant,
+// a phoneme-dense syllable divided its slice evenly and every segment came
+// out below its own audibility floor — the whole syllable turned to mush
+// rather than one phone being clipped.
+
+/// Manner-of-articulation class of an ARPAbet symbol. Duration demands
+/// differ by manner far more than by place, so this is the axis the
+/// timing table is keyed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArticulationClass {
+    /// Any vowel or diphthong — the syllable nucleus, which absorbs
+    /// whatever time the consonants leave.
+    Vowel,
+    /// Oral stop (`b p t d k g`) plus `hh`: a brief burst / aspiration.
+    Stop,
+    /// Affricate (`ch jh`): stop closure followed by frication.
+    Affricate,
+    /// Fricative (`f v th dh s z sh zh`): needs sustained noise before
+    /// its spectrum is identifiable — the longest consonant class.
+    Fricative,
+    /// Nasal (`m n ng`): voiced murmur, moderately long.
+    Nasal,
+    /// Liquid or glide (`l r w y`): a formant transition more than a
+    /// segment of its own.
+    Approximant,
+}
+
+/// Classify one canonical ARPAbet symbol. Silence / control tokens
+/// (`AP`, `SP`, `cl`) are not lexical phones and never reach here; they
+/// classify as [`ArticulationClass::Stop`] (the shortest class) if they
+/// somehow do.
+pub fn articulation_class(ph: &str) -> ArticulationClass {
+    match ph {
+        "b" | "p" | "t" | "d" | "k" | "g" | "hh" => ArticulationClass::Stop,
+        "ch" | "jh" => ArticulationClass::Affricate,
+        "f" | "v" | "th" | "dh" | "s" | "z" | "sh" | "zh" => ArticulationClass::Fricative,
+        "m" | "n" | "ng" => ArticulationClass::Nasal,
+        "l" | "r" | "w" | "y" => ArticulationClass::Approximant,
+        _ if g2p::is_consonant(ph) => ArticulationClass::Approximant,
+        _ => ArticulationClass::Vowel,
+    }
+}
+
+impl ArticulationClass {
+    /// The `(relaxed, deliberate)` target duration band in seconds,
+    /// interpolated by the lane's `consonant_emphasis`. Vowels have no
+    /// target — they take the remainder of the note — so their band is
+    /// only a lower bound used when a syllable is all-vowel.
+    ///
+    /// The bands are centred on the old uniform 35-85 ms so the existing
+    /// characterisation of `consonant_emphasis` (garbage below ~0.15,
+    /// mis-heard endings above ~0.60) still holds; what changed is the
+    /// *distribution* across classes, not the average.
+    fn target_band(self) -> (f64, f64) {
+        match self {
+            ArticulationClass::Vowel => (0.090, 0.090),
+            ArticulationClass::Stop => (0.035, 0.060),
+            ArticulationClass::Affricate => (0.055, 0.090),
+            ArticulationClass::Fricative => (0.055, 0.095),
+            ArticulationClass::Nasal => (0.045, 0.075),
+            ArticulationClass::Approximant => (0.040, 0.070),
+        }
+    }
+
+    /// Absolute floor in seconds: below this the phone is not heard as
+    /// itself, so shortening past it destroys information rather than
+    /// merely rushing it. Used both to protect consonants when a note is
+    /// tight and to compute [`min_articulation_sec`].
+    pub fn floor_sec(self) -> f64 {
+        match self {
+            ArticulationClass::Vowel => 0.050,
+            ArticulationClass::Stop => 0.030,
+            ArticulationClass::Affricate => 0.045,
+            ArticulationClass::Fricative => 0.040,
+            ArticulationClass::Nasal => 0.035,
+            ArticulationClass::Approximant => 0.035,
+        }
+    }
+}
+
+/// Target duration in seconds for one phone at `consonant_emphasis`
+/// `emphasis` (0..1). Vowels report their floor-ish nominal; the segment
+/// builder overrides it with whatever the consonants leave over.
+pub fn target_duration_sec(ph: &str, emphasis: f32) -> f64 {
+    let (lo, hi) = articulation_class(ph).target_band();
+    lo + (hi - lo) * emphasis.clamp(0.0, 1.0) as f64
+}
+
+/// Floor duration in seconds for one phone — see
+/// [`ArticulationClass::floor_sec`].
+pub fn floor_duration_sec(ph: &str) -> f64 {
+    articulation_class(ph).floor_sec()
+}
+
+/// The shortest note, in seconds, that can articulate `phonemes` without
+/// pushing any of them below its audibility floor. This is the number the
+/// `song.vocal` intelligibility report compares a note's real duration
+/// against: a note shorter than this **will** sound like a smear no matter
+/// what the model does, and the fix is a longer note or fewer phonemes on
+/// it (i.e. more syllable breaks), not a parameter tweak.
+///
+/// An empty phoneme list (a note the lyric draft never reached) needs no
+/// time and reports `0.0`.
+pub fn min_articulation_sec(phonemes: &[&str]) -> f64 {
+    phonemes.iter().map(|p| floor_duration_sec(p)).sum()
+}
+
 /// Nearest acceptable ARPAbet substitutes for a phone, most-similar
 /// first. Consulted only for symbols a bank's dict is missing, so it
 /// never alters a bank with the full inventory. Pairs voiced phones with

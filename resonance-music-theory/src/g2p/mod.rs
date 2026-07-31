@@ -24,7 +24,10 @@ pub use phonemes::{
 pub use phonemes::{PronunciationVariant, SyllableStress};
 
 // ── syllabify ─────────────────────────────────────────────────────────────────
-pub use syllabify::{auto_syllabify_text, cmu_syllable_count, syllabify_word};
+pub use syllabify::{
+    auto_syllabify_text, cmu_syllable_count, has_syllable_marks, normalize_syllable_marks,
+    syllabify_word, HYPHEN_SYLLABLE_MARKER,
+};
 
 // ── lyric_parse ───────────────────────────────────────────────────────────────
 pub use lyric_parse::{is_slur_lyric, SLUR_MARKER};

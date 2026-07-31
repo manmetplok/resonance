@@ -263,6 +263,7 @@ fn installed_vocal_lane_unblocks_the_vocal_namespace() {
         &mut app,
         "vocal.set_lyrics",
         &vocal_proto::SetLyricsParams {
+            syllabify: true,
             track_id: track,
             section_id: None,
             text: "hello world".to_owned(),
@@ -283,6 +284,7 @@ fn installed_vocal_lane_unblocks_the_vocal_namespace() {
         &mut app,
         "vocal.set_lyrics",
         &vocal_proto::SetLyricsParams {
+            syllabify: true,
             track_id: track,
             section_id: None,
             text: "hello world".to_owned(),
@@ -291,5 +293,10 @@ fn installed_vocal_lane_unblocks_the_vocal_namespace() {
     let _: MutationAck = response
         .result()
         .expect("vocal.set_lyrics reaches the installed lane");
-    assert_eq!(app.test_vocal_lines(u64::from(section_id), 48), vec!["hello world"]);
+    // `vocal.set_lyrics` syllabifies on the way in (one syllable sings on
+    // one note), so `hello` is stored broken.
+    assert_eq!(
+        app.test_vocal_lines(u64::from(section_id), 48),
+        vec!["hel\u{00B7}lo world"]
+    );
 }

@@ -41,7 +41,8 @@ pub use sections::{
 pub use model::{
     AUTOSAVE_JSON, PROJECT_FORMAT_VERSION, PROJECT_JSON,
     LoadedProject, ProjectBus, ProjectClip, ProjectExternalInstrument, ProjectFile,
-    ProjectMidiClip, ProjectPerformance, ProjectPlugin, ProjectPoolAsset, ProjectReference,
+    ProjectMidiClip, ProjectPerformance, ProjectPlugin, ProjectPluginParam, ProjectPoolAsset,
+    ProjectReference,
     ProjectReferenceMarker, ProjectReferenceSettings, ProjectTrack, SaveCollector,
     audio_format_from_tag, audio_format_tag, fade_curve_from_tag, fade_curve_tag,
 };

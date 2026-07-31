@@ -245,6 +245,7 @@ fn counts_are_reported_per_lane_and_flag_lyrics_without_notes() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: Some(SectionDefinitionId(verse)),
             text: "go\nstay".to_owned(),
@@ -306,6 +307,75 @@ fn note_count_finds_the_lane_clip_without_the_derived_map() {
     assert_eq!(lane.note_count, 1, "the lane's notes are counted");
 }
 
+// ---------------- Intelligibility pre-flight ----------------
+
+/// `song.vocal` must let a client tell — without rendering and listening
+/// — that a note is too short to articulate what it has been given.
+///
+/// This is the case that produced "vocals are not understandable at all":
+/// a phoneme-dense syllable on a short note renders successfully and
+/// comes out as a smear, with nothing in the API saying so.
+#[test]
+fn song_vocal_flags_notes_too_short_to_articulate() {
+    let (mut app, verse, _chorus) = two_lane_app();
+    // One word, deliberately stored unbroken, so all nine of its
+    // phonemes land on a single note.
+    let _ = call(
+        &mut app,
+        "vocal.set_lyrics",
+        &proto::SetLyricsParams {
+            syllabify: false,
+            track_id: ProtoTrackId(TRACK),
+            section_id: Some(SectionDefinitionId(verse)),
+            text: "resolution".to_owned(),
+        },
+    );
+    // A sixteenth-note clip on the lane's track at its placement bar.
+    let start = app.test_tempo_map().bar_to_sample(0);
+    app.test_apply_engine_event(resonance_audio::types::AudioEvent::MidiClipCreated {
+        clip_id: 900_002,
+        track_id: TRACK,
+        start_sample: start,
+        duration_ticks: 4 * 4 * resonance_audio::types::TICKS_PER_QUARTER_NOTE,
+        name: "Verse · Vox".to_owned(),
+        notes: vec![resonance_audio::types::MidiNote {
+            note: 64,
+            velocity: 0.8,
+            start_tick: 0,
+            duration_ticks: resonance_audio::types::TICKS_PER_QUARTER_NOTE / 4,
+        }],
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+
+    let view = vocal_view(&mut app);
+    let lane = view
+        .lanes
+        .iter()
+        .find(|l| u64::from(l.definition_id) == verse)
+        .expect("the verse lane is listed");
+
+    assert_eq!(lane.notes.len(), 1, "per-note report present");
+    let note = &lane.notes[0];
+    assert_eq!(note.phoneme_count, 9, "{:?}", note.phonemes);
+    assert!(
+        note.too_short,
+        "9 phonemes in {} ms (needs {} ms) should be flagged",
+        note.duration_ms, note.min_duration_ms
+    );
+    assert!(note.min_duration_ms > note.duration_ms);
+    assert_eq!(lane.short_note_count, 1);
+
+    // The voicebank's comfortable range travels with the lane so a
+    // client can also see whether a melody sits where it sings clearly.
+    let range = lane.comfortable_range.as_ref().expect("range reported");
+    assert!(range.low < range.high);
+    assert!(!range.low_name.is_empty() && !range.high_name.is_empty());
+    assert!(lane.voicebank.is_some());
+    assert!(!note.out_of_range, "E4 is comfortable for every bank");
+    assert_eq!(lane.out_of_range_note_count, 0);
+}
+
 // ---------------- FR-3 part 2: section_id addressing ----------------
 
 #[test]
@@ -318,6 +388,7 @@ fn section_id_writes_the_addressed_lane() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: Some(SectionDefinitionId(chorus)),
             text: "sing it louder".to_owned(),
@@ -325,7 +396,11 @@ fn section_id_writes_the_addressed_lane() {
     );
     let _: MutationAck = response.result().expect("set_lyrics succeeds");
 
-    assert_eq!(app.test_vocal_lines(chorus, TRACK), vec!["sing it louder"]);
+    // `louder` is two syllables, so the stored line carries a break.
+    assert_eq!(
+        app.test_vocal_lines(chorus, TRACK),
+        vec!["sing it lou\u{00B7}der"]
+    );
     assert_eq!(
         app.test_vocal_lines(verse, TRACK),
         verse_before,
@@ -343,6 +418,7 @@ fn an_omitted_section_id_still_writes_the_first_lane() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: None,
             text: "first lane".to_owned(),
@@ -362,6 +438,7 @@ fn set_line_addresses_the_same_lane() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: Some(SectionDefinitionId(chorus)),
             text: "one\ntwo".to_owned(),
@@ -372,6 +449,7 @@ fn set_line_addresses_the_same_lane() {
         &mut app,
         "vocal.set_line",
         &proto::SetLineParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: Some(SectionDefinitionId(chorus)),
             line_index: 1,
@@ -408,6 +486,7 @@ fn a_section_without_a_vocal_lane_on_the_track_is_rejected() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: Some(SectionDefinitionId(bare)),
             text: "nope".to_owned(),
@@ -424,6 +503,7 @@ fn an_unknown_section_id_is_not_found() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: Some(SectionDefinitionId(9999)),
             text: "nope".to_owned(),

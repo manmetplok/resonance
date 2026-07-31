@@ -6,7 +6,7 @@ use resonance_control::ids::{ChordId, ClipId, SectionDefinitionId, SectionPlacem
 use resonance_control::methods::song::{
     ChordView, ClipView, LyricLineView, NoteView, NotesView, SectionDefinitionView,
     SectionPlacementView, SectionsView, SongSummary, SyllableView, TrackDetail, TrackSummary,
-    TracksView, VocalLaneView, VocalRenderState, VocalView,
+    PitchRangeView, TracksView, VocalLaneView, VocalNoteView, VocalRenderState, VocalView,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -200,6 +200,27 @@ fn vocal_view_roundtrips_with_overrides_and_lowercase_state() {
             note_count: 4,
             syllable_count: 3,
             counts_mismatch: true,
+            voicebank: Some("Lilia".to_owned()),
+            comfortable_range: Some(PitchRangeView {
+                low: 50,
+                high: 79,
+                low_name: "D3".to_owned(),
+                high_name: "G5".to_owned(),
+            }),
+            notes: vec![VocalNoteView {
+                index: 0,
+                syllable: "hel".to_owned(),
+                phonemes: vec!["hh".to_owned(), "eh".to_owned(), "l".to_owned()],
+                phoneme_count: 3,
+                pitch: 64,
+                pitch_name: "E4".to_owned(),
+                duration_ms: 214.0,
+                min_duration_ms: 115.0,
+                too_short: false,
+                out_of_range: false,
+            }],
+            short_note_count: 0,
+            out_of_range_note_count: 0,
         }],
         lines: vec![LyricLineView {
             index: 0,

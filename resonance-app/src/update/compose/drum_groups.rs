@@ -9,13 +9,14 @@
 
 use iced::Task;
 
-use resonance_audio::types::{AudioCommand, MidiNote, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::{MidiNote, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
 
 use std::collections::HashMap;
 
 use crate::compose::drumroll::{groups, DrumGroup, DrumGroupPad, DrumPattern, GROUP_PALETTE};
 use crate::compose::messages::{ArrangementMessage, DrumGroupsMessage};
 use crate::compose::{ArrangementSpan, SectionDefinitionState};
+use crate::update::compose::ClipVisibility;
 use crate::message::Message;
 use crate::state::InstrumentType;
 use crate::util::{next_seed, seed_from_id};
@@ -751,6 +752,39 @@ pub fn generate_group_pattern(g: &mut DrumGroup) {
 /// Replaces any prior derived MIDI clip on the (definition, placement,
 /// track) triple so repeated Generate presses don't stack duplicates.
 pub fn materialize_drum_clips(r: &mut crate::Resonance) {
+    materialize_drum_clips_for(r, None, ClipVisibility::OnEcho);
+}
+
+/// The control endpoint's variant: rebuild **only** `definition_id`'s
+/// placements, and make the resulting clips visible in `r.midi_clips`
+/// before the JSON-RPC reply goes out.
+///
+/// Scoping is bug 4 of the control-API report. `generate.drums` asking
+/// for one section and getting a default groove silently written onto
+/// *every other section of the arrangement* is a surprise no caller can
+/// undo selectively; on a freshly loaded project it was also how the
+/// duplication in `rebuild_derived_clips` fanned out to sections the
+/// caller never named. A caller that wants the whole song still gets it,
+/// by calling once per section — which is also the only way to say what
+/// each section should sound like.
+pub(crate) fn materialize_drum_clips_for_control(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+) {
+    materialize_drum_clips_for(r, Some(definition_id), ClipVisibility::Immediate);
+}
+
+/// [`materialize_drum_clips`], optionally narrowed to a single section
+/// definition.
+///
+/// `only_definition: None` rebuilds every placement of every section —
+/// what the GUI's drum editor wants, since a kit/pad/pattern edit there
+/// can affect any section rendering that pattern.
+fn materialize_drum_clips_for(
+    r: &mut crate::Resonance,
+    only_definition: Option<u64>,
+    visibility: ClipVisibility,
+) {
     // Snapshot what we need so we don't borrow `r.compose` twice across
     // the engine sends.
     let drum_track_ids: Vec<TrackId> = r
@@ -781,6 +815,7 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
         .compose
         .placements
         .iter()
+        .filter(|p| only_definition.is_none_or(|id| p.definition_id == id))
         .filter_map(|p| {
             let def = r.compose.find_definition(p.definition_id)?;
             let spans = spans_with_groups_for_definition(&r.compose, def);
@@ -806,17 +841,6 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
         let notes = build_drum_notes(&section_spans, time_sig_num);
 
         for &track_id in &drum_track_ids {
-            // Tear down any prior derived clip on this triple so we don't
-            // stack copies. The engine collapses the delete + load in the
-            // same audio tick so playback doesn't drop out.
-            if let Some(old_id) = r
-                .compose
-                .derived_clips
-                .remove(&(definition_id, placement_id, track_id))
-            {
-                let _ = r.engine
-                    .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
-            }
             let track_name = r
                 .registry
                 .tracks
@@ -825,20 +849,26 @@ pub fn materialize_drum_clips(r: &mut crate::Resonance) {
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| "Drums".to_string());
             let name = format!("{} · {}", def_name, track_name);
-            let clip_id = r.compose.fresh_derived_clip_id();
-            let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
-                clip_id,
-                track_id,
-                start_sample,
-                duration_ticks,
-                notes: notes.clone(),
-                name,
-                trim_start_ticks: 0,
-                trim_end_ticks: 0,
-            });
-            r.compose
-                .derived_clips
-                .insert((definition_id, placement_id, track_id), clip_id);
+            // Tear down any prior derived clip on this triple so we don't
+            // stack copies, then install the new one. The engine collapses
+            // the delete + load in the same audio tick so playback doesn't
+            // drop out, and the helper mirrors the clip into `r.midi_clips`
+            // so the id `generate.drums` returns resolves immediately
+            // instead of racing the async `MidiClipCreated` echo (ba todo
+            // #1162).
+            super::install_derived_midi_clip(
+                r,
+                super::DerivedMidiClip {
+                    definition_id,
+                    placement_id,
+                    track_id,
+                    start_sample,
+                    duration_ticks,
+                    notes: notes.clone(),
+                    name: &name,
+                    visibility,
+                },
+            );
         }
     }
     r.compose.last_error = None;
@@ -1080,7 +1110,7 @@ pub(crate) fn control_generate_drums(
         }
     }
 
-    materialize_drum_clips(r);
+    materialize_drum_clips_for_control(r, definition_id);
     r.compose.last_error = None;
     ControlDrumOutcome::Generated
 }
@@ -1123,7 +1153,7 @@ fn install_builtin_pattern(
         def.set_primary_pattern(Some(pattern_id));
     }
 
-    materialize_drum_clips(r);
+    materialize_drum_clips_for_control(r, definition_id);
     r.compose.last_error = None;
     ControlDrumOutcome::Generated
 }

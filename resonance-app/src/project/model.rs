@@ -461,6 +461,50 @@ pub struct ProjectPlugin {
     pub clap_plugin_id: String,
     pub clap_file_path: String,
     pub state_file: String,
+    /// Parameter values that differ from the plugin's own defaults, as
+    /// last seen by the app (doc-free bug report: "plugin parameters are
+    /// not persisted in the project file").
+    ///
+    /// **Why this exists when `state_file` already holds a CLAP state
+    /// blob.** The blob is the plugin's opaque self-serialization and it
+    /// is the *only* thing that reached disk before. Two things made it
+    /// insufficient:
+    ///
+    /// 1. The host queries a plugin's `ParamInfo` list exactly once, at
+    ///    instantiation, and ships it in `AudioEvent::PluginAdded`. On
+    ///    load that event lands *before* the `LoadPluginState` blob is
+    ///    applied, and nothing re-reads the params afterwards — so the
+    ///    app-side mirror (`PluginSlotState::params`) that
+    ///    `track.plugin_params` / the mixer panel / automation all read
+    ///    kept reporting instantiation-time **defaults** no matter what
+    ///    the blob restored.
+    /// 2. A param set while the transport is stopped is queued in the
+    ///    CLAP host and only flushed inside `process()`, so the blob
+    ///    written by a save-while-stopped could itself be stale.
+    ///
+    /// Persisting the values explicitly fixes both: they round-trip in
+    /// plain, inspectable JSON, are re-applied to the mirror *and*
+    /// re-sent to the engine after the blob on load, and are independent
+    /// of whether the plugin implements CLAP state at all.
+    ///
+    /// Only non-default values are stored, so the file stays small and a
+    /// plugin that adds parameters in a later version picks up its own
+    /// new defaults. Absent (`#[serde(default)]`) in projects saved
+    /// before this field existed, which load exactly as they did before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<ProjectPluginParam>,
+}
+
+/// One persisted plugin parameter override. Addressed by the stable CLAP
+/// param id; `name` is carried alongside purely so a human reading
+/// `project.json` can tell what a numeric id means (it is never used to
+/// match on load — a renamed param must still restore).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectPluginParam {
+    pub id: u32,
+    #[serde(default)]
+    pub name: String,
+    pub value: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

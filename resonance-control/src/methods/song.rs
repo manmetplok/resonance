@@ -239,7 +239,7 @@ pub struct VocalView {
 /// render-time failure a client can see and fix first. The counts can
 /// disagree with a by-eye reading because the engine's G2P decides
 /// syllabification (`"don't"` is one syllable, `"remember"` is three).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct VocalLaneView {
     /// The section definition this lane belongs to — pass it as
@@ -266,6 +266,75 @@ pub struct VocalLaneView {
     /// reported as `false`. Distinguish "not generated yet" by
     /// `note_count == 0` rather than by this flag.
     pub counts_mismatch: bool,
+    /// Voicebank this lane will render with, e.g. `"Lilia"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voicebank: Option<String>,
+    /// The voicebank's comfortable MIDI pitch range. Notes outside it are
+    /// flagged in [`Self::notes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comfortable_range: Option<PitchRangeView>,
+    /// Per-note articulation budget — the render-time intelligibility
+    /// pre-flight. Empty when the lane has no notes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<VocalNoteView>,
+    /// How many of [`Self::notes`] are `too_short`.
+    #[serde(default)]
+    pub short_note_count: usize,
+    /// How many of [`Self::notes`] are `out_of_range`.
+    #[serde(default)]
+    pub out_of_range_note_count: usize,
+}
+
+/// An inclusive MIDI pitch range with human-readable note names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PitchRangeView {
+    /// Lowest comfortable MIDI note (60 = C4).
+    pub low: u8,
+    /// Highest comfortable MIDI note.
+    pub high: u8,
+    /// e.g. `"C3"`.
+    pub low_name: String,
+    /// e.g. `"E5"`.
+    pub high_name: String,
+}
+
+/// One note of a vocal lane, with everything needed to tell — without
+/// rendering and listening — whether it will be *understood*.
+///
+/// Two things silently destroy intelligibility and neither surfaces as an
+/// error: a note too short to articulate the phonemes assigned to it, and
+/// a note outside the voicebank's comfortable range. `phoneme_count` vs
+/// `min_duration_ms` vs `duration_ms` is the whole story for the first.
+/// SVS sings one syllable per note, so a nine-phoneme word crammed onto
+/// one note needs a duration no realistic tempo gives it; the fix is more
+/// syllable breaks in the lyric (see `vocal.set_lyrics`) or a longer note,
+/// not a synthesis parameter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct VocalNoteView {
+    /// 0-based index into the lane's clip note list.
+    pub index: usize,
+    /// The syllable sung here — `"+"` for a slur continuation.
+    pub syllable: String,
+    /// Lowercase ARPAbet phonemes this note sings.
+    pub phonemes: Vec<String>,
+    /// `phonemes.len()`, denormalized so a client can scan for crammed
+    /// notes without walking the lists.
+    pub phoneme_count: usize,
+    pub pitch: u8,
+    /// Pitch name, e.g. `"C4"`.
+    pub pitch_name: String,
+    /// Time this note actually has to sing, in milliseconds.
+    pub duration_ms: f64,
+    /// Milliseconds needed to articulate `phonemes` — the sum of each
+    /// phone's audibility floor.
+    pub min_duration_ms: f64,
+    /// `duration_ms < min_duration_ms`: this note will be heard as a
+    /// smear.
+    pub too_short: bool,
+    /// Outside [`VocalLaneView::comfortable_range`].
+    pub out_of_range: bool,
 }
 
 /// One lyric line with its per-syllable phonemes.

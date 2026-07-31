@@ -253,6 +253,16 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
         )
         .len();
         let note_count = lane_note_count(app, definition.id, track.id);
+        // Intelligibility pre-flight: per note, can the phonemes assigned
+        // to it actually be articulated in the time it has, and is it
+        // pitched where the voicebank sings clearly? Both failures render
+        // "successfully" and simply sound like mush, so without this a
+        // client had to bounce audio and listen to find out.
+        let articulation = lane_articulation(app, definition.id, track.id, vocal_params);
+        let short_note_count = articulation.iter().filter(|n| n.too_short).count();
+        let out_of_range_note_count = articulation.iter().filter(|n| n.out_of_range).count();
+        let (range_lo, range_hi) =
+            crate::compose::vocal_svs::comfortable_pitch_range(vocal_params.voicebank);
         lanes.push(song::VocalLaneView {
             definition_id: definition.id.into(),
             name: definition.name.clone(),
@@ -274,6 +284,30 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
             // false confidence right before a render (ba doc #271).
             // "Not generated yet" stays legible as `note_count == 0`.
             counts_mismatch: syllable_count > 0 && note_count != syllable_count,
+            voicebank: Some(vocal_params.voicebank.as_str().to_owned()),
+            comfortable_range: Some(song::PitchRangeView {
+                low: range_lo,
+                high: range_hi,
+                low_name: midi_note_name(range_lo),
+                high_name: midi_note_name(range_hi),
+            }),
+            notes: articulation
+                .iter()
+                .map(|a| song::VocalNoteView {
+                    index: a.note_index,
+                    syllable: a.label.clone(),
+                    phonemes: a.phonemes.iter().map(|p| (*p).to_owned()).collect(),
+                    phoneme_count: a.phonemes.len(),
+                    pitch: a.pitch,
+                    pitch_name: midi_note_name(a.pitch),
+                    duration_ms: (a.duration_sec * 1000.0).round(),
+                    min_duration_ms: (a.min_duration_sec * 1000.0).round(),
+                    too_short: a.too_short,
+                    out_of_range: a.out_of_range,
+                })
+                .collect(),
+            short_note_count,
+            out_of_range_note_count,
         });
         for line in &vocal_params.draft {
             let syllables =
@@ -743,6 +777,92 @@ fn lane_note_count(
                 .find(|c| c.track_id == track_id && c.start_sample == start)
         })
         .map_or(0, |clip| clip.notes.len())
+}
+
+/// The MIDI clip a vocal lane sings from, resolved exactly the way
+/// [`lane_note_count`] counts its notes (derived-clip map first, then the
+/// placement-start fallback) so the two never disagree about which clip
+/// the lane owns.
+fn lane_clip<'a>(
+    app: &'a Resonance,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+) -> Option<&'a crate::state::MidiClipState> {
+    let mapped = app
+        .compose
+        .derived_clips
+        .iter()
+        .filter(|((def, _, track), _)| *def == definition_id && *track == track_id)
+        .find_map(|(_, clip_id)| app.midi_clips.iter().find(|c| c.id == *clip_id));
+    if mapped.is_some() {
+        return mapped;
+    }
+    app.compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .find_map(|p| {
+            let start = app.tempo_map.bar_to_sample(p.start_bar);
+            app.midi_clips
+                .iter()
+                .find(|c| c.track_id == track_id && c.start_sample == start)
+        })
+}
+
+/// Per-note articulation report for one vocal lane — the data behind
+/// `song.vocal`'s `too_short` / `out_of_range` flags.
+///
+/// Resolves the lane's pronunciation the same way the render does
+/// (`override > project-dict > CMU-auto`, then the voicebank's phoneme
+/// substitutions) so the phonemes reported are the ones that will be
+/// sung. A lane whose phonemes fail the voicebank gate outright reports
+/// on the unsubstituted stream rather than nothing — the render will
+/// refuse with its own precise error, and the durations are still true.
+fn lane_articulation(
+    app: &Resonance,
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+    params: &resonance_music_theory::VocalParams,
+) -> Vec<crate::compose::vocal_svs::NoteArticulation> {
+    let Some(clip) = lane_clip(app, definition_id, track_id) else {
+        return Vec::new();
+    };
+    if clip.notes.is_empty() {
+        return Vec::new();
+    }
+    let empty = std::collections::HashMap::new();
+    let overrides = app
+        .compose
+        .pronunciation
+        .clip_overrides(clip.id)
+        .unwrap_or(&empty);
+    let annotations = app
+        .compose
+        .vocal_audio
+        .clip_lyrics
+        .get(&clip.id)
+        .cloned()
+        .unwrap_or_else(|| vec![String::new(); clip.notes.len()]);
+    let resolved = crate::compose::vocal_svs::resolve_clip_pronunciation(
+        &params.draft,
+        &annotations,
+        clip.notes.len(),
+        overrides,
+        &app.compose.pronunciation.project_dictionary,
+        &[],
+    );
+    let assigned = crate::compose::vocal_svs::validate_for_voicebank(&resolved, params.voicebank)
+        .unwrap_or(resolved);
+    crate::compose::vocal_svs::articulation_report(
+        &clip.notes,
+        &assigned,
+        resonance_audio::types::TICKS_PER_QUARTER_NOTE as u32,
+        // The render path reads the transport tempo the same way
+        // (`vocal_render::rerender_vocal_audio`), so the durations
+        // reported here are the ones the segment builder will divide up.
+        app.transport.bpm,
+        params.voicebank,
+    )
 }
 
 /// SVS render state of a vocal track, from the vocal-audio registry:

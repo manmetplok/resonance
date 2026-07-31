@@ -62,10 +62,36 @@ fn set_lyrics(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         Message::Compose(ComposeMessage::ControlSetVocalLyrics {
             definition_id,
             track_id,
-            text: params.text,
+            text: normalize_lyric_text(&params.text, params.syllabify),
         }),
     );
     ack(app, request, task)
+}
+
+/// Normalise incoming lyric text into the `·`-marked form the whole
+/// vocal path counts syllables from.
+///
+/// The lyric tokenizer treats a word with no break as **one** syllable,
+/// and a syllable is one note — so `"resolution"` stored verbatim put all
+/// nine of its phonemes (`r eh z ax l uw sh ax n`) on a single note. At
+/// any singable tempo that is a few tens of milliseconds per phoneme:
+/// the consonants never articulate and the word is heard as a smear.
+/// Every lyric that arrives over the wire therefore goes through
+/// [`g2p::auto_syllabify_text`] first, which inserts the missing breaks
+/// (`re·so·lu·tion`) while leaving hand-broken words, `[..]` phoneme
+/// blocks and line structure alone. It also normalises hand-typed `-`
+/// breaks to `·`, so `re-so-lu-tion` works without the caller having to
+/// type a middle dot.
+///
+/// `syllabify: false` still gets the `-` → `·` normalisation (that is a
+/// notation detail, not a transformation) but no automatic splitting.
+fn normalize_lyric_text(text: &str, syllabify: bool) -> String {
+    use resonance_music_theory::g2p;
+    if syllabify {
+        g2p::auto_syllabify_text(text)
+    } else {
+        g2p::normalize_syllable_marks(text)
+    }
 }
 
 fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
@@ -104,7 +130,7 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
             definition_id,
             track_id,
             line_index: params.line_index,
-            text: params.text,
+            text: normalize_lyric_text(&params.text, params.syllabify),
         }),
     );
     ack(app, request, task)
