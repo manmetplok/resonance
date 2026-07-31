@@ -96,6 +96,33 @@ pub(crate) const SILENCE_GAP_SEC: f64 = 0.4;
 /// [`render_cache`]); pass a fresh [`SvsRenderCache`] for a clip that has
 /// never been rendered. After the call its [`SvsRenderCache::last_plan`]
 /// holds the "N of M segments changed" tally for the UI overlay.
+/// Where a lane's rendered audio belongs on the timeline: the section's
+/// start, advanced by the lane's first note.
+///
+/// The SVS render is relative to that first note — [`render_cache`]
+/// subtracts `base_tick = notes[0].start_tick` when laying segments out —
+/// so the synthesised waveform begins *at* the note with no leading
+/// silence. Placing it at the section boundary therefore plays the whole
+/// phrase early by however far into the section it was written: a lane
+/// whose first note sits at beat 8 sounded at beat 0, silently, with
+/// relative timing inside the phrase preserved (ba doc #272 V-1).
+///
+/// Goes through the tempo map rather than a flat samples-per-tick so the
+/// offset stays right across a tempo change inside the section.
+///
+/// [`render_cache`]: crate::compose::vocal_svs::render_cache
+pub fn vocal_audio_start(
+    tempo_map: &resonance_audio::types::TempoMap,
+    section_start_sample: u64,
+    lead_ticks: u64,
+    sample_rate: u32,
+) -> u64 {
+    if lead_ticks == 0 {
+        return section_start_sample;
+    }
+    tempo_map.tick_to_abs_sample(section_start_sample, lead_ticks, sample_rate)
+}
+
 pub fn render_vocal_clip(
     notes: &[MidiNote],
     params: &VocalParams,

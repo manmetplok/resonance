@@ -352,6 +352,28 @@ fn enqueue_vocal_render(
 
     let bpm = r.transport.bpm;
     let engine_sr = r.sample_rate;
+
+    // Where the rendered audio actually goes on the timeline — the
+    // section start advanced by the lane's first note. See
+    // [`vocal_audio_start`] for why the offset is needed at all (ba doc
+    // #272 V-1). Only the audio moves: the lane's MIDI clip still starts
+    // at the section boundary and carries its own per-note ticks.
+    let lead_ticks = midi_notes.first().map(|n| n.start_tick).unwrap_or(0);
+    let audio_starts: Vec<(u64, u64)> = placement_starts
+        .iter()
+        .map(|&(placement_id, section_start)| {
+            (
+                placement_id,
+                crate::compose::vocal_svs::vocal_audio_start(
+                    &r.tempo_map,
+                    section_start,
+                    lead_ticks,
+                    engine_sr,
+                ),
+            )
+        })
+        .collect();
+
     let dest_dir = vocal_audio_dir(r);
     Task::perform(
         async move {
@@ -375,7 +397,7 @@ fn enqueue_vocal_render(
                     definition_id,
                     track_id,
                     wav_path,
-                    placements: placement_starts.clone(),
+                    placements: audio_starts.clone(),
                     clip_name: clip_name.clone(),
                     trim_start_frames: trim_start,
                     trim_end_frames: trim_end,
