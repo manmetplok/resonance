@@ -24,8 +24,24 @@ pub const ADD_EFFECT: &str = "track.add_effect";
 /// (no params -> [`PluginCatalog`]).
 pub const PLUGINS: &str = "track.plugins";
 
+/// `track.plugin_params` — a track's plugins and their parameters,
+/// read-only ([`PluginParamsParams`] -> [`PluginParamsView`]).
+pub const PLUGIN_PARAMS: &str = "track.plugin_params";
+/// `track.set_plugin_param` — set one plugin parameter
+/// ([`SetPluginParamParams`] -> `MutationAck`).
+pub const SET_PLUGIN_PARAM: &str = "track.set_plugin_param";
+
 /// All `track.*` method names.
-pub const METHODS: &[&str] = &[ADD, RENAME, DELETE, ADD_INSTRUMENT, ADD_EFFECT, PLUGINS];
+pub const METHODS: &[&str] = &[
+    ADD,
+    RENAME,
+    DELETE,
+    ADD_INSTRUMENT,
+    ADD_EFFECT,
+    PLUGINS,
+    PLUGIN_PARAMS,
+    SET_PLUGIN_PARAM,
+];
 
 /// Params for `track.add`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,4 +111,86 @@ pub struct PluginCatalogEntry {
 pub enum PluginKind {
     Instrument,
     Effect,
+}
+
+// ---------------------------------------------------------------------------
+// Plugin parameters (ba doc #272 V-3)
+// ---------------------------------------------------------------------------
+
+/// Params for `track.plugin_params`.
+///
+/// A plugin is addressed by the CLAP id `song.tracks` already reports —
+/// its `instrument` field or an entry of its `effects` array — so no
+/// extra identifier has to be discovered first. A track carrying the
+/// same plugin twice disambiguates with `occurrence`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PluginParamsParams {
+    pub track_id: TrackId,
+    /// CLAP id of the plugin on this track, e.g.
+    /// `"com.resonance.wavetable"`. Omitted returns every plugin on the
+    /// track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance to address when the track carries `plugin_id`
+    /// more than once; 0-based, defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
+
+/// Result of `track.plugin_params`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PluginParamsView {
+    pub track_id: TrackId,
+    pub plugins: Vec<PluginParamsEntry>,
+    pub revision: u64,
+}
+
+/// One plugin on the track, with its parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PluginParamsEntry {
+    /// CLAP id — what [`PluginParamsParams::plugin_id`] and
+    /// [`SetPluginParamParams::plugin_id`] take.
+    pub plugin_id: String,
+    pub name: String,
+    /// 0-based position of this plugin among the track's instances of
+    /// the same `plugin_id` — pass as `occurrence` to address it.
+    pub occurrence: u32,
+    pub kind: PluginKind,
+    pub params: Vec<PluginParamView>,
+}
+
+/// One plugin parameter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PluginParamView {
+    /// Stable CLAP parameter id. Either this (as a decimal string) or
+    /// `name` addresses the parameter in `track.set_plugin_param`.
+    pub id: u32,
+    pub name: String,
+    pub value: f64,
+    pub min: f64,
+    pub max: f64,
+    pub default: f64,
+}
+
+/// Params for `track.set_plugin_param`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetPluginParamParams {
+    pub track_id: TrackId,
+    /// CLAP id of the plugin to address; omitted targets the track's
+    /// instrument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// The parameter, by name (case-insensitive) or by its numeric id
+    /// as a string. Names come from `track.plugin_params`.
+    pub param: String,
+    /// New value; must lie within the parameter's `min..=max`, which an
+    /// out-of-range request reports back.
+    pub value: f64,
 }

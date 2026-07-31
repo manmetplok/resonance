@@ -73,6 +73,41 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "List a track's plugins and every parameter each one exposes — id, name, \
+                       current value, min, max and default. Omit plugin_id for all of them. \
+                       Plugins are named by the CLAP id song_tracks already shows (its \
+                       instrument field or an entry of its effects array); occurrence \
+                       disambiguates a track carrying the same plugin twice. Read this before \
+                       track_set_plugin_param to learn the parameter names and their ranges.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<track::PluginParamsView>()
+    )]
+    async fn track_plugin_params(
+        &self,
+        Parameters(params): Parameters<track::PluginParamsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::PLUGIN_PARAMS, &params).await
+    }
+
+    #[tool(
+        description = "Set one plugin parameter, so a track can sound like something other than \
+                       the plugin's default patch. param takes the parameter's name \
+                       (case-insensitive) or its numeric id as a string — both come from \
+                       track_plugin_params. plugin_id names the plugin; omitted it targets the \
+                       track's instrument, which is the usual case for shaping a synth. A value \
+                       outside the parameter's min..=max is rejected with the range rather than \
+                       clamped. Repeated sets of the same parameter collapse into one undo \
+                       entry.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn track_set_plugin_param(
+        &self,
+        Parameters(params): Parameters<track::SetPluginParamParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::SET_PLUGIN_PARAM, &params).await
+    }
+
+    #[tool(
         description = "The built-in plugin catalog: stable plugin ids with name and kind \
                        (instrument | effect), for track_add_instrument / track_add_effect. \
                        Read-only.",
