@@ -91,6 +91,58 @@ fn last_tick_by_section(
     out
 }
 
+/// A section pinned to the "silence" groove stays drumless — including
+/// after a later generate elsewhere re-materialises every clip, which is
+/// the path that used to refill it from the project default.
+#[test]
+fn a_section_pinned_to_silence_stays_drumless() {
+    let mut app = app_with_project();
+    let intro = section_named(&mut app, "Intro");
+    let verse = section_named(&mut app, "Verse");
+    app.test_add_drum_track(82);
+
+    call(&mut app, "generate.drums", &proto::DrumsParams {
+        section_id: intro,
+        track_id: ProtoTrackId(82),
+        pattern: Some("silence".to_owned()),
+        density: None,
+        seed: None,
+    })
+    .result::<GenerateResult>()
+    .expect("silence generates");
+
+    // Generating a different section rebuilds every drum clip; the
+    // pinned-silent one must not come back with the default groove.
+    let rx = app.test_capture_engine();
+    call(&mut app, "generate.drums", &proto::DrumsParams {
+        section_id: verse,
+        track_id: ProtoTrackId(82),
+        pattern: Some("four-on-floor".to_owned()),
+        density: None,
+        seed: None,
+    })
+    .result::<GenerateResult>()
+    .expect("generates");
+
+    let mut intro_notes = None;
+    let mut saw_verse = false;
+    while let Ok(cmd) = rx.try_recv() {
+        if let AudioCommand::LoadMidiClipDirect { notes, name, .. } = cmd {
+            match name.split(" · ").next().unwrap_or(&name) {
+                "Intro" => intro_notes = Some(notes.len()),
+                "Verse" => saw_verse = true,
+                _ => {}
+            }
+        }
+    }
+    assert!(saw_verse, "sanity: the verse was written");
+    assert_eq!(
+        intro_notes,
+        Some(0),
+        "a section pinned to silence must render no drum notes"
+    );
+}
+
 #[test]
 fn generated_drums_cover_the_whole_section() {
     let mut app = app_with_project();

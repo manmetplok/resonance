@@ -71,6 +71,18 @@ const G: u8 = 45; // ghost note
 
 const TEMPLATES: &[Template] = &[
     Template {
+        name: "silence",
+        description: "No drums at all — pins the section drumless.",
+        length_bars: 1,
+        // Deliberately empty. A section with no arrangement falls through
+        // to the project default pattern and gets drums nobody asked for
+        // (ba doc #272 V-2b); assigning this one *pins* an empty pattern,
+        // which the fallback then never overrides. It is the only way to
+        // say "this section has no drums" without deleting the drum
+        // track.
+        groups: &[],
+    },
+    Template {
         name: "halftime",
         description: "Backbeat on 3 — the snare halves the perceived tempo.",
         length_bars: 1,

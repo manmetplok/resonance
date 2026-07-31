@@ -40,6 +40,7 @@ fn the_documented_vocabulary_is_the_real_one() {
     // The names promised in the tool description and the not-found
     // error must all resolve, or the docs are lying to the caller.
     let expected = [
+        "silence",
         "halftime",
         "four-on-floor",
         "industrial",
@@ -53,15 +54,30 @@ fn the_documented_vocabulary_is_the_real_one() {
     assert_eq!(builtin_pattern_names(), expected);
     for name in expected {
         assert!(is_builtin_pattern(name), "{name} resolves");
-        assert!(
-            !build(name).groups.is_empty(),
-            "{name} installs at least one group"
-        );
+        // "silence" is deliberately group-less — it exists to pin a
+        // section drumless. Everything else must actually play.
+        if name != "silence" {
+            assert!(
+                !build(name).groups.is_empty(),
+                "{name} installs at least one group"
+            );
+        }
     }
     // Every entry carries help text for the tool surface.
     for (name, description) in builtin_pattern_catalog() {
         assert!(!description.is_empty(), "{name} has a description");
     }
+}
+
+/// "silence" is the way to say a section has no drums: it installs a
+/// pattern with nothing in it, which pins the section and so overrides
+/// the whole-section fallback that would otherwise fill it with the
+/// project default (doc #272 V-2b).
+#[test]
+fn silence_installs_a_pattern_that_plays_nothing() {
+    let p = build("silence");
+    assert!(p.groups.is_empty(), "silence has no groups");
+    assert_eq!(p.total_steps(), 0);
 }
 
 #[test]
