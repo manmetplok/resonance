@@ -176,39 +176,81 @@ pub(crate) fn track_has_vocal_lane(r: &crate::Resonance, track_id: TrackId) -> b
     })
 }
 
-/// The first section (in placement order, then creation order) whose
-/// `track_id` lane is a vocal generator. The control lyric/render methods
-/// address a track; this picks the lane they act on when the caller
-/// didn't (couldn't) name a section.
-pub(crate) fn first_vocal_definition(r: &crate::Resonance, track_id: TrackId) -> Option<u64> {
+/// Every section definition whose `track_id` lane is a vocal generator,
+/// placed lanes first in placement order (ties broken by definition id
+/// so the order is stable), then unplaced ones in creation order. A
+/// definition placed several times appears once — a lane renders once
+/// and its audio fans out to every placement.
+///
+/// This is the whole track: `vocal.render` with no `section_id` renders
+/// all of it. Addressing only the head of this list is what left every
+/// lane but the first frozen at its previous audio (ba doc #271 V2).
+pub(crate) fn vocal_definitions_for_track(
+    r: &crate::Resonance,
+    track_id: TrackId,
+) -> Vec<u64> {
+    let is_vocal_lane = |definition_id: u64| {
+        matches!(
+            r.compose
+                .find_definition(definition_id)
+                .and_then(|d| d.lane_generators.get(&track_id))
+                .map(|c| &c.kind),
+            Some(LaneGeneratorKind::Vocal(_))
+        )
+    };
+
     let mut placed: Vec<(u32, u64)> = r
         .compose
         .placements
         .iter()
-        .filter_map(|p| {
-            let is_vocal = r
-                .compose
-                .find_definition(p.definition_id)
-                .and_then(|d| d.lane_generators.get(&track_id))
-                .is_some_and(|c| matches!(c.kind, LaneGeneratorKind::Vocal(_)));
-            is_vocal.then_some((p.start_bar, p.definition_id))
-        })
+        .filter(|p| is_vocal_lane(p.definition_id))
+        .map(|p| (p.start_bar, p.definition_id))
         .collect();
-    placed.sort_by_key(|(bar, _)| *bar);
-    if let Some((_, def)) = placed.first() {
-        return Some(*def);
+    placed.sort_by_key(|&(bar, def)| (bar, def));
+
+    let mut out: Vec<u64> = Vec::new();
+    for (_, def) in placed {
+        if !out.contains(&def) {
+            out.push(def);
+        }
     }
-    // Fall back to an unplaced vocal lane in creation order.
-    r.compose
-        .definitions
-        .iter()
-        .find(|d| {
-            matches!(
-                d.lane_generators.get(&track_id).map(|c| &c.kind),
-                Some(LaneGeneratorKind::Vocal(_))
-            )
+    for def in &r.compose.definitions {
+        if is_vocal_lane(def.id) && !out.contains(&def.id) {
+            out.push(def.id);
+        }
+    }
+    out
+}
+
+/// Every `(definition_id, track_id)` vocal lane in the project, ordered
+/// by placement then track id. Backs a `vocal.render` that names no
+/// track at all — "every vocal track".
+pub(crate) fn all_vocal_lanes(r: &crate::Resonance) -> Vec<(u64, TrackId)> {
+    let mut tracks: Vec<TrackId> = Vec::new();
+    for def in &r.compose.definitions {
+        for (track_id, cfg) in &def.lane_generators {
+            if matches!(cfg.kind, LaneGeneratorKind::Vocal(_)) && !tracks.contains(track_id) {
+                tracks.push(*track_id);
+            }
+        }
+    }
+    tracks.sort_unstable();
+    tracks
+        .into_iter()
+        .flat_map(|track_id| {
+            vocal_definitions_for_track(r, track_id)
+                .into_iter()
+                .map(move |def| (def, track_id))
         })
-        .map(|d| d.id)
+        .collect()
+}
+
+/// The first section (in placement order, then creation order) whose
+/// `track_id` lane is a vocal generator. The control lyric methods
+/// address a track; this picks the lane they act on when the caller
+/// didn't (couldn't) name a section.
+pub(crate) fn first_vocal_definition(r: &crate::Resonance, track_id: TrackId) -> Option<u64> {
+    vocal_definitions_for_track(r, track_id).first().copied()
 }
 
 /// `vocal.set_lyrics`: replace the lane's whole draft from bulk text.
@@ -444,12 +486,34 @@ pub(super) fn rerender_vocal_audio(
         return Task::none();
     }
 
-    let derived_clip_id = placements.iter().find_map(|(pid, _)| {
-        r.compose
-            .derived_clips
-            .get(&(definition_id, *pid, track_id))
-            .copied()
-    });
+    // Prefer the derived-clip mapping, but fall back to matching a clip by
+    // the placement's start sample. The mapping is not always populated for
+    // a lane loaded from disk, and without this fallback such a lane is
+    // permanently unrenderable while `song.vocal` cheerfully reports it as
+    // having notes — the two must agree. `song.vocal`'s `lane_clip` and the
+    // `lane_has_notes` pre-flight resolve it the same way.
+    let derived_clip_id = placements
+        .iter()
+        .find_map(|(pid, _)| {
+            r.compose
+                .derived_clips
+                .get(&(definition_id, *pid, track_id))
+                .copied()
+        })
+        .or_else(|| {
+            placements.iter().find_map(|(_, start_bar)| {
+                let start = r.tempo_map.bar_to_sample(*start_bar);
+                r.midi_clips
+                    .iter()
+                    .find(|c| {
+                        c.track_id == track_id
+                            && c.start_sample == start
+                            // Never adopt a clip another lane already owns.
+                            && !r.compose.derived_clips.values().any(|id| *id == c.id)
+                    })
+                    .map(|c| c.id)
+            })
+        });
     let Some(clip_id) = derived_clip_id else {
         r.compose.last_error =
             Some("Generate a vocal first \u{2014} no MIDI clip to render.".to_string());

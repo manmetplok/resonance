@@ -8,6 +8,8 @@
 //!   pass per-port output slices into the audio thread.
 //! - [`process`]: the audio-thread fast path ([`ClapInstance::process`]
 //!   single-output wrapper and [`ClapInstance::process_multi`]).
+//! - [`params`]: `clap_plugin_params.flush` — delivers queued parameter
+//!   changes when no `process()` call is coming (transport stopped).
 //! - [`state`]: CLAP state extension (save / load / reload / reset).
 //! - [`gui`]: CLAP GUI extension (open / close the editor window).
 //! - host callbacks (in this file): the `clap_host` vtable we hand back
@@ -20,6 +22,7 @@
 mod bundle;
 mod gui;
 mod instance;
+mod params;
 mod process;
 mod state;
 
@@ -165,6 +168,11 @@ pub fn __instance_from_raw_for_test(
 /// - Lifecycle methods (create/activate/destroy) are called from the engine thread only
 /// - process() is called from the audio callback thread only
 /// - set_param() is called from the engine thread, pending_params consumed by process()
+/// - flush_pending_params() (`clap_plugin_params.flush`) may only run
+///   while no process() call is in flight for the same instance. The
+///   mutex around this wrapper is what enforces that: `&mut ClapInstance`
+///   is unreachable without its guard, and every process() call site
+///   takes the same lock. See `clap_host::params` for the full argument.
 pub struct SyncClapInstance(pub ClapInstance);
 
 unsafe impl Send for SyncClapInstance {}

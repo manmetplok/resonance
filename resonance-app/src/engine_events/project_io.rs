@@ -59,6 +59,7 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
         .save_state
         .take()
         .expect("save_state present when both_done");
+    report_clips_without_audio(r, &save);
     let project_file = crate::update::build_project_file(r);
     let path = save.path.clone();
     let plugin_states = save.plugin_states;
@@ -99,6 +100,73 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
         },
         move |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r, autosave)),
     )
+}
+
+/// Surface any clip whose audio file is **not** in the bundle the save
+/// just wrote.
+///
+/// `build_project_file` records `audio_file: "audio/clip_<id>.wav"` for
+/// every clip in `r.clips`, unconditionally — it has no way to know
+/// whether that file exists. The engine, which does, reports back the
+/// clips it actually wrote (`AudioEvent::ClipsSavedToProjectDir` ->
+/// [`SaveCollector::clip_files`]); until now that list was collected and
+/// never read.
+///
+/// The gap is reachable and self-perpetuating: `replay_audio_clips`
+/// pushes a `ClipState` for every `ProjectClip` even when the engine's
+/// `LoadClipFromWav` fails on a missing WAV, so a project that has lost
+/// an audio file loads with a clip the engine doesn't have, the next
+/// save writes the same dangling `audio_file` again, and every save
+/// after that repeats it. Nothing downstream complains — the clip simply
+/// plays silence, which on a vocal track reads as a section that "didn't
+/// render" (ba doc #271).
+///
+/// Reported, not fatal: the rest of the project is on disk and refusing
+/// the save would strand the user's work. An autosave only logs — it must
+/// never interrupt.
+///
+/// [`SaveCollector::clip_files`]: crate::project::SaveCollector::clip_files
+fn report_clips_without_audio(r: &mut Resonance, save: &crate::project::SaveCollector) {
+    let missing: Vec<ClipId> = r
+        .clips
+        .iter()
+        .map(|c| c.id)
+        .filter(|id| !save.clip_files.contains_key(id))
+        // The engine reports only the clips it touched this pass, so
+        // confirm against the bundle itself before crying wolf.
+        .filter(|id| {
+            !save
+                .path
+                .join("audio")
+                .join(format!("clip_{id}.wav"))
+                .exists()
+        })
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+
+    let names: Vec<String> = missing
+        .iter()
+        .map(|id| {
+            r.clips
+                .iter()
+                .find(|c| c.id == *id)
+                .map(|c| format!("{:?}", c.name))
+                .unwrap_or_else(|| id.to_string())
+        })
+        .collect();
+    let detail = format!(
+        "{} clip(s) have no audio file in {}: {} — they will be silent when the \
+         project is reopened.",
+        missing.len(),
+        save.path.display(),
+        names.join(", ")
+    );
+    eprintln!("[save] {detail}");
+    if !save.autosave {
+        r.error_message = Some(detail);
+    }
 }
 
 pub(super) fn all_cleared(r: &mut Resonance) {

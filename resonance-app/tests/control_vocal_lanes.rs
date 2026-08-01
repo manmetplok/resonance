@@ -157,11 +157,14 @@ fn render_targets_the_lane_named_by_section_id() {
         .result::<resonance_control::job::JobStarted>()
         .expect("the named lane renders");
 
-    // Omitting section_id still resolves the first lane in placement
-    // order (the verse), which has no notes — so the old behaviour is
-    // intact and demonstrably a different lane.
-    let message = expect_error(render(&mut app, None), ErrorKind::InvalidParams);
-    assert!(message.contains("no notes"), "unexpected: {message}");
+    // Omitting section_id covers the whole track, not its first lane:
+    // the verse has no notes and is skipped, and the render still runs
+    // for the chorus. This used to resolve the first lane alone and fail
+    // with "no notes" — the same resolution that silently left lanes
+    // 2..n stale on a track where every lane *could* render.
+    render(&mut app, None)
+        .result::<resonance_control::job::JobStarted>()
+        .expect("a track-level render skips the empty lane and renders the rest");
 
     // A section the track does not sing in is a precise error, not a
     // silent fallback to the first lane.

@@ -123,6 +123,17 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
                             if slot < self.plugin.param_count() {
                                 self.plugin.param(slot).set_plain(e.value());
                             }
+                            // Mirror into the shared atomics, exactly as
+                            // the `ParamValue` arm of `process()` does.
+                            // While the plugin is active the main-thread
+                            // `params.get_value` and `state.save` read
+                            // from `shared` (the owned plugin lives in
+                            // this audio processor and is unreachable
+                            // from there), so without this a host that
+                            // delivers a change via `flush` instead of
+                            // `process` would move the DSP but still
+                            // report and persist the old value.
+                            self.shared.set_value(slot, e.value());
                         }
                     }
                 }

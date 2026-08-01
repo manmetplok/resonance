@@ -114,14 +114,20 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Render the singing voice (SVS) for ONE vocal lane: it synthesises the \
-                       notes currently in that lane's MIDI clip and never changes them, so \
-                       author with vocal_generate + notes_* first and render last. Omitting \
-                       track_id picks the project's first vocal track, and omitting section_id \
-                       picks that track's first lane in placement order — pass section_id to \
-                       render any other lane, otherwise a track that sings in several sections \
-                       only ever re-renders its first. Call it once per lane. voicebank \
-                       defaults to the app default (Lilia). Runs as a job — this tool waits up \
+        description = "Render the singing voice (SVS): it synthesises the notes currently in \
+                       the target lane's MIDI clip and never changes them, so author with \
+                       vocal_generate + notes_* first and render last. Scope widens as you \
+                       omit arguments: section_id renders exactly that lane; track_id alone \
+                       renders EVERY lane on that track; omitting both renders every vocal \
+                       lane in the project. Lanes render sequentially and the job only \
+                       reports done once the last lane lands, so one call per track is \
+                       enough — a per-lane loop is not needed. Lanes that cannot render (no \
+                       notes or no lyrics) are skipped rather than failing the batch. \
+                       voicebank is resolved per lane, so a track whose lanes chose \
+                       different banks keeps them; it defaults to the app default (Lilia). \
+                       Caution: song_vocal's render_state reports `rendered` when ANY lane \
+                       on the track has audio, so it is not proof that every lane is \
+                       current. Runs as a job — this tool waits up \
                        to 2 minutes and returns the final status; if still running, poll \
                        job_status with the returned job_id. Needs a vocal lane \
                        (section_set_lane_generator kind \"vocal\") with notes AND lyrics — \

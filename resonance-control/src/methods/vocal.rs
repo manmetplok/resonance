@@ -118,10 +118,11 @@ pub struct ClearPronunciationParams {
     pub word: String,
 }
 
-/// Params for `vocal.render`. A render covers **one lane**: omitting
-/// `track_id` resolves the project's first vocal track and omitting
-/// `section_id` that track's first lane, so render each lane you want
-/// updated. The job's payload is [`RenderJobResult`].
+/// Params for `vocal.render`. A render covers **every lane it names**:
+/// `section_id` picks exactly one, `track_id` alone covers all of that
+/// track's vocal lanes, and omitting both covers every vocal lane in the
+/// project. The job resolves only once all of them have rendered; its
+/// payload is [`RenderJobResult`].
 ///
 /// Render synthesises the notes already in the lane's clip; it never
 /// generates or rewrites them (`vocal.generate` does that).
@@ -130,11 +131,12 @@ pub struct ClearPronunciationParams {
 pub struct RenderParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
-    /// Which of the track's vocal lanes to render. Omitted resolves the
-    /// track's first vocal lane in placement order — the same rule the
-    /// rest of the namespace uses. Without this a track that sings in
-    /// several sections could only ever re-render its first lane, so
-    /// every other lane stayed frozen at its first render.
+    /// Which of the track's vocal lanes to render. Omitted renders
+    /// **every** vocal lane on the track — unlike the rest of the
+    /// namespace, where an omitted section means the track's first lane.
+    /// Resolving a single lane here left a track that sings in several
+    /// sections frozen on its previous audio everywhere but its first
+    /// lane, while the call still reported success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_id: Option<SectionDefinitionId>,
     /// Voicebank name. Omitted keeps the lane's current voicebank
