@@ -320,6 +320,18 @@ pub struct Resonance {
     /// state blobs matching the preset's plugin chain).
     pub(crate) pending_preset_plugin_states:
         Option<(resonance_audio::types::TrackId, Vec<Option<Vec<u8>>>)>,
+    /// Saved plugin-parameter overrides waiting for their plugin's
+    /// `PluginAdded` event, keyed by plugin instance id.
+    ///
+    /// Project load sends `AddPlugin` and gets a `PluginAdded` back
+    /// carrying the plugin's parameter list *as instantiated* — i.e. at
+    /// its defaults. Writing the restored values into the slot before
+    /// that event lands would simply be overwritten by it, so they wait
+    /// here and `engine_events::plugins::apply_pending_param_overrides`
+    /// applies them (to the app-side mirror and to the engine) the moment
+    /// the event arrives. Entries are consumed on use.
+    pub(crate) pending_plugin_param_overrides:
+        std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<(u32, f64)>>,
 }
 
 /// Startup tab requested via `--tab arrange|mixer|compose|performance`. Read
@@ -626,6 +638,7 @@ impl Resonance {
             pending_track_preset: None,
             pending_preset_save: None,
             pending_preset_plugin_states: None,
+            pending_plugin_param_overrides: std::collections::HashMap::new(),
         };
 
         // Derive the transport label strings once so the very first

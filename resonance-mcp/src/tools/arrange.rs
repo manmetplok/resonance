@@ -13,12 +13,25 @@ use resonance_control::methods::{harmony, section};
 #[tool_router(router = router_arrange, vis = "pub(crate)")]
 impl ResonanceMcp {
     #[tool(
-        description = "Create a section definition (e.g. \"Verse\", 8 bars, optional \
-                       key/scale). Returns section_id. Definitions carry the chord grid. NOTE: \
-                       this ALSO places the section on the timeline after the last existing \
-                       placement, so a follow-up section_place is rejected as overlapping. To \
-                       build the definitions first and position them yourself, pass \
-                       place: false and then call section_place.",
+        description = "Create a section definition (name, length_bars, optional key/scale) and, \
+                       BY DEFAULT, also place it on the timeline right after the last existing \
+                       placement. \
+                       \
+                       PASS place: false whenever you are building an arrangement in a \
+                       deliberate order. The implicit placement is the single biggest trap on \
+                       this surface: leave place at its default and the follow-up section_place \
+                       is rejected as overlapping, because the section is already on the \
+                       timeline at a bar you did not choose. The reliable pattern is \
+                       section_create {place: false} for every section, then section_place each \
+                       one at its 1-based start_bar. Leave place at true only when appending \
+                       sections strictly front-to-back and \"after the last one\" is where you \
+                       want this one. \
+                       \
+                       Returns section_id. Definitions — not placements — carry the chord grid \
+                       every harmony_* and generate_* call reads. scale is {tonic, scale}, e.g. \
+                       {\"tonic\": \"A\", \"scale\": \"minor\"}; scale is one of chromatic, \
+                       major, minor, dorian, phrygian, lydian, mixolydian, locrian, \
+                       \"harmonic minor\", \"melodic minor\".",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<section::CreateResult>()
     )]
@@ -93,7 +106,12 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Set a section definition's key/scale, e.g. tonic \"A\", scale \"minor\". \
-                       Generators and progression rendering use this.",
+                       Generators (generate_part, vocal_generate) and roman-numeral progression \
+                       rendering read it. tonic is a pitch name (\"A\", \"F#\", \"Bb\"); scale is \
+                       one of chromatic, major, minor, dorian, phrygian, lydian, mixolydian, \
+                       locrian, \"harmonic minor\", \"melodic minor\" (matched \
+                       case-insensitively, with - and _ treated as spaces). An unknown value is \
+                       rejected with the full list.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn section_set_scale(
@@ -105,13 +123,25 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Configure (or with kind \"manual\", clear) the generator on one \
-                       (section, track) lane: bass/melody/pad for synth instrument tracks, \
-                       vocal for a vocal track. Installs the generator only — it derives no \
-                       notes; use generate_part to generate melodic MIDI now. This is the ONLY \
-                       way to create the vocal lane every vocal_* tool needs. Lyrics live per \
-                       (section, track) vocal lane and vocal_set_lyrics targets a track's FIRST \
-                       vocal lane, so a song that sings in four sections needs four vocal \
-                       tracks — one vocal lane each.",
+                       (section, track) lane. kind: bass | melody | pad on a synth instrument \
+                       track, vocal on a vocal track, manual to remove the lane's generator — \
+                       the wrong track kind is rejected precisely. Installs the generator only: \
+                       it derives NO notes. To get melodic MIDI now, call generate_part \
+                       (bass/lead/pad) or vocal_generate instead; this tool is for the vocal \
+                       lane and for pinning a lane's generator config. \
+                       \
+                       It is the ONLY way to create the vocal lane that every vocal_* tool \
+                       needs. Lyrics live per (section, track) vocal lane and vocal_set_lyrics \
+                       targets a track's FIRST vocal lane, so a song that sings in four sections \
+                       needs four vocal tracks — one vocal lane each. \
+                       \
+                       options is the same per-kind object generate_part documents (bass -> \
+                       BassParams, melody -> the same params generate_part's role \"lead\" takes, \
+                       pad -> PadParams); a partial object is fine, omitted fields keep the \
+                       generator defaults. EXCEPTION: for kind \"vocal\" the options object must \
+                       be COMPLETE — it has no field defaults, so any partial object is rejected \
+                       with a serde \"missing field\" error. Omit options entirely for vocal \
+                       lanes and shape the result with vocal_generate + notes_* instead.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<section::SetLaneGeneratorResult>()
     )]
@@ -162,10 +192,24 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Write a whole chord progression onto a section's grid, REPLACING its \
-                       existing chords. Give either explicit symbols ([\"Am7\",\"Dm7\",\"G7\", \
-                       \"Cmaj7\"]) or key + roman numerals ([\"i\",\"VI\",\"III\",\"VII\"]) or a \
-                       named preset; beats_per_chord defaults to one bar per chord; sevenths \
-                       enriches numeral/preset voicings. Returns the new chord ids in order.",
+                       existing chords. Give EXACTLY ONE chord source: \
+                       symbols ([\"Am7\",\"Dm7\",\"G7\",\"Cmaj7\"]), or key + numerals \
+                       ([\"i\",\"VI\",\"III\",\"VII\"] — case is ignored, quality comes from the \
+                       key), or key + preset. Supplying two, or a numeral/preset without key, is \
+                       rejected. \
+                       \
+                       preset is one of: pop, axis (both I V vi IV), 50s, doo-wop (both I vi IV \
+                       V), pachelbel, andalusian, 12-bar-blues. (The list also advertises \
+                       \"ii-V-I\", but the app lower-cases the name before matching so that one \
+                       is currently unreachable — write it as numerals [\"ii\",\"V\",\"I\"].) \
+                       key is {tonic, scale} with scale one of chromatic, major, minor, dorian, \
+                       phrygian, lydian, mixolydian, locrian, \"harmonic minor\", \
+                       \"melodic minor\". \
+                       \
+                       beats_per_chord must be a whole number of beats and defaults to one bar \
+                       per chord; the progression must fit the section's length or it is \
+                       rejected with the arithmetic. sevenths enriches numeral/preset voicings \
+                       only. Returns the new chord ids in order.",
         annotations(destructive_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<harmony::ApplyProgressionResult>()
     )]

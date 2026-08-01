@@ -52,7 +52,30 @@ pub struct SetLyricsParams {
     /// vocal lane in placement order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_id: Option<SectionDefinitionId>,
+    /// Lyric text, one line per lyric line (`\n`-separated).
+    ///
+    /// Syllable breaks may be written explicitly as `-` or `·`
+    /// (`re-so-lu-tion`); anything without a break is split for you (see
+    /// [`Self::syllabify`]). One **syllable** sings on one note, so the
+    /// break count is what decides how many notes a word needs.
     pub text: String,
+    /// Split multi-syllable words across notes (default `true`).
+    ///
+    /// SVS sings one syllable per note. Stored verbatim, `"resolution"`
+    /// is one syllable, so all nine of its phonemes are crammed onto a
+    /// single note and the word is unintelligible. With this on, the
+    /// engine's G2P inserts the missing `·` breaks (`re·so·lu·tion`) so
+    /// each syllable gets its own note. Words you broke yourself (`-` or
+    /// `·`) and `[..]` phoneme blocks are never touched.
+    ///
+    /// Set `false` only to store the text exactly as written — expect to
+    /// place every break yourself.
+    #[serde(default = "default_syllabify")]
+    pub syllabify: bool,
+}
+
+fn default_syllabify() -> bool {
+    true
 }
 
 /// Params for `vocal.set_line`.
@@ -67,7 +90,13 @@ pub struct SetLineParams {
     pub section_id: Option<SectionDefinitionId>,
     /// 0-based line index within the resolved lane (see `song.vocal`).
     pub line_index: usize,
+    /// One lyric line. Same syllable-break rules as
+    /// [`SetLyricsParams::text`].
     pub text: String,
+    /// Split multi-syllable words across notes (default `true`). See
+    /// [`SetLyricsParams::syllabify`].
+    #[serde(default = "default_syllabify")]
+    pub syllabify: bool,
 }
 
 /// Params for `vocal.set_pronunciation`. Pronunciation overrides are

@@ -12,6 +12,40 @@ use crate::project::{
 };
 use crate::Resonance;
 
+/// Serialize one plugin slot: identity, the path of its opaque CLAP
+/// state blob, and the parameter values that differ from the plugin's own
+/// defaults.
+///
+/// The explicit parameter list is what makes a saved project able to
+/// reproduce its own bounce. The state blob alone could not: nothing
+/// re-reads a plugin's params after `LoadPluginState`, so the app-side
+/// mirror every reader consults (`track.plugin_params`, the mixer panel,
+/// automation, the freeze fingerprint) reverted to instantiation-time
+/// defaults on load. See [`crate::project::ProjectPlugin::params`].
+///
+/// Only non-defaults are written — an untouched chain adds nothing to
+/// `project.json`, and a plugin that grows new parameters in a later
+/// version picks up its own new defaults for them.
+fn project_plugin(p: &crate::state::PluginSlotState) -> ProjectPlugin {
+    ProjectPlugin {
+        instance_id: p.instance_id,
+        plugin_name: p.plugin_name.clone(),
+        clap_plugin_id: p.clap_plugin_id.clone(),
+        clap_file_path: p.clap_file_path.clone(),
+        state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+        params: p
+            .params
+            .iter()
+            .filter(|param| param.current_value != param.default_value)
+            .map(|param| crate::project::ProjectPluginParam {
+                id: param.id,
+                name: param.name.clone(),
+                value: param.current_value,
+            })
+            .collect(),
+    }
+}
+
 /// Serialize current GUI state to the on-disk `ProjectFile` shape.
 pub fn build_project_file(r: &Resonance) -> ProjectFile {
     // Ids of the read-only devices shipped in the app binary. A selected
@@ -45,13 +79,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             plugins: t
                 .plugins
                 .iter()
-                .map(|p| ProjectPlugin {
-                    instance_id: p.instance_id,
-                    plugin_name: p.plugin_name.clone(),
-                    clap_plugin_id: p.clap_plugin_id.clone(),
-                    clap_file_path: p.clap_file_path.clone(),
-                    state_file: format!("plugins/plugin_{}.bin", p.instance_id),
-                })
+                .map(project_plugin)
                 .collect(),
             track_type: match t.track_type {
                 TrackType::Audio => "audio".to_string(),
@@ -117,13 +145,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             plugins: b
                 .plugins
                 .iter()
-                .map(|p| ProjectPlugin {
-                    instance_id: p.instance_id,
-                    plugin_name: p.plugin_name.clone(),
-                    clap_plugin_id: p.clap_plugin_id.clone(),
-                    clap_file_path: p.clap_file_path.clone(),
-                    state_file: format!("plugins/plugin_{}.bin", p.instance_id),
-                })
+                .map(project_plugin)
                 .collect(),
         })
         .collect();
@@ -189,13 +211,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
     let master_plugins = r
         .master_plugins
         .iter()
-        .map(|p| ProjectPlugin {
-            instance_id: p.instance_id,
-            plugin_name: p.plugin_name.clone(),
-            clap_plugin_id: p.clap_plugin_id.clone(),
-            clap_file_path: p.clap_file_path.clone(),
-            state_file: format!("plugins/plugin_{}.bin", p.instance_id),
-        })
+        .map(project_plugin)
         .collect();
 
     // Reference A/B block. Persist only the durable facts (path, name,

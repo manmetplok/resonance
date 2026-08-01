@@ -44,6 +44,18 @@ Long-running operations (project_*, vocal_render, render_mixdown, render_stems) 
 the tool waits a bounded time and returns the final job status; if it reports still-running, \
 poll job_status or block with job_wait using the returned job_id.\n\
 \n\
+You cannot hear anything, so verify every edit by reading it back — that is the only feedback \
+loop available and it is cheap: song_notes for what a clip actually contains, song_sections for \
+where sections landed, song_vocal for the singing pre-flight, track_plugin_params for a sound. \
+Mutating tools that create something return its id (clip_id, track_id, section_id, chord_id), so \
+use that instead of a follow-up search. Audio is NOT a measuring instrument here: render_mixdown \
+always bounces the whole song, and offset 0 in the file is the earliest clip, not bar 1 — bounce \
+for the user to listen to, never to work out where something sits.\n\
+\n\
+If a tool reports `unsupported`, or behaves like an older build, call control_hello: its \
+`capabilities` list is the authoritative set of control methods the RUNNING app implements, and \
+a tool whose method is missing there cannot be made to work by re-phrasing the call.\n\
+\n\
 Destructive operations (track_delete, section_delete, project_new/project_open with unsaved \
 changes, overwriting files) are refused with a summary of what would be lost until you pass \
 confirm: true (overwrite: true for render targets). Bars and beats are 1-based; clip- and \
@@ -65,7 +77,8 @@ impl ResonanceMcp {
     /// Every tool this server exposes: the per-namespace routers from
     /// [`crate::tools`], summed.
     pub fn combined_router() -> ToolRouter<Self> {
-        let mut router = Self::router_song()
+        let mut router = Self::router_control()
+            + Self::router_song()
             + Self::router_project()
             + Self::router_transport()
             + Self::router_trackmix()

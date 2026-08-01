@@ -11,6 +11,7 @@
 
 pub mod arrange;
 pub mod compose;
+pub mod control;
 pub mod project;
 pub mod render;
 pub mod song;

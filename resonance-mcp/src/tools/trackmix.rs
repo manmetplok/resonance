@@ -49,8 +49,17 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Set a track's instrument to a built-in plugin by stable id (e.g. \
-                       \"resonance-wavetable\") — list valid ids with track_plugins.",
+        description = "Set a track's instrument to a built-in plugin. plugin_id is the plugin's \
+                       CLAP id, which always has the form \"com.resonance.<name>\" — the two \
+                       built-in instruments are \"com.resonance.wavetable\" (the polyphonic \
+                       synth, what an instrument track's generated/authored MIDI plays through) \
+                       and \"com.resonance.drums\" (the kit, for a drums track). track_plugins \
+                       lists the catalog and a wrong id is rejected with the valid ids. An empty \
+                       instrument list means the first-party CLAP bundles were never built \
+                       (scripts/bundle.sh), not that the app ships no instruments. Then shape \
+                       the sound with track_plugin_params / track_set_plugin_param — the \
+                       wavetable synth exposes ~90 parameters and its default patch is only a \
+                       starting point.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn track_add_instrument(
@@ -61,8 +70,15 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Append a built-in effect (e.g. \"resonance-reverb\") to a track's \
-                       insert chain — list valid ids with track_plugins.",
+        description = "Append a built-in effect to a track's insert chain. plugin_id is the \
+                       plugin's CLAP id, of the form \"com.resonance.<name>\" — e.g. \
+                       \"com.resonance.reverb\", \"com.resonance.delay\", \"com.resonance.eq\", \
+                       \"com.resonance.compressor\", \"com.resonance.mastering\". track_plugins \
+                       lists the catalog and a wrong id is rejected with the valid ids. Each \
+                       call APPENDS another instance, so calling it twice with the same id gives \
+                       the track two of that effect (address them by occurrence in \
+                       track_plugin_params / track_set_plugin_param). Effect parameters are set \
+                       the same way as instrument ones, by naming plugin_id.",
         annotations(destructive_hint = false, open_world_hint = false)
     )]
     async fn track_add_effect(
@@ -108,9 +124,12 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "The built-in plugin catalog: stable plugin ids with name and kind \
-                       (instrument | effect), for track_add_instrument / track_add_effect. \
-                       Read-only.",
+        description = "The built-in plugin catalog: every installed plugin's CLAP id (\
+                       \"com.resonance.wavetable\", \"com.resonance.reverb\", ...) with its name \
+                       and kind (instrument | effect). These ids are what track_add_instrument / \
+                       track_add_effect take, and what track_plugin_params addresses plugins by. \
+                       Read-only. An empty result means the first-party CLAP bundles have not \
+                       been built.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<track::PluginCatalog>()
     )]
@@ -141,7 +160,12 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Mute or unmute a track.",
+        description = "Mute or unmute a track. Setting the state it is already in is a no-op \
+                       (no undo entry). Muting silences the track in playback and in the master \
+                       bounce but does NOT shorten the bounce: render_mixdown derives the file's \
+                       span from every clip in the project, before mute/solo are applied. \
+                       Isolating a track with mute (mute everything else) and with solo therefore \
+                       do NOT produce comparably-timed files — see mixer_set_solo.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn mixer_set_mute(
@@ -152,7 +176,14 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Solo or unsolo a track (soloing silences all non-soloed tracks).",
+        description = "Solo or unsolo a track: every non-soloed track is silenced. Setting the \
+                       state it is already in is a no-op. CAUTION when using this to isolate a \
+                       part for inspection: a bounce taken with a track soloed has been observed \
+                       to span only the soloed content, while the same isolation done with mutes \
+                       bounces the full song — so an offset measured in one file does not \
+                       transfer to the other, and neither is a trustworthy source of absolute bar \
+                       positions. Read positions from song_tracks (clip start/length) and \
+                       song_notes (clip-relative beats) instead of measuring them in audio.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn mixer_set_solo(

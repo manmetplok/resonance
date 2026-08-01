@@ -645,10 +645,29 @@ impl ComposeState {
     /// derived clip already saved with that id. The engine would then
     /// hold two clips at the same id, and the second regenerate's
     /// `DeleteMidiClip` would wipe both (taking out an unrelated lane).
+    ///
+    /// `drum_track_ids` is the set of tracks with `instrument_type ==
+    /// InstrumentType::Drum`. **Drum lanes have no `lane_generators`
+    /// entry** — a section's drums come from its *arrangement* / pattern
+    /// bank, not from the per-track lane generator map — so gating purely
+    /// on `lane_generators` silently dropped every drum clip on load.
+    /// `materialize_drum_clips` then found no prior clip to tear down and
+    /// stacked a second clip on every section's bar: after one
+    /// `generate.drums` a project with 11 drum clips played 22, doubled
+    /// and inaudibly out of the caller's reach (the loaded ones being
+    /// orphaned). Claiming drum-track clips here is what makes a
+    /// regenerate after a load *replace* rather than *duplicate*.
+    ///
+    /// For drum tracks the id must additionally live in the derived range
+    /// ([`DERIVED_CLIP_ID_BASE`]): a hand-drawn clip that merely happens
+    /// to start on a section boundary is the user's, and must never be
+    /// silently deleted by the next generate. Lane-generator tracks keep
+    /// their historical name-free, range-free rule.
     pub fn rebuild_derived_clips(
         &mut self,
         midi_clips: &[crate::state::MidiClipState],
         tempo_map: &resonance_audio::types::TempoMap,
+        drum_track_ids: &HashSet<TrackId>,
     ) {
         self.derived_clips.clear();
 
@@ -664,12 +683,14 @@ impl ComposeState {
             else {
                 continue;
             };
+            let is_generated_drum_clip =
+                drum_track_ids.contains(&clip.track_id) && clip.id >= DERIVED_CLIP_ID_BASE;
             let entry = self.placements.iter().find_map(|p| {
                 if p.start_bar != start_bar {
                     return None;
                 }
                 let def = self.definitions.iter().find(|d| d.id == p.definition_id)?;
-                if !def.lane_generators.contains_key(&clip.track_id) {
+                if !is_generated_drum_clip && !def.lane_generators.contains_key(&clip.track_id) {
                     return None;
                 }
                 Some((def.id, p.id))
@@ -681,6 +702,25 @@ impl ComposeState {
         }
 
         self.reserve_derived_clip_ids(midi_clips.iter().map(|c| c.id));
+    }
+
+    /// The set of drum-track ids [`rebuild_derived_clips`] needs, read off
+    /// the track registry. Kept next to the rebuild so both call sites
+    /// (project load and undo/redo diff-replay) agree on the definition of
+    /// "drum track" — the same predicate `materialize_drum_clips` uses to
+    /// pick the tracks it writes to.
+    pub fn drum_track_ids(tracks: &[crate::state::TrackState]) -> HashSet<TrackId> {
+        use crate::state::InstrumentType;
+        use resonance_audio::types::TrackType;
+        tracks
+            .iter()
+            .filter(|t| {
+                matches!(t.track_type, TrackType::Instrument)
+                    && t.sub_track.is_none()
+                    && t.instrument_type == InstrumentType::Drum
+            })
+            .map(|t| t.id)
+            .collect()
     }
 
     /// Bump `next_derived_clip_id` past every id in `ids` that lives in

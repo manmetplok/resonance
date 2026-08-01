@@ -66,14 +66,25 @@ pub fn syllabify_word(word: &str, target_syllables: usize) -> String {
         if is_vowel(c) {
             if !in_vowel_run {
                 if seen_first_vowel_run {
-                    // New vowel run — boundary belongs immediately
-                    // before the most-recent consonant cluster (we
-                    // step backward from i over the preceding
-                    // consonants). The split position is the index
-                    // *before* the first consonant of that cluster.
+                    // New vowel run — the boundary goes before the
+                    // consonants that start it. Step backward over the
+                    // preceding consonant cluster, then hand the next
+                    // syllable only as much of it as English would let a
+                    // syllable start with: the whole cluster if it is one
+                    // or two letters forming a real onset, otherwise just
+                    // the last letter. Without the limit `function` split
+                    // as `fu·nction` — cosmetically wrong on the note, and
+                    // out of step with the phoneme split, which does the
+                    // same phonotactic check.
                     let mut k = i;
                     while k > 0 && is_letter(chars[k - 1]) && !is_vowel(chars[k - 1]) {
                         k -= 1;
+                    }
+                    let cluster_len = i - k;
+                    if cluster_len > 2
+                        || (cluster_len == 2 && !is_onset_digraph(chars[k], chars[k + 1]))
+                    {
+                        k = i - 1;
                     }
                     if k > 0 && k < chars.len() {
                         candidates.push(k);
@@ -108,17 +119,172 @@ pub fn syllabify_word(word: &str, target_syllables: usize) -> String {
     out.into_iter().collect()
 }
 
-/// Insert `·` markers into a whole lyric line so each word matches
-/// CMU's syllable count. Words that already have enough dots are left
-/// alone (preserving user-intentional melismas with extra dots).
+/// Can this two-letter spelling start an English syllable? The spelling
+/// counterpart of [`is_legal_onset_pair`], used only to place the display
+/// `·` sensibly (`func·tion`, not `fu·nction`).
+fn is_onset_digraph(a: char, b: char) -> bool {
+    let pair = [a.to_ascii_lowercase(), b.to_ascii_lowercase()];
+    matches!(
+        pair.iter().collect::<String>().as_str(),
+        "bl" | "br"
+            | "ch"
+            | "cl"
+            | "cr"
+            | "dr"
+            | "dw"
+            | "fl"
+            | "fr"
+            | "gl"
+            | "gr"
+            | "kn"
+            | "ph"
+            | "pl"
+            | "pr"
+            | "qu"
+            | "sc"
+            | "sh"
+            | "sk"
+            | "sl"
+            | "sm"
+            | "sn"
+            | "sp"
+            | "st"
+            | "sw"
+            | "th"
+            | "tr"
+            | "tw"
+            | "wh"
+            | "wr"
+    )
+}
+
+/// The ASCII hyphen doubles as a hand-written syllable break, so a
+/// caller can type `re-so-lu-tion` instead of hunting for `·` on their
+/// keyboard. Recognised everywhere `·` is (see [`auto_syllabify_text`]
+/// and the lyric tokenizer), and normalised to `·` on ingest so only one
+/// marker ever reaches the resolver.
+pub const HYPHEN_SYLLABLE_MARKER: char = '-';
+
+/// `true` when `word` already carries an explicit syllable break — a `·`
+/// the auto-syllabifier (or the user) inserted, or a hand-typed `-`
+/// *between two letters* (a leading/trailing dash is punctuation, not a
+/// break). Explicit breaks are authoritative: [`auto_syllabify_text`]
+/// leaves such a word exactly as written.
+pub fn has_syllable_marks(word: &str) -> bool {
+    if word.contains('\u{00B7}') {
+        return true;
+    }
+    let chars: Vec<char> = word.chars().collect();
+    chars.iter().enumerate().any(|(i, &c)| {
+        c == HYPHEN_SYLLABLE_MARKER
+            && i > 0
+            && i + 1 < chars.len()
+            && chars[i - 1].is_alphabetic()
+            && chars[i + 1].is_alphabetic()
+    })
+}
+
+/// Rewrite hand-typed `-` syllable breaks to the canonical `·`. Only
+/// hyphens between two letters are converted, so `"well-known"` becomes
+/// the two-syllable `"well·known"` (which is what you want to sing) while
+/// a dangling `"—"`-style dash stays punctuation the word cleaner drops.
+pub(super) fn normalize_hyphen_marks(word: &str) -> String {
+    let chars: Vec<char> = word.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            let is_break = c == HYPHEN_SYLLABLE_MARKER
+                && i > 0
+                && i + 1 < chars.len()
+                && chars[i - 1].is_alphabetic()
+                && chars[i + 1].is_alphabetic();
+            if is_break {
+                '\u{00B7}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Insert `·` markers into a whole lyric text so each word matches CMU's
+/// syllable count — the single normalisation every lyric ingest point
+/// runs, so a multi-syllable word lands on one note *per syllable*
+/// instead of cramming its whole phoneme run onto one note.
+///
+/// Three things are deliberately left alone:
+///
+/// * **Line structure.** `\n` is preserved, so bulk lyric text (one line
+///   per lyric line) round-trips. Only intra-line whitespace runs are
+///   collapsed to a single space.
+/// * **`[...]` phoneme blocks.** A power-user override like
+///   `[l ih · l iy]` is copied through verbatim — its inner tokens are
+///   phonemes, not spellings, and syllabifying them would corrupt the
+///   override.
+/// * **Words that already carry a break** (`·` or a hand-typed
+///   `re-so-lu-tion`), preserving user-intentional melismas and manual
+///   hyphenation. Hand-typed `-` breaks are normalised to `·`.
 pub fn auto_syllabify_text(text: &str) -> String {
+    walk_lyric_text(text, true)
+}
+
+/// The notation-only half of [`auto_syllabify_text`]: rewrite hand-typed
+/// `-` syllable breaks to `·` and change nothing else — no automatic
+/// splitting. For a caller that wants to place every break itself but
+/// still type them with an ASCII keyboard.
+pub fn normalize_syllable_marks(text: &str) -> String {
+    walk_lyric_text(text, false)
+}
+
+/// Shared walk for the two entry points above: per line, per word,
+/// skipping `[...]` phoneme blocks. `syllabify` decides whether a word
+/// with no explicit break gets one inserted.
+fn walk_lyric_text(text: &str, syllabify: bool) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for (line_idx, line) in text.split('\n').enumerate() {
+        if line_idx > 0 {
+            out.push('\n');
+        }
+        out.push_str(&walk_lyric_line(line, syllabify));
+    }
+    out
+}
+
+/// One line of [`walk_lyric_text`]. Split out so the bracket scan never
+/// has to reason about newlines.
+fn walk_lyric_line(text: &str, syllabify: bool) -> String {
     let mut out = String::with_capacity(text.len() + 8);
     let mut first = true;
+    // `[...]` blocks are copied verbatim. They contain spaces, so we
+    // cannot simply walk `split_whitespace`: track bracket depth and
+    // pass everything between `[` and `]` straight through.
+    let mut in_block = false;
     for word_raw in text.split_whitespace() {
         if !first {
             out.push(' ');
         }
         first = false;
+        if in_block {
+            out.push_str(word_raw);
+            if word_raw.contains(']') {
+                in_block = false;
+            }
+            continue;
+        }
+        if word_raw.contains('[') {
+            out.push_str(word_raw);
+            // A single-token block (`[hh]`) opens and closes at once.
+            in_block = !word_raw.contains(']');
+            continue;
+        }
+        // An explicit break wins: normalise `-` to `·` and stop. Same
+        // path when automatic splitting is off — the caller is placing
+        // every break itself.
+        if !syllabify || has_syllable_marks(word_raw) {
+            out.push_str(&normalize_hyphen_marks(word_raw));
+            continue;
+        }
         // Strip leading/trailing non-letter punctuation so we can ask
         // CMU about the bare word, then put the punctuation back.
         let lead_count = word_raw
@@ -143,12 +309,13 @@ pub fn auto_syllabify_text(text: &str) -> String {
     out
 }
 
-/// Split a phoneme list into `n` syllable-shaped chunks. Tries to
-/// give each chunk exactly one vowel; consonants between vowels go
-/// to the chunk *after* (onset of the next syllable) for English-like
-/// resyllabification (`hou·ses` → `hh aw / z ah z`). Operates on
-/// `(phoneme, stress)` pairs so the stress on each vowel travels with
-/// the chunk it ends up in.
+/// Split a phoneme list into `n` syllable-shaped chunks, one vowel
+/// nucleus each. Consonants between two vowels are divided by
+/// [`syllable_boundary`]: as many as English allows become the next
+/// syllable's onset (`hou·ses` → `hh aw / s ax z`), the rest stay as the
+/// previous syllable's coda (`func·tion` → `f ah ng k / sh ax n`).
+/// Operates on `(phoneme, stress)` pairs so the stress on each vowel
+/// travels with the chunk it ends up in.
 pub(crate) fn split_into_syllables(
     phonemes: &[(&'static str, SyllableStress)],
     n: usize,
@@ -188,34 +355,88 @@ pub(crate) fn split_into_syllables(
     }
 
     // We have at least n vowels. Take the first n vowels as syllable
-    // nuclei; split between two adjacent vowels by putting all
-    // intermediate consonants into the *second* syllable's onset
-    // (English bias — "houses" splits as "hou-ses" not "hous-es").
+    // nuclei and cut each intervocalic consonant run at the point
+    // `syllable_boundary` picks.
     let chosen_vowels: Vec<usize> = vowels.iter().copied().take(n).collect();
     let mut out: Vec<Vec<(&'static str, SyllableStress)>> = Vec::with_capacity(n);
     for k in 0..n {
         let start = if k == 0 {
             0
         } else {
-            // Boundary between vowels k-1 and k: split before the
-            // last consonant cluster, so the consonants attach as
-            // onset to the new syllable.
-            let prev_v = chosen_vowels[k - 1];
-            let cur_v = chosen_vowels[k];
-            ((prev_v + 1)..cur_v)
-                .find(|&i| is_consonant(phonemes[i].0))
-                .unwrap_or(cur_v)
+            syllable_boundary(phonemes, chosen_vowels[k - 1], chosen_vowels[k])
         };
         let end = if k == n - 1 {
             phonemes.len()
         } else {
-            let cur_v = chosen_vowels[k];
-            let next_v = chosen_vowels[k + 1];
-            ((cur_v + 1)..next_v)
-                .find(|&i| is_consonant(phonemes[i].0))
-                .unwrap_or(next_v)
+            syllable_boundary(phonemes, chosen_vowels[k], chosen_vowels[k + 1])
         };
         out.push(phonemes[start..end].to_vec());
     }
     out
+}
+
+/// Where to cut the consonant run between two vowel nuclei.
+///
+/// Maximal onset, *constrained by English phonotactics*. Handing the
+/// whole run to the next syllable's onset — the old rule — is right for a
+/// single consonant (`hou·ses` → `hh aw / s ax z`) but wrong the moment
+/// there is a cluster: `function` came out as `f ah / ng k sh ax n`,
+/// piling five phonemes onto the second note while the first sang a bare
+/// `f ah`. `ng k sh` is not a syllable onset any English speaker produces,
+/// and the lopsided split is exactly the crammed-note case that destroys
+/// intelligibility.
+///
+/// So: take the longest *legal* onset (at most two phones, checked
+/// against [`is_legal_onset_pair`]) and leave the rest as the previous
+/// syllable's coda — `func·tion` → `f ah ng k / sh ax n`.
+fn syllable_boundary(
+    phonemes: &[(&'static str, SyllableStress)],
+    prev_vowel: usize,
+    next_vowel: usize,
+) -> usize {
+    let run: Vec<usize> = ((prev_vowel + 1)..next_vowel)
+        .filter(|&i| is_consonant(phonemes[i].0))
+        .collect();
+    match run.len() {
+        // Nothing between the nuclei (or only non-consonants): the next
+        // syllable starts at its own vowel.
+        0 => next_vowel,
+        // A single consonant always becomes the next onset.
+        1 => run[0],
+        _ => {
+            let last = run[run.len() - 1];
+            let second_last = run[run.len() - 2];
+            if is_legal_onset_pair(phonemes[second_last].0, phonemes[last].0) {
+                second_last
+            } else {
+                last
+            }
+        }
+    }
+}
+
+/// Is `(a, b)` a consonant pair English allows at the start of a
+/// syllable? Covers the productive clusters: stop/fricative + liquid or
+/// glide, and `s` + a voiceless stop / nasal / liquid / glide. Anything
+/// else (`k sh`, `ng k`, `l t`, …) only ever occurs across a syllable
+/// boundary, so the pair is split.
+fn is_legal_onset_pair(a: &str, b: &str) -> bool {
+    match (a, b) {
+        // s-clusters: "spin", "still", "sky", "smile", "snow", "slow",
+        // "sweet", "sue".
+        ("s", "p" | "t" | "k" | "m" | "n" | "l" | "w" | "y") => true,
+        // Obstruent + /r/: "pray", "brew", "tree", "dry", "cry", "grow",
+        // "free", "three", "shrink".
+        ("p" | "b" | "t" | "d" | "k" | "g" | "f" | "th" | "sh", "r") => true,
+        // Obstruent + /l/: "play", "blue", "clay", "glow", "flow".
+        // (`s l` is already covered by the s-cluster arm.)
+        ("p" | "b" | "k" | "g" | "f", "l") => true,
+        // Obstruent + /w/: "twin", "dwell", "quick", "Gwen", "thwart",
+        // "what".
+        ("t" | "d" | "k" | "g" | "th" | "hh", "w") => true,
+        // Obstruent + /y/: "pure", "beauty", "cute", "few", "view",
+        // "music", "hue".
+        ("p" | "b" | "k" | "f" | "v" | "m" | "hh" | "n", "y") => true,
+        _ => false,
+    }
 }

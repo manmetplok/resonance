@@ -62,6 +62,7 @@ fn plugin(id: u64) -> ProjectPlugin {
         clap_plugin_id: "com.example.foo".to_string(),
         clap_file_path: "/x/foo.clap".to_string(),
         state_file: format!("plugins/plugin_{id}.bin"),
+        params: Vec::new(),
     }
 }
 

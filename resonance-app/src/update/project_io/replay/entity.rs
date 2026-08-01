@@ -307,6 +307,17 @@ pub(super) fn replay_plugins(
                 data: state_data.clone(),
             });
         }
+        // Park the saved parameter overrides until `PluginAdded` reports
+        // this instance's param list. Applying them here would be undone:
+        // that event carries the values the plugin instantiated with (its
+        // defaults) and overwrites `slot.params` wholesale. See
+        // `Resonance::pending_plugin_param_overrides`.
+        if !pp.params.is_empty() {
+            r.pending_plugin_param_overrides.insert(
+                pp.instance_id,
+                pp.params.iter().map(|p| (p.id, p.value)).collect(),
+            );
+        }
         gui_plugins.push(PluginSlotState::new(
             pp.instance_id,
             pp.plugin_name.clone(),

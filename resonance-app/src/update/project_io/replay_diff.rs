@@ -150,8 +150,9 @@ pub fn try_diff_replay(
     // Rebuild runtime-only caches that aren't captured in the snapshot.
     // Mirrors the tail end of `replay_loaded_project` so the Compose tab
     // shows the right derived MIDI / vocal audio clips after the restore.
+    let drum_track_ids = crate::compose::ComposeState::drum_track_ids(&r.registry.tracks);
     r.compose
-        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map);
+        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map, &drum_track_ids);
 
     use std::collections::HashSet;
     let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r

@@ -656,6 +656,9 @@ fn builtin_plugin(instance_id: u64, name: &str, clap_plugin_id: &str) -> Project
         clap_plugin_id: clap_plugin_id.to_string(),
         clap_file_path: String::new(),
         state_file: String::new(),
+        // A template's plugins open at their own defaults, so there is
+        // nothing to override.
+        params: Vec::new(),
     }
 }
 

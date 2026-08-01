@@ -168,6 +168,7 @@ fn lyrics_false_generates_melody_only() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: None,
             text: "hold the line\nlet it go".to_owned(),
@@ -357,6 +358,7 @@ fn acceptance_lane_to_editable_notes_without_the_gui() {
         &mut app,
         "vocal.set_lyrics",
         &proto::SetLyricsParams {
+            syllabify: true,
             track_id: ProtoTrackId(TRACK),
             section_id: None,
             text: "one more line".to_owned(),

@@ -35,7 +35,10 @@ mod segment;
 mod validate;
 
 pub use paths::{curve_supported, CurveKind};
-pub use phonemes::{PhonemeFate, VoicebankPhonemes};
+pub use phonemes::{
+    articulation_class, floor_duration_sec, min_articulation_sec, target_duration_sec,
+    ArticulationClass, PhonemeFate, VoicebankPhonemes,
+};
 pub use post::write_stereo_wav;
 pub use pronunciation::{
     canonicalize_phonemes, clean_word, resolve_clip as resolve_clip_pronunciation, DictionaryEntry,
@@ -45,7 +48,10 @@ pub use render_cache::{
     render_units_cached, split_render_units, RenderPlan, RenderUnit, SvsRenderCache,
 };
 pub use segment::build_segment;
-pub use validate::{validate_for_voicebank, InvalidPhonemeReason, InvalidSyllable};
+pub use validate::{
+    articulation_report, comfortable_pitch_range, validate_for_voicebank, InvalidPhonemeReason,
+    InvalidSyllable, NoteArticulation,
+};
 
 use paths::locate_voicebank;
 use post::{

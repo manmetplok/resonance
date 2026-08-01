@@ -10,6 +10,7 @@ use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::{g2p, VocalParams};
 
 use super::super::paths::{voicebank_language_id, voicebank_phoneme_name};
+use super::super::phonemes::{floor_duration_sec, min_articulation_sec, target_duration_sec};
 use super::super::SEGMENT_PAD_SEC;
 
 /// Output of [`build_phoneme_track`]: every parallel array the
@@ -83,12 +84,22 @@ pub(super) fn build_phoneme_track(
         .and_then(|s| s.parse::<f64>().ok())
         .map(|ms| (ms / 1000.0).clamp(0.0, 0.05))
         .unwrap_or(0.0);
-    let consonant_emphasis = params.consonant_emphasis.clamp(0.0, 1.0) as f64;
-    // Consonant target duration in seconds. `consonant_emphasis` slides
-    // between a brisk 35 ms (low) and a deliberate 85 ms (high). Capped
-    // later to half the note's duration so a fast syllable still has a
-    // recognisable vowel.
-    let cons_dur_target = 0.035 + 0.050 * consonant_emphasis;
+    let consonant_emphasis = params.consonant_emphasis.clamp(0.0, 1.0);
+    // Onset-consonant anticipation. Singers place a syllable's leading
+    // consonants *before* the beat so the vowel — which carries the pitch
+    // and most of the intelligibility — lands on it. Laying the consonants
+    // out from the note's nominal start instead pushes every vowel late by
+    // the length of its own onset, which reads as slurred, behind-the-beat
+    // diction. We shift the boundary by stealing the onset cluster's
+    // target duration from the *previous* note's slot (capped, and never
+    // past the previous syllable's own articulation floor), so the total
+    // segment length is unchanged — only the boundary moves. Set
+    // RESONANCE_ONSET_LEAD_IN=0 to disable, or to a fraction to scale it.
+    let onset_lead_in: f64 = std::env::var("RESONANCE_ONSET_LEAD_IN")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| v.clamp(0.0, 1.0))
+        .unwrap_or(1.0);
 
     let mut track = PhonemeTrack {
         ph_seq: Vec::new(),
@@ -112,8 +123,8 @@ pub(super) fn build_phoneme_track(
         .map(|n| midi_to_diffsinger_note(n.note))
         .collect();
 
-    // Walk notes back-to-back. We never insert AP between adjacent
-    // syllables — the reference fixtures (`twinkle.ds`,
+    // Pass 1: lay out each note's slot. We never insert AP between
+    // adjacent syllables — the reference fixtures (`twinkle.ds`,
     // `hello_tiger.ds`) keep phonemes flowing continuously and let
     // the model handle syllable boundaries naturally. Each note's
     // effective sing duration is the time *until the next note* (or
@@ -121,6 +132,7 @@ pub(super) fn build_phoneme_track(
     // articulation-trim gap is absorbed automatically. Real silences
     // (gaps > 0.4 s between consecutive notes, which only happens at
     // genuine breath / rest points) still become an explicit AP.
+    let mut plans: Vec<NotePlan> = Vec::with_capacity(notes.len());
     for (i, n) in notes.iter().enumerate() {
         let next_start_tick = notes
             .get(i + 1)
@@ -146,9 +158,8 @@ pub(super) fn build_phoneme_track(
         // phoneme list); fall back to `"ah"` when the resolver couldn't
         // even produce a vowel (e.g. draft is empty).
         let assignment = &assigned[i];
-        let fallback = vec!["ah"];
         let phonemes: &[&'static str] = if assignment.phonemes.is_empty() {
-            &fallback
+            &FALLBACK_PHONEMES
         } else {
             &assignment.phonemes
         };
@@ -176,22 +187,32 @@ pub(super) fn build_phoneme_track(
         } else {
             0.0
         };
+        plans.push(NotePlan {
+            phonemes,
+            sing_sec,
+            ap_sec,
+            sp_sec,
+            velocity: stressed_velocity,
+        });
+    }
+
+    // Pass 2: pull each syllable's onset consonants back across the
+    // preceding note boundary (see `onset_lead_in` above). Purely a
+    // transfer between two adjacent slots, so the segment's total length
+    // is untouched and the render-unit layout still lines up.
+    apply_onset_lead_in(&mut plans, consonant_emphasis, onset_lead_in);
+
+    // Pass 3: emit the parallel arrays.
+    for (i, n) in notes.iter().enumerate() {
+        let plan = &plans[i];
+        let (sing_sec, ap_sec, sp_sec) = (plan.sing_sec, plan.ap_sec, plan.sp_sec);
+        let phonemes = plan.phonemes;
+        let stressed_velocity = plan.velocity;
         let phon_sing_sec = (sing_sec - sp_sec).max(0.05);
 
-        // Split `phon_sing_sec` across phonemes: each consonant gets
-        // up to `cons_dur_target`, capped so consonants never eat
-        // more than half the syllable. The vowel(s) absorb the
-        // remainder evenly.
-        let n_cons = phonemes.iter().filter(|p| g2p::is_consonant(p)).count();
-        let n_vow = phonemes.len().saturating_sub(n_cons).max(1);
-        let cons_total_cap = phon_sing_sec * 0.5;
-        let cons_each = if n_cons > 0 {
-            (cons_dur_target).min(cons_total_cap / n_cons as f64)
-        } else {
-            0.0
-        };
-        let vow_total = (phon_sing_sec - cons_each * n_cons as f64).max(0.05);
-        let vow_each = vow_total / n_vow as f64;
+        // Split `phon_sing_sec` across phonemes with per-class targets
+        // and audibility floors — see [`allocate_phoneme_durations`].
+        let durations = allocate_phoneme_durations(phonemes, phon_sing_sec, consonant_emphasis);
 
         let note_name = &note_name_cache[i];
         // Track per-phoneme offset within this note for the metadata
@@ -206,8 +227,9 @@ pub(super) fn build_phoneme_track(
             // syllable-initial consonants — those have a natural
             // closure from the preceding silence/vowel.
             let is_stop = matches!(*ph, "b" | "p" | "t" | "d" | "k" | "g");
+            let own_dur = durations.get(ph_idx).copied().unwrap_or(0.0);
             if stop_closure_sec > 0.0 && is_stop && ph_idx > 0 {
-                let cl_dur = stop_closure_sec.min(cons_each * 0.4);
+                let cl_dur = stop_closure_sec.min(own_dur * 0.4);
                 track.ph_seq.push(voicebank_phoneme_name(params.voicebank, "cl"));
                 track.ph_dur.push(cl_dur);
                 track.note_seq.push(note_name.clone());
@@ -217,15 +239,11 @@ pub(super) fn build_phoneme_track(
                     track.languages.push(id);
                 }
             }
-            let mut d = if g2p::is_consonant(ph) {
-                cons_each
-            } else {
-                vow_each
-            };
+            let mut d = own_dur;
             // Subtract the borrowed closure time so total syllable
             // duration stays the same.
             if stop_closure_sec > 0.0 && is_stop && ph_idx > 0 {
-                d = (d - stop_closure_sec.min(cons_each * 0.4)).max(0.005);
+                d = (d - stop_closure_sec.min(own_dur * 0.4)).max(0.005);
             }
             track.ph_seq.push(voicebank_phoneme_name(params.voicebank, ph));
             track.ph_dur.push(d);
@@ -267,6 +285,183 @@ pub(super) fn build_phoneme_track(
     push_rest_entry(&mut track, params, "AP", SEGMENT_PAD_SEC);
 
     track
+}
+
+/// Phoneme list used when the resolver produced nothing for a note (an
+/// empty draft, or fewer syllables than notes). A neutral `ah` keeps the
+/// note voiced rather than emitting a zero-length entry.
+static FALLBACK_PHONEMES: [&str; 1] = ["ah"];
+
+/// One note's slot layout, computed before any phoneme durations are
+/// handed out so the onset lead-in pass can move time between adjacent
+/// notes first.
+struct NotePlan<'a> {
+    phonemes: &'a [&'static str],
+    /// Time this note's own entries occupy (phonemes + any trailing SP).
+    sing_sec: f64,
+    /// Explicit rest appended after this note (a genuine silence).
+    ap_sec: f64,
+    /// Word-boundary SP reserved at the end of `sing_sec`.
+    sp_sec: f64,
+    velocity: f32,
+}
+
+impl NotePlan<'_> {
+    /// The part of the slot the phonemes themselves get.
+    fn phoneme_sec(&self) -> f64 {
+        (self.sing_sec - self.sp_sec).max(0.0)
+    }
+
+    /// The leading consonant run — everything before the first vowel.
+    fn onset(&self) -> &[&'static str] {
+        let first_vowel = self
+            .phonemes
+            .iter()
+            .position(|p| !g2p::is_consonant(p))
+            .unwrap_or(0);
+        &self.phonemes[..first_vowel]
+    }
+}
+
+/// Move each note's onset consonants back across the preceding note
+/// boundary so its vowel lands on the beat.
+///
+/// The amount taken is the onset cluster's *target* duration (not its
+/// allocated one — that depends on the slot length we are about to
+/// change, which would be circular), clamped three ways:
+///
+/// * never more than the previous note's slack — the time it has above
+///   its own [`min_articulation_sec`] floor — so anticipating one
+///   syllable never destroys the one before it;
+/// * never more than 30 % of the previous note's phoneme time, so a long
+///   held vowel isn't visibly clipped;
+/// * skipped entirely across a genuine silence (`ap_sec > 0`) or a
+///   word-boundary SP, where there is no note to steal from and the
+///   consonant belongs after the gap anyway.
+fn apply_onset_lead_in(plans: &mut [NotePlan], emphasis: f32, scale: f64) {
+    if scale <= 0.0 {
+        return;
+    }
+    for i in 1..plans.len() {
+        let onset_target: f64 = plans[i]
+            .onset()
+            .iter()
+            .map(|p| target_duration_sec(p, emphasis))
+            .sum();
+        if onset_target <= 0.0 {
+            continue;
+        }
+        let prev = &plans[i - 1];
+        if prev.ap_sec > 0.0 || prev.sp_sec > 0.0 {
+            continue;
+        }
+        let prev_phoneme_sec = prev.phoneme_sec();
+        let slack = (prev_phoneme_sec - min_articulation_sec(prev.phonemes)).max(0.0);
+        let lead = (onset_target * scale)
+            .min(slack)
+            .min(prev_phoneme_sec * 0.30);
+        if lead <= 0.0 {
+            continue;
+        }
+        plans[i - 1].sing_sec -= lead;
+        plans[i].sing_sec += lead;
+    }
+}
+
+/// Split `slot_sec` across `phonemes`, returning one duration per phone
+/// that sums to exactly `slot_sec`.
+///
+/// The old allocator gave every consonant the same slice, capped at
+/// `slot / 2 / n_consonants`. On a phoneme-dense note that cap dominated:
+/// `"resolution"` (nine phonemes) on a 214 ms note left each consonant
+/// 21 ms and each vowel 27 ms — an order of magnitude under what either
+/// needs to be identified, so the whole word arrived as a smear. Three
+/// changes fix that:
+///
+/// 1. **Per-class targets.** An `s` is given roughly twice a `t`'s slice,
+///    because that is what it takes to hear the difference (see
+///    [`super::super::phonemes::ArticulationClass`]).
+/// 2. **Floors before fairness.** When the slot is tight, consonants are
+///    interpolated down toward their floors rather than divided evenly to
+///    nothing, and the vowel is held at its own floor instead of soaking
+///    up the shortfall.
+/// 3. **Honest overflow.** If even every floor doesn't fit, everything is
+///    scaled proportionally — the note is genuinely too short, which is
+///    exactly what `song.vocal`'s articulation report flags so the caller
+///    can lengthen it or add a syllable break.
+fn allocate_phoneme_durations(phonemes: &[&str], slot_sec: f64, emphasis: f32) -> Vec<f64> {
+    if phonemes.is_empty() {
+        return Vec::new();
+    }
+    let slot_sec = slot_sec.max(0.001);
+    let n_vow = phonemes.iter().filter(|p| !g2p::is_consonant(p)).count();
+
+    // All-consonant syllable (only reachable via a pathological override):
+    // no nucleus to absorb the remainder, so distribute by target weight.
+    if n_vow == 0 {
+        let targets: Vec<f64> = phonemes
+            .iter()
+            .map(|p| target_duration_sec(p, emphasis))
+            .collect();
+        let total: f64 = targets.iter().sum();
+        return targets.iter().map(|t| slot_sec * t / total).collect();
+    }
+
+    let cons_target: f64 = phonemes
+        .iter()
+        .filter(|p| g2p::is_consonant(p))
+        .map(|p| target_duration_sec(p, emphasis))
+        .sum();
+    let cons_floor: f64 = phonemes
+        .iter()
+        .filter(|p| g2p::is_consonant(p))
+        .map(|p| floor_duration_sec(p))
+        .sum();
+    let vow_floor: f64 = phonemes
+        .iter()
+        .filter(|p| !g2p::is_consonant(p))
+        .map(|p| floor_duration_sec(p))
+        .sum();
+
+    // How far along the floor→target line the consonants land. 1.0 when
+    // the note is roomy enough for every target; 0.0 when it can only
+    // just clear the floors.
+    let t = if cons_target + vow_floor <= slot_sec {
+        1.0
+    } else if cons_floor + vow_floor >= slot_sec {
+        // Over-full: every phone at its floor still overruns the note.
+        // Scale the floors down proportionally and let the report flag it.
+        let scale = slot_sec / (cons_floor + vow_floor);
+        return phonemes
+            .iter()
+            .map(|p| floor_duration_sec(p) * scale)
+            .collect();
+    } else {
+        ((slot_sec - vow_floor - cons_floor) / (cons_target - cons_floor)).clamp(0.0, 1.0)
+    };
+
+    let mut out: Vec<f64> = phonemes
+        .iter()
+        .map(|p| {
+            if g2p::is_consonant(p) {
+                let floor = floor_duration_sec(p);
+                floor + (target_duration_sec(p, emphasis) - floor) * t
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    // The nucleus takes exactly what's left, split evenly between
+    // multiple vowels (a diphthong the dict spells as two symbols, or a
+    // syllable that ended up with more than one).
+    let cons_total: f64 = out.iter().sum();
+    let vow_each = ((slot_sec - cons_total) / n_vow as f64).max(0.0);
+    for (d, p) in out.iter_mut().zip(phonemes.iter()) {
+        if !g2p::is_consonant(p) {
+            *d = vow_each;
+        }
+    }
+    out
 }
 
 /// Append a rest entry (`AP`/`SP`) to every parallel array in `track`.

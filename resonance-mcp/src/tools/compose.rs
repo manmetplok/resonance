@@ -12,33 +12,53 @@ use resonance_control::methods::{generate, notes};
 #[tool_router(router = router_compose, vis = "pub(crate)")]
 impl ResonanceMcp {
     #[tool(
-        description = "Generate a pad, bass or lead part from a section's chord grid into a \
-                       track (role: pad | bass | lead). The section needs chords first \
-                       (harmony_apply_progression). Optional seed makes output reproducible. \
+        description = "Generate a pad, bass or lead part from a section's chord grid into a synth \
+                       instrument track (role: pad | bass | lead). A drum or vocal track is \
+                       rejected — use generate_drums / vocal_generate. The section needs chords \
+                       first (harmony_apply_progression) or the call is refused. seed makes the \
+                       output reproducible; omitted it is derived from the section id, so \
+                       repeating the call is stable rather than random. \
+                       \
+                       chord_count, beats_per_chord and sevenths are in the schema but the app \
+                       IGNORES them: the generator always reads the section's chord grid exactly \
+                       as it stands. Shape the harmony with harmony_apply_progression (which \
+                       does honour beats_per_chord and sevenths) before calling this. \
                        \
                        options is a role-specific object; every field is optional and any \
-                       subset works. Without it you get the plain default (bass = a root on \
-                       every beat), so set style to get a real part. \
-                       bass: style (RootHold | RootPulse | RootFifth | Octave | Walking | \
-                       Motif, default RootPulse), base_note (MIDI floor, default 28 = E1), \
-                       velocity (0..1, default 0.85), and for style Motif: motif_mode \
-                       (SameIntervals | Augmented | RhythmOnly | FirstNoteOnly), motif_phrase \
-                       (Simple | MirrorMelody | Restricted). \
-                       lead: style (ArpUp | ArpDown | ArpUpDown | Motif, default ArpUp), \
-                       register ([low, high] MIDI, default [67, 88]), note_value_ticks (480 = \
-                       quarters, 240 = 8ths default, 120 = 16ths), rest_density (0..1, default \
-                       0), velocity (default 0.8), fill_vocal_gaps (sound only where the \
-                       section's vocal lane is silent), and for style Motif: complexity (0..1, \
-                       default 0.5), articulation (0 legato .. 1 staccato, default 0.3), \
-                       contour (Auto | Arch | Descending | Ascending | Wave), phrase_len (2 | \
-                       4 | 8, default 4), motif_len (0 = auto), leap_chance (default 0.21), \
-                       embellishment (Auto | Folk | PopBallad | Jazz). \
-                       pad: register ([low, high] MIDI, default [52, 76]), velocity (default \
-                       0.7). \
+                       subset works, so `{\"style\": \"Walking\"}` is a valid whole object. \
+                       Enum values are spelled exactly as below (PascalCase, case-sensitive). \
+                       WITHOUT options you get the plain default, and for bass that default is \
+                       RootPulse — a literal root note on every beat, which is a placeholder, \
+                       not a bass line. Set style. \
                        \
-                       Returns clip_ids, one per placement of the section in arrangement \
-                       order, and clip_id as the first of them — no follow-up song_tracks \
-                       call needed.",
+                       bass: style (RootHold = one held note per chord | RootPulse = root on \
+                       every beat, DEFAULT | RootFifth | Octave | Walking = scale-stepping line \
+                       approaching the next chord root, needs the section to have a scale | \
+                       Motif = develops the section's shared motif), base_note (MIDI floor, \
+                       default 28 = E1), velocity (0..1, default 0.85), and for style Motif only: \
+                       motif_mode (SameIntervals | Augmented | RhythmOnly | FirstNoteOnly), \
+                       motif_phrase (Simple | MirrorMelody | Restricted). Walking and Motif are \
+                       the two that produce an actual part. \
+                       \
+                       lead: style (ArpUp DEFAULT | ArpDown | ArpUpDown | Motif = real melodic \
+                       development with phrasing and contour), register ([low, high] MIDI, \
+                       default [67, 88]), note_value_ticks (480 = quarters, 240 = 8ths DEFAULT, \
+                       120 = 16ths; arp styles only), rest_density (0..1, default 0; arp styles \
+                       only), velocity (default 0.8), fill_vocal_gaps (bool, sound only where \
+                       the section's vocal lane is silent — call-and-response), and for style \
+                       Motif only: complexity (0..1, default 0.5), articulation (0 legato .. 1 \
+                       staccato, default 0.3), contour (Auto | Arch | Descending | Ascending | \
+                       Wave), phrase_len (2 | 4 | 8, default 4), motif_len (0 = auto), \
+                       leap_chance (default 0.21), embellishment (Auto | Folk | PopBallad | \
+                       Jazz). \
+                       \
+                       pad: register ([low, high] MIDI, default [52, 76]), velocity (default \
+                       0.7). Pad has no style — it always voices the chords SATB-style. \
+                       \
+                       An unparseable options object is rejected with the serde error naming the \
+                       offending field. Returns clip_ids, one per placement of the section in \
+                       arrangement order, and clip_id as the first of them — no follow-up \
+                       song_tracks call needed. Verify with song_notes on the returned clip_id.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<generate::GenerateResult>()
     )]
@@ -50,10 +70,11 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Generate a drum pattern for one section onto a drums track. Only that \
-                       section's drums change — other sections keep their material even when \
-                       they started from the same pattern, so call it once per section to give \
-                       each its own groove. \
+        description = "Generate a drum pattern for one section onto a drums track (track_id must \
+                       be a drum track — any other kind is rejected). Only that section's drums \
+                       change: other sections keep their material even when they started from \
+                       the same pattern, so call it once per section to give each its own \
+                       groove. \
                        \
                        pattern names the groove. It resolves against the project's own pattern \
                        bank first, then a built-in library: silence (no drums — pins the \
@@ -71,8 +92,12 @@ impl ResonanceMcp {
                        voice, so the same name at 0.3 / 0.6 / 1.0 across three sections reads \
                        as one idea getting busier. \
                        \
+                       An unknown pattern name is rejected with both lists (project bank and \
+                       built-ins) spelled out, so a wrong guess is self-correcting. \
+                       \
                        Returns clip_ids, one per placement of the section in arrangement \
-                       order, and clip_id as the first of them.",
+                       order, and clip_id as the first of them. Verify with song_notes on the \
+                       returned clip_id.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<generate::GenerateResult>()
     )]

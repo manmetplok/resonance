@@ -5,8 +5,8 @@
 
 use resonance_music_theory::g2p::{
     assign_syllables_to_notes, auto_syllabify_text, canonical_phoneme, cmu_syllable_count,
-    cmu_variant_count, is_consonant, phonemes_for_draft, resolve_draft, syllabify_word,
-    SyllableStress, ARPABET_PHONEMES, CONSONANTS,
+    cmu_variant_count, has_syllable_marks, is_consonant, phonemes_for_draft, resolve_draft,
+    syllabify_word, SyllableStress, ARPABET_PHONEMES, CONSONANTS,
 };
 use resonance_music_theory::LyricLine;
 
@@ -363,6 +363,116 @@ fn arpabet_phonemes_are_canonical() {
     // Silence markers validate but are deliberately *not* lexical phones.
     assert_eq!(canonical_phoneme("AP"), Some("AP"));
     assert!(!ARPABET_PHONEMES.contains(&"AP"));
+}
+
+// ---------------------------------------------------------------------------
+// Syllable breaks: the one-note-per-syllable contract
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_syllabify_spreads_a_long_word_across_notes() {
+    // The bug this guards: an unbroken `"resolution"` is ONE lyric
+    // token, so all nine of its phonemes land on a single note and the
+    // word is sung as a smear. Auto-syllabification must turn it into
+    // four notes' worth of syllables — and must not lose or duplicate a
+    // phoneme doing so.
+    let dotted = auto_syllabify_text("resolution");
+    assert_eq!(dotted, "re\u{00B7}so\u{00B7}lu\u{00B7}tion");
+
+    let chunks = phonemes_for_draft(&[line(&dotted)]);
+    assert_eq!(chunks.len(), 4, "expected 4 syllables, got {chunks:?}");
+    for (i, chunk) in chunks.iter().enumerate() {
+        assert!(
+            chunk.iter().any(|p| !is_consonant(p)),
+            "syllable {i} ({chunk:?}) has no vowel to sing"
+        );
+    }
+    // Concatenating the chunks is still the whole word.
+    let undotted: Vec<&str> = phonemes_for_draft(&[line("resolution")])
+        .into_iter()
+        .flatten()
+        .collect();
+    let flat: Vec<&str> = chunks.into_iter().flatten().collect();
+    assert_eq!(flat, undotted, "syllable split changed the phoneme stream");
+}
+
+#[test]
+fn hyphens_are_syllable_breaks() {
+    // A caller can type `re-so-lu-tion` instead of hunting for `·`; the
+    // tokenizer treats the two identically.
+    assert!(has_syllable_marks("re-so-lu-tion"));
+    let hyphenated = phonemes_for_draft(&[line("re-so-lu-tion")]);
+    let dotted = phonemes_for_draft(&[line("re\u{00B7}so\u{00B7}lu\u{00B7}tion")]);
+    assert_eq!(hyphenated, dotted);
+    assert_eq!(hyphenated.len(), 4);
+}
+
+#[test]
+fn auto_syllabify_leaves_explicit_breaks_alone() {
+    // A word the user already broke is authoritative — including an
+    // intentional melisma with MORE breaks than CMU would give.
+    assert_eq!(
+        auto_syllabify_text("re\u{00B7}so\u{00B7}lu\u{00B7}ti\u{00B7}on"),
+        "re\u{00B7}so\u{00B7}lu\u{00B7}ti\u{00B7}on"
+    );
+    // Hand-typed hyphens are normalised to `·` but not re-split.
+    assert_eq!(auto_syllabify_text("re-so-lu-tion"), "re\u{00B7}so\u{00B7}lu\u{00B7}tion");
+    // A dangling dash is punctuation, not a break.
+    assert!(!has_syllable_marks("-"));
+    assert!(!has_syllable_marks("wait -"));
+}
+
+#[test]
+fn auto_syllabify_preserves_line_structure() {
+    // `vocal.set_lyrics` sends the whole draft as one `\n`-separated
+    // string; collapsing it to a single line would merge every lyric
+    // line into one.
+    let out = auto_syllabify_text("resolution\nmorning\nglass");
+    let lines: Vec<&str> = out.split('\n').collect();
+    assert_eq!(lines.len(), 3, "line structure lost in {out:?}");
+    assert_eq!(lines[0], "re\u{00B7}so\u{00B7}lu\u{00B7}tion");
+    assert_eq!(lines[2], "glass");
+}
+
+#[test]
+fn auto_syllabify_leaves_phoneme_blocks_untouched() {
+    // `[..]` contents are phonemes, not spelling — syllabifying them
+    // would corrupt the override (and its own `·` markers).
+    let out = auto_syllabify_text("the [l ih \u{00B7} l iy \u{00B7} ah] sings");
+    assert!(
+        out.contains("[l ih \u{00B7} l iy \u{00B7} ah]"),
+        "phoneme block mangled: {out:?}"
+    );
+    let chunks = phonemes_for_draft(&[line(&out)]);
+    // dh ax | l ih | l iy | ah | s ih ng z  → 5 syllables.
+    assert_eq!(chunks.len(), 5, "{chunks:?}");
+}
+
+#[test]
+fn consonant_cluster_leaves_a_coda_behind() {
+    // English phonotactics: `ng k sh` is not a syllable onset, so
+    // `function` must split `func|tion`, not `fu|nction`. The old
+    // maximal-onset rule piled five phonemes onto the second note.
+    let dotted = auto_syllabify_text("function");
+    assert_eq!(dotted, "func\u{00B7}tion");
+    let syllables = resolve_draft(&[line(&dotted)]);
+    assert_eq!(syllables.len(), 2);
+    assert_eq!(syllables[0].phonemes, vec!["f", "ah", "ng", "k"]);
+    assert_eq!(syllables[1].phonemes, vec!["sh", "ax", "n"]);
+}
+
+#[test]
+fn legal_onset_clusters_stay_together() {
+    // The counterpart: `st` IS a legal onset, so `restore` splits
+    // `re|store` and both notes get a singable chunk.
+    let syllables = resolve_draft(&[line("re\u{00B7}store")]);
+    assert_eq!(syllables.len(), 2);
+    assert_eq!(
+        syllables[1].phonemes.first(),
+        Some(&"s"),
+        "expected the `st` cluster to lead the second syllable: {:?}",
+        syllables[1].phonemes
+    );
 }
 
 #[test]
