@@ -238,6 +238,13 @@ pub use midi_hardware::MidiOutputRegistry;
 #[doc(hidden)]
 pub use engine::{import_one_to_pool, run_pool_import, PoolImportOutcome};
 
+/// Test surface for the bounded clip import / project-load worker pool.
+/// Exposed so `tests/load_clip_offthread.rs` can drive the exact queue
+/// the engine handlers submit to (nothing dropped past the concurrency
+/// cap) without bringing up the engine thread or an audio device.
+#[doc(hidden)]
+pub use engine::{ImportQueue, MAX_CONCURRENT_IMPORTS};
+
 /// Test surface for the vocal pitch-analysis path. Exposed so the
 /// integration test in `tests/clip_pitch_analysis.rs` can drive the
 /// command boundary (cache store + `ClipPitchDetected` emission, plus the

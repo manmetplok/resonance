@@ -16,7 +16,7 @@ mod dispatch;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -33,6 +33,7 @@ use crate::recording::RecordingState;
 use crate::types::*;
 use resonance_common::{TakeGroupId, TimelineRange};
 
+use super::import_queue::ImportQueue;
 use super::midi::MidiHardwareState;
 use super::{
     audition, automation, bounce_realtime, external_instrument, midi, plugins, transport,
@@ -98,7 +99,7 @@ pub(crate) struct LoopRecordSession {
 
 /// Mutable engine-thread-local state that persists across command
 /// dispatches: monotonic id counters, the recording session, the loaded
-/// CLAP bundles, and the concurrent-import counter.
+/// CLAP bundles, and the bounded clip-import worker pool.
 pub(crate) struct HandlerState {
     pub next_track_id: TrackId,
     pub next_bus_id: BusId,
@@ -120,7 +121,12 @@ pub(crate) struct HandlerState {
     pub next_take_group_id: TakeGroupId,
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,
-    pub active_imports: Arc<AtomicUsize>,
+    /// Bounded worker pool for clip import / project-load WAV work. The
+    /// engine thread only ever enqueues onto it (see
+    /// [`ImportQueue::submit`]); the heavy mmap + waveform decimation
+    /// runs on its workers. Dropped with `HandlerState` at engine
+    /// shutdown, which lets the workers finish and exit.
+    pub imports: ImportQueue,
     /// Current project directory. Set via `AudioCommand::SetProjectDir`
     /// whenever the app opens, creates, or saves-as a project.
     /// Recording and import refuse to run when this is `None`.
@@ -186,10 +192,6 @@ pub(crate) struct HandlerState {
     pub pending_latency_ping: Option<super::external_instrument_ping::PendingLatencyPing>,
 }
 
-/// Hard cap on concurrent clip decode threads. Import commands past this
-/// bound get dropped with an error event.
-pub(crate) const MAX_CONCURRENT_IMPORTS: usize = 4;
-
 /// Rebuild the audio-thread automation snapshot from the engine-thread
 /// lane map and publish it wait-free. Called after any lane mutation so
 /// the audio callback and bounce see the new lanes on their next block.
@@ -241,7 +243,7 @@ pub(crate) fn engine_thread(
         next_take_group_id: 1,
         rec: RecordingState::new(sample_rate),
         bundles: Vec::new(),
-        active_imports: Arc::new(AtomicUsize::new(0)),
+        imports: ImportQueue::default(),
         project_dir: None,
         midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
         midi_recording: HashMap::new(),

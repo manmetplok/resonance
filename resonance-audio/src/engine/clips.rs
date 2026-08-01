@@ -4,7 +4,6 @@
 //! ensure-all-clips-have-wav-files (project save).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -16,7 +15,7 @@ use crate::types::*;
 
 use resonance_dsp::tempo::{detect_tempo_default, TempoEstimate};
 
-use super::thread::{HandlerCtx, HandlerState, MAX_CONCURRENT_IMPORTS};
+use super::thread::{HandlerCtx, HandlerState};
 
 pub(crate) fn handle_import_clip(
     ctx: &HandlerCtx,
@@ -25,17 +24,6 @@ pub(crate) fn handle_import_clip(
     path: String,
     start_sample: u64,
 ) {
-    if state.active_imports.load(Ordering::Relaxed) >= MAX_CONCURRENT_IMPORTS {
-        eprintln!(
-            "Warning: too many concurrent imports ({MAX_CONCURRENT_IMPORTS}), skipping import of {:?}",
-            path
-        );
-        let _ = ctx.event_tx.send(AudioEvent::Error(
-            "Too many concurrent imports, please wait for current imports to finish.".to_string(),
-        ));
-        return;
-    }
-
     // Import needs a project directory to transcode the decoded
     // samples into. Startup enforces an active project, so this
     // should always hold.
@@ -54,74 +42,72 @@ pub(crate) fn handle_import_clip(
     let clip_id = state.next_clip_id;
     state.next_clip_id += 1;
     let sr = ctx.sample_rate;
-    let imports_counter = Arc::clone(&state.active_imports);
-    imports_counter.fetch_add(1, Ordering::Relaxed);
 
-    let spawn_result = std::thread::Builder::new()
-        .name("resonance-decode".into())
-        .spawn(move || {
-            match decode::decode_file(&path, sr) {
-                Ok((data, name)) => {
-                    let target = project_dir
-                        .join("audio")
-                        .join(format!("clip_{clip_id}.wav"));
-                    match transcode_to_wav(&target, &data, sr) {
-                        Ok(()) => match ClipSource::open_wav(&target) {
-                            Ok(source) => {
-                                let duration = source.frame_count();
-                                let waveform_peaks = compute_waveform_peaks(source.as_frames());
-                                let clip = AudioClip {
-                                    id: clip_id,
-                                    track_id,
-                                    start_sample,
-                                    source,
-                                    name: name.clone(),
-                                    trim_start_frames: 0,
-                                    trim_end_frames: 0,
-                                    fade_in_frames: 0,
-                                    fade_in_curve: FadeCurve::default(),
-                                    fade_out_frames: 0,
-                                    fade_out_curve: FadeCurve::default(),
-                                    gain_db: 0.0,
-                                    vocal_tuning: None,
-                                    warp_enabled: false,
-                                    original_bpm: None,
-                                    transpose_semitones: 0.0,
-                                    warp_algorithm: Default::default(),
-                                    warp_markers: Vec::new(),
-                                };
-                                clips_arc.write().push(clip);
-                                let _ = thread_event_tx.send(AudioEvent::ClipImported {
-                                    clip_id,
-                                    track_id,
-                                    start_sample,
-                                    duration_samples: duration,
-                                    name,
-                                    waveform_peaks,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = thread_event_tx.send(AudioEvent::Error(format!(
-                                    "Failed to mmap imported clip: {e}"
-                                )));
-                            }
-                        },
+    // Queued rather than run here: decoding is heavy and the engine
+    // thread must stay responsive. The queue bounds how many decodes
+    // run at once but never drops one, so dropping N files onto the
+    // timeline always yields N clips (see `ImportQueue`).
+    let submit_result = state
+        .imports
+        .submit(move || match decode::decode_file(&path, sr) {
+            Ok((data, name)) => {
+                let target = project_dir
+                    .join("audio")
+                    .join(format!("clip_{clip_id}.wav"));
+                match transcode_to_wav(&target, &data, sr) {
+                    Ok(()) => match ClipSource::open_wav(&target) {
+                        Ok(source) => {
+                            let duration = source.frame_count();
+                            let waveform_peaks = compute_waveform_peaks(source.as_frames());
+                            let clip = AudioClip {
+                                id: clip_id,
+                                track_id,
+                                start_sample,
+                                source,
+                                name: name.clone(),
+                                trim_start_frames: 0,
+                                trim_end_frames: 0,
+                                fade_in_frames: 0,
+                                fade_in_curve: FadeCurve::default(),
+                                fade_out_frames: 0,
+                                fade_out_curve: FadeCurve::default(),
+                                gain_db: 0.0,
+                                vocal_tuning: None,
+                                warp_enabled: false,
+                                original_bpm: None,
+                                transpose_semitones: 0.0,
+                                warp_algorithm: Default::default(),
+                                warp_markers: Vec::new(),
+                            };
+                            clips_arc.write().push(clip);
+                            let _ = thread_event_tx.send(AudioEvent::ClipImported {
+                                clip_id,
+                                track_id,
+                                start_sample,
+                                duration_samples: duration,
+                                name,
+                                waveform_peaks,
+                            });
+                        }
                         Err(e) => {
                             let _ = thread_event_tx.send(AudioEvent::Error(format!(
-                                "Failed to transcode imported clip to WAV: {e}"
+                                "Failed to mmap imported clip: {e}"
                             )));
                         }
+                    },
+                    Err(e) => {
+                        let _ = thread_event_tx.send(AudioEvent::Error(format!(
+                            "Failed to transcode imported clip to WAV: {e}"
+                        )));
                     }
                 }
-                Err(e) => {
-                    let _ = thread_event_tx
-                        .send(AudioEvent::Error(format!("Failed to import clip: {}", e)));
-                }
             }
-            imports_counter.fetch_sub(1, Ordering::Relaxed);
+            Err(e) => {
+                let _ = thread_event_tx
+                    .send(AudioEvent::Error(format!("Failed to import clip: {}", e)));
+            }
         });
-    if let Err(e) = spawn_result {
-        state.active_imports.fetch_sub(1, Ordering::Relaxed);
+    if let Err(e) = submit_result {
         let _ = ctx.event_tx.send(AudioEvent::Error(format!(
             "Failed to spawn decode thread: {}",
             e
@@ -414,78 +400,70 @@ pub(crate) fn handle_load_clip_from_wav(
     // periodically lost the race and emitted silence. Spawning a
     // short-lived worker keeps the engine thread free for the next
     // command and pushes the write lock contention down to the
-    // unavoidable single-element-`push` step. Concurrency is bounded by
-    // `MAX_CONCURRENT_IMPORTS` (shared with the import path).
-    if state.active_imports.load(Ordering::Relaxed) >= MAX_CONCURRENT_IMPORTS {
-        eprintln!(
-            "Warning: too many concurrent clip loads ({MAX_CONCURRENT_IMPORTS}), skipping load of {:?}",
-            path
-        );
-        let _ = ctx.event_tx.send(AudioEvent::Error(
-            "Too many concurrent clip loads, please wait for current loads to finish.".to_string(),
-        ));
-        return;
-    }
-
+    // unavoidable single-element-`push` step.
+    //
+    // Concurrency is bounded by `MAX_CONCURRENT_IMPORTS` worker threads
+    // in `state.imports` (shared with the import path). Requests past
+    // that bound *queue*: this handler used to reject them with an error
+    // event, which meant any project with more than
+    // `MAX_CONCURRENT_IMPORTS` audio clips silently lost the excess —
+    // those clips never reached the engine, played back silent, and were
+    // then missing from the bundle written by the next save. `submit`
+    // only enqueues (unbounded channel, lazy worker spawn), so the
+    // engine thread still returns immediately regardless of backlog.
     let clips_arc = Arc::clone(ctx.clips);
     let thread_event_tx = ctx.event_tx.clone();
     let engine_rate = ctx.sample_rate;
-    let imports_counter = Arc::clone(&state.active_imports);
-    imports_counter.fetch_add(1, Ordering::Relaxed);
 
-    let spawn_result = std::thread::Builder::new()
-        .name("resonance-clip-load".into())
-        .spawn(move || {
-            // `open_wav_at_rate` resamples to the engine rate when the
-            // project's WAV was written under a different device rate,
-            // so the clip can't play back pitched/sped.
-            match ClipSource::open_wav_at_rate(&path, engine_rate) {
-                Ok(source) => {
-                    let total_frames = source.frame_count();
-                    let waveform_peaks = compute_waveform_peaks(source.as_frames());
-                    let duration_samples = total_frames
-                        .saturating_sub(trim_start_frames)
-                        .saturating_sub(trim_end_frames);
+    let submit_result = state.imports.submit(move || {
+        // `open_wav_at_rate` resamples to the engine rate when the
+        // project's WAV was written under a different device rate,
+        // so the clip can't play back pitched/sped.
+        match ClipSource::open_wav_at_rate(&path, engine_rate) {
+            Ok(source) => {
+                let total_frames = source.frame_count();
+                let waveform_peaks = compute_waveform_peaks(source.as_frames());
+                let duration_samples = total_frames
+                    .saturating_sub(trim_start_frames)
+                    .saturating_sub(trim_end_frames);
 
-                    let clip = AudioClip {
-                        id: clip_id,
-                        track_id,
-                        start_sample,
-                        source,
-                        name: name.clone(),
-                        trim_start_frames,
-                        trim_end_frames,
-                        fade_in_frames: 0,
-                        fade_in_curve: FadeCurve::default(),
-                        fade_out_frames: 0,
-                        fade_out_curve: FadeCurve::default(),
-                        gain_db: 0.0,
-                        vocal_tuning: None,
-                        warp_enabled: false,
-                        original_bpm: None,
-                        transpose_semitones: 0.0,
-                        warp_algorithm: Default::default(),
-                        warp_markers: Vec::new(),
-                    };
-                    clips_arc.write().push(clip);
-                    let _ = thread_event_tx.send(AudioEvent::ClipImported {
-                        clip_id,
-                        track_id,
-                        start_sample,
-                        duration_samples,
-                        name,
-                        waveform_peaks,
-                    });
-                }
-                Err(e) => {
-                    let _ = thread_event_tx
-                        .send(AudioEvent::Error(format!("Failed to load clip WAV: {e}")));
-                }
+                let clip = AudioClip {
+                    id: clip_id,
+                    track_id,
+                    start_sample,
+                    source,
+                    name: name.clone(),
+                    trim_start_frames,
+                    trim_end_frames,
+                    fade_in_frames: 0,
+                    fade_in_curve: FadeCurve::default(),
+                    fade_out_frames: 0,
+                    fade_out_curve: FadeCurve::default(),
+                    gain_db: 0.0,
+                    vocal_tuning: None,
+                    warp_enabled: false,
+                    original_bpm: None,
+                    transpose_semitones: 0.0,
+                    warp_algorithm: Default::default(),
+                    warp_markers: Vec::new(),
+                };
+                clips_arc.write().push(clip);
+                let _ = thread_event_tx.send(AudioEvent::ClipImported {
+                    clip_id,
+                    track_id,
+                    start_sample,
+                    duration_samples,
+                    name,
+                    waveform_peaks,
+                });
             }
-            imports_counter.fetch_sub(1, Ordering::Relaxed);
-        });
-    if let Err(e) = spawn_result {
-        state.active_imports.fetch_sub(1, Ordering::Relaxed);
+            Err(e) => {
+                let _ = thread_event_tx
+                    .send(AudioEvent::Error(format!("Failed to load clip WAV: {e}")));
+            }
+        }
+    });
+    if let Err(e) = submit_result {
         let _ = ctx.event_tx.send(AudioEvent::Error(format!(
             "Failed to spawn clip-load thread: {}",
             e
