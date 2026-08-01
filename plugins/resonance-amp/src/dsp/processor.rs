@@ -34,6 +34,12 @@ pub struct AmpProcessor {
     output_gain_smoother: Smoother,
 }
 
+impl Default for AmpProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AmpProcessor {
     pub fn new() -> Self {
         Self {

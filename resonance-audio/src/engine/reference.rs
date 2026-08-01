@@ -326,6 +326,22 @@ pub struct ABMeterTap {
     scratch_r: Vec<f32>,
     samples_since_lra: usize,
     lra_tick_samples: usize,
+    /// Memoised gated-integrated LUFS, keyed on the gating-block count.
+    ///
+    /// `LufsMeter::integrated_lufs` runs the BS.1770-4 two-pass gate over
+    /// every 100 ms block of the session — `O(session length)` with two
+    /// `log10` per block. [`snapshot`](ABMeterTap::snapshot) is called
+    /// from the audio callback *every* block (375 Hz at 48 kHz / q128),
+    /// so that cost was paid ~37× per new gating block and grew without
+    /// bound as a session ran (measured: 57 µs per callback — 2.1 % of a
+    /// 2.67 ms quantum — after ten minutes, and rising linearly).
+    ///
+    /// The integrated value is a pure function of the block list, so
+    /// caching on the block count returns the identical value while
+    /// collapsing the recompute rate to the ~10 Hz the meter actually
+    /// changes at. `Cell` keeps `snapshot` a `&self` reader; the tap is
+    /// owned by one thread (the audio callback).
+    integrated_cache: std::cell::Cell<(usize, f32)>,
 }
 
 impl ABMeterTap {
@@ -338,7 +354,22 @@ impl ABMeterTap {
             scratch_r: Vec::new(),
             samples_since_lra: 0,
             lra_tick_samples: (LRA_TICK_SECONDS * sample_rate).max(1.0) as usize,
+            integrated_cache: std::cell::Cell::new((usize::MAX, f32::NEG_INFINITY)),
         }
+    }
+
+    /// Gated-integrated LUFS, recomputed only when a new gating block has
+    /// landed. See [`integrated_cache`](Self::integrated_cache).
+    #[inline]
+    fn cached_integrated_lufs(&self) -> f32 {
+        let blocks = self.lufs.integrated_block_count();
+        let (cached_blocks, cached_value) = self.integrated_cache.get();
+        if cached_blocks == blocks {
+            return cached_value;
+        }
+        let value = self.lufs.integrated_lufs();
+        self.integrated_cache.set((blocks, value));
+        value
     }
 
     /// Pre-size the de-interleave scratch so [`feed_interleaved`] is
@@ -360,6 +391,8 @@ impl ABMeterTap {
         self.true_peak.reset();
         self.lra.reset();
         self.samples_since_lra = 0;
+        self.integrated_cache
+            .set((usize::MAX, f32::NEG_INFINITY));
     }
 
     /// Feed one interleaved block (`channels`-wide, `frames` long) to every
@@ -415,7 +448,7 @@ impl ABMeterTap {
     pub fn snapshot(&self) -> MeterSnapshot {
         let (tp_l, tp_r) = self.true_peak.per_channel_dbtp();
         let tp_max = self.true_peak.peak_dbtp();
-        let integrated = self.lufs.integrated_lufs();
+        let integrated = self.cached_integrated_lufs();
         let short_term = self.lufs.short_term_lufs();
         let plr = PlrMeter::compute(tp_max, tp_max, integrated, short_term);
         MeterSnapshot {

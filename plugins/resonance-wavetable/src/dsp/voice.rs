@@ -2,6 +2,7 @@
 use crate::dsp::envelope::AdsrEnvelope;
 use crate::dsp::filter::StateVariableFilter;
 use crate::dsp::lfo::MultiLfo;
+use crate::dsp::oscillator::TableTap;
 
 pub const MAX_VOICES: usize = 32;
 pub const MAX_UNISON: usize = 7;
@@ -13,6 +14,29 @@ pub enum VoiceState {
     Releasing,
 }
 
+/// Everything about one unison sub-oscillator that is *not* a function of the
+/// oscillator phase, and therefore does not have to be recomputed per sample.
+///
+/// All of it derives from the block parameter snapshot, the voice's current
+/// pitch and the control-rate modulation matrix output. Rebuilding it costs an
+/// `exp2` (pitch → Hz), a `log2` (mip-level selection) and a `sin`/`cos` pair
+/// (constant-power pan) — roughly 100 cycles. Doing that per sample per unison
+/// per oscillator was the synth's dominant cost; the render loop now rebuilds
+/// only when one of those inputs actually changes, which for a typical patch
+/// is once per control tick rather than once per sample.
+#[derive(Clone, Copy, Default)]
+pub struct OscSetup {
+    /// Phase advance per sample at the resolved frequency.
+    pub phase_inc: f64,
+    /// Which mip levels / frames to blend, and with what weights.
+    pub tap: TableTap,
+    /// Oscillator level (osc level × balance), applied before the pan split.
+    pub level: f32,
+    /// Constant-power pan gains for this sub-voice.
+    pub pan_l: f32,
+    pub pan_r: f32,
+}
+
 /// One unison sub-voice: owns its own oscillator phases.
 #[derive(Clone)]
 pub struct UnisonSubVoice {
@@ -20,6 +44,9 @@ pub struct UnisonSubVoice {
     pub osc2_phase: f64,
     pub detune_cents: f32,
     pub pan_offset: f32,
+    /// Control-rate cached oscillator setup, refreshed by the render loop.
+    pub osc1_setup: OscSetup,
+    pub osc2_setup: OscSetup,
 }
 
 impl UnisonSubVoice {
@@ -29,6 +56,8 @@ impl UnisonSubVoice {
             osc2_phase: 0.0,
             detune_cents: 0.0,
             pan_offset: 0.0,
+            osc1_setup: OscSetup::default(),
+            osc2_setup: OscSetup::default(),
         }
     }
 
@@ -85,6 +114,13 @@ pub struct Voice {
     // `mod_dirty`); read by-value per sample inside the render loop.
     pub cached_mods: crate::dsp::modulation::ModState,
 
+    // Guards the per-unison `OscSetup` caches. The render loop rebuilds them
+    // when this is set, or when `current_pitch` has moved away from
+    // `osc_setup_pitch` (i.e. portamento is gliding). Set on trigger and
+    // whenever the oscillator-relevant modulation outputs change.
+    pub osc_setup_dirty: bool,
+    pub osc_setup_pitch: f32,
+
     // "Last computed" values cached per-sample during render. Read by the
     // viz state publisher at the end of each audio block. Not part of the
     // DSP itself.
@@ -115,6 +151,8 @@ impl Voice {
             filter_dirty: true,
             mod_dirty: true,
             cached_mods: crate::dsp::modulation::ModState::default(),
+            osc_setup_dirty: true,
+            osc_setup_pitch: f32::NAN,
             last_filter_cutoff: 8000.0,
             last_osc1_pos: 0.0,
             last_osc2_pos: 0.0,
@@ -169,6 +207,7 @@ impl Voice {
         self.filter_r.clear();
         self.filter_dirty = true;
         self.mod_dirty = true;
+        self.osc_setup_dirty = true;
 
         // Distribute unison voices
         self.unison_count = unison_count.clamp(1, MAX_UNISON);

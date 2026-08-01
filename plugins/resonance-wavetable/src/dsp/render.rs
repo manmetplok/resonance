@@ -21,8 +21,8 @@ use crate::dsp::envelope::EnvCoeffs;
 use crate::dsp::filter::FilterType;
 use crate::dsp::lfo::LfoShape;
 use crate::dsp::modulation::{self, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
-use crate::dsp::oscillator::{self, midi_to_freq, read_wavetable};
-use crate::dsp::voice::VoiceState;
+use crate::dsp::oscillator::{self, midi_to_freq};
+use crate::dsp::voice::{OscSetup, VoiceState};
 use crate::params::WavetableParams;
 
 /// Update filter coefficients every N samples. `tan()` and the three SVF
@@ -266,13 +266,27 @@ impl SynthEngine {
 
         // Push the same rate into every voice's LFO slot once. The
         // per-sample `next()` calls then just advance the phase.
+        //
+        // The same pass invalidates each voice's cached per-unison
+        // `OscSetup`. Those caches fold in block-constant snapshot values
+        // (oscillator level, pan, scan position, tuning), so they must never
+        // survive a block boundary — a parameter edit between blocks has to
+        // take effect on the first sample of the next one.
+        self.refresh_active();
         for voice in &mut self.voices {
             if voice.state != VoiceState::Idle {
                 voice.lfo1.set_rate(snap.lfo1_rate, self.sample_rate);
                 voice.lfo2.set_rate(snap.lfo2_rate, self.sample_rate);
                 voice.lfo3.set_rate(snap.lfo3_rate, self.sample_rate);
+                voice.osc_setup_dirty = true;
             }
         }
+
+        // Per-oscillator level, constant for the block. Kept as a separate
+        // factor from the pan gains so the per-sample multiply order matches
+        // the original `sample * level * pan` exactly.
+        let osc1_level = snap.osc1_level * (1.0 - snap.osc_balance.max(0.0));
+        let osc2_level = snap.osc2_level * (1.0 - snap.osc_balance.min(0.0).abs());
 
         // Hoist envelope exponential coefficients out of the per-sample
         // loop. With 32 voices × 2 envelopes × 48 kHz, leaving the
@@ -300,6 +314,13 @@ impl SynthEngine {
         let sample_rate = self.sample_rate;
 
         for sample_id in 0..frames {
+            // Set when a NoteOn lands on this sample. A freshly triggered
+            // voice carries `mod_dirty`, which forces an off-grid modulation
+            // matrix evaluation — and that evaluation needs live LFO values,
+            // so this is the one case besides a control tick where the LFO
+            // shapes must actually be evaluated.
+            let mut triggered_here = false;
+
             // Drain any events whose timing landed on this sample. Note
             // events mutate voice state but never parameters, so the
             // snapshot above remains valid for the rest of the block.
@@ -310,8 +331,10 @@ impl SynthEngine {
                 match event {
                     NoteEvent::NoteOn { note, velocity, .. } => {
                         self.note_on(*note, *velocity, params);
+                        triggered_here = true;
                         // The freshly triggered voice also needs its LFO
-                        // rates seeded for this block.
+                        // rates seeded for this block. (`trigger()` already
+                        // marks its `OscSetup` cache dirty.)
                         for voice in &mut self.voices {
                             if voice.state != VoiceState::Idle {
                                 voice.lfo1.set_rate(snap.lfo1_rate, sample_rate);
@@ -319,6 +342,7 @@ impl SynthEngine {
                                 voice.lfo3.set_rate(snap.lfo3_rate, sample_rate);
                             }
                         }
+                        self.refresh_active();
                     }
                     NoteEvent::NoteOff { note, .. } => {
                         self.note_off(*note);
@@ -330,23 +354,41 @@ impl SynthEngine {
                 next_event = events.next_event();
             }
 
-            // Advance global LFOs. Cheap: four adds + one wrap.
-            let global_lfo1_val =
-                self.global_lfo1.next(snap.lfo1_shape, &mut self.rng) * snap.lfo1_depth;
-            let global_lfo2_val =
-                self.global_lfo2.next(snap.lfo2_shape, &mut self.rng) * snap.lfo2_depth;
-            let global_lfo3_val =
-                self.global_lfo3.next(snap.lfo3_shape, &mut self.rng) * snap.lfo3_depth;
-
             // Sample index within the control-rate grid. Using a power-of-
             // two interval lets the compiler compile the masks as a cheap
             // AND rather than a divmod.
             let coeff_tick = (sample_id as u32 & (FILTER_COEFF_INTERVAL - 1)) == 0;
 
+            // LFO *values* feed only the modulation matrix, which runs at
+            // control rate (plus the sample a voice is triggered on). LFO
+            // *phases* still advance every sample. Evaluating the shape is
+            // a `sin()` for the default sine LFO, so gating it here removes
+            // three transcendental calls per sample from the engine and up
+            // to three more per voice per sample below.
+            let lfo_vals_needed = coeff_tick || triggered_here;
+
+            let (global_lfo1_val, global_lfo2_val, global_lfo3_val) = if lfo_vals_needed {
+                (
+                    self.global_lfo1.value(snap.lfo1_shape) * snap.lfo1_depth,
+                    self.global_lfo2.value(snap.lfo2_shape) * snap.lfo2_depth,
+                    self.global_lfo3.value(snap.lfo3_shape) * snap.lfo3_depth,
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            self.global_lfo1.advance(snap.lfo1_shape, &mut self.rng);
+            self.global_lfo2.advance(snap.lfo2_shape, &mut self.rng);
+            self.global_lfo3.advance(snap.lfo3_shape, &mut self.rng);
+
             let mut mix_l = 0.0f32;
             let mut mix_r = 0.0f32;
 
-            for voice in &mut self.voices {
+            // Only non-idle voices, via the index list refreshed at block
+            // start and on every note-on. A voice that drains to Idle
+            // mid-block stays in the list and hits the check below.
+            for k in 0..self.active_len {
+                let vi = self.active[k] as usize;
+                let voice = &mut self.voices[vi];
                 if voice.state == VoiceState::Idle {
                     continue;
                 }
@@ -355,22 +397,37 @@ impl SynthEngine {
                 voice.current_pitch +=
                     (voice.target_pitch - voice.current_pitch) * snap.glide_coeff;
 
-                // LFO values (per-voice or global)
-                let lfo1_val = if snap.lfo1_retrigger {
-                    voice.lfo1.next(snap.lfo1_shape, &mut self.rng) * snap.lfo1_depth
-                } else {
-                    global_lfo1_val
-                };
-                let lfo2_val = if snap.lfo2_retrigger {
-                    voice.lfo2.next(snap.lfo2_shape, &mut self.rng) * snap.lfo2_depth
-                } else {
-                    global_lfo2_val
-                };
-                let lfo3_val = if snap.lfo3_retrigger {
-                    voice.lfo3.next(snap.lfo3_shape, &mut self.rng) * snap.lfo3_depth
-                } else {
-                    global_lfo3_val
-                };
+                // LFO values (per-voice or global). Same control-rate gate as
+                // the globals above: the phase always advances, the shape is
+                // only evaluated when the mod matrix is about to consume it.
+                // `voice.mod_dirty` is only ever set by `trigger()`, which
+                // runs in this sample's event drain, so `lfo_vals_needed`
+                // already covers it.
+                debug_assert!(
+                    lfo_vals_needed || !voice.mod_dirty,
+                    "mod matrix would consume stale LFO values"
+                );
+                let mut lfo1_val = global_lfo1_val;
+                let mut lfo2_val = global_lfo2_val;
+                let mut lfo3_val = global_lfo3_val;
+                if snap.lfo1_retrigger {
+                    if lfo_vals_needed {
+                        lfo1_val = voice.lfo1.value(snap.lfo1_shape) * snap.lfo1_depth;
+                    }
+                    voice.lfo1.advance(snap.lfo1_shape, &mut self.rng);
+                }
+                if snap.lfo2_retrigger {
+                    if lfo_vals_needed {
+                        lfo2_val = voice.lfo2.value(snap.lfo2_shape) * snap.lfo2_depth;
+                    }
+                    voice.lfo2.advance(snap.lfo2_shape, &mut self.rng);
+                }
+                if snap.lfo3_retrigger {
+                    if lfo_vals_needed {
+                        lfo3_val = voice.lfo3.value(snap.lfo3_shape) * snap.lfo3_depth;
+                    }
+                    voice.lfo3.advance(snap.lfo3_shape, &mut self.rng);
+                }
 
                 // Envelopes — coefficients precomputed at block top.
                 let amp_env_val = voice.amp_env.next(&amp_coeffs);
@@ -390,7 +447,7 @@ impl SynthEngine {
                 // cache on the voice. `mod_dirty` forces an immediate
                 // refresh on freshly-triggered voices.
                 if coeff_tick || voice.mod_dirty {
-                    voice.cached_mods = modulation::evaluate_mod_matrix(
+                    let fresh = modulation::evaluate_mod_matrix(
                         &snap.mod_slots,
                         lfo1_val,
                         lfo2_val,
@@ -399,6 +456,13 @@ impl SynthEngine {
                         voice.velocity,
                         voice.current_pitch,
                     );
+                    // Only the oscillator-facing destinations invalidate the
+                    // cached per-unison setup; a filter LFO sweeping every
+                    // tick must not force an oscillator re-plan.
+                    if !fresh.osc_setup_eq(&voice.cached_mods) {
+                        voice.osc_setup_dirty = true;
+                    }
+                    voice.cached_mods = fresh;
                     voice.mod_dirty = false;
                 }
                 let mods = voice.cached_mods;
@@ -411,53 +475,99 @@ impl SynthEngine {
                 let mut osc_r = 0.0f32;
 
                 if oscs_active {
-                    for u in 0..voice.unison_count {
-                        let sub = &mut voice.unison[u];
+                    // Rebuild the per-unison oscillator setup only when one
+                    // of its inputs moved: the mod matrix produced new
+                    // oscillator-facing values, portamento shifted the pitch,
+                    // or the block just started (snapshot params may differ).
+                    //
+                    // This is where `exp2` (pitch → Hz), `log2` (mip-level
+                    // selection) and `sin`/`cos` (constant-power pan) live.
+                    // Previously all four ran per sample per unison per
+                    // oscillator — ~480 oscillators × 48 kHz × 4 transcendental
+                    // calls per second across the reported project. For a
+                    // static-pitch note they now run once per control tick, and
+                    // for a patch with no oscillator-facing modulation, once
+                    // per block.
+                    if voice.osc_setup_dirty || voice.current_pitch != voice.osc_setup_pitch {
+                        for u in 0..voice.unison_count {
+                            let sub = &mut voice.unison[u];
+                            let detune = sub.detune_cents / 100.0;
 
-                        if snap.osc1_enabled {
                             if let Some(idx) = wt1_idx {
                                 let wt = &self.wavetables[idx];
                                 let pitch = voice.current_pitch
                                     + snap.osc1_coarse
                                     + snap.osc1_fine / 100.0
-                                    + sub.detune_cents / 100.0
+                                    + detune
                                     + mods.osc1_pitch;
                                 let freq = midi_to_freq(pitch);
                                 let pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
-                                let sample = read_wavetable(wt, sub.osc1_phase, pos, freq);
-                                sub.osc1_phase += oscillator::phase_inc(freq, sample_rate);
-                                sub.osc1_phase -= sub.osc1_phase.floor();
-
                                 let pan = (snap.osc1_pan + sub.pan_offset + mods.osc1_pan)
                                     .clamp(-1.0, 1.0);
-                                let (pl, pr) = constant_power_pan(pan);
-                                let level = snap.osc1_level * (1.0 - snap.osc_balance.max(0.0));
-                                osc_l += sample * level * pl;
-                                osc_r += sample * level * pr;
+                                let (pan_l, pan_r) = constant_power_pan(pan);
+                                sub.osc1_setup = OscSetup {
+                                    phase_inc: oscillator::phase_inc(freq, sample_rate),
+                                    tap: oscillator::plan_tap(wt, pos, freq),
+                                    level: osc1_level,
+                                    pan_l,
+                                    pan_r,
+                                };
                             }
-                        }
 
-                        if snap.osc2_enabled {
                             if let Some(idx) = wt2_idx {
                                 let wt = &self.wavetables[idx];
                                 let pitch = voice.current_pitch
                                     + snap.osc2_coarse
                                     + snap.osc2_fine / 100.0
-                                    + sub.detune_cents / 100.0
+                                    + detune
                                     + mods.osc2_pitch;
                                 let freq = midi_to_freq(pitch);
                                 let pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
-                                let sample = read_wavetable(wt, sub.osc2_phase, pos, freq);
-                                sub.osc2_phase += oscillator::phase_inc(freq, sample_rate);
-                                sub.osc2_phase -= sub.osc2_phase.floor();
-
                                 let pan = (snap.osc2_pan + sub.pan_offset + mods.osc2_pan)
                                     .clamp(-1.0, 1.0);
-                                let (pl, pr) = constant_power_pan(pan);
-                                let level =
-                                    snap.osc2_level * (1.0 - snap.osc_balance.min(0.0).abs());
-                                osc_l += sample * level * pl;
-                                osc_r += sample * level * pr;
+                                let (pan_l, pan_r) = constant_power_pan(pan);
+                                sub.osc2_setup = OscSetup {
+                                    phase_inc: oscillator::phase_inc(freq, sample_rate),
+                                    tap: oscillator::plan_tap(wt, pos, freq),
+                                    level: osc2_level,
+                                    pan_l,
+                                    pan_r,
+                                };
+                            }
+                        }
+                        voice.osc_setup_dirty = false;
+                        voice.osc_setup_pitch = voice.current_pitch;
+                    }
+
+                    // Per-sample kernel: table read, phase advance, pan mix.
+                    // No transcendentals, no branches beyond the block-constant
+                    // enable flags.
+                    let wt1 = wt1_idx.map(|i| &self.wavetables[i]);
+                    let wt2 = wt2_idx.map(|i| &self.wavetables[i]);
+                    for u in 0..voice.unison_count {
+                        let sub = &mut voice.unison[u];
+
+                        if snap.osc1_enabled {
+                            if let Some(wt) = wt1 {
+                                let s = &sub.osc1_setup;
+                                let sample =
+                                    oscillator::read_tap(wt, &s.tap, sub.osc1_phase) * s.level;
+                                osc_l += sample * s.pan_l;
+                                osc_r += sample * s.pan_r;
+                                sub.osc1_phase += s.phase_inc;
+                                sub.osc1_phase -= sub.osc1_phase.floor();
+                            }
+                        }
+
+                        if snap.osc2_enabled {
+                            if let Some(wt) = wt2 {
+                                let s = &sub.osc2_setup;
+                                let sample =
+                                    oscillator::read_tap(wt, &s.tap, sub.osc2_phase) * s.level;
+                                osc_l += sample * s.pan_l;
+                                osc_r += sample * s.pan_r;
+                                sub.osc2_phase += s.phase_inc;
+                                sub.osc2_phase -= sub.osc2_phase.floor();
                             }
                         }
                     }
@@ -492,25 +602,6 @@ impl SynthEngine {
                 } else {
                     voice.last_filter_cutoff = snap.filter_cutoff;
                 }
-
-                // Cache post-modulation osc positions + LFO phases for viz.
-                voice.last_osc1_pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
-                voice.last_osc2_pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
-                voice.last_lfo_phases[0] = if snap.lfo1_retrigger {
-                    voice.lfo1.phase
-                } else {
-                    self.global_lfo1.phase
-                };
-                voice.last_lfo_phases[1] = if snap.lfo2_retrigger {
-                    voice.lfo2.phase
-                } else {
-                    self.global_lfo2.phase
-                };
-                voice.last_lfo_phases[2] = if snap.lfo3_retrigger {
-                    voice.lfo3.phase
-                } else {
-                    self.global_lfo3.phase
-                };
 
                 let amp = amp_env_val * voice.velocity * (1.0 + mods.amp_level).max(0.0);
                 mix_l += osc_l * amp;
@@ -564,6 +655,30 @@ impl SynthEngine {
             right[sample_id] = out_r;
 
             self.scope_collector.push(out_l, out_r);
+        }
+
+        // Post-block viz bookkeeping. These fields are read only by
+        // `publish_viz`, once per block, and only for voices that are still
+        // non-idle — so writing them per sample inside the voice loop (as the
+        // previous version did) burned ~10 ops per voice per sample to
+        // produce 127 values nobody ever looked at. The values written here
+        // are exactly what the final sample of the loop would have left
+        // behind.
+        let (g1, g2, g3) = (
+            self.global_lfo1.phase,
+            self.global_lfo2.phase,
+            self.global_lfo3.phase,
+        );
+        for voice in &mut self.voices {
+            if voice.state == VoiceState::Idle {
+                continue;
+            }
+            let mods = voice.cached_mods;
+            voice.last_osc1_pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
+            voice.last_osc2_pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
+            voice.last_lfo_phases[0] = if snap.lfo1_retrigger { voice.lfo1.phase } else { g1 };
+            voice.last_lfo_phases[1] = if snap.lfo2_retrigger { voice.lfo2.phase } else { g2 };
+            voice.last_lfo_phases[2] = if snap.lfo3_retrigger { voice.lfo3.phase } else { g3 };
         }
 
         // Disabled effects never consume their smoothers inside the loop;

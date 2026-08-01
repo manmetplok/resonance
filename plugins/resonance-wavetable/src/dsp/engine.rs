@@ -10,6 +10,18 @@ use crate::dsp::wavetable::Wavetable;
 
 pub struct SynthEngine {
     pub(crate) voices: Vec<Voice>,
+    /// Indices into `voices` that are not [`VoiceState::Idle`], and how many
+    /// of the fixed-size array are live.
+    ///
+    /// The per-sample render loop used to walk all `MAX_VOICES` slots and
+    /// `continue` past the idle ones. At 32 slots × a ~1 kB `Voice` that is
+    /// 32 cache lines touched every sample no matter how few notes are
+    /// sounding — the dominant cost of an *idle* plugin instance, and pure
+    /// overhead for the typical 4–8 voice case. The list is rebuilt at block
+    /// start and after every note-on; voices that go idle mid-block simply
+    /// hit the existing early-`continue`.
+    pub(crate) active: [u8; MAX_VOICES],
+    pub(crate) active_len: usize,
     voice_counter: u64,
     pub(crate) sample_rate: f32,
 
@@ -96,6 +108,8 @@ impl SynthEngine {
     pub fn new() -> Self {
         Self {
             voices: Vec::new(),
+            active: [0; MAX_VOICES],
+            active_len: 0,
             voice_counter: 0,
             sample_rate: 44100.0,
             global_lfo1: crate::dsp::lfo::MultiLfo::new(),
@@ -141,10 +155,24 @@ impl SynthEngine {
         self.fx_smoothers.set_sample_rate(sample_rate);
     }
 
+    /// Recompute the non-idle voice index list. Called at block start and
+    /// after each note-on; O(MAX_VOICES) but once per block, not per sample.
+    pub(crate) fn refresh_active(&mut self) {
+        let mut n = 0;
+        for (i, v) in self.voices.iter().enumerate() {
+            if v.state != VoiceState::Idle {
+                self.active[n] = i as u8;
+                n += 1;
+            }
+        }
+        self.active_len = n;
+    }
+
     pub fn reset(&mut self) {
         for v in &mut self.voices {
             v.kill();
         }
+        self.active_len = 0;
         self.voice_counter = 0;
         self.last_note = None;
         self.global_lfo1.reset_phase();

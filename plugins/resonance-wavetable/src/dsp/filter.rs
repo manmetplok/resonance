@@ -112,9 +112,15 @@ impl StateVariableFilter {
     }
 }
 
+/// Input drive soft-clip.
+///
+/// Uses [`resonance_dsp::tanh_fast`] rather than `f32::tanh`: this runs once
+/// per sample per channel per voice, so at 32 voices it is ~3M libm calls a
+/// second. See that function's docs for the measured error bound (~1 ULP over
+/// the range audio occupies).
 #[inline]
 fn soft_clip(x: f32) -> f32 {
-    x.tanh()
+    resonance_dsp::tanh_fast(x)
 }
 
 impl Default for StateVariableFilter {

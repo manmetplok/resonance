@@ -40,3 +40,11 @@ rfd = { workspace = true, optional = true }
 ureq = { version = "3", features = ["json"], optional = true }
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 dirs = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+# Per-block DSP benchmark. `harness = false` hands main() to criterion.
+[[bench]]
+name = "drums_dsp"
+harness = false

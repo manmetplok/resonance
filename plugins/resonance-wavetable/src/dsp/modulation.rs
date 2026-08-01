@@ -89,6 +89,28 @@ pub struct ModState {
     pub osc2_pan: f32,
 }
 
+impl ModState {
+    /// True when every field the cached per-unison [`OscSetup`] depends on is
+    /// unchanged, so the render loop can keep the cached frequency, mip-level
+    /// plan and pan gains instead of recomputing them.
+    ///
+    /// Deliberately narrower than a full `PartialEq`: the filter and amp
+    /// destinations are consumed per sample anyway, and letting a moving
+    /// filter LFO invalidate the oscillator cache would defeat the whole
+    /// point for the most common patch shape (LFO → cutoff).
+    ///
+    /// [`OscSetup`]: crate::dsp::voice::OscSetup
+    #[inline]
+    pub fn osc_setup_eq(&self, other: &Self) -> bool {
+        self.osc1_position == other.osc1_position
+            && self.osc2_position == other.osc2_position
+            && self.osc1_pitch == other.osc1_pitch
+            && self.osc2_pitch == other.osc2_pitch
+            && self.osc1_pan == other.osc1_pan
+            && self.osc2_pan == other.osc2_pan
+    }
+}
+
 /// A single modulation routing slot.
 pub struct ModSlot {
     pub source: ModSource,

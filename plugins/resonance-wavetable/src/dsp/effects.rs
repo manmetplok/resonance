@@ -1,5 +1,5 @@
 /// Post-voice effects: distortion, chorus, stereo delay.
-use resonance_dsp::{DelayLine, OnePole};
+use resonance_dsp::{tanh_fast, DelayLine, OnePole};
 
 // ---------------------------------------------------------------------------
 // Distortion (tanh soft-clip waveshaper)
@@ -9,10 +9,13 @@ pub struct Distortion;
 
 impl Distortion {
     /// Process a stereo pair through distortion.
+    ///
+    /// `tanh_fast` rather than `f32::tanh` — two libm calls per sample on the
+    /// master path. See [`resonance_dsp::tanh_fast`] for the error bound.
     #[inline]
     pub fn process(left: f32, right: f32, drive: f32, mix: f32) -> (f32, f32) {
-        let dl = (left * drive).tanh();
-        let dr = (right * drive).tanh();
+        let dl = tanh_fast(left * drive);
+        let dr = tanh_fast(right * drive);
         (
             left * (1.0 - mix) + dl * mix,
             right * (1.0 - mix) + dr * mix,
