@@ -16,8 +16,6 @@
 //! a separate, later step.
 
 use std::path::Path;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use resonance_common::probe_audio_file;
 
@@ -191,19 +189,21 @@ pub(crate) fn handle_import_audio_to_pool(
 
     let event_tx = ctx.event_tx.clone();
     let engine_rate = ctx.sample_rate;
-    let imports_counter = Arc::clone(&state.active_imports);
-    imports_counter.fetch_add(1, Ordering::Relaxed);
 
+    // One dedicated thread per batch, deliberately *not* the shared
+    // `HandlerState::imports` pool: a pool-import batch is a foreground,
+    // user-initiated action with its own progress UI, and queueing it
+    // behind a project load's clip backlog would leave the import modal
+    // sitting at "Queued". The batch itself is sequential, so a single
+    // extra thread is the whole cost.
     let spawn_result = std::thread::Builder::new()
         .name("resonance-pool-import".into())
         .spawn(move || {
             run_pool_import(&jobs, &project_dir, engine_rate, |ev| {
                 let _ = event_tx.send(ev);
             });
-            imports_counter.fetch_sub(1, Ordering::Relaxed);
         });
     if let Err(e) = spawn_result {
-        state.active_imports.fetch_sub(1, Ordering::Relaxed);
         let _ = ctx.event_tx.send(AudioEvent::Error(format!(
             "Failed to spawn pool-import thread: {e}"
         )));

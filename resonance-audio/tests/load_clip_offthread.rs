@@ -22,9 +22,15 @@
 //! assert that a simulated audio thread reading the same `clips` arc
 //! never observes the read lock blocked for the duration of the
 //! compute.
+//!
+//! `queued_loads_past_the_cap_are_never_dropped` covers the second half
+//! of the story: the worker pool that bounds this work
+//! (`ImportQueue` / `MAX_CONCURRENT_IMPORTS`) must *queue* requests past
+//! its cap rather than reject them, because the old cap-and-drop lost
+//! every audio clip past the fourth on project load.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,7 +38,8 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 
 use resonance_audio::transcode_to_wav;
-use resonance_audio::types::{compute_waveform_peaks, AudioClip, ClipSource, FadeCurve};
+use resonance_audio::types::{compute_waveform_peaks, AudioClip, AudioEvent, ClipSource, FadeCurve};
+use resonance_audio::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 
 fn make_tempdir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -237,6 +244,170 @@ fn concurrent_loads_all_publish_without_deadlock() {
     }
 
     assert_eq!(clips.read().len(), 4);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Regression for the capacity *drop*: `handle_load_clip_from_wav` used
+/// to compare an in-flight counter against `MAX_CONCURRENT_IMPORTS` and
+/// `return` when it was at the cap, emitting only an error event. Project
+/// load fires one `LoadClipFromWav` per audio clip, so every project with
+/// more than `MAX_CONCURRENT_IMPORTS` audio clips silently lost the
+/// excess: those clips never entered the engine, their lanes played
+/// silent, and the next save wrote a bundle missing their WAVs.
+///
+/// The handler now hands the work to `ImportQueue`, which queues past the
+/// cap instead of rejecting. This test drives that queue with the same
+/// job body the handler submits (open the WAV, decimate peaks, publish
+/// under a brief write lock, emit `ClipImported`) at three times the cap
+/// and asserts:
+///   * every submitted load eventually publishes its clip and its event —
+///     nothing is dropped;
+///   * no more than `MAX_CONCURRENT_IMPORTS` jobs ever run at once, and no
+///     more than that many worker threads are ever spawned, so the bound
+///     the cap exists for still holds; and
+///   * submitting never blocks the caller (the engine control thread)
+///     even though the queue is heavily backlogged.
+#[test]
+fn queued_loads_past_the_cap_are_never_dropped() {
+    let dir = make_tempdir("queue");
+    // Three times the production cap: the first `MAX_CONCURRENT_IMPORTS`
+    // jobs occupy every worker, so the rest can only complete by having
+    // been queued.
+    let total = MAX_CONCURRENT_IMPORTS * 3;
+
+    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(Vec::new()));
+    let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+
+    // Live job count and its high-water mark, to prove the queue really
+    // bounds concurrency rather than just spawning a thread per request.
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let peak_in_flight = Arc::new(AtomicUsize::new(0));
+
+    let mut wavs = Vec::new();
+    for id in 0..total as u64 {
+        let wav = dir.join(format!("clip_{id}.wav"));
+        write_test_wav(&wav, /* seconds */ 1);
+        wavs.push(wav);
+    }
+
+    let mut queue = ImportQueue::new(MAX_CONCURRENT_IMPORTS);
+
+    let submit_started = Instant::now();
+    for (id, wav) in wavs.into_iter().enumerate() {
+        let clip_id = id as u64;
+        let clips_arc = Arc::clone(&clips);
+        let tx = event_tx.clone();
+        let in_flight = Arc::clone(&in_flight);
+        let peak_in_flight = Arc::clone(&peak_in_flight);
+        queue
+            .submit(move || {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak_in_flight.fetch_max(now, Ordering::SeqCst);
+
+                let source = ClipSource::open_wav(&wav).expect("open wav");
+                let duration_samples = source.frame_count();
+                let waveform_peaks = compute_waveform_peaks(source.as_frames());
+                let clip = AudioClip {
+                    id: clip_id,
+                    track_id: 1,
+                    start_sample: clip_id * 48_000,
+                    source,
+                    name: format!("clip_{clip_id}"),
+                    trim_start_frames: 0,
+                    trim_end_frames: 0,
+                    fade_in_frames: 0,
+                    fade_in_curve: FadeCurve::default(),
+                    fade_out_frames: 0,
+                    fade_out_curve: FadeCurve::default(),
+                    gain_db: 0.0,
+                    vocal_tuning: None,
+                    warp_enabled: false,
+                    original_bpm: None,
+                    transpose_semitones: 0.0,
+                    warp_algorithm: Default::default(),
+                    warp_markers: Vec::new(),
+                };
+                clips_arc.write().push(clip);
+                let _ = tx.send(AudioEvent::ClipImported {
+                    clip_id,
+                    track_id: 1,
+                    start_sample: clip_id * 48_000,
+                    duration_samples,
+                    name: format!("clip_{clip_id}"),
+                    waveform_peaks,
+                });
+
+                // Hold the worker slot long enough that the later
+                // submissions are provably queued behind a full pool.
+                thread::sleep(Duration::from_millis(100));
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+            })
+            .expect("submit must not fail");
+    }
+    let submit_elapsed = submit_started.elapsed();
+    drop(event_tx);
+
+    // Requirement: the engine control thread must not wait on the queue.
+    // Submitting `total` jobs is `total` channel sends plus at most
+    // `MAX_CONCURRENT_IMPORTS` thread spawns; the jobs themselves take
+    // >= 100 ms each, so anything near the run's wall clock means the
+    // caller got parked.
+    assert!(
+        submit_elapsed < Duration::from_millis(500),
+        "submitting {total} loads took {submit_elapsed:?} — the engine \
+         thread must not block on the import queue"
+    );
+
+    // Everything must land. Generous deadline: this is a
+    // did-it-happen-at-all assertion, not a timing one.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while clips.read().len() < total {
+        assert!(
+            Instant::now() < deadline,
+            "only {} of {total} queued loads published within 30 s — \
+             loads past the concurrency cap must be queued, not dropped",
+            clips.read().len()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut ids: Vec<u64> = clips.read().iter().map(|c| c.id).collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        (0..total as u64).collect::<Vec<_>>(),
+        "every submitted clip must be published exactly once"
+    );
+
+    // Every clip must also report completion to the app. Order is not
+    // significant (workers finish out of order) — only that none is lost.
+    let mut event_ids: Vec<u64> = event_rx
+        .iter()
+        .map(|ev| match ev {
+            AudioEvent::ClipImported { clip_id, .. } => clip_id,
+            other => panic!("unexpected event from a successful load: {other:?}"),
+        })
+        .collect();
+    event_ids.sort_unstable();
+    assert_eq!(
+        event_ids,
+        (0..total as u64).collect::<Vec<_>>(),
+        "every queued load must emit ClipImported"
+    );
+
+    let peak = peak_in_flight.load(Ordering::SeqCst);
+    assert!(
+        peak <= MAX_CONCURRENT_IMPORTS,
+        "{peak} loads ran concurrently — the queue must stay bounded at \
+         {MAX_CONCURRENT_IMPORTS}"
+    );
+    assert!(
+        queue.worker_count() <= MAX_CONCURRENT_IMPORTS,
+        "queue spawned {} workers for {total} jobs — concurrency must be \
+         bounded by threads, not by request count",
+        queue.worker_count()
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

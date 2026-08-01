@@ -84,6 +84,8 @@ pub use clips::{
 };
 mod import_pool;
 pub use import_pool::{import_one_to_pool, run_pool_import, PoolImportOutcome};
+mod import_queue;
+pub use import_queue::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 mod master;
 pub(crate) mod midi;
 mod midi_map;
