@@ -147,12 +147,13 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
     {
         return;
     }
-    ctx.latency_comp.store(Arc::new(crate::latency::LatencyComp::new(
-        track_max,
-        &track_delays,
-        bus_max,
-        &bus_delays,
-    )));
+    ctx.latency_comp
+        .store(Arc::new(crate::latency::LatencyComp::new(
+            track_max,
+            &track_delays,
+            bus_max,
+            &bus_delays,
+        )));
 }
 
 /// Service plugin-initiated host callbacks (doc #260 finding #10):
@@ -303,6 +304,23 @@ pub(crate) fn handle_set_plugin_param(
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
             inst.0.set_param(param_id, value);
+            // `set_param` only queues; the queue is drained inside
+            // `process()`. The mixer skips the whole arrangement render
+            // while the transport is stopped (and skips silenced
+            // non-instrument tracks while it rolls), so without this the
+            // change could sit queued indefinitely — stale DSP, and a
+            // `save_state()` taken in that window serialising the OLD
+            // value. `clap_plugin_params.flush` is CLAP's entry point for
+            // exactly that case. It drains the queue, so a change is never
+            // both flushed and replayed on the next `process()`; if the
+            // plugin implements no `flush`, the queue is left intact and
+            // the next `process()` still applies it.
+            //
+            // Threading: `flush` must not run concurrently with
+            // `process()`. We hold this instance's mutex — the same lock
+            // every `process()` call site takes — across the call, which
+            // is what guarantees that. See `clap_host::params`.
+            inst.0.flush_pending_params();
         } else {
             // Audio thread is mid-process(): re-enqueue so the param
             // change lands on the next iteration rather than blocking

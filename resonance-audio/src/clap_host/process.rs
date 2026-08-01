@@ -11,9 +11,8 @@ use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::events::{
     clap_event_header, clap_event_note, clap_event_param_value, clap_event_transport,
     clap_input_events, clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_OFF,
-    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
-    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE,
-    CLAP_TRANSPORT_IS_PLAYING,
+    CLAP_EVENT_NOTE_ON, CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+    CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use clap_sys::fixedpoint::CLAP_BEATTIME_FACTOR;
 use clap_sys::process::clap_process;
@@ -26,17 +25,20 @@ use super::instance::{ClapInstance, StereoBufMut};
 
 /// Context for input events carrying both param value and note events.
 /// Param events (time=0) come first, then note events sorted by time.
-struct MixedEventListCtx {
-    param_events: Vec<clap_event_param_value>,
-    note_events: Vec<clap_event_note>,
+///
+/// Also reused by [`super::params`] to build the param-only event list
+/// handed to `clap_plugin_params.flush` (with `note_events` empty).
+pub(super) struct MixedEventListCtx {
+    pub(super) param_events: Vec<clap_event_param_value>,
+    pub(super) note_events: Vec<clap_event_note>,
 }
 
-unsafe extern "C" fn mixed_events_size(list: *const clap_input_events) -> u32 {
+pub(super) unsafe extern "C" fn mixed_events_size(list: *const clap_input_events) -> u32 {
     let ctx = &*((*list).ctx as *const MixedEventListCtx);
     (ctx.param_events.len() + ctx.note_events.len()) as u32
 }
 
-unsafe extern "C" fn mixed_events_get(
+pub(super) unsafe extern "C" fn mixed_events_get(
     list: *const clap_input_events,
     index: u32,
 ) -> *const clap_event_header {
@@ -55,7 +57,7 @@ unsafe extern "C" fn mixed_events_get(
     }
 }
 
-unsafe extern "C" fn discard_output_event(
+pub(super) unsafe extern "C" fn discard_output_event(
     _list: *const clap_output_events,
     _event: *const clap_event_header,
 ) -> bool {
@@ -127,25 +129,11 @@ impl ClapInstance {
 
         // Build input events from pending parameter changes (reuse pre-allocated buffer)
         self.param_event_buf.clear();
-        self.param_event_buf
-            .extend(self.pending_params.drain(..).map(|(param_id, value)| {
-                clap_event_param_value {
-                    header: clap_event_header {
-                        size: std::mem::size_of::<clap_event_param_value>() as u32,
-                        time: 0,
-                        space_id: CLAP_CORE_EVENT_SPACE_ID,
-                        type_: CLAP_EVENT_PARAM_VALUE,
-                        flags: 0,
-                    },
-                    param_id,
-                    cookie: ptr::null_mut(),
-                    note_id: -1,
-                    port_index: -1,
-                    channel: -1,
-                    key: -1,
-                    value,
-                }
-            }));
+        self.param_event_buf.extend(
+            self.pending_params
+                .drain(..)
+                .map(|(param_id, value)| super::params::param_value_event(param_id, value)),
+        );
 
         // Build note events from pending notes (reuse pre-allocated buffer)
         self.note_event_buf.clear();

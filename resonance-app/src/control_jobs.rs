@@ -22,7 +22,7 @@ use crate::control_socket::ConnId;
 use resonance_control::ids::JobId;
 use resonance_control::job::{JobStarted, JobState, JobStatus};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,8 +51,13 @@ pub enum JobToken {
     /// (`engine_events::project_io::all_cleared`, untitled path only);
     /// fails on `ProjectIoMessage::TemplateLoaded(Err)`.
     ProjectNew,
-    /// Completes when the SVS render for this lane lands (todo #1156).
-    VocalRender { definition_id: u64, track_id: u64 },
+    /// Completes when the SVS render for **every** lane in the batch has
+    /// landed (todo #1156). A `vocal.render` addressing a track covers
+    /// each of that track's vocal lanes, and one addressing no track
+    /// covers the whole project — one job, N lanes, resolved by
+    /// [`JobBoard::complete_vocal_lane`] as each lane's audio arrives.
+    /// Entries are `(definition_id, track_id)`.
+    VocalRender { lanes: Vec<(u64, u64)> },
     /// Completes on bounce/export completion (todo #1157).
     Export { path: std::path::PathBuf },
 }
@@ -66,6 +71,11 @@ struct JobEntry {
     result: Option<Value>,
     error: Option<String>,
     token: Option<JobToken>,
+    /// Lanes of a [`JobToken::VocalRender`] batch whose audio hasn't
+    /// landed yet. Seeded from the token at [`JobBoard::start`] and
+    /// drained by [`JobBoard::complete_vocal_lane`]; the job completes
+    /// when it empties. Always empty for every other token.
+    remaining_lanes: HashSet<(u64, u64)>,
     /// Connection that started the job; its close drops the entry.
     owner: Option<ConnId>,
     /// A terminal status has been delivered at least once — the entry
@@ -112,6 +122,10 @@ impl JobBoard {
         let mut table = self.table.lock().expect("job table poisoned");
         table.next_id += 1;
         let id = table.next_id;
+        let remaining_lanes = match &token {
+            Some(JobToken::VocalRender { lanes }) => lanes.iter().copied().collect(),
+            _ => HashSet::new(),
+        };
         table.jobs.insert(
             id,
             JobEntry {
@@ -122,6 +136,7 @@ impl JobBoard {
                 result: None,
                 error: None,
                 token,
+                remaining_lanes,
                 owner,
                 fetched: false,
             },
@@ -202,6 +217,51 @@ impl JobBoard {
             }
             None => false,
         }
+    }
+
+    /// Tick off one lane of every live [`JobToken::VocalRender`] batch
+    /// that covers it, completing a job once its last lane has landed.
+    ///
+    /// A `vocal.render` addressing a track fans out over *all* of that
+    /// track's vocal lanes, so the job must not resolve on the first
+    /// lane's audio — a client that waited on it would then read a
+    /// half-rendered track back as `done`. Returns whether any job was
+    /// tracking this lane (a `false` is normal: a GUI-driven render).
+    ///
+    /// The result payload carries every track the batch rendered, so a
+    /// whole-project render reports all of them.
+    pub fn complete_vocal_lane(&self, definition_id: u64, track_id: u64, revision: u64) -> bool {
+        let mut finished: Vec<(u64, Value)> = Vec::new();
+        let mut matched = false;
+        {
+            let mut table = self.table.lock().expect("job table poisoned");
+            for (id, entry) in table.jobs.iter_mut() {
+                if entry.state.is_terminal()
+                    || !entry.remaining_lanes.remove(&(definition_id, track_id))
+                {
+                    continue;
+                }
+                matched = true;
+                if entry.remaining_lanes.is_empty() {
+                    let mut track_ids: Vec<u64> = match &entry.token {
+                        Some(JobToken::VocalRender { lanes }) => {
+                            lanes.iter().map(|(_, t)| *t).collect()
+                        }
+                        _ => vec![track_id],
+                    };
+                    track_ids.sort_unstable();
+                    track_ids.dedup();
+                    finished.push((
+                        *id,
+                        serde_json::json!({ "track_ids": track_ids, "revision": revision }),
+                    ));
+                }
+            }
+        }
+        for (id, result) in finished {
+            self.complete(id, result);
+        }
+        matched
     }
 
     /// Fail the newest live `VocalRender` job, whatever its lane. The

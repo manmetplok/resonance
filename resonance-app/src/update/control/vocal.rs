@@ -7,10 +7,17 @@
 //! mutations synthesize a [`ComposeMessage`] carrier routed through
 //! [`super::run_via_update`], so each is one undoable transaction.
 //!
+//! `vocal.render` is the exception to the first-lane rule: it fans out
+//! over **every** lane the request covers (all of a track's lanes when
+//! no `section_id` is given; every vocal track when no `track_id` is
+//! given either), because "render the track" that renders one lane
+//! leaves the rest audibly stale while reporting success.
+//!
 //! `vocal.render` is a **job** (doc #265): it returns `{job_id}`
 //! immediately and the render lands asynchronously; the job resolves
 //! from the existing `VocalAudioReady` / `VocalAudioFailed` completion
-//! messages via a [`JobToken::VocalRender`]. The default voicebank is
+//! messages via a [`JobToken::VocalRender`], once **all** of its lanes
+//! have landed. The default voicebank is
 //! **Lilia** (doc #265) — the maintained multi-language bank — overriding
 //! the code-level `VocalParams` default of TIGER.
 
@@ -352,53 +359,19 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         None => None,
     };
 
-    // Which lane(s): a specific track, or every vocal track when omitted.
-    let track_id = match params.track_id {
-        Some(t) => {
-            let raw: u64 = t.into();
-            if !track_has_vocal_lane(app, raw) {
-                return fail(
-                    request,
-                    RpcError::not_found(format!("track {raw} has no vocal lane to render")),
-                );
-            }
-            raw
-        }
-        None => match first_vocal_lane_track(app) {
-            Some(raw) => raw,
-            None => {
-                return fail(
-                    request,
-                    RpcError::not_found("the project has no vocal lane to render"),
-                )
-            }
-        },
-    };
-
-    // Which of the track's lanes: an explicit section, else the first in
-    // placement order. Routed through the same resolver the rest of the
-    // namespace uses, so the error shapes match and — the point of
-    // accepting `section_id` at all — a track that sings in several
-    // sections can re-render any of them, not only its first (ba doc
-    // #271 V2).
-    let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
-        Ok(id) => id,
+    // Which lane(s) this render covers. A named `section_id` addresses
+    // exactly one; otherwise it is *every* lane of the named track, and
+    // with no track named, every vocal lane in the project. Resolving
+    // "the track's first vocal lane" here instead (the rule the lyric
+    // methods use, where one write must land on one lane) is what made
+    // `vocal.render(track_id)` re-render lane 1 and silently leave lanes
+    // 2..n on their previous audio — a render that reported `done` while
+    // most of the track was stale, and, once the edited notes no longer
+    // matched any rendered WAV, sections that saved out silent.
+    let lanes = match resolve_render_lanes(app, params.track_id, params.section_id) {
+        Ok(lanes) => lanes,
         Err(e) => return fail(request, e),
     };
-
-    // Resolve an omitted voicebank against the lane rather than against
-    // a constant. Blanket-defaulting to Lilia meant every render that
-    // left the argument out silently reset the lane, so a song with a
-    // TIGER character and a Lilia character lost the split on the next
-    // plain render (ba doc #271). A lane still holding the untouched
-    // `VocalParams` code default has never chosen one, so it still picks
-    // up doc #265's Lilia; anything explicitly set wins.
-    let voicebank = requested.unwrap_or_else(|| {
-        match lane_voicebank(app, definition_id, track_id) {
-            Some(vb) if vb != default_lane_voicebank() => vb,
-            _ => VocalVoicebank::Lilia,
-        }
-    });
 
     // Pre-flight the conditions `rerender_vocal_audio` silently no-ops
     // on so they surface as a precise error rather than a job that never
@@ -406,65 +379,223 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     // render synthesises the notes already in the lane's clip and never
     // derives from the chord grid, so a chordless section with authored
     // notes is a legitimate render (ba doc #271 V1).
-    if !lane_has_notes(app, definition_id, track_id) {
-        return fail(
-            request,
-            RpcError::invalid_params(
-                "vocal lane has no notes to sing; generate a melody (vocal.generate) or write \
-                 notes into its clip (notes.*) before rendering",
-            ),
-        );
-    }
-    if let Some(def) = app.compose.find_definition(definition_id) {
-        let empty_draft = def
-            .lane_generators
-            .get(&track_id)
-            .and_then(|c| match &c.kind {
-                crate::compose::LaneGeneratorKind::Vocal(p) => Some(p.draft.is_empty()),
-                _ => None,
-            })
-            .unwrap_or(true);
-        if empty_draft {
-            return fail(
-                request,
-                RpcError::invalid_params(
-                    "vocal lane has no lyrics; set lyrics (vocal.set_lyrics) before rendering",
-                ),
-            );
+    //
+    // Across a fan-out, a lane that can't render is skipped rather than
+    // failing the batch — one empty lane must not stop the rest of the
+    // track from re-rendering — but a batch where *nothing* can render
+    // is still a precise error.
+    let mut renderable: Vec<(u64, u64)> = Vec::new();
+    let mut blocked: Vec<(u64, String)> = Vec::new();
+    for &(definition_id, track_id) in &lanes {
+        match lane_render_block(app, definition_id, track_id) {
+            Some(reason) => blocked.push((definition_id, reason)),
+            None => renderable.push((definition_id, track_id)),
         }
     }
+    if renderable.is_empty() {
+        return fail(
+            request,
+            RpcError::invalid_params(describe_blocked(app, &blocked)),
+        );
+    }
 
-    // Register the job first so the completion hook (which fires
-    // synchronously if the render fails fast, or later on the audio-ready
-    // message) can resolve it by token.
+    // Any error left over from an earlier operation would otherwise be
+    // misread as this render's failure.
+    let _ = app.compose.last_error.take();
+
+    let mut tasks: Vec<Task<Message>> = Vec::new();
+    let mut started: Vec<(u64, u64)> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for (definition_id, track_id) in renderable {
+        // Resolve an omitted voicebank against the lane rather than
+        // against a constant. Blanket-defaulting to Lilia meant every
+        // render that left the argument out silently reset the lane, so a
+        // song with a TIGER character and a Lilia character lost the
+        // split on the next plain render (ba doc #271). A lane still
+        // holding the untouched `VocalParams` code default has never
+        // chosen one, so it still picks up doc #265's Lilia; anything
+        // explicitly set wins. Per lane, because a fan-out crosses lanes
+        // that may have chosen differently.
+        let voicebank = requested.unwrap_or_else(|| {
+            match lane_voicebank(app, definition_id, track_id) {
+                Some(vb) if vb != default_lane_voicebank() => vb,
+                _ => VocalVoicebank::Lilia,
+            }
+        });
+
+        let task = super::run_via_update(
+            app,
+            Message::Compose(ComposeMessage::ControlRenderVocal {
+                definition_id,
+                track_id,
+                voicebank,
+            }),
+        );
+
+        // A synchronous validation failure (blocked phoneme, vanished
+        // clip) leaves `compose.last_error` set and never dispatches a
+        // render task. Drop that lane from the batch — keeping it would
+        // leave the job waiting forever for audio that will never come.
+        if let Some(error) = app.compose.last_error.take() {
+            errors.push(lane_error(app, definition_id, &error));
+            continue;
+        }
+        started.push((definition_id, track_id));
+        tasks.push(task);
+    }
+
+    if started.is_empty() {
+        return fail(request, RpcError::invalid_params(errors.join("; ")));
+    }
+
+    // Register the job covering exactly the lanes that dispatched; it
+    // resolves when the last of them reports its audio.
     let JobStarted { job_id } = app.start_control_job(
         "vocal.render",
-        &format!("SVS render for vocal track {track_id}"),
+        &describe_batch(&started),
         JobToken::VocalRender {
-            definition_id,
-            track_id,
+            lanes: started.clone(),
         },
         None,
     );
 
-    let task = super::run_via_update(
-        app,
-        Message::Compose(ComposeMessage::ControlRenderVocal {
-            definition_id,
-            track_id,
-            voicebank,
-        }),
-    );
-
-    // A synchronous validation failure (empty draft, no chords, blocked
-    // phoneme) leaves `compose.last_error` set and never dispatches a
-    // render task — fail the job now so `job.wait` resolves immediately.
-    if let Some(error) = app.compose.last_error.take() {
-        app.control_jobs().fail(job_id.into(), error.clone());
-        return fail(request, RpcError::invalid_params(error));
-    }
+    // Chained, not batched: each lane's task drives a full SVS pipeline
+    // on a blocking thread, and `Task::batch` would start every lane's at
+    // once — several ONNX sessions and their working sets alive together
+    // on a machine that is also playing audio. Chaining renders them one
+    // after another, which is what a client looping over lanes by hand
+    // already did. The synchronous half (tear-down, epoch bump) has
+    // already run for every lane either way.
+    let task = tasks
+        .into_iter()
+        .reduce(|acc, next| acc.chain(next))
+        .unwrap_or_else(Task::none);
 
     (super::success(request, &JobStarted { job_id }), task)
+}
+
+/// The `(definition_id, track_id)` lanes a `vocal.render` covers.
+///
+/// - `section_id` names one lane (the only single-lane form).
+/// - `track_id` alone is every vocal lane on that track.
+/// - Neither is every vocal lane in the project.
+fn resolve_render_lanes(
+    app: &Resonance,
+    track_id: Option<resonance_control::ids::TrackId>,
+    section_id: Option<resonance_control::ids::SectionDefinitionId>,
+) -> Result<Vec<(u64, u64)>, RpcError> {
+    use crate::update::compose::vocal_render::{all_vocal_lanes, vocal_definitions_for_track};
+
+    match (track_id, section_id) {
+        (Some(track), section) => {
+            let track: u64 = track.into();
+            if !track_has_vocal_lane(app, track) {
+                return Err(RpcError::not_found(format!(
+                    "track {track} has no vocal lane to render"
+                )));
+            }
+            if section.is_some() {
+                // Routed through the same resolver the rest of the
+                // namespace uses, so the error shapes match.
+                let definition_id = resolve_vocal_lane(app, track, section)?;
+                return Ok(vec![(definition_id, track)]);
+            }
+            Ok(vocal_definitions_for_track(app, track)
+                .into_iter()
+                .map(|def| (def, track))
+                .collect())
+        }
+        (None, Some(section_id)) => {
+            // A section with no track: every vocal lane that section has.
+            let definition_id: u64 = section_id.into();
+            let Some(def) = app.compose.find_definition(definition_id) else {
+                return Err(RpcError::not_found(format!(
+                    "no section definition with id {definition_id}"
+                )));
+            };
+            let mut lanes: Vec<(u64, u64)> = def
+                .lane_generators
+                .iter()
+                .filter(|(_, cfg)| {
+                    matches!(cfg.kind, crate::compose::LaneGeneratorKind::Vocal(_))
+                })
+                .map(|(track, _)| (definition_id, *track))
+                .collect();
+            lanes.sort_unstable();
+            if lanes.is_empty() {
+                return Err(RpcError::invalid_params(format!(
+                    "section {definition_id} ({:?}) has no vocal lane to render",
+                    def.name
+                )));
+            }
+            Ok(lanes)
+        }
+        (None, None) => {
+            let lanes = all_vocal_lanes(app);
+            if lanes.is_empty() {
+                return Err(RpcError::not_found(
+                    "the project has no vocal lane to render",
+                ));
+            }
+            Ok(lanes)
+        }
+    }
+}
+
+/// Why this lane cannot render right now, or `None` when it can.
+fn lane_render_block(app: &Resonance, definition_id: u64, track_id: u64) -> Option<String> {
+    if !lane_has_notes(app, definition_id, track_id) {
+        return Some(
+            "vocal lane has no notes to sing; generate a melody (vocal.generate) or write \
+             notes into its clip (notes.*) before rendering"
+                .to_owned(),
+        );
+    }
+    if lane_draft_is_empty(app, definition_id, track_id) {
+        return Some(
+            "vocal lane has no lyrics; set lyrics (vocal.set_lyrics) before rendering".to_owned(),
+        );
+    }
+    None
+}
+
+/// The error for a batch in which no lane could render. One lane keeps
+/// its own message verbatim (the single-lane case is still the common
+/// one and its wording is what clients match on); several are listed
+/// with the section each belongs to.
+fn describe_blocked(app: &Resonance, blocked: &[(u64, String)]) -> String {
+    match blocked {
+        [] => "no vocal lane to render".to_owned(),
+        [(_, reason)] => reason.clone(),
+        many => format!(
+            "no vocal lane can render: {}",
+            many.iter()
+                .map(|(def, reason)| lane_error(app, *def, reason))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+    }
+}
+
+/// A lane-scoped error message, prefixed with the section name so a
+/// fan-out failure says *which* lane it is about.
+fn lane_error(app: &Resonance, definition_id: u64, reason: &str) -> String {
+    match app.compose.find_definition(definition_id) {
+        Some(def) => format!("{:?}: {reason}", def.name),
+        None => reason.to_owned(),
+    }
+}
+
+/// Human-readable job description naming what the batch covers.
+fn describe_batch(lanes: &[(u64, u64)]) -> String {
+    let mut tracks: Vec<u64> = lanes.iter().map(|(_, t)| *t).collect();
+    tracks.sort_unstable();
+    tracks.dedup();
+    match (lanes.len(), tracks.as_slice()) {
+        (1, [track]) => format!("SVS render for vocal track {track}"),
+        (n, [track]) => format!("SVS render for {n} vocal lanes on track {track}"),
+        (n, tracks) => format!("SVS render for {n} vocal lanes across {} tracks", tracks.len()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -498,20 +629,39 @@ fn default_lane_voicebank() -> VocalVoicebank {
 /// Resolves the clip the same way `rerender_vocal_audio` does — the
 /// derived clip of any placement of the section — so the pre-flight and
 /// the render agree on what "has notes" means.
+///
+/// The `derived_clips` map is not always populated for a lane: a project
+/// loaded from disk can carry the clip without the mapping being
+/// rehydrated for it. `song.vocal` already tolerates that (its `lane_clip`
+/// falls back to matching a clip by the placement's start sample), so
+/// without the same fallback here the two disagreed — `song.vocal` would
+/// report `note_count: 1, counts_mismatch: false` while `vocal.render`
+/// refused the lane with "has no notes to sing", leaving it permanently
+/// unrenderable. Observed on a lane whose placement starts at bar 269
+/// while its clip reports bar 268.
 fn lane_has_notes(app: &Resonance, definition_id: u64, track_id: u64) -> bool {
     app.compose
         .placements
         .iter()
         .filter(|p| p.definition_id == definition_id)
-        .filter_map(|p| {
-            app.compose
+        .any(|p| {
+            let mapped = app
+                .compose
                 .derived_clips
                 .get(&(definition_id, p.id, track_id))
-        })
-        .any(|clip_id| {
-            app.midi_clips
-                .iter()
-                .any(|c| c.id == *clip_id && !c.notes.is_empty())
+                .and_then(|clip_id| app.midi_clips.iter().find(|c| c.id == *clip_id));
+            let clip = mapped.or_else(|| {
+                let start = app.tempo_map.bar_to_sample(p.start_bar);
+                app.midi_clips.iter().find(|c| {
+                    c.track_id == track_id
+                        && c.start_sample == start
+                        // Never adopt a clip another lane already owns: the
+                        // fallback exists for lanes whose mapping is missing,
+                        // not to let one lane borrow a neighbour's clip.
+                        && !app.compose.derived_clips.values().any(|id| *id == c.id)
+                })
+            });
+            clip.is_some_and(|c| !c.notes.is_empty())
         })
 }
 
@@ -549,33 +699,6 @@ fn resolve_vocal_lane(
             RpcError::not_found(format!("no track with id {track_id}"))
         }
     })
-}
-
-/// The track id of any vocal lane in the project (first in placement
-/// order), for a `vocal.render` with no explicit track.
-fn first_vocal_lane_track(app: &Resonance) -> Option<u64> {
-    let mut placed: Vec<(u32, u64)> = Vec::new();
-    for p in &app.compose.placements {
-        if let Some(def) = app.compose.find_definition(p.definition_id) {
-            for (track_id, cfg) in &def.lane_generators {
-                if matches!(cfg.kind, crate::compose::LaneGeneratorKind::Vocal(_)) {
-                    placed.push((p.start_bar, *track_id));
-                }
-            }
-        }
-    }
-    placed.sort_by_key(|(bar, _)| *bar);
-    if let Some((_, track)) = placed.first() {
-        return Some(*track);
-    }
-    for def in &app.compose.definitions {
-        for (track_id, cfg) in &def.lane_generators {
-            if matches!(cfg.kind, crate::compose::LaneGeneratorKind::Vocal(_)) {
-                return Some(*track_id);
-            }
-        }
-    }
-    None
 }
 
 /// Parse a wire voicebank name against [`VocalVoicebank`] (case-

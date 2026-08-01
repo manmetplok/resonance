@@ -135,6 +135,61 @@ impl Resonance {
         }
     }
 
+    /// Test-only: the in-flight SVS render epoch of a vocal lane, bumped
+    /// once per queued render. The render itself runs off-thread, so this
+    /// counter is what a test asserts on to prove a lane was actually
+    /// dispatched for re-render (ba doc #271 V2).
+    #[doc(hidden)]
+    pub fn test_vocal_render_epoch(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        self.compose
+            .vocal_audio
+            .render_epoch
+            .get(&(definition_id, track_id))
+            .copied()
+    }
+
+    /// Test-only: install a rendered-vocal-audio clip entry for a lane,
+    /// standing in for audio a previous session rendered. A re-render
+    /// tears these down, so their disappearance is the observable "this
+    /// lane's old audio was replaced".
+    #[doc(hidden)]
+    pub fn test_install_vocal_audio_clip(
+        &mut self,
+        definition_id: u64,
+        placement_id: u64,
+        track_id: resonance_audio::types::TrackId,
+        clip_id: resonance_audio::types::ClipId,
+        path: std::path::PathBuf,
+    ) {
+        self.compose
+            .vocal_audio
+            .clips
+            .insert((definition_id, placement_id, track_id), (clip_id, path));
+    }
+
+    /// Test-only: the installed vocal-audio clip ids on a track, as
+    /// `(definition_id, clip_id)` pairs.
+    #[doc(hidden)]
+    pub fn test_vocal_audio_clips(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<(u64, resonance_audio::types::ClipId)> {
+        let mut out: Vec<(u64, resonance_audio::types::ClipId)> = self
+            .compose
+            .vocal_audio
+            .clips
+            .iter()
+            .filter(|((_, _, t), _)| *t == track_id)
+            .map(|((def, _, _), (clip, _))| (*def, *clip))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
     /// Test-only: the lyric lines of a track's vocal lane in a section
     /// (draft text, in order). Empty when the lane isn't a vocal
     /// generator.

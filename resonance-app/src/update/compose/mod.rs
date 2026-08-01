@@ -349,20 +349,15 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         // Vocal audio render completion (dispatched from the background
         // SVS task that `lane_inspector::handle` queued).
         ComposeMessage::VocalAudioReady(data) => {
-            // Resolve a control-initiated vocal render job (doc #265,
-            // todo #1156) before the install consumes `data`. No-op when
-            // no control job carries the token (a GUI-driven render).
-            let token = crate::control_jobs::JobToken::VocalRender {
-                definition_id: data.definition_id,
-                track_id: data.track_id,
-            };
-            r.control.jobs.complete_token(
-                &token,
-                serde_json::json!({
-                    "track_ids": [data.track_id],
-                    "revision": r.revision(),
-                }),
-            );
+            // Tick this lane off any control-initiated vocal render job
+            // (doc #265, todo #1156) before the install consumes `data`.
+            // A track-level `vocal.render` covers every lane on the
+            // track, so the job only resolves once the last of them
+            // lands. No-op when no control job covers the lane (a
+            // GUI-driven render).
+            r.control
+                .jobs
+                .complete_vocal_lane(data.definition_id, data.track_id, r.revision());
             vocal_render::handle_vocal_audio_ready(r, *data);
         }
         ComposeMessage::VocalAudioFailed { error } => {
