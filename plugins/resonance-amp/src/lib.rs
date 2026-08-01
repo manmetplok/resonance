@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use resonance_plugin::*;
 
-mod dsp;
+// `pub` so `benches/amp_dsp.rs` can drive `AmpProcessor::process_block`
+// directly — the same entry point `process()` uses, minus the CLAP
+// buffer plumbing.
+pub mod dsp;
 mod loader;
 pub mod nam;
 pub mod params;

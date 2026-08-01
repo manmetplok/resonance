@@ -25,3 +25,11 @@ serde_json.workspace = true
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
 egui = { workspace = true, optional = true }
 rfd = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+# Per-block DSP benchmark. `harness = false` hands main() to criterion.
+[[bench]]
+name = "ir_dsp"
+harness = false

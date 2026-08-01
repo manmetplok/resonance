@@ -53,6 +53,12 @@ hound.workspace = true
 # Used by tests/clip_warp.rs for WarpMarker / WarpAlgorithm serde round-trips,
 # and tests/export_settings.rs for ExportSettings serde round-trips.
 serde_json.workspace = true
+# Per-block render-path benchmarks (benches/render_path.rs).
+criterion.workspace = true
+
+[[bench]]
+name = "render_path"
+harness = false
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"

@@ -149,6 +149,127 @@ pub fn render_aux_with_comp_for_test(
     (data, bus_bufs)
 }
 
+/// Reusable benchmark harness over the **live** render path
+/// ([`RenderStrategy::Live`]) — the exact code the audio callback runs,
+/// minus the CLAP plugin calls (a harness project carries no plugin
+/// instances, so per-block cost here is pure engine overhead).
+///
+/// State is built once and reused across renders so the measured loop is
+/// allocation-free, matching the realtime callback. Used by
+/// `benches/render_path.rs`; not part of the public API.
+#[doc(hidden)]
+pub struct RenderBenchHarness {
+    tracks: indexmap::IndexMap<TrackId, Track>,
+    busses: indexmap::IndexMap<BusId, Bus>,
+    clips: Vec<AudioClip>,
+    midi_clips: Vec<MidiClip>,
+    plugins: indexmap::IndexMap<PluginInstanceId, parking_lot::Mutex<crate::clap_host::SyncClapInstance>>,
+    tempo_map: TempoMap,
+    aux_sends: Vec<AuxSend>,
+    latency: crate::latency::LatencyComp,
+    automation: crate::engine::AutomationSnapshot,
+    data: Vec<f32>,
+    track_buf_l: Vec<f32>,
+    track_buf_r: Vec<f32>,
+    bus_bufs: Vec<(Vec<f32>, Vec<f32>)>,
+    port_scratch: Vec<(Vec<f32>, Vec<f32>)>,
+    note_buf: Vec<PendingNoteEvent>,
+    midi_stash: MidiStash,
+    frames: usize,
+    sample_rate: u32,
+}
+
+#[doc(hidden)]
+impl RenderBenchHarness {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        tracks: Vec<Track>,
+        busses: Vec<Bus>,
+        clips: Vec<AudioClip>,
+        midi_clips: Vec<MidiClip>,
+        aux_sends: Vec<AuxSend>,
+        tempo_map: TempoMap,
+        frames: usize,
+        sample_rate: u32,
+    ) -> Self {
+        let tracks: indexmap::IndexMap<TrackId, Track> =
+            tracks.into_iter().map(|t| (t.id, t)).collect();
+        let busses: indexmap::IndexMap<BusId, Bus> = busses.into_iter().map(|b| (b.id, b)).collect();
+        let bus_count = busses.len();
+        Self {
+            tracks,
+            busses,
+            clips,
+            midi_clips,
+            plugins: indexmap::IndexMap::new(),
+            tempo_map,
+            aux_sends,
+            latency: crate::latency::LatencyComp::empty(),
+            automation: crate::engine::AutomationSnapshot::default(),
+            data: vec![0.0; frames * 2],
+            track_buf_l: vec![0.0; frames],
+            track_buf_r: vec![0.0; frames],
+            bus_bufs: (0..bus_count)
+                .map(|_| (vec![0.0; frames], vec![0.0; frames]))
+                .collect(),
+            port_scratch: (0..MAX_PLUGIN_OUTPUT_PORTS)
+                .map(|_| (vec![0.0; frames], vec![0.0; frames]))
+                .collect(),
+            note_buf: Vec::with_capacity(MAX_MIDI_EVENTS_PER_BUFFER),
+            midi_stash: MidiStash::new(),
+            frames,
+            sample_rate,
+        }
+    }
+
+    /// Render one live block at `playhead`. Returns the interleaved
+    /// output so the caller can black-box it.
+    pub fn render(&mut self, playhead: u64) -> &[f32] {
+        let frames = self.frames;
+        self.data.fill(0.0);
+        let active_busses = self.busses.len();
+        let transport_snap = Some(TransportSnap {
+            bpm: self.tempo_map.bpm as f64,
+            num: self.tempo_map.numerator as u16,
+            den: self.tempo_map.denominator as u16,
+            playing: true,
+            pos_beats: transport_pos_beats(&self.tempo_map, playhead, self.sample_rate),
+        });
+        let mut strategy = RenderStrategy::Live {
+            midi_stash: &mut self.midi_stash,
+            transport_snap,
+            monitor_temp: &[],
+            monitor_frames: 0,
+            input_channels: 0,
+        };
+        render_block(
+            &mut self.data[..frames * 2],
+            2,
+            &self.tracks,
+            &self.busses,
+            &self.clips,
+            &self.midi_clips,
+            &self.plugins,
+            &self.tempo_map,
+            self.sample_rate,
+            false,
+            active_busses,
+            &self.aux_sends,
+            playhead,
+            frames,
+            &mut self.track_buf_l,
+            &mut self.track_buf_r,
+            &mut self.bus_bufs,
+            &mut self.port_scratch,
+            &mut self.note_buf,
+            &self.latency,
+            &self.automation,
+            &mut strategy,
+        );
+        &self.data
+    }
+}
+
 use click::{render_count_in_clicks, render_metronome_clicks};
 use common::{advance_playhead_silent, panic_instrument_tracks, TransportSnap};
 use master::{apply_master_fx_chain, apply_master_volume_and_peaks};

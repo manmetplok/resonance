@@ -107,6 +107,16 @@ impl LufsMeter {
         self.integrated.cap_reached()
     }
 
+    /// Number of gating blocks accumulated so far (one per 100 ms of
+    /// primed audio). [`integrated_lufs`](Self::integrated_lufs) is a
+    /// pure function of these blocks and runs the two-pass gate over all
+    /// of them, so a realtime caller that reads it far more often than
+    /// 10 Hz can use this as a cache key and skip the `O(blocks)` work
+    /// on the blocks where nothing changed.
+    pub fn integrated_block_count(&self) -> usize {
+        self.integrated.len()
+    }
+
     /// One-shot analysis of a stereo buffer. Runs a fresh meter end-to-end
     /// and returns all three LUFS readouts.
     pub fn analyze_offline(sample_rate: f32, left: &[f32], right: &[f32]) -> LufsReadout {

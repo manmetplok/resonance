@@ -17,41 +17,100 @@ pub fn validate_matvec_dims(a: &[f32], x: &[f32], y: &[f32], rows: usize, cols: 
     a.len() >= rows * cols && x.len() >= cols && y.len() >= rows
 }
 
+/// Number of independent partial sums the dot product accumulates into.
+///
+/// A single running `sum += a * x` is a serial dependency chain: each FMA
+/// waits ~4 cycles for the previous one, so a 16-tap dot product costs ~64
+/// cycles no matter how wide the machine is. Rust's float semantics are
+/// strict, so LLVM may not split that chain on its own — it has to be
+/// written as independent lanes.
+///
+/// Eight lanes is one 256-bit vector, and two of them fit a 512-bit
+/// register, so this shape maps onto AVX2 and AVX-512 alike (and onto
+/// NEON as two 128-bit halves). Measured faster than 4 or 16 lanes on the
+/// 8-32 column shapes NAM actually issues.
+const DOT_LANES: usize = 8;
+
+/// Dot product with `DOT_LANES` independent accumulators and a pairwise
+/// tree reduction.
+///
+/// # Numerics
+///
+/// Summing in lanes reassociates the additions, so the result can differ
+/// from a strict left-to-right sum in the last ulp or two (~1e-7 relative
+/// for these lengths). That is deliberate and it moves *toward* the
+/// reference, not away: the C++ NeuralAmpModelerCore this engine mirrors
+/// uses Eigen, which vectorises its matvec the same way. The reference
+/// parity tests budget 1e-6 mixed abs/rel for exactly this accumulation
+/// gap (see `tests/common/mod.rs`).
+#[inline(always)]
+fn dot(row: &[f32], x: &[f32]) -> f32 {
+    debug_assert_eq!(row.len(), x.len());
+    let n = row.len();
+    let full = n / DOT_LANES * DOT_LANES;
+
+    let mut acc = [0.0f32; DOT_LANES];
+    // `chunks_exact` on both sides gives LLVM the constant trip count it
+    // needs to emit one packed FMA per chunk with no bounds checks.
+    for (r, xc) in row[..full]
+        .chunks_exact(DOT_LANES)
+        .zip(x[..full].chunks_exact(DOT_LANES))
+    {
+        for l in 0..DOT_LANES {
+            acc[l] += r[l] * xc[l];
+        }
+    }
+
+    // Pairwise tree reduction: log2(DOT_LANES) dependent steps instead of
+    // DOT_LANES serial adds.
+    let mut width = DOT_LANES / 2;
+    while width > 0 {
+        for l in 0..width {
+            acc[l] += acc[l + width];
+        }
+        width /= 2;
+    }
+    let mut sum = acc[0];
+
+    // Tail for column counts that are not a multiple of DOT_LANES.
+    for (a, b) in row[full..].iter().zip(&x[full..]) {
+        sum += a * b;
+    }
+    sum
+}
+
+// Note for future tuning: driving 4 rows at once through a
+// `[[f32; DOT_LANES]; 4]` accumulator bank — to give the out-of-order
+// engine four independent reduction chains — was tried and measured
+// *slower* by 23-32% across all four NAM shapes. LLVM spills the bank to
+// the stack instead of keeping it in vector registers. Row-at-a-time with
+// a single bank is the faster shape here.
+
 /// Matrix-vector multiply: y = A * x, where A is [rows x cols] row-major.
 ///
-/// Slicing first + `chunks_exact` gives LLVM enough length information to
-/// elide every per-element bounds check inside the inner dot product loop
-/// (verified by micro-benchmark to be within 1% of the previous
-/// `get_unchecked` version across 16x16, 32x32, and 64x64 dimensions).
+/// See [`dot`] for the accumulation strategy and its numerical
+/// consequences.
 #[inline(always)]
 pub fn matvec(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
     let a = &a[..rows * cols];
     let x = &x[..cols];
     let y = &mut y[..rows];
     for (out, row) in y.iter_mut().zip(a.chunks_exact(cols)) {
-        let mut sum = 0.0f32;
-        for (ai, xi) in row.iter().zip(x.iter()) {
-            sum += ai * xi;
-        }
-        *out = sum;
+        *out = dot(row, x);
     }
 }
 
 /// Matrix-vector multiply-add: y += A * x.
 ///
-/// Same iterator pattern as `matvec` — see that function's note on
-/// bounds-check elision.
+/// Same kernel as [`matvec`], accumulating into `y` instead of
+/// overwriting it.
 #[inline(always)]
 pub fn matvec_add(a: &[f32], x: &[f32], rows: usize, cols: usize, y: &mut [f32]) {
     let a = &a[..rows * cols];
     let x = &x[..cols];
     let y = &mut y[..rows];
     for (out, row) in y.iter_mut().zip(a.chunks_exact(cols)) {
-        let mut sum = 0.0f32;
-        for (ai, xi) in row.iter().zip(x.iter()) {
-            sum += ai * xi;
-        }
-        *out += sum;
+        *out += dot(row, x);
     }
 }
 

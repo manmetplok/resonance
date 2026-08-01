@@ -29,6 +29,9 @@ crossbeam-channel = "0.5"
 arc-swap = "1"
 midir = "0.10"
 schemars = "1"
+# Benchmark harness. `default-features = false` + `cargo_bench_support` keeps
+# the dependency tree small (no plotters/gnuplot HTML report generation).
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [profile.release]
 lto = "thin"

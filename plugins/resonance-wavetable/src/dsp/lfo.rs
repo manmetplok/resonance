@@ -51,10 +51,18 @@ impl MultiLfo {
         self.prev_phase = 0.0;
     }
 
-    /// Advance one sample. Returns value in -1..1.
+    /// Value at the current phase, in -1..1, **without** advancing.
+    ///
+    /// Split out from [`Self::advance`] because the two run at different
+    /// rates on the audio path: the phase has to move every sample to stay
+    /// continuous, but the value is only consumed by the modulation matrix,
+    /// which is evaluated at control rate. For the default sine shape this
+    /// is a `sin()` call — at 32 voices × 3 LFOs × 48 kHz, keeping it off
+    /// the per-sample path is worth several million transcendental calls a
+    /// second.
     #[inline]
-    pub fn next(&mut self, shape: LfoShape, rng: &mut SimpleRng) -> f32 {
-        let out = match shape {
+    pub fn value(&self, shape: LfoShape) -> f32 {
+        match shape {
             LfoShape::Sine => (self.phase * std::f32::consts::TAU).sin(),
             LfoShape::Triangle => {
                 if self.phase < 0.25 {
@@ -74,14 +82,22 @@ impl MultiLfo {
                 }
             }
             LfoShape::SampleAndHold => self.sh_value,
-        };
+        }
+    }
 
+    /// Advance the phase by one sample.
+    ///
+    /// Must be called once per sample regardless of whether [`Self::value`]
+    /// was read, so LFO phase stays sample-accurate and the S&H latch fires
+    /// on the exact wrap sample.
+    #[inline]
+    pub fn advance(&mut self, shape: LfoShape, rng: &mut SimpleRng) {
         self.prev_phase = self.phase;
         self.phase += self.phase_inc;
         self.phase -= self.phase.floor();
 
         // Latch a new S&H value when the phase wrapped on this advance.
-        // Done after the `out` read so the value held for *this* sample
+        // Done after the value read so the value held for *this* sample
         // matches what the user saw the previous frame, and the new
         // random value is what subsequent samples in this cycle hear.
         // Pulling the RNG out of the pre-advance match avoids calling
@@ -92,7 +108,16 @@ impl MultiLfo {
         if matches!(shape, LfoShape::SampleAndHold) && self.phase < self.prev_phase {
             self.sh_value = (rng.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0;
         }
+    }
 
+    /// Read the current value, then advance one sample.
+    ///
+    /// Exactly `value()` followed by `advance()`; kept for callers that need
+    /// both every sample.
+    #[inline]
+    pub fn next(&mut self, shape: LfoShape, rng: &mut SimpleRng) -> f32 {
+        let out = self.value(shape);
+        self.advance(shape, rng);
         out
     }
 }

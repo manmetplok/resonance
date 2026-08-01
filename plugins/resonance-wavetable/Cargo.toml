@@ -26,6 +26,15 @@ egui = { workspace = true, optional = true }
 [build-dependencies]
 resonance-dsp = { path = "../../resonance-dsp" }
 
+[dev-dependencies]
+criterion.workspace = true
+
+# Synth DSP benchmarks. Run headless:
+#   cargo bench -p resonance-wavetable --no-default-features
+[[bench]]
+name = "synth"
+harness = false
+
 [[example]]
 name = "editor_standalone"
 path = "examples/editor_standalone.rs"
