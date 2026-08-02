@@ -182,6 +182,11 @@ impl DrumSampler {
     /// Drummica fires only 1 (the overhead). All voices for a hit share
     /// the same velocity layer, round-robin index, choke group, and age
     /// so they play in lockstep.
+    ///
+    /// The cymbal case is special: with no close bank the overhead take is
+    /// the pad's whole sound, so it is summed into the pad's own group
+    /// port (Cymbals) rather than the shared Overhead port — otherwise the
+    /// Cymbals port never carries a sample.
     pub fn note_on(&mut self, note: u8, velocity: f32) {
         let pad_index = match drum_map::pad_index_for_note(note) {
             Some(i) => i,
@@ -260,7 +265,21 @@ impl DrumSampler {
             dest_count += 1;
         }
         if has_overhead && dest_count < destinations.len() {
-            destinations[dest_count] = Some(VoiceDestination::Overhead);
+            // Pads the library records with overheads only (every cymbal,
+            // ride and china piece in Drummica) have no close bank, so the
+            // overhead take is the pad's entire signal. Sending it to the
+            // shared Overhead port would leave the pad's own group port —
+            // and the sub-track the host derives from it — permanently
+            // silent, which is what made the Cymbals sub-track read as
+            // "the kit has no cymbals". Route those to the group port.
+            let oh_port = if close_mic_count == 0 {
+                output_port
+            } else {
+                OVERHEAD_PORT_INDEX as u8
+            };
+            destinations[dest_count] = Some(VoiceDestination::Overhead {
+                output_port: oh_port,
+            });
             dest_count += 1;
         }
 
@@ -378,7 +397,7 @@ impl DrumSampler {
             // Resolve the voice's source bank from its destination tag.
             let bank: Option<&LoadedMicBank> = match voice.destination {
                 VoiceDestination::CloseMic { bank_index, .. } => pad.close_mics.get(bank_index),
-                VoiceDestination::Overhead => pad.overhead.as_ref(),
+                VoiceDestination::Overhead { .. } => pad.overhead.as_ref(),
             };
             let Some(bank) = bank else {
                 voice.active = false;
@@ -417,8 +436,8 @@ impl DrumSampler {
                     };
                     (output_port as usize, g0, g1)
                 }
-                VoiceDestination::Overhead => (
-                    OVERHEAD_PORT_INDEX,
+                VoiceDestination::Overhead { output_port } => (
+                    output_port as usize,
                     self.prev_pad_oh[pad_index],
                     pad_oh[pad_index],
                 ),
