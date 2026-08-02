@@ -63,9 +63,23 @@ pub enum JobToken {
     /// An offline mix measurement (todo #1219): completes on
     /// `AudioEvent::MixMeasured`, fails on `MixMeasureError`.
     ///
-    /// Those events carry no correlation id, but the engine refuses a
-    /// second measurement while one is running, so at most one is ever
-    /// live — [`JobBoard::newest_live_measure`] is enough to find it.
+    /// As of today those events carry no correlation id, so
+    /// [`JobBoard::newest_live_measure`] only names the right job while
+    /// at most one measurement is in flight. What guarantees that is the
+    /// APP-side guard — `update::control::meter::source_guard` refuses
+    /// any measurement while another is still live, for every source,
+    /// before anything else. Do not mistake the engine's own refusal for
+    /// that guarantee: it only covers render-vs-render, and the live
+    /// path skips the engine's render guard entirely, so a live read
+    /// could start while a render measurement was pending and be
+    /// completed with the render's numbers. (That was one of the two
+    /// blockers that bounced #1219.) The app-side guard is therefore
+    /// load-bearing, not redundant.
+    ///
+    /// Todo #1243 adds a correlation id to both events; once it lands,
+    /// correlation stops depending on the one-at-a-time invariant and
+    /// this note describes only the pre-#1243 state.
+    ///
     /// `method` is the control method that started the job: the same
     /// engine pass backs `meter.measure` and `meter.stems`, which read
     /// its results into different result shapes.

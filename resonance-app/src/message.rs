@@ -879,10 +879,14 @@ pub enum PluginMessage {
     /// so the caller can address the plugin without waiting for the
     /// engine's `PluginAdded` echo (ba doc #273, todo #1234). Same hint
     /// pattern as [`BusMessage::AddBusWithId`] and the project-load
-    /// replay; the engine bumps its own allocator past any id it
-    /// receives as a hint, and `engine_events::plugins::track_added` is
-    /// idempotent, so the echo fills the placeholder's params in rather
-    /// than pushing a duplicate.
+    /// replay; the engine bumps its own allocator past a hinted id only
+    /// when that hint is BELOW
+    /// [`CONTROL_PLUGIN_ID_BASE`](crate::state::plugin_index::CONTROL_PLUGIN_ID_BASE)
+    /// — hints from the control range deliberately leave the engine
+    /// allocator untouched, which is what keeps the two ranges from
+    /// colliding. `engine_events::plugins::track_added` is idempotent,
+    /// so the echo fills the placeholder's params in rather than pushing
+    /// a duplicate.
     ///
     /// The GUI never sends this — its adds stay engine-allocated via
     /// [`AddPluginToTrack`](Self::AddPluginToTrack).
