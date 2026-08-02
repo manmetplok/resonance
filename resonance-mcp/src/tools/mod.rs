@@ -10,6 +10,7 @@
 //! drift from the protocol.
 
 pub mod arrange;
+pub mod bus;
 pub mod compose;
 pub mod control;
 pub mod master;

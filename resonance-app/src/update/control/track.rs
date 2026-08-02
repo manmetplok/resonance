@@ -25,7 +25,10 @@ use resonance_control::methods::mixer::{
 use resonance_control::methods::track::{
     self, AddParams, AddPluginParams, AddResult, DeleteParams, RemoveEffectParams, RenameParams,
 };
-use resonance_control::{MutationAck, Request, Response, RpcError, TrackKind};
+use resonance_audio::types::TrackOutput;
+use resonance_control::{
+    MutationAck, Request, Response, RpcError, TrackKind, TrackOutput as WireTrackOutput,
+};
 
 /// Handle a `track.*` / `mixer.*` request, or `None` when `method`
 /// belongs to another namespace.
@@ -40,6 +43,7 @@ pub(super) fn try_handle(
         track::ADD_INSTRUMENT => add_instrument(app, request),
         track::ADD_EFFECT => add_effect(app, request),
         track::REMOVE_EFFECT => remove_effect(app, request),
+        track::SET_OUTPUT => set_output(app, request),
         track::SET_PLUGIN_PARAM => set_plugin_param(app, request),
         mixer::SET_VOLUME => set_volume(app, request),
         mixer::SET_VOLUME_DB => set_volume_db(app, request),
@@ -257,6 +261,70 @@ fn add_plugin(
     let task = super::run_via_update(
         app,
         Message::Plugin(PluginMessage::AddPluginToTrack(params.track_id.0, plugin)),
+    );
+    (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// track.set_output
+// ---------------------------------------------------------------------------
+
+/// `track.set_output` — send a track's post-fader audio to master, or
+/// through a group bus first (ba doc #273, todo #1228).
+///
+/// `song.summary` / `song.tracks` report the current destination in the
+/// same shape, so read and write share one vocabulary.
+fn set_output(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track::SetOutputParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0) else {
+        return not_found_track(request, params.track_id.0);
+    };
+    // A bus is a track id in the same space, so "route the bus into
+    // itself" is expressible; the engine models bus -> master only.
+    if app.registry.busses.iter().any(|b| b.id == params.track_id.0) {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "{} is a bus, not a track; busses always feed master and cannot be re-routed",
+                params.track_id
+            )),
+        );
+    }
+
+    let output = match params.output {
+        WireTrackOutput::Master => TrackOutput::Master,
+        WireTrackOutput::Bus(bus_id) => {
+            if !app.registry.busses.iter().any(|b| b.id == bus_id.0) {
+                let known: Vec<String> = app
+                    .registry
+                    .busses
+                    .iter()
+                    .map(|b| format!("{} ({})", b.id, b.name))
+                    .collect();
+                return reject(
+                    request,
+                    RpcError::not_found(format!(
+                        "no bus with id {bus_id}; create one with bus.create. Existing busses: \
+                         [{}]",
+                        known.join(", ")
+                    )),
+                );
+            }
+            TrackOutput::Bus(bus_id.0)
+        }
+    };
+
+    // Idempotent: re-routing somewhere it already goes records no undo
+    // entry and sends no engine command.
+    if t.output == output {
+        return (ack(app, request), Task::none());
+    }
+    let task = super::run_via_update(
+        app,
+        Message::Track(TrackMessage::SetTrackOutput(params.track_id.0, output)),
     );
     (ack(app, request), task)
 }

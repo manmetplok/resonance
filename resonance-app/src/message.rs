@@ -442,6 +442,13 @@ pub enum ExternalInstrumentMessage {
 #[derive(Debug, Clone)]
 pub enum BusMessage {
     AddBus,
+    /// Add a bus whose id and name the *app* chose up front, so the
+    /// caller can use the id without waiting for the engine's `BusAdded`
+    /// echo. Same pattern as
+    /// [`MixerMessage::CreateReturnFromSend`](crate::message::MixerMessage::CreateReturnFromSend)
+    /// and the control API's `track.add`; the engine bumps its own
+    /// allocator past any id it receives as a hint.
+    AddBusWithId { id: BusId, name: String },
     RemoveBus(BusId),
     SetBusVolume(BusId, f32),
     SetBusPan(BusId, f32),

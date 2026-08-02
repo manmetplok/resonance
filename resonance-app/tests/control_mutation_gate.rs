@@ -57,6 +57,7 @@ fn mutating_methods() -> Vec<&'static str> {
         // answer `busy` rather than report a default master for a
         // project that isn't there (ba doc #273).
         methods::master::METHODS,
+        methods::bus::METHODS,
         methods::section::METHODS,
         methods::harmony::METHODS,
         methods::generate::METHODS,

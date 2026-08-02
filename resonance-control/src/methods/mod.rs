@@ -10,6 +10,7 @@
 //! carries `{revision}` (see [`crate::common::MutationAck`]).
 //! Methods documented as taking no params use `()`.
 
+pub mod bus;
 pub mod control;
 pub mod generate;
 pub mod harmony;
@@ -36,6 +37,7 @@ pub fn capabilities() -> Vec<&'static str> {
         track::METHODS,
         mixer::METHODS,
         master::METHODS,
+        bus::METHODS,
         section::METHODS,
         harmony::METHODS,
         generate::METHODS,

@@ -3,7 +3,7 @@
 //! Volume/pan/mute/solo live under `mixer.*`. Simple mutations return
 //! [`crate::common::MutationAck`].
 
-use crate::common::TrackKind;
+use crate::common::{TrackKind, TrackOutput};
 use crate::ids::TrackId;
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,9 @@ pub const ADD_EFFECT: &str = "track.add_effect";
 /// `track.remove_effect` — take an effect off the insert chain
 /// ([`RemoveEffectParams`] -> `MutationAck`).
 pub const REMOVE_EFFECT: &str = "track.remove_effect";
+/// `track.set_output` — route a track to master or into a bus
+/// ([`SetOutputParams`] -> `MutationAck`).
+pub const SET_OUTPUT: &str = "track.set_output";
 /// `track.plugins` — the built-in plugin catalog, read-only
 /// (no params -> [`PluginCatalog`]).
 pub const PLUGINS: &str = "track.plugins";
@@ -42,6 +45,7 @@ pub const METHODS: &[&str] = &[
     ADD_INSTRUMENT,
     ADD_EFFECT,
     REMOVE_EFFECT,
+    SET_OUTPUT,
     PLUGINS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
@@ -172,6 +176,20 @@ pub struct PluginParamsEntry {
     pub occurrence: u32,
     pub kind: PluginKind,
     pub params: Vec<PluginParamView>,
+}
+
+/// Params for `track.set_output` — where a track's post-fader audio
+/// goes.
+///
+/// `song.summary` / `song.tracks` report the current destination as the
+/// same [`TrackOutput`] shape, so a read and a write use one vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetOutputParams {
+    pub track_id: TrackId,
+    /// `"master"` to sum directly into the master output, or
+    /// `{"bus_id": N}` to route through a group bus first.
+    pub output: TrackOutput,
 }
 
 /// Params for `track.remove_effect`: address the plugin **either** by
