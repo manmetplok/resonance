@@ -13,6 +13,7 @@
 pub mod control;
 pub mod generate;
 pub mod harmony;
+pub mod master;
 pub mod mixer;
 pub mod notes;
 pub mod project;
@@ -34,6 +35,7 @@ pub fn capabilities() -> Vec<&'static str> {
         transport::METHODS,
         track::METHODS,
         mixer::METHODS,
+        master::METHODS,
         section::METHODS,
         harmony::METHODS,
         generate::METHODS,

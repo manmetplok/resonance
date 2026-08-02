@@ -35,6 +35,7 @@ use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 mod generate;
 mod harmony;
 mod job;
+mod master;
 mod notes;
 mod project;
 mod render;
@@ -184,6 +185,14 @@ pub fn execute(
     // Mutating track/mixer namespace (todo #1152): add/rename/delete
     // tracks, volume/pan/mute/solo, add built-in instrument/FX.
     if let Some(result) = track::try_handle(app, request) {
+        return result;
+    }
+
+    // Master bus (todo #1226): the final summing stage. `master.summary`
+    // reads only, but it sits below the gate on purpose — it describes
+    // the open project's master, so with no project the honest answer is
+    // `busy`, not a default.
+    if let Some(result) = master::try_handle(app, request) {
         return result;
     }
 

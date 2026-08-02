@@ -52,6 +52,11 @@ fn mutating_methods() -> Vec<&'static str> {
         methods::transport::METHODS,
         methods::track::METHODS,
         methods::mixer::METHODS,
+        // `master.summary` reads only, but it describes the OPEN
+        // project's master bus, so like every mutating method it must
+        // answer `busy` rather than report a default master for a
+        // project that isn't there (ba doc #273).
+        methods::master::METHODS,
         methods::section::METHODS,
         methods::harmony::METHODS,
         methods::generate::METHODS,
