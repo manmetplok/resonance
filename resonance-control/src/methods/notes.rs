@@ -27,6 +27,10 @@ pub const INSERT_MANY: &str = "notes.insert_many";
 /// undoable edit ([`ReplaceAllParams`] -> [`InsertManyResult`]).
 pub const REPLACE_ALL: &str = "notes.replace_all";
 
+/// `notes.import_midi` — import a Standard MIDI File
+/// ([`ImportMidiParams`] -> [`ImportMidiResult`]).
+pub const IMPORT_MIDI: &str = "notes.import_midi";
+
 /// All `notes.*` method names.
 pub const METHODS: &[&str] = &[
     INSERT,
@@ -36,7 +40,75 @@ pub const METHODS: &[&str] = &[
     MOVE_CLIP,
     INSERT_MANY,
     REPLACE_ALL,
+    IMPORT_MIDI,
 ];
+
+/// Largest Standard MIDI File `notes.import_midi` accepts, in bytes.
+/// Refused above this rather than truncated — a half-imported part is
+/// worse than a rejected one.
+pub const MAX_MIDI_BYTES: usize = 4 * 1024 * 1024;
+
+/// Params for `notes.import_midi`.
+///
+/// Give the file **either** as `path` (an absolute path the app can
+/// read) **or** as `data_base64`; supplying both, or neither, is
+/// `invalid_params`.
+///
+/// Target the import **either** at an existing `clip_id` — whose notes
+/// are replaced — **or** at a `track_id` (+ optional `start_bar`), which
+/// creates a clip long enough to hold the imported part.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ImportMidiParams {
+    /// Absolute path to a `.mid` file on the machine running the app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The file's bytes, base64-encoded. Capped at [`MAX_MIDI_BYTES`]
+    /// decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_base64: Option<String>,
+    /// Import into this existing MIDI clip, replacing its notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_id: Option<ClipId>,
+    /// Import onto this track as a new clip. Mutually exclusive with
+    /// `clip_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_id: Option<TrackId>,
+    /// 1-based bar the new clip starts at; defaults to bar 1. Ignored
+    /// when `clip_id` is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_bar: Option<u32>,
+    /// Which track of a multi-track SMF to import, 0-based as reported
+    /// in the error a multi-track file without this produces. A file
+    /// with exactly one note-carrying track needs no selector; one with
+    /// several is REFUSED rather than silently flattened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_track: Option<usize>,
+    /// Name for a newly created clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Result of `notes.import_midi` — what actually landed, so the client
+/// needs no follow-up `song.notes` to find out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ImportMidiResult {
+    /// The clip the notes went into — newly created, or the `clip_id`
+    /// that was given.
+    pub clip_id: ClipId,
+    pub track_id: TrackId,
+    /// How many notes were imported.
+    pub note_count: usize,
+    /// The SMF track that was imported, 0-based.
+    pub source_track: usize,
+    /// That track's name from the file, when it carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_track_name: Option<String>,
+    /// Length of the imported material in beats.
+    pub length_beats: f64,
+    pub revision: u64,
+}
 
 fn default_velocity() -> u8 {
     100

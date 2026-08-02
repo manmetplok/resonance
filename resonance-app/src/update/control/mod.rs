@@ -36,6 +36,7 @@ mod bus;
 mod edit;
 mod generate;
 mod harmony;
+mod import_midi;
 mod job;
 mod master;
 mod notes;
