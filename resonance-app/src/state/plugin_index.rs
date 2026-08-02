@@ -30,7 +30,8 @@ use crate::Resonance;
 /// Re-exported from `resonance-audio` rather than declared here: the
 /// engine has to know the same boundary, because it must NOT advance its
 /// own allocator past a hint from this range (see
-/// `engine::plugins::note_hinted_plugin_id`). One definition, both sides.
+/// `engine::plugins::allocate_plugin_instance_id`). One definition, both
+/// sides.
 pub use resonance_audio::types::CONTROL_PLUGIN_ID_BASE;
 
 impl Resonance {
@@ -142,7 +143,8 @@ impl Resonance {
     /// allocator will reach.
     ///
     /// What makes that a guarantee rather than a hope is the engine side
-    /// of the same constant: `engine::plugins::note_hinted_plugin_id`
+    /// of the same constant:
+    /// `engine::plugins::allocate_plugin_instance_id`
     /// advances `next_plugin_id` past a hint only when the hint is BELOW
     /// the base. Without that, the first control add would drag the
     /// engine's counter into this range and the next engine-allocated
