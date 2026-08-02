@@ -395,6 +395,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             bus_id,
             instance_id,
         } => plugins::bus_removed(r, bus_id, instance_id),
+        E::BusPluginMoved {
+            bus_id,
+            instance_id,
+            to_index,
+        } => plugins::bus_moved(r, bus_id, instance_id, to_index),
         E::MasterPluginAdded {
             instance_id,
             plugin_name,

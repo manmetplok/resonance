@@ -525,6 +525,30 @@ impl Bus {
         self.fx_bypassed.store(v, Ordering::Relaxed);
     }
 
+    /// Reorder this bus's insert chain: move `instance_id` to
+    /// `to_index`, shifting everything between its old and new slot by
+    /// one. Returns the slot it actually landed on after clamping, or
+    /// `None` when that instance is not on this chain (ba doc #273, todo
+    /// #1237).
+    ///
+    /// The bus twin of [`Track::move_plugin`], but a plain `Vec` edit
+    /// rather than a copy-on-write `ArcSwap` publish: `plugin_ids` is
+    /// owned data behind the engine's busses write lock, not a lock-free
+    /// snapshot the audio callback loads. Moving a plugin to the slot it
+    /// already occupies leaves the chain untouched and still reports
+    /// that slot.
+    pub fn move_plugin(&mut self, instance_id: PluginInstanceId, to_index: usize) -> Option<usize> {
+        let from = self.plugin_ids.iter().position(|&id| id == instance_id)?;
+        // `from` was found, so the chain is non-empty and this cannot
+        // wrap.
+        let to = to_index.min(self.plugin_ids.len() - 1);
+        if from != to {
+            let id = self.plugin_ids.remove(from);
+            self.plugin_ids.insert(to, id);
+        }
+        Some(to)
+    }
+
     /// Whether this bus is flagged as an aux return bus.
     pub fn is_return(&self) -> bool {
         self.is_return.load(Ordering::Relaxed)

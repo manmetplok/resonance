@@ -45,6 +45,11 @@ pub(super) fn dispatch_busses(
             bus_id,
             instance_id,
         } => busses::handle_remove_plugin_from_bus(ctx, bus_id, instance_id),
+        AudioCommand::MovePluginInBus {
+            bus_id,
+            instance_id,
+            to_index,
+        } => busses::handle_move_plugin_in_bus(ctx, bus_id, instance_id, to_index),
         AudioCommand::SetBusRole { bus_id, is_return } => {
             busses::handle_set_bus_role(ctx, bus_id, is_return)
         }

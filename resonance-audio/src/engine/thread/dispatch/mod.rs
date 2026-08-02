@@ -165,6 +165,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::SetTrackOutput { .. }
         | AudioCommand::AddPluginToBus { .. }
         | AudioCommand::RemovePluginFromBus { .. }
+        | AudioCommand::MovePluginInBus { .. }
         | AudioCommand::SetBusRole { .. }
         | AudioCommand::SetAuxSend { .. }
         | AudioCommand::RemoveAuxSend { .. }

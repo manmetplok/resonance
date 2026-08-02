@@ -324,6 +324,44 @@ pub(super) fn bus_added(
         .send(AudioCommand::SavePluginState { instance_id });
 }
 
+/// Mirror an engine-side bus chain reorder
+/// (`AudioCommand::MovePluginInBus` -> `AudioEvent::BusPluginMoved`, ba
+/// doc #273, todo #1237) onto `BusState.plugins` — the bus twin of
+/// [`track_moved`].
+pub(super) fn bus_moved(
+    r: &mut Resonance,
+    bus_id: BusId,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
+    mirror_bus_plugin_move(r, bus_id, instance_id, to_index);
+}
+
+/// The mirror itself, shared with the control API's `bus.move_effect`,
+/// which applies the order immediately so a client can read back what it
+/// just set. Applying it twice is harmless: the second call finds the
+/// plugin already at `to_index` and returns.
+pub(crate) fn mirror_bus_plugin_move(
+    r: &mut Resonance,
+    bus_id: BusId,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
+    let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) else {
+        return;
+    };
+    let Some(from) = bus.plugins.iter().position(|p| p.instance_id == instance_id) else {
+        return;
+    };
+    // `from` was found, so the chain is non-empty and this cannot wrap.
+    let to = to_index.min(bus.plugins.len() - 1);
+    if from == to {
+        return;
+    }
+    let slot = bus.plugins.remove(from);
+    bus.plugins.insert(to, slot);
+}
+
 pub(super) fn bus_removed(
     r: &mut Resonance,
     bus_id: BusId,

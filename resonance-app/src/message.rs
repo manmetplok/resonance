@@ -455,7 +455,30 @@ pub enum BusMessage {
     ToggleBusMute(BusId),
     ToggleBusFxBypass(BusId),
     AddPluginToBus(BusId, ScannedPlugin),
+    /// Add a plugin to a bus whose instance id the *app* chose up front,
+    /// mirroring a placeholder slot into `BusState.plugins` immediately
+    /// so the caller can address it without waiting for the engine's
+    /// `BusPluginAdded` echo (ba doc #273, todo #1237). The bus twin of
+    /// [`PluginMessage::AddPluginToTrackWithId`](crate::message::PluginMessage::AddPluginToTrackWithId);
+    /// `engine_events::plugins::bus_added` is idempotent, so the echo
+    /// fills the placeholder's params in rather than pushing a
+    /// duplicate. The GUI never sends this.
+    AddPluginToBusWithId {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        plugin: ScannedPlugin,
+    },
     RemovePluginFromBus(BusId, PluginInstanceId),
+    /// Reorder a bus's insert chain: move `instance_id` to `to_index`,
+    /// clamped to the last slot. Sends `AudioCommand::MovePluginInBus`
+    /// AND mirrors the new order into `BusState.plugins`, so a control
+    /// client reads its own write back in the same cycle; the engine's
+    /// `BusPluginMoved` echo replays the same move and is then a no-op.
+    MovePluginInBus {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
 }
 
 /// Aux-send + return-bus actions raised from the Mixer inspector's

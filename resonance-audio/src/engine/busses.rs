@@ -185,6 +185,44 @@ pub(crate) fn handle_remove_plugin_from_bus(
     });
 }
 
+/// Reorder a bus's insert chain (ba doc #273, todo #1237).
+///
+/// A bus chain is a plain `Vec<PluginInstanceId>` behind the busses
+/// write lock, NOT the `ArcSwap` a track chain uses, so this mirrors
+/// `handle_remove_plugin_from_bus`'s pattern (one short write guard, no
+/// plugin instance touched — only the order they are visited in) rather
+/// than `handle_move_plugin`'s publish-a-new-Arc pattern.
+pub(crate) fn handle_move_plugin_in_bus(
+    ctx: &HandlerCtx,
+    bus_id: BusId,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
+    let moved = ctx
+        .busses
+        .write()
+        .get_mut(&bus_id)
+        .and_then(|bus| bus.move_plugin(instance_id, to_index));
+    match moved {
+        // Report the *clamped* index so the app mirrors what the engine
+        // actually did rather than what was requested.
+        Some(to_index) => {
+            let _ = ctx.event_tx.send(AudioEvent::BusPluginMoved {
+                bus_id,
+                instance_id,
+                to_index,
+            });
+        }
+        None => {
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Cannot reorder plugin {} on bus {}: no such bus, or that \
+                 plugin is not on its chain",
+                instance_id, bus_id
+            )));
+        }
+    }
+}
+
 /// Lower / upper bound on aux-send level in dB. Mirrors the spirit of
 /// `handle_set_clip_gain`'s clamp: keep stored values finite and sane so
 /// a stray `NaN`/`inf` from the GUI can never poison engine state.

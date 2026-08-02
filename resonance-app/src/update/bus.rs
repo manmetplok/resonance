@@ -83,6 +83,50 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
                 id_hint: None,
             });
         }
+        BusMessage::AddPluginToBusWithId {
+            bus_id,
+            instance_id,
+            plugin,
+        } => {
+            let _ = r.engine.send(AudioCommand::AddPluginToBus {
+                bus_id,
+                clap_file_path: plugin.clap_file_path.clone(),
+                clap_plugin_id: plugin.clap_plugin_id.clone(),
+                id_hint: Some(instance_id),
+            });
+            // Mirror the slot NOW with an empty param list, as the
+            // project-load replay does; `bus_added` finds it by
+            // `instance_id` on the echo and fills in params/has_gui
+            // instead of pushing a second one.
+            if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
+                bus.plugins.push(crate::state::PluginSlotState::new(
+                    instance_id,
+                    plugin.name,
+                    plugin.clap_plugin_id,
+                    plugin.clap_file_path,
+                    Vec::new(),
+                    false,
+                ));
+                r.insert_plugin_index(instance_id, crate::state::PluginLocator::Bus(bus_id));
+            }
+        }
+        BusMessage::MovePluginInBus {
+            bus_id,
+            instance_id,
+            to_index,
+        } => {
+            let _ = r.engine.send(AudioCommand::MovePluginInBus {
+                bus_id,
+                instance_id,
+                to_index,
+            });
+            crate::engine_events::plugins::mirror_bus_plugin_move(
+                r,
+                bus_id,
+                instance_id,
+                to_index,
+            );
+        }
         BusMessage::RemovePluginFromBus(bus_id, instance_id) => {
             let _ = r.engine.send(AudioCommand::RemovePluginFromBus {
                 bus_id,

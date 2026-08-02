@@ -769,6 +769,28 @@ pub enum AudioCommand {
         bus_id: BusId,
         instance_id: PluginInstanceId,
     },
+    /// Reorder a bus's insert chain: move `instance_id` to `to_index`,
+    /// shifting the plugins between its old and new slot by one. The bus
+    /// twin of [`MovePlugin`](Self::MovePlugin), and audible for the
+    /// same reason — a bus chain is applied front to back over the
+    /// SUMMED group, so an EQ before a compressor is a different sound
+    /// from an EQ after it.
+    ///
+    /// `to_index` is clamped to the last slot, so an out-of-range value
+    /// moves the plugin to the end rather than failing. Moving a plugin
+    /// to the slot it already occupies is a no-op that still confirms
+    /// with [`AudioEvent::BusPluginMoved`](super::AudioEvent::BusPluginMoved).
+    ///
+    /// Unlike a track chain, a bus chain has no structural slot 0: every
+    /// entry is an effect over the group sum, so any order is valid.
+    ///
+    /// An unknown bus, or an `instance_id` that is not on that bus's
+    /// chain, leaves the chain untouched and reports `AudioEvent::Error`.
+    MovePluginInBus {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
 
     // -- Aux sends + return busses --
     /// Mark a bus as an aux *return* bus (or clear the flag). Emits

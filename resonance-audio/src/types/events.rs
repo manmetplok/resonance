@@ -530,6 +530,18 @@ pub enum AudioEvent {
         bus_id: BusId,
         instance_id: PluginInstanceId,
     },
+    /// A bus's insert chain was reordered by
+    /// [`AudioCommand::MovePluginInBus`](super::AudioCommand::MovePluginInBus).
+    /// `to_index` is the slot the plugin actually landed on *after*
+    /// clamping, so the app mirrors the engine's order rather than
+    /// re-deriving it. `BusState.plugins` order is what project
+    /// serialization writes, so mirroring this is what makes a bus
+    /// reorder survive save/load.
+    BusPluginMoved {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
 
     // -- Aux sends + return busses --
     /// A bus's return-role flag changed (see `AudioCommand::SetBusRole`).
