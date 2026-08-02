@@ -21,7 +21,12 @@
 //! shared range. It is a pure enumeration here — never N commands, and
 //! never a mute-and-bounce, which is what let a whole drum kit bleed
 //! into every other stem in the field and produce a plausible,
-//! completely wrong balance table.
+//! completely wrong balance table. Note what "one pass" does and does
+//! not claim: one command, one range, one guard, one `MixMeasured`. The
+//! engine still loops `render_stem` once per target inside it
+//! (`engine/bounce/measure.rs`), so a pass costs N full-length renders
+//! and scales with track count — which is why the MCP tool warns that a
+//! large project can outlast its wait and have to be polled.
 //!
 //! Nothing here mutates: no file is written, no project or transport
 //! state is touched, and the reply carries no `revision`. It is

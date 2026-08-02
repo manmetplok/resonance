@@ -76,9 +76,14 @@ impl ResonanceMcp {
                        bleeding into every stem and produced a plausible but completely wrong \
                        table. Nothing is written and nothing is changed. \
                        \
-                       Every entry is measured over the SAME range in the same render, so the \
-                       numbers are directly comparable and measured_seconds is identical on all \
-                       of them. range defaults to the whole song. include_busses (default \
+                       Every entry is measured in ONE pass over ONE SHARED range — one command, \
+                       one set of results — so the numbers are directly comparable and \
+                       measured_seconds is identical on all of them. Inside that pass the engine \
+                       renders each target in turn, so the COST scales with track count: a \
+                       20-track project is 20 full-length renders. On a large project that can \
+                       exceed this tool's 5-minute wait, after which it returns a still-running \
+                       job and you poll job_status or block with job_wait. range defaults to the \
+                       whole song. include_busses (default \
                        false) adds each group/return bus; a bus and its member tracks then both \
                        appear, describing the same audio before and after the bus chain — they \
                        overlap, so never add them together. \

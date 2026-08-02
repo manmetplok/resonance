@@ -16,7 +16,10 @@
 //! [`STEMS`] is a whole balance pass in one call: every track and the
 //! master, measured over ONE shared range in ONE engine pass, so the
 //! numbers are directly comparable and no track can bleed into another
-//! one's figures.
+//! one's figures. "One pass" means one command, one range and one set
+//! of results — not one render: inside it the engine renders each
+//! target in turn, so the *cost* scales with the number of tracks even
+//! though the *measurement* is a single, self-consistent pass.
 //!
 //! ## Units, in one place
 //!
@@ -277,7 +280,10 @@ pub struct TrackMeasurement {
 }
 
 /// Job payload once a `meter.stems` job completes: the whole mix plus
-/// every track, all measured over one shared range in one pass.
+/// every track, all measured over one shared range in one pass — one
+/// command and one set of results, inside which the engine renders each
+/// target in turn, so a pass over a large project takes proportionally
+/// longer than a single `meter.measure`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StemsResult {
