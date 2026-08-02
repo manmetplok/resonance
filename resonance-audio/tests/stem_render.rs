@@ -141,6 +141,115 @@ fn bus_filter_includes_tracks_routed_to_bus_with_sub_tracks() {
     assert!(!f.include_master_fx, "bus stems exclude master FX");
 }
 
+/// ba todo #1239: a sub-track carries its OWN routing —
+/// `mixer::render_core` reads `sub_track.output()` per sub-track and sums
+/// it straight into the bus. Resolving bus membership by scanning only
+/// top-level tracks therefore returned an EMPTY set for the routing doc
+/// #274 recommends (a multi-output instrument's group taps routed into
+/// one bus), so that bus exported and measured as digital silence.
+#[test]
+fn bus_filter_includes_sub_tracks_routed_to_it_on_their_own() {
+    let state = EngineState::new();
+    state.busses.write().insert(7, Bus::new(7, "drum bus".into()));
+    // The instrument track itself stays on master; its group taps are
+    // routed into the bus individually, which is what `track.set_output`
+    // on each sub-track does.
+    state.add_track(1, TrackOutput::Master);
+    state.add_track(2, TrackOutput::Master);
+    for (id, port) in [(10u64, 1u32), (11, 2), (12, 3)] {
+        let sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
+        sub.set_output(TrackOutput::Bus(7));
+        state.tracks.write().insert(id, sub);
+    }
+
+    let f = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    assert!(f.contains(10), "sub-track routed to the bus contributes");
+    assert!(f.contains(11));
+    assert!(f.contains(12));
+    // The parent is pulled in to DRIVE the fan-out — a sub-track's audio
+    // is one output port of the parent's instrument, and the parent is
+    // skipped before its instrument runs if it is not in the filter.
+    assert!(
+        f.contains(1),
+        "the taps' parent must render, or the bus stem is silent"
+    );
+    assert!(!f.contains(2), "an unrelated master track is excluded");
+    assert_eq!(
+        f.set.len(),
+        4,
+        "three routed taps plus their parent: {:?}",
+        f.set
+    );
+}
+
+/// A sub-track routed somewhere else does not join its parent's bus, and
+/// is still part of its parent's own track stem (an instrument's audio
+/// belongs to that instrument regardless of where it is routed).
+#[test]
+fn bus_filter_excludes_a_sub_track_routed_to_a_different_bus() {
+    let state = EngineState::new();
+    state.busses.write().insert(7, Bus::new(7, "drum bus".into()));
+    state.busses.write().insert(8, Bus::new(8, "fx bus".into()));
+    state.add_track(1, TrackOutput::Master);
+    for (id, port, out) in [
+        (10u64, 1u32, TrackOutput::Bus(7)),
+        (11, 2, TrackOutput::Bus(8)),
+    ] {
+        let sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
+        sub.set_output(out);
+        state.tracks.write().insert(id, sub);
+    }
+
+    let seven = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    assert!(
+        seven.contains(10) && !seven.contains(11),
+        "bus 7 gets only its own tap: {:?}",
+        seven.set
+    );
+    let eight = stem_filter(StemSource::Bus(8), &state.tracks.read());
+    assert!(
+        eight.contains(11) && !eight.contains(10),
+        "and bus 8 only its own — the shared parent does not drag the \
+         sibling tap along: {:?}",
+        eight.set
+    );
+    let track = stem_filter(StemSource::Track(1), &state.tracks.read());
+    assert!(
+        track.contains(10) && track.contains(11),
+        "both taps still belong to their instrument's own stem"
+    );
+}
+
+/// A parent and one of its sub-tracks both aimed at the same bus must be
+/// counted ONCE. The set dedupes the ids; the mixer walks the track map
+/// once per render, so no track's audio is summed twice either (the
+/// render side of this is pinned by
+/// `parent_and_sub_track_on_one_bus_are_not_summed_twice` in
+/// `stem_bus_sub_track_render.rs`).
+#[test]
+fn bus_filter_counts_a_parent_and_its_sub_track_once() {
+    let state = EngineState::new();
+    state.busses.write().insert(7, Bus::new(7, "drum bus".into()));
+    state.add_track(1, TrackOutput::Bus(7));
+    for (id, port) in [(10u64, 1u32), (11, 2)] {
+        let sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
+        // Tap 1 duplicates the parent's destination; tap 2 rides along.
+        if port == 1 {
+            sub.set_output(TrackOutput::Bus(7));
+        }
+        state.tracks.write().insert(id, sub);
+    }
+
+    let f = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    assert!(f.contains(1) && f.contains(10) && f.contains(11));
+    assert_eq!(
+        f.set.len(),
+        3,
+        "parent + two taps, each exactly once: {:?}",
+        f.set
+    );
+}
+
 #[test]
 fn master_filter_includes_everything_with_master_fx() {
     let state = EngineState::new();

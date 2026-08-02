@@ -17,10 +17,13 @@ pub enum StemSource {
     /// out to sibling sub-tracks). Excludes master FX + master volume,
     /// like a bounce-in-place clip, so the stem re-imports at unity.
     Track(TrackId),
-    /// A return / aux / group bus: every top-level track routed to the
-    /// bus (plus their sub-tracks). The bus's own FX chain runs (it is
-    /// fed only by the in-filter tracks), but master FX + master volume
-    /// are excluded.
+    /// A return / aux / group bus: every track routed to the bus —
+    /// top-level tracks (which bring their sub-tracks with them, so an
+    /// instrument is never split across stems) and **sub-tracks routed
+    /// to the bus on their own**, which is how a multi-output
+    /// instrument gets a group bus (ba todo #1239). The bus's own FX
+    /// chain runs (it is fed only by the in-filter tracks), but master
+    /// FX + master volume are excluded.
     Bus(BusId),
     /// The full mix — every track, with master FX, master volume and the
     /// final hard-clip applied, identical to the project bounce.
