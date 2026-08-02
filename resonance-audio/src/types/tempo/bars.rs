@@ -4,6 +4,42 @@ use super::conversion::{sample_frac_to_tick_frac, tick_frac_to_sample_frac};
 use super::map::TempoMap;
 use super::TICKS_PER_QUARTER_NOTE;
 
+/// Tolerance used when snapping a derived beat position back onto the beat
+/// grid, expressed in **samples**.
+///
+/// A bar start is never an exact real number of samples: `rebuild_bar_table`
+/// rounds each entry to the nearest sample (±0.5), `bar_to_sample`'s
+/// past-the-horizon extrapolation *truncates* (up to −1), and a caller
+/// deriving a beat inside that bar rounds once more (±0.5). So a position
+/// that genuinely is a downbeat can arrive up to ~2 samples short of the
+/// arithmetic boundary, and flooring it lands in the previous bar with a beat
+/// fraction of 0.9999 — the bug this constant exists to fix.
+///
+/// Two samples is 42 µs at 48 kHz, orders of magnitude below anything
+/// audible or musically meaningful (a 1 ms offset is already 48 samples), so
+/// the snap cannot quantise a genuinely off-grid position.
+const SNAP_TOLERANCE_SAMPLES: f64 = 2.0;
+
+/// Collapse floating-point residue onto the whole-beat grid.
+///
+/// `eps` is [`SNAP_TOLERANCE_SAMPLES`] converted to beats by the caller,
+/// which is the only place that knows the local samples-per-beat. Snapping to
+/// the *nearest* whole beat keeps the correction symmetric — a position a
+/// hair before and a hair after a boundary both resolve to it — while a
+/// genuinely off-grid position keeps its true fraction (half a beat in still
+/// reads 0.5).
+fn snap_to_beat_grid(beats: f64, eps: f64) -> f64 {
+    if !beats.is_finite() || !(eps > 0.0) {
+        return beats;
+    }
+    let nearest = beats.round();
+    if (beats - nearest).abs() <= eps {
+        nearest
+    } else {
+        beats
+    }
+}
+
 impl TempoMap {
     /// Number of bars in the precomputed bar table.
     pub fn bar_count(&self) -> usize {
@@ -70,7 +106,8 @@ impl TempoMap {
     pub fn position_to_bars(&self, sample_pos: u64, sample_rate: u32) -> (u32, u8, f64) {
         if self.bar_table.is_empty() {
             let spb = self.samples_per_beat(sample_rate);
-            let total_beats = sample_pos as f64 / spb;
+            let total_beats =
+                snap_to_beat_grid(sample_pos as f64 / spb, SNAP_TOLERANCE_SAMPLES / spb);
             let bar = (total_beats / self.numerator as f64).floor() as u32 + 1;
             let beat_in_bar = (total_beats % self.numerator as f64).floor() as u8 + 1;
             let frac = total_beats.fract();
@@ -96,7 +133,18 @@ impl TempoMap {
             };
             let tick_frac =
                 sample_frac_to_tick_frac(sample_frac, entry.bpm as f64, next.arrival_bpm as f64);
-            let beat_frac = tick_frac * num_beats;
+            // This bar spans `bar_samples` samples and `num_beats` beats, so
+            // one sample is `num_beats / bar_samples` beats.
+            let eps = if bar_samples > 0.0 {
+                SNAP_TOLERANCE_SAMPLES * num_beats / bar_samples
+            } else {
+                0.0
+            };
+            let beat_frac = snap_to_beat_grid(tick_frac * num_beats, eps);
+            if beat_frac >= num_beats {
+                // Snapped up onto the next bar's downbeat.
+                return (bar + 1, 1, 0.0);
+            }
             let beat = beat_frac.floor() as u8 + 1;
             (bar, beat, beat_frac.fract())
         } else {
@@ -110,9 +158,20 @@ impl TempoMap {
             if !spb.is_finite() || spb <= 0.0 || num_beats <= 0.0 {
                 return (bar, 1, 0.0);
             }
-            let beats_past = (sample_pos - entry.sample) as f64 / spb;
-            let bars_past = (beats_past / num_beats).floor();
-            let beat_frac = beats_past - bars_past * num_beats;
+            // `bar_to_sample` truncates its extrapolation past the horizon, so
+            // an exact downbeat can arrive short of the boundary and would
+            // floor into the previous bar with a beat fraction of 0.9999.
+            // One sample is `1/spb` beats.
+            let beats_past = snap_to_beat_grid(
+                (sample_pos - entry.sample) as f64 / spb,
+                SNAP_TOLERANCE_SAMPLES / spb,
+            );
+            let mut bars_past = (beats_past / num_beats).floor();
+            let mut beat_frac = beats_past - bars_past * num_beats;
+            if beat_frac >= num_beats {
+                bars_past += 1.0;
+                beat_frac -= num_beats;
+            }
             let bar = bar + bars_past as u32;
             (bar, beat_frac.floor() as u8 + 1, beat_frac.fract())
         }
