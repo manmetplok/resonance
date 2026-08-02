@@ -10,7 +10,10 @@
 
 mod multi_out_harness;
 
-use multi_out_harness::{at_master, peak, EngineState, FRAMES, PARENT, PORT_LEVELS, TAP_A, TAP_B};
+use multi_out_harness::{
+    at_master, peak, EngineState, FRAMES, PARENT, PORT_LEVELS, SIBLING, SIBLING_TAP, TAP_A,
+    TAP_B,
+};
 use resonance_audio::__test_support::StemSource;
 use resonance_audio::types::TrackOutput;
 
@@ -150,5 +153,130 @@ fn a_sub_track_stem_is_unaffected_by_where_its_sibling_is_routed() {
         (a - at_master(PORT_LEVELS[1])).abs() < 1e-6,
         "tap A's stem is exactly tap A ({}), got {a}",
         at_master(PORT_LEVELS[1])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Frozen parents (ba todo #1248)
+// ---------------------------------------------------------------------------
+
+/// The whole kit as one signal, which is what a freeze cache of a
+/// multi-output instrument holds: `freeze_raw` forces every sub-track
+/// into master at unity, so the parent's single cache file carries the
+/// summed fan-out.
+const FROZEN_KIT: f32 = PORT_LEVELS[1] + PORT_LEVELS[2];
+
+/// ba todo #1248, the regression #1242 introduced in kind. A frozen
+/// track never reaches `discard_own_output` — that lives in the
+/// instrument arm of the per-track loop, and the frozen branch fills the
+/// buffer from cache and short-circuits it — so a sub-track stem came
+/// back carrying the parent's ENTIRE frozen cache under one tap's name.
+///
+/// Measured before the fix: tap A's stem peaked at the whole kit's level
+/// (0.26516503) instead of tap A's (0.17677669). Silence would have been
+/// wrong; the whole kit is worse, because a caller cannot tell.
+///
+/// The refusal is asserted on the RENDER call, and the level the bug
+/// produced is named explicitly, so a future change that resumes
+/// returning audio here cannot pass by being merely non-silent.
+#[test]
+fn a_sub_track_stem_of_a_frozen_parent_is_refused_not_answered_with_the_kit() {
+    let state = EngineState::new();
+    state.freeze(PARENT, FROZEN_KIT, FRAMES as usize);
+
+    let err = state
+        .try_render(StemSource::Track(TAP_A))
+        .expect_err("a tap of a frozen parent has no separable signal");
+
+    // The message must be actionable: which track is frozen, and what to
+    // do about it.
+    assert!(
+        err.contains(&PARENT.to_string()) && err.contains("frozen"),
+        "the error must name the frozen parent: {err}"
+    );
+    assert!(
+        err.contains("Unfreeze"),
+        "the error must say how to get a real answer: {err}"
+    );
+    assert!(
+        err.contains("Tap 1"),
+        "the error must name the tap that was asked for: {err}"
+    );
+}
+
+/// The same refusal covers a BUS stem fed by a frozen parent's taps —
+/// the routing ba doc #274 option (b) recommends. The defect is
+/// identical there (the parent's cache reaches master and lands in the
+/// bus stem), so the guard is on the filter's fan-out parents rather
+/// than on `StemSource::Track`.
+#[test]
+fn a_bus_stem_fed_by_a_frozen_parents_taps_is_refused_too() {
+    let state = EngineState::new();
+    state.add_bus(7, "Kit Bus");
+    state.set_output(TAP_A, TrackOutput::Bus(7));
+    state.freeze(PARENT, FROZEN_KIT, FRAMES as usize);
+
+    let err = state
+        .try_render(StemSource::Bus(7))
+        .expect_err("the bus is fed only by taps of a frozen instrument");
+    assert!(err.contains("frozen"), "{err}");
+}
+
+/// The frozen parent's OWN stem is still perfectly renderable — the
+/// cache is exactly that instrument's whole output, which is what this
+/// stem is asking for. Only fan-out parents are refused, so freezing a
+/// kit must not break stemming the kit.
+#[test]
+fn a_frozen_parents_own_stem_still_renders_from_its_cache() {
+    let state = EngineState::new();
+    state.freeze(PARENT, FROZEN_KIT, FRAMES as usize);
+
+    let stem = state
+        .try_render(StemSource::Track(PARENT))
+        .expect("a frozen track's own stem comes straight from its cache");
+    let got = peak(&stem);
+    assert!(
+        (got - at_master(FROZEN_KIT)).abs() < 1e-6,
+        "the frozen kit's stem is its cache at master ({}), got {got}",
+        at_master(FROZEN_KIT)
+    );
+}
+
+/// An unrelated track's stem is unaffected by somebody else's freeze —
+/// the guard keys on the filter's own fan-out parents, not on "is
+/// anything in this project frozen".
+#[test]
+fn an_unfrozen_instruments_taps_are_unaffected_by_a_frozen_neighbour() {
+    let state = EngineState::new();
+    state.add_unfrozen_sibling(SIBLING, SIBLING_TAP);
+    state.freeze(PARENT, FROZEN_KIT, FRAMES as usize);
+
+    let stem = state
+        .try_render(StemSource::Track(SIBLING_TAP))
+        .expect("the sibling instrument is not frozen");
+    assert!(
+        (peak(&stem) - at_master(PORT_LEVELS[1])).abs() < 1e-6,
+        "the unfrozen instrument's tap still renders normally, got {}",
+        peak(&stem)
+    );
+}
+
+/// And once the parent is unfrozen the tap renders again — the refusal
+/// is a statement about the freeze, not a permanent property of the
+/// track.
+#[test]
+fn unfreezing_the_parent_makes_the_tap_renderable_again() {
+    let state = EngineState::new();
+    state.freeze(PARENT, FROZEN_KIT, FRAMES as usize);
+    assert!(state.try_render(StemSource::Track(TAP_A)).is_err());
+
+    state.unfreeze(PARENT);
+    let stem = state
+        .try_render(StemSource::Track(TAP_A))
+        .expect("unfrozen, the tap is separable again");
+    assert!(
+        (peak(&stem) - at_master(PORT_LEVELS[1])).abs() < 1e-6,
+        "and it carries exactly tap A, got {}",
+        peak(&stem)
     );
 }

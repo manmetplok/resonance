@@ -41,6 +41,7 @@ use resonance_audio::__test_support::{
     __instance_from_raw_for_test, render_stem, SharedState, StemSource, SyncClapInstance,
 };
 use resonance_audio::types::*;
+use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
 pub const SR: u32 = 48_000;
 /// Output ports the fake instrument declares: port 0 ("main") plus two
@@ -59,6 +60,10 @@ pub const INSTRUMENT_ID: PluginInstanceId = 100;
 pub const PARENT: TrackId = 1;
 pub const TAP_A: TrackId = 10;
 pub const TAP_B: TrackId = 11;
+/// A SECOND multi-output instrument, added on demand by
+/// [`EngineState::add_unfrozen_sibling`] (ba todo #1248).
+pub const SIBLING: TrackId = 2;
+pub const SIBLING_TAP: TrackId = 20;
 
 // ---------------------------------------------------------------------------
 // Fake multi-output CLAP instrument
@@ -278,11 +283,66 @@ impl EngineState {
         self.tracks.read().get(&id).unwrap().set_output(output);
     }
 
+    /// Attach a freeze cache to `id`, as `SetTrackFrozenSource` does
+    /// after a successful freeze (ba todo #1248).
+    ///
+    /// `dc` is the constant the cache holds on both channels. For a
+    /// multi-output parent that is the WHOLE baked fan-out — freeze
+    /// captures with `freeze_raw`, which forces every sub-track into
+    /// master at unity so the parent's single cache file carries the
+    /// summed kit (`render_core`'s `force_master_route`). That is
+    /// precisely what makes a sub-track stem of a frozen parent hard:
+    /// the tap's own signal is no longer separable from its siblings'.
+    pub fn freeze(&self, id: TrackId, dc: f32, frames: usize) {
+        let samples = Arc::new(vec![dc; frames * 2]);
+        let cache_ref = FreezeCacheRef::new(
+            "frozen-kit.wav".into(),
+            SR,
+            32,
+            1,
+            FreezeCacheStatus::Frozen,
+        );
+        let source = FrozenSource::new(cache_ref, samples, SR, frames as u64);
+        self.tracks
+            .read()
+            .get(&id)
+            .unwrap()
+            .frozen_source
+            .store(Some(Arc::new(source)));
+    }
+
+    /// Drop `id`'s freeze cache, as an unfreeze does.
+    pub fn unfreeze(&self, id: TrackId) {
+        self.tracks.read().get(&id).unwrap().frozen_source.store(None);
+    }
+
+    /// Add a SECOND multi-output instrument with one tap, so a test can
+    /// assert that freezing one instrument leaves another alone.
+    pub fn add_unfrozen_sibling(&self, parent: TrackId, tap: TrackId) {
+        let id = INSTRUMENT_ID + parent;
+        self.plugins
+            .write()
+            .insert(id, Mutex::new(multi_out_instrument(PORT_LEVELS)));
+        let track = Track::with_type(parent, "Other Kit".into(), TrackType::Instrument);
+        track.set_output(TrackOutput::Master);
+        track.push_plugin(id);
+        self.tracks.write().insert(parent, track);
+        let sub = Track::new_sub_track(tap, "Other Tap 1".into(), parent, 1);
+        sub.set_output(TrackOutput::Master);
+        self.tracks.write().insert(tap, sub);
+    }
+
     pub fn add_bus(&self, id: BusId, name: &str) {
         self.busses.write().insert(id, Bus::new(id, name.into()));
     }
 
     pub fn render(&self, source: StemSource) -> Vec<f32> {
+        self.try_render(source).expect("render succeeds")
+    }
+
+    /// As [`EngineState::render`], surfacing the engine's refusal instead
+    /// of panicking on it (ba todo #1248).
+    pub fn try_render(&self, source: StemSource) -> Result<Vec<f32>, String> {
         render_stem(
             source,
             0,
@@ -297,7 +357,6 @@ impl EngineState {
             &self.tempo_map,
             SR,
         )
-        .expect("render succeeds")
     }
 }
 
