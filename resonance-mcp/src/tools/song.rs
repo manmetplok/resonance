@@ -71,7 +71,11 @@ impl ResonanceMcp {
                        decibels, the unit balance work is done in; `output` is \"master\" or \
                        {\"bus_id\": N}. Enumerate tracks from this view at runtime instead of \
                        hardcoding a list, and check the sub-track faders before concluding an \
-                       instrument needs more notes.",
+                       instrument needs more notes. \
+                       \
+                       `sends` lists the track's aux sends (send_id, to_bus, level_db, \
+                       pre_fader, enabled) — read it back after track_add_send to confirm what \
+                       you wired. Aux sends are not saved yet (ba todo #482).",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<song::TracksView>()
     )]

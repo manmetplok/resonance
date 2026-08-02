@@ -5,7 +5,9 @@
 use crate::common::{
     BeatRange, KeyScale, SongPosition, TimeSignature, TrackKind, TrackOutput, TransportState,
 };
-use crate::ids::{ChordId, ClipId, NoteId, SectionDefinitionId, SectionPlacementId, TrackId};
+use crate::ids::{
+    ChordId, ClipId, NoteId, SectionDefinitionId, SectionPlacementId, SendId, TrackId,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -193,7 +195,32 @@ pub struct TrackDetail {
     /// v1; absent means `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub frozen: bool,
+    /// Aux sends taking a tap from this track into a return bus, on top
+    /// of wherever `output` sends its main signal. Empty when the track
+    /// feeds nothing but its output.
+    ///
+    /// **Not persisted yet** (ba todo #482): a send created over the
+    /// control API is lost on save + reload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<SendView>,
     pub clips: Vec<ClipView>,
+}
+
+/// One aux send from a track into a return bus.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SendView {
+    /// Address this send in `track.set_send` / `track.remove_send`.
+    pub send_id: SendId,
+    /// The return bus this send feeds.
+    pub to_bus: TrackId,
+    /// Send gain in dB (0 = tapped at unity).
+    pub level_db: f32,
+    /// `true` taps before the track's fader, `false` after it.
+    pub pre_fader: bool,
+    /// A disabled send keeps its routing and level but contributes no
+    /// signal.
+    pub enabled: bool,
 }
 
 /// One clip on a track.

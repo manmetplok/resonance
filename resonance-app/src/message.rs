@@ -473,6 +473,17 @@ pub enum MixerMessage {
     /// default routing (0 dB, post-fader, enabled). The engine allocates
     /// the [`SendId`].
     AddSend { source: SendSource, dest: BusId },
+    /// Create an aux send whose id the *app* chose up front, with
+    /// explicit level and tap point, so a caller can use the id without
+    /// waiting for the engine's `AuxSendChanged` echo (ba doc #273).
+    /// Same hint pattern as [`BusMessage::AddBusWithId`].
+    AddSendWithId {
+        id: SendId,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+    },
     /// Remove the send with this id.
     RemoveSend(SendId),
     /// Set a send's level in dB (slider drag). Coalesces into a single

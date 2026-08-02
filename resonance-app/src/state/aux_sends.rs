@@ -29,6 +29,14 @@ pub struct AuxSendState {
     /// reason suitable for the UI. Cleared once a send is successfully
     /// created or updated (the user's retry superseded the error).
     pub last_rejection: Option<AuxSendRejection>,
+    /// Id counter for sends the *app* creates up front, so a control
+    /// method can return the `send_id` in its reply instead of waiting
+    /// for the engine's `AuxSendChanged` echo (ba doc #273, todo #1229).
+    /// Lives in a high range for the same reason
+    /// `TrackRegistry::next_return_bus_id` does: the engine bumps its own
+    /// allocator past any id it receives as a hint, so the two ranges
+    /// never overlap. `0` means "not seeded yet".
+    pub next_control_send_id: SendId,
 }
 
 impl AuxSendState {
@@ -47,4 +55,23 @@ impl AuxSendState {
     pub fn remove(&mut self, send_id: SendId) {
         self.sends.retain(|s| s.id != send_id);
     }
+
+    /// Allocate a fresh app-chosen send id, skipping past any id already
+    /// mirrored from the engine. Handed to the engine as a `SetAuxSend`
+    /// hint, so it must not clash with one the engine allocated itself.
+    pub fn allocate_control_send_id(&mut self) -> SendId {
+        if self.next_control_send_id == 0 {
+            self.next_control_send_id = CONTROL_SEND_ID_BASE;
+        }
+        loop {
+            let candidate = self.next_control_send_id;
+            self.next_control_send_id += 1;
+            if !self.sends.iter().any(|s| s.id == candidate) {
+                return candidate;
+            }
+        }
+    }
 }
+
+/// Start of the app-side send-id range (the engine counts up from 0).
+const CONTROL_SEND_ID_BASE: SendId = 2_000_000_000;

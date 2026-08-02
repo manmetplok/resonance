@@ -698,6 +698,24 @@ fn effect_chain(app: &Resonance, t: &TrackState) -> Vec<String> {
         .collect()
 }
 
+/// This track's aux sends, in the mirror's insertion order (ba doc #273,
+/// todo #1229). An agent that cannot hear must be able to read back what
+/// it wired.
+fn track_sends(app: &Resonance, t: &TrackState) -> Vec<song::SendView> {
+    app.aux
+        .sends
+        .iter()
+        .filter(|s| s.source == resonance_audio::types::SendSource::Track(t.id))
+        .map(|s| song::SendView {
+            send_id: resonance_control::ids::SendId(s.id),
+            to_bus: resonance_control::ids::TrackId(s.dest),
+            level_db: s.level_db,
+            pre_fader: s.pre_fader,
+            enabled: s.enabled,
+        })
+        .collect()
+}
+
 fn track_detail(app: &Resonance, t: &TrackState) -> TrackDetail {
     let mut clips: Vec<ClipView> = Vec::new();
     for c in app.clips.iter().filter(|c| c.track_id == t.id) {
@@ -731,6 +749,7 @@ fn track_detail(app: &Resonance, t: &TrackState) -> TrackDetail {
     TrackDetail {
         summary: track_summary(app, t),
         effects: effect_chain(app, t),
+        sends: track_sends(app, t),
         // Cache attached (valid or stale): the #576 frozen-input
         // classifier rejects note/lyric/instrument/param edits, so the
         // client needs to see why its mutations bounce.

@@ -106,6 +106,73 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Add an aux SEND: an extra tap from a track into a return bus, on top of \
+                       wherever the track's main output goes. Returns the send_id in the reply. \
+                       to_bus comes from bus_create; that bus is flagged as a return bus \
+                       automatically. \
+                       \
+                       USE SENDS, NOT INSERTS, FOR REVERB AND DELAY. One reverb fed from \
+                       several tracks is what puts those tracks in the same room, and that \
+                       shared space is most of what makes a mix cohere. A reverb inserted on \
+                       each track puts every instrument in a different building and costs far \
+                       more CPU. \
+                       \
+                       DEPTH is the dimension faders cannot reach, and it is built here: more \
+                       wet signal reads as further away, less as closer. pre_fader: false (the \
+                       default) taps AFTER the track's fader, so pulling the track down takes \
+                       its reverb with it — that is almost always what you want. pre_fader: \
+                       true keeps the send level independent of the fader, which is for effect, \
+                       not for space. To keep a source forward and intelligible while still \
+                       putting it in a room, use 20 ms or more of pre-delay on the reverb \
+                       itself; to push it further back, roll off the highs on the return. \
+                       \
+                       CAVEAT: aux sends are NOT SAVED YET (ba todo #482). A send created here \
+                       is lost when the project is saved and reloaded, so treat it as a live \
+                       mixing decision and tell the user it will not survive a reload.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<track::AddSendResult>()
+    )]
+    async fn track_add_send(
+        &self,
+        Parameters(params): Parameters<track::AddSendParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::ADD_SEND, &params).await
+    }
+
+    #[tool(
+        description = "Change an existing aux send: level_db (how much signal reaches the \
+                       return — more wet reads as further away), pre_fader (tap before or \
+                       after the track's own fader; post is the usual choice), enabled (silence \
+                       the send without losing its routing and level), or to_bus (re-route it \
+                       into a different return). Omitted fields keep their current value, and \
+                       setting a value it already has is a no-op. send_id comes from \
+                       track_add_send or from the sends array in song_tracks. A route that \
+                       would feed back is refused. Aux sends are not saved yet (ba todo #482).",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn track_set_send(
+        &self,
+        Parameters(params): Parameters<track::SetSendParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::SET_SEND, &params).await
+    }
+
+    #[tool(
+        description = "Delete an aux send. The track keeps its main output routing and the \
+                       return bus keeps its other feeds; only this one tap goes away. send_id \
+                       comes from track_add_send or the sends array in song_tracks. To silence \
+                       a send but keep it configured, use track_set_send with enabled: false \
+                       instead.",
+        annotations(destructive_hint = true, open_world_hint = false)
+    )]
+    async fn track_remove_send(
+        &self,
+        Parameters(params): Parameters<track::RemoveSendParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::REMOVE_SEND, &params).await
+    }
+
+    #[tool(
         description = "Remove one effect from a track's insert chain — the counterpart to \
                        track_add_effect, which APPENDS a fresh instance on every call, so \
                        without this a wrong add was permanent. Address the effect EITHER by \
