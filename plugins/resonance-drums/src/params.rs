@@ -36,6 +36,11 @@ pub struct PadParams {
     /// completely muted from the overhead bus. Defaults to 1.0 so the
     /// plugin sounds the same on first instantiation as it did before
     /// the multi-output rewrite.
+    ///
+    /// For pads the library records with overheads only (all cymbals in
+    /// Drummica) the overhead take is routed to the pad's own group port
+    /// instead — see `VoiceDestination::Overhead` — and this param scales
+    /// it there, so turning it down still silences the pad.
     pub oh_blend: FloatParam,
     /// Balance (0..1) between the pad's two close-mic banks. 0.5 is
     /// equal — used as the default so the pre-existing single-bank

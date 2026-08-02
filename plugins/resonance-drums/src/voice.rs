@@ -25,9 +25,17 @@ pub enum VoiceDestination {
         output_port: u8,
         balance_side: BalanceSide,
     },
-    /// Overhead mic bank. Always routes to the shared Overhead output
-    /// port (6) and is scaled by the per-pad `oh_blend` param.
-    Overhead,
+    /// Overhead mic bank, scaled by the per-pad `oh_blend` param.
+    ///
+    /// `output_port` is normally the shared Overhead port
+    /// (`kit::OVERHEAD_PORT_INDEX`). The exception is a pad the library
+    /// ships **no close mic for** — every cymbal, ride and china piece in
+    /// Drummica is recorded on the overheads only. For those pads the
+    /// overhead bank is the pad's *only* signal, so it is routed to the
+    /// pad's own group port instead; otherwise that group's output port
+    /// (and the sub-track the host creates for it) would be permanently
+    /// silent. See `DrumSampler::note_on`.
+    Overhead { output_port: u8 },
 }
 
 /// Which "side" of a balance slider this close-mic voice represents.
