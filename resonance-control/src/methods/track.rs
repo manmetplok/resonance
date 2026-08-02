@@ -36,10 +36,6 @@ pub const ADD_SEND: &str = "track.add_send";
 pub const SET_SEND: &str = "track.set_send";
 /// `track.remove_send` — delete a send ([`RemoveSendParams`]).
 pub const REMOVE_SEND: &str = "track.remove_send";
-/// `track.plugins` — the built-in plugin catalog, read-only
-/// (no params -> [`PluginCatalog`]).
-pub const PLUGINS: &str = "track.plugins";
-
 /// `track.plugin_params` — a track's plugins and their parameters,
 /// read-only ([`PluginParamsParams`] -> [`PluginParamsView`]).
 pub const PLUGIN_PARAMS: &str = "track.plugin_params";
@@ -60,7 +56,6 @@ pub const METHODS: &[&str] = &[
     ADD_SEND,
     SET_SEND,
     REMOVE_SEND,
-    PLUGINS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
 ];
@@ -105,7 +100,8 @@ pub struct DeleteParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AddPluginParams {
     pub track_id: TrackId,
-    /// Stable plugin id from the catalog, e.g. `"resonance-wavetable"`.
+    /// Stable plugin id from `plugins.catalog`, e.g.
+    /// `"com.resonance.wavetable"`.
     pub plugin_id: String,
 }
 
@@ -142,23 +138,6 @@ pub struct AddPluginResult {
     /// handle.
     pub slot: u32,
     pub revision: u64,
-}
-
-/// Result of `track.plugins`: the built-in plugin catalog.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct PluginCatalog {
-    pub plugins: Vec<PluginCatalogEntry>,
-}
-
-/// One catalog entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct PluginCatalogEntry {
-    /// Stable id used in [`AddPluginParams::plugin_id`].
-    pub id: String,
-    pub name: String,
-    pub kind: PluginKind,
 }
 
 /// Plugin roles, lowercase on the wire.

@@ -70,27 +70,28 @@ fn mutating_methods() -> Vec<&'static str> {
     ] {
         methods.extend_from_slice(namespace);
     }
-    // `track.plugins` and `track.plugin_params` live in `track::METHODS`
-    // but are read-only queries served by the `song::try_handle` block
-    // above the gate — neither is a mutation. Everything else in
-    // `track::*` is.
-    methods.retain(|m| *m != methods::track::PLUGINS && *m != methods::track::PLUGIN_PARAMS);
+    // `track.plugin_params` lives in `track::METHODS` but is a read-only
+    // query served by the `song::try_handle` block above the gate.
+    // Everything else in `track::*` is a mutation. (`plugins.catalog`
+    // moved out of this namespace entirely in todo #1236.)
+    methods.retain(|m| *m != methods::track::PLUGIN_PARAMS);
     methods
 }
 
 /// The read-only / lifecycle allowlist: methods that legitimately run
 /// with no active project and so must NOT be `busy`-gated.
 fn allowlisted_methods() -> Vec<&'static str> {
-    // `track.plugins` and `track.plugin_params` are the read-only
-    // members of the otherwise-mutating `track::*` namespace.
-    let mut methods = vec![
-        "control.hello",
-        methods::track::PLUGINS,
-        methods::track::PLUGIN_PARAMS,
-    ];
+    // `track.plugin_params` is the read-only member of the
+    // otherwise-mutating `track::*` namespace. `plugins.*` — the
+    // installed-plugin catalog and its deprecated `track.plugins` alias
+    // — is read-only AND project-independent: it reads the startup
+    // scanner's results, so gating it made a pure catalog query answer
+    // `busy` with nothing open (todo #1236).
+    let mut methods = vec!["control.hello", methods::track::PLUGIN_PARAMS];
     for namespace in [
         methods::song::METHODS,
         methods::project::METHODS,
+        methods::plugins::METHODS,
         resonance_control::job::METHODS,
     ] {
         methods.extend_from_slice(namespace);

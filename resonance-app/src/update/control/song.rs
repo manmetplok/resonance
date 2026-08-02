@@ -1,5 +1,5 @@
 //! `song.*` read-only introspection views (ba doc #265, todo #1148),
-//! plus the read-only built-in plugin catalog (`track.plugins`).
+//! plus the read-only installed-plugin catalog (`plugins.catalog`).
 //!
 //! Every handler here executes against `&Resonance` — no mutation, no
 //! undo entries, no engine traffic. The view types come from
@@ -19,7 +19,8 @@ use resonance_control::methods::song::{
     TrackDetail, TrackSummary, TracksParams, TracksView, VocalParams as VocalViewParams,
     VocalRenderState, VocalView,
 };
-use resonance_control::methods::track::{self, PluginCatalog, PluginCatalogEntry, PluginKind};
+use resonance_control::methods::plugins::{self, PluginCatalog, PluginCatalogEntry};
+use resonance_control::methods::track::{self, PluginKind};
 use resonance_control::{
     KeyScale, Request, Response, RpcError, SongPosition, TimeSignature, TrackKind,
     TrackOutput as WireTrackOutput, TransportState,
@@ -39,7 +40,13 @@ pub(super) fn try_handle(app: &Resonance, request: &Request) -> Option<Response>
         song::TRACKS => tracks(app, request),
         song::NOTES => notes(app, request),
         song::VOCAL => vocal(app, request),
-        track::PLUGINS => plugin_catalog(app, request),
+        // `plugins.catalog`, plus the deprecated `track.plugins`
+        // spelling it was renamed from (todo #1236) — one handler, so
+        // the two can never answer differently.
+        #[allow(deprecated)]
+        m if m == plugins::CATALOG || m == plugins::PLUGINS_DEPRECATED_ALIAS => {
+            plugin_catalog(app, request)
+        }
         track::PLUGIN_PARAMS => plugin_params(app, request),
         _ => return None,
     };
@@ -341,10 +348,19 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
     super::success(request, &result)
 }
 
-/// `track.plugins` — the addable plugin catalog (read-only; the rest of
-/// `track.*` lands in todo #1152). Ids are the CLAP plugin ids the
-/// scanner reported; they are what `track.add_instrument` /
-/// `track.add_effect` will accept.
+/// `plugins.catalog` — the catalog of INSTALLED plugins, i.e. what can
+/// be loaded, not what a track currently carries (that is
+/// `track.plugin_params`). Ids are the CLAP plugin ids the scanner
+/// reported; they are what `track.add_instrument` / `track.add_effect`
+/// accept.
+///
+/// Also answers the deprecated `track.plugins` alias — the name this
+/// method carried until todo #1236, whose "track." prefix read as a
+/// per-track query and cost a field agent a session's debugging.
+///
+/// Reads `app.available_plugins`, which the scanner fills at startup, so
+/// it needs NO open project and is listed in
+/// [`is_read_only_method`](super::is_read_only_method).
 fn plugin_catalog(app: &Resonance, request: &Request) -> Response {
     let plugins = app
         .available_plugins

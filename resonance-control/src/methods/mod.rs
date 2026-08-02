@@ -18,6 +18,7 @@ pub mod harmony;
 pub mod master;
 pub mod mixer;
 pub mod notes;
+pub mod plugins;
 pub mod project;
 pub mod render;
 pub mod section;
@@ -25,6 +26,18 @@ pub mod song;
 pub mod track;
 pub mod transport;
 pub mod vocal;
+
+/// Method names kept reachable only for backwards compatibility, each
+/// an alias for a renamed method. They ARE in [`capabilities`] — the app
+/// really does answer them — but they get no MCP tool of their own, so
+/// an agent sees exactly one spelling per operation.
+///
+/// Every entry is scheduled for removal; see the alias constant's own
+/// doc comment for what it was renamed to.
+#[allow(deprecated)]
+pub fn deprecated_aliases() -> Vec<&'static str> {
+    vec![plugins::PLUGINS_DEPRECATED_ALIAS]
+}
 
 /// Every method name in protocol v1, in stable namespace order. This is
 /// what `control.hello` reports as `capabilities`.
@@ -36,6 +49,7 @@ pub fn capabilities() -> Vec<&'static str> {
         project::METHODS,
         transport::METHODS,
         track::METHODS,
+        plugins::METHODS,
         mixer::METHODS,
         master::METHODS,
         bus::METHODS,

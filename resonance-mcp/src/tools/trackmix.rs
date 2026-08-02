@@ -7,7 +7,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use rmcp::{tool, tool_router};
-use resonance_control::methods::{mixer, track};
+use resonance_control::methods::{mixer, plugins, track};
 
 #[tool_router(router = router_trackmix, vis = "pub(crate)")]
 impl ResonanceMcp {
@@ -53,7 +53,7 @@ impl ResonanceMcp {
                        CLAP id, which always has the form \"com.resonance.<name>\" — the two \
                        built-in instruments are \"com.resonance.wavetable\" (the polyphonic \
                        synth, what an instrument track's generated/authored MIDI plays through) \
-                       and \"com.resonance.drums\" (the kit, for a drums track). track_plugins \
+                       and \"com.resonance.drums\" (the kit, for a drums track). plugins_catalog \
                        lists the catalog and a wrong id is rejected with the valid ids. An empty \
                        instrument list means the first-party CLAP bundles were never built \
                        (scripts/bundle.sh), not that the app ships no instruments. Then shape \
@@ -78,7 +78,7 @@ impl ResonanceMcp {
         description = "Append a built-in effect to a track's insert chain. plugin_id is the \
                        plugin's CLAP id, of the form \"com.resonance.<name>\" — e.g. \
                        \"com.resonance.reverb\", \"com.resonance.delay\", \"com.resonance.eq\", \
-                       \"com.resonance.compressor\", \"com.resonance.mastering\". track_plugins \
+                       \"com.resonance.compressor\", \"com.resonance.mastering\". plugins_catalog \
                        lists the catalog and a wrong id is rejected with the valid ids. Each \
                        call APPENDS another instance, so calling it twice with the same id gives \
                        the track two of that effect. \
@@ -290,13 +290,20 @@ impl ResonanceMcp {
                        \"com.resonance.wavetable\", \"com.resonance.reverb\", ...) with its name \
                        and kind (instrument | effect). These ids are what track_add_instrument / \
                        track_add_effect take, and what track_plugin_params addresses plugins by. \
-                       Read-only. An empty result means the first-party CLAP bundles have not \
-                       been built.",
+                       Takes no arguments. \
+                       \
+                       This lists what CAN be loaded, app-wide. To see what a particular track \
+                       actually carries — its chain, in processing order, with every parameter \
+                       and its range — use track_plugin_params instead. \
+                       \
+                       Read-only and answerable with no project open, so you can decide what to \
+                       build with before creating one. An empty result means the first-party \
+                       CLAP bundles have not been built (scripts/bundle.sh).",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
-        output_schema = schema_for_output::<track::PluginCatalog>()
+        output_schema = schema_for_output::<plugins::PluginCatalog>()
     )]
-    async fn track_plugins(&self) -> Result<CallToolResult, McpError> {
-        self.invoke_structured(track::PLUGINS, &()).await
+    async fn plugins_catalog(&self) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(plugins::CATALOG, &()).await
     }
 
     #[tool(
