@@ -44,6 +44,7 @@ pub(super) fn try_handle(
         notes::MOVE_CLIP => move_clip(app, request),
         notes::INSERT_MANY => insert_many(app, request),
         notes::REPLACE_ALL => replace_all(app, request),
+        notes::IMPORT_MIDI => super::import_midi::handle(app, request),
         _ => return None,
     };
     Some(out)

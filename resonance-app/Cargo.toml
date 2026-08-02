@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 bytemuck.workspace = true
+base64 = "0.22"
 printpdf = "0.9"
 time = { workspace = true, features = ["formatting", "parsing"] }
 
