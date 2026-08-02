@@ -47,4 +47,69 @@ impl ResonanceMcp {
     ) -> Result<CallToolResult, McpError> {
         self.invoke(master::SET_VOLUME, &params).await
     }
+
+    #[tool(
+        description = "Append an effect to the MASTER insert chain, where it processes the \
+                       whole summed mix (after every track and bus, before the master fader). \
+                       plugin_id is a CLAP id of the form \"com.resonance.<name>\"; \
+                       \"com.resonance.mastering\" is the one to reach for here. Instrument \
+                       plugins are refused — the master has no notes to play. Each call \
+                       APPENDS, so calling it twice gives the master two instances (address \
+                       them by occurrence in master_remove_effect). Undoable. \
+                       \
+                       WHY THIS MATTERS: a finished mix typically sits around -23..-18 LUFS \
+                       with headroom deliberately left for mastering, and it CANNOT be made \
+                       louder by raising faders — the loudest transient hits full scale first. \
+                       A limiter on the master is what buys level beyond that transient. Do \
+                       NOT chase loudness by pulling the drums down: that trades a level \
+                       problem for a balance problem, and the balance problem is the one \
+                       listeners hear. \
+                       \
+                       TARGETS: keep true peak at or below -1 dBTP (Spotify's recommendation), \
+                       or -2 dBTP to stay safe through lossy codecs, which push peaks up. \
+                       Streaming platforms normalise, so mastering louder than about -14 LUFS \
+                       integrated buys nothing — it is turned back down on playback and you \
+                       keep only the squashed dynamics.",
+        annotations(destructive_hint = false, open_world_hint = false)
+    )]
+    async fn master_add_effect(
+        &self,
+        Parameters(params): Parameters<master::AddEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(master::ADD_EFFECT, &params).await
+    }
+
+    #[tool(
+        description = "Remove one effect from the master insert chain. Address it EITHER by \
+                       slot (the 0-based position master_summary reports) OR by plugin_id plus \
+                       occurrence when the same effect is on the master more than once — both \
+                       forms together, or neither, is rejected rather than guessed at, because \
+                       a guess here strips a processor off the entire mix. Remaining plugins \
+                       renumber, so re-read master_summary before a second removal. Undoable.",
+        annotations(destructive_hint = true, open_world_hint = false)
+    )]
+    async fn master_remove_effect(
+        &self,
+        Parameters(params): Parameters<master::RemoveEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(master::REMOVE_EFFECT, &params).await
+    }
+
+    #[tool(
+        description = "Bypass or re-engage the ENTIRE master effect chain in one call. This \
+                       SETS the state rather than toggling it, so it is safe to repeat and \
+                       cannot end up inverted; setting the state it is already in is a no-op. \
+                       Bypassing is the A/B test for whether the master processing is helping: \
+                       bounce with bypassed: true and with false and compare the measurements, \
+                       rather than judging the chain by its settings. master_summary reports \
+                       the current value as fx_bypassed. Master volume is NOT affected — only \
+                       the plugins.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn master_set_fx_bypass(
+        &self,
+        Parameters(params): Parameters<master::SetFxBypassParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(master::SET_FX_BYPASS, &params).await
+    }
 }
