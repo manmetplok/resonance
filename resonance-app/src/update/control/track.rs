@@ -23,7 +23,7 @@ use resonance_control::methods::mixer::{
     self, SetMuteParams, SetPanParams, SetSoloParams, SetVolumeDbParams, SetVolumeParams,
 };
 use resonance_control::methods::track::{
-    self, AddParams, AddPluginParams, AddResult, DeleteParams, RenameParams,
+    self, AddParams, AddPluginParams, AddResult, DeleteParams, RemoveEffectParams, RenameParams,
 };
 use resonance_control::{MutationAck, Request, Response, RpcError, TrackKind};
 
@@ -39,6 +39,7 @@ pub(super) fn try_handle(
         track::DELETE => delete(app, request),
         track::ADD_INSTRUMENT => add_instrument(app, request),
         track::ADD_EFFECT => add_effect(app, request),
+        track::REMOVE_EFFECT => remove_effect(app, request),
         track::SET_PLUGIN_PARAM => set_plugin_param(app, request),
         mixer::SET_VOLUME => set_volume(app, request),
         mixer::SET_VOLUME_DB => set_volume_db(app, request),
@@ -258,6 +259,117 @@ fn add_plugin(
         Message::Plugin(PluginMessage::AddPluginToTrack(params.track_id.0, plugin)),
     );
     (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// track.remove_effect
+// ---------------------------------------------------------------------------
+
+/// `track.remove_effect` — take one effect off a track's insert chain
+/// (ba doc #273, todo #1223).
+///
+/// Until this existed an effect could only ever be APPENDED, and
+/// `track.add_effect` adds another instance on every call, so a wrong
+/// add was unrecoverable over the control API. Dispatches the existing
+/// `PluginMessage::RemovePluginFromTrack` through `run_via_update`, so
+/// the removal is undoable like a manual one.
+fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: RemoveEffectParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0).cloned() else {
+        return not_found_track(request, params.track_id.0);
+    };
+    let entries = super::song::plugin_entries(app, &t);
+
+    let entry = match (params.slot, &params.plugin_id) {
+        (Some(_), Some(_)) => {
+            return reject(
+                request,
+                RpcError::invalid_params(
+                    "address the effect by slot OR by plugin_id (+ occurrence), not both",
+                ),
+            )
+        }
+        (None, None) => {
+            return reject(
+                request,
+                RpcError::invalid_params(format!(
+                    "name the effect to remove: slot, or plugin_id (+ occurrence). Track {} \
+                     carries [{}]",
+                    t.id,
+                    chain_description(&entries)
+                )),
+            )
+        }
+        (Some(slot), None) => match entries.iter().find(|e| e.slot == slot) {
+            Some(entry) => entry,
+            None => {
+                return reject(
+                    request,
+                    RpcError::not_found(format!(
+                        "track {} has no plugin at slot {slot}; it carries [{}]",
+                        t.id,
+                        chain_description(&entries)
+                    )),
+                )
+            }
+        },
+        (None, Some(plugin_id)) => {
+            let occurrence = params.occurrence.unwrap_or(0);
+            match entries
+                .iter()
+                .find(|e| &e.plugin_id == plugin_id && e.occurrence == occurrence)
+            {
+                Some(entry) => entry,
+                None => {
+                    return reject(
+                        request,
+                        super::song::unknown_plugin_on_track(app, &t, plugin_id, occurrence),
+                    )
+                }
+            }
+        }
+    };
+
+    // The instrument is replaced with `track.add_instrument`, never
+    // removed here — taking it off would silently mute the track.
+    if entry.kind == track::PluginKind::Instrument {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "slot {} on track {} is the track's INSTRUMENT ({}), not an effect; replace it \
+                 with track.add_instrument instead of removing it",
+                entry.slot, t.id, entry.plugin_id
+            )),
+        );
+    }
+
+    let Some(instance_id) = instance_for(&t, &entry.plugin_id, entry.occurrence) else {
+        return reject(
+            request,
+            RpcError::not_found(format!(
+                "plugin {:?} vanished from track {} between lookup and removal",
+                entry.plugin_id, t.id
+            )),
+        );
+    };
+    let task = super::run_via_update(
+        app,
+        Message::Plugin(PluginMessage::RemovePluginFromTrack(t.id, instance_id)),
+    );
+    (ack(app, request), task)
+}
+
+/// The chain as `slot:plugin_id` pairs, for error messages that let the
+/// caller correct an address rather than guess again.
+fn chain_description(entries: &[track::PluginParamsEntry]) -> String {
+    entries
+        .iter()
+        .map(|e| format!("{}:{}", e.slot, e.plugin_id))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ---------------------------------------------------------------------------

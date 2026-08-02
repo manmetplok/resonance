@@ -425,6 +425,9 @@ pub(super) fn plugin_entries(app: &Resonance, t: &TrackState) -> Vec<track::Plug
             track::PluginParamsEntry {
                 plugin_id: p.clap_plugin_id.clone(),
                 name: p.plugin_name.clone(),
+                // Chain index, instrument included: slot order is
+                // processing order (ba doc #273, todo #1223).
+                slot: i as u32,
                 occurrence: *occurrence,
                 kind: if Some(i) == instrument {
                     PluginKind::Instrument

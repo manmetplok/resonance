@@ -20,6 +20,9 @@ pub const ADD_INSTRUMENT: &str = "track.add_instrument";
 /// `track.add_effect` — append a built-in effect to the insert chain
 /// ([`AddPluginParams`] -> `MutationAck`).
 pub const ADD_EFFECT: &str = "track.add_effect";
+/// `track.remove_effect` — take an effect off the insert chain
+/// ([`RemoveEffectParams`] -> `MutationAck`).
+pub const REMOVE_EFFECT: &str = "track.remove_effect";
 /// `track.plugins` — the built-in plugin catalog, read-only
 /// (no params -> [`PluginCatalog`]).
 pub const PLUGINS: &str = "track.plugins";
@@ -38,6 +41,7 @@ pub const METHODS: &[&str] = &[
     DELETE,
     ADD_INSTRUMENT,
     ADD_EFFECT,
+    REMOVE_EFFECT,
     PLUGINS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
@@ -155,11 +159,44 @@ pub struct PluginParamsEntry {
     /// [`SetPluginParamParams::plugin_id`] take.
     pub plugin_id: String,
     pub name: String,
+    /// 0-based position in the track's insert chain, the instrument
+    /// included, so slot order IS processing order. `slot` and
+    /// `(plugin_id, occurrence)` are two ways to address the same
+    /// plugin: `slot` says *where* it sits, the pair says *which* copy
+    /// of a repeated effect it is. Slots renumber when a plugin is
+    /// removed, so re-read this view between removals.
+    #[serde(default)]
+    pub slot: u32,
     /// 0-based position of this plugin among the track's instances of
     /// the same `plugin_id` — pass as `occurrence` to address it.
     pub occurrence: u32,
     pub kind: PluginKind,
     pub params: Vec<PluginParamView>,
+}
+
+/// Params for `track.remove_effect`: address the plugin **either** by
+/// `slot` **or** by `plugin_id` (+ `occurrence`). Both forms together,
+/// or neither, is `invalid_params` — with `track.add_effect` appending a
+/// fresh instance on every call, guessing which copy was meant is how
+/// the wrong processor comes off.
+///
+/// The track's INSTRUMENT cannot be removed this way; replace it with
+/// `track.add_instrument` instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RemoveEffectParams {
+    pub track_id: TrackId,
+    /// 0-based chain position, as reported by
+    /// [`PluginParamsEntry::slot`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// CLAP id of the effect to remove.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based; defaults to the first.
+    /// Only meaningful together with `plugin_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
 }
 
 /// One plugin parameter.
