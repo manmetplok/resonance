@@ -10,6 +10,9 @@
 //! - [`SpectrumAnalyzer`] / [`SpectrumHandle`] — background-thread FFT
 //! - [`CorrelationMeter`], [`CrestMeter`], [`PlrMeter`]
 //! - [`MeterSnapshot`] — aggregate for lock-free publication to a UI thread
+//! - [`offline`] — pure whole-buffer primitives for mix analysis
+//!   ([`band_shares`], [`mono_penalty_db`], [`sample_peak_db`],
+//!   [`clipped_samples`])
 
 pub mod atomic_snapshot;
 pub mod correlation;
@@ -17,6 +20,7 @@ pub mod crest;
 pub mod k_weighting;
 pub mod lra;
 pub mod lufs;
+pub mod offline;
 pub mod plr;
 pub mod snapshot;
 pub mod spectrum;
@@ -28,6 +32,9 @@ pub use crest::CrestMeter;
 pub use k_weighting::KWeightingFilter;
 pub use lra::LraMeter;
 pub use lufs::{LufsMeter, LufsReadout};
+pub use offline::{
+    band_shares, clipped_samples, mono_penalty_db, sample_peak_db, sample_peak_linear, BandShares,
+};
 pub use plr::{PlrMeter, PlrReadout};
 pub use snapshot::MeterSnapshot;
 pub use spectrum::{SpectrumAnalyzer, SpectrumHandle, SpectrumSnapshot, FFT_SIZE, NUM_OCTAVE_BINS};
