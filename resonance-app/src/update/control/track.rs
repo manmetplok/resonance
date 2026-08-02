@@ -20,7 +20,7 @@ use crate::state::TrackState;
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::mixer::{
-    self, SetMuteParams, SetPanParams, SetSoloParams, SetVolumeParams,
+    self, SetMuteParams, SetPanParams, SetSoloParams, SetVolumeDbParams, SetVolumeParams,
 };
 use resonance_control::methods::track::{
     self, AddParams, AddPluginParams, AddResult, DeleteParams, RenameParams,
@@ -41,6 +41,7 @@ pub(super) fn try_handle(
         track::ADD_EFFECT => add_effect(app, request),
         track::SET_PLUGIN_PARAM => set_plugin_param(app, request),
         mixer::SET_VOLUME => set_volume(app, request),
+        mixer::SET_VOLUME_DB => set_volume_db(app, request),
         mixer::SET_PAN => set_pan(app, request),
         mixer::SET_MUTE => set_mute(app, request),
         mixer::SET_SOLO => set_solo(app, request),
@@ -423,6 +424,56 @@ fn set_volume(app: &mut Resonance, request: &Request) -> (Response, Task<Message
     let task = super::run_via_update(
         app,
         Message::Track(TrackMessage::SetTrackVolume(params.track_id.0, db)),
+    );
+    (ack(app, request), task)
+}
+
+/// `mixer.set_volume_db` — the same fader as [`set_volume`], in dB (ba
+/// doc #273).
+///
+/// `TrackState.volume` is already stored in dB, so this dispatches the
+/// caller's value verbatim: no `log10` on the way in, no `powf` on the
+/// way out. Out-of-range values are rejected rather than clamped —
+/// silently moving a level the caller asked for is how a mix ends up
+/// subtly wrong with nothing to point at.
+fn set_volume_db(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: SetVolumeDbParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    if find_track(app, params.track_id.0).is_none() {
+        return not_found_track(request, params.track_id.0);
+    }
+    if !params.volume_db.is_finite() {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "volume_db must be finite (got {}); the app's silence floor is {} dB, \
+                 not -inf",
+                params.volume_db,
+                mixer::VOLUME_DB_MIN
+            )),
+        );
+    }
+    if !(mixer::VOLUME_DB_MIN..=mixer::VOLUME_DB_MAX).contains(&params.volume_db) {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "volume_db must be within {}..={} dB — the range the mixer fader spans \
+                 ({} dB is silence, 0 dB is unity) — got {}",
+                mixer::VOLUME_DB_MIN,
+                mixer::VOLUME_DB_MAX,
+                mixer::VOLUME_DB_MIN,
+                params.volume_db
+            )),
+        );
+    }
+    let task = super::run_via_update(
+        app,
+        Message::Track(TrackMessage::SetTrackVolume(
+            params.track_id.0,
+            params.volume_db,
+        )),
     );
     (ack(app, request), task)
 }
