@@ -59,14 +59,19 @@ impl ResonanceMcp {
                        (scripts/bundle.sh), not that the app ships no instruments. Then shape \
                        the sound with track_plugin_params / track_set_plugin_param — the \
                        wavetable synth exposes ~90 parameters and its default patch is only a \
-                       starting point.",
-        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+                       starting point. \
+                       \
+                       Returns {plugin_id, occurrence, slot} — pass plugin_id and occurrence \
+                       straight to track_set_plugin_param instead of re-reading the chain to \
+                       work out which instance is the new one.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<track::AddPluginResult>()
     )]
     async fn track_add_instrument(
         &self,
         Parameters(params): Parameters<track::AddPluginParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.invoke(track::ADD_INSTRUMENT, &params).await
+        self.invoke_structured(track::ADD_INSTRUMENT, &params).await
     }
 
     #[tool(
@@ -76,16 +81,29 @@ impl ResonanceMcp {
                        \"com.resonance.compressor\", \"com.resonance.mastering\". track_plugins \
                        lists the catalog and a wrong id is rejected with the valid ids. Each \
                        call APPENDS another instance, so calling it twice with the same id gives \
-                       the track two of that effect (address them by occurrence in \
-                       track_plugin_params / track_set_plugin_param). Effect parameters are set \
-                       the same way as instrument ones, by naming plugin_id.",
-        annotations(destructive_hint = false, open_world_hint = false)
+                       the track two of that effect. \
+                       \
+                       Returns {plugin_id, occurrence, slot}: occurrence is WHICH copy you just \
+                       made (0 the first time, 1 the second), and it is what \
+                       track_set_plugin_param and track_remove_effect take — so pass it \
+                       straight on rather than re-reading the chain and guessing which instance \
+                       is new. slot is its position in the chain right now, and slots renumber \
+                       whenever anything is removed or moved. \
+                       \
+                       The effect is visible to track_plugin_params immediately, but its \
+                       PARAMETER LIST arrives a moment later from the audio engine, so a \
+                       set_plugin_param issued in the very next call can report that the plugin \
+                       is still initializing — that is a retry, not a failed add. Effect \
+                       parameters are then set the same way as instrument ones, by naming \
+                       plugin_id.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<track::AddPluginResult>()
     )]
     async fn track_add_effect(
         &self,
         Parameters(params): Parameters<track::AddPluginParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.invoke(track::ADD_EFFECT, &params).await
+        self.invoke_structured(track::ADD_EFFECT, &params).await
     }
 
     #[tool(

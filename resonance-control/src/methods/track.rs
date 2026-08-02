@@ -15,10 +15,10 @@ pub const RENAME: &str = "track.rename";
 /// `"confirm": true` ([`DeleteParams`] -> `MutationAck`).
 pub const DELETE: &str = "track.delete";
 /// `track.add_instrument` — set a built-in instrument by stable plugin
-/// id ([`AddPluginParams`] -> `MutationAck`).
+/// id ([`AddPluginParams`] -> [`AddPluginResult`]).
 pub const ADD_INSTRUMENT: &str = "track.add_instrument";
 /// `track.add_effect` — append a built-in effect to the insert chain
-/// ([`AddPluginParams`] -> `MutationAck`).
+/// ([`AddPluginParams`] -> [`AddPluginResult`]).
 pub const ADD_EFFECT: &str = "track.add_effect";
 /// `track.remove_effect` — take an effect off the insert chain
 /// ([`RemoveEffectParams`] -> `MutationAck`).
@@ -103,6 +103,41 @@ pub struct AddPluginParams {
     pub track_id: TrackId,
     /// Stable plugin id from the catalog, e.g. `"resonance-wavetable"`.
     pub plugin_id: String,
+}
+
+/// Result of `track.add_effect` / `track.add_instrument`: a handle on
+/// the plugin that was just created.
+///
+/// `(plugin_id, occurrence)` is exactly what `track.set_plugin_param`,
+/// `track.plugin_params` and `track.remove_effect` take, so the caller
+/// can configure or undo what it just added without re-reading the chain
+/// and guessing which instance is the new one. Adding the same plugin
+/// twice gives `occurrence` 0 then 1.
+///
+/// The plugin is visible to `track.plugin_params` in the same update
+/// cycle as this reply — no engine round-trip is needed to see that it
+/// exists. Its PARAMETER LIST, however, arrives with the engine's echo,
+/// so a `track.plugin_params` read in the same tick may show an empty
+/// `params` array; `track.set_plugin_param` says so explicitly rather
+/// than claiming the plugin has no such parameter.
+///
+/// Additive: the previous reply was an object carrying only `revision`,
+/// so a client reading just that field keeps working.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AddPluginResult {
+    /// The CLAP id that was added — echoed back so a reply is
+    /// self-describing.
+    pub plugin_id: String,
+    /// 0-based index of this instance among the track's copies of
+    /// `plugin_id`. Pass as `occurrence` to address it.
+    pub occurrence: u32,
+    /// 0-based position in the track's insert chain, the instrument
+    /// included, at the moment of the add. Slots renumber when anything
+    /// is removed or moved, so `(plugin_id, occurrence)` is the stabler
+    /// handle.
+    pub slot: u32,
+    pub revision: u64,
 }
 
 /// Result of `track.plugins`: the built-in plugin catalog.

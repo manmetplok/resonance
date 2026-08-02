@@ -13,6 +13,26 @@ pub type SendId = u64;
 /// the project pool and may back zero, one, or many clips.
 pub type AssetId = u64;
 
+/// First [`PluginInstanceId`] reserved for the app's own allocator.
+///
+/// The engine counts plugin ids up from 1. The control API needs to know
+/// a plugin's id *synchronously*, before the engine's `PluginAdded` echo
+/// arrives, so the app allocates from this range instead and passes the
+/// result to the engine as an `id_hint` (ba doc #273, todo #1234).
+///
+/// The constant lives here, next to `PluginInstanceId`, rather than in
+/// the app, because the split only works if BOTH sides honour it: the
+/// engine bumps `next_plugin_id` past any hint it is given, so were it
+/// to do that for a control-range hint its own counter would land inside
+/// this range and start handing out ids the app also considers free.
+/// The add paths in `engine/plugins.rs`, `engine/busses.rs` and
+/// `engine/master.rs` therefore bump only for hints *below* this base —
+/// project-load replay hints, which are all engine-allocated.
+///
+/// Same distinct-range convention as sub-track ids (1e9) and return-bus
+/// ids (2e9).
+pub const CONTROL_PLUGIN_ID_BASE: PluginInstanceId = 3_000_000_000;
+
 /// Where a track's post-fader audio lands. Tracks either sum directly
 /// into the master output (the default, matching pre-bus behaviour) or
 /// route into a named bus for group processing before reaching master.

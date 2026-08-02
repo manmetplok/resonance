@@ -8,7 +8,7 @@ use std::path::Path;
 use crate::clap_host::SyncClapInstance;
 use crate::types::*;
 
-use super::plugins::{ensure_bundle, resolve_plugin_id};
+use super::plugins::{allocate_plugin_instance_id, ensure_bundle, resolve_plugin_id};
 use super::thread::{HandlerCtx, HandlerState};
 use super::MAX_BUSSES;
 
@@ -140,14 +140,7 @@ pub(crate) fn handle_add_plugin_to_bus(
         .unwrap_or_else(|| actual_plugin_id.clone());
     match state.bundles[bundle_idx].create_instance(&actual_plugin_id, ctx.sample_rate) {
         Ok(instance) => {
-            let instance_id = id_hint.unwrap_or_else(|| {
-                let i = state.next_plugin_id;
-                state.next_plugin_id += 1;
-                i
-            });
-            if id_hint.is_some() {
-                state.next_plugin_id = state.next_plugin_id.max(instance_id + 1);
-            }
+            let instance_id = allocate_plugin_instance_id(&mut state.next_plugin_id, id_hint);
             let params = instance.query_params();
             let has_gui = instance.has_gui();
             ctx.plugins.write().insert(

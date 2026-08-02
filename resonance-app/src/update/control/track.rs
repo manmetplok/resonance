@@ -257,15 +257,46 @@ fn add_plugin(
             )),
         );
     }
-    // AddPluginToTrack appends to the chain. On an instrument track the
-    // instrument sits at slot 0 (the engine's add path handles the
-    // instrument-vs-effect placement); the control surface exposes the
-    // same append the GUI uses.
+    // Compute the handle BEFORE dispatching: the engine appends
+    // (`push_plugin`), so the new plugin lands at the current chain
+    // length, and its occurrence is the number of copies already there.
+    let (slot, occurrence) = {
+        // `find_track` succeeded above.
+        let t = find_track(app, params.track_id.0).expect("track checked above");
+        (
+            t.plugins.len() as u32,
+            t.plugins
+                .iter()
+                .filter(|p| p.clap_plugin_id == params.plugin_id)
+                .count() as u32,
+        )
+    };
+
+    // The GUI's add is asynchronous: the engine allocates the instance
+    // id, instantiates the plugin and echoes `PluginAdded`, and only
+    // then does the app mirror a slot. A control client that issued
+    // `track.set_plugin_param` immediately afterwards therefore got
+    // "... it carries: []", which reads as "the add failed" (ba doc
+    // #273, todo #1234). So allocate the id app-side, pass it as
+    // `id_hint`, and let the message handler mirror a placeholder slot —
+    // the plugin is addressable in the SAME update cycle as this reply.
+    // The GUI path is untouched and stays engine-allocated.
+    let instance_id = app.allocate_control_plugin_id();
     let task = super::run_via_update(
         app,
-        Message::Plugin(PluginMessage::AddPluginToTrack(params.track_id.0, plugin)),
+        Message::Plugin(PluginMessage::AddPluginToTrackWithId {
+            track_id: params.track_id.0,
+            instance_id,
+            plugin,
+        }),
     );
-    (ack(app, request), task)
+    let result = track::AddPluginResult {
+        plugin_id: params.plugin_id,
+        occurrence,
+        slot,
+        revision: app.revision(),
+    };
+    (super::success(request, &result), task)
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +762,24 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         };
         return reject(request, error);
     };
+
+    // The one window `track.add_effect`'s synchronous commit (todo
+    // #1234) cannot close: the slot exists, but its parameter list only
+    // arrives with the engine's `PluginAdded` echo. Say that, rather
+    // than falling through to "plugin X has no parameter Y (has: [])" —
+    // which is what made a working add look like a failed one.
+    if entry.params.is_empty() {
+        return reject(
+            request,
+            RpcError::busy(format!(
+                "plugin {:?} is on track {} but is still initializing — its parameter list \
+                 arrives with the engine echo, usually within a frame. Retry, or read \
+                 track.plugin_params until its params array is non-empty. (A plugin that \
+                 genuinely exposes no parameters reports the same empty list.)",
+                entry.plugin_id, t.id
+            )),
+        );
+    }
 
     // Resolve the parameter by name first, then by numeric CLAP id — a
     // client reading `track.plugin_params` has both, and a name is what

@@ -289,9 +289,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Master(_) => UndoAction::Record,
 
         Message::Plugin(p) => match p {
-            PluginMessage::AddPluginToTrack(_, _) | PluginMessage::RemovePluginFromTrack(_, _) => {
-                UndoAction::Record
-            }
+            PluginMessage::AddPluginToTrack(_, _)
+            | PluginMessage::AddPluginToTrackWithId { .. }
+            | PluginMessage::RemovePluginFromTrack(_, _) => UndoAction::Record,
             PluginMessage::SetPluginParam(instance_id, param_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
                     instance_id: *instance_id,

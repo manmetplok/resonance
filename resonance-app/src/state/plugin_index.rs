@@ -13,11 +13,25 @@
 //! entry helper; `rebuild_plugin_index` is the wholesale variant used
 //! after a project replay or demo seed where the entire state tree is
 //! repopulated at once.
+//!
+//! Because this module already owns the "every live plugin instance,
+//! wherever it lives" view, it is also where
+//! [`Resonance::allocate_control_plugin_id`] lives — the app-side
+//! instance-id allocator the control API needs to add a plugin
+//! synchronously (ba doc #273, todo #1234).
 
 use resonance_audio::types::PluginInstanceId;
 
 use crate::state::{PluginLocator, PluginSlotState};
 use crate::Resonance;
+
+/// First plugin instance id the app may allocate for itself.
+///
+/// Re-exported from `resonance-audio` rather than declared here: the
+/// engine has to know the same boundary, because it must NOT advance its
+/// own allocator past a hint from this range (see
+/// `engine::plugins::note_hinted_plugin_id`). One definition, both sides.
+pub use resonance_audio::types::CONTROL_PLUGIN_ID_BASE;
 
 impl Resonance {
     /// Locate a plugin slot on any track, bus, or master by instance id
@@ -107,6 +121,68 @@ impl Resonance {
     /// removed wholesale.
     pub(crate) fn remove_plugin_index(&mut self, instance_id: PluginInstanceId) {
         self.plugin_index.remove(&instance_id);
+    }
+
+    /// Allocate a plugin instance id the APP chose, for a control-API
+    /// add that has to report `occurrence`/`slot` in its reply (ba doc
+    /// #273, todo #1234).
+    ///
+    /// The engine normally allocates instance ids and echoes them back
+    /// with `PluginAdded`, which is too late for a synchronous reply.
+    /// The id is passed to the engine as `id_hint`, which the engine
+    /// honours (`resonance-audio/src/engine/plugins.rs`), exactly as the
+    /// project-load replay path already relies on.
+    ///
+    /// Same distinct-range convention as
+    /// [`TrackRegistry::allocate_sub_track_id`](crate::state::TrackRegistry::allocate_sub_track_id)
+    /// (1e9) and
+    /// [`allocate_return_bus_id`](crate::state::TrackRegistry::allocate_return_bus_id)
+    /// (2e9): control-allocated plugin ids count up from
+    /// [`CONTROL_PLUGIN_ID_BASE`], above anything the engine's own
+    /// allocator will reach.
+    ///
+    /// What makes that a guarantee rather than a hope is the engine side
+    /// of the same constant: `engine::plugins::note_hinted_plugin_id`
+    /// advances `next_plugin_id` past a hint only when the hint is BELOW
+    /// the base. Without that, the first control add would drag the
+    /// engine's counter into this range and the next engine-allocated
+    /// add (`master.add_effect` still is one) could take an id this
+    /// allocator also considers free.
+    ///
+    /// The in-use scan below is belt-and-braces on top of the range
+    /// split, not the thing that makes it safe: it can only see ids the
+    /// app already mirrors, so an engine-allocated plugin whose
+    /// `PluginAdded` echo is still in flight is invisible to it.
+    pub(crate) fn allocate_control_plugin_id(&mut self) -> PluginInstanceId {
+        if self.next_control_plugin_id < CONTROL_PLUGIN_ID_BASE {
+            self.next_control_plugin_id = CONTROL_PLUGIN_ID_BASE;
+        }
+        loop {
+            let candidate = self.next_control_plugin_id;
+            self.next_control_plugin_id += 1;
+            if !self.plugin_instance_id_in_use(candidate) {
+                return candidate;
+            }
+        }
+    }
+
+    /// True when any track, bus or master chain already mirrors this
+    /// instance id. `plugin_index` is a cache, so this checks the chains
+    /// themselves — a stale index must never hand out a live id.
+    fn plugin_instance_id_in_use(&self, instance_id: PluginInstanceId) -> bool {
+        self.registry
+            .tracks
+            .iter()
+            .any(|t| t.plugins.iter().any(|p| p.instance_id == instance_id))
+            || self
+                .registry
+                .busses
+                .iter()
+                .any(|b| b.plugins.iter().any(|p| p.instance_id == instance_id))
+            || self
+                .master_plugins
+                .iter()
+                .any(|p| p.instance_id == instance_id)
     }
 
     /// Recompute the entire `plugin_index` from `registry.tracks`,
