@@ -239,6 +239,31 @@ pub enum AudioCommand {
         track_id: TrackId,
         instance_id: PluginInstanceId,
     },
+    /// Reorder a track's insert chain: move `instance_id` to `to_index`,
+    /// shifting the plugins between its old and new slot by one. Order is
+    /// audible — an EQ before a compressor is a different sound from an EQ
+    /// after it — and before this command the only way to reorder a chain
+    /// was to tear it down and rebuild it.
+    ///
+    /// `to_index` is clamped to the last slot, so an out-of-range value
+    /// moves the plugin to the end rather than failing. Moving a plugin to
+    /// the slot it already occupies is a no-op that still confirms with
+    /// [`AudioEvent::PluginMoved`](super::AudioEvent::PluginMoved).
+    ///
+    /// **Slot 0 is structural on instrument tracks**: `plugins().first()` is
+    /// the instrument — it is what receives MIDI, what keeps running while
+    /// the track's FX are bypassed, and what every sub-track inherits its
+    /// latency from (`latency::chain_latencies`). The engine performs
+    /// whatever move it is asked to, so a caller that only means to reorder
+    /// *effects* must keep the instrument pinned at index 0 itself.
+    ///
+    /// An unknown track, or an `instance_id` that is not on that track's
+    /// chain, leaves the chain untouched and reports `AudioEvent::Error`.
+    MovePlugin {
+        track_id: TrackId,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
     ScanPlugins,
     SetPluginParam {
         instance_id: PluginInstanceId,

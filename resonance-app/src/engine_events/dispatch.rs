@@ -355,6 +355,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             track_id,
             instance_id,
         } => plugins::track_removed(r, track_id, instance_id),
+        E::PluginMoved {
+            track_id,
+            instance_id,
+            to_index,
+        } => plugins::track_moved(r, track_id, instance_id, to_index),
         E::PluginsScanned { plugins } => plugins::scanned(r, plugins),
         E::PluginStateSaved { instance_id, data } => {
             plugins::state_saved(r, instance_id, data)

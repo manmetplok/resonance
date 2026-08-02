@@ -219,6 +219,41 @@ pub(super) fn track_removed(
     r.remove_plugin_index(instance_id);
 }
 
+/// Mirror an engine-side chain reorder (`AudioEvent::MovePlugin` ->
+/// `AudioEvent::PluginMoved`, ba todo #1224) onto the app's
+/// `TrackState.plugins`.
+///
+/// The engine is the source of truth for chain order and reports the slot
+/// the plugin actually landed on *after* its own clamping, so this replays
+/// that index rather than re-deriving it. Mirroring matters beyond the
+/// display: this `Vec`'s order is what project serialization writes, so a
+/// reorder only survives save/load if it lands here too. `plugin_index` is
+/// keyed by track, not by slot, so it needs no update.
+pub(super) fn track_moved(
+    r: &mut Resonance,
+    track_id: TrackId,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
+    let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) else {
+        return;
+    };
+    let Some(from) = track
+        .plugins
+        .iter()
+        .position(|p| p.instance_id == instance_id)
+    else {
+        return;
+    };
+    // `from` was found, so the chain is non-empty and this cannot wrap.
+    let to = to_index.min(track.plugins.len() - 1);
+    if from == to {
+        return;
+    }
+    let slot = track.plugins.remove(from);
+    track.plugins.insert(to, slot);
+}
+
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.available_plugins = plugins;
     r.view_caches.rebuild_plugins(&r.available_plugins);
