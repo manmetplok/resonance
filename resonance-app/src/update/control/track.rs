@@ -309,6 +309,14 @@ fn add_plugin(
 ///
 /// `song.summary` / `song.tracks` report the current destination in the
 /// same shape, so read and write share one vocabulary.
+///
+/// Busses share the track id space, so "route a bus somewhere" is
+/// expressible — but the engine models bus -> master only, and
+/// [`find_track`] searches `registry.tracks`, which never holds a bus.
+/// A bus id therefore falls out below as `not_found` before any routing
+/// is attempted. There used to be an explicit "this is a bus" branch
+/// after that check; it was unreachable, so it is gone (ba doc #273,
+/// todo #1238 item 2).
 fn set_output(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: track::SetOutputParams = match request.params() {
         Ok(p) => p,
@@ -317,17 +325,6 @@ fn set_output(app: &mut Resonance, request: &Request) -> (Response, Task<Message
     let Some(t) = find_track(app, params.track_id.0) else {
         return not_found_track(request, params.track_id.0);
     };
-    // A bus is a track id in the same space, so "route the bus into
-    // itself" is expressible; the engine models bus -> master only.
-    if app.registry.busses.iter().any(|b| b.id == params.track_id.0) {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "{} is a bus, not a track; busses always feed master and cannot be re-routed",
-                params.track_id
-            )),
-        );
-    }
 
     let output = match params.output {
         WireTrackOutput::Master => TrackOutput::Master,
