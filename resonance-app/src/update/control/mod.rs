@@ -281,6 +281,10 @@ fn hello(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
 /// project the gate otherwise requires. Every other method mutates the
 /// current project and is gated.
 ///
+/// `plugins.*` is the one addition to that list: it is read-only AND
+/// project-independent (unlike `master.summary` / `edit.status`, which
+/// read but describe the open project and so stay gated).
+///
 /// The `notes.*` create/insert/etc., `transport.*`, `track.*` /
 /// `mixer.*`, `section.*`, `harmony.*`, `generate.*`, `vocal.*` and
 /// `render.*` namespaces are all mutating and deliberately absent.
@@ -289,6 +293,13 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
     method == HELLO
         || methods::song::METHODS.contains(&method)
         || methods::project::METHODS.contains(&method)
+        // `plugins.catalog` (and its deprecated `track.plugins` alias)
+        // reads `available_plugins`, which the scanner fills at startup
+        // and which no project owns. Gating it made a pure catalog query
+        // answer `busy` with nothing open, so an agent could not even
+        // find out what it had to build with before opening a project
+        // (todo #1236).
+        || methods::plugins::METHODS.contains(&method)
         || resonance_control::job::METHODS.contains(&method)
 }
 

@@ -260,17 +260,28 @@ async fn reconnects_after_dropped_socket() {
 async fn combined_router_exposes_every_control_method() {
     // One MCP tool per control method — control.hello and job.* included
     // — so the published surface can't silently drop a protocol method.
+    // The exception is a deprecated alias: the app still answers it, so
+    // it is in `capabilities`, but it deliberately gets no tool, because
+    // an agent must see exactly one spelling per operation.
     let router = ResonanceMcp::combined_router();
     let tools: std::collections::BTreeSet<String> = router
         .list_all()
         .into_iter()
         .map(|t| t.name.to_string())
         .collect();
+    let aliases = resonance_control::methods::deprecated_aliases();
     // `a.b` -> `a_b` is the whole naming rule.
     let expected: std::collections::BTreeSet<String> = resonance_control::methods::capabilities()
         .into_iter()
+        .filter(|m| !aliases.contains(m))
         .map(|m| m.replacen('.', "_", 1))
         .collect();
+    for alias in &aliases {
+        assert!(
+            !tools.contains(&alias.replacen('.', "_", 1)),
+            "{alias} is deprecated and must not be published as an MCP tool"
+        );
+    }
     assert_eq!(
         tools, expected,
         "published tool names diverged from the control method list"

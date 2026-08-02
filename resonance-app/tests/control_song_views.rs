@@ -1,4 +1,4 @@
-//! `song.*` introspection views + `track.plugins` catalog over the
+//! `song.*` introspection views + the `plugins.catalog` query over the
 //! control endpoint (ba doc #265, todo #1148).
 //!
 //! Builds a small project in-memory (tracks, clips, notes, a placed
@@ -19,7 +19,7 @@ use resonance_audio::types::{AudioEvent, MidiNote, ScannedPlugin, TrackType};
 use resonance_control::methods::song::{
     NotesView, SectionsView, SongSummary, TracksView, VocalView,
 };
-use resonance_control::methods::track::PluginCatalog;
+use resonance_control::methods::plugins::PluginCatalog;
 use resonance_control::{ErrorKind, Request, Response};
 use resonance_music_theory::{
     parse_chord, LyricLine, Mode, MotifSource, PitchClass, Scale, VocalParams,
@@ -513,7 +513,7 @@ fn vocal_track_resolution_errors() {
     assert_eq!(response.error.expect("unknown track").kind(), ErrorKind::NotFound);
 }
 
-// ---------------- track.plugins catalog ----------------
+// ---------------- plugins.catalog ----------------
 
 #[test]
 fn plugin_catalog_lists_scanned_plugins() {
@@ -537,12 +537,12 @@ fn plugin_catalog_lists_scanned_plugins() {
         ],
     });
 
-    let response = roundtrip(&mut app, Request::without_params(1, "track.plugins"));
+    let response = roundtrip(&mut app, Request::without_params(1, "plugins.catalog"));
     let catalog: PluginCatalog = response.result().expect("catalog succeeds");
     assert_eq!(catalog.plugins.len(), 2);
     assert_eq!(catalog.plugins[0].id, "com.resonance.wavetable");
 
-    let json: serde_json::Value = roundtrip(&mut app, Request::without_params(2, "track.plugins"))
+    let json: serde_json::Value = roundtrip(&mut app, Request::without_params(2, "plugins.catalog"))
         .result()
         .expect("catalog succeeds");
     assert_eq!(json["plugins"][0]["kind"], "instrument");
@@ -560,7 +560,7 @@ fn song_views_never_mutate_or_bump_revision() {
         "song.sections",
         "song.tracks",
         "song.vocal",
-        "track.plugins",
+        "plugins.catalog",
     ] {
         let response = roundtrip(&mut app, Request::without_params(1, method));
         assert!(response.error.is_none(), "{method} should succeed");
