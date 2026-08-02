@@ -15,9 +15,24 @@ use serde::{Deserialize, Serialize};
 pub const SUMMARY: &str = "master.summary";
 /// `master.set_volume` — set the master fader ([`SetMasterVolumeParams`]).
 pub const SET_VOLUME: &str = "master.set_volume";
+/// `master.add_effect` — append an effect to the master insert chain
+/// ([`AddEffectParams`]).
+pub const ADD_EFFECT: &str = "master.add_effect";
+/// `master.remove_effect` — take an effect off the master chain
+/// ([`RemoveEffectParams`]).
+pub const REMOVE_EFFECT: &str = "master.remove_effect";
+/// `master.set_fx_bypass` — bypass/unbypass the whole master chain
+/// ([`SetFxBypassParams`]).
+pub const SET_FX_BYPASS: &str = "master.set_fx_bypass";
 
 /// All `master.*` method names.
-pub const METHODS: &[&str] = &[SUMMARY, SET_VOLUME];
+pub const METHODS: &[&str] = &[
+    SUMMARY,
+    SET_VOLUME,
+    ADD_EFFECT,
+    REMOVE_EFFECT,
+    SET_FX_BYPASS,
+];
 
 /// Result of `master.summary`.
 ///
@@ -66,4 +81,47 @@ pub struct SetMasterVolumeParams {
     /// [`crate::methods::mixer::VOLUME_DB_MIN`]`..=`[`crate::methods::mixer::VOLUME_DB_MAX`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume_db: Option<f32>,
+}
+
+/// Params for `master.add_effect`. Appends, exactly like
+/// `track.add_effect`: calling it twice with the same id puts two
+/// instances on the master.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AddEffectParams {
+    /// The effect's stable CLAP id, e.g. `"com.resonance.mastering"`.
+    /// Instrument plugins are refused — the master chain processes an
+    /// already-summed mix and has no notes to play.
+    pub plugin_id: String,
+}
+
+/// Params for `master.remove_effect`: address the plugin **either** by
+/// `slot` **or** by `plugin_id` (+ `occurrence` when the same effect is
+/// on the master more than once). Giving both forms, or neither, is
+/// `invalid_params` — a guess here removes the wrong processor from the
+/// whole mix.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RemoveEffectParams {
+    /// 0-based chain position, as reported by `master.summary`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// The effect's CLAP id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based. Defaults to `0`; only
+    /// meaningful together with `plugin_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
+
+/// Params for `master.set_fx_bypass`. Idempotent: this SETS the state
+/// rather than toggling it, so a client that lost track of the current
+/// value cannot flip it the wrong way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetFxBypassParams {
+    /// `true` bypasses every plugin on the master chain (the mix passes
+    /// through unprocessed); `false` re-engages them.
+    pub bypassed: bool,
 }
