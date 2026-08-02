@@ -2,7 +2,9 @@
 //! views. None of these methods mutate; all results carry `revision` so
 //! clients can detect concurrent GUI edits.
 
-use crate::common::{BeatRange, KeyScale, SongPosition, TimeSignature, TrackKind, TransportState};
+use crate::common::{
+    BeatRange, KeyScale, SongPosition, TimeSignature, TrackKind, TrackOutput, TransportState,
+};
 use crate::ids::{ChordId, ClipId, NoteId, SectionDefinitionId, SectionPlacementId, TrackId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -94,13 +96,42 @@ pub struct TrackSummary {
     /// which a client cannot distinguish from an omitted field.
     #[serde(default)]
     pub instrument: Option<String>,
+    /// Present only on **sub-tracks**: the parent track this one belongs
+    /// to. A multi-output instrument (e.g. the drum kit, which declares
+    /// Main/Kick/Snare/Toms/Hats/Cymbals/Overhead) spawns one child track
+    /// per output port past the first, each with its own fader. Absent on
+    /// ordinary tracks — the field is elided rather than reported as
+    /// `null`, so its presence alone identifies a sub-track.
+    ///
+    /// A parent and its sub-tracks are ONE instrument: mute, solo and
+    /// loudness measurement only mean anything applied to the whole
+    /// group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<TrackId>,
     pub muted: bool,
     pub soloed: bool,
     /// Linear fader gain (1.0 = unity).
     pub volume: f32,
+    /// The same fader in decibels (0 dB = unity), which is what the app
+    /// itself stores and what the mixer shows. Balance work is done in dB
+    /// (1 LU == 1 dB), so prefer this over [`Self::volume`]; the two
+    /// always agree (`volume == 10^(volume_db/20)`), with a floor around
+    /// -80 dB standing in for silence.
+    #[serde(default)]
+    pub volume_db: f32,
     /// Stereo pan in `-1.0..=1.0` (0 = center).
     pub pan: f32,
+    /// Where this track's audio goes: `"master"` or `{"bus_id": N}`.
+    /// Tracks routed into a bus are summed and processed there before
+    /// reaching master, so a bus's level and FX affect them all.
+    #[serde(default = "default_output")]
+    pub output: TrackOutput,
     pub clip_count: usize,
+}
+
+/// Routing default for peers that predate the `output` field.
+fn default_output() -> TrackOutput {
+    TrackOutput::Master
 }
 
 /// Result of `song.sections`.

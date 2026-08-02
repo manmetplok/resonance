@@ -15,8 +15,29 @@ impl ResonanceMcp {
         description = "Whole-song overview: tempo (BPM), time signature, key (when global), \
                        length, transport state and playhead (bar.beat), the ordered section \
                        arrangement, and one summary line per track (id, name, kind, instrument, \
-                       mute/solo/volume/pan, clip count). Read-only. Call this first — every \
-                       other tool's ids come from here or the other song_* views.",
+                       mute/solo, volume as linear gain AND volume_db, pan, output routing, \
+                       clip count). Read-only. Call this first — every other tool's ids come \
+                       from here or the other song_* views. \
+                       \
+                       SUB-TRACKS: a track carrying `parent_id` is a child of a multi-output \
+                       instrument, not an independent part — the drum kit routes Kick, Snare, \
+                       Toms, Hats, Cymbals and Overhead to separate tracks, each with its own \
+                       fader. Treat a parent and its sub-tracks as ONE indivisible group when \
+                       muting, soloing or measuring; measuring a parent alone under-reports the \
+                       kit, and muting it alone does not silence the children. Always enumerate \
+                       tracks from this view at runtime — never hardcode a track list for mute \
+                       or analysis logic, because the names are user-editable and the only \
+                       reliable parentage signal is this field. \
+                       \
+                       CHECK SUB-TRACK FADERS BEFORE TOUCHING NOTES: `volume_db` is reported \
+                       per track for exactly this reason. In the field a user said \"the kit \
+                       has almost no cymbals\", the agent wrote more cymbal notes, and nothing \
+                       changed — the Hats and Toms faders were about 9 dB down. Read the \
+                       balance first, fix it on the faders, and only then edit notes. \
+                       \
+                       ROUTING: `output` is \"master\" or {\"bus_id\": N} — a track routed to a \
+                       bus is summed and processed there before reaching master, so that bus's \
+                       level and effects act on every member.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<song::SongSummary>()
     )]
@@ -40,7 +61,17 @@ impl ResonanceMcp {
         description = "Per-track detail: summary fields plus the effect chain, frozen flag \
                        (frozen tracks reject note/lyric/instrument edits), and every clip \
                        (id, start position, length, midi flag). Omit track_id for all tracks. \
-                       Read-only; clip_ids for song_notes and notes_* come from here.",
+                       Read-only; clip_ids for song_notes and notes_* come from here. \
+                       \
+                       Carries the same per-track `parent_id`, `volume_db` and `output` fields \
+                       as song_summary: a line with `parent_id` is a SUB-TRACK of a \
+                       multi-output instrument (the drum kit gives Kick/Snare/Toms/Hats/ \
+                       Cymbals/Overhead their own faders) and must be treated as part of its \
+                       parent when muting, soloing or measuring; `volume_db` is the fader in \
+                       decibels, the unit balance work is done in; `output` is \"master\" or \
+                       {\"bus_id\": N}. Enumerate tracks from this view at runtime instead of \
+                       hardcoding a list, and check the sub-track faders before concluding an \
+                       instrument needs more notes.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<song::TracksView>()
     )]

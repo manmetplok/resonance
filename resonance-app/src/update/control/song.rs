@@ -12,7 +12,7 @@
 use crate::compose::LaneGeneratorKind;
 use crate::state::{BusState, TrackState};
 use crate::Resonance;
-use resonance_audio::types::TrackType;
+use resonance_audio::types::{TrackOutput, TrackType};
 use resonance_control::methods::song::{
     self, ChordView, ClipView, LyricLineView, NoteView, NotesParams, NotesView,
     SectionDefinitionView, SectionPlacementView, SectionsView, SongSummary, SyllableView,
@@ -21,7 +21,8 @@ use resonance_control::methods::song::{
 };
 use resonance_control::methods::track::{self, PluginCatalog, PluginCatalogEntry, PluginKind};
 use resonance_control::{
-    KeyScale, Request, Response, RpcError, SongPosition, TimeSignature, TrackKind, TransportState,
+    KeyScale, Request, Response, RpcError, SongPosition, TimeSignature, TrackKind,
+    TrackOutput as WireTrackOutput, TransportState,
 };
 use resonance_music_theory::midi_note_name;
 
@@ -578,10 +579,19 @@ fn track_summary(app: &Resonance, t: &TrackState) -> TrackSummary {
         name: t.name.clone(),
         kind: track_kind(t),
         instrument: instrument_summary(app, t),
+        // Sub-tracks of a multi-output instrument: the ONLY signal a
+        // client used to get was a `→` in the name (doc #273).
+        parent_id: t
+            .sub_track
+            .map(|link| resonance_control::ids::TrackId(link.parent_track_id)),
         muted: t.muted,
         soloed: t.soloed,
         volume: db_to_linear(t.volume),
+        // `TrackState.volume` is already dB — the linear `volume` above
+        // is the derived one, not this.
+        volume_db: t.volume,
         pan: t.pan,
+        output: track_output(t.output),
         clip_count: clip_count(app, t.id),
     }
 }
@@ -592,11 +602,25 @@ fn bus_summary(b: &BusState) -> TrackSummary {
         name: b.name.clone(),
         kind: TrackKind::Bus,
         instrument: None,
+        parent_id: None,
         muted: b.muted,
         soloed: false,
         volume: db_to_linear(b.volume),
+        // Bus volume is stored in dB too.
+        volume_db: b.volume,
         pan: b.pan,
+        // Busses always feed master; nesting a bus into another bus is
+        // not a routing the app models.
+        output: WireTrackOutput::Master,
         clip_count: 0,
+    }
+}
+
+/// The app's routing enum as its wire form.
+fn track_output(output: TrackOutput) -> WireTrackOutput {
+    match output {
+        TrackOutput::Master => WireTrackOutput::Master,
+        TrackOutput::Bus(id) => WireTrackOutput::Bus(resonance_control::ids::TrackId(id)),
     }
 }
 

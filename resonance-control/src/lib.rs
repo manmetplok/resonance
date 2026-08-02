@@ -30,7 +30,7 @@ pub mod rpc;
 
 pub use common::{
     BeatRange, KeyScale, MutationAck, PositionSpec, SongPosition, TimeSignature, TrackKind,
-    TransportState,
+    TrackOutput, TransportState,
 };
 pub use framing::{write_message, FramingError, MessageReader};
 pub use job::{JobStarted, JobState, JobStatus};
