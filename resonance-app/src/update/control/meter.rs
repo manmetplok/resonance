@@ -10,11 +10,10 @@
 //! returns `{job_id}` immediately. The engine answers with exactly one
 //! terminal event, `MixMeasured` or `MixMeasureError`, which
 //! [`mix_measured`] / [`mix_measure_error`] turn into the job's result.
-//! Neither event carries a correlation id, so the correlation rests
-//! entirely on there being at most ONE Measure job open at a time —
-//! which [`source_guard`] enforces for every source before anything
-//! else (see the guards below). Given that, the newest live measure job
-//! IS the one that just finished.
+//! Both events echo the `measure_id` the command carried, and the token
+//! passed is the JOB ID itself (ba todo #1243) — so a result names its
+//! own job and correlation is a lookup, not an inference. An event whose
+//! job is already terminal or gone resolves nothing.
 //!
 //! `meter.stems` is the same job over a longer `targets` vector: ONE
 //! engine pass measuring the master and every top-level track over one
@@ -39,13 +38,15 @@
 //!
 //! # Guards
 //!
-//! * **One measurement at a time, whatever the source.** This is not
-//!   merely mirroring the engine's rule: it is what makes
-//!   [`mix_measured`]'s "newest live measure job" correlation correct.
-//!   The engine serialises renders against each other, but the live
-//!   path never reaches the engine's render guard, so a live read
-//!   started mid-render would leave two Measure jobs open and the first
-//!   event to arrive would resolve the wrong one.
+//! * **One OFFLINE measurement at a time.** This mirrors the engine's
+//!   own rule — two offline measurements would contend for the single
+//!   offline renderer, and `OfflineRenderGuard` refuses the second — and
+//!   answering `busy` synchronously beats handing back a job id that is
+//!   only going to fail. It applies to `source: "render"` only. Until ba
+//!   todo #1243 it had to apply to EVERY source, live included, because
+//!   the correlation was "the newest live measure job" and a second open
+//!   job would have made it name the wrong one; that reason is gone, and
+//!   a live read now runs happily alongside a render measurement.
 //! * `source: "live"` reads the engine's streaming master meter and
 //!   needs no render, so it is exempt from every *render* guard — but it
 //!   only exists for the master mix, and asking for a track on that path
@@ -56,19 +57,27 @@
 //!   (the mutation gate covers bounce-in-place and freeze; the WAV
 //!   bounce flag is checked here) and while the transport is rolling.
 //!
-//! # Known coupling: there is no `job.cancel`
+//! # Known coupling: there is still no `job.cancel`
 //!
-//! A Measure job is only ever ended by an engine event, and the guard
-//! above refuses every later `meter.*` call until it ends. Every engine
-//! path emits exactly one terminal event today (`MixMeasured` or
+//! A Measure job is only ever ended by an engine event, and the offline
+//! guard refuses every later `source: "render"` call until it ends.
+//! Every engine path emits exactly one terminal event (`MixMeasured` or
 //! `MixMeasureError`, on every branch of `bounce::measure`), so the job
-//! always resolves — but if one ever failed to, `meter.*` would stay
-//! wedged behind "a measurement is already in progress" for the life of
-//! the process. It is deliberately NOT bounded by a wall-clock timeout
-//! here: reaping a job on a deadline without a correlation id would let
-//! the late event complete whatever job is open next, which is the
-//! precise mis-attribution the guard exists to prevent. Bounding it
-//! safely needs a correlation id on the two events (engine-side).
+//! always resolves — but if one ever failed to, render measurements
+//! would stay wedged behind "a measurement is already in progress" for
+//! the life of the process. Live reads no longer wedge with it.
+//!
+//! What ba todo #1243 changed is that bounding this with a wall-clock
+//! timeout is now SAFE. Reaping a job on a deadline used to be
+//! unacceptable because a late engine event would then complete whatever
+//! job was open next — one caller receiving another's numbers, the exact
+//! defect the #1219 review caught. With `measure_id` on both events a
+//! late event names a job that is already terminal and
+//! [`crate::control_jobs::JobBoard::live_measure`] drops it. The timeout
+//! itself is deliberately NOT added here: picking a deadline that cannot
+//! reap a legitimately slow `meter.stems` on a large project (N
+//! full-length renders) is a judgement call of its own, and it belongs
+//! with `job.cancel` rather than bolted onto this handler.
 
 use crate::control_jobs::JobToken;
 use crate::control_socket::ConnId;
@@ -301,12 +310,21 @@ fn start(
     let started = app.start_control_job(
         method,
         &describe(&targets, source),
-        JobToken::Measure { method },
+        JobToken::Measure {
+            method,
+            offline: source == EngineSource::Render,
+        },
         Some(conn),
     );
+    // The job id IS the correlation token (ba todo #1243). The engine
+    // treats it as opaque and echoes it on whichever terminal event the
+    // command produces, so the result names its own job instead of being
+    // matched to "the newest measurement still open".
+    let measure_id = u64::from(started.job_id);
     if app
         .engine
         .send(AudioCommand::MeasureMix {
+            measure_id,
             targets,
             range,
             source,
@@ -336,15 +354,18 @@ fn describe(targets: &[StemSource], source: EngineSource) -> String {
 
 /// Resolve the control job for a completed [`AudioCommand::MeasureMix`].
 ///
-/// Called from `engine_events::dispatch`. A no-op when no measurement
-/// was control-initiated — the GUI has no measurement surface today, so
-/// that path is unreachable rather than merely unusual, but treating it
-/// as normal keeps the hook honest if one is ever added.
-pub(crate) fn mix_measured(app: &mut Resonance, results: Vec<MixMeasurement>) {
-    let Some((job_id, token)) = app.control.jobs.newest_live_measure() else {
-        return;
-    };
-    let JobToken::Measure { method } = token else {
+/// Called from `engine_events::dispatch`. `measure_id` is the job id the
+/// command carried out (ba todo #1243), so this is a direct lookup: a
+/// result completes the request that asked for it, and an event whose
+/// job is gone — already terminal, evicted, or a measurement the GUI
+/// started rather than the control API — completes nothing at all rather
+/// than handing one caller another caller's numbers.
+pub(crate) fn mix_measured(
+    app: &mut Resonance,
+    measure_id: u64,
+    results: Vec<MixMeasurement>,
+) {
+    let Some(JobToken::Measure { method, .. }) = app.control.jobs.live_measure(measure_id) else {
         return;
     };
     // One engine pass backs both methods; the method that asked decides
@@ -362,11 +383,11 @@ pub(crate) fn mix_measured(app: &mut Resonance, results: Vec<MixMeasurement>) {
     // An empty or master-less result set means the engine changed under
     // us; fail loudly rather than report a default that reads real.
     match payload {
-        Some(payload) => app.control.jobs.complete(job_id, payload),
+        Some(payload) => app.control.jobs.complete(measure_id, payload),
         None => app
             .control
             .jobs
-            .fail(job_id, "the engine returned no usable measurement"),
+            .fail(measure_id, "the engine returned no usable measurement"),
     }
 }
 
@@ -378,9 +399,9 @@ pub(crate) fn mix_measured(app: &mut Resonance, results: Vec<MixMeasurement>) {
 /// than re-worded here. [`source_guard`] already answers the cases the
 /// app can see coming with a synchronous `busy`; this is what is left
 /// once the engine wins a race the app could not.
-pub(crate) fn mix_measure_error(app: &mut Resonance, message: String) {
-    match app.control.jobs.newest_live_measure() {
-        Some((job_id, _)) => app.control.jobs.fail(job_id, message),
+pub(crate) fn mix_measure_error(app: &mut Resonance, measure_id: u64, message: String) {
+    match app.control.jobs.live_measure(measure_id) {
+        Some(_) => app.control.jobs.fail(measure_id, message),
         None => eprintln!("audio: mix measurement failed: {message}"),
     }
 }
@@ -552,20 +573,6 @@ fn source_guard(
     source: EngineSource,
     target: StemSource,
 ) -> Option<RpcError> {
-    // FIRST, and for BOTH sources. Neither `MixMeasured` nor
-    // `MixMeasureError` carries a correlation id, so [`mix_measured`]
-    // resolves the newest live `Measure` job — which only names the right
-    // job while at most one measurement is in flight. The engine enforces
-    // that between renders, but the live path below skips the engine's
-    // render guard entirely: without this check first, a live read
-    // started during a render measurement would be completed with the
-    // render's numbers (and vice versa). A live read is instantaneous, so
-    // refusing it for the duration of a render measurement costs the
-    // caller nothing but a retry.
-    if app.control.jobs.newest_live_measure().is_some() {
-        return Some(RpcError::busy("a measurement is already in progress"));
-    }
-
     if source == EngineSource::Live {
         // There is one live tap and it sits on the master mix; reporting
         // that snapshot under a track's name would be a fabrication.
@@ -577,9 +584,24 @@ fn source_guard(
         }
         // No render, so none of the offline guards apply — measuring the
         // live meter during playback is the whole point of this source.
+        // Nor does the concurrency guard below: reading the streaming tap
+        // contends with nothing, and since ba todo #1243 both terminal
+        // events carry the job id, so a live read that overlaps a render
+        // measurement gets its OWN result. Until then this had to be
+        // refused too, purely so `mix_measured` could identify its job by
+        // "the newest live measure" — a guard that existed to prop up the
+        // correlation, not to protect anything.
         return None;
     }
 
+    // Two offline measurements would contend for the one offline
+    // renderer, which is a real conflict rather than a correlation
+    // artefact: the engine's `OfflineRenderGuard` refuses the second
+    // outright. A synchronous `busy` says so before a job is registered,
+    // instead of handing the caller a job id that is only going to fail.
+    if app.control.jobs.has_live_offline_measure() {
+        return Some(RpcError::busy("a measurement is already in progress"));
+    }
     if app.transport.recording {
         return Some(RpcError::busy(
             "the transport is recording; stop it before measuring",

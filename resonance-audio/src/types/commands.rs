@@ -401,8 +401,20 @@ pub enum AudioCommand {
     /// offline render — bounce, export, freeze or stem export — holds the
     /// renderer, or while the transport is rolling. Emits exactly ONE
     /// terminal event: `MixMeasured` with one measurement per target, or
-    /// `MixMeasureError` if the whole command failed.
+    /// `MixMeasureError` if the whole command failed. Both echo
+    /// `measure_id`, so a caller with several measurements outstanding
+    /// can tell which one answered.
     MeasureMix {
+        /// Opaque correlation token, echoed unchanged on whichever
+        /// terminal event this command produces (ba todo #1243).
+        ///
+        /// The engine never interprets it — it is the caller's handle on
+        /// its own request. `resonance-app` passes the control job's id,
+        /// which is what lets `meter.*` match a result to the request
+        /// that asked for it instead of to "the newest pending measure
+        /// job", a correlation that only held while exactly one
+        /// measurement could ever be in flight.
+        measure_id: u64,
         /// The mix slices to measure. No paths: nothing is written.
         targets: Vec<StemSource>,
         /// Shared measurement window in engine samples. `None` measures

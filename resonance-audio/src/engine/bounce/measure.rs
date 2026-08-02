@@ -64,6 +64,11 @@ use super::{OfflineRenderGuard, MEASURE_BUSY_MSG};
 /// event on `event_tx`: [`AudioEvent::MixMeasured`] with one measurement
 /// per target in request order, or [`AudioEvent::MixMeasureError`].
 ///
+/// `measure_id` is the caller's opaque correlation token and is echoed on
+/// whichever of those two events this call emits, on EVERY branch —
+/// including the early rejections that never reach a render (ba todo
+/// #1243). Nothing here interprets it.
+///
 /// Synchronous core, called on the worker thread spawned by
 /// [`measure_mix_spawn`]. Pulled out (like
 /// [`export_stems`][super::stem_export::export_stems]) so integration
@@ -75,6 +80,7 @@ use super::{OfflineRenderGuard, MEASURE_BUSY_MSG};
 /// pass, which is exactly the error class this command exists to remove.
 #[allow(clippy::too_many_arguments)]
 pub fn measure_mix(
+    measure_id: u64,
     targets: Vec<StemSource>,
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
@@ -90,7 +96,10 @@ pub fn measure_mix(
     event_tx: &Sender<AudioEvent>,
 ) {
     let fail = |message: String| {
-        let _ = event_tx.send(AudioEvent::MixMeasureError(message));
+        let _ = event_tx.send(AudioEvent::MixMeasureError {
+            measure_id,
+            message,
+        });
     };
 
     if targets.is_empty() {
@@ -107,6 +116,7 @@ pub fn measure_mix(
             return;
         }
         let _ = event_tx.send(AudioEvent::MixMeasured {
+            measure_id,
             results: vec![from_live_snapshot(shared.mix_meter.load())],
         });
         return;
@@ -168,7 +178,10 @@ pub fn measure_mix(
         }
     }
 
-    let _ = event_tx.send(AudioEvent::MixMeasured { results });
+    let _ = event_tx.send(AudioEvent::MixMeasured {
+        measure_id,
+        results,
+    });
 }
 
 /// Spawn [`measure_mix`] on a dedicated worker thread so the engine
@@ -176,6 +189,7 @@ pub fn measure_mix(
 /// as [`export_stems_spawn`][super::stem_export::export_stems_spawn].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn measure_mix_spawn(
+    measure_id: u64,
     targets: Vec<StemSource>,
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
@@ -194,6 +208,7 @@ pub(crate) fn measure_mix_spawn(
         .name("measure-mix".into())
         .spawn(move || {
             measure_mix(
+                measure_id,
                 targets,
                 range,
                 source,

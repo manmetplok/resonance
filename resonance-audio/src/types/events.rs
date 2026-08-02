@@ -348,6 +348,10 @@ pub enum AudioEvent {
     ///
     /// [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
     MixMeasured {
+        /// The `measure_id` of the command that produced this, echoed
+        /// unchanged (ba todo #1243). Match on this rather than on "the
+        /// newest measurement I started".
+        measure_id: u64,
         results: Vec<MixMeasurement>,
     },
     /// An [`AudioCommand::MeasureMix`] failed as a whole and produced no
@@ -361,7 +365,16 @@ pub enum AudioEvent {
     /// from the same pass.
     ///
     /// [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
-    MixMeasureError(String),
+    MixMeasureError {
+        /// The `measure_id` of the command that failed, echoed unchanged
+        /// (ba todo #1243). Present on every failure branch, including
+        /// the ones that reject the request before any render starts, so
+        /// a failure is always attributable to the request that caused
+        /// it.
+        measure_id: u64,
+        /// User-facing reason.
+        message: String,
+    },
     /// Progress update for an [`AudioCommand::ExportAudio`] job.
     /// `fraction` is in `[0.0, 1.0]` within the reported `phase`.
     /// Generalizes `BounceProgress` for the export pipeline; the legacy
