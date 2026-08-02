@@ -47,10 +47,15 @@ impl ResonanceMcp {
                        \
                        A null field means the number does not exist for this measurement, never \
                        zero: either the range was silent or too short for that meter's window, \
-                       or source was \"live\", where the streaming tap cannot supply \
-                       sample_peak_db, clipped_samples, mono_penalty_db, bands or \
-                       measured_seconds, and reports its current windows as \
-                       lufs_short_term_now / lufs_momentary_now instead of maxima. Check \
+                       or source was \"live\", where the streaming tap supplies none of \
+                       sample_peak_db, clipped_samples, crest_db, correlation, mono_penalty_db, \
+                       bands or measured_seconds, and reports its current windows as \
+                       lufs_short_term_now / lufs_momentary_now instead of maxima. So crest and \
+                       phase can only be judged with source \"render\". The three figures that \
+                       DO arrive on \"live\" — lufs_integrated, lra, true_peak_db — are \
+                       SESSION-CUMULATIVE: they cover everything played since the app's audio \
+                       engine started, not a range you asked for, so use \"live\" for \"how is \
+                       this session going\" and \"render\" for any figure about a passage. Check \
                        `source` before trusting a field.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()

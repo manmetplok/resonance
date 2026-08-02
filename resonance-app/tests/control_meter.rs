@@ -119,6 +119,16 @@ fn rendered(target: StemSource, sample_rate: u32) -> MixMeasurement {
 
 /// What the engine reports off the live master tap: real streaming
 /// readings, documented placeholders everywhere else.
+///
+/// This mirrors `bounce::measure::from_live_snapshot` field for field,
+/// INCLUDING the two values that look like readings but are not:
+/// `crest_db` and `correlation` come straight off a `MeterSnapshot`
+/// that `ABMeterTap::snapshot` never writes (it ends
+/// `..MeterSnapshot::default()`, and neither `CrestMeter` nor
+/// `CorrelationMeter` is instantiated anywhere), so they are always
+/// exactly 0.0 no matter what is playing. A fixture that invented
+/// plausible numbers here would let the handler pass a fabrication
+/// through unnoticed — which is what it did until this was fixed.
 fn live_snapshot() -> MixMeasurement {
     MixMeasurement {
         target: StemSource::Master,
@@ -130,13 +140,14 @@ fn live_snapshot() -> MixMeasurement {
         // The tap's CURRENT windows, not maxima.
         lufs_short_term_max: -19.0,
         lufs_momentary_max: -17.0,
+        // Session-cumulative, not figures for a range.
         lra_lu: 5.0,
         true_peak_dbtp: -1.0,
         // Placeholders the streaming tap cannot fill.
         sample_peak_db: -120.0,
-        crest_db: 11.0,
+        crest_db: 0.0,
         clipped_samples: 0,
-        correlation: 0.9,
+        correlation: 0.0,
         mono_penalty_db: 0.0,
         bands: BandShares::SILENT,
     }
@@ -203,9 +214,9 @@ fn measuring_the_master_returns_every_figure() {
     assert_eq!(result.lra, 7.25);
     assert_eq!(result.true_peak_db, -1.5);
     assert_eq!(result.sample_peak_db, Some(-2.0));
-    assert_eq!(result.crest_db, 12.5);
+    assert_eq!(result.crest_db, Some(12.5));
     assert_eq!(result.clipped_samples, Some(0));
-    assert_eq!(result.correlation, 0.82);
+    assert_eq!(result.correlation, Some(0.82));
     assert_eq!(result.mono_penalty_db, Some(-0.4));
     let bands = result.bands.expect("render path carries bands");
     assert_eq!((bands.low, bands.mid, bands.high, bands.air), (0.4, 0.35, 0.2, 0.05));
@@ -284,10 +295,12 @@ fn the_live_path_nulls_what_the_streaming_tap_cannot_supply() {
 
     let result = measured(&mut app, job);
     assert_eq!(result.source, MeasureSource::Live);
-    // Real streaming readings survive.
+    // Real streaming readings survive — the three the tap does measure.
+    // (lra and true_peak_db are session-cumulative on this path, which
+    // the field docs and the tool description say; they are still real.)
     assert_eq!(result.lufs_integrated, Some(-21.0));
     assert_eq!(result.true_peak_db, -1.0);
-    assert_eq!(result.correlation, 0.9);
+    assert_eq!(result.lra, 5.0);
     // The tap keeps no history, so these are NOT maxima and must not be
     // reported as such — they move to the `_now` fields.
     assert_eq!(result.lufs_short_max, None);
@@ -302,11 +315,25 @@ fn the_live_path_nulls_what_the_streaming_tap_cannot_supply() {
     assert_eq!(result.mono_penalty_db, None);
     assert!(result.bands.is_none());
     assert_eq!(result.measured_seconds, None);
+    // The two the tap runs no meter for at all. Their engine-side value
+    // is a hard 0.0, which is INSIDE each field's plausible range —
+    // "maximally squashed" and "perfectly wide" — so passing it through
+    // would be indistinguishable from a reading. Null is the only
+    // honest answer.
+    assert_eq!(result.crest_db, None);
+    assert_eq!(result.correlation, None);
 
     // On the wire they are explicit nulls, not omissions: an agent must
     // see that the field exists and was not measurable.
     let wire = measured_json(&mut app, job);
-    for field in ["sample_peak_db", "clipped_samples", "mono_penalty_db", "bands"] {
+    for field in [
+        "sample_peak_db",
+        "clipped_samples",
+        "crest_db",
+        "correlation",
+        "mono_penalty_db",
+        "bands",
+    ] {
         assert_eq!(wire[field], serde_json::Value::Null, "{field} on the wire");
     }
     assert_eq!(wire["source"], json!("live"));
@@ -503,4 +530,60 @@ fn a_second_measurement_while_one_is_in_flight_is_busy() {
     let _ = measured(&mut app, job);
     let next = started_job(roundtrip(&mut app, request(3, "meter.measure", json!({}))));
     assert_eq!(job_status(&mut app, next).state, JobState::Pending);
+}
+
+/// A live read is exempt from every RENDER guard, but NOT from the
+/// one-measurement-at-a-time rule — that rule is what makes the job
+/// correlation sound. `MixMeasured` carries no correlation id, so with
+/// two Measure jobs open the first event to land would resolve whichever
+/// has the higher id: the render's numbers would complete the LIVE job.
+#[test]
+fn a_live_measure_while_a_render_measure_is_pending_is_busy() {
+    let mut app = app();
+    let rate = app.sample_rate;
+    let render = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
+
+    let response = roundtrip(
+        &mut app,
+        request(2, "meter.measure", json!({ "source": "live" })),
+    );
+    let error = response.error.expect("live during a render measure is refused");
+    assert_eq!(error.kind(), ErrorKind::Busy);
+    assert!(
+        error.message.contains("measurement"),
+        "the error must name the measurement: {}",
+        error.message
+    );
+
+    // The render measurement keeps its own numbers, and only once it has
+    // resolved is a live read accepted.
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        results: vec![rendered(StemSource::Master, rate)],
+    });
+    assert_eq!(measured(&mut app, render).source, MeasureSource::Render);
+
+    let live = started_job(roundtrip(
+        &mut app,
+        request(3, "meter.measure", json!({ "source": "live" })),
+    ));
+    assert_eq!(job_status(&mut app, live).state, JobState::Pending);
+}
+
+/// And the other way round: the live job is open, so a render
+/// measurement is refused too. Symmetry matters — a live read that never
+/// received its event would otherwise be resolved by the render's.
+#[test]
+fn a_render_measure_while_a_live_measure_is_pending_is_busy() {
+    let mut app = app();
+    let live = started_job(roundtrip(
+        &mut app,
+        request(1, "meter.measure", json!({ "source": "live" })),
+    ));
+    assert_eq!(job_status(&mut app, live).state, JobState::Pending);
+
+    let response = roundtrip(&mut app, request(2, "meter.measure", json!({})));
+    assert_eq!(
+        response.error.expect("one measurement at a time").kind(),
+        ErrorKind::Busy
+    );
 }

@@ -133,14 +133,28 @@ pub struct Bands {
 /// 2. **`source: "live"`.** The live master meter is a streaming tap
 ///    with no access to a whole buffer, so `sample_peak_db`,
 ///    `clipped_samples`, `mono_penalty_db`, `bands` and
-///    `measured_seconds` are all `null` on that path — and
-///    `lufs_short_max` / `lufs_momentary_max` are too, because the tap
-///    keeps no history. Its *current* readings are reported separately
-///    as [`lufs_short_term_now`](Self::lufs_short_term_now) /
+///    `measured_seconds` are all `null` on that path; so are
+///    `crest_db` and `correlation`, which that tap simply does not
+///    run a meter for; and so are `lufs_short_max` /
+///    `lufs_momentary_max`, because the tap keeps no history. Its
+///    *current* readings are reported separately as
+///    [`lufs_short_term_now`](Self::lufs_short_term_now) /
 ///    [`lufs_momentary_now`](Self::lufs_momentary_now), which are
 ///    present only on the live path. Filling any of these with zeros
 ///    would read as a real measurement and silently corrupt a balance
-///    decision.
+///    decision — and `0.0` is especially dangerous for `crest_db` and
+///    `correlation`, because it sits *inside* each one's plausible
+///    range and cannot be told from a reading.
+///
+/// ## What a "live" number describes
+///
+/// The live tap is never reset per measurement, so the three figures
+/// that do survive that path — [`lufs_integrated`](Self::lufs_integrated),
+/// [`lra`](Self::lra) and [`true_peak_db`](Self::true_peak_db) — are
+/// **session-cumulative**: they describe everything played since the
+/// engine started, not a window anyone asked for. `source: "live"`
+/// answers "how has this session been going"; only `source: "render"`
+/// measures a *range*.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MeasureResult {
@@ -171,26 +185,35 @@ pub struct MeasureResult {
     pub lufs_momentary_now: Option<f32>,
     /// EBU R128 loudness range, LU — how much the loudness moves across
     /// the range. `0.0` when there are too few short-term windows to
-    /// form a range.
+    /// form a range. On `source: "live"` it is SESSION-CUMULATIVE, not
+    /// a figure for a range: how much the loudness has moved since the
+    /// engine started.
     pub lra: f32,
 
     /// Maximum inter-sample (true) peak, dBTP, 4x oversampled. This is
-    /// the number a lossy encoder cares about.
+    /// the number a lossy encoder cares about. On `source: "live"` it
+    /// is SESSION-CUMULATIVE, not a figure for a range: the highest
+    /// peak since the engine started, which answers "did this ever go
+    /// over while I listened", never "how hot is this passage".
     pub true_peak_db: f32,
     /// Maximum absolute sample value, dBFS. Always at or below
     /// `true_peak_db`.
     pub sample_peak_db: Option<f32>,
     /// Peak-to-RMS ratio over the whole range, dB — how much dynamic
-    /// movement survives. `0.0` for silence.
-    pub crest_db: f32,
+    /// movement survives. `0.0` for silence. `null` on `source:
+    /// "live"`: the streaming tap runs no crest meter at all, so there
+    /// is no number to report.
+    pub crest_db: Option<f32>,
     /// Channel samples at or beyond digital full scale (`|x| >= 1.0`),
     /// counted per channel sample. Anything above 0 on the master means
     /// audible clipping.
     pub clipped_samples: Option<u64>,
     /// Pearson correlation of L against R, in `[-1, 1]`. `+1` is
     /// mono-identical, `0` uncorrelated, negative means anti-phase
-    /// content that a mono listener loses.
-    pub correlation: f32,
+    /// content that a mono listener loses. `null` on `source: "live"`:
+    /// the streaming tap runs no correlation meter at all, and `0`
+    /// there would read as "perfectly wide".
+    pub correlation: Option<f32>,
     /// Loudness lost when the range is folded to mono, dB. Negative
     /// means level disappears in mono; near `0` is mono-safe.
     pub mono_penalty_db: Option<f32>,

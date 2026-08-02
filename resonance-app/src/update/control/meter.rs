@@ -10,9 +10,11 @@
 //! returns `{job_id}` immediately. The engine answers with exactly one
 //! terminal event, `MixMeasured` or `MixMeasureError`, which
 //! [`mix_measured`] / [`mix_measure_error`] turn into the job's result.
-//! Neither event carries a correlation id, but the engine refuses a
-//! second measurement while one runs, so the newest live measure job IS
-//! the one that just finished.
+//! Neither event carries a correlation id, so the correlation rests
+//! entirely on there being at most ONE Measure job open at a time —
+//! which [`source_guard`] enforces for every source before anything
+//! else (see the guards below). Given that, the newest live measure job
+//! IS the one that just finished.
 //!
 //! Nothing here mutates: no file is written, no project or transport
 //! state is touched, and the reply carries no `revision`. It is
@@ -25,8 +27,15 @@
 //!
 //! # Guards
 //!
+//! * **One measurement at a time, whatever the source.** This is not
+//!   merely mirroring the engine's rule: it is what makes
+//!   [`mix_measured`]'s "newest live measure job" correlation correct.
+//!   The engine serialises renders against each other, but the live
+//!   path never reaches the engine's render guard, so a live read
+//!   started mid-render would leave two Measure jobs open and the first
+//!   event to arrive would resolve the wrong one.
 //! * `source: "live"` reads the engine's streaming master meter and
-//!   needs no render, so it is exempt from every render guard — but it
+//!   needs no render, so it is exempt from every *render* guard — but it
 //!   only exists for the master mix, and asking for a track on that path
 //!   is refused up front rather than turned into a job that fails.
 //! * `source: "render"` shares the offline renderer with bounce, freeze
@@ -34,7 +43,20 @@
 //!   producing a file, so it is refused `busy` while one is in flight
 //!   (the mutation gate covers bounce-in-place and freeze; the WAV
 //!   bounce flag is checked here) and while the transport is rolling.
-//! * Only one measurement at a time, mirroring the engine's own rule.
+//!
+//! # Known coupling: there is no `job.cancel`
+//!
+//! A Measure job is only ever ended by an engine event, and the guard
+//! above refuses every later `meter.*` call until it ends. Every engine
+//! path emits exactly one terminal event today (`MixMeasured` or
+//! `MixMeasureError`, on every branch of `bounce::measure`), so the job
+//! always resolves — but if one ever failed to, `meter.*` would stay
+//! wedged behind "a measurement is already in progress" for the life of
+//! the process. It is deliberately NOT bounded by a wall-clock timeout
+//! here: reaping a job on a deadline without a correlation id would let
+//! the late event complete whatever job is open next, which is the
+//! precise mis-attribution the guard exists to prevent. Bounding it
+//! safely needs a correlation id on the two events (engine-side).
 
 use crate::control_jobs::JobToken;
 use crate::control_socket::ConnId;
@@ -255,9 +277,16 @@ pub(crate) fn measure_result(m: MixMeasurement, sample_rate: u32) -> MeasureResu
         lra: m.lra_lu,
         true_peak_db: m.true_peak_dbtp,
         sample_peak_db: (!live).then_some(m.sample_peak_db),
-        crest_db: m.crest_db,
+        // `ABMeterTap` — the only thing that ever writes
+        // `shared.mix_meter` — runs no crest and no correlation meter;
+        // both fall out of `MeterSnapshot::default()` as 0.0. Passing
+        // those through would be the worst kind of fabrication: 0.0 is
+        // *inside* each field's plausible range, so a reader cannot tell
+        // it from a measurement, and it happens to spell "maximally
+        // squashed" and "perfectly wide".
+        crest_db: (!live).then_some(m.crest_db),
         clipped_samples: (!live).then_some(m.clipped_samples),
-        correlation: m.correlation,
+        correlation: (!live).then_some(m.correlation),
         mono_penalty_db: (!live).then_some(m.mono_penalty_db),
         bands: (!live).then_some(Bands {
             low: m.bands.low,
@@ -381,6 +410,20 @@ fn source_guard(
     source: EngineSource,
     target: StemSource,
 ) -> Option<RpcError> {
+    // FIRST, and for BOTH sources. Neither `MixMeasured` nor
+    // `MixMeasureError` carries a correlation id, so [`mix_measured`]
+    // resolves the newest live `Measure` job — which only names the right
+    // job while at most one measurement is in flight. The engine enforces
+    // that between renders, but the live path below skips the engine's
+    // render guard entirely: without this check first, a live read
+    // started during a render measurement would be completed with the
+    // render's numbers (and vice versa). A live read is instantaneous, so
+    // refusing it for the duration of a render measurement costs the
+    // caller nothing but a retry.
+    if app.control.jobs.newest_live_measure().is_some() {
+        return Some(RpcError::busy("a measurement is already in progress"));
+    }
+
     if source == EngineSource::Live {
         // There is one live tap and it sits on the master mix; reporting
         // that snapshot under a track's name would be a fabrication.
@@ -415,9 +458,6 @@ fn source_guard(
         return Some(RpcError::busy(
             "a render is in progress; measure again when it finishes",
         ));
-    }
-    if app.control.jobs.newest_live_measure().is_some() {
-        return Some(RpcError::busy("a measurement is already in progress"));
     }
     None
 }
