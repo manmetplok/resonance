@@ -16,6 +16,10 @@ use resonance_app::undo::{CoalesceKey, UndoExtras, UndoHistory, UndoSnapshot};
 /// so tests can distinguish snapshots on the history stack. `bpm` is
 /// abused purely as a numeric discriminator here; the rest of the
 /// snapshot is a valid default.
+fn label(id: f32) -> String {
+    format!("edit {id}")
+}
+
 fn dummy_snapshot(id: f32) -> UndoSnapshot {
     UndoSnapshot {
         project: LoadedProject {
@@ -34,13 +38,13 @@ fn dummy_snapshot(id: f32) -> UndoSnapshot {
 #[test]
 fn record_clears_redo() {
     let mut h = UndoHistory::new();
-    h.record(dummy_snapshot(1.0));
+    h.record(dummy_snapshot(1.0), label(1.0));
     // Simulate an undo: redo now has one entry.
-    let popped = h.pop_undo().unwrap();
-    h.push_redo(popped);
+    let (popped, popped_label) = h.pop_undo().unwrap();
+    h.push_redo(popped, popped_label);
     assert!(h.can_redo());
     // Recording a new action must wipe redo.
-    h.record(dummy_snapshot(2.0));
+    h.record(dummy_snapshot(2.0), label(2.0));
     assert!(!h.can_redo());
 }
 
@@ -48,22 +52,22 @@ fn record_clears_redo() {
 fn capacity_trims_oldest() {
     let mut h = UndoHistory::new();
     h.test_set_capacity(3);
-    h.record(dummy_snapshot(1.0));
-    h.record(dummy_snapshot(2.0));
-    h.record(dummy_snapshot(3.0));
-    h.record(dummy_snapshot(4.0));
+    h.record(dummy_snapshot(1.0), label(1.0));
+    h.record(dummy_snapshot(2.0), label(2.0));
+    h.record(dummy_snapshot(3.0), label(3.0));
+    h.record(dummy_snapshot(4.0), label(4.0));
     assert_eq!(h.test_undo_entries().len(), 3);
     // The oldest (1.0) should have been trimmed; top of stack is 4.0.
-    assert_eq!(h.pop_undo().unwrap().project.file.bpm, 4.0);
-    assert_eq!(h.pop_undo().unwrap().project.file.bpm, 3.0);
-    assert_eq!(h.pop_undo().unwrap().project.file.bpm, 2.0);
+    assert_eq!(h.pop_undo().unwrap().0.project.file.bpm, 4.0);
+    assert_eq!(h.pop_undo().unwrap().0.project.file.bpm, 3.0);
+    assert_eq!(h.pop_undo().unwrap().0.project.file.bpm, 2.0);
     assert!(h.pop_undo().is_none());
 }
 
 #[test]
 fn commit_records_pending_transaction() {
     let mut h = UndoHistory::new();
-    h.begin(dummy_snapshot(1.0));
+    h.begin(dummy_snapshot(1.0), label(1.0));
     assert!(h.has_pending());
     h.commit();
     assert!(!h.has_pending());
@@ -77,22 +81,22 @@ fn coalesces_same_key_and_breaks_on_intervening_action() {
     let key = CoalesceKey::TrackVolume(7);
 
     // First entry under `key` pushes normally.
-    h.record_coalesced(dummy_snapshot(1.0), key.clone());
+    h.record_coalesced(dummy_snapshot(1.0), key.clone(), label(1.0));
     assert_eq!(h.test_undo_entries().len(), 1);
     // Subsequent entries under the same key do not push.
-    h.record_coalesced(dummy_snapshot(2.0), key.clone());
-    h.record_coalesced(dummy_snapshot(3.0), key.clone());
+    h.record_coalesced(dummy_snapshot(2.0), key.clone(), label(2.0));
+    h.record_coalesced(dummy_snapshot(3.0), key.clone(), label(3.0));
     assert_eq!(h.test_undo_entries().len(), 1);
     // The retained entry is the original (pre-burst) snapshot.
     assert_eq!(h.test_undo_entries()[0].project.file.bpm, 1.0);
 
     // A different coalesce key breaks the run and pushes a new entry.
-    h.record_coalesced(dummy_snapshot(10.0), CoalesceKey::TrackPan(7));
+    h.record_coalesced(dummy_snapshot(10.0), CoalesceKey::TrackPan(7), label(10.0));
     assert_eq!(h.test_undo_entries().len(), 2);
 
     // An atomic record also breaks any subsequent coalesce run.
-    h.record(dummy_snapshot(20.0));
-    h.record_coalesced(dummy_snapshot(4.0), key);
+    h.record(dummy_snapshot(20.0), label(20.0));
+    h.record_coalesced(dummy_snapshot(4.0), key, label(4.0));
     assert_eq!(h.test_undo_entries().len(), 4);
 }
 
@@ -100,10 +104,10 @@ fn coalesces_same_key_and_breaks_on_intervening_action() {
 fn coalesce_run_is_broken_by_pop() {
     let mut h = UndoHistory::new();
     let key = CoalesceKey::MasterVolume;
-    h.record_coalesced(dummy_snapshot(1.0), key.clone());
+    h.record_coalesced(dummy_snapshot(1.0), key.clone(), label(1.0));
     h.pop_undo();
     // After popping, the next coalesced record must push fresh.
-    h.record_coalesced(dummy_snapshot(2.0), key);
+    h.record_coalesced(dummy_snapshot(2.0), key, label(2.0));
     assert_eq!(h.test_undo_entries().len(), 1);
     assert_eq!(h.test_undo_entries()[0].project.file.bpm, 2.0);
 }
@@ -111,10 +115,10 @@ fn coalesce_run_is_broken_by_pop() {
 #[test]
 fn clear_empties_everything() {
     let mut h = UndoHistory::new();
-    h.record(dummy_snapshot(1.0));
-    h.begin(dummy_snapshot(2.0));
-    let snap = h.pop_undo().unwrap();
-    h.push_redo(snap);
+    h.record(dummy_snapshot(1.0), label(1.0));
+    h.begin(dummy_snapshot(2.0), label(2.0));
+    let (snap, snap_label) = h.pop_undo().unwrap();
+    h.push_redo(snap, snap_label);
     h.clear();
     assert!(!h.can_undo());
     assert!(!h.can_redo());

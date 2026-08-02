@@ -17,14 +17,17 @@
 //! | [`snapshot`] | Capture types (`ClipFadeGain`, `UndoExtras`, `UndoSnapshot`, `CoalesceKey`) and the `Resonance` methods that build and apply them |
 //! | [`history`] | The bounded `UndoHistory` stack with transaction + coalesce logic |
 //! | [`classify`] | `UndoAction` enum and the `classify` function that maps messages to actions |
+//! | [`describe`] | Short human labels for history entries, reported by `edit.status` (todo #1196) |
 
 pub use resonance_audio::DEFAULT_HISTORY_CAPACITY;
 
 pub mod classify;
+pub mod describe;
 pub mod history;
 pub mod snapshot;
 
 pub use classify::{classify, UndoAction};
+pub use describe::describe;
 pub use history::UndoHistory;
 pub use snapshot::{ClipFadeGain, CoalesceKey, UndoExtras, UndoSnapshot};
 pub(crate) use snapshot::restore_arrangements;
@@ -79,15 +82,15 @@ impl crate::Resonance {
                 UndoAction::Skip | UndoAction::Commit => {}
                 UndoAction::Record => {
                     let snap = self.snapshot_for_undo();
-                    self.undo.record(snap);
+                    self.undo.record(snap, describe(message));
                 }
                 UndoAction::RecordCoalesced(key) => {
                     let snap = self.snapshot_for_undo();
-                    self.undo.record_coalesced(snap, key);
+                    self.undo.record_coalesced(snap, key, describe(message));
                 }
                 UndoAction::Begin => {
                     let snap = self.snapshot_for_undo();
-                    self.undo.begin(snap);
+                    self.undo.begin(snap, describe(message));
                 }
             }
         }

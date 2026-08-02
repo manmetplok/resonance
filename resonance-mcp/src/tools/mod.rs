@@ -13,6 +13,7 @@ pub mod arrange;
 pub mod bus;
 pub mod compose;
 pub mod control;
+pub mod edit;
 pub mod master;
 pub mod project;
 pub mod render;

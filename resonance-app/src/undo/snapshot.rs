@@ -494,37 +494,35 @@ impl crate::Resonance {
     /// or an in-flight operation blocks undo/redo. On success the current
     /// state is pushed onto the redo stack before the snapshot is
     /// restored.
-    pub(crate) fn try_undo(&mut self) -> bool {
+    pub(crate) fn try_undo(&mut self) -> Option<String> {
         if !self.can_undo_redo_now() || !self.undo.can_undo() {
-            return false;
+            return None;
         }
-        let Some(snapshot) = self.undo.pop_undo() else {
-            return false;
-        };
+        let (snapshot, label) = self.undo.pop_undo()?;
         let current = self.snapshot_for_undo();
-        self.undo.push_redo(current);
+        // The action just undone is what a redo would re-apply, so its
+        // label travels with the state pushed onto the redo stack.
+        self.undo.push_redo(current, label.clone());
         self.begin_restore_from_snapshot(snapshot);
         // An undo changes the song like any committed edit — remote
         // control clients detect it through the revision counter
         // (doc #265, todo #1147).
         self.revision = self.revision.wrapping_add(1);
-        true
+        Some(label)
     }
 
     /// Symmetric counterpart to `try_undo`.
-    pub(crate) fn try_redo(&mut self) -> bool {
+    pub(crate) fn try_redo(&mut self) -> Option<String> {
         if !self.can_undo_redo_now() || !self.undo.can_redo() {
-            return false;
+            return None;
         }
-        let Some(snapshot) = self.undo.pop_redo() else {
-            return false;
-        };
+        let (snapshot, label) = self.undo.pop_redo()?;
         let current = self.snapshot_for_undo();
-        self.undo.push_undo(current);
+        self.undo.push_undo(current, label.clone());
         self.begin_restore_from_snapshot(snapshot);
         // Symmetric to `try_undo`: a redo is a committed edit for remote
         // revision-tracking purposes.
         self.revision = self.revision.wrapping_add(1);
-        true
+        Some(label)
     }
 }
