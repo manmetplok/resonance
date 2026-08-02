@@ -243,7 +243,19 @@ fn render_range(
         // Tail chunks are padded up to the CLAP activation minimum and
         // only `emit` frames are consumed — see `chunk_span`.
         let (render_frames, emit) = chunk_span(render_stop - pos);
-        render_chunk(ctx, scratch, pos, render_frames, &everything, true, true, false);
+        // `fan_out_only` is empty (ba todo #1242): a full mixdown wants
+        // every track's own output, including a multi-output parent's.
+        render_chunk(
+            ctx,
+            scratch,
+            pos,
+            render_frames,
+            &everything,
+            &|_| false,
+            true,
+            true,
+            false,
+        );
 
         let drop_now = skip_frames.min(emit);
         skip_frames -= drop_now;

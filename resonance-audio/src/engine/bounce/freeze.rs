@@ -206,7 +206,20 @@ pub fn to_freeze_cache(
         // (capture the raw pre-fader / pre-pan / pre-routing post-FX
         // signal so the live mixer re-applies volume / pan / routing on
         // playback and stays sample-identical to the unfrozen track).
-        render_chunk(&ctx, &mut scratch, pos, render_frames, &in_filter, false, false, true);
+        // `fan_out_only` is empty (ba todo #1242): freeze always
+        // captures the parent plus its whole fan-out, so the parent's own
+        // main output belongs in the cache.
+        render_chunk(
+            &ctx,
+            &mut scratch,
+            pos,
+            render_frames,
+            &in_filter,
+            &|_| false,
+            false,
+            false,
+            true,
+        );
 
         let drop_now = skip_frames.min(emit);
         skip_frames -= drop_now;

@@ -69,6 +69,13 @@ pub(crate) enum RenderStrategy<'a> {
     },
     Bounce {
         in_filter: &'a dyn Fn(TrackId) -> bool,
+        /// Tracks that are in the filter ONLY to drive their sub-tracks'
+        /// port fan-out (ba todo #1242). Their instrument runs — a
+        /// sub-track has no other source of audio — but their own main
+        /// output (port 0) is discarded before the track's FX chain,
+        /// fader, aux sends and routing, so a sub-track stem carries that
+        /// tap and nothing else. Always `false` outside stem rendering.
+        fan_out_only: &'a dyn Fn(TrackId) -> bool,
         respect_mute_solo: bool,
         /// Freeze-cache capture mode. When `true`, every in-filter track
         /// renders its **raw post-instrument / post-FX** signal — unity
@@ -95,6 +102,12 @@ struct TrackDisposition {
     /// don't stick on unmute) but its output is discarded once the mute
     /// ramp has fully faded the previous gain to zero.
     discard_after_instrument: bool,
+    /// Bounce/stem: the instrument runs and its extra ports still fan out
+    /// to sub-tracks, but this track's OWN main output (port 0) is
+    /// discarded — it is only here to drive somebody else's fan-out (ba
+    /// todo #1242). Unlike `discard_after_instrument` this must NOT skip
+    /// the rest of the iteration, or the fan-out never happens.
+    discard_own_output: bool,
 }
 
 impl RenderStrategy<'_> {
@@ -215,10 +228,12 @@ impl RenderStrategy<'_> {
                     gain_r: (last_gain_r, target_gain_r),
                     silenced,
                     discard_after_instrument: silenced && faded_out,
+                    discard_own_output: false,
                 })
             }
             Self::Bounce {
                 in_filter,
+                fan_out_only,
                 respect_mute_solo,
                 freeze_raw,
             } => {
@@ -251,6 +266,7 @@ impl RenderStrategy<'_> {
                     gain_r,
                     silenced: false,
                     discard_after_instrument: false,
+                    discard_own_output: fan_out_only(track.id),
                 })
             }
         }
@@ -815,6 +831,7 @@ pub(crate) fn render_block(
             gain_r,
             silenced,
             discard_after_instrument,
+            discard_own_output,
         }) = strategy.track_disposition(track, any_solo, auto_gain, auto_mute)
         else {
             continue;
@@ -918,9 +935,17 @@ pub(crate) fn render_block(
             if discard_after_instrument {
                 continue;
             }
-            // Effect plugins (skipped when the track's FX are bypassed;
-            // the instrument itself still ran above).
-            if !track.fx_bypassed() {
+            // Fan-out driver only (ba todo #1242): this track is in the
+            // stem's filter so its instrument would RUN and fill the port
+            // scratch, not because its own main output belongs here.
+            // Drop port 0 — and with it the parent chain, fader, aux
+            // sends and routing that would otherwise carry it into the
+            // stem — while falling through to the sub-track fan-out
+            // below, which is the whole reason this track is rendering.
+            if discard_own_output {
+                track_buf_l[..frames].fill(0.0);
+                track_buf_r[..frames].fill(0.0);
+            } else if !track.fx_bypassed() {
                 for &plugin_id in plugin_iter {
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = strategy.lock_fx(mutex) {
