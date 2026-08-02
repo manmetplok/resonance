@@ -183,7 +183,20 @@ pub fn to_audio_clip(
         // Tail chunks are padded up to the CLAP activation minimum and
         // only `emit` frames are consumed — see `chunk_span`.
         let (render_frames, emit) = chunk_span(render_stop - pos);
-        render_chunk(&ctx, &mut scratch, pos, render_frames, &in_filter, false, false, false);
+        // `fan_out_only` is empty: a bounce-in-place filter is a track
+        // plus its own sub-tracks, so no parent is present purely to
+        // drive somebody else's fan-out (ba todo #1242).
+        render_chunk(
+            &ctx,
+            &mut scratch,
+            pos,
+            render_frames,
+            &in_filter,
+            &|_| false,
+            false,
+            false,
+            false,
+        );
         let drop_now = skip_frames.min(emit);
         skip_frames -= drop_now;
         let copy = (emit - drop_now).min(total_frames - written);

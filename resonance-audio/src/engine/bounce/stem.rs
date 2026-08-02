@@ -14,7 +14,12 @@
 //!   A track includes its sub-tracks; a bus includes every track routed
 //!   to it — top-level tracks (plus their sub-tracks) *and* sub-tracks
 //!   routed to it on their own (ba todo #1239) — and runs that bus's FX
-//!   chain; master is everything.
+//!   chain; master is everything. Either kind of filter also pulls in the
+//!   PARENT of any sub-tracks it contains, because a sub-track's audio is
+//!   one output port of the parent's instrument and only exists while the
+//!   parent renders; a parent pulled in for that reason alone is flagged
+//!   `fan_out_only` so its own main output stays out of the stem (ba todo
+//!   #1242).
 //! * [`render_stem`] — render one source over a shared range to an
 //!   in-RAM interleaved-stereo buffer. Per-track / per-bus stems exclude
 //!   master FX + master volume (like `to_audio_clip`); the master stem
@@ -77,6 +82,13 @@ impl StemBitDepth {
 pub struct StemFilter {
     /// Tracks that contribute (ignored when `all`).
     pub set: HashSet<TrackId>,
+    /// Tracks in `set` that are present **only** to drive a sub-track
+    /// fan-out (ba todo #1242). Their instrument must run — that is the
+    /// only way their sub-tracks get any audio at all — but their own
+    /// main output (port 0) belongs to a different stem, so its chain,
+    /// fader, aux sends and routing contribute nothing here. Never
+    /// populated for `Master`.
+    pub fan_out_only: HashSet<TrackId>,
     /// `true` for the master stem: every track contributes.
     pub all: bool,
     /// Apply master FX chain + master volume + hard-clip to the result.
@@ -89,6 +101,13 @@ impl StemFilter {
     pub fn contains(&self, id: TrackId) -> bool {
         self.all || self.set.contains(&id)
     }
+
+    /// Is this track in the filter *only* to drive its sub-tracks'
+    /// fan-out, so its own main output must be discarded?
+    #[inline]
+    pub fn is_fan_out_only(&self, id: TrackId) -> bool {
+        !self.all && self.fan_out_only.contains(&id)
+    }
 }
 
 /// Resolve the [`StemFilter`] for `source` against the current track
@@ -98,6 +117,7 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
     match source {
         StemSource::Master => StemFilter {
             set: HashSet::new(),
+            fan_out_only: HashSet::new(),
             all: true,
             include_master_fx: true,
         },
@@ -105,8 +125,22 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
             let mut set = HashSet::new();
             set.insert(track_id);
             add_sub_tracks(track_id, tracks, &mut set);
+            // When the target IS a sub-track it produces no audio of its
+            // own — its signal is one output port of the PARENT's
+            // instrument (ba todo #1242, the `StemSource::Track` sibling
+            // of #1239's bus fix). Without the parent to drive the
+            // fan-out the stem is digital silence, which `render.stems`,
+            // a single-sub-track export and `meter.measure` all reported
+            // as a real measurement.
+            //
+            // A parent pulled in this way is a fan-out DRIVER, not a
+            // member: "Drums -> Hats" must be hats. The sibling taps are
+            // held out by `sub_track_disposition`'s own `in_filter` gate,
+            // and the parent's port-0 chain by `fan_out_only`.
+            let fan_out_only = add_fan_out_parents(tracks, &mut set);
             StemFilter {
                 set,
+                fan_out_only,
                 all: false,
                 include_master_fx: false,
             }
@@ -139,9 +173,10 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
                     add_sub_tracks(t.id, tracks, &mut set);
                 }
             }
-            add_fan_out_parents(tracks, &mut set);
+            let fan_out_only = add_fan_out_parents(tracks, &mut set);
             StemFilter {
                 set,
+                fan_out_only,
                 all: false,
                 include_master_fx: false,
             }
@@ -149,31 +184,49 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
     }
 }
 
-/// Insert the parent of every sub-track already in `set` (ba todo #1239).
+/// Insert the parent of every sub-track already in `set` (ba todo #1239),
+/// returning the parents that were **added by this walk** — i.e. those
+/// that are in the filter only to drive a fan-out (ba todo #1242).
 ///
 /// A sub-track produces no audio of its own: its signal is one output
 /// port of the parent's instrument, fanned out by `mixer::render_core`
 /// while the *parent* is being rendered. The `in_filter` gate skips a
-/// track that is not in the set before its instrument runs, so a bus fed
+/// track that is not in the set before its instrument runs, so a stem fed
 /// only by sub-tracks would still render as silence unless the parent
 /// comes along to drive the fan-out.
 ///
 /// The set is an `in_filter` — "which tracks contribute to this render" —
 /// not a membership list, so pulling a parent in for its fan-out is not a
-/// claim that the parent feeds the bus. Its own main-output (port 0)
-/// signal still follows its own routing, exactly as it does for every
-/// other track in the set; on a multi-output instrument that is the port
-/// almost nothing lands on (the drum kit puts one of thirty pads there —
-/// ba doc #274 §1a). This does NOT walk further: a parent added here does
-/// not drag in its other sub-tracks, so a tap routed to a different bus
-/// stays out of this one.
-fn add_fan_out_parents(tracks: &IndexMap<TrackId, Track>, set: &mut HashSet<TrackId>) {
+/// claim that the parent belongs to this stem. That is exactly what the
+/// returned set records: such a parent runs its instrument (the fan-out
+/// needs it) but its own main-output (port 0) chain is discarded, so a
+/// sub-track stem carries that tap and nothing else. On the real drum kit
+/// port 0 is one of thirty pads — the count stick, ba doc #274 §1a — so
+/// the leak is small but it is audible whenever that pad is played, and
+/// "hats" must mean hats.
+///
+/// A parent that is already in the set for its OWN sake (it is the stem's
+/// target, or it is itself routed to the bus being stemmed) is not
+/// returned, so its main output still renders normally.
+///
+/// This does NOT walk further: a parent added here does not drag in its
+/// other sub-tracks, so a tap routed to a different bus stays out of this
+/// one.
+fn add_fan_out_parents(
+    tracks: &IndexMap<TrackId, Track>,
+    set: &mut HashSet<TrackId>,
+) -> HashSet<TrackId> {
     let parents: Vec<TrackId> = set
         .iter()
         .filter_map(|id| tracks.get(id))
         .filter_map(|t| t.sub_track_of.map(|(parent, _)| parent))
         .collect();
-    set.extend(parents);
+    // `HashSet::insert` reports whether the id is new, which is precisely
+    // "pulled in for the fan-out and for nothing else".
+    parents
+        .into_iter()
+        .filter(|&parent| set.insert(parent))
+        .collect()
 }
 
 /// Insert every sub-track fed by `parent` into `set`.
@@ -311,6 +364,7 @@ pub fn render_stem(
     let mut output = vec![0.0f32; total_frames * 2];
 
     let in_filter = |id: TrackId| filter.contains(id);
+    let fan_out_only = |id: TrackId| filter.is_fan_out_only(id);
     let mut pos = render_start;
     let mut written: usize = 0;
     while pos < render_stop {
@@ -323,6 +377,7 @@ pub fn render_stem(
             pos,
             render_frames,
             &in_filter,
+            &fan_out_only,
             filter.include_master_fx,
             respect_mute_solo,
             false,

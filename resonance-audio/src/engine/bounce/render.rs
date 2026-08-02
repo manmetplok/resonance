@@ -248,6 +248,12 @@ pub(super) fn reset_plugins(
 /// one — but its bus isn't drained either, so reverb tails on shared
 /// buses still come from the in-filter tracks only.
 ///
+/// `fan_out_only` narrows that for the multi-output case (ba todo
+/// #1242): a track it returns true for is in the filter *only* to drive
+/// its sub-tracks' port fan-out, so its instrument runs but its own main
+/// output (port 0) is discarded before the track's FX chain, fader, aux
+/// sends and routing. Callers with no sub-track stems pass `&|_| false`.
+///
 /// `freeze_raw` selects the freeze-cache capture mode (see
 /// [`mixer::RenderStrategy::Bounce`]): in-filter tracks render their raw
 /// post-FX signal at unity gain straight to master so the cache is fader-
@@ -265,6 +271,7 @@ pub(super) fn render_chunk(
     pos: u64,
     frames: usize,
     in_filter: &dyn Fn(TrackId) -> bool,
+    fan_out_only: &dyn Fn(TrackId) -> bool,
     include_master_fx: bool,
     respect_mute_solo: bool,
     freeze_raw: bool,
@@ -293,6 +300,7 @@ pub(super) fn render_chunk(
     // writes so a bounce can run concurrently with live playback.
     let mut strategy = mixer::RenderStrategy::Bounce {
         in_filter,
+        fan_out_only,
         respect_mute_solo,
         freeze_raw,
     };
