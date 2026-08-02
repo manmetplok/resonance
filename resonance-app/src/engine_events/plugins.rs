@@ -235,6 +235,20 @@ pub(super) fn track_moved(
     instance_id: PluginInstanceId,
     to_index: usize,
 ) {
+    mirror_track_plugin_move(r, track_id, instance_id, to_index);
+}
+
+/// The mirror itself, shared with the control API's `track.move_effect`
+/// (ba doc #273, todo #1225), which applies the order immediately so a
+/// client can read back what it just set instead of waiting a cycle for
+/// `PluginMoved`. Applying it twice is harmless: the second call finds
+/// the plugin already at `to_index` and returns.
+pub(crate) fn mirror_track_plugin_move(
+    r: &mut Resonance,
+    track_id: TrackId,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
     let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) else {
         return;
     };

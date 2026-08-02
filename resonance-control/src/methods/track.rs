@@ -23,6 +23,9 @@ pub const ADD_EFFECT: &str = "track.add_effect";
 /// `track.remove_effect` — take an effect off the insert chain
 /// ([`RemoveEffectParams`] -> `MutationAck`).
 pub const REMOVE_EFFECT: &str = "track.remove_effect";
+/// `track.move_effect` — reorder the insert chain
+/// ([`MoveEffectParams`] -> `MutationAck`).
+pub const MOVE_EFFECT: &str = "track.move_effect";
 /// `track.set_output` — route a track to master or into a bus
 /// ([`SetOutputParams`] -> `MutationAck`).
 pub const SET_OUTPUT: &str = "track.set_output";
@@ -52,6 +55,7 @@ pub const METHODS: &[&str] = &[
     ADD_INSTRUMENT,
     ADD_EFFECT,
     REMOVE_EFFECT,
+    MOVE_EFFECT,
     SET_OUTPUT,
     ADD_SEND,
     SET_SEND,
@@ -331,6 +335,37 @@ pub struct RemoveEffectParams {
     /// Only meaningful together with `plugin_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<u32>,
+}
+
+/// Params for `track.move_effect`: change WHERE an effect sits in the
+/// chain, addressed exactly like [`RemoveEffectParams`] — **either**
+/// `slot` **or** `plugin_id` (+ `occurrence`), never both and never
+/// neither.
+///
+/// Order is audible. A compressor after an EQ reacts to the EQ'd signal;
+/// the same compressor before it does not, and the two are different
+/// sounds, not different spellings of one. A limiter belongs last,
+/// because anything after it can push the signal back over the ceiling
+/// it was there to hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct MoveEffectParams {
+    pub track_id: TrackId,
+    /// 0-based chain position of the effect to move, as reported by
+    /// [`PluginParamsEntry::slot`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// CLAP id of the effect to move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based; defaults to the first.
+    /// Only meaningful together with `plugin_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Destination chain position, 0-based. A value past the end of the
+    /// chain clamps to the last slot rather than failing. Moving an
+    /// effect to the slot it already occupies is an accepted no-op.
+    pub to_slot: u32,
 }
 
 /// One plugin parameter.

@@ -210,6 +210,38 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Move one effect to a different position in a track's insert chain. \
+                       Address it EITHER by slot OR by plugin_id plus occurrence, exactly as in \
+                       track_remove_effect, and give to_slot for where it should end up. \
+                       \
+                       ORDER IS AUDIBLE, and it is not a matter of tidiness. A chain is applied \
+                       front to back, so each effect hears what the one before it produced. An \
+                       EQ before a compressor changes what the compressor reacts to — cutting \
+                       lows first stops a kick from triggering gain reduction on everything \
+                       else; the same EQ after the compressor only reshapes what the compressor \
+                       already did. A limiter belongs LAST, because anything placed after it \
+                       can push the signal back over the ceiling it exists to hold, and a \
+                       reverb or delay generally goes after dynamics so the tail is not itself \
+                       squashed. Since track_add_effect only ever appends, the order a chain \
+                       ends up in is the order it was built in — this is how to correct that \
+                       without tearing the chain down and losing every parameter you set. \
+                       \
+                       Read the current order from track_plugin_params: each entry's slot is \
+                       its 0-based position, and slot order IS processing order. to_slot past \
+                       the end of the chain clamps to the end rather than failing, and moving \
+                       an effect to where it already sits is an accepted no-op. The track's \
+                       INSTRUMENT is not a chain-ordered insert: it cannot be moved, and an \
+                       effect cannot be moved in front of it. Undoable.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn track_move_effect(
+        &self,
+        Parameters(params): Parameters<track::MoveEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::MOVE_EFFECT, &params).await
+    }
+
+    #[tool(
         description = "List a track's plugins and every parameter each one exposes — id, name, \
                        current value, min, max and default. Omit plugin_id for all of them. \
                        Plugins are named by the CLAP id song_tracks already shows (its \

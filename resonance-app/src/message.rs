@@ -869,6 +869,21 @@ pub enum PluginMessage {
         plugin: ScannedPlugin,
     },
     RemovePluginFromTrack(TrackId, PluginInstanceId),
+    /// Reorder a track's insert chain: move `instance_id` to
+    /// `to_index`, shifting everything between its old and new slot by
+    /// one (ba doc #273, todo #1225). `to_index` is clamped to the last
+    /// slot, so a value past the end means "the end".
+    ///
+    /// Sends `AudioCommand::MovePlugin` (todo #1224) *and* mirrors the
+    /// new order into `TrackState.plugins` immediately, so a control
+    /// client can read its own write back in the same cycle. The
+    /// engine's `PluginMoved` echo replays the same move, which is a
+    /// no-op once the order already matches.
+    MovePluginInTrack {
+        track_id: TrackId,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
     TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
     /// Open the plugin's editor window (CLAP_EXT_GUI).

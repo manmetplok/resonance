@@ -48,6 +48,28 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 instance_id,
             });
         }
+        PluginMessage::MovePluginInTrack {
+            track_id,
+            instance_id,
+            to_index,
+        } => {
+            let _ = r.engine.send(AudioCommand::MovePlugin {
+                track_id,
+                instance_id,
+                to_index,
+            });
+            // Mirror it now rather than waiting for `PluginMoved`: the
+            // app's `Vec` order is what the mixer draws and what project
+            // serialization writes, and a control client must be able to
+            // read back the order it just set. `track_moved` replays the
+            // same move on the echo and no-ops when it already matches.
+            crate::engine_events::plugins::mirror_track_plugin_move(
+                r,
+                track_id,
+                instance_id,
+                to_index,
+            );
+        }
         PluginMessage::TogglePluginPanel(instance_id) => {
             if r.mixer.selected_plugin == Some(instance_id) {
                 r.mixer.selected_plugin = None;

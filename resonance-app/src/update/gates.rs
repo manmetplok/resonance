@@ -312,7 +312,9 @@ fn plugin_edit_target(
     match m {
         SetPluginParam(instance_id, ..) => r.track_of_plugin(*instance_id),
         AddPluginToTrack(track_id, _) | RemovePluginFromTrack(track_id, _) => Some(*track_id),
-        AddPluginToTrackWithId { track_id, .. } => Some(*track_id),
+        AddPluginToTrackWithId { track_id, .. } | MovePluginInTrack { track_id, .. } => {
+            Some(*track_id)
+        }
         TogglePluginPanel(_) | OpenPluginEditor(_) | ClosePluginEditor(_) => None,
     }
 }
