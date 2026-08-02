@@ -229,6 +229,75 @@ fn add_fan_out_parents(
         .collect()
 }
 
+/// Refuse a stem whose sub-track audio would have to come out of a
+/// FROZEN parent's cache (ba todo #1248).
+///
+/// Freezing a multi-output instrument bakes its whole fan-out into ONE
+/// cache file: `freeze_raw` forces every sub-track into master at unity
+/// (`render_core`'s `force_master_route`) so the parent's cache carries
+/// the summed kit, and on playback the frozen branch fills the parent's
+/// buffer from that cache and never runs the instrument — so
+/// `extra_ports_filled` stays 0 and the sub-tracks produce nothing at
+/// all. While a parent is frozen its taps have no independent signal;
+/// that is a property of the freeze design (doc #187), not an oversight
+/// here.
+///
+/// So a stem or measurement of one such tap has no honest answer.
+/// Before ba todo #1242 it returned silence; #1242's fan-out fix made it
+/// return the frozen parent's cache, i.e. THE WHOLE KIT under the name
+/// of one tap — plausible, confident and wrong, which this arc has
+/// repeatedly established is the worse failure. `discard_own_output`
+/// cannot help: it lives in the instrument arm of the per-track loop,
+/// which a frozen track never reaches, and zeroing the frozen buffer
+/// instead would delete the tap's own signal along with its siblings'.
+///
+/// Of the three options ba todo #1248 lists this is (b), and it is
+/// enforced HERE rather than at the control layer so that stem export
+/// and `render.stems` are covered by the same rule as `meter.measure` —
+/// the defect is in the render path, and every caller of that path
+/// deserves the answer. It is also the only option that leaves doc
+/// #187's parity invariant untouched: nothing about how a frozen track
+/// PLAYS changes, an offline request simply gets an error instead of a
+/// wrong buffer. Option (a) (fall back to unfrozen rendering) would
+/// measure audio the user is not hearing whenever the cache is stale,
+/// and option (c) (unfreeze on demand) would mutate the project to
+/// answer a read-only question.
+///
+/// Only fan-out parents are checked: `StemSource::Track(frozen_parent)`
+/// is still perfectly renderable — the cache IS that instrument's whole
+/// output — and is deliberately left alone.
+fn frozen_fan_out_refusal(
+    filter: &StemFilter,
+    tracks: &IndexMap<TrackId, Track>,
+) -> Option<String> {
+    // Walk `tracks` rather than the `HashSet` so the message is
+    // deterministic when more than one frozen parent is involved.
+    let (parent_id, parent) = tracks
+        .iter()
+        .find(|(id, t)| {
+            filter.fan_out_only.contains(id) && t.frozen_source.load_full().is_some()
+        })?;
+    let taps: Vec<&str> = tracks
+        .values()
+        .filter(|t| {
+            t.sub_track_of.map(|(p, _)| p) == Some(*parent_id) && filter.contains(t.id)
+        })
+        .map(|t| t.name.as_str())
+        .collect();
+    let which = match taps.as_slice() {
+        [] => String::new(),
+        [one] => format!(" (\"{one}\")"),
+        many => format!(" ({})", many.join(", ")),
+    };
+    Some(format!(
+        "Track {parent_id} (\"{}\") is frozen, and its freeze cache holds the \
+         whole instrument as one signal — the sub-track{which} cannot be \
+         separated out of it. Unfreeze track {parent_id} to render or measure \
+         its individual outputs.",
+        parent.name
+    ))
+}
+
 /// Insert every sub-track fed by `parent` into `set`.
 fn add_sub_tracks(parent: TrackId, tracks: &IndexMap<TrackId, Track>, set: &mut HashSet<TrackId>) {
     for t in tracks.values() {
@@ -316,7 +385,16 @@ pub fn render_stem(
         return Err("Empty render range".into());
     }
 
-    let filter = stem_filter(source, &tracks.read());
+    let filter = {
+        let tracks_guard = tracks.read();
+        let filter = stem_filter(source, &tracks_guard);
+        // A tap whose parent is FROZEN has no separable signal at all
+        // (ba todo #1248) — refuse rather than hand back the whole kit.
+        if let Some(message) = frozen_fan_out_refusal(&filter, &tracks_guard) {
+            return Err(message);
+        }
+        filter
+    };
     // The master stem honours mute/solo (it is the real mix); isolated
     // track/bus stems render their source regardless of mute/solo.
     let respect_mute_solo = filter.include_master_fx;
