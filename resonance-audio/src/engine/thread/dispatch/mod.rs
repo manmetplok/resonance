@@ -99,6 +99,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         // Plugins
         AudioCommand::AddPlugin { .. }
         | AudioCommand::RemovePlugin { .. }
+        | AudioCommand::MovePlugin { .. }
         | AudioCommand::ScanPlugins
         | AudioCommand::SetPluginParam { .. }
         | AudioCommand::OpenPluginEditor { .. }

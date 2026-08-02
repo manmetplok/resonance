@@ -277,6 +277,18 @@ pub enum AudioEvent {
         track_id: TrackId,
         instance_id: PluginInstanceId,
     },
+    /// A track's insert chain was reordered by
+    /// [`AudioCommand::MovePlugin`](super::AudioCommand::MovePlugin).
+    /// `to_index` is the slot the plugin actually landed on *after*
+    /// clamping, so the app can mirror the engine's order rather than
+    /// re-deriving it. The app's `TrackState.plugins` order is what project
+    /// serialization writes, so mirroring this is what makes a reorder
+    /// survive save/load.
+    PluginMoved {
+        track_id: TrackId,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
     PluginsScanned {
         plugins: Vec<ScannedPlugin>,
     },

@@ -316,6 +316,33 @@ impl Track {
         self.plugin_chain.store(Arc::new(next));
     }
 
+    /// Move `instance_id` to `to_index`, shifting the plugins between its
+    /// old and new slot by one. `to_index` is clamped to the last slot.
+    /// Returns the index the plugin ended up at, or `None` if it is not on
+    /// this chain — in which case nothing is published at all.
+    ///
+    /// Copy-on-write like [`push_plugin`](Self::push_plugin): the reordered
+    /// `Vec` is built by the caller's thread (the engine control thread,
+    /// never the audio callback) and published with a single
+    /// `ArcSwap::store`, so a concurrent [`plugins`](Self::plugins) load
+    /// sees either the old order or the new one, never a half-rotated
+    /// chain. A no-op move publishes nothing, so it cannot even cost
+    /// readers a reload.
+    pub fn move_plugin(&self, instance_id: PluginInstanceId, to_index: usize) -> Option<usize> {
+        let current = self.plugin_chain.load_full();
+        let from = current.iter().position(|&id| id == instance_id)?;
+        // `from` was found, so the chain is non-empty and this cannot wrap.
+        let to = to_index.min(current.len() - 1);
+        if from == to {
+            return Some(to);
+        }
+        let mut next = (*current).clone();
+        let id = next.remove(from);
+        next.insert(to, id);
+        self.plugin_chain.store(Arc::new(next));
+        Some(to)
+    }
+
     /// Replace the chain wholesale with `ids`. Used by project-load
     /// replay and by the plugin-scan path that clears every track's
     /// chain before re-instantiating the saved instances.

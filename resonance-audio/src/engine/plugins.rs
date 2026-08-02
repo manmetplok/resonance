@@ -23,6 +23,13 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
         cmd,
         AudioCommand::AddPlugin { .. }
             | AudioCommand::RemovePlugin { .. }
+            // Reordering looks latency-neutral — a chain's latency is the
+            // sum of its plugins — but it isn't. On an instrument track the
+            // *first* plugin is the instrument: it keeps running while the
+            // FX chain is bypassed, and every sub-track inherits its
+            // latency (see `latency::chain_latencies`). Moving a plugin
+            // into or out of slot 0 therefore changes the comp table.
+            | AudioCommand::MovePlugin { .. }
             | AudioCommand::AddPluginToBus { .. }
             | AudioCommand::RemovePluginFromBus { .. }
             | AudioCommand::ScanPlugins
@@ -293,6 +300,43 @@ pub(crate) fn handle_remove_plugin(
         track_id,
         instance_id,
     });
+}
+
+pub(crate) fn handle_move_plugin(
+    ctx: &HandlerCtx,
+    track_id: TrackId,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
+    // Same shape as `handle_remove_plugin`: `move_plugin` builds the
+    // reordered Vec here on the engine thread and publishes it with one
+    // `ArcSwap::store`, so a read guard on the tracks map is enough. The
+    // audio thread is never blocked on the edit and never allocates, and
+    // no lock is held across a `process()` call — the plugin instances
+    // themselves are untouched, only the order they are visited in.
+    let moved = ctx
+        .tracks
+        .read()
+        .get(&track_id)
+        .and_then(|track| track.move_plugin(instance_id, to_index));
+    match moved {
+        // Report the *clamped* index so the app mirrors what the engine
+        // actually did rather than what was requested.
+        Some(to_index) => {
+            let _ = ctx.event_tx.send(AudioEvent::PluginMoved {
+                track_id,
+                instance_id,
+                to_index,
+            });
+        }
+        None => {
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Cannot reorder plugin {} on track {}: no such track, or that \
+                 plugin is not on its chain",
+                instance_id, track_id
+            )));
+        }
+    }
 }
 
 pub(crate) fn handle_set_plugin_param(

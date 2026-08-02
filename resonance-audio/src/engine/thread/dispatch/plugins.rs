@@ -28,6 +28,11 @@ pub(super) fn dispatch_plugins(
             track_id,
             instance_id,
         } => plugins::handle_remove_plugin(ctx, track_id, instance_id),
+        AudioCommand::MovePlugin {
+            track_id,
+            instance_id,
+            to_index,
+        } => plugins::handle_move_plugin(ctx, track_id, instance_id, to_index),
         AudioCommand::ScanPlugins => {
             scan::scan_plugins(ctx.plugins, ctx.tracks, &mut state.bundles, ctx.event_tx)
         }
