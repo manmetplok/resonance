@@ -4,10 +4,13 @@
 use resonance_control::common::{
     KeyScale, SongPosition, TimeSignature, TrackKind, TrackOutput, TransportState,
 };
-use resonance_control::ids::{ChordId, ClipId, SectionDefinitionId, SectionPlacementId, TrackId};
+use resonance_control::ids::{
+    ChordId, ClipId, SectionDefinitionId, SectionPlacementId, SendId, TrackId,
+};
 use resonance_control::methods::song::{
     ChordView, ClipView, LyricLineView, NoteView, NotesView, SectionDefinitionView,
-    SectionPlacementView, SectionsView, SongSummary, SyllableView, TrackDetail, TrackSummary,
+    SectionPlacementView, SectionsView, SendView, SongSummary, SyllableView, TrackDetail,
+    TrackSummary,
     PitchRangeView, TracksView, VocalLaneView, VocalNoteView, VocalRenderState, VocalView,
 };
 use serde_json::json;
@@ -168,6 +171,13 @@ fn track_detail_flattens_the_summary_fields() {
         summary: track_summary(),
         effects: vec!["resonance-eq".to_owned()],
         frozen: false,
+        sends: vec![SendView {
+            send_id: SendId(3),
+            to_bus: TrackId(90),
+            level_db: -6.0,
+            pre_fader: false,
+            enabled: true,
+        }],
         clips: vec![ClipView {
             id: ClipId(7),
             name: Some("Bass groove".to_owned()),
@@ -190,6 +200,15 @@ fn track_detail_flattens_the_summary_fields() {
     assert_eq!(wire["tracks"][0]["id"], json!(4));
     assert_eq!(wire["tracks"][0]["kind"], json!("instrument"));
     assert_eq!(wire["tracks"][0]["effects"], json!(["resonance-eq"]));
+    // Sends are readable: an agent that cannot hear must be able to
+    // check what it wired (ba doc #273, todo #1229).
+    assert_eq!(
+        wire["tracks"][0]["sends"],
+        json!([{
+            "send_id": 3, "to_bus": 90, "level_db": -6.0,
+            "pre_fader": false, "enabled": true
+        }])
+    );
     assert_eq!(wire["tracks"][0]["clips"][0]["midi"], json!(true));
     let back: TracksView = serde_json::from_value(wire).unwrap();
     assert_eq!(back, view);

@@ -71,3 +71,9 @@ id_type!(
     /// app, monotonic per app run.
     JobId
 );
+id_type!(
+    /// An aux-send id: one tap from a track into a return bus. Reported
+    /// by `song.tracks` and taken by `track.set_send` /
+    /// `track.remove_send`.
+    SendId
+);

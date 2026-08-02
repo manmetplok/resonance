@@ -261,6 +261,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
                 UndoAction::RecordCoalesced(CoalesceKey::SendLevel(*send_id))
             }
             MixerMessage::AddSend { .. }
+            | MixerMessage::AddSendWithId { .. }
             | MixerMessage::RemoveSend(_)
             | MixerMessage::SetSendDest(_, _)
             | MixerMessage::ToggleSendPreFader(_)

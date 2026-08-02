@@ -4,7 +4,7 @@
 //! [`crate::common::MutationAck`].
 
 use crate::common::{TrackKind, TrackOutput};
-use crate::ids::TrackId;
+use crate::ids::{SendId, TrackId};
 use serde::{Deserialize, Serialize};
 
 /// `track.add` — add a track ([`AddParams`] -> [`AddResult`]).
@@ -26,6 +26,13 @@ pub const REMOVE_EFFECT: &str = "track.remove_effect";
 /// `track.set_output` — route a track to master or into a bus
 /// ([`SetOutputParams`] -> `MutationAck`).
 pub const SET_OUTPUT: &str = "track.set_output";
+/// `track.add_send` — tap a track into a return bus
+/// ([`AddSendParams`] -> [`AddSendResult`]).
+pub const ADD_SEND: &str = "track.add_send";
+/// `track.set_send` — edit an existing send ([`SetSendParams`]).
+pub const SET_SEND: &str = "track.set_send";
+/// `track.remove_send` — delete a send ([`RemoveSendParams`]).
+pub const REMOVE_SEND: &str = "track.remove_send";
 /// `track.plugins` — the built-in plugin catalog, read-only
 /// (no params -> [`PluginCatalog`]).
 pub const PLUGINS: &str = "track.plugins";
@@ -46,6 +53,9 @@ pub const METHODS: &[&str] = &[
     ADD_EFFECT,
     REMOVE_EFFECT,
     SET_OUTPUT,
+    ADD_SEND,
+    SET_SEND,
+    REMOVE_SEND,
     PLUGINS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
@@ -190,6 +200,77 @@ pub struct SetOutputParams {
     /// `"master"` to sum directly into the master output, or
     /// `{"bus_id": N}` to route through a group bus first.
     pub output: TrackOutput,
+}
+
+// ---------------------------------------------------------------------------
+// Aux sends (ba doc #273, todo #1229)
+// ---------------------------------------------------------------------------
+
+/// Lowest send level the engine accepts, in dB (it clamps to this).
+pub const SEND_LEVEL_DB_MIN: f32 = -120.0;
+/// Highest send level the engine accepts, in dB.
+pub const SEND_LEVEL_DB_MAX: f32 = 24.0;
+
+/// Params for `track.add_send` — an extra tap from a track into a return
+/// bus, independent of where the track's main output goes.
+///
+/// This is how several tracks share ONE reverb (or delay): each sends
+/// some of its signal to a common return, which puts them in the same
+/// room. A reverb inserted per track puts every instrument in a
+/// different building and costs far more CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AddSendParams {
+    pub track_id: TrackId,
+    /// The destination bus (from `bus.create`, or a `kind: "bus"` entry
+    /// in `song.summary`). It is flagged as a RETURN bus automatically.
+    pub to_bus: TrackId,
+    /// Send gain in dB; `0` taps the source at unity. Defaults to `0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_db: Option<f32>,
+    /// `true` taps before the track's own fader (the send level then
+    /// ignores the fader), `false` — the default, and what you almost
+    /// always want for reverb — taps after it, so moving the track down
+    /// takes its reverb with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_fader: Option<bool>,
+}
+
+/// Result of `track.add_send`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AddSendResult {
+    /// Address this send in `track.set_send` / `track.remove_send`; it
+    /// is also reported in `song.tracks`.
+    pub send_id: SendId,
+    pub revision: u64,
+}
+
+/// Params for `track.set_send`: change one or more properties of an
+/// existing send. Omitted fields keep their current value.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetSendParams {
+    pub send_id: SendId,
+    /// New send gain in dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_db: Option<f32>,
+    /// Move the tap before (`true`) or after (`false`) the fader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_fader: Option<bool>,
+    /// Silence the send without losing its routing and level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Re-route the send into a different return bus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_bus: Option<TrackId>,
+}
+
+/// Params for `track.remove_send`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RemoveSendParams {
+    pub send_id: SendId,
 }
 
 /// Params for `track.remove_effect`: address the plugin **either** by

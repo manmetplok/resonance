@@ -34,6 +34,22 @@ pub fn handle(r: &mut Resonance, m: MixerMessage) -> Task<Message> {
                 enabled: true,
             });
         }
+        MixerMessage::AddSendWithId {
+            id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+        } => {
+            let _ = r.engine.send(AudioCommand::SetAuxSend {
+                id_hint: Some(id),
+                source,
+                dest,
+                level_db,
+                pre_fader,
+                enabled: true,
+            });
+        }
         MixerMessage::RemoveSend(send_id) => {
             let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id });
         }
