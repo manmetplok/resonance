@@ -94,6 +94,33 @@ pub enum TrackKind {
     Unknown,
 }
 
+/// Where a track's post-fader audio lands: straight into the master
+/// sum, or into a bus for group processing first.
+///
+/// On the wire this is the string `"master"` or the object
+/// `{"bus_id": <id>}` — the bus id is a track id from the same space
+/// `song.summary` reports busses under (`kind: "bus"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum TrackOutput {
+    /// Sums directly into the master output (the default).
+    #[serde(rename = "master")]
+    Master,
+    /// Routes into this bus, which then feeds master.
+    #[serde(rename = "bus_id")]
+    Bus(crate::ids::TrackId),
+}
+
+impl TrackOutput {
+    /// The destination bus, or `None` when this routes to master.
+    pub fn bus_id(self) -> Option<crate::ids::TrackId> {
+        match self {
+            Self::Master => None,
+            Self::Bus(id) => Some(id),
+        }
+    }
+}
+
 /// Transport states, lowercase on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

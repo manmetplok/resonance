@@ -1,7 +1,9 @@
 //! Compact song views: exact documented JSON shapes (lowercase enums,
 //! musical + sample positions, real app ids) and round-trips.
 
-use resonance_control::common::{KeyScale, SongPosition, TimeSignature, TrackKind, TransportState};
+use resonance_control::common::{
+    KeyScale, SongPosition, TimeSignature, TrackKind, TrackOutput, TransportState,
+};
 use resonance_control::ids::{ChordId, ClipId, SectionDefinitionId, SectionPlacementId, TrackId};
 use resonance_control::methods::song::{
     ChordView, ClipView, LyricLineView, NoteView, NotesView, SectionDefinitionView,
@@ -17,14 +19,51 @@ fn track_summary() -> TrackSummary {
         name: "Bass".to_owned(),
         kind: TrackKind::Instrument,
         instrument: Some("resonance-wavetable".to_owned()),
+        parent_id: None,
         muted: false,
         soloed: true,
         // Exactly representable in f32 so the JSON shape check below
         // stays bit-stable through the f32 -> f64 widening.
         volume: 0.5,
+        volume_db: -6.0,
         pan: -0.25,
+        output: TrackOutput::Master,
         clip_count: 2,
     }
+}
+
+/// A sub-track of a multi-output instrument, routed into a bus: the two
+/// fields whose absence silently corrupted a field analysis (ba doc
+/// #273).
+fn sub_track_summary() -> TrackSummary {
+    TrackSummary {
+        id: TrackId(5),
+        name: "Drums → Kick".to_owned(),
+        parent_id: Some(TrackId(4)),
+        output: TrackOutput::Bus(TrackId(90)),
+        ..track_summary()
+    }
+}
+
+#[test]
+fn track_summary_reports_parentage_and_routing() {
+    let wire = serde_json::to_value(sub_track_summary()).unwrap();
+    assert_eq!(wire["parent_id"], json!(4));
+    // `"master"` or `{"bus_id": N}` — never a bare number.
+    assert_eq!(wire["output"], json!({"bus_id": 90}));
+    assert_eq!(wire["volume_db"], json!(-6.0));
+
+    // An ordinary track omits `parent_id` entirely rather than emitting
+    // `null` noise on every line.
+    let wire = serde_json::to_value(track_summary()).unwrap();
+    assert!(wire.get("parent_id").is_none(), "{wire}");
+    assert_eq!(wire["output"], json!("master"));
+
+    let back: TrackSummary = serde_json::from_value(
+        serde_json::to_value(sub_track_summary()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(back, sub_track_summary());
 }
 
 #[test]
@@ -77,7 +116,8 @@ fn song_summary_matches_documented_shape() {
                 "id": 4, "name": "Bass", "kind": "instrument",
                 "instrument": "resonance-wavetable",
                 "muted": false, "soloed": true,
-                "volume": 0.5, "pan": -0.25, "clip_count": 2
+                "volume": 0.5, "volume_db": -6.0, "pan": -0.25,
+                "output": "master", "clip_count": 2
             }],
             "revision": 12
         })
