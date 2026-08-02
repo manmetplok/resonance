@@ -1,12 +1,18 @@
-//! `meter.*` control handlers (ba doc #273, todo #1219): measure the mix
-//! over the control API instead of bouncing a WAV and analysing it.
+//! `meter.*` control handlers (ba doc #273, todos #1219 / #1220):
+//! measure the mix over the control API instead of bouncing WAVs and
+//! analysing them.
 //!
-//! Covers the job round trip (start -> engine event -> typed result),
-//! target resolution for master / track / bus / an id that does not
-//! exist, the range clamp, the guards that keep a measurement off a busy
-//! renderer, and — the point of the whole result shape — that a number
-//! the meters cannot supply comes back as `null` rather than as a zero
-//! that reads like a measurement.
+//! `meter.measure` — the job round trip (start -> engine event -> typed
+//! result), target resolution for master / track / bus / an id that does
+//! not exist, the range clamp, the guards that keep a measurement off a
+//! busy renderer, and — the point of the whole result shape — that a
+//! number the meters cannot supply comes back as `null` rather than as a
+//! zero that reads like a measurement.
+//!
+//! `meter.stems` — master plus ONE entry per top-level track from ONE
+//! engine pass, with the drum kit's sub-track folded into its parent
+//! instead of competing with it, ids and names that join to
+//! `song.summary`, and one shared range across every entry.
 
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
@@ -17,7 +23,9 @@ use resonance_audio::types::{
 };
 use resonance_control::job::{JobStarted, JobState, JobStatus};
 use resonance_control::methods::control::HelloResult;
-use resonance_control::methods::meter::{MeasureResult, MeasureSource, MeasureTarget};
+use resonance_control::methods::meter::{
+    MeasureResult, MeasureSource, MeasureTarget, StemsResult,
+};
 use resonance_control::{ErrorKind, Request, Response};
 use resonance_metering::offline::BandShares;
 use serde_json::json;
@@ -585,5 +593,250 @@ fn a_render_measure_while_a_live_measure_is_pending_is_busy() {
     assert_eq!(
         response.error.expect("one measurement at a time").kind(),
         ErrorKind::Busy
+    );
+}
+
+// ---------------------------------------------------------------------------
+// meter.stems (ba todo #1220)
+// ---------------------------------------------------------------------------
+
+/// The measurements the engine would answer a `meter.stems` pass with:
+/// one per requested target, all over the same range.
+fn stems_results(targets: &[StemSource], rate: u32) -> Vec<MixMeasurement> {
+    targets.iter().map(|t| rendered(*t, rate)).collect()
+}
+
+fn stems_result(app: &mut Resonance, job: u64) -> StemsResult {
+    let status = job_status(app, job);
+    assert_eq!(status.state, JobState::Done, "job errored: {:?}", status.error);
+    serde_json::from_value(status.result.expect("done carries a result"))
+        .expect("result is a StemsResult")
+}
+
+/// The core of the todo: master plus ONE entry per top-level track, and
+/// the drum kit's sub-track folded into its parent rather than competing
+/// with it. The sub-track must not be a target either — the engine would
+/// render it silent, since a sub-track's audio only exists while its
+/// parent's instrument runs.
+#[test]
+fn stems_reports_top_level_tracks_once_with_sub_tracks_folded_in() {
+    let mut app = app();
+    let rate = app.sample_rate;
+    let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
+
+    // Exactly what one engine pass would answer for master + the two
+    // TOP-LEVEL tracks. KICK is deliberately absent: it is a sub-track.
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        results: stems_results(
+            &[
+                StemSource::Master,
+                StemSource::Track(DRUMS),
+                StemSource::Track(BASS),
+            ],
+            rate,
+        ),
+    });
+
+    let result = stems_result(&mut app, job);
+    assert_eq!(result.master.target, MeasureTarget::Master);
+
+    let ids: Vec<u64> = result.tracks.iter().map(|t| t.track_id.0).collect();
+    assert_eq!(ids, vec![DRUMS, BASS], "one entry per top-level track");
+    assert!(
+        !ids.contains(&KICK),
+        "the sub-track must not compete with its parent: {ids:?}"
+    );
+
+    let drums = &result.tracks[0];
+    assert_eq!(
+        drums.includes_track_ids.iter().map(|i| i.0).collect::<Vec<_>>(),
+        vec![KICK],
+        "the parent must say which sub-tracks its numbers already contain"
+    );
+    assert!(result.tracks[1].includes_track_ids.is_empty());
+
+    // Every entry came from the same pass over the same range.
+    let seconds = result.master.measured_seconds;
+    assert_eq!(seconds, Some(10.0));
+    for track in &result.tracks {
+        assert_eq!(
+            track.measurement.measured_seconds, seconds,
+            "{} was measured over a different range",
+            track.name
+        );
+    }
+}
+
+/// Ids and names line up with what `song.summary` reports, so a client
+/// can join the two without a lookup table.
+#[test]
+fn stems_entries_match_song_summary() {
+    use resonance_control::methods::song::SongSummary;
+
+    let mut app = app();
+    let rate = app.sample_rate;
+    let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        results: stems_results(
+            &[
+                StemSource::Master,
+                StemSource::Track(DRUMS),
+                StemSource::Track(BASS),
+            ],
+            rate,
+        ),
+    });
+    let result = stems_result(&mut app, job);
+
+    let summary: SongSummary = roundtrip(&mut app, Request::without_params(2, "song.summary"))
+        .result()
+        .expect("song.summary succeeds");
+    for entry in &result.tracks {
+        let line = summary
+            .tracks
+            .iter()
+            .find(|t| t.id == entry.track_id)
+            .unwrap_or_else(|| panic!("track {} is not in song.summary", entry.track_id));
+        assert_eq!(entry.name, line.name);
+    }
+}
+
+/// The wire shape: the measurement's fields sit alongside `track_id` and
+/// `name` on one flat object, and `includes_track_ids` is omitted rather
+/// than emitted as an empty array on the common case.
+#[test]
+fn a_stem_entry_is_one_flat_object_on_the_wire() {
+    let mut app = app();
+    let rate = app.sample_rate;
+    let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        results: stems_results(
+            &[
+                StemSource::Master,
+                StemSource::Track(DRUMS),
+                StemSource::Track(BASS),
+            ],
+            rate,
+        ),
+    });
+
+    let wire = measured_json(&mut app, job);
+    let drums = &wire["tracks"][0];
+    assert_eq!(drums["track_id"], json!(DRUMS));
+    assert_eq!(drums["lufs_integrated"], json!(-20.5));
+    assert_eq!(drums["target"], json!({ "track_id": DRUMS }));
+    assert_eq!(drums["includes_track_ids"], json!([KICK]));
+    assert!(
+        wire["tracks"][1].get("includes_track_ids").is_none(),
+        "an ordinary track must not carry an empty array: {}",
+        wire["tracks"][1]
+    );
+}
+
+#[test]
+fn busses_are_opt_in() {
+    let mut app = app();
+    let rate = app.sample_rate;
+
+    // Default: no bus entry, and the bus is not even a target.
+    let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        results: stems_results(
+            &[
+                StemSource::Master,
+                StemSource::Track(DRUMS),
+                StemSource::Track(BASS),
+            ],
+            rate,
+        ),
+    });
+    let without = stems_result(&mut app, job);
+    assert!(without.tracks.iter().all(|t| t.track_id.0 != BUS));
+
+    let job = started_job(roundtrip(
+        &mut app,
+        request(2, "meter.stems", json!({ "include_busses": true })),
+    ));
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        results: stems_results(
+            &[
+                StemSource::Master,
+                StemSource::Track(DRUMS),
+                StemSource::Track(BASS),
+                StemSource::Bus(BUS),
+            ],
+            rate,
+        ),
+    });
+    let with = stems_result(&mut app, job);
+    let bus = with
+        .tracks
+        .iter()
+        .find(|t| t.track_id.0 == BUS)
+        .expect("bus entry");
+    assert_eq!(bus.name, "Drum Bus");
+    assert_eq!(bus.measurement.target, MeasureTarget::Bus(BUS.into()));
+}
+
+#[test]
+fn stems_accepts_an_explicit_range_and_no_range_alike() {
+    let mut app = app();
+    let rate = app.sample_rate;
+    app.test_push_clip(four_second_clip(rate));
+
+    for (id, params) in [
+        (1, json!({})),
+        (
+            2,
+            json!({ "range": { "start": { "bar": 1 }, "end": { "sample": u64::from(rate) * 2 } } }),
+        ),
+    ] {
+        let job = started_job(roundtrip(&mut app, request(id, "meter.stems", params)));
+        assert_eq!(job_status(&mut app, job).state, JobState::Pending);
+        app.test_apply_engine_event(AudioEvent::MixMeasured {
+            results: stems_results(&[StemSource::Master, StemSource::Track(DRUMS)], rate),
+        });
+        assert_eq!(stems_result(&mut app, job).tracks.len(), 1);
+    }
+}
+
+/// A pass with no master measurement is not a partial answer to report —
+/// it is a broken one.
+#[test]
+fn stems_without_a_master_result_fails_the_job() {
+    let mut app = app();
+    let rate = app.sample_rate;
+    let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        results: stems_results(&[StemSource::Track(DRUMS)], rate),
+    });
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Error);
+}
+
+#[test]
+fn stems_while_a_render_is_in_flight_is_busy() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = app();
+    let target = dir.path().join("mix.wav").display().to_string();
+    let _ = roundtrip(&mut app, request(1, "render.mixdown", json!({ "path": target })));
+
+    let response = roundtrip(&mut app, request(2, "meter.stems", json!({})));
+    assert_eq!(response.error.expect("render guard").kind(), ErrorKind::Busy);
+}
+
+#[test]
+fn hello_lists_meter_stems() {
+    let mut app = app();
+    let hello: HelloResult = roundtrip(
+        &mut app,
+        request(1, "control.hello", json!({ "protocol_version": 1 })),
+    )
+    .result()
+    .expect("hello succeeds");
+    assert!(
+        hello.capabilities.iter().any(|m| m == "meter.stems"),
+        "meter.stems missing from capabilities: {:?}",
+        hello.capabilities
     );
 }

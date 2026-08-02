@@ -4,13 +4,22 @@
 //! (`resonance-metering`) for its GUI meters; this namespace is what
 //! puts those numbers on the wire, so a client that cannot hear can
 //! still tell whether a mix is too loud, too squashed, out of phase or
-//! bottom-heavy (ba doc #273, todo #1219).
+//! bottom-heavy (ba doc #273, todos #1219 / #1220).
 //!
 //! It replaces the bounce-and-analyse loop entirely: no WAV is written,
 //! nothing is mutated, and no external analyser is involved. Because a
 //! measurement renders the requested slice offline it runs as a job
 //! ([`crate::job::JobStarted`]) exactly like `render.mixdown`; the job's
-//! terminal `result` payload is [`MeasureResult`].
+//! terminal `result` payload is [`MeasureResult`] for
+//! [`MEASURE`] and [`StemsResult`] for [`STEMS`].
+//!
+//! [`STEMS`] is a whole balance pass in one call: every track and the
+//! master, measured over ONE shared range in ONE engine pass, so the
+//! numbers are directly comparable and no track can bleed into another
+//! one's figures. "One pass" means one command, one range and one set
+//! of results — not one render: inside it the engine renders each
+//! target in turn, so the *cost* scales with the number of tracks even
+//! though the *measurement* is a single, self-consistent pass.
 //!
 //! ## Units, in one place
 //!
@@ -33,9 +42,12 @@ use serde::{Deserialize, Serialize};
 /// `meter.measure` — measure one slice of the mix
 /// ([`MeasureParams`] -> job -> [`MeasureResult`]).
 pub const MEASURE: &str = "meter.measure";
+/// `meter.stems` — measure every track plus the master in one pass
+/// ([`StemsParams`] -> job -> [`StemsResult`]).
+pub const STEMS: &str = "meter.stems";
 
 /// All `meter.*` method names.
-pub const METHODS: &[&str] = &[MEASURE];
+pub const METHODS: &[&str] = &[MEASURE, STEMS];
 
 /// Which slice of the mix to measure.
 ///
@@ -223,4 +235,72 @@ pub struct MeasureResult {
     /// every entry of one measurement pass, which is what makes the
     /// numbers comparable.
     pub measured_seconds: Option<f64>,
+}
+
+// ---------------------------------------------------------------------------
+// meter.stems
+// ---------------------------------------------------------------------------
+
+/// Params for `meter.stems`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StemsParams {
+    /// Defaults to the whole song. Every entry is measured over this ONE
+    /// range, which is what makes the numbers directly comparable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<RangeSpec>,
+    /// Also measure each group / return bus (default `false`). A bus and
+    /// the tracks feeding it BOTH appear then, describing the same audio
+    /// at two stages — the bus is its members summed through the bus FX
+    /// chain, so the entries overlap and must never be added together.
+    #[serde(default)]
+    pub include_busses: bool,
+}
+
+/// One line of a [`StemsResult`] — a track (or bus) and its numbers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TrackMeasurement {
+    /// The track or bus id, as `song.summary` reports it.
+    pub track_id: TrackId,
+    /// Its name, so a report reads without a second lookup.
+    pub name: String,
+    /// Sub-tracks folded into this entry — the extra output ports of a
+    /// multi-output instrument, whose audio is INCLUDED in these
+    /// numbers. Empty for an ordinary track.
+    ///
+    /// Those ids get no line of their own (see [`StemsResult::tracks`]),
+    /// so this is what tells a client where they went.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub includes_track_ids: Vec<TrackId>,
+    /// The measurement itself, flattened into this object: every field
+    /// of [`MeasureResult`] appears alongside `track_id` and `name`.
+    #[serde(flatten)]
+    pub measurement: MeasureResult,
+}
+
+/// Job payload once a `meter.stems` job completes: the whole mix plus
+/// every track, all measured over one shared range in one pass — one
+/// command and one set of results, inside which the engine renders each
+/// target in turn, so a pass over a large project takes proportionally
+/// longer than a single `meter.measure`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StemsResult {
+    /// The full mix, identical to `meter.measure` with the default
+    /// target — the reference every track entry is read against.
+    pub master: MeasureResult,
+    /// One entry per TOP-LEVEL track, in mixer order, plus the busses
+    /// when `include_busses` was set.
+    ///
+    /// A sub-track never gets its own entry. A multi-output instrument's
+    /// extra output ports carry no material of their own — their audio
+    /// is produced while the parent renders — so they are measured as
+    /// part of the parent and listed in its
+    /// [`includes_track_ids`](TrackMeasurement::includes_track_ids).
+    /// That is the whole point of measuring this way: the mute-and-bounce
+    /// approach it replaces left a whole drum kit bleeding into every
+    /// other stem and produced a plausible, completely wrong balance
+    /// table.
+    pub tracks: Vec<TrackMeasurement>,
 }

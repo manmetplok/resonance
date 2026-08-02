@@ -67,4 +67,49 @@ impl ResonanceMcp {
         self.invoke_job(meter::MEASURE, &params, MEASURE_WAIT_MS)
             .await
     }
+
+    #[tool(
+        description = "Measure EVERY track plus the master in ONE pass — a whole balance pass in \
+                       one call. This replaces bouncing one stem per track and analysing the \
+                       files; that loop cost about ten minutes per iteration and, because it \
+                       worked by muting the other tracks, routinely left a whole drum kit \
+                       bleeding into every stem and produced a plausible but completely wrong \
+                       table. Nothing is written and nothing is changed. \
+                       \
+                       Every entry is measured in ONE pass over ONE SHARED range — one command, \
+                       one set of results — so the numbers are directly comparable and \
+                       measured_seconds is identical on all of them. Inside that pass the engine \
+                       renders each target in turn, so the COST scales with track count: a \
+                       20-track project is 20 full-length renders. On a large project that can \
+                       exceed this tool's 5-minute wait, after which it returns a still-running \
+                       job and you poll job_status or block with job_wait. range defaults to the \
+                       whole song. include_busses (default \
+                       false) adds each group/return bus; a bus and its member tracks then both \
+                       appear, describing the same audio before and after the bus chain — they \
+                       overlap, so never add them together. \
+                       \
+                       The result is {master, tracks[]}. Each track entry carries track_id, \
+                       name and the same fields meter_measure returns — see that tool for what \
+                       they mean and how to read them. A SUB-TRACK NEVER GETS ITS OWN ENTRY: \
+                       the extra output ports of a multi-output instrument carry no material of \
+                       their own, so they are measured as part of their parent and listed in \
+                       that entry's includes_track_ids. The kit is therefore counted exactly \
+                       once, on the parent track. \
+                       \
+                       Read balance off lufs_integrated differences (1 LU == 1 dB). A useful \
+                       starting convention, validated in the field, is drums 0 LU as the \
+                       reference, bass -2, lead -4, rhythm guitar -6, texture -11, pad -13, fx \
+                       -18. That is a convention and not physics — its value is catching a \
+                       track that drifted far from where you meant to put it, not dictating the \
+                       arrangement.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn meter_stems(
+        &self,
+        Parameters(params): Parameters<meter::StemsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(meter::STEMS, &params, MEASURE_WAIT_MS)
+            .await
+    }
 }
