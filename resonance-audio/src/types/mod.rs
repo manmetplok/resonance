@@ -52,6 +52,7 @@ mod clip;
 mod commands;
 mod events;
 mod reference;
+mod measure;
 mod stem;
 mod freeze;
 mod export;
@@ -71,6 +72,7 @@ pub use events::{
     AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage,
 };
 pub use reference::{ABSource, ReferenceAnalysisStage, ReferenceId, ReferenceMarker};
+pub use measure::{MeasureSource, MixMeasurement};
 pub use stem::{StemBitDepth, StemSource, StemTarget};
 pub use export::{
     BitDepth, ExportFormat, ExportMetadata, ExportSettings, FlacLevel, Mp3Rate, NormalizeMode,

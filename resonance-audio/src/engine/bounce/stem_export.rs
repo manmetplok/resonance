@@ -182,6 +182,7 @@ pub(crate) fn export_stems_spawn(
     std::thread::Builder::new()
         .name("export-stems".into())
         .spawn(move || {
+            let _offline = super::OfflineRenderGuard::mark(&shared);
             export_stems(
                 targets,
                 range,

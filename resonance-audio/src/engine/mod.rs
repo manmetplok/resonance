@@ -30,10 +30,11 @@ use crate::types::*;
 
 mod bounce;
 pub use bounce::{
-    chunk_span, encode_buffer_for_test, export_stems, freeze_terminal_event,
-    normalize_buffer_for_test, read_freeze_cache, render_stem, stem_filter, stem_project_range,
-    to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav, try_lock_with_backoff,
-    write_stem_wav, BOUNCE_CHUNK, FREEZE_CANCELLED_MSG, MIN_CLAP_FRAMES, StemFilter,
+    chunk_span, encode_buffer_for_test, export_stems, freeze_terminal_event, measure_mix,
+    measure_rendered_buffer, normalize_buffer_for_test, read_freeze_cache, render_stem,
+    stem_filter, stem_project_range, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
+    try_lock_with_backoff, write_stem_wav, BOUNCE_CHUNK, FREEZE_CANCELLED_MSG, MEASURE_BUSY_MSG,
+    MIN_CLAP_FRAMES, StemFilter,
 };
 mod bounce_common;
 pub use bounce_common::midi_render_range;
@@ -160,6 +161,25 @@ pub struct SharedState {
     /// running on their worker threads can be aborted from the same
     /// `CancelBounce` command without threading another channel.
     pub bounce_cancel: AtomicBool,
+    /// How many offline renders are running right now (ba todo #1218).
+    ///
+    /// Bounce / export / freeze / stem export / mix measurement all run on
+    /// worker threads and all drive the SAME live CLAP plugin instances
+    /// through `render_chunk`, resetting them at the start of a render.
+    /// Two of them in flight at once interleave `process()` / `reset()`
+    /// calls on those shared instances and corrupt both outputs, exactly
+    /// as rendering during playback would.
+    ///
+    /// Every offline renderer publishes itself here for the duration of
+    /// its render via `bounce::OfflineRenderGuard`. The *measurement*
+    /// command additionally requires the count to be zero before it starts
+    /// (`OfflineRenderGuard::try_acquire_exclusive`) and reports a busy
+    /// error otherwise — it is a read-only query, so refusing costs the
+    /// caller nothing and it must never disturb a render that is producing
+    /// a file. The file-producing renderers keep their existing behaviour
+    /// (the app serialises them through its export/freeze modals); making
+    /// them refuse each other is a behaviour change for another todo.
+    pub offline_render_count: AtomicU32,
     /// External-instrument round-trip offsets per track
     /// (`latency_offset_samples`, positive = the hardware return
     /// arrives that late). Published by the engine control thread
@@ -326,6 +346,7 @@ impl Default for SharedState {
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
             bounce_cancel: AtomicBool::new(false),
+            offline_render_count: AtomicU32::new(0),
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
             dsp_load_ema_bits: AtomicU32::new(0),
             dsp_load_peak_bits: AtomicU32::new(0),
