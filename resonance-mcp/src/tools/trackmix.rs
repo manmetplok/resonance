@@ -219,7 +219,13 @@ impl ResonanceMcp {
                        track's instrument, which is the usual case for shaping a synth. A value \
                        outside the parameter's min..=max is rejected with the range rather than \
                        clamped. Repeated sets of the same parameter collapse into one undo \
-                       entry.",
+                       entry. \
+                       \
+                       The min/max track_plugin_params reports are f64 renderings of f32 plugin \
+                       declarations, so a bound often reads with a long tail of digits (a \
+                       minimum the plugin calls 0.1 shows as 0.10000000149011612). Send the \
+                       clean value — 0.1 is accepted and clamped onto the true bound. There is \
+                       no need to copy the long form back.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn track_set_plugin_param(
