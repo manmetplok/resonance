@@ -33,6 +33,7 @@ use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
 mod bus;
+mod edit;
 mod generate;
 mod harmony;
 mod job;
@@ -200,6 +201,13 @@ pub fn execute(
     // Group busses (todo #1228): create/delete/level. Listing lives in
     // `song.*`, which already reports busses as `kind: "bus"`.
     if let Some(result) = bus::try_handle(app, request) {
+        return result;
+    }
+
+    // Undo / redo (todo #1196): pops the app's EXISTING history. Like
+    // `master.summary`, `edit.status` reads only but describes the open
+    // project, so it sits below the gate.
+    if let Some(result) = edit::try_handle(app, request) {
         return result;
     }
 

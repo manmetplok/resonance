@@ -58,6 +58,9 @@ fn mutating_methods() -> Vec<&'static str> {
         // project that isn't there (ba doc #273).
         methods::master::METHODS,
         methods::bus::METHODS,
+        // `edit.status` reads only, but like `master.summary` it
+        // describes the OPEN project's history (ba doc #273).
+        methods::edit::METHODS,
         methods::section::METHODS,
         methods::harmony::METHODS,
         methods::generate::METHODS,
