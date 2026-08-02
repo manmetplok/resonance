@@ -11,8 +11,9 @@
 //! What this module provides:
 //!
 //! * [`StemSource`] + [`stem_filter`] — the per-source `in_filter` rules.
-//!   A track includes its sub-tracks; a bus includes every top-level
-//!   track routed to it (plus their sub-tracks) and runs that bus's FX
+//!   A track includes its sub-tracks; a bus includes every track routed
+//!   to it — top-level tracks (plus their sub-tracks) *and* sub-tracks
+//!   routed to it on their own (ba todo #1239) — and runs that bus's FX
 //!   chain; master is everything.
 //! * [`render_stem`] — render one source over a shared range to an
 //!   in-RAM interleaved-stereo buffer. Per-track / per-bus stems exclude
@@ -113,13 +114,32 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
         StemSource::Bus(bus_id) => {
             let mut set = HashSet::new();
             for t in tracks.values() {
-                // Only top-level tracks carry an output routing; their
-                // sub-tracks ride along whichever way the parent goes.
-                if t.sub_track_of.is_none() && t.output() == TrackOutput::Bus(bus_id) {
-                    set.insert(t.id);
+                // A SUB-TRACK carries its own routing (ba todo #1239).
+                // `mixer::render_core` reads `sub_track.output()` per
+                // sub-track and sums post-fader sub-track audio straight
+                // into the bus — a sub-track can therefore feed a bus on
+                // its own, independently of its parent, which is exactly
+                // how a multi-output instrument gets a group bus (doc
+                // #274 option (b): route the drum kit's six group taps
+                // into one bus and insert a compressor there). Scanning
+                // only top-level tracks here made such a bus resolve to
+                // the EMPTY set, so its stem exported — and its
+                // `meter.measure` reported — digital silence.
+                if t.output() != TrackOutput::Bus(bus_id) {
+                    continue;
+                }
+                set.insert(t.id);
+                // A whole instrument stays in one stem: a bus-routed
+                // parent brings its sub-tracks along, the same rule
+                // `StemSource::Track` applies. The `HashSet` collapses
+                // the overlap when a parent and one of its sub-tracks
+                // both target this bus (each track is still rendered
+                // exactly once — the mixer walks the track map once).
+                if t.sub_track_of.is_none() {
                     add_sub_tracks(t.id, tracks, &mut set);
                 }
             }
+            add_fan_out_parents(tracks, &mut set);
             StemFilter {
                 set,
                 all: false,
@@ -127,6 +147,33 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
             }
         }
     }
+}
+
+/// Insert the parent of every sub-track already in `set` (ba todo #1239).
+///
+/// A sub-track produces no audio of its own: its signal is one output
+/// port of the parent's instrument, fanned out by `mixer::render_core`
+/// while the *parent* is being rendered. The `in_filter` gate skips a
+/// track that is not in the set before its instrument runs, so a bus fed
+/// only by sub-tracks would still render as silence unless the parent
+/// comes along to drive the fan-out.
+///
+/// The set is an `in_filter` — "which tracks contribute to this render" —
+/// not a membership list, so pulling a parent in for its fan-out is not a
+/// claim that the parent feeds the bus. Its own main-output (port 0)
+/// signal still follows its own routing, exactly as it does for every
+/// other track in the set; on a multi-output instrument that is the port
+/// almost nothing lands on (the drum kit puts one of thirty pads there —
+/// ba doc #274 §1a). This does NOT walk further: a parent added here does
+/// not drag in its other sub-tracks, so a tap routed to a different bus
+/// stays out of this one.
+fn add_fan_out_parents(tracks: &IndexMap<TrackId, Track>, set: &mut HashSet<TrackId>) {
+    let parents: Vec<TrackId> = set
+        .iter()
+        .filter_map(|id| tracks.get(id))
+        .filter_map(|t| t.sub_track_of.map(|(parent, _)| parent))
+        .collect();
+    set.extend(parents);
 }
 
 /// Insert every sub-track fed by `parent` into `set`.
