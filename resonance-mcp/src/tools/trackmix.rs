@@ -89,12 +89,34 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Remove one effect from a track's insert chain — the counterpart to \
+                       track_add_effect, which APPENDS a fresh instance on every call, so \
+                       without this a wrong add was permanent. Address the effect EITHER by \
+                       slot (the 0-based chain position track_plugin_params reports) OR by \
+                       plugin_id plus occurrence (which copy, when the track carries the same \
+                       effect twice). Both forms together, or neither, is rejected rather than \
+                       guessed at. The track's INSTRUMENT cannot be removed this way — replace \
+                       it with track_add_instrument. Slots renumber after a removal, so re-read \
+                       track_plugin_params before removing a second one. Undoable.",
+        annotations(destructive_hint = true, open_world_hint = false)
+    )]
+    async fn track_remove_effect(
+        &self,
+        Parameters(params): Parameters<track::RemoveEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::REMOVE_EFFECT, &params).await
+    }
+
+    #[tool(
         description = "List a track's plugins and every parameter each one exposes — id, name, \
                        current value, min, max and default. Omit plugin_id for all of them. \
                        Plugins are named by the CLAP id song_tracks already shows (its \
                        instrument field or an entry of its effects array); occurrence \
-                       disambiguates a track carrying the same plugin twice. Read this before \
-                       track_set_plugin_param to learn the parameter names and their ranges.",
+                       disambiguates a track carrying the same plugin twice. Each entry also \
+                       carries slot — its 0-based position in the chain, instrument included, \
+                       so slot order IS processing order and slot is what track_remove_effect \
+                       takes. Read this before track_set_plugin_param to learn the parameter \
+                       names and their ranges.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<track::PluginParamsView>()
     )]
