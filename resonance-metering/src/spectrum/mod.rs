@@ -8,6 +8,7 @@
 
 pub mod fft_worker;
 pub mod octave;
+pub mod offline;
 pub mod ring;
 
 use std::sync::atomic::{AtomicBool, Ordering};
