@@ -43,6 +43,7 @@ pub(super) fn try_handle(
         track::ADD_INSTRUMENT => add_instrument(app, request),
         track::ADD_EFFECT => add_effect(app, request),
         track::REMOVE_EFFECT => remove_effect(app, request),
+        track::MOVE_EFFECT => move_effect(app, request),
         track::SET_OUTPUT => set_output(app, request),
         track::ADD_SEND => add_send(app, request),
         track::SET_SEND => set_send(app, request),
@@ -614,85 +615,224 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
     let Some(t) = find_track(app, params.track_id.0).cloned() else {
         return not_found_track(request, params.track_id.0);
     };
-    let entries = super::song::plugin_entries(app, &t);
-
-    let entry = match (params.slot, &params.plugin_id) {
-        (Some(_), Some(_)) => {
-            return reject(
-                request,
-                RpcError::invalid_params(
-                    "address the effect by slot OR by plugin_id (+ occurrence), not both",
-                ),
-            )
-        }
-        (None, None) => {
-            return reject(
-                request,
-                RpcError::invalid_params(format!(
-                    "name the effect to remove: slot, or plugin_id (+ occurrence). Track {} \
-                     carries [{}]",
-                    t.id,
-                    chain_description(&entries)
-                )),
-            )
-        }
-        (Some(slot), None) => match entries.iter().find(|e| e.slot == slot) {
-            Some(entry) => entry,
-            None => {
-                return reject(
-                    request,
-                    RpcError::not_found(format!(
-                        "track {} has no plugin at slot {slot}; it carries [{}]",
-                        t.id,
-                        chain_description(&entries)
-                    )),
-                )
-            }
-        },
-        (None, Some(plugin_id)) => {
-            let occurrence = params.occurrence.unwrap_or(0);
-            match entries
-                .iter()
-                .find(|e| &e.plugin_id == plugin_id && e.occurrence == occurrence)
-            {
-                Some(entry) => entry,
-                None => {
-                    return reject(
-                        request,
-                        super::song::unknown_plugin_on_track(app, &t, plugin_id, occurrence),
-                    )
-                }
-            }
-        }
+    let address = ChainAddress {
+        slot: params.slot,
+        plugin_id: params.plugin_id.as_deref(),
+        occurrence: params.occurrence,
     };
-
-    // The instrument is replaced with `track.add_instrument`, never
-    // removed here — taking it off would silently mute the track.
-    if entry.kind == track::PluginKind::Instrument {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "slot {} on track {} is the track's INSTRUMENT ({}), not an effect; replace it \
-                 with track.add_instrument instead of removing it",
-                entry.slot, t.id, entry.plugin_id
-            )),
-        );
-    }
-
-    let Some(instance_id) = instance_for(&t, &entry.plugin_id, entry.occurrence) else {
-        return reject(
-            request,
-            RpcError::not_found(format!(
-                "plugin {:?} vanished from track {} between lookup and removal",
-                entry.plugin_id, t.id
-            )),
-        );
-    };
+    let (_entry, instance_id) =
+        match resolve_chain_effect(app, &t, address, ChainVerb::Remove) {
+            Ok(found) => found,
+            Err(error) => return reject(request, error),
+        };
     let task = super::run_via_update(
         app,
         Message::Plugin(PluginMessage::RemovePluginFromTrack(t.id, instance_id)),
     );
     (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// track.move_effect
+// ---------------------------------------------------------------------------
+
+/// `track.move_effect` — reorder a track's insert chain (ba doc #273,
+/// todo #1225).
+///
+/// `track.add_effect` only ever APPENDS, so before this the order of a
+/// chain was whatever order it happened to be built in, and correcting
+/// it meant tearing the chain down and rebuilding it — losing every
+/// parameter set along the way. Dispatches the same
+/// `AudioCommand::MovePlugin` the engine gained in todo #1224 through
+/// `run_via_update`, so the reorder is undoable like a manual one.
+///
+/// The order is mirrored app-side immediately (and again, idempotently,
+/// when `AudioEvent::PluginMoved` echoes) so a client can read back the
+/// new slots in the same cycle — the same read-your-writes rule
+/// `track.add_effect` follows since todo #1234.
+fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track::MoveEffectParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0).cloned() else {
+        return not_found_track(request, params.track_id.0);
+    };
+    let address = ChainAddress {
+        slot: params.slot,
+        plugin_id: params.plugin_id.as_deref(),
+        occurrence: params.occurrence,
+    };
+    let (entry, instance_id) = match resolve_chain_effect(app, &t, address, ChainVerb::Move) {
+        Ok(found) => found,
+        Err(error) => return reject(request, error),
+    };
+
+    // Slot 0 on an instrument track is structural: it is what receives
+    // MIDI and what every sub-track inherits its latency from. Moving an
+    // EFFECT on top of it would displace the instrument, so refuse a
+    // destination that would land above it rather than silently
+    // rearranging the track's sound source.
+    let entries = super::song::plugin_entries(app, &t);
+    let instrument_slot = entries
+        .iter()
+        .find(|e| e.kind == track::PluginKind::Instrument)
+        .map(|e| e.slot);
+    let floor = instrument_slot.map(|s| s + 1).unwrap_or(0);
+    if params.to_slot < floor {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "slot {} on track {} is the track's INSTRUMENT ({}); effects sit after it, so \
+                 to_slot must be at least {floor}",
+                instrument_slot.unwrap_or(0),
+                t.id,
+                entries
+                    .iter()
+                    .find(|e| e.kind == track::PluginKind::Instrument)
+                    .map(|e| e.plugin_id.as_str())
+                    .unwrap_or("?"),
+            )),
+        );
+    }
+
+    // Clamp rather than error: a caller that asks for "last" by naming a
+    // slot past the end means the end (the engine clamps identically, so
+    // the echo agrees with what is mirrored here).
+    let last = t.plugins.len().saturating_sub(1) as u32;
+    let to_slot = params.to_slot.min(last);
+    if to_slot == entry.slot {
+        // A no-op move records no undo entry and sends no command.
+        return (ack(app, request), Task::none());
+    }
+
+    let task = super::run_via_update(
+        app,
+        Message::Plugin(PluginMessage::MovePluginInTrack {
+            track_id: t.id,
+            instance_id,
+            to_index: to_slot as usize,
+        }),
+    );
+    (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// Shared chain addressing for remove_effect / move_effect
+// ---------------------------------------------------------------------------
+
+/// How a caller named one plugin on a track's chain: by `slot`, or by
+/// `plugin_id` (+ `occurrence`). Exactly one form, never both.
+#[derive(Clone, Copy)]
+struct ChainAddress<'a> {
+    slot: Option<u32>,
+    plugin_id: Option<&'a str>,
+    occurrence: Option<u32>,
+}
+
+/// What the caller is doing with the addressed plugin — only used to
+/// word the rejections, so "name the effect to remove" doesn't appear on
+/// a failed move.
+#[derive(Clone, Copy)]
+enum ChainVerb {
+    Remove,
+    Move,
+}
+
+impl ChainVerb {
+    fn verb(self) -> &'static str {
+        match self {
+            ChainVerb::Remove => "remove",
+            ChainVerb::Move => "move",
+        }
+    }
+
+    /// Why the track's instrument is off limits for this verb.
+    fn instrument_refusal(self) -> &'static str {
+        match self {
+            ChainVerb::Remove => {
+                "replace it with track.add_instrument instead of removing it"
+            }
+            ChainVerb::Move => {
+                "instruments are not chain-ordered inserts; it stays at the head of the chain"
+            }
+        }
+    }
+}
+
+/// Resolve a [`ChainAddress`] to one EFFECT on the track, returning its
+/// wire entry and the engine instance id behind it.
+///
+/// Shared by `track.remove_effect` and `track.move_effect` so the two
+/// cannot drift: both accept the same two addressing forms, both refuse
+/// an ambiguous or absent address, and both refuse the track's
+/// instrument.
+fn resolve_chain_effect(
+    app: &Resonance,
+    t: &TrackState,
+    address: ChainAddress<'_>,
+    verb: ChainVerb,
+) -> Result<(track::PluginParamsEntry, resonance_audio::types::PluginInstanceId), RpcError> {
+    let entries = super::song::plugin_entries(app, t);
+    let entry = match (address.slot, address.plugin_id) {
+        (Some(_), Some(_)) => {
+            return Err(RpcError::invalid_params(
+                "address the effect by slot OR by plugin_id (+ occurrence), not both",
+            ))
+        }
+        (None, None) => {
+            return Err(RpcError::invalid_params(format!(
+                "name the effect to {}: slot, or plugin_id (+ occurrence). Track {} carries [{}]",
+                verb.verb(),
+                t.id,
+                chain_description(&entries)
+            )))
+        }
+        (Some(slot), None) => match entries.iter().find(|e| e.slot == slot) {
+            Some(entry) => entry.clone(),
+            None => {
+                return Err(RpcError::not_found(format!(
+                    "track {} has no plugin at slot {slot}; it carries [{}]",
+                    t.id,
+                    chain_description(&entries)
+                )))
+            }
+        },
+        (None, Some(plugin_id)) => {
+            let occurrence = address.occurrence.unwrap_or(0);
+            match entries
+                .iter()
+                .find(|e| e.plugin_id == plugin_id && e.occurrence == occurrence)
+            {
+                Some(entry) => entry.clone(),
+                None => {
+                    return Err(super::song::unknown_plugin_on_track(
+                        app, t, plugin_id, occurrence,
+                    ))
+                }
+            }
+        }
+    };
+
+    if entry.kind == track::PluginKind::Instrument {
+        return Err(RpcError::invalid_params(format!(
+            "slot {} on track {} is the track's INSTRUMENT ({}), not an effect; {}",
+            entry.slot,
+            t.id,
+            entry.plugin_id,
+            verb.instrument_refusal()
+        )));
+    }
+
+    let instance_id = instance_for(t, &entry.plugin_id, entry.occurrence).ok_or_else(|| {
+        RpcError::not_found(format!(
+            "plugin {:?} vanished from track {} between lookup and {}",
+            entry.plugin_id,
+            t.id,
+            verb.verb()
+        ))
+    })?;
+    Ok((entry, instance_id))
 }
 
 /// The chain as `slot:plugin_id` pairs, for error messages that let the

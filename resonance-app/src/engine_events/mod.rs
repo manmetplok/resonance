@@ -14,7 +14,7 @@ mod freeze;
 pub(crate) mod midi;
 mod midi_map;
 pub mod performance;
-mod plugins;
+pub(crate) mod plugins;
 mod pool;
 mod presets;
 mod project_io;
