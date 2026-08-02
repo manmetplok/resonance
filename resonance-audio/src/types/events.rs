@@ -8,9 +8,9 @@ use resonance_metering::MeterSnapshot;
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    ABSource, AssetId, BusId, ClipId, F0Frame, FadeCurve, InputDeviceInfo, MidiNote, NoteBlob,
-    ParamInfo, PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin,
-    SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
+    ABSource, AssetId, BusId, ClipId, F0Frame, FadeCurve, InputDeviceInfo, MidiNote, MixMeasurement,
+    NoteBlob, ParamInfo, PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos,
+    ScannedPlugin, SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
 };
 use crate::quantize::GrooveTemplate;
 use resonance_common::FreezeCacheRef;
@@ -338,6 +338,30 @@ pub enum AudioEvent {
     StemExportCancelled {
         files: Vec<String>,
     },
+    /// An [`AudioCommand::MeasureMix`] finished: one measurement per
+    /// requested target, in request order, all over the same range so the
+    /// numbers are directly comparable (ba todo #1218, doc #273).
+    ///
+    /// Terminal — a `MeasureMix` emits either this or
+    /// [`AudioEvent::MixMeasureError`], never both, so a caller can
+    /// resolve a single job off it.
+    ///
+    /// [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
+    MixMeasured {
+        results: Vec<MixMeasurement>,
+    },
+    /// An [`AudioCommand::MeasureMix`] failed as a whole and produced no
+    /// numbers — bad target list, rolling transport, another offline
+    /// render in progress, an empty range, or a render failure on one of
+    /// the targets. The string is user-facing.
+    ///
+    /// Measurement is fail-fast rather than per-target tolerant (unlike
+    /// stem export, which keeps the files it managed to write): a partial
+    /// result set would invite comparing numbers that did not all come
+    /// from the same pass.
+    ///
+    /// [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
+    MixMeasureError(String),
     /// Progress update for an [`AudioCommand::ExportAudio`] job.
     /// `fraction` is in `[0.0, 1.0]` within the reported `phase`.
     /// Generalizes `BounceProgress` for the export pipeline; the legacy

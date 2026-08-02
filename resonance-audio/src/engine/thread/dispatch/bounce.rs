@@ -121,6 +121,25 @@ pub(super) fn dispatch_bounce(
             ctx.sample_rate,
             ctx.event_tx.clone(),
         ),
+        AudioCommand::MeasureMix {
+            targets,
+            range,
+            source,
+        } => bounce::measure_mix_spawn(
+            targets,
+            range,
+            source,
+            Arc::clone(ctx.shared),
+            Arc::clone(ctx.tracks),
+            Arc::clone(ctx.busses),
+            Arc::clone(ctx.master),
+            Arc::clone(ctx.clips),
+            Arc::clone(ctx.midi_clips),
+            Arc::clone(ctx.plugins),
+            Arc::clone(ctx.tempo_map),
+            ctx.sample_rate,
+            ctx.event_tx.clone(),
+        ),
         AudioCommand::CancelStemExport => {
             // Shares the cooperative cancel flag with the bounce paths;
             // the stem-export worker polls it between targets.

@@ -36,6 +36,7 @@ mod clip;
 mod encoder;
 mod freeze;
 mod limiter;
+mod measure;
 mod normalize;
 mod render;
 mod resample;
@@ -47,11 +48,73 @@ pub use clip::to_audio_clip;
 pub use freeze::{read_freeze_cache, to_freeze_cache, FREEZE_CANCELLED_MSG};
 pub use render::try_lock_with_backoff;
 pub use render::{chunk_span, BOUNCE_CHUNK, MIN_CLAP_FRAMES};
+pub use measure::{measure_mix, measure_rendered_buffer};
+pub(crate) use measure::measure_mix_spawn;
 pub use stem::{render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter};
 pub use stem_export::export_stems;
 pub(crate) use stem_export::export_stems_spawn;
 pub use wav::{encode_buffer_for_test, normalize_buffer_for_test};
 pub(crate) use wav::{run_export, ExportReporter};
+
+/// RAII marker for "an offline render is running on a worker thread"
+/// (ba todo #1218).
+///
+/// Every offline renderer drives the same live CLAP plugin instances, so
+/// two concurrent renders corrupt each other. Holding one of these for the
+/// duration of a render publishes that fact in
+/// [`SharedState::offline_render_count`], which is what lets the read-only
+/// mix-measurement command refuse to start rather than interfere with a
+/// render that is producing a file.
+///
+/// [`mark`](Self::mark) always succeeds and just counts (the file-writing
+/// renderers keep their existing behaviour);
+/// [`try_acquire_exclusive`](Self::try_acquire_exclusive) succeeds only
+/// when nothing else is rendering.
+pub(crate) struct OfflineRenderGuard {
+    shared: Arc<SharedState>,
+}
+
+/// Message reported when a measurement is refused because an offline
+/// render already holds the renderer. Public so the app (and tests) can
+/// recognise the busy case without string-matching a literal.
+pub const MEASURE_BUSY_MSG: &str = "Another offline render is in progress";
+
+impl OfflineRenderGuard {
+    /// Join the set of running offline renders unconditionally.
+    pub(crate) fn mark(shared: &Arc<SharedState>) -> Self {
+        shared
+            .offline_render_count
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self {
+            shared: Arc::clone(shared),
+        }
+    }
+
+    /// Take the renderer only if no other offline render is running.
+    /// Returns `None` when one is, so the caller can report "busy".
+    pub(crate) fn try_acquire_exclusive(shared: &Arc<SharedState>) -> Option<Self> {
+        shared
+            .offline_render_count
+            .compare_exchange(
+                0,
+                1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .ok()
+            .map(|_| Self {
+                shared: Arc::clone(shared),
+            })
+    }
+}
+
+impl Drop for OfflineRenderGuard {
+    fn drop(&mut self) {
+        self.shared
+            .offline_render_count
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
 
 /// Classify a freeze render's result into its terminal `AudioEvent`.
 ///
@@ -141,6 +204,7 @@ pub(crate) fn export_spawn(
     std::thread::Builder::new()
         .name("export".into())
         .spawn(move || {
+            let _offline = OfflineRenderGuard::mark(&shared);
             run_export(
                 path,
                 &settings,
@@ -188,6 +252,7 @@ pub(crate) fn to_audio_clip_spawn(
     std::thread::Builder::new()
         .name("bounce-in-place".into())
         .spawn(move || {
+            let _offline = OfflineRenderGuard::mark(&shared);
             to_audio_clip(
                 source_track_id,
                 target_track_id,
@@ -235,6 +300,7 @@ pub fn to_freeze_cache_spawn(
     std::thread::Builder::new()
         .name("freeze-render".into())
         .spawn(move || {
+            let _offline = OfflineRenderGuard::mark(&shared);
             let mut progress = |fraction: f32| {
                 let _ = event_tx.send(AudioEvent::FreezeProgress { track_id, fraction });
             };

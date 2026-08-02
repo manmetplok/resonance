@@ -7,9 +7,9 @@ use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
 
 use super::{
-    ABSource, BusId, ClipId, ExportSettings, FadeCurve, FrozenSource, MidiNote, PluginInstanceId,
-    ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth, StemTarget,
-    TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
+    ABSource, BusId, ClipId, ExportSettings, FadeCurve, FrozenSource, MeasureSource, MidiNote,
+    PluginInstanceId, ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth,
+    StemSource, StemTarget, TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
 use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
 
@@ -382,6 +382,35 @@ pub enum AudioCommand {
         /// Render a tail past the end of the range so reverb / delay
         /// tails decay into the stem instead of being cut off.
         include_fx_tail: bool,
+    },
+    /// Offline "measure the mix": render one or more mix slices (a track,
+    /// a bus, or the whole master) over ONE shared range and feed them to
+    /// the BS.1770 meters, WITHOUT writing anything to disk and without
+    /// touching project or transport state (ba todo #1218, doc #273).
+    ///
+    /// Every target is rendered over the same range, so the results are
+    /// directly comparable — which is what lets the control layer's
+    /// `meter.stems` be a pure enumeration of sources over this one
+    /// command rather than a second engine pass. A track target includes
+    /// its sub-tracks (`stem_filter`), so a multi-output instrument is
+    /// measured whole and cannot suffer the drum-bleed attribution error
+    /// that mute-and-bounce measurement does.
+    ///
+    /// Rendering runs on a worker thread (like
+    /// [`AudioCommand::ExportStems`]) and is refused while another
+    /// offline render — bounce, export, freeze or stem export — holds the
+    /// renderer, or while the transport is rolling. Emits exactly ONE
+    /// terminal event: `MixMeasured` with one measurement per target, or
+    /// `MixMeasureError` if the whole command failed.
+    MeasureMix {
+        /// The mix slices to measure. No paths: nothing is written.
+        targets: Vec<StemSource>,
+        /// Shared measurement window in engine samples. `None` measures
+        /// the full project range (every audio + MIDI clip), matching the
+        /// project bounce. Ignored by [`MeasureSource::Live`].
+        range: Option<(SamplePos, SamplePos)>,
+        /// Render offline, or read the live master meter.
+        source: MeasureSource,
     },
     /// Cancel an in-flight stem export between targets. The worker polls
     /// a shared atomic and stops before the next target; stems already
