@@ -98,6 +98,58 @@ fn descriptions_never_show_crate_names_as_plugin_ids() {
     }
 }
 
+/// Descriptions are written as Rust string continuations, so a line
+/// break must be spelled with a trailing `\` — writing the continuation
+/// as plain indentation instead bakes a long run of spaces into the
+/// schema an agent reads (ba doc #273, todo #1238 item 4).
+#[test]
+fn descriptions_carry_no_runs_of_padding_whitespace() {
+    for (tool, description) in descriptions() {
+        if let Some(at) = description.find("     ") {
+            let around = &description[at.saturating_sub(40)..(at + 40).min(description.len())];
+            panic!(
+                "{tool}'s description contains a run of 5+ spaces, which lands verbatim in the \
+                 published schema. Use a trailing backslash to continue the string instead of \
+                 indenting the next line. Near: {around:?}"
+            );
+        }
+    }
+}
+
+/// The aux-send persistence caveat (ba todo #482) must appear on EVERY
+/// send tool, not most of them: an agent that reads only the one it is
+/// calling must learn that its work is lost on reload (todo #1238 item
+/// 3).
+///
+/// The set is DERIVED from the published tool names rather than listed
+/// here, so a send tool added later is covered the day it is added — a
+/// hardcoded list only pins the tools someone remembered to add to it.
+#[test]
+fn every_send_tool_states_the_persistence_caveat() {
+    let send_tools: Vec<(String, String)> = descriptions()
+        .into_iter()
+        .filter(|(tool, _)| tool.contains("_send"))
+        .collect();
+
+    // Guard against the rule going vacuous: if sends are ever renamed out
+    // of this shape, fail loudly instead of passing over an empty set.
+    assert!(
+        send_tools.len() >= 3,
+        "expected at least the three aux-send tools to match `_send`, found {:?} — if sends \
+         were renamed, update the rule rather than dropping the check",
+        send_tools.iter().map(|(t, _)| t).collect::<Vec<_>>()
+    );
+
+    for (tool, description) in send_tools {
+        assert!(
+            description.contains("not SAVED")
+                || description.contains("not saved")
+                || description.contains("NOT SAVED"),
+            "{tool} does not warn that aux sends are lost on save + reload (ba todo #482)"
+        );
+    }
+}
+
 /// Every id-shaped substring starting with `prefix`, up to the first
 /// character that cannot appear in a CLAP id. A bare `prefix` with no
 /// concrete name after it is the descriptions' `com.resonance.<name>`

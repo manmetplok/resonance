@@ -11,8 +11,10 @@ use resonance_control::methods::bus;
 #[tool_router(router = router_bus, vis = "pub(crate)")]
 impl ResonanceMcp {
     #[tool(
-        description = "Create a group bus and return its bus_id IN THE REPLY, so you can route \
-                       tracks into it on the very next call. \
+        description = "Create a group bus and return its bus_id IN THE REPLY. The bus exists \
+                       for track_set_output and track_add_send the moment that reply lands — \
+                       no polling, no waiting on the audio engine — so you can route tracks \
+                       into it on the very next call. \
                        \
                        A bus sums a group of tracks to one point before master. That buys two \
                        things faders cannot: you can process the group AS ONE — a single \

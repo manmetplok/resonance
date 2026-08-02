@@ -177,7 +177,11 @@ fn set_output_rejects_unknown_busses_tracks_and_busses_as_the_source() {
     assert_eq!(error.kind(), ErrorKind::NotFound);
 
     // A bus id is a track id in the same space, so routing a bus is
-    // expressible — and refused, because busses always feed master.
+    // expressible — and refused. Note the reason, which the comment here
+    // used to get wrong (todo #1238 item 2): it is `not_found`, because
+    // `track.set_output` looks the source up among TRACKS and a bus is
+    // not one. Busses do always feed master, but that rule is enforced
+    // by the engine's model, not by a branch in this handler.
     let error = call(
         &mut app,
         "track.set_output",
@@ -186,6 +190,11 @@ fn set_output_rejects_unknown_busses_tracks_and_busses_as_the_source() {
     .error
     .expect("a bus is not a routable source");
     assert_eq!(error.kind(), ErrorKind::NotFound);
+    assert!(
+        error.message.contains("no track with id"),
+        "the refusal is the plain track lookup, not a bus-specific branch: {}",
+        error.message
+    );
 }
 
 #[test]

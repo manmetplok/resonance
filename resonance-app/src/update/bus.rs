@@ -16,8 +16,26 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
         BusMessage::AddBusWithId { id, name } => {
             let _ = r.engine.send(AudioCommand::AddBus {
                 id_hint: Some(id),
-                name: Some(name),
+                name: Some(name.clone()),
             });
+            // Mirror the bus NOW rather than on the engine's `BusAdded`
+            // echo (ba doc #273, todo #1238 item 1). The caller was
+            // handed this id in a reply, and `track.set_output` /
+            // `track.add_send` validate against `registry.busses`, so
+            // routing into it on the very next call must be guaranteed,
+            // not merely likely. `engine_events::tracks::bus_added`
+            // returns early when the id is already present, so the echo
+            // is a no-op — the same idempotency the plugin add relies on
+            // (todo #1234).
+            if !r.registry.busses.iter().any(|b| b.id == id) {
+                let order = r.registry.next_bus_order;
+                r.registry.next_bus_order += 1;
+                r.registry
+                    .busses
+                    .push(crate::state::BusState::new(id, order, name));
+                r.registry.resort_busses();
+                r.view_caches.rebuild_output(&r.registry.busses);
+            }
         }
         BusMessage::RemoveBus(bus_id) => {
             let _ = r.engine.send(AudioCommand::RemoveBus { bus_id });

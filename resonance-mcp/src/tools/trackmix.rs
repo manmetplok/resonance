@@ -180,7 +180,8 @@ impl ResonanceMcp {
                        return bus keeps its other feeds; only this one tap goes away. send_id \
                        comes from track_add_send or the sends array in song_tracks. To silence \
                        a send but keep it configured, use track_set_send with enabled: false \
-                       instead.",
+                       instead. Aux sends are not saved yet (ba todo #482), so a send is lost \
+                       on save + reload whether or not you remove it here.",
         annotations(destructive_hint = true, open_world_hint = false)
     )]
     async fn track_remove_send(

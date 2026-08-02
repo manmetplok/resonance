@@ -210,11 +210,26 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Import a Standard MIDI File — the CHEAP path for bulk material. A part                        written through notes_insert_many travels as a JSON note array in the                        tool call; a few thousand notes that way dominate the cost of the whole                        session. An SMF carries the same part in a fraction of the payload and                        lands as ONE undoable edit. \
+        description = "Import a Standard MIDI File \u{2014} the CHEAP path for bulk material. A \
+                       part written through notes_insert_many travels as a JSON note array in \
+                       the tool call; a few thousand notes that way dominate the cost of the \
+                       whole session. An SMF carries the same part in a fraction of the payload \
+                       and lands as ONE undoable edit. \
                        \
-                       Give the file as `path` (an absolute path on the machine running the                        app) OR as `data_base64` — one or the other, never both. Files up to                        4 MB are accepted; anything larger is refused rather than truncated, so                        split it. Roughly, keep base64 payloads under a megabyte or so and                        prefer `path` when the file is already on disk. \
+                       Give the file as `path` (an absolute path on the machine running the \
+                       app) OR as `data_base64` \u{2014} one or the other, never both. Files up \
+                       to 4 MB are accepted; anything larger is refused rather than truncated, \
+                       so split it. Roughly, keep base64 payloads under a megabyte or so and \
+                       prefer `path` when the file is already on disk. \
                        \
-                       Target it at a `track_id` (with an optional 1-based `start_bar`,                        default bar 1), which creates a clip long enough to hold the part, or                        at an existing `clip_id`, whose notes are REPLACED. A multi-track SMF                        is refused unless you name `source_track`, and the error lists every                        track with its name and note count so you can pick — it is never                        silently flattened into one clip. Note positions honour the project's                        tempo map, not a fixed BPM. The result reports clip_id, note_count and                        length_beats, so no follow-up song_notes is needed.",
+                       Target it at a `track_id` (with an optional 1-based `start_bar`, default \
+                       bar 1), which creates a clip long enough to hold the part, or at an \
+                       existing `clip_id`, whose notes are REPLACED. A multi-track SMF is \
+                       refused unless you name `source_track`, and the error lists every track \
+                       with its name and note count so you can pick \u{2014} it is never \
+                       silently flattened into one clip. Note positions honour the project\'s \
+                       tempo map, not a fixed BPM. The result reports clip_id, note_count and \
+                       length_beats, so no follow-up song_notes is needed.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<notes::ImportMidiResult>()
     )]
