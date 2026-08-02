@@ -299,6 +299,13 @@ pub struct RemoveEffectParams {
 }
 
 /// One plugin parameter.
+///
+/// `min`/`max`/`default`/`value` are f64 on the wire, but plugins
+/// declare their ranges in **f32**, so a bound with no exact binary
+/// representation arrives with a long tail of digits: a minimum the
+/// plugin calls `0.1` is reported as `0.10000000149011612`. That is not
+/// a rounding bug to work around — see [`SetPluginParamParams::value`]
+/// for what `track.set_plugin_param` accepts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PluginParamView {
@@ -307,7 +314,13 @@ pub struct PluginParamView {
     pub id: u32,
     pub name: String,
     pub value: f64,
+    /// Lowest accepted value, as an f64 rendering of the plugin's f32
+    /// declaration — so it may read `0.10000000149011612` where the
+    /// plugin means `0.1`. Sending the tidy decimal is fine: it rounds
+    /// onto the bound and is clamped, not rejected.
     pub min: f64,
+    /// Highest accepted value, with the same f32-widening caveat as
+    /// [`min`](Self::min).
     pub max: f64,
     pub default: f64,
 }
@@ -326,7 +339,16 @@ pub struct SetPluginParamParams {
     /// The parameter, by name (case-insensitive) or by its numeric id
     /// as a string. Names come from `track.plugin_params`.
     pub param: String,
-    /// New value; must lie within the parameter's `min..=max`, which an
+    /// New value. Must lie within the parameter's `min..=max`, which an
     /// out-of-range request reports back.
+    ///
+    /// Those bounds are f64 renderings of **f32** plugin declarations
+    /// ([`PluginParamView::min`]), so a value that rounds onto a bound —
+    /// `0.1` against a reported minimum of `0.10000000149011612` — is
+    /// ACCEPTED and clamped to the true bound, never rejected for being
+    /// a few ULPs out. Anything past that tolerance is still refused
+    /// rather than clamped, so a genuinely wrong number (`-60` on a
+    /// `0..1` parameter) comes back as an error instead of silently
+    /// becoming something else.
     pub value: f64,
 }

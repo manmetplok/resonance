@@ -760,15 +760,30 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
 
     // Reject rather than clamp: silently moving a value the caller asked
     // for is how a mix ends up subtly wrong with nothing to point at.
-    if params.value < param.min || params.value > param.max {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "{} must be within {}..={} (got {})",
-                param.name, param.min, param.max, params.value
-            )),
-        );
-    }
+    //
+    // ...but the bounds themselves are f64 renderings of f32 plugin
+    // declarations, so an exact comparison rejects the very number this
+    // API just reported. nih-plug declares the compressor's attack as
+    // `FloatRange::Skewed { min: 0.1, .. }` in f32; widened to f64 that
+    // is 0.10000000149011612, which is strictly greater than the f64 0.1
+    // a caller types. Every f32-declared bound without an exact binary
+    // representation has this, on every plugin (ba doc #273, todo
+    // #1235). So compare with an f32-precision tolerance and CLAMP what
+    // lands inside the band — the DSP never sees a value below the
+    // plugin's real minimum, and a genuinely out-of-range request is
+    // still refused with the same message it always got.
+    let value = match clamp_within_tolerance(params.value, param.min, param.max) {
+        Some(value) => value,
+        None => {
+            return reject(
+                request,
+                RpcError::invalid_params(format!(
+                    "{} must be within {}..={} (got {})",
+                    param.name, param.min, param.max, params.value
+                )),
+            )
+        }
+    };
 
     // The instance id is the engine's handle; it is not on the wire, so
     // recover it from the same chain position the entry came from.
@@ -784,13 +799,50 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
 
     let task = super::run_via_update(
         app,
-        Message::Plugin(PluginMessage::SetPluginParam(
-            instance_id,
-            param.id,
-            params.value,
-        )),
+        Message::Plugin(PluginMessage::SetPluginParam(instance_id, param.id, value)),
     );
     (ack(app, request), task)
+}
+
+/// `value` clamped into `min..=max`, or `None` when it lies genuinely
+/// outside the range (ba doc #273, todo #1235).
+///
+/// "Genuinely" is the whole point: `min`/`max` reach the wire as f64
+/// widenings of f32 plugin declarations, so the exact f64 a caller reads
+/// out of `track.plugin_params` round-trips, but the tidy decimal it
+/// *means* (`0.1`) sits a few ULPs outside. The tolerance scales with the
+/// magnitude of the range rather than being a fixed absolute epsilon —
+/// on a 20..20000 Hz parameter an absolute 1e-7 would be meaningless,
+/// and on a 0..1 parameter it would be far too generous.
+///
+/// A request beyond the tolerance band is still `None`, so
+/// `set_plugin_param` keeps its reject-don't-clamp promise for values
+/// the caller really did get wrong.
+pub(crate) fn clamp_within_tolerance(value: f64, min: f64, max: f64) -> Option<f64> {
+    if !(min <= max) {
+        // A plugin declaring an inverted range is a plugin bug; take the
+        // value as-is rather than rejecting everything it exposes.
+        //
+        // Written as `!(min <= max)` rather than `min > max` so a NaN
+        // bound lands here too: NaN fails every comparison, so `min > max`
+        // would wave it through to `value.clamp(min, max)`, and
+        // `f64::clamp` *asserts* `min <= max` — a third-party CLAP plugin
+        // reporting a NaN bound would panic the update loop. `ParamInfo`
+        // takes `min_value`/`max_value` straight from the plugin with no
+        // sanitisation (`resonance-audio/src/clap_host/instance.rs`), so
+        // that is reachable from outside the project.
+        return Some(value);
+    }
+    let tol = (max - min)
+        .abs()
+        .max(max.abs())
+        .max(min.abs())
+        .max(1.0)
+        * f32::EPSILON as f64;
+    if value < min - tol || value > max + tol {
+        return None;
+    }
+    Some(value.clamp(min, max))
 }
 
 /// The engine instance id of the `occurrence`-th plugin with this CLAP
