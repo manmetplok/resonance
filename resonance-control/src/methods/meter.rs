@@ -178,7 +178,11 @@ pub struct MeasureResult {
 
     /// Gated integrated loudness over the range, LUFS. The single most
     /// useful number for balance. `null` for silence or for a range
-    /// shorter than one 400 ms gating block.
+    /// shorter than one 400 ms gating block. On `source: "live"` it is
+    /// SESSION-CUMULATIVE, not a figure for a range: the gated loudness
+    /// of everything played since the engine started, which answers
+    /// "how loud has this session been", never "how loud is this
+    /// passage".
     pub lufs_integrated: Option<f32>,
     /// Loudest 3 s short-term window in the range, LUFS. `null` when the
     /// range is shorter than 3 s.
