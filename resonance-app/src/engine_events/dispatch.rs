@@ -57,14 +57,21 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         | E::StemExportTargetError { .. }
         | E::StemExportComplete { .. }
         | E::StemExportCancelled { .. } => {}
-        // Offline mix measurement (ba doc #273, todos #1218 / #1219).
-        // These are the terminal events of `AudioCommand::MeasureMix`,
-        // which only the control API's `meter.*` issues; the GUI has no
-        // measurement surface, so they resolve the in-flight control job
-        // and nothing else. A measurement nobody asked for over the
-        // control socket is logged rather than dropped silently.
-        E::MixMeasured { results } => crate::update::control::mix_measured(r, results),
-        E::MixMeasureError(message) => crate::update::control::mix_measure_error(r, message),
+        // Mix measurement (ba doc #273, todos #1218 / #1219). These are
+        // the terminal events of `AudioCommand::MeasureMix`, which only
+        // the control API's `meter.*` issues; the GUI has no measurement
+        // surface, so they resolve the control job named by `measure_id`
+        // (ba todo #1243) and nothing else. A measurement nobody asked
+        // for over the control socket is logged rather than dropped
+        // silently.
+        E::MixMeasured {
+            measure_id,
+            results,
+        } => crate::update::control::mix_measured(r, measure_id, results),
+        E::MixMeasureError {
+            measure_id,
+            message,
+        } => crate::update::control::mix_measure_error(r, measure_id, message),
         E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
         E::ExportComplete { path, bytes, .. } => transport::export_complete(r, path, bytes),
         E::ExportError { kind, message } => transport::export_error(r, kind, message),

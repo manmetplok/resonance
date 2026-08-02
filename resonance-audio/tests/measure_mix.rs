@@ -36,6 +36,9 @@ use resonance_audio::__test_support::{
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
+/// Correlation token the harness sends (ba todo #1243). Deliberately not
+/// 0 or 1, so an implementation that dropped or defaulted it would show.
+const MEASURE_ID: u64 = 4_242;
 /// Long enough that the 3 s short-term window fills, so every LUFS
 /// readout in a measurement is finite and assertable.
 const FRAMES: usize = (SR as usize) * 4;
@@ -110,7 +113,14 @@ impl EngineState {
     }
 
     fn measure(&self, targets: Vec<StemSource>, source: MeasureSource) {
+        self.measure_as(MEASURE_ID, targets, source);
+    }
+
+    /// As [`EngineState::measure`], with an explicit correlation token
+    /// (ba todo #1243).
+    fn measure_as(&self, measure_id: u64, targets: Vec<StemSource>, source: MeasureSource) {
         measure_mix(
+            measure_id,
             targets,
             None,
             source,
@@ -133,7 +143,13 @@ impl EngineState {
         let events: Vec<AudioEvent> = self.rx.try_iter().collect();
         assert_eq!(events.len(), 1, "exactly one terminal event: {events:?}");
         match &events[0] {
-            AudioEvent::MixMeasured { results } => results.clone(),
+            AudioEvent::MixMeasured {
+                measure_id,
+                results,
+            } => {
+                assert_eq!(*measure_id, MEASURE_ID, "the token is echoed back");
+                results.clone()
+            }
             other => panic!("expected MixMeasured, got {other:?}"),
         }
     }
@@ -144,7 +160,13 @@ impl EngineState {
         let events: Vec<AudioEvent> = self.rx.try_iter().collect();
         assert_eq!(events.len(), 1, "exactly one terminal event: {events:?}");
         match &events[0] {
-            AudioEvent::MixMeasureError(message) => message.clone(),
+            AudioEvent::MixMeasureError {
+                measure_id,
+                message,
+            } => {
+                assert_eq!(*measure_id, MEASURE_ID, "the token is echoed back");
+                message.clone()
+            }
             other => panic!("expected MixMeasureError, got {other:?}"),
         }
     }
@@ -339,7 +361,7 @@ fn live_measurement_is_master_only_and_says_so() {
     state.measure(vec![StemSource::Master], MeasureSource::Live);
     let events: Vec<AudioEvent> = state.rx.try_iter().collect();
     match &events[..] {
-        [AudioEvent::MixMeasured { results }] => {
+        [AudioEvent::MixMeasured { results, .. }] => {
             assert_eq!(results.len(), 1);
             assert_eq!(results[0].target, StemSource::Master);
             assert_eq!(
@@ -350,6 +372,51 @@ fn live_measurement_is_master_only_and_says_so() {
             assert_eq!(results[0].frames, 0, "the live meter measures no range");
         }
         other => panic!("expected one MixMeasured, got {other:?}"),
+    }
+}
+
+/// ba todo #1243: the correlation token is echoed on EVERY terminal
+/// branch, including the ones that reject the request before a render
+/// starts. Without that, the control layer has to guess which request a
+/// result belongs to — which is only correct while at most one
+/// measurement can ever be in flight.
+#[test]
+fn every_terminal_branch_echoes_its_correlation_id() {
+    let state = two_track_project();
+
+    // Success, offline render path.
+    state.measure_as(11, vec![StemSource::Master], MeasureSource::Render);
+    assert_eq!(terminal_id(&state), 11);
+
+    // Success, live path (a different branch, emitted before the render
+    // guard is even reached).
+    state.measure_as(22, vec![StemSource::Master], MeasureSource::Live);
+    assert_eq!(terminal_id(&state), 22);
+
+    // Failure, early rejection: empty target list.
+    state.measure_as(33, Vec::new(), MeasureSource::Render);
+    assert_eq!(terminal_id(&state), 33);
+
+    // Failure, early rejection: a track on the live tap.
+    state.measure_as(44, vec![StemSource::Track(1)], MeasureSource::Live);
+    assert_eq!(terminal_id(&state), 44);
+
+    // Failure, offline branch: transport rolling.
+    state.shared.playing.store(true, Ordering::Relaxed);
+    state.measure_as(55, vec![StemSource::Master], MeasureSource::Render);
+    assert_eq!(terminal_id(&state), 55);
+    state.shared.playing.store(false, Ordering::Relaxed);
+}
+
+/// The `measure_id` of the single terminal event the state just emitted,
+/// whichever of the two it is.
+fn terminal_id(state: &EngineState) -> u64 {
+    let events: Vec<AudioEvent> = state.rx.try_iter().collect();
+    assert_eq!(events.len(), 1, "exactly one terminal event: {events:?}");
+    match &events[0] {
+        AudioEvent::MixMeasured { measure_id, .. }
+        | AudioEvent::MixMeasureError { measure_id, .. } => *measure_id,
+        other => panic!("expected a terminal measure event, got {other:?}"),
     }
 }
 

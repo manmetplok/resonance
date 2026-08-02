@@ -122,10 +122,12 @@ pub(super) fn dispatch_bounce(
             ctx.event_tx.clone(),
         ),
         AudioCommand::MeasureMix {
+            measure_id,
             targets,
             range,
             source,
         } => bounce::measure_mix_spawn(
+            measure_id,
             targets,
             range,
             source,

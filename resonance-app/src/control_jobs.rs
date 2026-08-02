@@ -60,30 +60,42 @@ pub enum JobToken {
     VocalRender { lanes: Vec<(u64, u64)> },
     /// Completes on bounce/export completion (todo #1157).
     Export { path: std::path::PathBuf },
-    /// An offline mix measurement (todo #1219): completes on
+    /// A mix measurement (todo #1219): completes on
     /// `AudioEvent::MixMeasured`, fails on `MixMeasureError`.
     ///
-    /// As of today those events carry no correlation id, so
-    /// [`JobBoard::newest_live_measure`] only names the right job while
-    /// at most one measurement is in flight. What guarantees that is the
-    /// APP-side guard — `update::control::meter::source_guard` refuses
-    /// any measurement while another is still live, for every source,
-    /// before anything else. Do not mistake the engine's own refusal for
-    /// that guarantee: it only covers render-vs-render, and the live
-    /// path skips the engine's render guard entirely, so a live read
-    /// could start while a render measurement was pending and be
-    /// completed with the render's numbers. (That was one of the two
-    /// blockers that bounced #1219.) The app-side guard is therefore
-    /// load-bearing, not redundant.
+    /// Both events echo the `measure_id` the command carried (ba todo
+    /// #1243), and `meter.*` passes the JOB ID as that token — so the
+    /// event names its own job outright and [`JobBoard::live_measure`]
+    /// is a direct lookup rather than an inference.
     ///
-    /// Todo #1243 adds a correlation id to both events; once it lands,
-    /// correlation stops depending on the one-at-a-time invariant and
-    /// this note describes only the pre-#1243 state.
+    /// Before #1243 the events carried nothing and the job had to be
+    /// guessed as "the newest live measure", which was correct only
+    /// while at most one measurement could exist at a time. Nothing in
+    /// the ENGINE guaranteed that, and it is worth not re-learning why
+    /// (ba todo #1244): the engine's own refusal covers render-vs-render
+    /// only, and the live path skips its render guard entirely, so a
+    /// live read starting during a render measurement would have been
+    /// completed with the render's numbers — one of the two blockers
+    /// that bounced #1219. What actually held it together was the
+    /// app-side guard in `update::control::meter::source_guard`, which
+    /// had to refuse EVERY overlap to do so.
     ///
-    /// `method` is the control method that started the job: the same
-    /// engine pass backs `meter.measure` and `meter.stems`, which read
-    /// its results into different result shapes.
-    Measure { method: &'static str },
+    /// The correlation id removes that burden. The guard now refuses
+    /// only what genuinely conflicts — see `offline` below — and a live
+    /// read runs alongside a render measurement, each receiving its own
+    /// result.
+    Measure {
+        /// The control method that started the job: the same engine pass
+        /// backs `meter.measure` and `meter.stems`, which read its
+        /// results into different result shapes.
+        method: &'static str,
+        /// This measurement renders offline (rather than reading the
+        /// live streaming tap), so it contends with bounce / export /
+        /// freeze for the one offline renderer. Only offline
+        /// measurements block each other; see
+        /// [`JobBoard::has_live_offline_measure`].
+        offline: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -315,25 +327,48 @@ impl JobBoard {
         }
     }
 
-    /// The newest live [`JobToken::Measure`] job — its id and the token
-    /// that started it — or `None` when no measurement is in flight
-    /// (nothing but the control API measures today, so that is the
-    /// normal answer).
+    /// The token of `job_id` if it is a [`JobToken::Measure`] that is
+    /// still running, else `None`.
+    ///
+    /// This is the correlation hook for `MixMeasured` / `MixMeasureError`
+    /// (ba todo #1243): the events carry the job id back as their
+    /// `measure_id`, so a result reaches the job that asked for it, and
+    /// an event for a job that no longer exists — already completed,
+    /// evicted, or never control-initiated — resolves NOTHING rather
+    /// than landing on whichever job happens to be open.
     ///
     /// Unlike [`complete_token`](Self::complete_token) this matches on
     /// the *variant* rather than on equality, because the caller needs
     /// the token's contents (which method asked) to shape the result
     /// before it can complete the job.
-    pub fn newest_live_measure(&self) -> Option<(u64, JobToken)> {
+    pub fn live_measure(&self, job_id: u64) -> Option<JobToken> {
         let table = self.table.lock().expect("job table poisoned");
-        table
-            .jobs
-            .iter()
-            .filter(|(_, e)| {
-                !e.state.is_terminal() && matches!(e.token, Some(JobToken::Measure { .. }))
-            })
-            .max_by_key(|(id, _)| **id)
-            .and_then(|(id, e)| e.token.clone().map(|token| (*id, token)))
+        let entry = table.jobs.get(&job_id)?;
+        if entry.state.is_terminal() {
+            return None;
+        }
+        match &entry.token {
+            Some(token @ JobToken::Measure { .. }) => Some(token.clone()),
+            _ => None,
+        }
+    }
+
+    /// Is an OFFLINE measurement job still running?
+    ///
+    /// The one thing measurements genuinely contend for is the offline
+    /// renderer, which is shared with bounce, export and freeze — so this
+    /// is what `meter.*` refuses a second render measurement on. A live
+    /// measurement reads the streaming tap, renders nothing, and is
+    /// therefore not counted here and not blocked by anything here (ba
+    /// todo #1243; before the correlation id existed, `meter.*` had to
+    /// refuse EVERY overlap, live included, purely to keep "the newest
+    /// live measure job" naming the right job).
+    pub fn has_live_offline_measure(&self) -> bool {
+        let table = self.table.lock().expect("job table poisoned");
+        table.jobs.values().any(|e| {
+            !e.state.is_terminal()
+                && matches!(e.token, Some(JobToken::Measure { offline: true, .. }))
+        })
     }
 
     fn newest_live_with_token(&self, token: &JobToken) -> Option<u64> {

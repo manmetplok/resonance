@@ -210,6 +210,7 @@ fn measuring_the_master_returns_every_figure() {
     assert_eq!(job_status(&mut app, job).state, JobState::Pending);
 
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: vec![rendered(StemSource::Master, rate)],
     });
 
@@ -243,6 +244,7 @@ fn a_track_target_is_echoed_back_on_its_result() {
         request(1, "meter.measure", json!({ "target": { "track_id": DRUMS } })),
     ));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: vec![rendered(StemSource::Track(DRUMS), rate)],
     });
     assert_eq!(
@@ -265,6 +267,7 @@ fn a_bus_is_reachable_under_both_spellings() {
     ] {
         let job = started_job(roundtrip(&mut app, request(id, "meter.measure", params)));
         app.test_apply_engine_event(AudioEvent::MixMeasured {
+            measure_id: job,
             results: vec![rendered(StemSource::Bus(BUS), rate)],
         });
         assert_eq!(measured(&mut app, job).target, MeasureTarget::Bus(BUS.into()));
@@ -275,9 +278,10 @@ fn a_bus_is_reachable_under_both_spellings() {
 fn an_engine_failure_fails_the_job_with_its_reason() {
     let mut app = app();
     let job = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
-    app.test_apply_engine_event(AudioEvent::MixMeasureError(
-        "Another offline render is in progress".to_owned(),
-    ));
+    app.test_apply_engine_event(AudioEvent::MixMeasureError {
+        measure_id: job,
+        message: "Another offline render is in progress".to_owned(),
+    });
     let status = job_status(&mut app, job);
     assert_eq!(status.state, JobState::Error);
     assert_eq!(
@@ -298,6 +302,7 @@ fn the_live_path_nulls_what_the_streaming_tap_cannot_supply() {
         request(1, "meter.measure", json!({ "source": "live" })),
     ));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: vec![live_snapshot()],
     });
 
@@ -363,6 +368,7 @@ fn silence_reports_null_loudness_rather_than_negative_infinity() {
 
     let job = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: vec![silent],
     });
 
@@ -409,6 +415,7 @@ fn a_range_past_the_end_of_the_song_is_clamped_not_refused() {
         ),
     ));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: vec![rendered(StemSource::Master, rate)],
     });
     assert_eq!(measured(&mut app, job).source, MeasureSource::Render);
@@ -438,7 +445,10 @@ fn an_omitted_range_measures_the_whole_song() {
     for (id, params) in [(1, json!({})), (2, json!({ "range": {} }))] {
         let job = started_job(roundtrip(&mut app, request(id, "meter.measure", params)));
         assert_eq!(job_status(&mut app, job).state, JobState::Pending);
-        app.test_apply_engine_event(AudioEvent::MixMeasureError("done".to_owned()));
+        app.test_apply_engine_event(AudioEvent::MixMeasureError {
+            measure_id: job,
+            message: "done".to_owned(),
+        });
     }
 }
 
@@ -533,6 +543,7 @@ fn a_second_measurement_while_one_is_in_flight_is_busy() {
 
     // Once the first resolves, the next one is accepted.
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: vec![rendered(StemSource::Master, rate)],
     });
     let _ = measured(&mut app, job);
@@ -540,48 +551,156 @@ fn a_second_measurement_while_one_is_in_flight_is_busy() {
     assert_eq!(job_status(&mut app, next).state, JobState::Pending);
 }
 
-/// A live read is exempt from every RENDER guard, but NOT from the
-/// one-measurement-at-a-time rule — that rule is what makes the job
-/// correlation sound. `MixMeasured` carries no correlation id, so with
-/// two Measure jobs open the first event to land would resolve whichever
-/// has the higher id: the render's numbers would complete the LIVE job.
+/// ba todo #1243, the correlation fix, pinned on the order that actually
+/// mis-attributes.
+///
+/// The old rule was "resolve the newest live Measure job"
+/// (`max_by_key(id)` over non-terminal Measure jobs), and `next_id` is
+/// monotonic — so the job asked for SECOND always won. Landing the live
+/// event first would therefore have resolved the live job correctly even
+/// without a correlation id; that ordering proves nothing.
+///
+/// The hazard is the other way round, and it is what the guard this todo
+/// relaxes existed to prevent: the RENDER measurement (asked first, so
+/// the older id) answers while the live job is still open. Under the old
+/// rule "newest" named the LIVE job, so the render's numbers completed
+/// it — a caller asking for a live meter reading receiving a rendered
+/// measurement of the whole song. With `measure_id` each event names its
+/// own job, so this now resolves the render job and leaves the live one
+/// untouched.
 #[test]
-fn a_live_measure_while_a_render_measure_is_pending_is_busy() {
+fn a_render_event_resolves_its_own_job_not_the_newer_live_one() {
     let mut app = app();
     let rate = app.sample_rate;
+
     let render = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
-
-    let response = roundtrip(
-        &mut app,
-        request(2, "meter.measure", json!({ "source": "live" })),
-    );
-    let error = response.error.expect("live during a render measure is refused");
-    assert_eq!(error.kind(), ErrorKind::Busy);
-    assert!(
-        error.message.contains("measurement"),
-        "the error must name the measurement: {}",
-        error.message
-    );
-
-    // The render measurement keeps its own numbers, and only once it has
-    // resolved is a live read accepted.
-    app.test_apply_engine_event(AudioEvent::MixMeasured {
-        results: vec![rendered(StemSource::Master, rate)],
-    });
-    assert_eq!(measured(&mut app, render).source, MeasureSource::Render);
-
     let live = started_job(roundtrip(
         &mut app,
-        request(3, "meter.measure", json!({ "source": "live" })),
+        request(2, "meter.measure", json!({ "source": "live" })),
     ));
+    assert!(
+        live > render,
+        "the live job must be the NEWER of the two ({render} then {live}),          or this test is not exercising the mis-attributing case"
+    );
+    assert_eq!(job_status(&mut app, render).state, JobState::Pending);
     assert_eq!(job_status(&mut app, live).state, JobState::Pending);
+
+    // The render answers while the live job is open. This is the event
+    // that used to complete the live job with rendered numbers.
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: render,
+        results: vec![rendered(StemSource::Master, rate)],
+    });
+    assert_eq!(
+        measured(&mut app, render).source,
+        MeasureSource::Render,
+        "the render job gets the render numbers"
+    );
+    assert_eq!(
+        job_status(&mut app, live).state,
+        JobState::Pending,
+        "and the newer live job is untouched — this is the assertion the          old 'newest pending' rule could not satisfy"
+    );
+
+    // The live read then resolves with its own, quite different, numbers.
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: live,
+        results: vec![live_snapshot()],
+    });
+    assert_eq!(measured(&mut app, live).source, MeasureSource::Live);
 }
 
-/// And the other way round: the live job is open, so a render
-/// measurement is refused too. Symmetry matters — a live read that never
-/// received its event would otherwise be resolved by the render's.
+/// The failure path correlates the same way, in the same direction: the
+/// OLDER render job fails while the newer live job is open, and only the
+/// render job fails. Under "newest pending" this error would have killed
+/// the live job instead.
 #[test]
-fn a_render_measure_while_a_live_measure_is_pending_is_busy() {
+fn an_error_fails_only_the_job_it_names() {
+    let mut app = app();
+
+    let render = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
+    let live = started_job(roundtrip(
+        &mut app,
+        request(2, "meter.measure", json!({ "source": "live" })),
+    ));
+    assert!(live > render, "the live job is the newer of the two");
+
+    app.test_apply_engine_event(AudioEvent::MixMeasureError {
+        measure_id: render,
+        message: "Stop transport before measuring the mix".to_owned(),
+    });
+    let status = job_status(&mut app, render);
+    assert_eq!(status.state, JobState::Error);
+    assert_eq!(
+        status.error.as_deref(),
+        Some("Stop transport before measuring the mix")
+    );
+    assert_eq!(
+        job_status(&mut app, live).state,
+        JobState::Pending,
+        "the newer live job survives the older job's failure"
+    );
+
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: live,
+        results: vec![live_snapshot()],
+    });
+    assert_eq!(measured(&mut app, live).source, MeasureSource::Live);
+}
+
+/// An event naming a job that is already finished resolves NOTHING. This
+/// is what makes a wall-clock timeout safe to add later (ba todo #1243):
+/// under "newest pending measure job" a late event would have completed
+/// whichever job was open next — one caller receiving another's numbers,
+/// the defect the #1219 review caught.
+#[test]
+fn a_late_event_for_a_finished_job_cannot_complete_a_later_one() {
+    let mut app = app();
+    let rate = app.sample_rate;
+
+    let first = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: first,
+        results: vec![rendered(StemSource::Master, rate)],
+    });
+    let _ = measured(&mut app, first);
+
+    // A second measurement is now accepted...
+    let second = started_job(roundtrip(&mut app, request(2, "meter.measure", json!({}))));
+    assert_eq!(job_status(&mut app, second).state, JobState::Pending);
+
+    // ...and a duplicate/late event for the FIRST job must not touch it.
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: first,
+        results: vec![rendered(StemSource::Track(DRUMS), rate)],
+    });
+    assert_eq!(
+        job_status(&mut app, second).state,
+        JobState::Pending,
+        "the open job is still waiting for its own result"
+    );
+
+    // An id nobody ever issued is inert too.
+    app.test_apply_engine_event(AudioEvent::MixMeasureError {
+        measure_id: 9_999_999,
+        message: "from nowhere".to_owned(),
+    });
+    assert_eq!(job_status(&mut app, second).state, JobState::Pending);
+
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: second,
+        results: vec![rendered(StemSource::Master, rate)],
+    });
+    assert_eq!(measured(&mut app, second).source, MeasureSource::Render);
+}
+
+/// A render measurement is still refused while another RENDER
+/// measurement is open — that one is a genuine conflict over the single
+/// offline renderer, not a correlation artefact, and the engine's
+/// `OfflineRenderGuard` would refuse it anyway. A synchronous `busy`
+/// beats a job id that is only going to fail.
+#[test]
+fn a_render_measure_while_a_live_measure_is_pending_is_accepted() {
     let mut app = app();
     let live = started_job(roundtrip(
         &mut app,
@@ -589,10 +708,11 @@ fn a_render_measure_while_a_live_measure_is_pending_is_busy() {
     ));
     assert_eq!(job_status(&mut app, live).state, JobState::Pending);
 
-    let response = roundtrip(&mut app, request(2, "meter.measure", json!({})));
+    let render = started_job(roundtrip(&mut app, request(2, "meter.measure", json!({}))));
     assert_eq!(
-        response.error.expect("one measurement at a time").kind(),
-        ErrorKind::Busy
+        job_status(&mut app, render).state,
+        JobState::Pending,
+        "a pending live read does not hold the offline renderer"
     );
 }
 
@@ -627,6 +747,7 @@ fn stems_reports_top_level_tracks_once_with_sub_tracks_folded_in() {
     // Exactly what one engine pass would answer for master + the two
     // TOP-LEVEL tracks. KICK is deliberately absent: it is a sub-track.
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: stems_results(
             &[
                 StemSource::Master,
@@ -677,6 +798,7 @@ fn stems_entries_match_song_summary() {
     let rate = app.sample_rate;
     let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: stems_results(
             &[
                 StemSource::Master,
@@ -710,6 +832,7 @@ fn a_stem_entry_is_one_flat_object_on_the_wire() {
     let rate = app.sample_rate;
     let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: stems_results(
             &[
                 StemSource::Master,
@@ -741,6 +864,7 @@ fn busses_are_opt_in() {
     // Default: no bus entry, and the bus is not even a target.
     let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: stems_results(
             &[
                 StemSource::Master,
@@ -758,6 +882,7 @@ fn busses_are_opt_in() {
         request(2, "meter.stems", json!({ "include_busses": true })),
     ));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: stems_results(
             &[
                 StemSource::Master,
@@ -794,6 +919,7 @@ fn stems_accepts_an_explicit_range_and_no_range_alike() {
         let job = started_job(roundtrip(&mut app, request(id, "meter.stems", params)));
         assert_eq!(job_status(&mut app, job).state, JobState::Pending);
         app.test_apply_engine_event(AudioEvent::MixMeasured {
+            measure_id: job,
             results: stems_results(&[StemSource::Master, StemSource::Track(DRUMS)], rate),
         });
         assert_eq!(stems_result(&mut app, job).tracks.len(), 1);
@@ -808,6 +934,7 @@ fn stems_without_a_master_result_fails_the_job() {
     let rate = app.sample_rate;
     let job = started_job(roundtrip(&mut app, request(1, "meter.stems", json!({}))));
     app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
         results: stems_results(&[StemSource::Track(DRUMS)], rate),
     });
     let status = job_status(&mut app, job);
