@@ -138,7 +138,9 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Set a track's fader gain. volume is linear: 1.0 = unity, 0.0 = silence.",
+        description = "Set a track's fader gain. volume is linear: 1.0 = unity, 0.0 = silence. \
+                       For balance work use mixer_set_volume_db instead — the same fader in \
+                       decibels, the unit loudness differences are measured in.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn mixer_set_volume(
@@ -146,6 +148,33 @@ impl ResonanceMcp {
         Parameters(params): Parameters<mixer::SetVolumeParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke(mixer::SET_VOLUME, &params).await
+    }
+
+    #[tool(
+        description = "Set a track's fader in DECIBELS — prefer this over mixer_set_volume for \
+                       any balance work. 0 dB is unity (no change), negative attenuates, \
+                       positive boosts; the accepted range is -60..=+6 dB, and -60 dB is \
+                       silence (the app has no -inf). A value outside that range is rejected \
+                       with the range rather than clamped. \
+                       \
+                       1 LU == 1 dB, so a track measuring 5.2 LU louder than you want is fixed \
+                       by subtracting 5.2 from its current volume_db — which song_summary and \
+                       song_tracks report per track. That is one subtraction; going through \
+                       linear gain means reimplementing new = old * 10^(err/20) every time, \
+                       which is where balance arithmetic usually goes wrong. \
+                       \
+                       Applying the SAME gain change to every fader does NOT change the \
+                       balance: it is a scalar and preserves every relationship between tracks \
+                       exactly. If a mix is too quiet overall, that is a master-level or \
+                       limiting problem, not a per-track one. Undoable like a manual fader \
+                       move.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn mixer_set_volume_db(
+        &self,
+        Parameters(params): Parameters<mixer::SetVolumeDbParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(mixer::SET_VOLUME_DB, &params).await
     }
 
     #[tool(
