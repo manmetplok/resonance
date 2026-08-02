@@ -60,6 +60,16 @@ pub enum JobToken {
     VocalRender { lanes: Vec<(u64, u64)> },
     /// Completes on bounce/export completion (todo #1157).
     Export { path: std::path::PathBuf },
+    /// An offline mix measurement (todo #1219): completes on
+    /// `AudioEvent::MixMeasured`, fails on `MixMeasureError`.
+    ///
+    /// Those events carry no correlation id, but the engine refuses a
+    /// second measurement while one is running, so at most one is ever
+    /// live — [`JobBoard::newest_live_measure`] is enough to find it.
+    /// `method` is the control method that started the job: the same
+    /// engine pass backs `meter.measure` and `meter.stems`, which read
+    /// its results into different result shapes.
+    Measure { method: &'static str },
 }
 
 #[derive(Debug)]
@@ -289,6 +299,27 @@ impl JobBoard {
             }
             None => false,
         }
+    }
+
+    /// The newest live [`JobToken::Measure`] job — its id and the token
+    /// that started it — or `None` when no measurement is in flight
+    /// (nothing but the control API measures today, so that is the
+    /// normal answer).
+    ///
+    /// Unlike [`complete_token`](Self::complete_token) this matches on
+    /// the *variant* rather than on equality, because the caller needs
+    /// the token's contents (which method asked) to shape the result
+    /// before it can complete the job.
+    pub fn newest_live_measure(&self) -> Option<(u64, JobToken)> {
+        let table = self.table.lock().expect("job table poisoned");
+        table
+            .jobs
+            .iter()
+            .filter(|(_, e)| {
+                !e.state.is_terminal() && matches!(e.token, Some(JobToken::Measure { .. }))
+            })
+            .max_by_key(|(id, _)| **id)
+            .and_then(|(id, e)| e.token.clone().map(|token| (*id, token)))
     }
 
     fn newest_live_with_token(&self, token: &JobToken) -> Option<u64> {

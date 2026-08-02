@@ -16,6 +16,7 @@ pub mod edit;
 pub mod generate;
 pub mod harmony;
 pub mod master;
+pub mod meter;
 pub mod mixer;
 pub mod notes;
 pub mod plugins;
@@ -60,6 +61,7 @@ pub fn capabilities() -> Vec<&'static str> {
         notes::METHODS,
         vocal::METHODS,
         render::METHODS,
+        meter::METHODS,
         crate::job::METHODS,
     ] {
         methods.extend_from_slice(namespace);

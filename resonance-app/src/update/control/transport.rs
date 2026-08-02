@@ -218,7 +218,11 @@ fn set_key(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) 
 
 /// Resolve a client [`PositionSpec`] (1-based musical bar/beat, or an
 /// absolute sample) to a sample position via the tempo map.
-fn resolve_position(app: &Resonance, spec: &PositionSpec) -> Result<u64, RpcError> {
+///
+/// Shared with `meter.*` (todo #1219), which windows a measurement with
+/// the same vocabulary — one definition of "bar 5" for the whole control
+/// surface.
+pub(super) fn resolve_position(app: &Resonance, spec: &PositionSpec) -> Result<u64, RpcError> {
     if let Some(sample) = spec.sample {
         if spec.bar.is_some() || spec.beat.is_some() {
             return Err(RpcError::invalid_params(
