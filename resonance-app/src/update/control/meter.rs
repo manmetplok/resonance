@@ -1,6 +1,6 @@
-//! `meter.*` control handlers (ba doc #273, todo #1219): put the app's
-//! own BS.1770 numbers on the wire instead of making a client bounce a
-//! WAV and shell out to an analyser.
+//! `meter.*` control handlers (ba doc #273, todos #1219 / #1220): put
+//! the app's own BS.1770 numbers on the wire instead of making a client
+//! bounce a WAV and shell out to an analyser.
 //!
 //! # Shape
 //!
@@ -15,6 +15,13 @@
 //! which [`source_guard`] enforces for every source before anything
 //! else (see the guards below). Given that, the newest live measure job
 //! IS the one that just finished.
+//!
+//! `meter.stems` is the same job over a longer `targets` vector: ONE
+//! engine pass measuring the master and every top-level track over one
+//! shared range. It is a pure enumeration here — never N commands, and
+//! never a mute-and-bounce, which is what let a whole drum kit bleed
+//! into every other stem in the field and produce a plausible,
+//! completely wrong balance table.
 //!
 //! Nothing here mutates: no file is written, no project or transport
 //! state is touched, and the reply carries no `revision`. It is
@@ -67,7 +74,8 @@ use resonance_audio::types::{
     AudioCommand, MeasureSource as EngineSource, MixMeasurement, SamplePos, StemSource,
 };
 use resonance_control::methods::meter::{
-    self as proto, Bands, MeasureParams, MeasureResult, MeasureSource, MeasureTarget,
+    self as proto, Bands, MeasureParams, MeasureResult, MeasureSource, MeasureTarget, StemsParams,
+    StemsResult, TrackMeasurement,
 };
 use resonance_control::methods::render::RangeSpec;
 use resonance_control::{Request, Response, RpcError};
@@ -82,6 +90,7 @@ pub(super) fn try_handle(
 ) -> Option<(Response, Task<Message>)> {
     let handled = match request.method.as_str() {
         proto::MEASURE => measure(app, conn, request),
+        proto::STEMS => stems(app, conn, request),
         _ => return None,
     };
     Some(handled)
@@ -139,6 +148,130 @@ fn measure(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
         start(app, conn, request, proto::MEASURE, vec![target], range, source),
         Task::none(),
     )
+}
+
+// ---------------------------------------------------------------------------
+// meter.stems
+// ---------------------------------------------------------------------------
+
+/// Measure the master and every track in ONE engine pass.
+///
+/// This is a pure control-layer enumeration: it builds one `targets`
+/// vector and issues one [`AudioCommand::MeasureMix`]. It is emphatically
+/// NOT N measurements — that is what makes a balance pass cost one call
+/// instead of one full-length bounce per track, and it is why every
+/// entry shares a range and is therefore comparable.
+///
+/// Sub-tracks are deliberately NOT enumerated. A sub-track is one output
+/// port of its parent's instrument and carries no material of its own;
+/// `stem_filter` already folds it into the parent, and asking the engine
+/// for it on its own would render silence (the parent's instrument never
+/// runs). So the kit is measured once, on the parent, which reports the
+/// folded ids in `includes_track_ids`.
+fn stems(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
+    let params: StemsParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+
+    // Stems always render: there is one live tap and it only covers the
+    // master, so it could never answer this question.
+    if let Some(error) = source_guard(app, EngineSource::Render, StemSource::Master) {
+        return (super::failure(request, error), Task::none());
+    }
+    let range = match resolve_range(app, params.range) {
+        Ok(range) => range,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+
+    let mut targets = vec![StemSource::Master];
+    targets.extend(stem_track_ids(app).map(StemSource::Track));
+    if params.include_busses {
+        targets.extend(app.sorted_busses().iter().map(|b| StemSource::Bus(b.id)));
+    }
+
+    (
+        start(
+            app,
+            conn,
+            request,
+            proto::STEMS,
+            targets,
+            range,
+            EngineSource::Render,
+        ),
+        Task::none(),
+    )
+}
+
+/// The tracks that get an entry of their own, in mixer order: the
+/// top-level ones. A sub-track is measured as part of its parent (see
+/// [`stems`]), so listing it here would both double-count the kit and
+/// ask the engine for a stem that renders silent.
+fn stem_track_ids(app: &Resonance) -> impl Iterator<Item = u64> + '_ {
+    app.sorted_tracks()
+        .iter()
+        .filter(|t| t.sub_track.is_none())
+        .map(|t| t.id)
+}
+
+/// The sub-tracks folded into `parent`'s measurement, in mixer order —
+/// exactly the set `stem_filter` adds for `StemSource::Track(parent)`.
+fn folded_sub_tracks(app: &Resonance, parent: u64) -> Vec<resonance_control::ids::TrackId> {
+    app.sorted_tracks()
+        .iter()
+        .filter(|t| t.sub_track.is_some_and(|link| link.parent_track_id == parent))
+        .map(|t| t.id.into())
+        .collect()
+}
+
+/// Build the `meter.stems` payload from one pass's results.
+///
+/// The engine echoes each result's `target`, so entries are attributed
+/// by identity rather than by trusting request order.
+fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResult> {
+    let master = results
+        .iter()
+        .find(|m| m.target == StemSource::Master)
+        .map(|m| measure_result(*m, app.sample_rate))?;
+
+    let tracks = results
+        .iter()
+        .filter_map(|m| {
+            let (id, includes) = match m.target {
+                StemSource::Master => return None,
+                StemSource::Track(id) => (id, folded_sub_tracks(app, id)),
+                StemSource::Bus(id) => (id, Vec::new()),
+            };
+            Some(TrackMeasurement {
+                track_id: id.into(),
+                name: entry_name(app, m.target, id),
+                includes_track_ids: includes,
+                measurement: measure_result(*m, app.sample_rate),
+            })
+        })
+        .collect();
+
+    Some(StemsResult { master, tracks })
+}
+
+/// The measured entry's display name. A track deleted between the
+/// request and the engine's answer still gets an honest label rather
+/// than an empty string.
+fn entry_name(app: &Resonance, target: StemSource, id: u64) -> String {
+    let found = match target {
+        StemSource::Bus(_) => app
+            .sorted_busses()
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| b.name.clone()),
+        _ => app
+            .sorted_tracks()
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.name.clone()),
+    };
+    found.unwrap_or_else(|| format!("(removed {id})"))
 }
 
 // ---------------------------------------------------------------------------
@@ -209,22 +342,26 @@ pub(crate) fn mix_measured(app: &mut Resonance, results: Vec<MixMeasurement>) {
     let JobToken::Measure { method } = token else {
         return;
     };
-    if method != proto::MEASURE {
-        return;
-    }
-    // `meter.measure` asks for exactly one target, so exactly one
-    // measurement comes back. An empty set means the engine changed
-    // under us; fail loudly rather than report a default.
-    match results.first() {
-        Some(measurement) => {
-            let payload = serde_json::to_value(measure_result(*measurement, app.sample_rate))
-                .unwrap_or(serde_json::Value::Null);
-            app.control.jobs.complete(job_id, payload);
-        }
+    // One engine pass backs both methods; the method that asked decides
+    // which shape its results are read into.
+    let payload = match method {
+        // `meter.measure` asks for exactly one target, so exactly one
+        // measurement comes back.
+        proto::MEASURE => results
+            .first()
+            .map(|m| measure_result(*m, app.sample_rate))
+            .and_then(|r| serde_json::to_value(r).ok()),
+        proto::STEMS => stems_result(app, &results).and_then(|r| serde_json::to_value(r).ok()),
+        _ => return,
+    };
+    // An empty or master-less result set means the engine changed under
+    // us; fail loudly rather than report a default that reads real.
+    match payload {
+        Some(payload) => app.control.jobs.complete(job_id, payload),
         None => app
             .control
             .jobs
-            .fail(job_id, "the engine returned no measurement"),
+            .fail(job_id, "the engine returned no usable measurement"),
     }
 }
 
