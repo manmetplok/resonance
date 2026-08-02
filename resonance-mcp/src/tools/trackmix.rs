@@ -89,6 +89,23 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Route a track's audio: output is either \"master\" (sum straight into \
+                       the master output) or {\"bus_id\": N} to send it through a group bus \
+                       first, where it is summed with the bus's other members and processed by \
+                       the bus's own effects and fader before reaching master. bus_id comes \
+                       from bus_create, or from song_summary's entries with kind: \"bus\". A \
+                       track's current destination is the output field in song_summary / \
+                       song_tracks. Setting the routing it already has is a no-op. Undoable.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn track_set_output(
+        &self,
+        Parameters(params): Parameters<track::SetOutputParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::SET_OUTPUT, &params).await
+    }
+
+    #[tool(
         description = "Remove one effect from a track's insert chain — the counterpart to \
                        track_add_effect, which APPENDS a fresh instance on every call, so \
                        without this a wrong add was permanent. Address the effect EITHER by \

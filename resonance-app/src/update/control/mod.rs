@@ -32,6 +32,7 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod bus;
 mod generate;
 mod harmony;
 mod job;
@@ -193,6 +194,12 @@ pub fn execute(
     // the open project's master, so with no project the honest answer is
     // `busy`, not a default.
     if let Some(result) = master::try_handle(app, request) {
+        return result;
+    }
+
+    // Group busses (todo #1228): create/delete/level. Listing lives in
+    // `song.*`, which already reports busses as `kind: "bus"`.
+    if let Some(result) = bus::try_handle(app, request) {
         return result;
     }
 

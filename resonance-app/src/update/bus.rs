@@ -13,6 +13,12 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
                 name: None,
             });
         }
+        BusMessage::AddBusWithId { id, name } => {
+            let _ = r.engine.send(AudioCommand::AddBus {
+                id_hint: Some(id),
+                name: Some(name),
+            });
+        }
         BusMessage::RemoveBus(bus_id) => {
             let _ = r.engine.send(AudioCommand::RemoveBus { bus_id });
             for track in &mut r.registry.tracks {
