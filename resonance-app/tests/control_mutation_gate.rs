@@ -67,6 +67,11 @@ fn mutating_methods() -> Vec<&'static str> {
         methods::notes::METHODS,
         methods::vocal::METHODS,
         methods::render::METHODS,
+        // `meter.*` mutates nothing, but it MEASURES the open project,
+        // so with nothing open the honest answer is `busy` rather than a
+        // measurement of silence that reads like a real one (todo
+        // #1219).
+        methods::meter::METHODS,
     ] {
         methods.extend_from_slice(namespace);
     }

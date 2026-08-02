@@ -39,6 +39,7 @@ mod harmony;
 mod import_midi;
 mod job;
 mod master;
+mod meter;
 mod notes;
 mod project;
 mod render;
@@ -48,6 +49,7 @@ mod track;
 mod transport;
 mod vocal;
 
+pub(crate) use meter::{mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
@@ -179,6 +181,16 @@ pub fn execute(
         return handled;
     }
 
+    // Mix measurement (todo #1219): renders a slice of the mix offline
+    // and reports its BS.1770 numbers, as a job. Read-only in the sense
+    // that it changes nothing — but it describes the OPEN project, so
+    // like `master.summary` it sits below the gate and is absent from
+    // `is_read_only_method`: with nothing open the honest answer is
+    // `busy`, not a measurement of silence.
+    if let Some(handled) = meter::try_handle(app, conn, request) {
+        return handled;
+    }
+
     // Mutating transport namespace (todo #1150): synthesizes the
     // existing TransportMessage variants through the full update path.
     if let Some(result) = transport::try_handle(app, request) {
@@ -287,7 +299,10 @@ fn hello(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
 ///
 /// The `notes.*` create/insert/etc., `transport.*`, `track.*` /
 /// `mixer.*`, `section.*`, `harmony.*`, `generate.*`, `vocal.*` and
-/// `render.*` namespaces are all mutating and deliberately absent.
+/// `render.*` namespaces are all mutating and deliberately absent. So is
+/// `meter.*` (todo #1219), which mutates nothing but measures the open
+/// project — a stable `busy` with nothing open beats a measurement of a
+/// project that isn't there.
 pub(crate) fn is_read_only_method(method: &str) -> bool {
     use resonance_control::methods;
     method == HELLO

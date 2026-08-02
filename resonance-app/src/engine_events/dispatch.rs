@@ -57,15 +57,14 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         | E::StemExportTargetError { .. }
         | E::StemExportComplete { .. }
         | E::StemExportCancelled { .. } => {}
-        // Offline mix measurement (ba todo #1218, doc #273). The engine
-        // command exists for the control API's `meter.measure` /
-        // `meter.stems` (todos #1219 / #1220), which resolve their job off
-        // these events themselves; the GUI has no measurement surface, so
-        // the results are consumed here and only a failure is logged.
-        E::MixMeasured { .. } => {}
-        E::MixMeasureError(message) => {
-            eprintln!("audio: mix measurement failed: {message}")
-        }
+        // Offline mix measurement (ba doc #273, todos #1218 / #1219).
+        // These are the terminal events of `AudioCommand::MeasureMix`,
+        // which only the control API's `meter.*` issues; the GUI has no
+        // measurement surface, so they resolve the in-flight control job
+        // and nothing else. A measurement nobody asked for over the
+        // control socket is logged rather than dropped silently.
+        E::MixMeasured { results } => crate::update::control::mix_measured(r, results),
+        E::MixMeasureError(message) => crate::update::control::mix_measure_error(r, message),
         E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
         E::ExportComplete { path, bytes, .. } => transport::export_complete(r, path, bytes),
         E::ExportError { kind, message } => transport::export_error(r, kind, message),

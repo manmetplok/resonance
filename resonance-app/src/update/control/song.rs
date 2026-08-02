@@ -781,7 +781,11 @@ fn clip_count(app: &Resonance, id: resonance_audio::types::TrackId) -> usize {
 
 /// Last sample of the song: the furthest end over audio clips, MIDI
 /// clips, and placed sections. 0 for an empty project.
-fn song_end_sample(app: &Resonance) -> u64 {
+///
+/// Shared with `meter.*` (todo #1219), which clamps a measurement range
+/// to it, so "the whole song" means the same thing to a reader and to a
+/// measurement.
+pub(super) fn song_end_sample(app: &Resonance) -> u64 {
     let mut end: u64 = 0;
     for c in &app.clips {
         end = end.max(c.start_sample + c.duration_samples);
