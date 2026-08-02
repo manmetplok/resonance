@@ -32,6 +32,10 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             | AudioCommand::MovePlugin { .. }
             | AudioCommand::AddPluginToBus { .. }
             | AudioCommand::RemovePluginFromBus { .. }
+            // Bus chains have no structural slot 0, but the comp
+            // table is rebuilt per chain, and rebuilding it after a
+            // no-op reorder is cheap next to getting it wrong.
+            | AudioCommand::MovePluginInBus { .. }
             | AudioCommand::ScanPlugins
             | AudioCommand::SetTrackOutput { .. }
             | AudioCommand::AddTrack { .. }
