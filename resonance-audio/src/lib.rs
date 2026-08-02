@@ -65,6 +65,9 @@ pub mod __test_support {
     };
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
+    /// The engine's plugin instance-id allocation rule, shared by the
+    /// track / bus / master add paths — see `tests/plugin_id_ranges.rs`.
+    pub use crate::engine::plugins::allocate_plugin_instance_id;
     pub use crate::latency::{
         add_external_offsets, bus_chain_latencies, chain_latencies, comp_latency_clamped,
         compensation_delays, master_chain_latency, LatencyComp,

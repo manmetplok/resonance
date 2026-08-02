@@ -14,6 +14,34 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 id_hint: None,
             });
         }
+        PluginMessage::AddPluginToTrackWithId {
+            track_id,
+            instance_id,
+            plugin,
+        } => {
+            let _ = r.engine.send(AudioCommand::AddPlugin {
+                track_id,
+                clap_file_path: plugin.clap_file_path.clone(),
+                clap_plugin_id: plugin.clap_plugin_id.clone(),
+                id_hint: Some(instance_id),
+            });
+            // Mirror the slot NOW, with an empty param list, exactly as
+            // the project-load replay does (`replay_plugins`). The
+            // engine's `PluginAdded` echo finds this slot by
+            // `instance_id` and fills in `params`/`has_gui` instead of
+            // pushing a second one, so no duplicate appears.
+            if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+                track.plugins.push(crate::state::PluginSlotState::new(
+                    instance_id,
+                    plugin.name,
+                    plugin.clap_plugin_id,
+                    plugin.clap_file_path,
+                    Vec::new(),
+                    false,
+                ));
+                r.insert_plugin_index(instance_id, crate::state::PluginLocator::Track(track_id));
+            }
+        }
         PluginMessage::RemovePluginFromTrack(track_id, instance_id) => {
             let _ = r.engine.send(AudioCommand::RemovePlugin {
                 track_id,

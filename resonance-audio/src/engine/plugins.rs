@@ -202,6 +202,46 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
     }
 }
 
+/// The engine's plugin instance-id allocation rule, shared by the track,
+/// bus and master add paths so the three cannot drift.
+///
+/// Without a hint, hand out `*next_plugin_id` and advance it.
+///
+/// With a hint, honour it — and advance the counter past it ONLY when the
+/// hint is below [`CONTROL_PLUGIN_ID_BASE`]. Hints below the base are
+/// engine-allocated ids coming back on the project-load replay path, and
+/// the counter has to move past those or a later add would reuse one.
+/// Hints at or above the base come from the app's own allocator (ba doc
+/// #273, todo #1234), and advancing for those is what BREAKS the split:
+/// it drags `next_plugin_id` up into the control range, so the next
+/// engine-allocated add — `master.add_effect` still is one — takes an id
+/// the app also believes is free. The app can only skip ids it already
+/// mirrors, so it cannot skip one whose `PluginAdded` echo is still in
+/// flight (dlopen + `create_instance` + `query_params`), and the two
+/// plugins end up sharing one live CLAP instance in `ctx.plugins`, driven
+/// from two chains.
+///
+/// Ignoring control-range hints here is safe precisely because the app
+/// owns that range exclusively.
+pub fn allocate_plugin_instance_id(
+    next_plugin_id: &mut PluginInstanceId,
+    id_hint: Option<PluginInstanceId>,
+) -> PluginInstanceId {
+    match id_hint {
+        Some(hint) => {
+            if hint < CONTROL_PLUGIN_ID_BASE {
+                *next_plugin_id = (*next_plugin_id).max(hint + 1);
+            }
+            hint
+        }
+        None => {
+            let id = *next_plugin_id;
+            *next_plugin_id += 1;
+            id
+        }
+    }
+}
+
 pub(crate) fn handle_add_plugin(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -232,14 +272,7 @@ pub(crate) fn handle_add_plugin(
 
     match state.bundles[bundle_idx].create_instance(&actual_plugin_id, ctx.sample_rate) {
         Ok(instance) => {
-            let instance_id = id_hint.unwrap_or_else(|| {
-                let i = state.next_plugin_id;
-                state.next_plugin_id += 1;
-                i
-            });
-            if id_hint.is_some() {
-                state.next_plugin_id = state.next_plugin_id.max(instance_id + 1);
-            }
+            let instance_id = allocate_plugin_instance_id(&mut state.next_plugin_id, id_hint);
 
             // Query params + has_gui + output port layout before moving
             // instance into shared map.

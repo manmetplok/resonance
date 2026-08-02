@@ -90,7 +90,7 @@ pub use import_queue::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 mod master;
 pub(crate) mod midi;
 mod midi_map;
-mod plugins;
+pub(crate) mod plugins;
 pub(crate) mod reference;
 mod scan;
 mod thread;
