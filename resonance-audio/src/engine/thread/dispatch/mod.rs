@@ -171,6 +171,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::RemoveAuxSend { .. }
         | AudioCommand::AddPluginToMaster { .. }
         | AudioCommand::RemovePluginFromMaster { .. }
+        | AudioCommand::MovePluginInMaster { .. }
         | AudioCommand::SetBusFxBypass { .. }
         | AudioCommand::SetMasterFxBypass { .. } => busses::dispatch_busses(ctx, state, cmd),
 

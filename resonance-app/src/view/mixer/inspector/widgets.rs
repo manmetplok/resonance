@@ -125,6 +125,46 @@ pub(super) fn placeholder_pick(value: &'static str) -> Element<'static, Message>
         .into()
 }
 
+/// Read-only label/value row with a hairline under it — the shape the
+/// ROUTING group uses for facts the user cannot edit here (a track's
+/// Send A/B placeholders, a bus's members / sends / output). `muted`
+/// dims the value for an empty one.
+pub(super) fn info_row(
+    label: &'static str,
+    value: String,
+    muted: bool,
+) -> Element<'static, Message> {
+    let value_color = if muted { theme::TEXT_4 } else { theme::TEXT_1 };
+    // The value takes the remaining width and wraps inside it rather
+    // than running past the pane's right edge — a bus's member list is
+    // as long as the number of tracks routed into it, and clipping it
+    // silently drops exactly the names the row exists to show.
+    let r_row = row![
+        text(label).size(11).color(theme::TEXT_3),
+        Space::new().width(10),
+        text(value)
+            .size(12)
+            .font(theme::MONO_FONT)
+            .color(value_color)
+            .width(Length::Fill)
+            .align_x(alignment::Horizontal::Right),
+    ]
+    .align_y(alignment::Vertical::Center)
+    .padding([6, 0]);
+
+    column![
+        r_row,
+        container(Space::new().width(Length::Fill))
+            .height(1)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(theme::LINE_2)),
+                ..Default::default()
+            }),
+    ]
+    .spacing(0)
+    .into()
+}
+
 /// 2×2 stat tile used in the SIGNAL group.
 pub(super) fn stat_tile(label: &'static str, value: String) -> Element<'static, Message> {
     container(

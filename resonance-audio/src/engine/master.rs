@@ -79,6 +79,31 @@ pub(crate) fn handle_remove_plugin_from_master(ctx: &HandlerCtx, instance_id: Pl
         .send(AudioEvent::MasterPluginRemoved { instance_id });
 }
 
+pub(crate) fn handle_move_plugin_in_master(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
+    let moved = ctx.master.write().move_plugin(instance_id, to_index);
+    match moved {
+        // Report the *clamped* index so the app mirrors what the engine
+        // actually did rather than what was requested.
+        Some(to_index) => {
+            let _ = ctx.event_tx.send(AudioEvent::MasterPluginMoved {
+                instance_id,
+                to_index,
+            });
+        }
+        None => {
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Cannot reorder plugin {} on the master: it is not on the \
+                 master chain",
+                instance_id
+            )));
+        }
+    }
+}
+
 pub(crate) fn handle_set_master_fx_bypass(ctx: &HandlerCtx, bypassed: bool) {
     ctx.shared
         .master_fx_bypassed

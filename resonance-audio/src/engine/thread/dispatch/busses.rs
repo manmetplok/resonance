@@ -80,6 +80,10 @@ pub(super) fn dispatch_busses(
         AudioCommand::RemovePluginFromMaster { instance_id } => {
             master::handle_remove_plugin_from_master(ctx, instance_id)
         }
+        AudioCommand::MovePluginInMaster {
+            instance_id,
+            to_index,
+        } => master::handle_move_plugin_in_master(ctx, instance_id, to_index),
         AudioCommand::SetBusFxBypass { bus_id, bypassed } => {
             busses::handle_set_bus_fx_bypass(ctx, bus_id, bypassed)
         }

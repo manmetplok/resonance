@@ -158,9 +158,35 @@ impl crate::Resonance {
             .width(theme::MIXER_STRIP_WIDTH)
             .height(Length::Fill);
 
-        container(strip_content)
-            .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32))
-            .style(theme::card_warm)
-            .into()
+        // Clicking anywhere on the strip that isn't already a control
+        // selects the bus, exactly as a track strip does — that is what
+        // gives the inspector something to describe. `mouse_area` sits
+        // *outside* the container so the inner buttons, pickers, knob and
+        // fader keep their own press handling.
+        let is_selected = self.mixer.selected_bus == Some(bus_id);
+        iced::widget::mouse_area(
+            container(strip_content)
+                .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32))
+                // Selected saturates the strip's resting warm hairline to
+                // the full warm accent — the same dim-to-saturated move a
+                // selected sub-track's rail makes, in the bus palette
+                // rather than the track one.
+                .style(move |theme| {
+                    let base = theme::card_warm(theme);
+                    if is_selected {
+                        container::Style {
+                            border: iced::Border {
+                                color: theme::WARM,
+                                ..base.border
+                            },
+                            ..base
+                        }
+                    } else {
+                        base
+                    }
+                }),
+        )
+        .on_press(Message::Ui(UiMessage::SelectBus(Some(bus_id))))
+        .into()
     }
 }

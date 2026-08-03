@@ -71,6 +71,10 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             // aligned with (doc #260 finding #19).
             | AudioCommand::AddPluginToMaster { .. }
             | AudioCommand::RemovePluginFromMaster { .. }
+            // Reordering the master chain leaves its total latency
+            // unchanged, but rebuilding the figure after a no-op reorder
+            // is cheap next to publishing a stale one.
+            | AudioCommand::MovePluginInMaster { .. }
             | AudioCommand::SetMasterFxBypass { .. }
     )
 }

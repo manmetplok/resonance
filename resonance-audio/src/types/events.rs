@@ -598,6 +598,17 @@ pub enum AudioEvent {
     MasterPluginRemoved {
         instance_id: PluginInstanceId,
     },
+    /// The master insert chain was reordered by
+    /// [`AudioCommand::MovePluginInMaster`](super::AudioCommand::MovePluginInMaster).
+    /// `to_index` is the slot the plugin actually landed on *after*
+    /// clamping, so the app mirrors the engine's order rather than
+    /// re-deriving it. The order of `Resonance::master_plugins` is what
+    /// project serialization writes, so mirroring this is what makes a
+    /// master reorder survive save/load.
+    MasterPluginMoved {
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
     TrackFxBypassChanged {
         track_id: TrackId,
         bypassed: bool,

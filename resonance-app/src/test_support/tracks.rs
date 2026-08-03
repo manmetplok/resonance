@@ -90,6 +90,35 @@ impl Resonance {
         self.registry.resort_tracks();
     }
 
+    /// Test-only: the primary (single) track selection the mixer
+    /// inspector reads.
+    #[doc(hidden)]
+    pub fn test_selected_track(&self) -> Option<resonance_audio::types::TrackId> {
+        self.interaction.selected_track
+    }
+
+    /// Test-only: the selected BUS strip, if any. Drives
+    /// `tests/mixer_inspector_bus.rs` — the bus counterpart of
+    /// `test_selected_track`, separate because bus ids and track ids are
+    /// separate id spaces.
+    #[doc(hidden)]
+    pub fn test_selected_bus(&self) -> Option<resonance_audio::types::BusId> {
+        self.mixer.selected_bus
+    }
+
+    /// Test-only: push a bus straight into the registry, bypassing the
+    /// engine round-trip, and refresh the output-choice cache the engine
+    /// handlers would normally keep fresh.
+    #[doc(hidden)]
+    pub fn test_add_bus(&mut self, bus_id: resonance_audio::types::BusId, name: &str) {
+        let order = self.registry.busses.len();
+        self.registry
+            .busses
+            .push(state::BusState::new(bus_id, order, name.to_owned()));
+        self.registry.next_bus_order = self.registry.busses.len();
+        self.view_caches.rebuild_output(&self.registry.busses);
+    }
+
     /// Test-only: read the Arrange multi-track selection set, in click
     /// order. Drives `tests/group_creation_from_selection.rs`.
     #[doc(hidden)]

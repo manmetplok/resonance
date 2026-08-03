@@ -282,6 +282,10 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
         r.plugin_index.remove(&id);
     }
     r.registry.busses.retain(|b| b.id != bus_id);
+    // Don't leave the inspector pointed at a bus that no longer exists.
+    if r.mixer.selected_bus == Some(bus_id) {
+        r.mixer.selected_bus = None;
+    }
     // Any track that was routed to the removed bus falls back to Master
     // locally (the engine did the same server-side).
     for track in &mut r.registry.tracks {

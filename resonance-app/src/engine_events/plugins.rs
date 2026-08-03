@@ -409,6 +409,38 @@ pub(super) fn master_added(
         .send(AudioCommand::SavePluginState { instance_id });
 }
 
+/// Mirror an engine-side master chain reorder
+/// (`AudioCommand::MovePluginInMaster` -> `AudioEvent::MasterPluginMoved`)
+/// onto `Resonance::master_plugins` — the master twin of [`bus_moved`].
+pub(super) fn master_moved(r: &mut Resonance, instance_id: PluginInstanceId, to_index: usize) {
+    mirror_master_plugin_move(r, instance_id, to_index);
+}
+
+/// The mirror itself, shared with the control API's
+/// `master.move_effect`, which applies the order immediately so a client
+/// can read back what it just set. Applying it twice is harmless: the
+/// second call finds the plugin already at `to_index` and returns.
+pub(crate) fn mirror_master_plugin_move(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    to_index: usize,
+) {
+    let Some(from) = r
+        .master_plugins
+        .iter()
+        .position(|p| p.instance_id == instance_id)
+    else {
+        return;
+    };
+    // `from` was found, so the chain is non-empty and this cannot wrap.
+    let to = to_index.min(r.master_plugins.len() - 1);
+    if from == to {
+        return;
+    }
+    let slot = r.master_plugins.remove(from);
+    r.master_plugins.insert(to, slot);
+}
+
 pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     r.master_plugins.retain(|p| p.instance_id != instance_id);
     if r.mixer.selected_plugin == Some(instance_id) {

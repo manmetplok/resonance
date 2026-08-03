@@ -148,8 +148,8 @@ impl Resonance {
     /// advances `next_plugin_id` past a hint only when the hint is BELOW
     /// the base. Without that, the first control add would drag the
     /// engine's counter into this range and the next engine-allocated
-    /// add (`master.add_effect` still is one) could take an id this
-    /// allocator also considers free.
+    /// add (every GUI add still is one) could take an id this allocator
+    /// also considers free.
     ///
     /// The in-use scan below is belt-and-braces on top of the range
     /// split, not the thing that makes it safe: it can only see ids the

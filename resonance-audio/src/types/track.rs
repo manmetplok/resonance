@@ -605,4 +605,21 @@ impl MasterBus {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Move `instance_id` to `to_index`, shifting the plugins between
+    /// its old and new slot by one. Returns the slot it actually landed
+    /// on (`to_index` clamped to the last slot), or `None` when that
+    /// plugin is not on the master chain. The master twin of
+    /// [`Bus::move_plugin`].
+    pub fn move_plugin(&mut self, instance_id: PluginInstanceId, to_index: usize) -> Option<usize> {
+        let from = self.plugin_ids.iter().position(|&id| id == instance_id)?;
+        // `from` was found, so the chain is non-empty and this cannot
+        // wrap.
+        let to = to_index.min(self.plugin_ids.len() - 1);
+        if from != to {
+            let id = self.plugin_ids.remove(from);
+            self.plugin_ids.insert(to, id);
+        }
+        Some(to)
+    }
 }

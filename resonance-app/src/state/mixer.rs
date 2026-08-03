@@ -17,6 +17,15 @@ pub enum MixerInspectorGroup {
 #[derive(Debug, Default)]
 pub struct MixerUiState {
     pub selected_plugin: Option<PluginInstanceId>,
+    /// Bus whose strip is selected, if any — the bus counterpart of
+    /// [`ClipInteractionState::selected_track`](crate::state::ClipInteractionState::selected_track),
+    /// which the mixer inspector reads to decide what to show. It is a
+    /// separate field rather than a shared one because bus ids and track
+    /// ids are separate id spaces that overlap numerically. The two are
+    /// mutually exclusive: `UiMessage::SelectBus` clears the track
+    /// selection and `UiMessage::SelectTrack` clears this, so the
+    /// inspector always describes exactly one channel.
+    pub selected_bus: Option<BusId>,
     pub expanded_sub_track_parents: std::collections::HashSet<TrackId>,
     pub add_track_menu_open: bool,
     pub settings_open: bool,

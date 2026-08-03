@@ -21,6 +21,7 @@ use resonance_control::methods::master::{
     SetMasterVolumeParams,
 };
 use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
+use resonance_control::methods::track;
 use resonance_control::{MutationAck, Request, Response, RpcError};
 
 /// Handle a `master.*` request, or `None` when `method` belongs to
@@ -34,7 +35,10 @@ pub(super) fn try_handle(
         master::SET_VOLUME => set_volume(app, request),
         master::ADD_EFFECT => add_effect(app, request),
         master::REMOVE_EFFECT => remove_effect(app, request),
+        master::MOVE_EFFECT => move_effect(app, request),
         master::SET_FX_BYPASS => set_fx_bypass(app, request),
+        master::PLUGIN_PARAMS => plugin_params(app, request),
+        master::SET_PLUGIN_PARAM => set_plugin_param(app, request),
         _ => return None,
     };
     Some(out)
@@ -139,6 +143,111 @@ fn set_volume(app: &mut Resonance, request: &Request) -> (Response, Task<Message
 // The master insert chain (ba doc #273, todo #1227)
 // ---------------------------------------------------------------------------
 
+/// The master chain as wire entries, in processing order, each tagged
+/// with its occurrence among same-id siblings.
+///
+/// Deliberately the same [`track::PluginParamsEntry`] shape
+/// `track.plugin_params` and `bus.plugin_params` return, so a client
+/// reads the master chain with the code it already has. `kind` is always
+/// `Effect`: the master has no instrument slot.
+fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
+    let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    app.master_plugins
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let occurrence = seen
+                .entry(p.clap_plugin_id.as_str())
+                .and_modify(|n| *n += 1)
+                .or_insert(0);
+            track::PluginParamsEntry {
+                plugin_id: p.clap_plugin_id.clone(),
+                name: p.plugin_name.clone(),
+                slot: i as u32,
+                occurrence: *occurrence,
+                kind: track::PluginKind::Effect,
+                params: p
+                    .params
+                    .iter()
+                    .map(|param| track::PluginParamView {
+                        id: param.id,
+                        name: param.name.clone(),
+                        value: param.current_value,
+                        min: param.min_value,
+                        max: param.max_value,
+                        default: param.default_value,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// Resolve "which plugin on the master" from the slot-or-(id,
+/// occurrence) pair every chain method accepts. `verb` only shapes the
+/// wording.
+fn resolve_master_effect(
+    app: &Resonance,
+    slot: Option<u32>,
+    plugin_id: Option<&str>,
+    occurrence: Option<u32>,
+    verb: &str,
+) -> Result<(track::PluginParamsEntry, resonance_audio::types::PluginInstanceId), RpcError> {
+    let entries = master_plugin_entries(app);
+    let entry = match (slot, plugin_id) {
+        (Some(_), Some(_)) => {
+            return Err(RpcError::invalid_params(
+                "address the effect by slot OR by plugin_id (+ occurrence), not both",
+            ))
+        }
+        (None, None) => {
+            return Err(RpcError::invalid_params(format!(
+                "name the effect to {verb}: slot, or plugin_id (+ occurrence). The master \
+                 chain is [{}]",
+                chain_description(app)
+            )))
+        }
+        (Some(slot), None) => match entries.iter().find(|e| e.slot == slot) {
+            Some(entry) => entry.clone(),
+            None => {
+                return Err(RpcError::not_found(format!(
+                    "the master chain has no slot {slot}; it carries [{}]",
+                    chain_description(app)
+                )))
+            }
+        },
+        (None, Some(wanted)) => {
+            let occurrence = occurrence.unwrap_or(0);
+            match entries
+                .iter()
+                .find(|e| e.plugin_id == wanted && e.occurrence == occurrence)
+            {
+                Some(entry) => entry.clone(),
+                None => {
+                    return Err(RpcError::not_found(format!(
+                        "the master chain has no plugin {wanted:?} at occurrence {occurrence}; \
+                         it carries [{}]",
+                        chain_description(app)
+                    )))
+                }
+            }
+        }
+    };
+    let instance_id = app
+        .master_plugins
+        .iter()
+        .filter(|p| p.clap_plugin_id == entry.plugin_id)
+        .nth(entry.occurrence as usize)
+        .map(|p| p.instance_id)
+        .ok_or_else(|| {
+            RpcError::not_found(format!(
+                "plugin {:?} vanished from the master chain between lookup and {verb}",
+                entry.plugin_id
+            ))
+        })?;
+    Ok((entry, instance_id))
+}
+
 /// `master.add_effect` — append an effect to the master chain.
 ///
 /// This is what makes a limiter loadable at all: the mastering plugin
@@ -150,6 +259,13 @@ fn add_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
+    let (slot, occurrence) = (
+        app.master_plugins.len() as u32,
+        app.master_plugins
+            .iter()
+            .filter(|p| p.clap_plugin_id == params.plugin_id)
+            .count() as u32,
+    );
     let Some(plugin) = app
         .available_plugins
         .iter()
@@ -189,11 +305,26 @@ fn add_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             )),
         );
     }
+    // Same synchronous commit as `track.add_effect` / `bus.add_effect`:
+    // the id is allocated app-side and the slot mirrored at dispatch, so
+    // `master.plugin_params` and `master.set_plugin_param` can address
+    // the plugin in the same cycle as this reply instead of racing the
+    // engine's `MasterPluginAdded` echo.
+    let instance_id = app.allocate_control_plugin_id();
     let task = super::run_via_update(
         app,
-        Message::Master(MasterMessage::AddPluginToMaster(plugin)),
+        Message::Master(MasterMessage::AddPluginToMasterWithId {
+            instance_id,
+            plugin,
+        }),
     );
-    (ack(app, request), task)
+    let result = track::AddPluginResult {
+        plugin_id: params.plugin_id,
+        occurrence,
+        slot,
+        revision: app.revision(),
+    };
+    (super::success(request, &result), task)
 }
 
 /// `master.remove_effect` — take one plugin off the master chain,
@@ -204,61 +335,219 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         Err(e) => return reject(request, e),
     };
 
-    let instance_id = match (params.slot, &params.plugin_id) {
-        (Some(_), Some(_)) => {
-            return reject(
-                request,
-                RpcError::invalid_params(
-                    "address the effect by slot OR by plugin_id (+ occurrence), not both",
-                ),
-            )
-        }
-        (None, None) => {
-            return reject(
-                request,
-                RpcError::invalid_params(format!(
-                    "name the effect to remove: slot, or plugin_id (+ occurrence). The master \
-                     chain is [{}]",
-                    chain_description(app)
-                )),
-            )
-        }
-        (Some(slot), None) => {
-            let Some(p) = app.master_plugins.get(slot as usize) else {
-                return reject(
-                    request,
-                    RpcError::not_found(format!(
-                        "the master chain has no slot {slot}; it is [{}]",
-                        chain_description(app)
-                    )),
-                );
-            };
-            p.instance_id
-        }
-        (None, Some(plugin_id)) => {
-            let occurrence = params.occurrence.unwrap_or(0);
-            let Some(p) = app
-                .master_plugins
-                .iter()
-                .filter(|p| &p.clap_plugin_id == plugin_id)
-                .nth(occurrence as usize)
-            else {
-                return reject(
-                    request,
-                    RpcError::not_found(format!(
-                        "the master chain has no plugin {plugin_id:?} at occurrence \
-                         {occurrence}; it is [{}]",
-                        chain_description(app)
-                    )),
-                );
-            };
-            p.instance_id
-        }
+    let instance_id = match resolve_master_effect(
+        app,
+        params.slot,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        "remove",
+    ) {
+        Ok((_, id)) => id,
+        Err(error) => return reject(request, error),
     };
 
     let task = super::run_via_update(
         app,
         Message::Master(MasterMessage::RemovePluginFromMaster(instance_id)),
+    );
+    (ack(app, request), task)
+}
+
+/// `master.move_effect` — reorder the master chain.
+///
+/// Order decides whether the chain does its job: a limiter holding a
+/// ceiling has to be last, because anything after it can push the sum
+/// back over that ceiling.
+fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::MoveEffectParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let (entry, instance_id) = match resolve_master_effect(
+        app,
+        params.slot,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        "move",
+    ) {
+        Ok(found) => found,
+        Err(error) => return reject(request, error),
+    };
+    // Clamp rather than error: naming a slot past the end means "the
+    // end", and the engine clamps identically so the echo agrees.
+    let to_slot = params
+        .to_slot
+        .min(app.master_plugins.len().saturating_sub(1) as u32);
+    if to_slot == entry.slot {
+        return (ack(app, request), Task::none());
+    }
+    let task = super::run_via_update(
+        app,
+        Message::Master(MasterMessage::MovePluginInMaster {
+            instance_id,
+            to_index: to_slot as usize,
+        }),
+    );
+    (ack(app, request), task)
+}
+
+/// `master.plugin_params` — read the master chain, in the same shape
+/// `track.plugin_params` reports a track's.
+///
+/// Read-only but project-requiring, so like `master.summary` it stays
+/// OUT of `is_read_only_method`: with no project open the honest answer
+/// is `busy`, not an empty chain.
+fn plugin_params(app: &Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::PluginParamsParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let entries = master_plugin_entries(app);
+    let plugins = match &params.plugin_id {
+        None => entries,
+        Some(wanted) => {
+            let occurrence = params.occurrence.unwrap_or(0);
+            let matched: Vec<track::PluginParamsEntry> = entries
+                .iter()
+                .filter(|e| &e.plugin_id == wanted && e.occurrence == occurrence)
+                .cloned()
+                .collect();
+            if matched.is_empty() {
+                return reject(
+                    request,
+                    RpcError::not_found(format!(
+                        "the master chain has no plugin {wanted:?} at occurrence {occurrence}; \
+                         it carries [{}]",
+                        chain_description(app)
+                    )),
+                );
+            }
+            matched
+        }
+    };
+    let result = master::PluginParamsView {
+        plugins,
+        revision: app.revision(),
+    };
+    (super::success(request, &result), Task::none())
+}
+
+/// `master.set_plugin_param` — configure a plugin on the finished mix.
+///
+/// Without this the master chain is write-only: `master.add_effect`
+/// loads a limiter and it then sits at its defaults, which on a mix
+/// left at normal mixing headroom means it never engages at all.
+fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::SetPluginParamParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    if !params.value.is_finite() {
+        return reject(
+            request,
+            RpcError::invalid_params(format!("value must be finite (got {})", params.value)),
+        );
+    }
+    let entries = master_plugin_entries(app);
+    let occurrence = params.occurrence.unwrap_or(0);
+    let entry = match &params.plugin_id {
+        Some(id) => entries
+            .iter()
+            .find(|e| &e.plugin_id == id && e.occurrence == occurrence),
+        // No id names the first plugin on the chain — unambiguous on a
+        // one-effect master, which is the common case.
+        None => entries.first(),
+    };
+    let Some(entry) = entry else {
+        return reject(
+            request,
+            RpcError::not_found(match &params.plugin_id {
+                Some(id) => format!(
+                    "the master chain has no plugin {id:?} at occurrence {occurrence}; it \
+                     carries [{}]",
+                    chain_description(app)
+                ),
+                None => "the master chain carries no plugins; add one with master.add_effect"
+                    .to_owned(),
+            }),
+        );
+    };
+
+    // Same initializing window `track.set_plugin_param` names: the slot
+    // is mirrored at dispatch, the parameter list arrives with the
+    // engine echo.
+    if entry.params.is_empty() {
+        return reject(
+            request,
+            RpcError::busy(format!(
+                "plugin {:?} is on the master but is still initializing — its parameter list \
+                 arrives with the engine echo, usually within a frame. Retry, or read \
+                 master.plugin_params until its params array is non-empty. (A plugin that \
+                 genuinely exposes no parameters reports the same empty list.)",
+                entry.plugin_id
+            )),
+        );
+    }
+
+    let wanted = params.param.trim();
+    let param = entry
+        .params
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(wanted))
+        .or_else(|| {
+            wanted
+                .parse::<u32>()
+                .ok()
+                .and_then(|id| entry.params.iter().find(|p| p.id == id))
+        });
+    let Some(param) = param else {
+        let known: Vec<&str> = entry.params.iter().map(|p| p.name.as_str()).collect();
+        return reject(
+            request,
+            RpcError::not_found(format!(
+                "plugin {:?} has no parameter {wanted:?} (has: [{}])",
+                entry.plugin_id,
+                known.join(", ")
+            )),
+        );
+    };
+
+    // Shared with `track.set_plugin_param` so the f32-declared-bounds
+    // tolerance (todo #1235) behaves identically on all three surfaces.
+    let Some(value) = super::track::clamp_within_tolerance(params.value, param.min, param.max)
+    else {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "{} must be within {}..={} (got {})",
+                param.name, param.min, param.max, params.value
+            )),
+        );
+    };
+
+    let Some(instance_id) = app
+        .master_plugins
+        .iter()
+        .filter(|p| p.clap_plugin_id == entry.plugin_id)
+        .nth(entry.occurrence as usize)
+        .map(|p| p.instance_id)
+    else {
+        return reject(
+            request,
+            RpcError::not_found(format!(
+                "plugin {:?} vanished from the master chain between lookup and set",
+                entry.plugin_id
+            )),
+        );
+    };
+    let param_id = param.id;
+    let task = super::run_via_update(
+        app,
+        Message::Plugin(crate::message::PluginMessage::SetPluginParam(
+            instance_id,
+            param_id,
+            value,
+        )),
     );
     (ack(app, request), task)
 }

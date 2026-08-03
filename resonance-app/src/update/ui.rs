@@ -71,6 +71,11 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             return project_io::save_project_as_dialog();
         }
         UiMessage::SelectTrack(id) => {
+            // A track and a bus can't both be selected — the inspector
+            // describes one channel.
+            if id.is_some() {
+                r.mixer.selected_bus = None;
+            }
             match id {
                 // An additive (Cmd/Shift) click on a track toggles it in the
                 // multi-selection and leaves any clip selection alone.
@@ -84,6 +89,17 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                     r.interaction.selected_clip = None;
                     r.interaction.selected_midi_clip = None;
                 }
+            }
+        }
+        UiMessage::SelectBus(id) => {
+            r.mixer.selected_bus = id;
+            // Selecting a bus takes the highlight off whatever track had
+            // it, so the mixer never shows two selected strips while the
+            // inspector describes one of them.
+            if id.is_some() {
+                r.interaction.select_single_track(None);
+                r.interaction.selected_clip = None;
+                r.interaction.selected_midi_clip = None;
             }
         }
         UiMessage::OpenTrackMenu { id, x, y } => {

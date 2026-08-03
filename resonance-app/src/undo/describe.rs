@@ -37,8 +37,10 @@ pub fn describe(message: &Message) -> String {
             _ => "track edit",
         },
         Message::Master(m) => match m {
-            MasterMessage::AddPluginToMaster(_) => "add master effect",
+            MasterMessage::AddPluginToMaster(_)
+            | MasterMessage::AddPluginToMasterWithId { .. } => "add master effect",
             MasterMessage::RemovePluginFromMaster(_) => "remove master effect",
+            MasterMessage::MovePluginInMaster { .. } => "reorder master effects",
             MasterMessage::ToggleMasterFxBypass => "master FX bypass",
         },
         Message::Bus(b) => match b {

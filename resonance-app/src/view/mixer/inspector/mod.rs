@@ -13,7 +13,14 @@
 //! - `routing`           — ROUTING group orchestration
 //! - `external_instrument` — EXTERNAL INSTRUMENT group (todo #454)
 //! - `chain`             — CHAIN group (plugin rows + add picker)
+//! - `bus`               — the whole pane for a selected BUS strip
+//!
+//! A bus is not a `TrackState`, so it gets its own module rather than a
+//! set of `if is_bus` branches through the track path: no input device,
+//! no MIDI, no output picker (a bus always sums to master), and ROUTING
+//! answers what feeds it instead.
 
+mod bus;
 mod chain;
 mod external_instrument;
 mod io;
@@ -52,6 +59,19 @@ fn midi_choices_with_override(
 }
 
 pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
+    // A selected bus takes the pane. The two selections are mutually
+    // exclusive (see `MixerUiState::selected_bus`), so this is a
+    // precedence rule only for the window where a bus was deleted while
+    // selected — in which case the lookup misses and the track path
+    // takes over.
+    let selected_bus = r
+        .mixer
+        .selected_bus
+        .and_then(|id| r.registry.busses.iter().find(|b| b.id == id));
+    if let Some(b) = selected_bus {
+        return chrome(bus::view(r, b));
+    }
+
     let selected_id = r.interaction.selected_track;
     let selected = selected_id.and_then(|id| r.registry.tracks.iter().find(|t| t.id == id));
 
@@ -155,6 +175,12 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
         None => render_empty(),
     };
 
+    chrome(body)
+}
+
+/// The pane itself — fixed width, padding and background. Shared by the
+/// track, bus and empty bodies so the three can never drift apart.
+fn chrome<'a>(body: Element<'a, Message>) -> Element<'a, Message> {
     container(body)
         .width(Length::Fixed(theme::INSPECTOR_WIDTH))
         .height(Length::Fill)

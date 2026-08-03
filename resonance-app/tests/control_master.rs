@@ -193,7 +193,10 @@ fn every_master_method_is_advertised_in_the_handshake() {
         "master.set_volume",
         "master.add_effect",
         "master.remove_effect",
+        "master.move_effect",
         "master.set_fx_bypass",
+        "master.plugin_params",
+        "master.set_plugin_param",
     ] {
         assert!(capabilities.contains(&method), "{method} missing");
     }
@@ -231,6 +234,20 @@ fn seed_plugins(app: &mut Resonance) {
     });
 }
 
+/// The instance id the app hinted on the most recent master add. The
+/// control path allocates it app-side and mirrors the slot immediately,
+/// so the engine's echo has to carry the same id or it would land as a
+/// second plugin.
+fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
+    std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|c| match c {
+            AudioCommand::AddPluginToMaster { id_hint, .. } => Some(id_hint),
+            _ => None,
+        })
+        .expect("an AddPluginToMaster reached the engine")
+        .expect("the control path hints the instance id")
+}
+
 /// Mirror the engine's `PluginAdded` echo for the master chain, the way
 /// the real engine does after `AudioCommand::AddPluginToMaster`.
 fn echo_master_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str, name: &str) {
@@ -258,17 +275,23 @@ fn add_effect_puts_the_plugin_on_the_master_chain() {
     .result()
     .expect("master.add_effect succeeds");
 
-    let added = std::iter::from_fn(|| rx.try_recv().ok()).any(|c| {
-        matches!(c, AudioCommand::AddPluginToMaster { clap_plugin_id, .. }
-            if clap_plugin_id == "com.resonance.mastering")
-    });
-    assert!(added, "the engine must be told to load the plugin");
-
-    echo_master_plugin(&mut app, 11, "com.resonance.mastering", "Resonance Mastering");
+    // The plugin is on the chain in the same cycle as the reply — the
+    // engine echo only fills in the parameter list (todo #1234's
+    // read-your-writes rule, now shared by all three surfaces).
     let view = summary(&mut app);
     assert_eq!(view.plugins.len(), 1);
     assert_eq!(view.plugins[0].plugin_id, "com.resonance.mastering");
     assert_eq!(view.plugins[0].slot, 0);
+
+    let instance_id = hinted(&rx);
+    echo_master_plugin(
+        &mut app,
+        instance_id,
+        "com.resonance.mastering",
+        "Resonance Mastering",
+    );
+    let view = summary(&mut app);
+    assert_eq!(view.plugins.len(), 1, "the echo fills the slot, not a second one");
 }
 
 #[test]
@@ -425,6 +448,7 @@ fn set_fx_bypass_is_idempotent_and_reflected_in_the_summary() {
 fn master_state_built_over_the_control_api_is_persisted() {
     let mut app = app();
     seed_plugins(&mut app);
+    let rx = app.test_capture_engine();
     let _: MutationAck = call(
         &mut app,
         "master.add_effect",
@@ -432,7 +456,13 @@ fn master_state_built_over_the_control_api_is_persisted() {
     )
     .result()
     .expect("succeeds");
-    echo_master_plugin(&mut app, 11, "com.resonance.mastering", "Resonance Mastering");
+    let instance_id = hinted(&rx);
+    echo_master_plugin(
+        &mut app,
+        instance_id,
+        "com.resonance.mastering",
+        "Resonance Mastering",
+    );
     let _: MutationAck = call(&mut app, "master.set_volume", serde_json::json!({"volume_db": -2.5}))
         .result()
         .expect("succeeds");
@@ -466,6 +496,7 @@ fn chain_edits_are_recorded_on_the_undo_stack() {
     seed_plugins(&mut app);
     let before = app.revision();
 
+    let rx = app.test_capture_engine();
     let _: MutationAck = call(
         &mut app,
         "master.add_effect",
@@ -474,7 +505,13 @@ fn chain_edits_are_recorded_on_the_undo_stack() {
     .result()
     .expect("succeeds");
     assert_eq!(app.revision(), before + 1, "the add is a committed edit");
-    echo_master_plugin(&mut app, 11, "com.resonance.mastering", "Resonance Mastering");
+    let instance_id = hinted(&rx);
+    echo_master_plugin(
+        &mut app,
+        instance_id,
+        "com.resonance.mastering",
+        "Resonance Mastering",
+    );
     assert_eq!(summary(&mut app).plugins.len(), 1);
 
     let rx = app.test_capture_engine();

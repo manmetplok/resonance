@@ -70,6 +70,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::DismissError)
         | Message::Ui(UiMessage::StartNewProject)
         | Message::Ui(UiMessage::SelectTrack(_))
+        | Message::Ui(UiMessage::SelectBus(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)

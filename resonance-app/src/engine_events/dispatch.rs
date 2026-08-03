@@ -423,6 +423,10 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             has_gui,
         ),
         E::MasterPluginRemoved { instance_id } => plugins::master_removed(r, instance_id),
+        E::MasterPluginMoved {
+            instance_id,
+            to_index,
+        } => plugins::master_moved(r, instance_id, to_index),
         E::MasterFxBypassChanged { bypassed } => {
             plugins::master_fx_bypass_changed(r, bypassed)
         }

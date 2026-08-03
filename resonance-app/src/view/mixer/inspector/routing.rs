@@ -2,7 +2,7 @@
 //! in / MIDI out / output pickers, plus read-only Send placeholders.
 //! External-instrument tracks delegate to `external_instrument` instead.
 
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::TrackType;
 
@@ -115,30 +115,12 @@ fn enable_external_row(track_id: resonance_audio::types::TrackId) -> Element<'st
     .into()
 }
 
-/// Read-only routing row used for Send A/B placeholders.
+/// Read-only routing row used for Send A/B placeholders. Shares its
+/// shape with the bus inspector's routing facts.
 fn routing_row(
     label: &'static str,
     value: &'static str,
     muted: bool,
 ) -> Element<'static, Message> {
-    let value_color = if muted { theme::TEXT_4 } else { theme::TEXT_1 };
-    let r_row = row![
-        text(label).size(11).color(theme::TEXT_3),
-        Space::new().width(Length::Fill),
-        text(value).size(12).font(theme::MONO_FONT).color(value_color),
-    ]
-    .align_y(alignment::Vertical::Center)
-    .padding([6, 0]);
-
-    column![
-        r_row,
-        container(Space::new().width(Length::Fill))
-            .height(1)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::LINE_2)),
-                ..Default::default()
-            }),
-    ]
-    .spacing(0)
-    .into()
+    super::widgets::info_row(label, value.to_string(), muted)
 }

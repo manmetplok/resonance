@@ -559,7 +559,28 @@ pub enum FreezeMessage {
 pub enum MasterMessage {
     ToggleMasterFxBypass,
     AddPluginToMaster(ScannedPlugin),
+    /// Add a plugin to the master whose instance id the *app* chose up
+    /// front, mirroring a placeholder slot into `Resonance::master_plugins`
+    /// immediately so the caller can address it without waiting for the
+    /// engine's `MasterPluginAdded` echo. The master twin of
+    /// [`BusMessage::AddPluginToBusWithId`]; `engine_events::plugins::master_added`
+    /// is idempotent, so the echo fills the placeholder's params in
+    /// rather than pushing a duplicate. The GUI never sends this.
+    AddPluginToMasterWithId {
+        instance_id: PluginInstanceId,
+        plugin: ScannedPlugin,
+    },
     RemovePluginFromMaster(PluginInstanceId),
+    /// Reorder the master insert chain: move `instance_id` to
+    /// `to_index`, clamped to the last slot. Sends
+    /// `AudioCommand::MovePluginInMaster` AND mirrors the new order into
+    /// `Resonance::master_plugins`, so a control client reads its own
+    /// write back in the same cycle; the engine's `MasterPluginMoved`
+    /// echo replays the same move and is then a no-op.
+    MovePluginInMaster {
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1089,6 +1110,13 @@ pub enum UiMessage {
     /// Whether the click replaces or extends the multi-selection is read
     /// from the live modifier state ([`ModifiersChanged`]).
     SelectTrack(Option<TrackId>),
+    /// Select (highlight) a BUS strip in the mixer, or deselect. Busses
+    /// need their own message because bus ids and track ids are separate
+    /// id spaces that overlap numerically — `SelectTrack(Some(1))` and
+    /// "bus 1" are different things, and one field cannot hold both.
+    /// Selecting a bus clears the track selection and vice versa: the
+    /// inspector shows exactly one channel.
+    SelectBus(Option<BusId>),
     /// Live keyboard modifier state changed. Tracked so a track-header
     /// click can tell a plain select from an additive (Cmd/Shift) one
     /// without the mouse event carrying modifiers (todo #684).

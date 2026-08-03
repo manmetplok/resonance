@@ -18,7 +18,8 @@ impl ResonanceMcp {
                        every bus lands here, after their own faders and effects — so anything \
                        inserted here acts on the whole mix at once. Read this before deciding \
                        what to put on the master: an empty plugins array means the mix is \
-                       going out completely unprocessed. Read-only.",
+                       going out completely unprocessed. Identity only, though — for what a \
+                       master plugin is actually SET to, read master_plugin_params. Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<master::MasterSummary>()
     )]
@@ -55,7 +56,13 @@ impl ResonanceMcp {
                        \"com.resonance.mastering\" is the one to reach for here. Instrument \
                        plugins are refused — the master has no notes to play. Each call \
                        APPENDS, so calling it twice gives the master two instances (address \
-                       them by occurrence in master_remove_effect). Undoable. \
+                       them by occurrence in master_remove_effect). Returns the slot and \
+                       occurrence it landed on. Undoable. \
+                       \
+                       Adding is only half the job: a plugin sits at its defaults until \
+                       master_set_plugin_param configures it, and the mastering plugin's stages \
+                       all default to OFF, so an unconfigured master chain measures identically \
+                       to an empty one. \
                        \
                        WHY THIS MATTERS: a finished mix typically sits around -23..-18 LUFS \
                        with headroom deliberately left for mastering, and it CANNOT be made \
@@ -93,6 +100,78 @@ impl ResonanceMcp {
         Parameters(params): Parameters<master::RemoveEffectParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke(master::REMOVE_EFFECT, &params).await
+    }
+
+    #[tool(
+        description = "Move an effect to a different position in the master chain. Addressed \
+                       like master_remove_effect — by slot OR by plugin_id plus occurrence — \
+                       plus to_slot for where it should end up. \
+                       \
+                       The chain runs front to back over the finished mix, so order is audible, \
+                       and on the master it decides whether the chain works at all: a limiter \
+                       holding a ceiling must be LAST, because any processor after it can push \
+                       the sum back over the ceiling it exists to hold. Like a bus and unlike a \
+                       track, the master has no instrument pinned at slot 0 — every position is \
+                       a valid destination. to_slot past the end clamps to the end, and moving \
+                       an effect to where it already sits is an accepted no-op. Undoable.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn master_move_effect(
+        &self,
+        Parameters(params): Parameters<master::MoveEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(master::MOVE_EFFECT, &params).await
+    }
+
+    #[tool(
+        description = "List the master chain's effects and every parameter each one exposes — \
+                       id, name, current value, min, max and default. Omit plugin_id for all of \
+                       them. The entries are the same shape track_plugin_params and \
+                       bus_plugin_params return, including slot (0-based chain position, which \
+                       IS processing order) and occurrence (which copy of a repeated effect). \
+                       Every entry is kind: \"effect\" — the master has no instrument. \
+                       \
+                       master_summary reports identity only, so this is the ONLY way to see \
+                       what a master plugin is actually set to. Read it before \
+                       master_set_plugin_param to learn the parameter names and their ranges. \
+                       A plugin whose params array is empty was added moments ago and is still \
+                       initializing — read again.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<master::PluginParamsView>()
+    )]
+    async fn master_plugin_params(
+        &self,
+        Parameters(params): Parameters<master::PluginParamsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(master::PLUGIN_PARAMS, &params).await
+    }
+
+    #[tool(
+        description = "Set one parameter on a plugin inserted on the master — what turns a \
+                       limiter that is merely present into one that actually holds a ceiling. \
+                       param takes the parameter's name (case-insensitive) or its numeric id as \
+                       a string, both from master_plugin_params. plugin_id names which effect; \
+                       omitted it targets the master's first, which is unambiguous only on a \
+                       one-effect chain. A value outside the parameter's min..=max is rejected \
+                       with the range rather than clamped, but a value that rounds onto an \
+                       f32-declared bound (0.1 against a reported 0.10000000149011612) is \
+                       accepted. Repeated sets of the same parameter collapse into one undo \
+                       entry, and a set applies even while the transport is stopped. \
+                       \
+                       \"com.resonance.mastering\" is a chain of stages that each default to \
+                       OFF, so at its defaults it passes the mix through untouched — a plugin \
+                       added and never configured measures the same as no plugin at all. To \
+                       bring a finished mix up to a release level: set \"Limiter On\" to 1, set \
+                       \"Ceiling\" to -1 (dBTP), then raise \"Input Trim\" in dB until \
+                       meter_measure reports the integrated loudness you want. Trim drives the \
+                       signal INTO the limiter; the master fader is post-FX and cannot do this.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn master_set_plugin_param(
+        &self,
+        Parameters(params): Parameters<master::SetPluginParamParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(master::SET_PLUGIN_PARAM, &params).await
     }
 
     #[tool(

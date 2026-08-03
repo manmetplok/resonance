@@ -848,6 +848,30 @@ pub enum AudioCommand {
     RemovePluginFromMaster {
         instance_id: PluginInstanceId,
     },
+    /// Reorder the master insert chain: move `instance_id` to
+    /// `to_index`, shifting the plugins between its old and new slot by
+    /// one. The master twin of
+    /// [`MovePluginInBus`](Self::MovePluginInBus), and audible for the
+    /// same reason — the chain runs front to back over the finished mix.
+    /// On the master it also decides whether the chain works at all: a
+    /// limiter holding a ceiling must be last, because anything after it
+    /// can push the sum back over that ceiling.
+    ///
+    /// `to_index` is clamped to the last slot, so an out-of-range value
+    /// moves the plugin to the end rather than failing. Moving a plugin
+    /// to the slot it already occupies is a no-op that still confirms
+    /// with [`AudioEvent::MasterPluginMoved`](super::AudioEvent::MasterPluginMoved).
+    ///
+    /// Like a bus chain — and unlike a track's — the master has no
+    /// structural slot 0: every entry is an effect over the summed mix,
+    /// so any order is valid.
+    ///
+    /// An `instance_id` that is not on the master chain leaves it
+    /// untouched and reports `AudioEvent::Error`.
+    MovePluginInMaster {
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
     /// Bypass every effect plugin on a track. Instrument plugins
     /// (slot 0 on instrument tracks) keep running.
     SetTrackFxBypass {
