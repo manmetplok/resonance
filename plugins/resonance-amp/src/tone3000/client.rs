@@ -8,6 +8,11 @@ use std::io::Read as _;
 use super::types::{Model, PaginatedResponse, Tone};
 use super::API_BASE;
 
+/// Tone3000 `architecture` filter value for NAM Architecture 2. The API
+/// accepts `1`, `2` or `custom`; we only load A2 profiles in the
+/// browser, so both the search and the model list pin this.
+const ARCHITECTURE_A2: &str = "2";
+
 pub struct Tone3000Client {
     agent: ureq::Agent,
 }
@@ -48,10 +53,15 @@ impl Tone3000Client {
             .query("query", query)
             .query("sort", sort)
             // Underscore-separated multi-value filter per the tone3000
-            // spec. Includes full-rig so bundled amp+cab+mic snapshots
-            // show up alongside bare amp profiles.
-            .query("gears", "amp_full-rig")
-            .query("platform", "nam")
+            // spec. Includes amp-cab so bundled amp+cab+mic snapshots
+            // show up alongside bare amp profiles. (`full-rig` is the
+            // deprecated alias the API normalises to `amp-cab`.)
+            .query("gears", "amp_amp-cab")
+            // `format` supersedes the deprecated `platform` alias.
+            .query("format", "nam")
+            // A2 only. Omitting this falls back to A1 + custom, which is
+            // the legacy default from before A2 existed.
+            .query("architecture", ARCHITECTURE_A2)
             .query("page", page.to_string())
             .query("page_size", "25")
             .call()?;
@@ -70,6 +80,9 @@ impl Tone3000Client {
             .get(&url)
             .header("Authorization", format!("Bearer {token}"))
             .query("tone_id", tone_id.to_string())
+            // Must be repeated here: /models applies the same A1+custom
+            // fallback, so without it an A2 tone lists no models at all.
+            .query("architecture", ARCHITECTURE_A2)
             .query("page_size", "100")
             .call()?;
         check_status(&mut resp)?;

@@ -144,8 +144,9 @@ fn build_authorize_url(redirect_uri: &str, challenge: &str, state: &str) -> Stri
          &code_challenge={challenge}\
          &code_challenge_method=S256\
          &state={state}\
-         &gears=amp\
-         &platform=nam"
+         &gears=amp_amp-cab\
+         &format=nam\
+         &architecture=2"
     )
 }
 
