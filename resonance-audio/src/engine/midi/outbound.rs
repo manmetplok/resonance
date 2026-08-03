@@ -128,10 +128,40 @@ pub fn outbound_track_snapshot(tracks: &IndexMap<TrackId, Track>) -> Vec<Outboun
         .collect()
 }
 
+/// One hardware message scheduled inside a single poll window. The
+/// window's NoteOns and NoteOffs are collected into one list and emitted
+/// in timeline order rather than "every NoteOn, then every NoteOff", so a
+/// pitch that repeats inside the window always releases before it
+/// retriggers (see [`emit_outbound_notes`]).
+struct PendingMsg {
+    /// Timeline sample position this message belongs to.
+    pos: u64,
+    is_note_on: bool,
+    track_id: TrackId,
+    channel: u8,
+    note: u8,
+    /// NoteOn velocity; unused for a NoteOff.
+    velocity: u8,
+    /// For a NoteOn, the note's end position — what goes into `held`. For
+    /// a NoteOff, the `held` end it was scheduled from, used as a
+    /// staleness guard when an overlapping NoteOn re-armed the key first.
+    end: u64,
+}
+
 /// Emit the hardware NoteOn/NoteOff messages for one forward poll window
 /// `[last, curr)`. Pure core of [`poll_timeline_to_midi_output`] —
 /// discontinuity classification (loop wrap / seek / stop) stays with the
 /// caller, which drains `held` before calling this for a fresh segment.
+///
+/// Messages are emitted in timeline order, with a NoteOff sorting ahead of
+/// a NoteOn at the same position, and a NoteOn for a pitch that is still
+/// held releases it first. Both rules exist because the wire has to stay
+/// strictly 1:1 on/off per pitch: a hardware synth that receives two
+/// NoteOns for one key allocates two voices and only releases one of them
+/// on the single NoteOff, leaving a note droning until the next panic.
+/// Back-to-back repeats of the same pitch (note N ending exactly where
+/// note N+1 starts) land in one ~16 ms poll window, so this is the common
+/// case, not an edge case.
 ///
 /// Recorded-span gating (doc #257), per track with `gate_recorded`:
 ///
@@ -179,7 +209,23 @@ pub fn emit_outbound_notes<S: OutboundNoteSink>(
         }
     }
 
-    // 2) NoteOn for any timeline note that starts in `[last, curr)`.
+    // 2) Collect the NoteOffs already due from `held` — before any of this
+    // window's NoteOns can overwrite their entries.
+    let mut pending: Vec<PendingMsg> = held
+        .iter()
+        .filter(|(_, (end, _))| *end >= last && *end < curr)
+        .map(|((tid, note), (end, channel))| PendingMsg {
+            pos: *end,
+            is_note_on: false,
+            track_id: *tid,
+            channel: *channel,
+            note: *note,
+            velocity: 0,
+            end: *end,
+        })
+        .collect();
+
+    // 3) NoteOn for any timeline note that starts in `[last, curr)`.
     for ot in output_tracks {
         for clip in midi_clips.iter().filter(|c| c.track_id == ot.track_id) {
             // Trim is in tick space relative to the clip; the
@@ -223,28 +269,63 @@ pub fn emit_outbound_notes<S: OutboundNoteSink>(
                 {
                     continue;
                 }
+                // A note can be shorter than the poll window, so its own
+                // end may fall inside it. Keep `end` strictly after
+                // `note_start` so the pair never collapses onto one
+                // position (where the NoteOff would sort ahead of its own
+                // NoteOn and strand the note).
+                let note_end = note_end.max(note_start + 1);
                 let velocity_u8 = (note.velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
-                sink.note_on(ot.track_id, ot.channel, note.note, velocity_u8);
-                // If the same pitch is already held (e.g.
-                // overlapping notes on the same track), the
-                // earlier NoteOff time gets clobbered. Most
-                // hardware synths handle a second NoteOn on a
-                // held pitch as "retrigger", which matches
-                // what the user sees on the timeline.
-                held.insert((ot.track_id, note.note), (note_end, ot.channel));
+                pending.push(PendingMsg {
+                    pos: note_start,
+                    is_note_on: true,
+                    track_id: ot.track_id,
+                    channel: ot.channel,
+                    note: note.note,
+                    velocity: velocity_u8,
+                    end: note_end,
+                });
+                if note_end < curr {
+                    pending.push(PendingMsg {
+                        pos: note_end,
+                        is_note_on: false,
+                        track_id: ot.track_id,
+                        channel: ot.channel,
+                        note: note.note,
+                        velocity: 0,
+                        end: note_end,
+                    });
+                }
             }
         }
     }
 
-    // 3) NoteOff for held notes whose end fell in `[last, curr)`.
-    let to_off: Vec<((TrackId, u8), (u64, u8))> = held
-        .iter()
-        .filter(|(_, (end, _))| *end >= last && *end < curr)
-        .map(|(k, v)| (*k, *v))
-        .collect();
-    for ((tid, note), (_end, channel)) in to_off {
-        held.remove(&(tid, note));
-        sink.note_off(tid, channel, note);
+    // 4) Emit in timeline order. `sort_by_key` is stable, so messages at
+    // the same position keep the collection order above (per track, per
+    // clip, per note) — and `false < true` puts a NoteOff ahead of a
+    // NoteOn sharing its position, which is what makes a note ending
+    // exactly where the next one starts release before it retriggers.
+    pending.sort_by_key(|m| (m.pos, m.is_note_on));
+    for msg in pending {
+        let key = (msg.track_id, msg.note);
+        if msg.is_note_on {
+            // A pitch still sounding from an earlier, overlapping note is
+            // released first: without this its NoteOff would be dropped
+            // when the entry below overwrites it, and the synth would be
+            // left holding a voice it never gets an off for.
+            if let Some((_, held_channel)) = held.remove(&key) {
+                sink.note_off(msg.track_id, held_channel, msg.note);
+            }
+            sink.note_on(msg.track_id, msg.channel, msg.note, msg.velocity);
+            held.insert(key, (msg.end, msg.channel));
+        } else if held.get(&key) == Some(&(msg.end, msg.channel)) {
+            // Still describes the note this NoteOff was scheduled for. A
+            // mismatch means an overlapping NoteOn earlier in this window
+            // already released the key and re-armed it, so this one is
+            // stale and would cut the new note short.
+            held.remove(&key);
+            sink.note_off(msg.track_id, msg.channel, msg.note);
+        }
     }
 }
 
@@ -320,6 +401,14 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
     // map is consulted unconditionally inside `emit_outbound_notes`.
     let output_tracks = outbound_track_snapshot(&ctx.tracks.read());
     if output_tracks.is_empty() {
+        // Every output track disappeared (unassigned, deleted or muted)
+        // while notes were sounding: release them here, because nothing
+        // downstream will ever schedule their NoteOff again.
+        let drained: Vec<((TrackId, u8), (u64, u8))> =
+            state.midi_hw.midi_outbound_held.drain().collect();
+        for ((tid, note), (_end, channel)) in drained {
+            state.midi_hw.midi_outputs.send_note_off(tid, channel, note);
+        }
         state.midi_hw.midi_outbound_last_playhead = curr;
         return;
     }
