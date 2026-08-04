@@ -42,6 +42,17 @@ pub struct Track {
     /// [`playback_source`](Self::playback_source) /
     /// [`set_playback_source`](Self::set_playback_source) pair.
     playback_source_recorded: AtomicBool,
+    /// True when this track is in external-instrument mode (doc #169): its
+    /// "instrument" is outboard hardware reached over MIDI, so it has no
+    /// instrument plugin to render and its audio arrives on the return
+    /// input — live while monitoring, or from a recorded take. Such a
+    /// track is created as [`TrackType::Instrument`] but has to take the
+    /// mixer's *audio* path (clips + monitor + all-plugins-are-FX); this
+    /// flag is what tells the audio callback so, since the authoritative
+    /// `ExternalInstruments` map is engine-control-thread-local and not
+    /// reachable from the callback. Mirrored by
+    /// `set_external_instrument_in_place` / `clear_…` so it cannot drift.
+    external: AtomicBool,
     /// If true, track captures a single input channel (duplicated to both L/R).
     /// If false, track captures a stereo pair.
     mono: AtomicBool,
@@ -143,6 +154,7 @@ impl Track {
             record_armed: AtomicBool::new(false),
             monitor_enabled: AtomicBool::new(false),
             playback_source_recorded: AtomicBool::new(false),
+            external: AtomicBool::new(false),
             mono: AtomicBool::new(true),
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
@@ -270,6 +282,18 @@ impl Track {
     pub fn set_playback_source(&self, source: PlaybackSource) {
         self.playback_source_recorded
             .store(source == PlaybackSource::Recorded, Ordering::Relaxed);
+    }
+
+    /// True when the track is in external-instrument mode — see the
+    /// [`external`](Self::external) field. Drives the mixer's per-track
+    /// branch: an external track renders like an audio track even though
+    /// its type is `Instrument`.
+    pub fn is_external(&self) -> bool {
+        self.external.load(Ordering::Relaxed)
+    }
+
+    pub fn set_external(&self, v: bool) {
+        self.external.store(v, Ordering::Relaxed);
     }
 
     pub fn mono(&self) -> bool {

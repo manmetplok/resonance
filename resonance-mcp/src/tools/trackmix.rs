@@ -13,9 +13,12 @@ use resonance_control::methods::{mixer, plugins, track};
 #[tool_router(router = router_trackmix, vis = "pub(crate)")]
 impl ResonanceMcp {
     #[tool(
-        description = "Add a track. kind: instrument | drums | vocal | audio; optional name. \
-                       Returns the new track_id — use it in every later track/mixer/clip call. \
-                       Give instrument tracks a sound with track_add_instrument.",
+        description = "Add a track. kind: instrument | drums | vocal | audio | external; \
+                       optional name. Returns the new track_id — use it in every later \
+                       track/mixer/clip call. Give instrument tracks a sound with \
+                       track_add_instrument. kind \"external\" creates a track driven by \
+                       outboard hardware instead of a plugin; wire it up with \
+                       external_set_midi_out + external_set_return.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<track::AddResult>()
     )]

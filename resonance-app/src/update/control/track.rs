@@ -95,11 +95,12 @@ fn add(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         TrackKind::Drums => ControlTrackKind::Drums,
         TrackKind::Vocal => ControlTrackKind::Vocal,
         TrackKind::Audio => ControlTrackKind::Audio,
+        TrackKind::External => ControlTrackKind::External,
         TrackKind::Bus | TrackKind::Unknown => {
             return reject(
                 request,
                 RpcError::invalid_params(format!(
-                    "cannot add a track of kind {:?}; use instrument|drums|vocal|audio",
+                    "cannot add a track of kind {:?}; use instrument|drums|vocal|audio|external",
                     params.kind
                 )),
             )

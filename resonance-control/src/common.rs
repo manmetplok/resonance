@@ -89,6 +89,11 @@ pub enum TrackKind {
     Vocal,
     Audio,
     Bus,
+    /// An instrument track whose synth is outboard hardware, driven over
+    /// MIDI with its audio coming back on an input. Configured through
+    /// the `external.*` methods; it renders nothing on its own until
+    /// both halves of that route are set.
+    External,
     /// Forward-compat catch-all for kinds introduced by newer peers.
     #[serde(other)]
     Unknown,

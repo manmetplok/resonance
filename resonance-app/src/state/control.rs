@@ -19,6 +19,10 @@ pub enum ControlTrackKind {
     Drums,
     Vocal,
     Audio,
+    /// An instrument track put straight into external-instrument mode
+    /// (doc #169) — the engine-side track is a plain instrument track;
+    /// what makes it external is the config registered on top of it.
+    External,
 }
 
 /// Per-connection session state, created on `Connected` and dropped on

@@ -873,7 +873,7 @@ pub(crate) fn render_block(
             ) {
                 has_audio = true;
             }
-        } else if track.track_type == TrackType::Instrument {
+        } else if track.track_type == TrackType::Instrument && !track.is_external() {
             // -- Instrument track: collect MIDI events, send to instrument plugin --
             collect_midi_events(
                 midi_clips_guard,
@@ -964,6 +964,12 @@ pub(crate) fn render_block(
             }
         } else {
             // -- Audio track: mix clips + monitor input + plugin chain --
+            //
+            // External-instrument tracks land here too (doc #169): their
+            // synth is outboard, so there is no instrument plugin to run
+            // and their audio arrives on the return input — live through
+            // the monitor mix, or as a recorded take through the clip
+            // mix. Every plugin on such a track is an insert effect.
 
             // Mix monitor input for all tracks with monitoring enabled
             // (live path only) — unless the Recorded playback source
