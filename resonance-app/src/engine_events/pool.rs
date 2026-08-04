@@ -59,11 +59,11 @@ pub(super) fn asset_imported(
     // Place the asset as a clip if this file's import queued one. A
     // pool-only import (dialog / `PoolOnly`) queues no clip; a stray
     // asset with no matching entry is left in the pool unplaced.
-    match r.pool_import.take_matching(&original_path) {
+    let placed = match r.pool_import.take_matching(&original_path) {
         Some(PlacementTarget::Track {
             track_id,
             start_sample,
-        }) => place_clip(
+        }) => Some(place_clip(
             r,
             asset_id,
             &project_relative_path,
@@ -72,8 +72,61 @@ pub(super) fn asset_imported(
             duration_frames,
             peaks,
             track_id,
-        ),
-        Some(PlacementTarget::PoolOnly) | None => {}
+        )),
+        Some(PlacementTarget::PoolOnly) | None => None,
+    };
+
+    resolve_control_import(r, &original_path, None, asset_id, placed);
+}
+
+/// Tick this source file off any control-endpoint import job waiting on it
+/// and, for a batch whose last file just landed, build that job's result
+/// from what actually arrived (ba doc #265, `pool.import` / `clip.place`).
+///
+/// The result shape depends on which method started the job — a
+/// `clip.place` reports the placed clip, a `pool.import` the assets — so
+/// the job's `kind` selects it. A batch with any failed file resolves as an
+/// error naming the first failure; its successful files stay in the pool
+/// and are visible to `pool.list`.
+fn resolve_control_import(
+    r: &mut Resonance,
+    source_path: &str,
+    error: Option<&str>,
+    asset_id: AssetId,
+    placed: Option<ClipId>,
+) {
+    let finished = r.control.jobs.tick_import_path(source_path, error);
+    for (job_id, batch_error) in finished {
+        if let Some(message) = batch_error {
+            r.control.jobs.fail(job_id, message);
+            continue;
+        }
+        let kind = r.control.jobs.kind_of(job_id);
+        let result = match kind.as_deref() {
+            Some(resonance_control::methods::clip::PLACE) => match placed {
+                Some(clip_id) => serde_json::to_value(
+                    crate::update::control::place_result(r, clip_id, asset_id),
+                )
+                .unwrap_or(serde_json::Value::Null),
+                // The import succeeded but no clip came out of it — the
+                // queued placement was dropped (its track went away).
+                // Failing is honest; the asset is still in the pool.
+                None => {
+                    r.control.jobs.fail(
+                        job_id,
+                        "the file imported but its placement did not run \
+                         (was the target track deleted?)",
+                    );
+                    continue;
+                }
+            },
+            _ => {
+                let paths = r.control.jobs.import_batch_paths(job_id);
+                serde_json::to_value(crate::update::control::import_result(r, &paths))
+                    .unwrap_or(serde_json::Value::Null)
+            }
+        };
+        r.control.jobs.complete(job_id, result);
     }
 }
 
@@ -103,12 +156,13 @@ pub(super) fn import_failed(r: &mut Resonance, asset_id: AssetId, path: String, 
     let _ = r.pool_import.take_matching(&path);
     r.import_progress.upsert(
         asset_id,
-        path,
+        path.clone(),
         FileImportProgress::Failed {
             reason: reason.clone(),
         },
     );
     r.error_message = Some(format!("Import failed: {reason}"));
+    resolve_control_import(r, &path, Some(&reason), asset_id, None);
 }
 
 /// Place an imported asset as an audio clip on `track_id` at
@@ -129,8 +183,38 @@ fn place_clip(
     duration_frames: u64,
     peaks: Vec<(f32, f32)>,
     track_id: TrackId,
-) {
+) -> ClipId {
     let clip_id = r.compose.fresh_derived_clip_id();
+    place_clip_with_id(
+        r,
+        clip_id,
+        asset_id,
+        project_relative_path,
+        original_path,
+        start_sample,
+        duration_frames,
+        peaks,
+        track_id,
+    );
+    clip_id
+}
+
+/// [`place_clip`] with the clip id supplied by the caller. The control
+/// endpoint's `clip.place` allocates the id up front — the same trick
+/// `notes.create_clip` uses — so its reply can name the clip without
+/// waiting for any engine echo.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn place_clip_with_id(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    asset_id: AssetId,
+    project_relative_path: &str,
+    original_path: &str,
+    start_sample: SamplePos,
+    duration_frames: u64,
+    peaks: Vec<(f32, f32)>,
+    track_id: TrackId,
+) {
     let name = clip_name_from(original_path);
 
     // Resolve the engine-format WAV (which the engine wrote into the

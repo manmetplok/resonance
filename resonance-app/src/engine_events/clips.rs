@@ -44,7 +44,7 @@ pub(super) fn imported(
     }
 }
 
-pub(super) fn deleted(r: &mut Resonance, clip_id: ClipId) {
+pub(crate) fn deleted(r: &mut Resonance, clip_id: ClipId) {
     r.clips.retain(|c| c.id != clip_id);
     // Drop any vocal-audio-clip side-table entries that reference
     // this clip. Without this, an engine-side delete would leave a

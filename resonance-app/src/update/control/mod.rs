@@ -33,6 +33,7 @@ use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
 mod bus;
+mod clip;
 mod edit;
 mod generate;
 mod harmony;
@@ -49,6 +50,7 @@ mod track;
 mod transport;
 mod vocal;
 
+pub(crate) use clip::{import_result, place_result};
 pub(crate) use meter::{mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;
 
@@ -227,6 +229,14 @@ pub fn execute(
     // Piano-roll note editing (todo #1155): notes.insert/edit/delete +
     // create_clip, synthesizing MidiEditor / MidiClip messages.
     if let Some(result) = notes::try_handle(app, request) {
+        return result;
+    }
+
+    // Samples: the media pool (`pool.*`) and audio-clip placement/editing
+    // (`clip.*`). `pool.list` reads only, but like `master.summary` it
+    // describes the OPEN project, so it sits below the gate — with nothing
+    // open the honest answer is `busy`, not an empty pool.
+    if let Some(result) = clip::try_handle(app, conn, request) {
         return result;
     }
 

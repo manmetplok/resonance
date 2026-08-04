@@ -94,8 +94,81 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
         ClipMessage::ResetClipFadeGain { clip_id } => {
             reset_clip_fade_gain(r, clip_id);
         }
+        // Discrete placement edits from the control endpoint — the
+        // pointer-free equivalents of the drag gestures above.
+        ClipMessage::MoveClipTo {
+            clip_id,
+            new_start_sample,
+            new_track_id,
+        } => {
+            move_clip_to(r, clip_id, new_start_sample, new_track_id);
+        }
+        ClipMessage::TrimClipTo {
+            clip_id,
+            new_start_sample,
+            trim_start_frames,
+            trim_end_frames,
+        } => {
+            trim_clip_to(
+                r,
+                clip_id,
+                new_start_sample,
+                trim_start_frames,
+                trim_end_frames,
+            );
+        }
     }
     Task::none()
+}
+
+/// Move an audio clip to an absolute position/track in one step, mutating
+/// the mirror and sending `MoveClip` — what `end_clip_drag` does at the
+/// end of a pointer drag, without the drag.
+pub fn move_clip_to(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    new_start_sample: SamplePos,
+    new_track_id: TrackId,
+) {
+    let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    clip.start_sample = new_start_sample;
+    clip.track_id = new_track_id;
+    let _ = r.engine.send(AudioCommand::MoveClip {
+        clip_id,
+        new_start_sample,
+        new_track_id,
+    });
+}
+
+/// Set an audio clip's trim to absolute frame counts, mutating the mirror
+/// and sending `TrimClip` — the pointer-free `end_clip_trim`. The visible
+/// length is re-derived from `total_frames` exactly as the drag path does,
+/// so the mirror stays consistent whatever the caller passed.
+pub fn trim_clip_to(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    new_start_sample: SamplePos,
+    trim_start_frames: u64,
+    trim_end_frames: u64,
+) {
+    let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) else {
+        return;
+    };
+    clip.start_sample = new_start_sample;
+    clip.trim_start_frames = trim_start_frames;
+    clip.trim_end_frames = trim_end_frames;
+    clip.duration_samples = clip
+        .total_frames
+        .saturating_sub(trim_start_frames)
+        .saturating_sub(trim_end_frames);
+    let _ = r.engine.send(AudioCommand::TrimClip {
+        clip_id,
+        new_start_sample,
+        trim_start_frames,
+        trim_end_frames,
+    });
 }
 
 // -- Audio clip drag/trim ----------------------------------------------

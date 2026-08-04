@@ -11,6 +11,7 @@
 
 pub mod arrange;
 pub mod bus;
+pub mod clip;
 pub mod compose;
 pub mod control;
 pub mod edit;

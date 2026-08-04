@@ -664,6 +664,33 @@ pub enum ClipMessage {
     ResetClipFadeGain {
         clip_id: ClipId,
     },
+    // -- Discrete placement edits (control endpoint `clip.*`, doc #265) --
+    //
+    // The on-canvas equivalents above are drag gestures: a Start/Update/End
+    // triple whose geometry comes from pointer pixels. A remote client has
+    // no pointer, so these two express the same two edits as one atomic,
+    // already-resolved message — the same shape `MidiClipMessage::MoveClipTo`
+    // takes for MIDI clips. Both mutate the live `ClipState` mirror and send
+    // the matching engine command, and both are `UndoAction::Record`.
+    /// Move an audio clip to an absolute timeline position, optionally onto
+    /// another track. No snapping — the caller has already decided where it
+    /// goes.
+    MoveClipTo {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        /// The clip's track after the move; pass its current track to move
+        /// it in time only.
+        new_track_id: TrackId,
+    },
+    /// Set an audio clip's trim (and, with it, its timeline start) to
+    /// absolute frame counts. The caller supplies values already clamped
+    /// against the source length.
+    TrimClipTo {
+        clip_id: ClipId,
+        new_start_sample: SamplePos,
+        trim_start_frames: u64,
+        trim_end_frames: u64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1324,6 +1351,37 @@ pub enum PoolMessage {
     ImportAndPlace {
         paths: Vec<std::path::PathBuf>,
         target: DropTarget,
+    },
+    /// Import one or more files and place them at an EXACT position on an
+    /// existing track — no grid snap (control endpoint `clip.place`, doc
+    /// #265).
+    ///
+    /// [`ImportAndPlace`](Self::ImportAndPlace) snaps the drop position to
+    /// the timeline grid at the current zoom, which is right for a pointer
+    /// and wrong for an API: a client that asked for a sample position
+    /// would get a different one depending on how far the user happened to
+    /// be zoomed in. This variant places where it was told.
+    ImportAndPlaceExact {
+        paths: Vec<std::path::PathBuf>,
+        track_id: TrackId,
+        start_sample: SamplePos,
+    },
+    /// Place an asset that is ALREADY in the pool as a clip, with no
+    /// import step (control endpoint `clip.place`, doc #265).
+    ///
+    /// The GUI has no equivalent — dragging a pool row always goes through
+    /// `ImportAndPlace`, which short-circuits to the same placement once
+    /// it sees the file is known. A remote client placing the same
+    /// one-shot forty times should not re-decode it forty times, so this
+    /// skips straight to the placement. `clip_id` is allocated by the
+    /// caller (the derived-clip range, as `MidiClipMessage::CreateEmptyClip`
+    /// does) so the control reply can name the clip immediately.
+    /// Classified `UndoAction::Record`.
+    PlacePooledAsset {
+        clip_id: ClipId,
+        asset_id: AssetId,
+        track_id: TrackId,
+        start_sample: SamplePos,
     },
 }
 
