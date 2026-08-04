@@ -23,7 +23,7 @@
 use std::path::Path;
 
 use iced::Task;
-use resonance_audio::types::{AudioCommand, SamplePos};
+use resonance_audio::types::{AssetId, AudioCommand, ClipId, SamplePos, TrackId};
 
 use crate::message::{DropTarget, Message, PoolMessage};
 use crate::state::{PendingImport, PlacementTarget};
@@ -93,8 +93,63 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
             let placement = resolve_target(r, target);
             import(r, paths, placement);
         }
+
+        // Control-endpoint placement (doc #265). Both variants below skip
+        // `resolve_target` — its grid snap is a pointer affordance, and a
+        // caller that named a position means it.
+        PoolMessage::ImportAndPlaceExact {
+            paths,
+            track_id,
+            start_sample,
+        } => {
+            import(
+                r,
+                paths,
+                PlacementTarget::Track {
+                    track_id,
+                    start_sample,
+                },
+            );
+        }
+        PoolMessage::PlacePooledAsset {
+            clip_id,
+            asset_id,
+            track_id,
+            start_sample,
+        } => {
+            place_pooled_asset(r, clip_id, asset_id, track_id, start_sample);
+        }
     }
     Task::none()
+}
+
+/// Place an asset already in the pool as a clip, skipping the import
+/// entirely. The asset carries everything a placement needs — its
+/// project-relative WAV, source path, length and thumbnail peaks — so this
+/// is the tail of the import flow with the slow half removed. A missing
+/// asset id is a no-op; the control handler has already rejected that case
+/// and the GUI cannot reach this message at all.
+fn place_pooled_asset(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    asset_id: AssetId,
+    track_id: TrackId,
+    start_sample: SamplePos,
+) {
+    let Some(asset) = r.pool.asset(asset_id).cloned() else {
+        return;
+    };
+    crate::engine_events::pool::place_clip_with_id(
+        r,
+        clip_id,
+        asset_id,
+        &asset.project_relative_path,
+        &asset.original_path,
+        start_sample,
+        asset.duration_frames,
+        asset.thumbnail_peaks.clone(),
+        track_id,
+    );
 }
 
 /// Open the OS multi-file audio picker. The resolved paths (or an empty

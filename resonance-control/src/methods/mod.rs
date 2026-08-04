@@ -11,6 +11,7 @@
 //! Methods documented as taking no params use `()`.
 
 pub mod bus;
+pub mod clip;
 pub mod control;
 pub mod edit;
 pub mod generate;
@@ -20,6 +21,7 @@ pub mod meter;
 pub mod mixer;
 pub mod notes;
 pub mod plugins;
+pub mod pool;
 pub mod project;
 pub mod render;
 pub mod section;
@@ -59,6 +61,8 @@ pub fn capabilities() -> Vec<&'static str> {
         harmony::METHODS,
         generate::METHODS,
         notes::METHODS,
+        pool::METHODS,
+        clip::METHODS,
         vocal::METHODS,
         render::METHODS,
         meter::METHODS,

@@ -60,6 +60,17 @@ pub enum JobToken {
     VocalRender { lanes: Vec<(u64, u64)> },
     /// Completes on bounce/export completion (todo #1157).
     Export { path: std::path::PathBuf },
+    /// A media-pool import started over the control endpoint: `pool.import`,
+    /// or a `clip.place` whose file was not in the pool yet.
+    ///
+    /// The engine decodes/resamples/copies each source file on a worker
+    /// thread and reports back per file, so a batch resolves one path at a
+    /// time via [`JobBoard::tick_import_path`] and the job completes only
+    /// once the LAST of them has landed — the same "don't resolve on the
+    /// first sub-event" rule as [`JobToken::VocalRender`]. Entries are the
+    /// source paths exactly as they were handed to the engine, which is
+    /// what the import events echo back.
+    PoolImport { paths: Vec<String> },
     /// A mix measurement (todo #1219): completes on
     /// `AudioEvent::MixMeasured`, fails on `MixMeasureError`.
     ///
@@ -112,6 +123,16 @@ struct JobEntry {
     /// drained by [`JobBoard::complete_vocal_lane`]; the job completes
     /// when it empties. Always empty for every other token.
     remaining_lanes: HashSet<(u64, u64)>,
+    /// Source paths of a [`JobToken::PoolImport`] batch whose import
+    /// hasn't reported yet. Seeded from the token at [`JobBoard::start`]
+    /// and drained by [`JobBoard::tick_import_path`]; the job resolves
+    /// when it empties. Always empty for every other token.
+    remaining_paths: HashSet<String>,
+    /// First failure reported by any path of a [`JobToken::PoolImport`]
+    /// batch. A batch with a failed file resolves as an error even when
+    /// its other files imported fine — those assets are still in the pool
+    /// and visible to `pool.list`.
+    import_error: Option<String>,
     /// Connection that started the job; its close drops the entry.
     owner: Option<ConnId>,
     /// A terminal status has been delivered at least once — the entry
@@ -162,6 +183,10 @@ impl JobBoard {
             Some(JobToken::VocalRender { lanes }) => lanes.iter().copied().collect(),
             _ => HashSet::new(),
         };
+        let remaining_paths = match &token {
+            Some(JobToken::PoolImport { paths }) => paths.iter().cloned().collect(),
+            _ => HashSet::new(),
+        };
         table.jobs.insert(
             id,
             JobEntry {
@@ -173,6 +198,8 @@ impl JobBoard {
                 error: None,
                 token,
                 remaining_lanes,
+                remaining_paths,
+                import_error: None,
                 owner,
                 fetched: false,
             },
@@ -252,6 +279,54 @@ impl JobBoard {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Tick off one source path of every live [`JobToken::PoolImport`]
+    /// batch that covers it. `error` is `Some` when that file failed to
+    /// import.
+    ///
+    /// Returns the batches whose LAST path just landed, as
+    /// `(job_id, batch_error)` — still un-resolved, because the result
+    /// payload is built from app state (the pool assets that appeared, the
+    /// clip that was placed) which this board cannot see. The caller
+    /// completes or fails each returned id. A `Vec` that comes back empty
+    /// is the normal case for a GUI-driven import.
+    pub fn tick_import_path(&self, path: &str, error: Option<&str>) -> Vec<(u64, Option<String>)> {
+        let mut finished = Vec::new();
+        let mut table = self.table.lock().expect("job table poisoned");
+        for (id, entry) in table.jobs.iter_mut() {
+            if entry.state.is_terminal() || !entry.remaining_paths.remove(path) {
+                continue;
+            }
+            if let Some(error) = error {
+                entry
+                    .import_error
+                    .get_or_insert_with(|| format!("{path}: {error}"));
+            }
+            if entry.remaining_paths.is_empty() {
+                finished.push((*id, entry.import_error.clone()));
+            }
+        }
+        finished
+    }
+
+    /// The method that started a job, without marking it fetched the way
+    /// [`Self::status`] does — completion hooks use it to pick the result
+    /// shape, and a peek must not count as the client collecting it.
+    pub fn kind_of(&self, id: u64) -> Option<String> {
+        let table = self.table.lock().expect("job table poisoned");
+        table.jobs.get(&id).map(|e| e.kind.clone())
+    }
+
+    /// The source paths of a [`JobToken::PoolImport`] job, so the caller
+    /// can collect exactly that batch's assets when building its result.
+    /// Empty for any other job.
+    pub fn import_batch_paths(&self, id: u64) -> Vec<String> {
+        let table = self.table.lock().expect("job table poisoned");
+        match table.jobs.get(&id).and_then(|e| e.token.as_ref()) {
+            Some(JobToken::PoolImport { paths }) => paths.clone(),
+            _ => Vec::new(),
         }
     }
 

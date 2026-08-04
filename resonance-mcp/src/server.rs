@@ -89,7 +89,8 @@ impl ResonanceMcp {
             + Self::router_compose()
             + Self::router_vocal()
             + Self::router_render()
-            + Self::router_meter();
+            + Self::router_meter()
+            + Self::router_clip();
         normalize_schemas(&mut router);
         router
     }

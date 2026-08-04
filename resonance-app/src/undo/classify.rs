@@ -348,6 +348,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ClipMessage::SetClipFadeInCurve { .. }
             | ClipMessage::SetClipFadeOutCurve { .. }
             | ClipMessage::ResetClipFadeGain { .. } => UndoAction::Record,
+            // Control-endpoint placement edits (`clip.move` / `clip.trim`):
+            // atomic and already resolved, so one undo entry each — the
+            // Begin/Commit coalescing above exists only for pointer drags.
+            ClipMessage::MoveClipTo { .. } | ClipMessage::TrimClipTo { .. } => UndoAction::Record,
         },
 
         Message::MidiClip(c) => match c {

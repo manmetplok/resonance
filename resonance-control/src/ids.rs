@@ -77,3 +77,9 @@ id_type!(
     /// `track.remove_send`.
     SendId
 );
+id_type!(
+    /// A media-pool asset id: one imported audio file, already decoded and
+    /// resampled into the project. Reported by `pool.list` and taken by
+    /// `clip.place`.
+    AssetId
+);

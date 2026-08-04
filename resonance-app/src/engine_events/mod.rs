@@ -7,7 +7,7 @@
 
 mod automation;
 mod aux_sends;
-mod clips;
+pub(crate) mod clips;
 mod dispatch;
 mod external_instrument;
 mod freeze;
@@ -15,7 +15,7 @@ pub(crate) mod midi;
 mod midi_map;
 pub mod performance;
 pub(crate) mod plugins;
-mod pool;
+pub(crate) mod pool;
 mod presets;
 mod project_io;
 mod reference;
