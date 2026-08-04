@@ -113,12 +113,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                     id_hint: Some(id),
                     name: name.clone(),
                 },
-                ControlTrackKind::Instrument | ControlTrackKind::Drums => {
-                    AudioCommand::AddInstrumentTrack {
-                        id_hint: Some(id),
-                        name: name.clone(),
-                    }
-                }
+                ControlTrackKind::Instrument
+                | ControlTrackKind::Drums
+                | ControlTrackKind::External => AudioCommand::AddInstrumentTrack {
+                    id_hint: Some(id),
+                    name: name.clone(),
+                },
             };
             let _ = r.engine.send(cmd);
             // Defer name + drum-type application to the engine echo (the
@@ -133,6 +133,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 },
             );
             r.apply_pending_control_track(id);
+            // External mode goes on in the same undo step as the track
+            // itself, exactly as `AddExternalInstrumentTrack` does for
+            // the Add-Track menu — one undo removes both.
+            if matches!(kind, ControlTrackKind::External) {
+                crate::update::external_instrument::enable_external_instrument(r, id);
+            }
         }
         TrackMessage::RequestRemoveTrack(id) => {
             let has_audio = r.clips.iter().any(|c| c.track_id == id);

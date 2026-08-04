@@ -92,6 +92,9 @@ pub struct SectionPlacementView {
 pub struct TrackSummary {
     pub id: TrackId,
     pub name: String,
+    /// `instrument` | `drums` | `vocal` | `audio` | `bus` | `external`.
+    /// `external` means the track drives outboard hardware rather than a
+    /// plugin — the `external.*` methods configure and inspect it.
     pub kind: TrackKind,
     /// Instrument/plugin summary, e.g. `"resonance-wavetable"`. Always
     /// present: an explicit `null` says the track has no sound source,

@@ -31,11 +31,12 @@
 use std::collections::{HashMap, HashSet};
 
 use crossbeam_channel::Sender;
+use indexmap::IndexMap;
 use resonance_common::ExternalInstrument;
 
 use crate::midi_hardware::{enumerate_midi_outputs, MidiOutputRegistry};
 use crate::platform;
-use crate::types::{AudioEvent, TrackId};
+use crate::types::{AudioEvent, Track, TrackId};
 
 use super::thread::{HandlerCtx, HandlerState};
 
@@ -45,13 +46,36 @@ pub type ExternalInstruments = HashMap<TrackId, ExternalInstrument>;
 /// Store or replace the external-instrument config for its track, marking the
 /// track as an external instrument, then echo the stored config back via
 /// `ExternalInstrumentChanged`.
+///
+/// `tracks` is the shared track table: the mode is mirrored onto the track's
+/// own `external` flag, because this map is control-thread-local and the audio
+/// callback needs to know (an external track renders down the audio path, not
+/// the instrument path). A missing track is harmless — the app enables the mode
+/// on a freshly-allocated id whose `AddInstrumentTrack` is still in flight, so
+/// `mark_external_tracks` re-asserts the flag when the track lands.
 pub fn set_external_instrument_in_place(
     instruments: &mut ExternalInstruments,
+    tracks: &IndexMap<TrackId, Track>,
     event_tx: &Sender<AudioEvent>,
     config: ExternalInstrument,
 ) {
     instruments.insert(config.track_id, config);
+    if let Some(track) = tracks.get(&config.track_id) {
+        track.set_external(true);
+    }
     let _ = event_tx.send(AudioEvent::ExternalInstrumentChanged { config });
+}
+
+/// Re-assert every stored external-instrument mode onto the shared track
+/// table. Called after a track is added so a `SetExternalInstrument` that
+/// arrived before its track existed still marks it (the app allocates the id
+/// and enables the mode without waiting for the `InstrumentTrackAdded` echo).
+pub fn mark_external_tracks(instruments: &ExternalInstruments, tracks: &IndexMap<TrackId, Track>) {
+    for track_id in instruments.keys() {
+        if let Some(track) = tracks.get(track_id) {
+            track.set_external(true);
+        }
+    }
 }
 
 /// Remove the external-instrument config for `track_id`, taking the track out
@@ -60,10 +84,14 @@ pub fn set_external_instrument_in_place(
 /// ⇒ no event" convention.
 pub fn clear_external_instrument_in_place(
     instruments: &mut ExternalInstruments,
+    tracks: &IndexMap<TrackId, Track>,
     event_tx: &Sender<AudioEvent>,
     track_id: TrackId,
 ) {
     if instruments.remove(&track_id).is_some() {
+        if let Some(track) = tracks.get(&track_id) {
+            track.set_external(false);
+        }
         let _ = event_tx.send(AudioEvent::ExternalInstrumentCleared { track_id });
     }
 }

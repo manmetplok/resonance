@@ -35,6 +35,7 @@ use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 mod bus;
 mod clip;
 mod edit;
+mod external;
 mod generate;
 mod harmony;
 mod import_midi;
@@ -202,6 +203,15 @@ pub fn execute(
     // Mutating track/mixer namespace (todo #1152): add/rename/delete
     // tracks, volume/pan/mute/solo, add built-in instrument/FX.
     if let Some(result) = track::try_handle(app, request) {
+        return result;
+    }
+
+    // External instruments: the MIDI-out + audio-return route, patch,
+    // latency, monitoring and the realtime capture. `external.devices`
+    // and `external.status` read only, but they sit below the gate on
+    // purpose — they describe the OPEN project's hardware wiring, so
+    // with nothing open the honest answer is `busy`, not an empty list.
+    if let Some(result) = external::try_handle(app, request) {
         return result;
     }
 

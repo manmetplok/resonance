@@ -58,6 +58,11 @@ fn mutating_methods() -> Vec<&'static str> {
         // project that isn't there (ba doc #273).
         methods::master::METHODS,
         methods::bus::METHODS,
+        // `external.devices` / `external.status` mutate nothing, but
+        // they describe the OPEN project's hardware wiring, so with
+        // nothing open the honest answer is `busy` rather than an empty
+        // list that reads like "no external instruments".
+        methods::external::METHODS,
         // `edit.status` reads only, but like `master.summary` it
         // describes the OPEN project's history (ba doc #273).
         methods::edit::METHODS,

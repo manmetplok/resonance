@@ -34,7 +34,14 @@ pub(super) fn chain_group(
     // Instrument tracks render the instrument slot (plugin index 0) plus
     // any FX rows after it. Audio tracks render every plugin as an FX
     // row. Both end with the "+ FX" picker.
-    let is_instrument = track.track_type == TrackType::Instrument;
+    //
+    // External-instrument tracks are typed `Instrument` but their synth
+    // is outboard hardware — there is no plugin slot to fill, and the
+    // mixer runs every plugin on such a track as an insert effect over
+    // the audio return. Offering an instrument slot here would build a
+    // chain the engine renders differently from how it reads.
+    let is_instrument = track.track_type == TrackType::Instrument
+        && !r.external_instruments.contains_key(&track.id);
     if track.plugins.is_empty() {
         col = col.push(empty_chain_row());
     } else {

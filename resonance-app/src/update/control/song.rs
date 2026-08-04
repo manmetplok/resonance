@@ -596,7 +596,7 @@ fn track_summary(app: &Resonance, t: &TrackState) -> TrackSummary {
     TrackSummary {
         id: resonance_control::ids::TrackId(t.id),
         name: t.name.clone(),
-        kind: track_kind(t),
+        kind: track_kind(app, t),
         instrument: instrument_summary(app, t),
         // Sub-tracks of a multi-output instrument: the ONLY signal a
         // client used to get was a `→` in the name (doc #273).
@@ -643,7 +643,16 @@ fn track_output(output: TrackOutput) -> WireTrackOutput {
     }
 }
 
-fn track_kind(t: &TrackState) -> TrackKind {
+fn track_kind(app: &Resonance, t: &TrackState) -> TrackKind {
+    // External-instrument mode has no track-type discriminant — the
+    // engine track is a plain instrument track and the config
+    // registered on top is what makes it external (cf. the
+    // `external_instruments` map). It's reported as its own kind so a
+    // client sees the same spelling `track.add` takes, and knows the
+    // `external.*` methods apply.
+    if app.external_instruments.contains_key(&t.id) {
+        return TrackKind::External;
+    }
     match t.track_type {
         TrackType::Audio => TrackKind::Audio,
         TrackType::Vocal => TrackKind::Vocal,

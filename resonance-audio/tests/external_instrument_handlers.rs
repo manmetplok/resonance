@@ -14,16 +14,30 @@ use std::collections::HashSet;
 
 use crossbeam_channel::unbounded;
 
-use resonance_audio::types::AudioEvent;
+use indexmap::IndexMap;
+use resonance_audio::types::{AudioEvent, Track, TrackId, TrackType};
 use resonance_audio::{
     check_external_instrument_devices_in_place, clear_external_instrument_in_place,
-    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    mark_external_tracks, resend_external_instrument_patch_in_place,
+    set_external_instrument_in_place,
     set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
     ExternalInstruments, MidiOutputRegistry,
 };
 use resonance_common::ExternalInstrument;
 
 const TRACK: u64 = 7;
+
+/// A one-track table for the handlers that mirror external mode onto the
+/// shared track state. External tracks are created as `Instrument` (the
+/// app's `AddExternalInstrumentTrack` sends `AddInstrumentTrack`).
+fn track_table() -> IndexMap<TrackId, Track> {
+    let mut tracks = IndexMap::new();
+    tracks.insert(
+        TRACK,
+        Track::with_type(TRACK, "ext".into(), TrackType::Instrument),
+    );
+    tracks
+}
 
 fn names(items: &[&str]) -> HashSet<String> {
     items.iter().map(|s| s.to_string()).collect()
@@ -32,11 +46,12 @@ fn names(items: &[&str]) -> HashSet<String> {
 #[test]
 fn set_stores_config_and_emits_changed() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
 
     let mut config = ExternalInstrument::new(TRACK);
     config.program = Some(4);
-    set_external_instrument_in_place(&mut instruments, &tx, config);
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, config);
 
     match rx.try_recv() {
         Ok(AudioEvent::ExternalInstrumentChanged { config: echoed }) => {
@@ -55,12 +70,13 @@ fn set_stores_config_and_emits_changed() {
 #[test]
 fn set_replaces_existing_config() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, _rx) = unbounded::<AudioEvent>();
 
-    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
     let mut replacement = ExternalInstrument::new(TRACK);
     replacement.bank = Some(128);
-    set_external_instrument_in_place(&mut instruments, &tx, replacement);
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, replacement);
 
     assert_eq!(instruments.len(), 1, "still one entry for the track");
     assert_eq!(instruments[&TRACK], replacement, "config replaced wholesale");
@@ -69,16 +85,17 @@ fn set_replaces_existing_config() {
 #[test]
 fn clear_emits_only_when_present() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
 
     // Absent track: silent no-op.
-    clear_external_instrument_in_place(&mut instruments, &tx, TRACK);
+    clear_external_instrument_in_place(&mut instruments, &tracks, &tx, TRACK);
     assert!(rx.try_recv().is_err(), "clearing an absent track emits nothing");
 
-    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
     let _ = rx.try_recv(); // drain the Changed echo
 
-    clear_external_instrument_in_place(&mut instruments, &tx, TRACK);
+    clear_external_instrument_in_place(&mut instruments, &tracks, &tx, TRACK);
     match rx.try_recv() {
         Ok(AudioEvent::ExternalInstrumentCleared { track_id }) => assert_eq!(track_id, TRACK),
         other => panic!("expected ExternalInstrumentCleared, got {other:?}"),
@@ -89,9 +106,10 @@ fn clear_emits_only_when_present() {
 #[test]
 fn set_latency_updates_and_echoes() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
     let _ = rx.try_recv();
 
     set_external_instrument_latency_in_place(&mut instruments, &tx, TRACK, -256);
@@ -117,12 +135,13 @@ fn set_latency_no_op_when_not_external() {
 #[test]
 fn patch_updates_config_and_reports_offline_route_preserved() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
     // Empty registry: no device assigned -> the patch send finds no live
     // connection and reports the MIDI output as offline.
     let mut outputs = MidiOutputRegistry::new();
 
-    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
     let _ = rx.try_recv();
 
     set_external_instrument_patch_in_place(
@@ -183,6 +202,7 @@ fn patch_no_op_when_not_external() {
 #[test]
 fn resend_reports_offline_route_preserved() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
     // Empty registry: no device assigned -> the re-send finds no live
     // connection and reports the MIDI output as offline.
@@ -191,7 +211,7 @@ fn resend_reports_offline_route_preserved() {
     let mut config = ExternalInstrument::new(TRACK);
     config.bank = Some(128);
     config.program = Some(42);
-    set_external_instrument_in_place(&mut instruments, &tx, config);
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, config);
     let _ = rx.try_recv(); // drain the Changed echo from the initial store
 
     resend_external_instrument_patch_in_place(
@@ -222,12 +242,13 @@ fn resend_reports_offline_route_preserved() {
 #[test]
 fn resend_no_op_when_no_patch_selected() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
     let mut outputs = MidiOutputRegistry::new();
 
     // External instrument with neither bank nor program -> nothing to send,
     // so no offline event even though the registry is empty.
-    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
     let _ = rx.try_recv();
 
     resend_external_instrument_patch_in_place(&instruments, &tx, &mut outputs, TRACK, 0, None);
@@ -254,8 +275,9 @@ fn resend_no_op_when_not_external() {
 #[test]
 fn check_devices_reports_each_missing_endpoint() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
-    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
     let _ = rx.try_recv();
 
     // MIDI out present, return input gone.
@@ -303,6 +325,7 @@ fn check_devices_reports_each_missing_endpoint() {
 #[test]
 fn check_devices_silent_when_present_or_not_external() {
     let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
     let (tx, rx) = unbounded::<AudioEvent>();
 
     // Not an external instrument -> no-op even with missing devices.
@@ -318,7 +341,7 @@ fn check_devices_silent_when_present_or_not_external() {
     assert!(rx.try_recv().is_err(), "non-external track is a no-op");
 
     // External instrument, both endpoints present -> silent.
-    set_external_instrument_in_place(&mut instruments, &tx, ExternalInstrument::new(TRACK));
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
     let _ = rx.try_recv();
     check_external_instrument_devices_in_place(
         &instruments,
@@ -354,4 +377,54 @@ fn patch_messages_build_bank_select_then_program_change() {
 fn patch_messages_empty_when_nothing_selected() {
     let config = ExternalInstrument::new(TRACK);
     assert!(config.patch_messages(0).is_empty());
+}
+
+/// External mode is mirrored onto the track itself so the audio callback
+/// can see it: the `ExternalInstruments` map lives on the engine control
+/// thread and the mixer's per-track branch has to know that an
+/// `Instrument`-typed track renders down the *audio* path (clips +
+/// monitor), which is what makes a recorded take audible.
+#[test]
+fn set_marks_the_track_external_and_clear_unmarks_it() {
+    let mut instruments = ExternalInstruments::new();
+    let tracks = track_table();
+    let (tx, _rx) = unbounded::<AudioEvent>();
+
+    assert!(
+        !tracks[&TRACK].is_external(),
+        "a fresh instrument track is not external"
+    );
+
+    set_external_instrument_in_place(&mut instruments, &tracks, &tx, ExternalInstrument::new(TRACK));
+    assert!(tracks[&TRACK].is_external(), "set marks the track external");
+
+    clear_external_instrument_in_place(&mut instruments, &tracks, &tx, TRACK);
+    assert!(
+        !tracks[&TRACK].is_external(),
+        "clear takes the track back out of external mode"
+    );
+}
+
+/// The app allocates the track id itself and enables external mode without
+/// waiting for the `InstrumentTrackAdded` echo, so the config can be stored
+/// before the track exists. `mark_external_tracks` re-asserts it once the
+/// track lands — without it the mode would be stored but inaudible.
+#[test]
+fn mark_re_asserts_mode_for_a_late_arriving_track() {
+    let mut instruments = ExternalInstruments::new();
+    let (tx, _rx) = unbounded::<AudioEvent>();
+
+    // Track doesn't exist yet: storing the config is still fine.
+    let empty = IndexMap::new();
+    set_external_instrument_in_place(&mut instruments, &empty, &tx, ExternalInstrument::new(TRACK));
+    assert!(instruments.contains_key(&TRACK), "config stored regardless");
+
+    // The track lands a beat later.
+    let tracks = track_table();
+    assert!(!tracks[&TRACK].is_external(), "arrives unmarked");
+    mark_external_tracks(&instruments, &tracks);
+    assert!(
+        tracks[&TRACK].is_external(),
+        "stored mode is re-asserted onto the new track"
+    );
 }

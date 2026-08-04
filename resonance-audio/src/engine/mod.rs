@@ -70,7 +70,8 @@ mod external_instrument;
 mod external_instrument_ping;
 pub use external_instrument::{
     check_external_instrument_devices_in_place, clear_external_instrument_in_place,
-    resend_external_instrument_patch_in_place, set_external_instrument_in_place,
+    mark_external_tracks, resend_external_instrument_patch_in_place,
+    set_external_instrument_in_place,
     set_external_instrument_latency_in_place, set_external_instrument_patch_in_place,
     ExternalInstruments,
 };
