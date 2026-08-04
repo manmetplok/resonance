@@ -1,0 +1,23 @@
+[package]
+name = "resonance-gate"
+version = "0.1.0"
+edition = "2021"
+description = "A stereo noise gate / downward expander CLAP plugin with an external sidechain key"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+# Editor ships by default so the bundled .clap has a GUI.
+# Turn it off (`--no-default-features`) for a headless DSP build.
+default = ["editor"]
+editor = ["dep:wayland-plugin-gui", "dep:egui", "resonance-plugin/editor-widgets"]
+
+[dependencies]
+resonance-plugin = { path = "../../resonance-plugin" }
+resonance-common = { path = "../../resonance-common" }
+resonance-dsp = { path = "../../resonance-dsp" }
+serde_json.workspace = true
+
+wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+egui = { workspace = true, optional = true }

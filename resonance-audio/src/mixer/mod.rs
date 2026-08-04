@@ -136,6 +136,8 @@ pub fn render_aux_with_comp_for_test(
         false,
         active_busses,
         &aux_sends,
+        &[],
+        &mut SidechainTaps::new(frames),
         0,
         frames,
         &mut track_buf_l,
@@ -168,6 +170,7 @@ pub struct RenderBenchHarness {
     plugins: indexmap::IndexMap<PluginInstanceId, parking_lot::Mutex<crate::clap_host::SyncClapInstance>>,
     tempo_map: TempoMap,
     aux_sends: Vec<AuxSend>,
+    sidechain: SidechainTaps,
     latency: crate::latency::LatencyComp,
     automation: crate::engine::AutomationSnapshot,
     data: Vec<f32>,
@@ -206,6 +209,7 @@ impl RenderBenchHarness {
             plugins: indexmap::IndexMap::new(),
             tempo_map,
             aux_sends,
+            sidechain: SidechainTaps::new(frames),
             latency: crate::latency::LatencyComp::empty(),
             automation: crate::engine::AutomationSnapshot::default(),
             data: vec![0.0; frames * 2],
@@ -257,6 +261,8 @@ impl RenderBenchHarness {
             false,
             active_busses,
             &self.aux_sends,
+            &[],
+            &mut self.sidechain,
             playhead,
             frames,
             &mut self.track_buf_l,
@@ -579,6 +585,10 @@ pub(crate) fn mix_audio(
     // when the monitored source is a reference. Both publish their snapshot
     // into `shared` for the control thread's `PollABMeters` reply.
     ab_meters: &mut ABMeters,
+    // Per-source key capture buffers (doc: `types::sidechain`). Owned by
+    // the audio thread and pre-allocated, so routing a sidechain never
+    // allocates on the realtime path.
+    sidechain: &mut SidechainTaps,
 ) {
     resonance_common::flush_denormals();
 
@@ -860,6 +870,13 @@ pub(crate) fn mix_audio(
     let aux_guard = shared.aux_sends.load();
     let aux_ref: &[AuxSend] = &aux_guard;
 
+    // Sidechain routes for this block, plus the bank swap that makes
+    // every key read the PREVIOUS block's capture (see `types::sidechain`
+    // for why the key is deliberately one block old).
+    let sidechain_guard = shared.sidechain_routes.load();
+    let sidechain_routes: &[SidechainRoute] = &sidechain_guard;
+    sidechain.begin_block(sidechain_routes);
+
     // Snapshot the parameter-automation lanes once per buffer (wait-free,
     // published by the engine thread on lane edits). Held across both
     // seam sub-blocks and the master pass so the whole buffer agrees.
@@ -912,6 +929,8 @@ pub(crate) fn mix_audio(
             any_solo,
             active_busses,
             aux_ref,
+            sidechain_routes,
+            sidechain,
             playhead,
             head_frames,
             track_buf_l,
@@ -948,6 +967,8 @@ pub(crate) fn mix_audio(
             any_solo,
             active_busses,
             aux_ref,
+            sidechain_routes,
+            sidechain,
             loop_in,
             tail_frames,
             track_buf_l,
@@ -980,6 +1001,8 @@ pub(crate) fn mix_audio(
             any_solo,
             active_busses,
             aux_ref,
+            sidechain_routes,
+            sidechain,
             playhead,
             frames,
             track_buf_l,

@@ -92,6 +92,33 @@ impl ClapInstance {
     /// This is the multi-output fast path used by the mixer for the drum
     /// plugin's per-group outputs.
     pub fn process_multi(&mut self, outputs: &mut [StereoBufMut<'_>], frames: usize) {
+        self.process_multi_with_key(outputs, None, frames);
+    }
+
+    /// True when the plugin declares an external sidechain (key) input
+    /// port alongside its main input. Only such a plugin can be handed a
+    /// key by [`ClapInstance::process_multi_with_key`]; for anything else
+    /// the key is ignored, because connecting a port the plugin never
+    /// declared is a spec violation the plugin is entitled to trust.
+    pub fn has_sidechain_input(&self) -> bool {
+        self.input_port_count >= 2
+    }
+
+    /// [`ClapInstance::process_multi`] with an optional external sidechain
+    /// (key) signal.
+    ///
+    /// `key` is a stereo pair covering at least `frames` samples. It is
+    /// passed as a **second, non-main CLAP input port**, which is what the
+    /// plugin's own `SIDECHAIN_INPUT` declaration opted into; the plugin
+    /// reads it for detection and never writes to it. A `key` handed to a
+    /// plugin that declares no sidechain port is dropped rather than
+    /// connected.
+    pub fn process_multi_with_key(
+        &mut self,
+        outputs: &mut [StereoBufMut<'_>],
+        key: Option<(&[f32], &[f32])>,
+        frames: usize,
+    ) {
         if !self.active || frames == 0 {
             return;
         }
@@ -106,13 +133,37 @@ impl ClapInstance {
             .unwrap_or((ptr::null_mut(), ptr::null_mut()));
         let mut in_ptrs: [*mut f32; 2] = [main_left_ptr, main_right_ptr];
 
-        let mut audio_in = clap_audio_buffer {
-            data32: in_ptrs.as_mut_ptr(),
-            data64: ptr::null_mut(),
-            channel_count: 2,
-            latency: 0,
-            constant_mask: 0,
+        // Port 0 is the main input. Port 1, when present, is the external
+        // key — only connected for a plugin that declared one AND when the
+        // caller supplied a signal, so the count below stays 1 in every
+        // other case and the existing path is untouched.
+        let key = key.filter(|_| self.has_sidechain_input());
+        let mut key_ptrs: [*mut f32; 2] = match key {
+            // Cast away const: CLAP's buffer struct is shared between
+            // inputs and outputs so it has no const variant. The plugin
+            // contract for an input port is read-only, and the bridge in
+            // `resonance-plugin` hands the key out as `&[f32]`.
+            Some((l, r)) => [l.as_ptr() as *mut f32, r.as_ptr() as *mut f32],
+            None => [ptr::null_mut(), ptr::null_mut()],
         };
+
+        let mut audio_in = [
+            clap_audio_buffer {
+                data32: in_ptrs.as_mut_ptr(),
+                data64: ptr::null_mut(),
+                channel_count: 2,
+                latency: 0,
+                constant_mask: 0,
+            },
+            clap_audio_buffer {
+                data32: key_ptrs.as_mut_ptr(),
+                data64: ptr::null_mut(),
+                channel_count: 2,
+                latency: 0,
+                constant_mask: 0,
+            },
+        ];
+        let audio_inputs_count: u32 = if key.is_some() { 2 } else { 1 };
 
         // Refresh each output port's pointer array to point at the
         // caller's buffer slices for this block. We iterate up to the
@@ -216,9 +267,9 @@ impl ClapInstance {
             steady_time: -1,
             frames_count: frames as u32,
             transport: transport_ptr,
-            audio_inputs: &mut audio_in as *mut clap_audio_buffer as *const clap_audio_buffer,
+            audio_inputs: audio_in.as_mut_ptr() as *const clap_audio_buffer,
             audio_outputs: self.audio_out_buffers.as_mut_ptr(),
-            audio_inputs_count: 1,
+            audio_inputs_count,
             audio_outputs_count: active_out_count as u32,
             in_events: &in_events,
             out_events: &out_events,

@@ -763,6 +763,8 @@ pub(crate) fn render_block(
     any_solo: bool,
     active_busses: usize,
     aux_sends: &[AuxSend],
+    sidechain_routes: &[SidechainRoute],
+    sidechain: &mut SidechainTaps,
     playhead: u64,
     frames: usize,
     track_buf_l: &mut [f32],
@@ -988,16 +990,35 @@ pub(crate) fn render_block(
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = strategy.lock_fx(mutex) {
                             apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
-                            inst.0.process(
-                                &mut track_buf_l[..frames],
-                                &mut track_buf_r[..frames],
-                                frames,
-                            );
+                            // An external key, when this instance is
+                            // routed one and actually declares a key
+                            // port. `sidechain` is borrowed immutably
+                            // here and mutably at the capture below, so
+                            // the two never overlap.
+                            let key = sidechain.key_for(sidechain_routes, plugin_id);
+                            let mut outs = [StereoBufMut {
+                                left: &mut track_buf_l[..frames],
+                                right: &mut track_buf_r[..frames],
+                            }];
+                            inst.0.process_multi_with_key(&mut outs, key, frames);
                             has_audio = true;
                         }
                     }
                 }
             }
+        }
+
+        // Capture this track post-FX and pre-fader for anything keying
+        // off it. Costs a `copy_from_slice` only for tracks that are
+        // actually routed somewhere as a key.
+        let tap_source = SendSource::Track(track.id);
+        if sidechain.is_tapped(tap_source) {
+            sidechain.capture(
+                tap_source,
+                &track_buf_l[..frames],
+                &track_buf_r[..frames],
+                frames,
+            );
         }
 
         // Plugin-delay compensation: delay the post-chain signal so

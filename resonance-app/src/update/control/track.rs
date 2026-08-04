@@ -49,6 +49,8 @@ pub(super) fn try_handle(
         track::SET_SEND => set_send(app, request),
         track::REMOVE_SEND => remove_send(app, request),
         track::SET_PLUGIN_PARAM => set_plugin_param(app, request),
+        track::SET_SIDECHAIN => set_sidechain(app, request),
+        track::CLEAR_SIDECHAIN => clear_sidechain(app, request),
         mixer::SET_VOLUME => set_volume(app, request),
         mixer::SET_VOLUME_DB => set_volume_db(app, request),
         mixer::SET_PAN => set_pan(app, request),
@@ -1186,6 +1188,158 @@ fn set_solo(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
     let task = super::run_via_update(
         app,
         Message::Track(TrackMessage::ToggleSolo(params.track_id.0)),
+    );
+    (ack(app, request), task)
+}
+
+
+// ---------------------------------------------------------------------------
+// track.set_sidechain / track.clear_sidechain
+// ---------------------------------------------------------------------------
+
+/// Resolve the plugin a sidechain request addresses, the same way
+/// `track.set_plugin_param` does: an explicit `plugin_id` (+ optional
+/// `occurrence`), else the track's instrument.
+fn resolve_keyed_plugin(
+    app: &Resonance,
+    t: &crate::state::TrackState,
+    plugin_id: Option<&str>,
+    occurrence: Option<u32>,
+) -> Result<resonance_audio::types::PluginInstanceId, RpcError> {
+    let entries = super::song::plugin_entries(app, t);
+    let occurrence = occurrence.unwrap_or(0);
+    let entry = match plugin_id {
+        Some(id) => entries
+            .iter()
+            .find(|e| e.plugin_id == id && e.occurrence == occurrence),
+        None => entries
+            .iter()
+            .find(|e| e.kind == track::PluginKind::Instrument),
+    };
+    match entry {
+        Some(entry) => instance_for(t, &entry.plugin_id, entry.occurrence).ok_or_else(|| {
+            RpcError::not_found(format!(
+                "plugin {:?} vanished from track {} between lookup and routing",
+                entry.plugin_id, t.id
+            ))
+        }),
+        None => Err(match plugin_id {
+            Some(id) => super::song::unknown_plugin_on_track(app, t, id, occurrence),
+            None => RpcError::invalid_params(format!(
+                "track {} has no instrument; name a plugin_id (it carries: [{}])",
+                t.id,
+                entries
+                    .iter()
+                    .map(|e| e.plugin_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }),
+    }
+}
+
+/// `track.set_sidechain` — feed another track's or bus's audio into a
+/// plugin's external key input.
+///
+/// The key replaces the plugin's DETECTOR source only; it never reaches
+/// the output. Plugins that declare no key port (most of them) store the
+/// route inertly — the mixer only connects a port the plugin actually
+/// declared — so this is not rejected on plugin kind, which would break
+/// the moment an instance's plugin were swapped.
+fn set_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track::SetSidechainParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0).cloned() else {
+        return not_found_track(request, params.track_id.0);
+    };
+
+    // Exactly one source.
+    let source = match (params.source_track_id, params.source_bus_id) {
+        (Some(track), None) => {
+            if find_track(app, track.0).is_none() {
+                return reject(
+                    request,
+                    RpcError::not_found(format!("no source track with id {track}")),
+                );
+            }
+            resonance_audio::types::SendSource::Track(track.0)
+        }
+        (None, Some(bus)) => {
+            if !app.registry.busses.iter().any(|b| b.id == bus.0) {
+                return reject(
+                    request,
+                    RpcError::not_found(format!("no source bus with id {bus}")),
+                );
+            }
+            resonance_audio::types::SendSource::Bus(bus.0)
+        }
+        (Some(_), Some(_)) => {
+            return reject(
+                request,
+                RpcError::invalid_params(
+                    "give exactly one of source_track_id or source_bus_id, not both",
+                ),
+            )
+        }
+        (None, None) => {
+            return reject(
+                request,
+                RpcError::invalid_params(
+                    "track.set_sidechain needs a source_track_id or a source_bus_id",
+                ),
+            )
+        }
+    };
+
+    let instance_id = match resolve_keyed_plugin(
+        app,
+        &t,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+    ) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+
+    let task = super::run_via_update(
+        app,
+        Message::Plugin(PluginMessage::SetPluginSidechain {
+            instance_id,
+            source: Some(source),
+            enabled: params.enabled,
+        }),
+    );
+    (ack(app, request), task)
+}
+
+/// `track.clear_sidechain` — drop a plugin's key route so it falls back
+/// to keying off its own input.
+fn clear_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track::ClearSidechainParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0).cloned() else {
+        return not_found_track(request, params.track_id.0);
+    };
+    let instance_id = match resolve_keyed_plugin(
+        app,
+        &t,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+    ) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+    let task = super::run_via_update(
+        app,
+        Message::Plugin(PluginMessage::SetPluginSidechain {
+            instance_id,
+            source: None,
+            enabled: false,
+        }),
     );
     (ack(app, request), task)
 }

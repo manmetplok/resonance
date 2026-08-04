@@ -3,6 +3,7 @@ use std::sync::Arc;
 use resonance_plugin::*;
 
 pub mod dsp;
+pub mod gate;
 pub mod params;
 pub mod presets;
 pub mod sync;
@@ -148,6 +149,20 @@ impl ResonancePlugin for ResonanceDelay {
                 mod_rate,
                 mod_depth,
                 freeze,
+                gate_duck: gate::GateDuckParams {
+                    gate_on: self.params.gate_on.value(),
+                    gate_period: gate::gate_period_samples(
+                        self.params.gate_rate.value() as usize,
+                        tempo,
+                        self.sample_rate,
+                    ),
+                    gate_width: self.params.gate_width.value(),
+                    gate_edge: self.params.gate_shape.value(),
+                    gate_depth: self.params.gate_depth.value(),
+                    duck_amount: self.params.duck_amount.value(),
+                    duck_threshold_db: self.params.duck_threshold.value(),
+                    duck_release_ms: self.params.duck_release.value(),
+                },
             },
         );
 

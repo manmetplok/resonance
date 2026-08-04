@@ -14,7 +14,14 @@ pub(super) fn dispatch_busses(
         AudioCommand::AddBus { id_hint, name } => {
             busses::handle_add_bus(ctx, state, id_hint, name)
         }
-        AudioCommand::RemoveBus { bus_id } => busses::handle_remove_bus(ctx, bus_id),
+        AudioCommand::RemoveBus { bus_id } => {
+            busses::handle_remove_bus(ctx, bus_id);
+            crate::engine::sidechain::drop_source_routes(
+                ctx,
+                state,
+                crate::types::SendSource::Bus(bus_id),
+            );
+        }
         AudioCommand::SetBusVolume { bus_id, volume } => {
             busses::handle_set_bus_volume(ctx, bus_id, volume)
         }

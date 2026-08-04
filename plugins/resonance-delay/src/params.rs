@@ -1,6 +1,6 @@
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 14;
+pub const PARAM_COUNT: usize = 22;
 
 pub struct DelayParams {
     pub sync: BoolParam,
@@ -17,6 +17,18 @@ pub struct DelayParams {
     pub mod_rate: FloatParam,
     pub mod_depth: FloatParam,
     pub freeze: BoolParam,
+    // -- Wet gate + duck (see `crate::gate`) -----------------------------
+    //
+    // Both shape the wet path only, after the tap and before the mix, so
+    // the feedback loop never re-records a chopped or ducked signal.
+    pub gate_on: BoolParam,
+    pub gate_rate: IntParam,
+    pub gate_width: FloatParam,
+    pub gate_shape: FloatParam,
+    pub gate_depth: FloatParam,
+    pub duck_amount: FloatParam,
+    pub duck_threshold: FloatParam,
+    pub duck_release: FloatParam,
 }
 
 impl DelayParams {
@@ -36,6 +48,14 @@ impl DelayParams {
             11 => &self.mod_rate,
             12 => &self.mod_depth,
             13 => &self.freeze,
+            14 => &self.gate_on,
+            15 => &self.gate_rate,
+            16 => &self.gate_width,
+            17 => &self.gate_shape,
+            18 => &self.gate_depth,
+            19 => &self.duck_amount,
+            20 => &self.duck_threshold,
+            21 => &self.duck_release,
             _ => &self.sync,
         }
     }
@@ -171,6 +191,93 @@ impl Default for DelayParams {
             .with_string_to_value(formatters::s2v_f32_percentage()),
 
             freeze: BoolParam::new("freeze", "Freeze", false),
+
+            gate_on: BoolParam::new("gate_on", "Gate", false),
+
+            // Same division table as the delay time, so "1/8 delay,
+            // 1/16 gate" reads the way it sounds.
+            gate_rate: IntParam::new(
+                "gate_rate",
+                "Gate Rate",
+                7,
+                IntRange::Linear { min: 0, max: 11 },
+            ),
+
+            // Duty cycle: how much of each period the wet is open for.
+            gate_width: FloatParam::new(
+                "gate_width",
+                "Gate Width",
+                0.5,
+                FloatRange::Linear {
+                    min: 0.05,
+                    max: 0.95,
+                },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            // Edge ramp as a fraction of the period. 0 is a hard chop
+            // (which clicks on sustained material); the default rounds
+            // the corners just enough to stay clean.
+            gate_shape: FloatParam::new(
+                "gate_shape",
+                "Gate Shape",
+                0.05,
+                FloatRange::Linear { min: 0.0, max: 0.5 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            // How far the closed phase attenuates. 1.0 is silent; less
+            // leaves the tail audible underneath the rhythm.
+            gate_depth: FloatParam::new(
+                "gate_depth",
+                "Gate Depth",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            // 0 disables ducking; 1 is `DUCK_MAX_GR_DB` of reduction
+            // while the dry input is over the threshold.
+            duck_amount: FloatParam::new(
+                "duck_amount",
+                "Duck",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            duck_threshold: FloatParam::new(
+                "duck_threshold",
+                "Duck Threshold",
+                -24.0,
+                FloatRange::Linear {
+                    min: -60.0,
+                    max: 0.0,
+                },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            duck_release: FloatParam::new(
+                "duck_release",
+                "Duck Release",
+                200.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 1000.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
         }
     }
 }

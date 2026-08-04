@@ -41,7 +41,12 @@ pub(super) fn dispatch_tracks(
             name,
         ),
         AudioCommand::RemoveTrack { track_id } => {
-            tracks::handle_remove_track(ctx, state, track_id)
+            tracks::handle_remove_track(ctx, state, track_id);
+            crate::engine::sidechain::drop_source_routes(
+                ctx,
+                state,
+                crate::types::SendSource::Track(track_id),
+            );
         }
         AudioCommand::SetTrackRecordArm { track_id, armed } => {
             tracks::handle_set_track_record_arm(ctx, track_id, armed)

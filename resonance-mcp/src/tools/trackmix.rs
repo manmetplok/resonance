@@ -2,6 +2,7 @@
 //! parameters. All mutations are normal undoable edits.
 
 use crate::server::ResonanceMcp;
+use resonance_control::MutationAck;
 use rmcp::handler::server::tool::schema_for_output;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -390,5 +391,51 @@ impl ResonanceMcp {
         Parameters(params): Parameters<mixer::SetSoloParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke(mixer::SET_SOLO, &params).await
+    }
+
+    #[tool(
+        description = "Route another track's or bus's audio into a plugin's external SIDECHAIN \
+                       KEY — the detector input. This is what \"duck the pad from the kick\" \
+                       needs; it cannot be done with plugin parameters. \
+                       \
+                       The plugin is addressed like track_set_plugin_param: track_id plus an \
+                       optional plugin_id (+ occurrence), defaulting to the track's instrument. \
+                       Name the key source with EITHER source_track_id OR source_bus_id. \
+                       enabled defaults to true; false keeps the routing configured but stops \
+                       delivering the key, so the plugin falls back to keying off its own input. \
+                       \
+                       Only the DETECTOR changes: the key never reaches the output, so routing a \
+                       kick into a pad's compressor makes the pad duck, it does not add kick to \
+                       the pad. Two plugins currently read a key — resonance-compressor (ducking) \
+                       and resonance-gate (open/close from another source). A route onto a plugin \
+                       with no key port is stored but does nothing, because the plugin at an \
+                       instance can be swapped; it is not an error. \
+                       \
+                       The key is delivered one audio block late by design (~2.7 ms at the \
+                       default quantum), which keeps the result independent of track order and \
+                       makes a track keying off itself legal rather than a feedback loop. That \
+                       is below any usable ducker's attack time. Undoable with edit_undo.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn track_set_sidechain(
+        &self,
+        Parameters(params): Parameters<track::SetSidechainParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::SET_SIDECHAIN, &params).await
+    }
+
+    #[tool(
+        description = "Remove a plugin's external sidechain key route, so its detector goes back \
+                       to reading the plugin's own input. Addressed exactly as \
+                       track_set_sidechain. Clearing a plugin that had no route is not an error.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn track_clear_sidechain(
+        &self,
+        Parameters(params): Parameters<track::ClearSidechainParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::CLEAR_SIDECHAIN, &params).await
     }
 }

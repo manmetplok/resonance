@@ -965,6 +965,19 @@ pub enum PluginMessage {
     OpenPluginEditor(PluginInstanceId),
     /// Close the plugin's editor window.
     ClosePluginEditor(PluginInstanceId),
+    /// Route another track's or bus's audio into this plugin's external
+    /// sidechain (key) input, or clear the route when `source` is `None`
+    /// (control endpoint `track.set_sidechain` / `track.clear_sidechain`).
+    ///
+    /// Only the DETECTOR of the target plugin changes; the key never
+    /// reaches the output. A plugin that declares no key port stores the
+    /// route inertly rather than erroring, because the plugin at an
+    /// instance id can be swapped underneath it.
+    SetPluginSidechain {
+        instance_id: PluginInstanceId,
+        source: Option<SendSource>,
+        enabled: bool,
+    },
 }
 
 /// Edits to parameter-automation lanes (architecture doc #162 §3, epic

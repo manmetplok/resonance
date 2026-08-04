@@ -92,6 +92,7 @@ pub(crate) mod midi;
 mod midi_map;
 pub(crate) mod plugins;
 pub(crate) mod reference;
+pub(crate) mod sidechain;
 mod scan;
 mod thread;
 mod tracks;
@@ -271,6 +272,12 @@ pub struct SharedState {
     /// created, so projects without sends pay nothing.
     pub aux_sends: arc_swap::ArcSwap<Vec<AuxSend>>,
 
+    /// External sidechain (key) routes, audio-thread-visible copy of the
+    /// control thread's table. Empty until the first route is created, so
+    /// projects that never sidechain pay nothing (the render path's only
+    /// cost is an `is_empty` check per plugin).
+    pub sidechain_routes: arc_swap::ArcSwap<Vec<SidechainRoute>>,
+
     // -- Audition preview (doc #175) --
     /// Decoded preview source, published wait-free by the engine thread and
     /// read by the audio callback. `None` when no preview is loaded. See
@@ -363,6 +370,7 @@ impl Default for SharedState {
             mix_meter: resonance_metering::AtomicMeterSnapshot::new(),
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),
             aux_sends: arc_swap::ArcSwap::from_pointee(Vec::new()),
+            sidechain_routes: arc_swap::ArcSwap::from_pointee(Vec::new()),
             audition_source: arc_swap::ArcSwapOption::empty(),
             audition_playing: AtomicBool::new(false),
             audition_pos_bits: AtomicU64::new(0),
@@ -644,6 +652,9 @@ impl AudioEngine {
             // feed path never allocates.
             let mut ab_meters = reference::ABMeters::new(audio_sample_rate as f32);
             ab_meters.reserve(audio_buf_frames);
+            // Sidechain key capture, pre-allocated for the widest block
+            // the callback can hand us so the realtime path never grows it.
+            let mut sidechain = crate::types::SidechainTaps::new(audio_buf_frames);
             // Native backend: the monitor ring may adaptively drain its
             // sticky startup backlog (same graph clock); the cpal
             // fallback keeps the standing margin (doc #260 finding #12).
@@ -712,6 +723,7 @@ impl AudioEngine {
                         audio_buf_frames,
                         audio_quantum,
                         &mut ab_meters,
+                        &mut sidechain,
                     );
                     let mix_end = std::time::Instant::now();
                     if let Some(report) = load_meter.record(

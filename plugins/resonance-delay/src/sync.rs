@@ -19,6 +19,13 @@ const DIVISION_BEATS: &[f32] = &[
     1.0 / 6.0, // 1/16T
 ];
 
+/// Length of `division` in beats, clamped to the table. Shared with the
+/// wet gate ([`crate::gate`]), which counts its period in the same
+/// divisions the delay time uses.
+pub fn division_beats(division: usize) -> f32 {
+    DIVISION_BEATS[division.min(DIVISION_BEATS.len() - 1)]
+}
+
 pub fn delay_samples(
     sync: bool,
     division: usize,

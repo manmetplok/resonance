@@ -115,6 +115,9 @@ pub(crate) struct HandlerState {
     /// (never read from the audio callback), so plain data — see
     /// [`AuxSend`]. The source of truth for cyclic-route validation.
     pub aux_sends: IndexMap<SendId, AuxSend>,
+    /// External sidechain key routes, one per plugin instance. Mirrored
+    /// to the audio thread by `engine::sidechain::publish`.
+    pub sidechain_routes: crate::engine::sidechain::SidechainRoutes,
     /// Monotonic id allocator for cycle-record take groups. One group is
     /// handed out per armed track per loop-record run (see
     /// [`LoopRecordSession::groups`]).
@@ -240,6 +243,7 @@ pub(crate) fn engine_thread(
         next_plugin_id: 1,
         next_send_id: 1,
         aux_sends: IndexMap::new(),
+        sidechain_routes: Default::default(),
         next_take_group_id: 1,
         rec: RecordingState::new(sample_rate),
         bundles: Vec::new(),

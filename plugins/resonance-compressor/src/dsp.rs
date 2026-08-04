@@ -119,10 +119,23 @@ impl CompressorDsp {
     /// Process a stereo block in place. All parameter reads happen at the
     /// top of the call so the detector and gain-computer math stay hot
     /// inside the per-sample loop.
+    /// Process one block in place.
+    ///
+    /// `key` is the external sidechain signal when the host has connected
+    /// one, and `None` for the ordinary case where the compressor keys off
+    /// its own input. Only the DETECTOR changes: the key never reaches the
+    /// output, and the SC HPF still applies to whichever signal is feeding
+    /// detection — a high-passed key is exactly as useful as a high-passed
+    /// self-key when the source has kick energy you don't want triggering
+    /// the gain reduction.
+    ///
+    /// With `key: None` this is bit-identical to the pre-sidechain path,
+    /// so existing projects are unaffected.
     pub fn process_stereo(
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
+        key: Option<(&[f32], &[f32])>,
         params: &CompressorParams,
         viz: &CompressorViz,
     ) {
@@ -175,10 +188,20 @@ impl CompressorDsp {
             let l = left[i];
             let r = right[i];
 
-            // Detection signal: mono sum routed through the optional
-            // sidechain HPF. HPF is biquad; an identity biquad returns
-            // the sample unchanged with a tiny state cost.
-            let mono = 0.5 * (l + r);
+            // Detection signal: mono sum of the KEY when one is
+            // connected, else of this track's own input, routed through
+            // the optional sidechain HPF. HPF is biquad; an identity
+            // biquad returns the sample unchanged with a tiny state cost.
+            // A key shorter than the block reads as silence rather than
+            // panicking — the host is supposed to hand over a full-length
+            // buffer, but a truncated one must degrade.
+            let mono = match key {
+                Some((kl, kr)) => {
+                    0.5 * (kl.get(i).copied().unwrap_or(0.0)
+                        + kr.get(i).copied().unwrap_or(0.0))
+                }
+                None => 0.5 * (l + r),
+            };
             let det_sample = self.sc_hpf.process(mono);
 
             // Peak envelope: fast attack, exponential decay. The release
@@ -224,8 +247,16 @@ impl CompressorDsp {
             left[i] = out_l;
             right[i] = out_r;
 
-            // Meter envelopes (slow decay, instant attack).
-            let abs_in = abs_sample.max(l.abs()).max(r.abs());
+            // Meter envelopes (slow decay, instant attack). The input
+            // meter shows the INPUT, so an external key — which can be
+            // far louder than the signal being compressed — must not be
+            // folded into it. Without a key the detector is derived from
+            // the input anyway, and including it is the pre-existing
+            // behaviour, kept so the meter reads identically.
+            let abs_in = match key {
+                Some(_) => l.abs().max(r.abs()),
+                None => abs_sample.max(l.abs()).max(r.abs()),
+            };
             in_peak_block = if abs_in > in_peak_block {
                 abs_in
             } else {

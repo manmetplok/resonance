@@ -35,7 +35,7 @@ fn process_blocks(
     for _ in 0..n_blocks {
         let mut left = vec![DC; BLOCK];
         let mut right = vec![DC; BLOCK];
-        dsp.process_stereo(&mut left, &mut right, params, viz);
+        dsp.process_stereo(&mut left, &mut right, None, params, viz);
         out.extend_from_slice(&left);
     }
 }

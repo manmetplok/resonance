@@ -27,7 +27,10 @@ pub(super) fn dispatch_plugins(
         AudioCommand::RemovePlugin {
             track_id,
             instance_id,
-        } => plugins::handle_remove_plugin(ctx, track_id, instance_id),
+        } => {
+            plugins::handle_remove_plugin(ctx, track_id, instance_id);
+            crate::engine::sidechain::drop_plugin_route(ctx, state, instance_id);
+        }
         AudioCommand::MovePlugin {
             track_id,
             instance_id,

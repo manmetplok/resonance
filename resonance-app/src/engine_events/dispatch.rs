@@ -22,6 +22,10 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::PlayheadMoved(pos) => r.transport.playhead = pos,
         E::SampleRateDetected { sample_rate } => r.sample_rate = sample_rate,
         E::Stopped => transport::stopped(r),
+        // The engine echoes a key route change back; the app already
+        // dispatched it, so nothing to mirror. Consumed for
+        // exhaustiveness (and so a GUI-side route view can hang off it).
+        E::SidechainRouteChanged { .. } => {}
         E::Error(e) => transport::error(r, e),
         E::InputDevicesListed { devices, default_name } => {
             transport::input_devices_listed(r, devices, default_name)

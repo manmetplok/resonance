@@ -89,6 +89,22 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 }
             });
         }
+        PluginMessage::SetPluginSidechain {
+            instance_id,
+            source,
+            enabled,
+        } => {
+            let _ = match source {
+                Some(source) => r.engine.send(AudioCommand::SetSidechainRoute {
+                    plugin: instance_id,
+                    source,
+                    enabled,
+                }),
+                None => r.engine.send(AudioCommand::ClearSidechainRoute {
+                    plugin: instance_id,
+                }),
+            };
+        }
         PluginMessage::OpenPluginEditor(instance_id) => {
             let _ = r.engine
                 .send(AudioCommand::OpenPluginEditor { instance_id });

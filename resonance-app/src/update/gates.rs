@@ -312,6 +312,9 @@ fn plugin_edit_target(
     use crate::message::PluginMessage::*;
     match m {
         SetPluginParam(instance_id, ..) => r.track_of_plugin(*instance_id),
+        // Re-keying a detector changes the rendered signal on the
+        // plugin's own track, so a frozen track must go stale for it.
+        SetPluginSidechain { instance_id, .. } => r.track_of_plugin(*instance_id),
         AddPluginToTrack(track_id, _) | RemovePluginFromTrack(track_id, _) => Some(*track_id),
         AddPluginToTrackWithId { track_id, .. } | MovePluginInTrack { track_id, .. } => {
             Some(*track_id)

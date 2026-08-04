@@ -42,6 +42,13 @@ pub const PLUGIN_PARAMS: &str = "track.plugin_params";
 /// `track.set_plugin_param` — set one plugin parameter
 /// ([`SetPluginParamParams`] -> `MutationAck`).
 pub const SET_PLUGIN_PARAM: &str = "track.set_plugin_param";
+/// `track.set_sidechain` — route another track's or bus's audio into a
+/// plugin's external sidechain key ([`SetSidechainParams`] ->
+/// `MutationAck`).
+pub const SET_SIDECHAIN: &str = "track.set_sidechain";
+/// `track.clear_sidechain` — remove a plugin's key route
+/// ([`ClearSidechainParams`] -> `MutationAck`).
+pub const CLEAR_SIDECHAIN: &str = "track.clear_sidechain";
 
 /// All `track.*` method names.
 pub const METHODS: &[&str] = &[
@@ -58,7 +65,53 @@ pub const METHODS: &[&str] = &[
     REMOVE_SEND,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    SET_SIDECHAIN,
+    CLEAR_SIDECHAIN,
 ];
+
+/// Params for `track.set_sidechain`.
+///
+/// The plugin is addressed exactly as `track.set_plugin_param` addresses
+/// it — `track_id` plus an optional `plugin_id` / `occurrence` — and the
+/// key source is named by `source_track_id` **or** `source_bus_id`,
+/// exactly one of which must be given.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetSidechainParams {
+    /// The track hosting the plugin whose key is being routed.
+    pub track_id: TrackId,
+    /// CLAP id of the plugin to address; omitted targets the track's
+    /// instrument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Feed the key from this track's audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_track_id: Option<TrackId>,
+    /// Feed the key from this bus's audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_bus_id: Option<TrackId>,
+    /// A disabled route keeps its configuration but delivers no key, so
+    /// the plugin falls back to keying off its own input. Defaults true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Params for `track.clear_sidechain`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ClearSidechainParams {
+    pub track_id: TrackId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
 
 /// Params for `track.add`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

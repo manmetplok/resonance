@@ -1,7 +1,15 @@
 //! Resonance Compressor — a stereo feed-forward compressor with soft
-//! knee, peak/RMS-blended detector, optional sidechain HPF, parallel mix,
-//! and auto-makeup gain. DSP is intentionally log-domain and cheap; the
-//! editor shows a live transfer curve + GR history + In/GR/Out meters.
+//! knee, peak/RMS-blended detector, an external sidechain key, an
+//! optional sidechain HPF, parallel mix, and auto-makeup gain. DSP is
+//! intentionally log-domain and cheap; the editor shows a live transfer
+//! curve + GR history + In/GR/Out meters.
+//!
+//! Note that "sidechain HPF" and "sidechain key" are two different
+//! things, and the plugin had only the first for a long time: the HPF is
+//! an internal filter on the detector path, whereas the key is an
+//! external signal — another track or bus — that replaces the detector's
+//! source entirely. Ducking a pad from a kick needs the key; no amount
+//! of internal filtering can do it.
 
 use std::sync::Arc;
 
@@ -35,10 +43,12 @@ impl ResonancePlugin for ResonanceCompressor {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str =
-        "Stereo feed-forward compressor with soft knee, sidechain HPF, and parallel mix";
+        "Stereo feed-forward compressor with soft knee, external sidechain key, \
+         sidechain HPF, and parallel mix";
     const FEATURES: &'static [&'static str] = &["audio-effect", "compressor", "stereo", "dynamics"];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
+    const SIDECHAIN_INPUT: Option<u32> = Some(2);
 
     fn new() -> Self {
         Self {
@@ -85,7 +95,35 @@ impl ResonancePlugin for ResonanceCompressor {
             return;
         };
 
-        dsp.process_stereo(left, right, &self.params, &self.viz);
+        dsp.process_stereo(left, right, None, &self.params, &self.viz);
+    }
+
+    fn process_with_key(
+        &mut self,
+        outputs: &mut [OutputBuffer<'_>],
+        key: Option<KeyBuffer<'_>>,
+        _frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+        let Some(main) = outputs.first_mut() else {
+            return;
+        };
+        let left = &mut *main.left;
+        let right = &mut *main.right;
+        resonance_common::flush_denormals();
+
+        let Some(dsp) = &mut self.dsp else {
+            return;
+        };
+
+        dsp.process_stereo(
+            left,
+            right,
+            key.map(|k| (k.left, k.right)),
+            &self.params,
+            &self.viz,
+        );
     }
 
     #[cfg(feature = "editor")]
