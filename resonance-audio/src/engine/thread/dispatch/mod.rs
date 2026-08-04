@@ -43,6 +43,17 @@ use crate::types::*;
 /// breaks on it before calling this function.
 pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
     match cmd {
+        // External sidechain (key) routing: which source feeds a
+        // plugin instance's key port.
+        AudioCommand::SetSidechainRoute {
+            plugin,
+            source,
+            enabled,
+        } => crate::engine::sidechain::handle_set(ctx, state, plugin, source, enabled),
+        AudioCommand::ClearSidechainRoute { plugin } => {
+            crate::engine::sidechain::handle_clear(ctx, state, plugin)
+        }
+
         // Transport
         AudioCommand::Play
         | AudioCommand::Record { .. }

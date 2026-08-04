@@ -68,6 +68,7 @@ impl TrackType {
 }
 
 mod aux_send;
+pub mod sidechain;
 mod clip;
 mod commands;
 mod events;
@@ -81,6 +82,7 @@ mod track;
 mod vocal_tuning;
 
 pub use aux_send::{aux_send_would_cycle, AuxSend, SendSource};
+pub use sidechain::{SidechainRoute, SidechainTaps, MAX_SIDECHAIN_SOURCES};
 pub use clip::{
     audio_clip_covers, compute_waveform_peaks, AudioClip, ClipSource, FadeCurve, MidiClip,
     MidiNote, PendingNoteEvent, WarpAlgorithm, WarpMarker, WAVEFORM_PEAK_FRAMES,

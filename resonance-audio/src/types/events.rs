@@ -78,6 +78,14 @@ pub enum ExportErrorKind {
 /// Events sent from the audio engine back to the GUI.
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
+    /// A plugin instance's external sidechain (key) route changed.
+    /// `source` is `None` when the route was cleared, in which case the
+    /// plugin falls back to keying off its own input.
+    SidechainRouteChanged {
+        plugin: PluginInstanceId,
+        source: Option<SendSource>,
+        enabled: bool,
+    },
     PlayheadMoved(SamplePos),
     SampleRateDetected {
         sample_rate: u32,

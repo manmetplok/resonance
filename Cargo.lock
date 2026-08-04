@@ -5398,6 +5398,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "resonance-gate"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "resonance-common",
+ "resonance-dsp",
+ "resonance-plugin",
+ "serde_json",
+ "wayland-plugin-gui",
+]
+
+[[package]]
 name = "resonance-granular-delay"
 version = "0.1.0"
 dependencies = [

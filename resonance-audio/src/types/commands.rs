@@ -46,6 +46,24 @@ pub enum AudioCommand {
     ImportAudioToPool {
         paths: Vec<String>,
     },
+    /// Route `source`'s audio into `plugin`'s external sidechain (key)
+    /// input, replacing any route that instance already had. The plugin
+    /// must declare a key port (the compressor and the gate do); a route
+    /// onto one that doesn't is stored but inert, so a preset swap that
+    /// changes the plugin can't silently misroute audio.
+    ///
+    /// The key is delivered one block late by construction — see
+    /// [`crate::types::sidechain`] for why that is the right trade.
+    SetSidechainRoute {
+        plugin: PluginInstanceId,
+        source: SendSource,
+        enabled: bool,
+    },
+    /// Remove `plugin`'s key route, so it falls back to keying off its
+    /// own input.
+    ClearSidechainRoute {
+        plugin: PluginInstanceId,
+    },
     MoveClip {
         clip_id: ClipId,
         new_start_sample: SamplePos,

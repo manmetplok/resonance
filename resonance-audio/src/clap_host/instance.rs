@@ -55,6 +55,13 @@ pub struct ClapInstance {
     /// per-port scratch buffers without re-querying on every block.
     /// Always >= 1 because resonance-plugin rejects empty output layouts.
     pub(super) output_port_count: usize,
+    /// Number of *input* audio ports the plugin declares. `1` is the
+    /// ordinary effect; `2` means it also declares an external sidechain
+    /// (key) port, which the host may connect via
+    /// [`ClapInstance::process_multi_with_key`]. Instruments report 0.
+    /// Cached at activation for the same reason as the output count — the
+    /// audio thread must not re-query the extension per block.
+    pub(super) input_port_count: usize,
     /// Processing latency in samples, as reported by the plugin's
     /// `clap.latency` extension right after activation (0 if the
     /// extension is absent). Refreshed on every deactivate → reactivate
@@ -104,6 +111,7 @@ impl ClapInstance {
         gui_ext: Option<*const clap_plugin_gui>,
         latency_ext: Option<*const clap_plugin_latency>,
         output_port_count: usize,
+        input_port_count: usize,
         latency: u32,
         audio_out_buffers: Vec<clap_audio_buffer>,
         audio_out_ptrs: Vec<[*mut f32; 2]>,
@@ -120,6 +128,7 @@ impl ClapInstance {
             latency_ext,
             gui_open: false,
             output_port_count,
+            input_port_count,
             latency,
             // Pre-size every event buffer at activation so the first
             // process() call after a fresh plugin add doesn't allocate

@@ -1,5 +1,6 @@
 use resonance_dsp::{Biquad, DelayLine, OnePole};
 
+use crate::gate::{GateDuck, GateDuckParams};
 use crate::params::DelaySmoothers;
 
 /// Block-level parameters that do not change within a process call.
@@ -13,6 +14,8 @@ pub struct BlockParams {
     pub mod_rate: f32,
     pub mod_depth: f32,
     pub freeze: bool,
+    /// Wet-path gate + duck, applied after the tap and before the mix.
+    pub gate_duck: GateDuckParams,
 }
 
 /// In/out peak amplitudes captured across a block, in linear units.
@@ -34,6 +37,7 @@ pub struct DelayDsp {
     lp_l: OnePole,
     lp_r: OnePole,
     lfo_phase: f32,
+    gate_duck: GateDuck,
 }
 
 impl DelayDsp {
@@ -54,6 +58,7 @@ impl DelayDsp {
             lp_l,
             lp_r,
             lfo_phase: 0.0,
+            gate_duck: GateDuck::new(sample_rate),
         }
     }
 
@@ -80,6 +85,7 @@ impl DelayDsp {
         self.lp_l.clear();
         self.lp_r.clear();
         self.lfo_phase = 0.0;
+        self.gate_duck.clear();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -185,6 +191,7 @@ impl DelayDsp {
         params: &BlockParams,
     ) -> BlockPeaks {
         let mut peaks = BlockPeaks::default();
+        self.gate_duck.prepare_block(&params.gate_duck);
         for i in 0..frames {
             let delay_samp = smoothers.delay_samples.next();
             let feedback = smoothers.feedback.next();
@@ -209,9 +216,15 @@ impl DelayDsp {
                 params.freeze,
             );
 
+            // Gate/duck the wet only, and only here — `self.process`
+            // has already pushed the ungated signal into the delay
+            // line, so the tail keeps its shape and the rhythm is
+            // applied to what comes out of it.
+            let wet_gain = self.gate_duck.next_gain(dry_l, dry_r, &params.gate_duck);
+
             let dry_amount = 1.0 - mix;
-            let out_l = dry_l * dry_amount + wet_l * mix;
-            let out_r = dry_r * dry_amount + wet_r * mix;
+            let out_l = dry_l * dry_amount + wet_l * mix * wet_gain;
+            let out_r = dry_r * dry_amount + wet_r * mix * wet_gain;
             left[i] = out_l;
             right[i] = out_r;
             peaks.out_l = peaks.out_l.max(out_l.abs());

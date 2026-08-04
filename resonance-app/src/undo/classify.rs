@@ -293,6 +293,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | PluginMessage::AddPluginToTrackWithId { .. }
             | PluginMessage::RemovePluginFromTrack(_, _)
             | PluginMessage::MovePluginInTrack { .. } => UndoAction::Record,
+            // Routing a key is a project edit like any other insert
+            // change, so it takes an undo entry of its own.
+            PluginMessage::SetPluginSidechain { .. } => UndoAction::Record,
             PluginMessage::SetPluginParam(instance_id, param_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
                     instance_id: *instance_id,

@@ -99,6 +99,7 @@ pub fn try_lock_with_backoff<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Mutable scratch buffers reused across chunks. Allocated once by the
 /// caller and lent to [`render_chunk`].
 pub(super) struct ChunkScratch {
+    pub sidechain: crate::types::SidechainTaps,
     pub track_buf_l: Vec<f32>,
     pub track_buf_r: Vec<f32>,
     pub bus_bufs: Vec<(Vec<f32>, Vec<f32>)>,
@@ -114,6 +115,7 @@ pub(super) struct ChunkScratch {
 impl ChunkScratch {
     pub(super) fn new() -> Self {
         Self {
+            sidechain: crate::types::SidechainTaps::new(BOUNCE_CHUNK),
             track_buf_l: vec![0.0f32; BOUNCE_CHUNK],
             track_buf_r: vec![0.0f32; BOUNCE_CHUNK],
             bus_bufs: (0..MAX_BUSSES)
@@ -290,6 +292,11 @@ pub(super) fn render_chunk(
     // Aux-send snapshot: the offline bounce taps + sums sends identically
     // to the live path so a bounced/exported WAV matches playback.
     let aux_guard = ctx.shared.aux_sends.load();
+    // The bounce renders the same graph as live, so it honours the same
+    // key routes. Its taps live in the bounce scratch (a separate audio
+    // path with its own block cadence) rather than the audio thread's.
+    let sidechain_guard = ctx.shared.sidechain_routes.load();
+    scratch.sidechain.begin_block(&sidechain_guard);
 
     // Per-track / sub-track / bus rendering: shared with the live audio
     // callback (`mixer/render_core.rs`). The Bounce strategy swaps the
@@ -317,6 +324,8 @@ pub(super) fn render_chunk(
         any_solo,
         active_busses,
         &aux_guard,
+        &sidechain_guard,
+        &mut scratch.sidechain,
         pos,
         frames,
         &mut scratch.track_buf_l,

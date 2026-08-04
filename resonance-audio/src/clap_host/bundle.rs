@@ -242,6 +242,18 @@ pub(super) fn build_instance(
         }
     };
 
+    // Input ports, same query with `is_input = true`. A second port is
+    // how a plugin declares an external sidechain key (resonance-plugin's
+    // `SIDECHAIN_INPUT`); the host connects it only when a routing has
+    // been configured for that instance. Effects default to 1 and
+    // instruments to 0, matching what the extension would report.
+    let input_port_count = unsafe {
+        match audio_ports_ext.and_then(|ports| (*ports).count) {
+            Some(count_fn) => count_fn(plugin, true) as usize,
+            None => 1,
+        }
+    };
+
     let latency_ext = unsafe {
         if let Some(get_ext) = (*plugin).get_extension {
             let ext = get_ext(plugin, CLAP_EXT_LATENCY.as_ptr());
@@ -323,6 +335,7 @@ pub(super) fn build_instance(
         gui_ext,
         latency_ext,
         output_port_count,
+        input_port_count,
         latency,
         audio_out_buffers,
         audio_out_ptrs,
