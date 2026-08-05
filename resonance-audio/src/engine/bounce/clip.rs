@@ -193,6 +193,12 @@ pub fn to_audio_clip(
             render_frames,
             &in_filter,
             &|_| false,
+            // No key-only tracks: a bounce-in-place renders one track
+            // and its own sub-tracks, and a key routed in from elsewhere is
+            // part of that track's sound, so it is pulled in by the filter
+            // itself rather than by this render (ba doc #277).
+            &|_| false,
+            &|_| false,
             false,
             false,
             false,

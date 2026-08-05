@@ -216,6 +216,10 @@ pub fn to_freeze_cache(
             render_frames,
             &in_filter,
             &|_| false,
+            // No key-only tracks (ba doc #277): freeze captures the
+            // track's own post-FX signal.
+            &|_| false,
+            &|_| false,
             false,
             false,
             true,

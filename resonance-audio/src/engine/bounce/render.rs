@@ -274,6 +274,8 @@ pub(super) fn render_chunk(
     frames: usize,
     in_filter: &dyn Fn(TrackId) -> bool,
     fan_out_only: &dyn Fn(TrackId) -> bool,
+    key_only: &dyn Fn(TrackId) -> bool,
+    key_only_bus: &dyn Fn(BusId) -> bool,
     include_master_fx: bool,
     respect_mute_solo: bool,
     freeze_raw: bool,
@@ -308,6 +310,8 @@ pub(super) fn render_chunk(
     let mut strategy = mixer::RenderStrategy::Bounce {
         in_filter,
         fan_out_only,
+        key_only,
+        key_only_bus,
         respect_mute_solo,
         freeze_raw,
     };

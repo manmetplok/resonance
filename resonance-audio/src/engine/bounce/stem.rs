@@ -89,6 +89,23 @@ pub struct StemFilter {
     /// fader, aux sends and routing contribute nothing here. Never
     /// populated for `Master`.
     pub fan_out_only: HashSet<TrackId>,
+    /// Tracks in `set` that are present **only** as a sidechain KEY
+    /// SOURCE for a plugin inside this stem (ba doc #277). They render —
+    /// that is the only way their audio exists to be captured — and are
+    /// then dropped before the fader, so they key without joining the
+    /// mix.
+    ///
+    /// Without this a stem was rendered without its key sources, every
+    /// key resolved to silence, and each keyed plugin fell back to its
+    /// own input. `meter.measure` on the ducked track then reported the
+    /// same figure to two decimals no matter what was routed in — which
+    /// is exactly how the feature is verified, so it read as "sidechain
+    /// does nothing" even after the delivery path was fixed.
+    pub key_only: HashSet<TrackId>,
+    /// Busses that are present only as a key source, for the same
+    /// reason. Their chain runs and is captured; their output never
+    /// reaches master.
+    pub key_only_busses: HashSet<BusId>,
     /// `true` for the master stem: every track contributes.
     pub all: bool,
     /// Apply master FX chain + master volume + hard-clip to the result.
@@ -108,16 +125,56 @@ impl StemFilter {
     pub fn is_fan_out_only(&self, id: TrackId) -> bool {
         !self.all && self.fan_out_only.contains(&id)
     }
+
+    /// Is this track in the filter *only* to be captured as a key, so its
+    /// audio must not reach the stem's mix?
+    #[inline]
+    pub fn is_key_only(&self, id: TrackId) -> bool {
+        !self.all && self.key_only.contains(&id)
+    }
+
+    /// The bus twin of [`StemFilter::is_key_only`].
+    #[inline]
+    pub fn is_key_only_bus(&self, id: BusId) -> bool {
+        !self.all && self.key_only_busses.contains(&id)
+    }
 }
 
 /// Resolve the [`StemFilter`] for `source` against the current track
 /// topology. Pure (reads only the passed map) so it is unit-testable
 /// without an engine.
+///
+/// Sidechain-free shorthand for [`stem_filter_with_keys`]; a slice whose
+/// plugins are keyed from outside it needs that one instead.
 pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> StemFilter {
+    stem_filter_with_keys(source, tracks, &IndexMap::new(), &[])
+}
+
+/// [`stem_filter`], plus the sidechain KEY SOURCES the filtered slice
+/// needs in order to sound like itself (ba doc #277).
+///
+/// A stem renders part of the graph. A plugin inside that part may be
+/// keyed from a track or bus OUTSIDE it — which is the normal case, since
+/// the whole point of a key is that it comes from somewhere else — and a
+/// source that never renders is never captured, so the key resolves to
+/// silence and the plugin falls back to its own input. The stem then
+/// measures a graph that does not exist: exactly the figure the mix would
+/// produce with nothing routed at all.
+///
+/// Such sources are pulled in as `key_only`: rendered so they can be
+/// captured, dropped before the fader so they never join the mix.
+pub fn stem_filter_with_keys(
+    source: StemSource,
+    tracks: &IndexMap<TrackId, Track>,
+    busses: &IndexMap<BusId, Bus>,
+    routes: &[SidechainRoute],
+) -> StemFilter {
     match source {
         StemSource::Master => StemFilter {
             set: HashSet::new(),
             fan_out_only: HashSet::new(),
+            key_only: HashSet::new(),
+            key_only_busses: HashSet::new(),
             all: true,
             include_master_fx: true,
         },
@@ -137,10 +194,14 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
             // member: "Drums -> Hats" must be hats. The sibling taps are
             // held out by `sub_track_disposition`'s own `in_filter` gate,
             // and the parent's port-0 chain by `fan_out_only`.
+            let (key_only, key_only_busses) =
+                add_key_sources(tracks, busses, routes, None, &mut set);
             let fan_out_only = add_fan_out_parents(tracks, &mut set);
             StemFilter {
                 set,
                 fan_out_only,
+                key_only,
+                key_only_busses,
                 all: false,
                 include_master_fx: false,
             }
@@ -173,15 +234,84 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
                     add_sub_tracks(t.id, tracks, &mut set);
                 }
             }
+            let (key_only, key_only_busses) =
+                add_key_sources(tracks, busses, routes, Some(bus_id), &mut set);
             let fan_out_only = add_fan_out_parents(tracks, &mut set);
             StemFilter {
                 set,
                 fan_out_only,
+                key_only,
+                key_only_busses,
                 all: false,
                 include_master_fx: false,
             }
         }
     }
+}
+
+/// Pull every sidechain key source feeding a plugin inside `set` into the
+/// render, returning the tracks and busses that are there ONLY for that.
+///
+/// `own_bus` is the bus being stemmed, if any — its own insert chain is
+/// part of the slice, so a key routed into it counts too.
+///
+/// A key source that is already a member of the stem is left alone: it is
+/// audible here anyway, and marking it key-only would drop it from the
+/// mix it belongs to.
+fn add_key_sources(
+    tracks: &IndexMap<TrackId, Track>,
+    busses: &IndexMap<BusId, Bus>,
+    routes: &[SidechainRoute],
+    own_bus: Option<BusId>,
+    set: &mut HashSet<TrackId>,
+) -> (HashSet<TrackId>, HashSet<BusId>) {
+    let mut key_tracks = HashSet::new();
+    let mut key_busses = HashSet::new();
+    if routes.is_empty() {
+        return (key_tracks, key_busses);
+    }
+
+    // Every plugin instance inside the slice: the chains of its tracks,
+    // plus the stemmed bus's own chain.
+    let mut inside: Vec<PluginInstanceId> = Vec::new();
+    for id in set.iter() {
+        if let Some(track) = tracks.get(id) {
+            inside.extend(track.plugins().iter().copied());
+        }
+    }
+    if let Some(bus_id) = own_bus {
+        if let Some(bus) = busses.get(&bus_id) {
+            inside.extend(bus.plugin_ids.iter().copied());
+        }
+    }
+
+    for plugin in inside {
+        let Some(source) = crate::types::sidechain::route_source(routes, plugin) else {
+            continue;
+        };
+        match source {
+            SendSource::Track(id) => {
+                if set.insert(id) {
+                    key_tracks.insert(id);
+                }
+            }
+            SendSource::Bus(id) => {
+                if own_bus == Some(id) {
+                    continue;
+                }
+                // A bus carries nothing of its own: it has to be fed by
+                // the tracks routed into it, so they render too — and
+                // they are key-only for exactly the same reason.
+                for t in tracks.values() {
+                    if t.output() == TrackOutput::Bus(id) && set.insert(t.id) {
+                        key_tracks.insert(t.id);
+                    }
+                }
+                key_busses.insert(id);
+            }
+        }
+    }
+    (key_tracks, key_busses)
 }
 
 /// Insert the parent of every sub-track already in `set` (ba todo #1239),
@@ -387,7 +517,12 @@ pub fn render_stem(
 
     let filter = {
         let tracks_guard = tracks.read();
-        let filter = stem_filter(source, &tracks_guard);
+        // Key sources are part of the render even when they are not part
+        // of the stem (ba doc #277) — without them every keyed plugin in
+        // the slice silently falls back to its own input.
+        let routes = shared.sidechain_routes.load();
+        let filter =
+            stem_filter_with_keys(source, &tracks_guard, &busses.read(), &routes);
         // A tap whose parent is FROZEN has no separable signal at all
         // (ba todo #1248) — refuse rather than hand back the whole kit.
         if let Some(message) = frozen_fan_out_refusal(&filter, &tracks_guard) {
@@ -443,6 +578,10 @@ pub fn render_stem(
 
     let in_filter = |id: TrackId| filter.contains(id);
     let fan_out_only = |id: TrackId| filter.is_fan_out_only(id);
+    // Key sources render so they can be captured, and are dropped before
+    // the fader so they key this stem without joining it (ba doc #277).
+    let key_only = |id: TrackId| filter.is_key_only(id);
+    let key_only_bus = |id: BusId| filter.is_key_only_bus(id);
     let mut pos = render_start;
     let mut written: usize = 0;
     while pos < render_stop {
@@ -456,6 +595,8 @@ pub fn render_stem(
             render_frames,
             &in_filter,
             &fan_out_only,
+            &key_only,
+            &key_only_bus,
             filter.include_master_fx,
             respect_mute_solo,
             false,

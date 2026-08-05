@@ -76,6 +76,15 @@ pub(crate) enum RenderStrategy<'a> {
         /// fader, aux sends and routing, so a sub-track stem carries that
         /// tap and nothing else. Always `false` outside stem rendering.
         fan_out_only: &'a dyn Fn(TrackId) -> bool,
+        /// Tracks that are in the filter ONLY to be captured as a
+        /// sidechain key (ba doc #277). They render through their whole
+        /// chain — otherwise there is no audio to capture — and are then
+        /// dropped before PDC, fader, aux sends and routing, so they key
+        /// the stem without joining it. Always `false` outside stem
+        /// rendering, where every track renders anyway.
+        key_only: &'a dyn Fn(TrackId) -> bool,
+        /// The bus twin of `key_only`.
+        key_only_bus: &'a dyn Fn(BusId) -> bool,
         respect_mute_solo: bool,
         /// Freeze-cache capture mode. When `true`, every in-filter track
         /// renders its **raw post-instrument / post-FX** signal — unity
@@ -117,6 +126,25 @@ impl RenderStrategy<'_> {
     #[inline]
     fn is_live(&self) -> bool {
         matches!(self, Self::Live { .. })
+    }
+
+    /// True when this track is rendered only so it can be captured as a
+    /// key — see `RenderStrategy::Bounce::key_only`.
+    #[inline]
+    fn is_key_only(&self, id: TrackId) -> bool {
+        match self {
+            Self::Live { .. } => false,
+            Self::Bounce { key_only, .. } => key_only(id),
+        }
+    }
+
+    /// The bus twin of [`RenderStrategy::is_key_only`].
+    #[inline]
+    fn is_key_only_bus(&self, id: BusId) -> bool {
+        match self {
+            Self::Live { .. } => false,
+            Self::Bounce { key_only_bus, .. } => key_only_bus(id),
+        }
     }
 
     /// Freeze-cache capture: bypass per-track / sub-track fader, pan and
@@ -236,6 +264,7 @@ impl RenderStrategy<'_> {
                 fan_out_only,
                 respect_mute_solo,
                 freeze_raw,
+                ..
             } => {
                 // For `to_wav` we honour the user's mix (muted /
                 // non-soloed tracks drop out). For bounce-in-place
@@ -1053,6 +1082,14 @@ pub(crate) fn render_block(
             );
         }
 
+        // Present only as a key source: its audio has just been captured,
+        // and it belongs to a different stem (ba doc #277). Everything
+        // below — PDC, fader, aux sends, routing — would put it in this
+        // one, so stop here.
+        if strategy.is_key_only(track.id) {
+            continue;
+        }
+
         // Plugin-delay compensation: delay the post-chain signal so
         // every track reaches master with the same total latency (see
         // `crate::latency`). Runs even when the track produced no audio
@@ -1242,6 +1279,14 @@ pub(crate) fn render_block(
                     sidechain.capture(sub_tap, &pl[..frames], &pr[..frames], frames);
                 }
 
+                // Captured, and not a member of this stem (ba doc #277).
+                // This is the drum-tap case the field report hit: keying
+                // a compressor from the kick TAP while measuring the
+                // ducked track, which is how the routing gets verified.
+                if strategy.is_key_only(sub_track.id) {
+                    continue;
+                }
+
                 // Plugin-delay compensation for the sub-track's chain.
                 {
                     let (pl, pr) = &mut port_scratch[port_idx];
@@ -1344,6 +1389,11 @@ pub(crate) fn render_block(
         let bus_tap = SendSource::Bus(bus.id);
         if sidechain.is_tapped(bus_tap) {
             sidechain.capture(bus_tap, &bus_buf_l[..frames], &bus_buf_r[..frames], frames);
+        }
+
+        // Captured, and not part of this stem (ba doc #277).
+        if strategy.is_key_only_bus(bus.id) {
+            continue;
         }
 
         // Bus-stage equalization: pad this bus's chain up to the

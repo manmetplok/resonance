@@ -495,3 +495,54 @@ fn the_key_is_one_block_old() {
     );
     assert_keyed(second, at_master(KEY_LEVEL), "second block");
 }
+
+// ---------------------------------------------------------------------------
+// Key sources outside the rendered slice
+// ---------------------------------------------------------------------------
+
+/// Measuring ONE track while keying from another (ba doc #277).
+///
+/// This is how the feature is actually verified — `meter.measure` on the
+/// ducked track, changing only the key source — and it is the one shape
+/// the first fix missed. A stem renders a FILTERED slice of the graph:
+/// the target track, its sub-tracks, and any parent needed to drive a
+/// fan-out. A track that is only a KEY SOURCE is not in that set, so it
+/// never rendered, nothing was ever captured, and the key resolved to
+/// silence — which every keyed plugin reads as "no external key" and
+/// answers by keying off its own input.
+///
+/// The result was a measurement that could not move: keying a compressor
+/// from a kick hitting every beat and from a track silent for 86% of the
+/// song both reported the same LUFS to two decimals, on a compressor
+/// proven to have 28 LU of authority over its own input.
+#[test]
+fn a_key_source_outside_the_stem_still_keys() {
+    let state = fixture();
+    // The monitor sits on TAP_B and is keyed from TAP_A, its sibling.
+    // Rendering TAP_B's stem holds TAP_A out of the mix — but it must
+    // still be captured, or the key is silence.
+    state.tracks.read().get(&TAP_B).unwrap().push_plugin(MONITOR_ID);
+    state.tracks.read().get(&TAP_B).unwrap().set_volume(1.0);
+    route(&state, SendSource::Track(TAP_A));
+
+    let got = render_second_chunk(&state, StemSource::Track(TAP_B));
+    assert_keyed(got, at_master(KEY_LEVEL), "key source outside the stem");
+}
+
+/// And the source must not leak INTO the stem it keys: it is rendered to
+/// be captured, not to be heard. "Drums -> Hats" keyed off the kick is
+/// still hats.
+#[test]
+fn a_key_source_outside_the_stem_does_not_join_it() {
+    let state = fixture();
+    // No monitor plugin at all: TAP_B is silent on its own. Keying
+    // something from TAP_A must not put TAP_A's audio in this stem.
+    state.tracks.read().get(&TAP_B).unwrap().set_volume(1.0);
+    route(&state, SendSource::Track(TAP_A));
+
+    let got = render_second_chunk(&state, StemSource::Track(TAP_B));
+    assert!(
+        got < 1e-6,
+        "a stem of a silent track must stay silent, got {got} — the key source leaked in"
+    );
+}
