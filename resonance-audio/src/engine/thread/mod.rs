@@ -193,6 +193,23 @@ pub(crate) struct HandlerState {
     /// measured offset, and republishes PDC — or reports a clean failure once
     /// the listen window elapses. `None` outside of an active ping.
     pub pending_latency_ping: Option<super::external_instrument_ping::PendingLatencyPing>,
+    /// Clip edits that arrived before their clip existed (ba doc #276
+    /// BUG 1).
+    ///
+    /// `LoadClipFromWav` hands the mmap + waveform work to a worker
+    /// thread, so a clip is not in `ctx.clips` when the command that
+    /// created it returns. A client that places a clip and immediately
+    /// trims it — the only way to make one asset serve several sections,
+    /// and what the whole arrangement flow does — used to hit the
+    /// handlers' "missing lookup ⇒ no-op" convention: the trim vanished,
+    /// the app mirror kept the geometry it had optimistically applied,
+    /// and every reported number stayed right while the render played
+    /// the untrimmed source.
+    ///
+    /// Such a command is parked here instead and retried by
+    /// [`super::clips::poll_deferred_clip_commands`] on each engine-loop
+    /// iteration.
+    pub deferred_clip_commands: Vec<super::clips::DeferredClipCommand>,
 }
 
 /// Rebuild the audio-thread automation snapshot from the engine-thread
@@ -263,6 +280,7 @@ pub(crate) fn engine_thread(
         automation_lanes: automation::AutomationLanes::new(),
         external_instruments: external_instrument::ExternalInstruments::new(),
         pending_latency_ping: None,
+        deferred_clip_commands: Vec::new(),
     };
     let ctx = HandlerCtx {
         shared: &shared,
@@ -397,6 +415,10 @@ pub(crate) fn engine_thread(
         // round-trip offset — or report a clean failure once the listen
         // window elapses.
         super::external_instrument_ping::poll_pending_latency_ping(&ctx, &mut state);
+
+        // Re-apply clip edits that arrived before their clip finished
+        // loading on the import worker (ba doc #276 BUG 1).
+        super::clips::poll_deferred_clip_commands(&ctx, &mut state);
 
         // Sync the stable `bpm` field from the tempo event table so
         // the mixer (audio thread) always sees the correct tempo for

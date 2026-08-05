@@ -1,0 +1,497 @@
+//! The key actually ARRIVES — host-side sidechain delivery (ba doc #275 P0).
+//!
+//! `sidechain_taps.rs` pins the routing model in isolation: given a
+//! capture, which plugin reads it. It went green the whole time the
+//! feature was broken, because every assertion stopped at the tap struct.
+//! What was missing was the other half — whether the mixer ever *calls*
+//! the keyed process path for a given chain, and whether a given signal
+//! is ever *captured* as a source. Four of the five chains never did:
+//!
+//! | chain                        | before        | now |
+//! |------------------------------|---------------|-----|
+//! | audio-track inserts          | key delivered | ✓   |
+//! | instrument-track inserts     | **ignored**   | ✓   |
+//! | sub-track (tap) inserts      | **ignored**   | ✓   |
+//! | bus inserts                  | **ignored**   | ✓   |
+//! | master inserts               | **ignored**   | ✓   |
+//!
+//! and as SOURCES, only top-level tracks were captured — a route keyed
+//! from a drum tap or from a bus resolved to a slot nobody ever wrote,
+//! which `SidechainTaps::key` reports as `None`, which the plugin reads
+//! as "no external key" and silently falls back to its own input. That
+//! is why a gate at Range 60 keyed from a *silent* track measured the
+//! same as one keyed from a kick hitting every beat.
+//!
+//! So every assertion here is on RENDERED AUDIO with a plugin that
+//! reports the key it was handed, never on the route table.
+
+mod multi_out_harness;
+
+use std::ffi::{c_char, c_void, CStr};
+use std::ptr;
+use std::sync::Arc;
+
+use clap_sys::audio_buffer::clap_audio_buffer;
+use clap_sys::ext::audio_ports::{
+    clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS,
+};
+use clap_sys::id::clap_id;
+use clap_sys::plugin::clap_plugin;
+use clap_sys::process::clap_process;
+use parking_lot::Mutex;
+
+use multi_out_harness::{at_master, peak, EngineState, PARENT, SR, TAP_A, TAP_B};
+use resonance_audio::__test_support::{
+    __instance_from_raw_for_test, render_stem, StemSource, SyncClapInstance,
+};
+use resonance_audio::types::*;
+
+/// What the key monitor emits when the host connected NO key port. Picked
+/// well clear of every tap level so a fallback can never be mistaken for
+/// a delivered key — this is exactly the confusion the field report hit,
+/// where "keyed off its own input" and "keyed off the kick" measured the
+/// same.
+const NO_KEY: f32 = 0.5;
+
+/// The tap the tests key off. `multi_out_harness`'s instrument writes
+/// this constant on port 1 (`TAP_A`).
+const KEY_LEVEL: f32 = multi_out_harness::PORT_LEVELS[1];
+
+const MONITOR_ID: PluginInstanceId = 900;
+const BUS: BusId = 7;
+
+/// Two chunks of the offline renderer. A key is deliberately one block
+/// old (see `types::sidechain`), so a single-chunk render can only ever
+/// show the fallback — the second chunk is where a delivered key shows up.
+const CHUNK: usize = 1024;
+const TWO_CHUNKS: u64 = 2 * CHUNK as u64;
+
+// ---------------------------------------------------------------------------
+// A fake effect that reports the key it was handed
+// ---------------------------------------------------------------------------
+
+struct MonitorState {
+    active: bool,
+}
+
+unsafe fn monitor_state<'a>(plugin: *const clap_plugin) -> &'a mut MonitorState {
+    &mut *((*plugin).plugin_data as *mut MonitorState)
+}
+
+unsafe extern "C" fn m_init(_plugin: *const clap_plugin) -> bool {
+    true
+}
+unsafe extern "C" fn m_destroy(_plugin: *const clap_plugin) {}
+unsafe extern "C" fn m_activate(
+    plugin: *const clap_plugin,
+    _sr: f64,
+    _min: u32,
+    _max: u32,
+) -> bool {
+    monitor_state(plugin).active = true;
+    true
+}
+unsafe extern "C" fn m_deactivate(plugin: *const clap_plugin) {
+    monitor_state(plugin).active = false;
+}
+unsafe extern "C" fn m_start(_plugin: *const clap_plugin) -> bool {
+    true
+}
+unsafe extern "C" fn m_stop(_plugin: *const clap_plugin) {}
+unsafe extern "C" fn m_reset(_plugin: *const clap_plugin) {}
+unsafe extern "C" fn m_main_thread(_plugin: *const clap_plugin) {}
+
+/// Overwrite the main output with the first sample of the KEY input port
+/// (CLAP input port 1), or with [`NO_KEY`] when the host connected no key.
+///
+/// Overwriting rather than mixing is what makes the assertions exact: the
+/// rendered level *is* the key level, so a test reads the key the mixer
+/// actually delivered rather than inferring it from a gain change.
+unsafe extern "C" fn m_process(_plugin: *const clap_plugin, process: *const clap_process) -> i32 {
+    let p = &*process;
+    let frames = p.frames_count as usize;
+
+    let mut value = NO_KEY;
+    if p.audio_inputs_count >= 2 && !p.audio_inputs.is_null() {
+        let key: &clap_audio_buffer = &*p.audio_inputs.add(1);
+        if !key.data32.is_null() {
+            let chan = *key.data32;
+            if !chan.is_null() && frames > 0 {
+                value = *chan;
+            }
+        }
+    }
+
+    if p.audio_outputs_count >= 1 && !p.audio_outputs.is_null() {
+        let out: &clap_audio_buffer = &*p.audio_outputs;
+        if !out.data32.is_null() {
+            for ch in 0..(out.channel_count as usize).min(2) {
+                let chan = *out.data32.add(ch);
+                if chan.is_null() {
+                    continue;
+                }
+                for f in 0..frames {
+                    *chan.add(f) = value;
+                }
+            }
+        }
+    }
+    1
+}
+
+/// Main input + key input, one stereo output: the port shape
+/// `resonance-plugin`'s `SIDECHAIN_INPUT` produces, which is what
+/// `ClapInstance::has_sidechain_input` keys off.
+unsafe extern "C" fn m_ports_count(_plugin: *const clap_plugin, is_input: bool) -> u32 {
+    if is_input {
+        2
+    } else {
+        1
+    }
+}
+
+unsafe extern "C" fn m_ports_get(
+    _plugin: *const clap_plugin,
+    index: u32,
+    is_input: bool,
+    info: *mut clap_audio_port_info,
+) -> bool {
+    let limit = if is_input { 2 } else { 1 };
+    if index >= limit || info.is_null() {
+        return false;
+    }
+    let out = &mut *info;
+    out.id = index as clap_id;
+    out.name = [0; 256];
+    let label: &[u8] = match (is_input, index) {
+        (true, 1) => b"Key\0",
+        (true, _) => b"In\0",
+        _ => b"Out\0",
+    };
+    for (slot, byte) in out.name.iter_mut().zip(label.iter()) {
+        *slot = *byte as c_char;
+    }
+    out.flags = 0;
+    out.channel_count = 2;
+    out.port_type = ptr::null();
+    out.in_place_pair = u32::MAX;
+    true
+}
+
+static MONITOR_PORTS_EXT: clap_plugin_audio_ports = clap_plugin_audio_ports {
+    count: Some(m_ports_count),
+    get: Some(m_ports_get),
+};
+
+unsafe extern "C" fn m_get_extension(
+    _plugin: *const clap_plugin,
+    id: *const c_char,
+) -> *const c_void {
+    if !id.is_null() && CStr::from_ptr(id) == CStr::from_ptr(CLAP_EXT_AUDIO_PORTS.as_ptr()) {
+        return &MONITOR_PORTS_EXT as *const clap_plugin_audio_ports as *const c_void;
+    }
+    ptr::null()
+}
+
+fn key_monitor() -> SyncClapInstance {
+    let inst = __instance_from_raw_for_test(
+        move |_host| {
+            let state = Box::into_raw(Box::new(MonitorState { active: false }));
+            let plugin = Box::new(clap_plugin {
+                desc: ptr::null(),
+                plugin_data: state as *mut c_void,
+                init: Some(m_init),
+                destroy: Some(m_destroy),
+                activate: Some(m_activate),
+                deactivate: Some(m_deactivate),
+                start_processing: Some(m_start),
+                stop_processing: Some(m_stop),
+                reset: Some(m_reset),
+                process: Some(m_process),
+                get_extension: Some(m_get_extension),
+                on_main_thread: Some(m_main_thread),
+            });
+            Box::into_raw(plugin) as *const clap_plugin
+        },
+        SR,
+    )
+    .expect("key-monitor effect builds");
+    assert!(
+        inst.has_sidechain_input(),
+        "the monitor must declare a key port, or it can never be handed one"
+    );
+    SyncClapInstance(inst)
+}
+
+// ---------------------------------------------------------------------------
+// Fixture
+// ---------------------------------------------------------------------------
+
+/// The harness kit with the key monitor loaded, both taps faded out, and
+/// `TAP_B` silenced at the source.
+///
+/// Fading the taps to zero rather than muting them is deliberate: the tap
+/// is captured POST-FX, PRE-FADER, so a source at fader zero still keys
+/// at full level. That both isolates the monitor's output at master and
+/// pins the documented tap point.
+fn fixture() -> EngineState {
+    let state = EngineState::with_port_levels([0.0, KEY_LEVEL, 0.0]);
+    state
+        .plugins
+        .write()
+        .insert(MONITOR_ID, Mutex::new(key_monitor()));
+    for tap in [TAP_A, TAP_B] {
+        state.tracks.read().get(&tap).unwrap().set_volume(0.0);
+    }
+    state
+        .shared
+        .master_volume_bits
+        .store(1.0f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    state
+}
+
+fn route(state: &EngineState, source: SendSource) {
+    state
+        .shared
+        .sidechain_routes
+        .store(Arc::new(vec![SidechainRoute {
+            plugin: MONITOR_ID,
+            source,
+            enabled: true,
+        }]));
+}
+
+/// Render two chunks and hand back the peak of the SECOND one — the first
+/// chunk can only ever show the fallback, because a key is one block old.
+fn render_second_chunk(state: &EngineState, source: StemSource) -> f32 {
+    let out = render_stem(
+        source,
+        0,
+        TWO_CHUNKS,
+        &state.shared,
+        &state.tracks,
+        &state.busses,
+        &state.master,
+        &state.clips,
+        &state.midi_clips,
+        &state.plugins,
+        &state.tempo_map,
+        SR,
+    )
+    .expect("render succeeds");
+    assert_eq!(out.len(), TWO_CHUNKS as usize * 2);
+    peak(&out[CHUNK * 2..])
+}
+
+/// Assert a rendered level is the delivered key and not the fallback,
+/// naming both so a failure says which side it landed on.
+#[track_caller]
+fn assert_keyed(got: f32, expected: f32, chain: &str) {
+    assert!(
+        (got - expected).abs() < 1e-6,
+        "{chain}: expected the routed key ({expected}), got {got} \
+         (the self-key fallback would read {})",
+        at_master(NO_KEY)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Delivery: every chain that hosts plugins must hand over the key
+// ---------------------------------------------------------------------------
+
+/// The bass-ducker case from the field report: a compressor on an
+/// INSTRUMENT track, keyed from the kick. The route was stored, the
+/// plugin ran, and the mixer called the keyless `process()` — so the
+/// ducker keyed off the bass itself and the mix measured identical to
+/// two decimals no matter what was routed in.
+#[test]
+fn an_instrument_tracks_inserts_receive_the_key() {
+    let state = fixture();
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    route(&state, SendSource::Track(TAP_A));
+
+    let got = render_second_chunk(&state, StemSource::Track(PARENT));
+    assert_keyed(got, at_master(KEY_LEVEL), "instrument-track inserts");
+}
+
+/// The gate-on-a-drum-tap case: sub-tracks host their own effect chain,
+/// run from the parent's port fan-out, and it had the same keyless call.
+#[test]
+fn a_sub_tracks_inserts_receive_the_key() {
+    let state = fixture();
+    state.tracks.read().get(&TAP_B).unwrap().push_plugin(MONITOR_ID);
+    // TAP_B carries the monitor, so it must reach master to be measured;
+    // TAP_A stays at fader zero and keys anyway.
+    state.tracks.read().get(&TAP_B).unwrap().set_volume(1.0);
+    route(&state, SendSource::Track(TAP_A));
+
+    let got = render_second_chunk(&state, StemSource::Track(PARENT));
+    assert_keyed(got, at_master(KEY_LEVEL), "sub-track inserts");
+}
+
+/// A bus ducker — "route the kick into the group bus's compressor" — is
+/// the same shape as the track case and was broken the same way.
+#[test]
+fn a_busses_inserts_receive_the_key() {
+    let state = fixture();
+    state.add_bus(BUS, "Group");
+    state.busses.write().get_mut(&BUS).unwrap().plugin_ids.push(MONITOR_ID);
+    route(&state, SendSource::Track(TAP_A));
+
+    let got = render_second_chunk(&state, StemSource::Master);
+    assert_keyed(got, at_master(KEY_LEVEL), "bus inserts");
+}
+
+/// Master-bus ducking (the classic pumping mix). The master chain runs
+/// post-sum in both the live callback and the offline bounce; both now
+/// carry the key.
+#[test]
+fn the_master_chain_receives_the_key() {
+    let state = fixture();
+    state.master.write().plugin_ids.push(MONITOR_ID);
+    route(&state, SendSource::Track(TAP_A));
+
+    let got = render_second_chunk(&state, StemSource::Master);
+    assert!(
+        (got - KEY_LEVEL).abs() < 1e-6,
+        "master inserts: expected the routed key ({KEY_LEVEL}), got {got}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Sources: what can be keyed FROM
+// ---------------------------------------------------------------------------
+
+/// The field report's first suspicion, now supported rather than silently
+/// empty: keying off `1000000000`, a TAP of a multi-output drum kit. A
+/// kick that only exists as one port of a kit plugin has no other
+/// address, so if a tap can't key, "duck the bass from the kick" can't be
+/// expressed at all for the built-in kit.
+///
+/// (This is the same assertion as the instrument-track test above; it is
+/// spelled out separately because it pins the SOURCE half — the tap is
+/// captured post-FX pre-fader while sitting at fader zero.)
+#[test]
+fn a_sub_track_can_be_the_key_source() {
+    let state = fixture();
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    route(&state, SendSource::Track(TAP_A));
+
+    let got = render_second_chunk(&state, StemSource::Track(PARENT));
+    assert_keyed(got, at_master(KEY_LEVEL), "sub-track as key source");
+}
+
+/// `SendSource::Bus` has been a legal route target since the feature
+/// landed (`sidechain::from_bus`), but no bus was ever captured, so it
+/// resolved to an unwritten slot — accepted, then ignored.
+#[test]
+fn a_bus_can_be_the_key_source() {
+    let state = fixture();
+    state.add_bus(BUS, "Group");
+    state.set_output(TAP_A, TrackOutput::Bus(BUS));
+    // The bus is captured pre-fader too, so it can feed a key without
+    // being audible itself.
+    state.busses.read().get(&BUS).unwrap().set_volume(0.0);
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    route(&state, SendSource::Bus(BUS));
+
+    let got = render_second_chunk(&state, StemSource::Master);
+    // The tap reaches the bus through its own fader, which the fixture
+    // parks at zero — so raise it to hear the bus carry a key.
+    assert!(
+        got < 1e-6 || (got - at_master(NO_KEY)).abs() > 1e-6,
+        "bus source must not silently fall back to the self-key value"
+    );
+
+    // Now with the tap audible into the bus: the bus's pre-fader sum is
+    // the tap at its own fader/pan, which is the signal the key carries.
+    let state = fixture();
+    state.add_bus(BUS, "Group");
+    state.set_output(TAP_A, TrackOutput::Bus(BUS));
+    state.tracks.read().get(&TAP_A).unwrap().set_volume(1.0);
+    state.busses.read().get(&BUS).unwrap().set_volume(0.0);
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    route(&state, SendSource::Bus(BUS));
+
+    let got = render_second_chunk(&state, StemSource::Master);
+    assert_keyed(
+        got,
+        at_master(at_master(KEY_LEVEL)),
+        "bus as key source (tap panned into the bus, bus tapped pre-fader)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The negative half
+// ---------------------------------------------------------------------------
+
+/// With no route the plugin must see NO key and fall back to its own
+/// input — the property that made the bug invisible, and the reason the
+/// field report's "toggle `enabled` to verify" advice doesn't work.
+#[test]
+fn an_unrouted_plugin_gets_no_key() {
+    let state = fixture();
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+
+    let got = render_second_chunk(&state, StemSource::Track(PARENT));
+    assert!(
+        (got - at_master(NO_KEY)).abs() < 1e-6,
+        "an unrouted plugin must see no key, got {got}"
+    );
+}
+
+/// A disabled route is the same as no route: configuration kept, key not
+/// delivered.
+#[test]
+fn a_disabled_route_delivers_no_key() {
+    let state = fixture();
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state
+        .shared
+        .sidechain_routes
+        .store(Arc::new(vec![SidechainRoute {
+            plugin: MONITOR_ID,
+            source: SendSource::Track(TAP_A),
+            enabled: false,
+        }]));
+
+    let got = render_second_chunk(&state, StemSource::Track(PARENT));
+    assert!(
+        (got - at_master(NO_KEY)).abs() < 1e-6,
+        "a disabled route must deliver no key, got {got}"
+    );
+}
+
+/// The one-block delay is a property, not an accident: it is what makes
+/// the result independent of track order and lets a track key off itself.
+/// The first block of a render therefore shows the fallback.
+#[test]
+fn the_key_is_one_block_old() {
+    let state = fixture();
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    route(&state, SendSource::Track(TAP_A));
+
+    let out = render_stem(
+        StemSource::Track(PARENT),
+        0,
+        TWO_CHUNKS,
+        &state.shared,
+        &state.tracks,
+        &state.busses,
+        &state.master,
+        &state.clips,
+        &state.midi_clips,
+        &state.plugins,
+        &state.tempo_map,
+        SR,
+    )
+    .expect("render succeeds");
+
+    let first = peak(&out[..CHUNK * 2]);
+    let second = peak(&out[CHUNK * 2..]);
+    assert!(
+        (first - at_master(NO_KEY)).abs() < 1e-6,
+        "the first block has no previous capture to read, got {first}"
+    );
+    assert_keyed(second, at_master(KEY_LEVEL), "second block");
+}

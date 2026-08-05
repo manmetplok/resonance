@@ -62,6 +62,7 @@ pub(super) fn try_handle(
         proto::PLACE => place(app, conn, request),
         proto::MOVE => move_clip(app, request),
         proto::TRIM => trim(app, request),
+        proto::SPLIT => split(app, request),
         proto::DELETE => delete(app, request),
         proto::SET_GAIN => set_gain(app, request),
         proto::SET_FADE => set_fade(app, request),
@@ -226,12 +227,12 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
             RpcError::not_found(format!("no track with id {track_id}")),
         );
     };
-    if track.track_type != TrackType::Audio {
+    if !takes_audio_clips(app, track) {
         return reject(
             request,
             RpcError::invalid_params(format!(
                 "track {track_id} is a {:?} track; audio clips need an audio track \
-                 (track.add with kind \"audio\")",
+                 (track.add with kind \"audio\") or an external-instrument track",
                 track.track_type
             )),
         );
@@ -405,6 +406,20 @@ pub(crate) fn import_result(app: &Resonance, paths: &[String]) -> pool_proto::Im
 // clip.move / clip.trim / clip.delete
 // ---------------------------------------------------------------------------
 
+/// Whether `track` can hold audio clips.
+///
+/// An external-instrument track does, even though its type is
+/// `Instrument`: its sound is outboard, so what lands on it is recorded
+/// AUDIO — the mixer renders it through the audio-track branch, and
+/// `clip.trim` has always worked on those takes. Only `clip.place` and
+/// `clip.move` refused, which meant a hardware take could be cut but
+/// never copied or re-placed: duplicating an 8-bar section was
+/// impossible over the API and had to be spliced outside the project
+/// (ba doc #275 P2).
+fn takes_audio_clips(app: &Resonance, track: &crate::state::TrackState) -> bool {
+    track.track_type == TrackType::Audio || app.external_instruments.contains_key(&track.id)
+}
+
 fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: MoveParams = match request.params() {
         Ok(p) => p,
@@ -417,12 +432,13 @@ fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
 
     let new_track_id = match params.track_id {
         Some(id) => match app.registry.tracks.iter().find(|t| t.id == id.0) {
-            Some(t) if t.track_type == TrackType::Audio => id.0,
+            Some(t) if takes_audio_clips(app, t) => id.0,
             Some(t) => {
                 return reject(
                     request,
                     RpcError::invalid_params(format!(
-                        "track {id} is a {:?} track; audio clips need an audio track",
+                        "track {id} is a {:?} track; audio clips need an audio track \
+                         or an external-instrument track",
                         t.track_type
                     )),
                 )
@@ -450,6 +466,61 @@ fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         }),
     );
     (ack(app, request), task)
+}
+
+/// `clip.split` — cut one clip in two at a timeline position.
+///
+/// Both halves are trims of the same source, so the edit is free for a
+/// mapped take and exactly reversible with `edit.undo`. The tail's id is
+/// allocated here (like `clip.place`) so the reply names both halves and
+/// `song.tracks` resolves the new one on the very next request.
+fn split(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: proto::SplitParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(clip) = find_clip(app, params.clip_id.0) else {
+        return clip_not_found(app, request, params.clip_id.0);
+    };
+    let (clip_start, duration) = (clip.start_sample, clip.duration_samples);
+
+    let at_sample = match super::transport::resolve_position(app, &params.at) {
+        Ok(sample) => sample,
+        Err(e) => return reject(request, e),
+    };
+    // A cut at either edge leaves one half empty. Refusing beats
+    // returning a zero-length clip the caller would then have to notice.
+    if at_sample <= clip_start || at_sample >= clip_start + duration {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "clip {} plays samples {}..{}; a split at {at_sample} is outside it, so one \
+                 half would be empty",
+                params.clip_id,
+                clip_start,
+                clip_start + duration
+            )),
+        );
+    }
+
+    let new_clip_id = app.compose.fresh_derived_clip_id();
+    let task = super::run_via_update(
+        app,
+        Message::Clip(ClipMessage::SplitClipAt {
+            clip_id: params.clip_id.0,
+            new_clip_id,
+            at_sample,
+        }),
+    );
+    let result = proto::SplitResult {
+        head_clip_id: resonance_control::ids::ClipId(params.clip_id.0),
+        tail_clip_id: resonance_control::ids::ClipId(new_clip_id),
+        at: super::song::song_position(app, at_sample),
+        head_length_samples: at_sample - clip_start,
+        tail_length_samples: clip_start + duration - at_sample,
+        revision: app.revision(),
+    };
+    (super::success(request, &result), task)
 }
 
 fn trim(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {

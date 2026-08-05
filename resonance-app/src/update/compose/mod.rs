@@ -91,14 +91,23 @@ pub(crate) fn install_derived_midi_clip(
     use resonance_audio::types::AudioCommand;
 
     let key = (clip.definition_id, clip.placement_id, clip.track_id);
-    if let Some(old_id) = r.compose.derived_clips.remove(&key) {
+    let reused = r.compose.derived_clips.remove(&key);
+    if let Some(old_id) = reused {
         let _ = r
             .engine
             .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
         r.midi_clips.retain(|c| c.id != old_id);
     }
 
-    let clip_id = r.compose.fresh_derived_clip_id();
+    // Regenerating the SAME (section, placement, track) slot keeps the
+    // slot's clip id (ba doc #275 P1.7). The clip is still torn down and
+    // rebuilt — its notes, length and name are all replaced — but a
+    // client that cached the id from `generate.part` or `song.tracks`
+    // can still address it afterwards. Handing out a fresh id every time
+    // silently invalidated every cached id whenever anything re-derived
+    // the lane, including a track rename (the generated name embeds the
+    // track's name, so renaming re-derives).
+    let clip_id = reused.unwrap_or_else(|| r.compose.fresh_derived_clip_id());
     let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
         clip_id,
         track_id: clip.track_id,

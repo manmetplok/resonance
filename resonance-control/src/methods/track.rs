@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 /// `track.add` — add a track ([`AddParams`] -> [`AddResult`]).
 pub const ADD: &str = "track.add";
 /// `track.rename` — rename a track ([`RenameParams`] -> `MutationAck`).
+///
+/// Generated section clips embed the track's name (`"<section> ·
+/// <track>"`), so renaming re-derives them — but each keeps the clip id
+/// of the (section, placement, track) slot it belongs to, so cached ids
+/// stay valid (ba doc #275 P1.7).
 pub const RENAME: &str = "track.rename";
 /// `track.delete` — delete a track; destructive, requires
 /// `"confirm": true` ([`DeleteParams`] -> `MutationAck`).
@@ -71,22 +76,38 @@ pub const METHODS: &[&str] = &[
 
 /// Params for `track.set_sidechain`.
 ///
-/// The plugin is addressed exactly as `track.set_plugin_param` addresses
-/// it — `track_id` plus an optional `plugin_id` / `occurrence` — and the
-/// key source is named by `source_track_id` **or** `source_bus_id`,
-/// exactly one of which must be given.
+/// The plugin is addressed as `track.set_plugin_param` addresses it —
+/// `track_id` plus an optional `plugin_id` / `occurrence` — and the key
+/// source is named by `source_track_id` **or** `source_bus_id`, exactly
+/// one of which must be given.
+///
+/// Two rules keep a route from being accepted and then ignored (ba doc
+/// #275 P0):
+///
+/// - An omitted `plugin_id` targets the first plugin on the track that
+///   declares a key port, NOT the instrument at slot 0 (a synth has no
+///   key input, so that default routed every unqualified call onto the
+///   one plugin guaranteed to drop it).
+/// - A route onto a plugin with no key port is **refused**, naming the
+///   plugins on that track that accept one.
+///
+/// Any track or bus can be the source, including a sub-track (one tap of
+/// a multi-output instrument, e.g. the kick of a drum kit) — that is
+/// usually the only address a single kit piece has.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetSidechainParams {
     /// The track hosting the plugin whose key is being routed.
     pub track_id: TrackId,
-    /// CLAP id of the plugin to address; omitted targets the track's
-    /// instrument.
+    /// CLAP id of the plugin to address; omitted targets the first
+    /// plugin on the track that declares a key port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<u32>,
-    /// Feed the key from this track's audio.
+    /// Feed the key from this track's audio. A sub-track (drum tap) is a
+    /// valid source and is captured post-FX, pre-fader — so a kick can
+    /// key a ducker while its own fader sits at -inf.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_track_id: Option<TrackId>,
     /// Feed the key from this bus's audio.
@@ -107,6 +128,8 @@ fn default_true() -> bool {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ClearSidechainParams {
     pub track_id: TrackId,
+    /// Omitted targets the same plugin `track.set_sidechain` would: the
+    /// first on the track with a key port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

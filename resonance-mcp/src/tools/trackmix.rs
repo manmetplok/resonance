@@ -402,17 +402,26 @@ impl ResonanceMcp {
                        needs; it cannot be done with plugin parameters. \
                        \
                        The plugin is addressed like track_set_plugin_param: track_id plus an \
-                       optional plugin_id (+ occurrence), defaulting to the track's instrument. \
-                       Name the key source with EITHER source_track_id OR source_bus_id. \
-                       enabled defaults to true; false keeps the routing configured but stops \
-                       delivering the key, so the plugin falls back to keying off its own input. \
+                       optional plugin_id (+ occurrence). Omitting plugin_id targets the first \
+                       plugin on the track that HAS a key port (not the instrument at slot 0 — a \
+                       synth has none). Name the key source with EITHER source_track_id OR \
+                       source_bus_id; any track, bus or SUB-TRACK works, and a sub-track (one tap \
+                       of a multi-output drum kit) is usually the only address a single kit piece \
+                       has. Sources are tapped post-FX and PRE-fader, so a key source can sit at \
+                       -inf on the mixer and still key. enabled defaults to true; false keeps the \
+                       routing configured but stops delivering the key, so the plugin falls back \
+                       to keying off its own input. \
                        \
                        Only the DETECTOR changes: the key never reaches the output, so routing a \
                        kick into a pad's compressor makes the pad duck, it does not add kick to \
                        the pad. Two plugins currently read a key — resonance-compressor (ducking) \
-                       and resonance-gate (open/close from another source). A route onto a plugin \
-                       with no key port is stored but does nothing, because the plugin at an \
-                       instance can be swapped; it is not an error. \
+                       and resonance-gate (open/close from another source). Routing a key into a \
+                       plugin that has no key port is REFUSED, naming the plugins on that track \
+                       that accept one. \
+                       \
+                       To verify a route took effect, key from a deliberately SILENT track and \
+                       watch the level change — do NOT toggle enabled, because a disabled route \
+                       falls back to self-keying and can look identical to a working one. \
                        \
                        The key is delivered one audio block late by design (~2.7 ms at the \
                        default quantum), which keeps the result independent of track order and \

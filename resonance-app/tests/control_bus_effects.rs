@@ -150,6 +150,7 @@ fn echo(app: &mut Resonance, bus_id: u64, instance_id: u64, plugin_id: &str) {
             },
         ],
         has_gui: false,
+        has_sidechain_input: false,
     });
 }
 

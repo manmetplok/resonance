@@ -126,10 +126,11 @@ fn bounce_excludes_the_reference_and_renders_the_mix() {
     let _ = std::fs::remove_dir(&dir);
 
     assert_eq!(samples.len(), FRAMES * 2, "stereo frame count");
-    // The clip pans to centre, so each channel carries the DC scaled by
-    // the constant-power centre gain (-3 dB). The exact value doesn't
-    // matter — what matters is that it's the *mix*, never the reference.
-    let expected_mix = MIX_DC * std::f32::consts::FRAC_1_SQRT_2;
+    // The clip pans to centre, which is unity on a stereo-balance track
+    // (ba doc #276 BUG 3), so each channel carries the DC as-is. The
+    // exact value doesn't matter — what matters is that it's the *mix*,
+    // never the reference.
+    let expected_mix = MIX_DC;
     assert!(
         samples.iter().all(|&s| (s - expected_mix).abs() < 1e-4),
         "bounce must contain the mix (~{expected_mix}), got e.g. {}",

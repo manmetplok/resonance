@@ -78,6 +78,7 @@ fn app() -> Resonance {
             },
         ],
         has_gui: false,
+        has_sidechain_input: false,
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });
@@ -273,6 +274,7 @@ fn a_nan_bound_is_treated_as_a_malformed_range_rather_than_panicking() {
             },
         ],
         has_gui: false,
+        has_sidechain_input: false,
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });

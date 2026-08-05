@@ -234,9 +234,9 @@ fn frozen_track_plays_cache_not_live_source() {
     attach(&state, manual_source(DC, frames, SR));
     let frozen = bounce(&state, "cache_frozen");
 
-    // Centre pan applies the constant-power -3 dB gain to a unity-volume
-    // track; the cache is DC, so every sample is that exact constant.
-    let expected = DC * std::f32::consts::FRAC_1_SQRT_2;
+    // Centre pan is unity on a stereo-balance track (ba doc #276 BUG 3),
+    // so a unity-volume track passes the DC cache through untouched.
+    let expected = DC;
     assert!(
         frozen.iter().all(|&s| (s - expected).abs() < 1e-4),
         "frozen bounce must carry the DC cache (~{expected}), got e.g. {}",
@@ -306,8 +306,8 @@ fn sample_rate_mismatch_resamples() {
 
     let frozen = bounce(&state, "resample");
     // DC interpolates to DC, so the resampled output is the same constant
-    // (scaled by centre pan) and, crucially, non-silent and finite.
-    let expected = DC * std::f32::consts::FRAC_1_SQRT_2;
+    // (centre pan is unity) and, crucially, non-silent and finite.
+    let expected = DC;
     assert!(peak(&frozen) > 0.1, "resampled cache must be non-silent");
     assert!(
         frozen.iter().all(|s| s.is_finite()),

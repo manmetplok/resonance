@@ -40,7 +40,7 @@ Every mutating result carries a `revision` counter that the app bumps once per c
 if it jumps by more than your own calls, the user edited concurrently — re-read before \
 continuing.\n\
 \n\
-Long-running operations (project_*, vocal_render, render_mixdown, render_stems) run as jobs: \
+Long-running operations (project_*, vocal_render, render_mixdown) run as jobs: \
 the tool waits a bounded time and returns the final job status; if it reports still-running, \
 poll job_status or block with job_wait using the returned job_id.\n\
 \n\

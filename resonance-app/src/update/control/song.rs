@@ -698,12 +698,22 @@ fn instrument_slot(app: &Resonance, t: &TrackState) -> Option<usize> {
 /// (`"external:<device-id>"`) when the track drives outboard hardware,
 /// else the instrument plugin's stable CLAP id. `None` for audio tracks
 /// and for instrument tracks holding no instrument.
+///
+/// When no device DEFINITION has been picked (the optional registry entry
+/// that names patches and CC layout), this falls back to the track's
+/// lifecycle state — the same word `external.status` reports — rather than
+/// the flat `"unconfigured"` it used to print. A fully wired, recorded
+/// track reading `external:unconfigured` here while `external.status` said
+/// `live` was two answers to one question (ba doc #275 P1.5).
 fn instrument_summary(app: &Resonance, t: &TrackState) -> Option<String> {
     if let Some(ext) = app.external_instruments.get(&t.id) {
-        return Some(format!(
-            "external:{}",
-            ext.device_id.as_deref().unwrap_or("unconfigured")
-        ));
+        return Some(match ext.device_id.as_deref() {
+            Some(device) => format!("external:{device}"),
+            None => format!(
+                "external:{}",
+                super::external::status_label(ext.status(t))
+            ),
+        });
     }
     instrument_slot(app, t)
         .and_then(|i| t.plugins.get(i))

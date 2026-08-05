@@ -351,11 +351,14 @@ pub(super) fn render_chunk(
             for &plugin_id in &master_guard.plugin_ids {
                 if let Some(mutex) = plugins_guard.get(&plugin_id) {
                     let mut inst = lock_plugin_for_bounce(mutex);
-                    inst.0.process(
-                        &mut scratch.track_buf_l[..frames],
-                        &mut scratch.track_buf_r[..frames],
-                        frames,
-                    );
+                    // Same key routing as the live master chain, so a
+                    // bounced mix pumps exactly like playback.
+                    let key = scratch.sidechain.key_for(&sidechain_guard, plugin_id);
+                    let mut outs = [crate::clap_host::StereoBufMut {
+                        left: &mut scratch.track_buf_l[..frames],
+                        right: &mut scratch.track_buf_r[..frames],
+                    }];
+                    inst.0.process_multi_with_key(&mut outs, key, frames);
                 }
             }
             for f in 0..frames {

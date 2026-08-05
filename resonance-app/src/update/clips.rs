@@ -103,6 +103,13 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
         } => {
             move_clip_to(r, clip_id, new_start_sample, new_track_id);
         }
+        ClipMessage::SplitClipAt {
+            clip_id,
+            new_clip_id,
+            at_sample,
+        } => {
+            split_clip_at(r, clip_id, new_clip_id, at_sample);
+        }
         ClipMessage::TrimClipTo {
             clip_id,
             new_start_sample,
@@ -139,6 +146,55 @@ pub fn move_clip_to(
         clip_id,
         new_start_sample,
         new_track_id,
+    });
+}
+
+/// Cut a clip in two at `at_sample`, mirroring BOTH halves immediately.
+///
+/// The engine owns the audio and does the real split; the mirror is
+/// updated here rather than waiting for the `ClipTrimmed` /
+/// `ClipImported` echoes, so `clip.split` can report the tail's id and
+/// have `song.tracks` resolve it on the caller's very next request (the
+/// same contract `clip.place` and `notes.create_clip` hold).
+///
+/// A split at or outside either edge does nothing at all, matching the
+/// engine — one side would be empty.
+pub fn split_clip_at(
+    r: &mut Resonance,
+    clip_id: ClipId,
+    new_clip_id: ClipId,
+    at_sample: SamplePos,
+) {
+    let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) else {
+        return;
+    };
+    let head_end = clip.start_sample + clip.duration_samples;
+    if at_sample <= clip.start_sample || at_sample >= head_end {
+        return;
+    }
+    let head_frames = at_sample - clip.start_sample;
+    let mut tail = clip.clone();
+    tail.id = new_clip_id;
+    tail.start_sample = at_sample;
+    tail.trim_start_frames = clip.trim_start_frames + head_frames;
+    tail.duration_samples = clip.duration_samples - head_frames;
+    tail.fade_in_frames = 0;
+    // Warp markers and tuning are keyed to the original clip's timeline;
+    // the engine drops them on the tail, so the mirror must too.
+    tail.vocal_tuning = None;
+
+    let head_trim_end = clip.trim_end_frames + (clip.duration_samples - head_frames);
+    if let Some(head) = r.clips.iter_mut().find(|c| c.id == clip_id) {
+        head.trim_end_frames = head_trim_end;
+        head.duration_samples = head_frames;
+        head.fade_out_frames = 0;
+    }
+    r.clips.push(tail);
+
+    let _ = r.engine.send(AudioCommand::SplitClip {
+        clip_id,
+        new_clip_id,
+        at_sample,
     });
 }
 

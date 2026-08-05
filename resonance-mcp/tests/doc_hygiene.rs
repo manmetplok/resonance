@@ -182,8 +182,6 @@ fn known_traps_stay_documented() {
         ("section_create", &["place: false"]),
         // render.mixdown rejects a partial range on current builds.
         ("render_mixdown", &["range", "not supported", "NOT SUPPORTED"]),
-        // render.stems is unimplemented app-side.
-        ("render_stems", &["NOT IMPLEMENTED"]),
         // generate.part silently ignores three of its own params.
         ("generate_part", &["IGNORES"]),
         // The bass default is a placeholder, not a part.

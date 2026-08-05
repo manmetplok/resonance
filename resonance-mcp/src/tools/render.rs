@@ -19,7 +19,9 @@ impl ResonanceMcp {
         description = "Bounce the master mix to a WAV file at an absolute path. Replacing an \
                        existing file needs overwrite: true. Runs as a job — waits up to 5 \
                        minutes and returns the final status whose result carries {path, \
-                       duration_s, sample_rate}. The transport must be stopped (a running or \
+                       duration_s, sample_rate, soloed_track_ids}. A non-empty \
+                       soloed_track_ids means the file is NOT the mix — only those tracks are \
+                       in it; check it before calling a bounce a master. The transport must be stopped (a running or \
                        recording transport is refused as busy), and only one render at a time. \
                        \
                        RANGE IS NOT SUPPORTED on current builds: `range` is in the schema, but \
@@ -43,26 +45,6 @@ impl ResonanceMcp {
             .await
     }
 
-    #[tool(
-        description = "Export per-track stem WAVs into an absolute directory. NOT IMPLEMENTED in \
-                       the app on current builds: render.stems answers `unsupported` (stem \
-                       export lands with the export epic), so this call only ever costs a round \
-                       trip and returns an error — do not plan a workflow around it, and use \
-                       render_mixdown for audio you can actually listen to. (render.stems IS \
-                       listed in control_hello's capabilities: the method is declared by the \
-                       protocol but not implemented by the app, so capabilities cannot tell you \
-                       this one — only the call itself can.) When it does land: range defaults \
-                       to the whole song, replacing existing files needs overwrite: true, and it \
-                       runs as a job whose result carries {paths, duration_s}.",
-        annotations(destructive_hint = true, open_world_hint = false),
-        output_schema = schema_for_output::<JobStatus>()
-    )]
-    async fn render_stems(
-        &self,
-        Parameters(params): Parameters<render::StemsParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.invoke_job(render::STEMS, &params, RENDER_WAIT_MS).await
-    }
 
     #[tool(
         description = "Current state of a job (pending | running | done | error) with optional \

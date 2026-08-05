@@ -58,7 +58,13 @@ impl ResonanceMcp {
                        To create one from scratch, prefer track_add with kind \"external\" — \
                        one call instead of two. After enabling, wire both halves \
                        (external_set_midi_out AND external_set_return) or the track stays \
-                       silent. Undoable.",
+                       silent. \
+                       \
+                       If the track already carried an in-app INSTRUMENT it is removed here: on \
+                       an external track every plugin is an insert, so a leftover synth runs \
+                       first and overwrites the incoming hardware audio with its own silence \
+                       (audible in the app, -120 dBFS in every offline render). Effects on the \
+                       track are kept. Undoable.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn external_enable(
@@ -152,7 +158,12 @@ impl ResonanceMcp {
                        it makes an audible click. The measurement lands asynchronously — read \
                        external_status back for latency_offset_samples, or \
                        latency_detect_error if it failed (no return, silent synth, nothing \
-                       heard in the listen window).",
+                       heard in the listen window). \
+                       \
+                       A measurement REPLACES the stored offset, larger or smaller, so \
+                       re-running always reports what it just heard. (It used to clamp up to \
+                       the stored value, which made a re-measurement return the previous \
+                       reading verbatim.)",
         annotations(destructive_hint = false, open_world_hint = false)
     )]
     async fn external_detect_latency(

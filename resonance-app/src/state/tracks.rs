@@ -354,6 +354,12 @@ pub struct PluginSlotState {
     pub custom: PluginCustomState,
     /// Whether the plugin exposes a CLAP_EXT_GUI editor.
     pub has_gui: bool,
+    /// Whether the plugin declares an external sidechain (key) input port.
+    /// Reported by the engine on `PluginAdded`; `false` until that echo
+    /// arrives (and for the demo/replay slots that never get one).
+    /// `track.set_sidechain` refuses a route onto a plugin without a key
+    /// port, because the mixer would drop it (ba doc #275 P0).
+    pub has_sidechain_input: bool,
     /// Whether the host has currently opened the plugin's editor window.
     pub editor_open: bool,
 }
@@ -375,8 +381,16 @@ impl PluginSlotState {
             params,
             custom: PluginCustomState::Generic,
             has_gui,
+            has_sidechain_input: false,
             editor_open: false,
         }
+    }
+
+    /// Record whether this instance declares a key port, as the engine's
+    /// `PluginAdded` echo reports it.
+    pub fn with_sidechain_input(mut self, has_sidechain_input: bool) -> Self {
+        self.has_sidechain_input = has_sidechain_input;
+        self
     }
 }
 

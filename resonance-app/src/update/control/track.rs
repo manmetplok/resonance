@@ -1207,6 +1207,17 @@ fn resolve_keyed_plugin(
     plugin_id: Option<&str>,
     occurrence: Option<u32>,
 ) -> Result<resonance_audio::types::PluginInstanceId, RpcError> {
+    // No `plugin_id`: key the plugin that can actually take a key. The
+    // instrument-first default this used to share with
+    // `track.set_plugin_param` sent every unqualified call at slot 0 —
+    // a synth, which has no key port — so the route was stored on the
+    // one plugin in the chain guaranteed to ignore it (ba doc #275 P0).
+    if plugin_id.is_none() {
+        if let Some(slot) = t.plugins.iter().find(|p| p.has_sidechain_input) {
+            return Ok(slot.instance_id);
+        }
+    }
+
     let entries = super::song::plugin_entries(app, t);
     let occurrence = occurrence.unwrap_or(0);
     let entry = match plugin_id {
@@ -1304,6 +1315,16 @@ fn set_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         Err(e) => return reject(request, e),
     };
 
+    // A plugin that declares no key port can never be handed one — the
+    // mixer drops the key rather than connect a port the plugin never
+    // declared. Storing the route anyway is the failure mode ba doc #275
+    // reports as most expensive: the call succeeds, the audio is
+    // unchanged, and a client with no ears has nothing to go on. This is
+    // the one place that can say so, so it refuses here.
+    if let Err(e) = require_key_port(&t, instance_id) {
+        return reject(request, e);
+    }
+
     let task = super::run_via_update(
         app,
         Message::Plugin(PluginMessage::SetPluginSidechain {
@@ -1313,6 +1334,42 @@ fn set_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         }),
     );
     (ack(app, request), task)
+}
+
+/// Refuse a key route onto a plugin instance with no sidechain input,
+/// naming the plugins on this track that do have one.
+///
+/// The flag comes from the engine's `PluginAdded` echo (the same
+/// `has_sidechain_input` the mixer keys off), so this predicate cannot
+/// drift from the one that decides delivery.
+fn require_key_port(
+    t: &crate::state::TrackState,
+    instance_id: resonance_audio::types::PluginInstanceId,
+) -> Result<(), RpcError> {
+    let Some(slot) = t.plugins.iter().find(|p| p.instance_id == instance_id) else {
+        return Ok(());
+    };
+    if slot.has_sidechain_input {
+        return Ok(());
+    }
+    let keyable: Vec<&str> = t
+        .plugins
+        .iter()
+        .filter(|p| p.has_sidechain_input)
+        .map(|p| p.clap_plugin_id.as_str())
+        .collect();
+    let hint = if keyable.is_empty() {
+        "no plugin on this track declares one — add a plugin that does \
+         (com.resonance.compressor, com.resonance.gate) and route the key into that"
+            .to_string()
+    } else {
+        format!("plugins on this track that accept a key: [{}]", keyable.join(", "))
+    };
+    Err(RpcError::invalid_params(format!(
+        "plugin {} on track {} declares no sidechain (key) input, so a key routed \
+         into it would be silently ignored; {hint}",
+        slot.clap_plugin_id, t.id
+    )))
 }
 
 /// `track.clear_sidechain` — drop a plugin's key route so it falls back

@@ -167,10 +167,6 @@ pub(crate) struct PendingLatencyPing {
     /// offline failure.
     pub channel: u8,
     pub midi_out_device: Option<String>,
-    /// The track's manual latency offset at ping time — the floor the applied
-    /// offset can't drop below ("manual offset is the floor; auto-detect is
-    /// the convenience", doc #169).
-    pub manual_floor: i64,
     /// Live capture stream. Dropping it closes the device; kept alive for the
     /// whole measurement. Never read directly.
     pub _input: InputHandle,
@@ -249,9 +245,9 @@ fn track_routing(ctx: &HandlerCtx, track_id: TrackId) -> (u8, Option<String>, Op
 pub(crate) fn handle_detect_latency(ctx: &HandlerCtx, state: &mut HandlerState, track_id: TrackId) {
     // Not an external instrument → silent no-op, matching the other handlers'
     // missing-lookup convention.
-    let Some(config) = state.external_instruments.get(&track_id).copied() else {
+    if !state.external_instruments.contains_key(&track_id) {
         return;
-    };
+    }
 
     let fail = |reason: &str| {
         let _ = ctx
@@ -358,7 +354,6 @@ pub(crate) fn handle_detect_latency(ctx: &HandlerCtx, state: &mut HandlerState, 
         track_id,
         channel,
         midi_out_device,
-        manual_floor: config.latency_offset_samples,
         _input: input,
         ring_consumer: cons,
         input_channels: in_ch,
@@ -418,10 +413,18 @@ pub(crate) fn poll_pending_latency_ping(ctx: &HandlerCtx, state: &mut HandlerSta
     }
 }
 
-/// A detection landed: compute the round-trip, apply it as the track's offset
-/// (raising — never lowering — past the manual floor), emit the measured
-/// event, and republish the plugin-delay-compensation table. Also sends the
-/// matching Note Off so the synth doesn't sustain the ping note.
+/// A detection landed: compute the round-trip, apply it as the track's
+/// offset, emit the measured event, and republish the plugin-delay-
+/// compensation table. Also sends the matching Note Off so the synth
+/// doesn't sustain the ping note.
+///
+/// A measurement REPLACES whatever the offset was, including a bigger
+/// one. It used to clamp up to the stored value as a floor ("auto-detect
+/// only ever raises"), which made a second detect return the first
+/// reading verbatim and indistinguishable from a fresh one — an 82 ms
+/// stale value surviving a 12 ms re-measurement drags every take 71 ms
+/// early, and the only way out was to zero the offset first (ba doc #275
+/// P1.3). A measurement is evidence; the stored number is not.
 fn finish_ping_success(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -434,9 +437,8 @@ fn finish_ping_success(
         onset_to_engine_samples(onset_input_frames, ping.input_sample_rate, ctx.sample_rate);
     let latency_ms = onset_to_ms(onset_input_frames, ping.input_sample_rate);
 
-    // Manual offset is the floor: auto-detect only ever raises the applied
-    // offset, never drops it below what the user dialled in.
-    let applied = measured.max(ping.manual_floor);
+    // The measurement wins outright — see the note above.
+    let applied = measured;
 
     if let Some(config) = state.external_instruments.get_mut(&ping.track_id) {
         config.latency_offset_samples = applied;

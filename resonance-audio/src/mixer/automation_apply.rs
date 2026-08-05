@@ -38,11 +38,12 @@ fn db_to_lin(db: f32) -> f32 {
     }
 }
 
-/// Equal-power stereo gains for a `(volume, pan)` pair — the same pan law
-/// [`super::common::track_stereo_gains`] applies to the static values.
+/// Stereo gains for an automated `(volume, pan)` pair — the same balance
+/// law [`super::common::track_stereo_gains`] applies to the static
+/// values, so a pan lane and a pan knob mean the same thing.
 #[inline]
 fn stereo_gains(volume: f32, pan: f32) -> (f32, f32) {
-    let (pan_l, pan_r) = resonance_dsp::constant_power_pan(pan);
+    let (pan_l, pan_r) = resonance_dsp::stereo_balance(pan);
     (volume * pan_l, volume * pan_r)
 }
 
@@ -77,6 +78,30 @@ pub fn auto_gain_ramp(
     let (gl_start, gr_start) = stereo_gains(volume_at(start), pan_at(start));
     let (gl_end, gr_end) = stereo_gains(volume_at(end), pan_at(end));
     Some(((gl_start, gl_end), (gr_start, gr_end)))
+}
+
+/// The VOLUME half of [`auto_gain_ramp`]: linear gain at the block's two
+/// evaluation frames, with no pan law applied.
+///
+/// Used for the group trim a multi-output instrument's parent fader
+/// applies to its sub-track taps (ba doc #275 P1.1). Pan is deliberately
+/// left out — the taps sum to master individually, each with its own pan,
+/// so there is nothing left for the parent's pan to act on.
+#[inline]
+pub fn auto_volume_ramp(
+    snap: &AutomationSnapshot,
+    gain_target: AutomationTarget,
+    static_volume: f32,
+    start: u64,
+    end: u64,
+) -> (f32, f32) {
+    match snap.mix_lanes.get(&gain_target) {
+        Some(lane) => (
+            db_to_lin(lane.real_value_at(start)),
+            db_to_lin(lane.real_value_at(end)),
+        ),
+        None => (static_volume, static_volume),
+    }
 }
 
 /// Automated master volume (linear) at `frame`, or `None` when no

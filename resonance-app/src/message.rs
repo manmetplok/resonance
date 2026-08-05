@@ -31,6 +31,10 @@ pub enum Message {
     ChordTrack(ChordTrackMessage),
     Transport(TransportMessage),
     Marker(MarkerMessage),
+    /// Structural bar shifts (`arrangement.*`, ba doc #275 P2): insert or
+    /// remove bars, moving every clip, placement, marker and automation
+    /// point after the cut in ONE undoable edit.
+    Arrangement(ArrangementMessage),
     /// Transient marker interaction state (selection, context menu, inline
     /// rename) driven by the timeline ruler hit-testing (todo #369). These
     /// mutate only view state and never the persisted marker set, so they
@@ -186,6 +190,19 @@ pub enum TransportMessage {
 /// entry; the navigation variants (`JumpToNext`, `JumpToPrev`, `JumpTo`,
 /// `PlayFromMarker`) only move the playhead / transport and are not
 /// undoable, mirroring `SeekToSample` / `Play`.
+/// Structural bar shifts. Both variants move everything after the cut
+/// and are recorded as a single undo entry — the whole point of having
+/// them at all is that a restructure is one transaction rather than a
+/// few hundred per-object calls that can be interrupted half-done.
+#[derive(Debug, Clone, Copy)]
+pub enum ArrangementMessage {
+    /// Open `count` bars at 1-based `at_bar`.
+    InsertBars { at_bar: u32, count: u32 },
+    /// Close `count` bars at 1-based `at_bar`, deleting what starts
+    /// inside them.
+    RemoveBars { at_bar: u32, count: u32 },
+}
+
 #[derive(Debug, Clone)]
 pub enum MarkerMessage {
     /// Drop a new point marker at the current playhead (snapped to the
@@ -690,6 +707,15 @@ pub enum ClipMessage {
         new_start_sample: SamplePos,
         trim_start_frames: u64,
         trim_end_frames: u64,
+    },
+    /// Cut a clip in two at an absolute timeline position (control
+    /// endpoint `clip.split`, ba doc #275 P2). `new_clip_id` is allocated
+    /// by the caller so the reply can name both halves without waiting
+    /// for the engine echo, the same way `clip.place` does.
+    SplitClipAt {
+        clip_id: ClipId,
+        new_clip_id: ClipId,
+        at_sample: SamplePos,
     },
 }
 

@@ -30,7 +30,7 @@ use crate::latency::LatencyComp;
 use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 use crate::types::*;
 
-use super::automation_apply::{apply_plugin_params, auto_gain_ramp, auto_muted};
+use super::automation_apply::{apply_plugin_params, auto_gain_ramp, auto_muted, auto_volume_ramp};
 use super::common::{
     bus_stereo_gains, latch_transport, ramped_stereo_peaks, sum_to_output, sum_to_stereo,
     track_stereo_gains, TransportSnap,
@@ -274,6 +274,12 @@ impl RenderStrategy<'_> {
 
     /// Decide whether and how a sub-track renders its parent's port.
     /// Returns the `(gain_l, gain_r)` ramp endpoints.
+    ///
+    /// `parent_volume` is the parent track's fader (start, end) for this
+    /// block, applied as a group trim over the tap — a multi-output
+    /// instrument leaves through its taps, so without this the parent's
+    /// fader moved a value nobody read and the kit stayed put (ba doc
+    /// #275 P1.1). It is volume only, never pan; see `auto_volume_ramp`.
     fn sub_track_disposition(
         &self,
         sub_track: &Track,
@@ -281,6 +287,7 @@ impl RenderStrategy<'_> {
         parent_silenced: bool,
         auto_gain: AutoGain,
         auto_mute: Option<bool>,
+        parent_volume: (f32, f32),
     ) -> Option<((f32, f32), (f32, f32))> {
         let muted = sub_track.muted() || auto_mute.unwrap_or(false);
         match self {
@@ -300,6 +307,12 @@ impl RenderStrategy<'_> {
                 } else {
                     track_stereo_gains(sub_track)
                 };
+                // Only the TARGET is trimmed: the ramp's start endpoint is
+                // the gain this tap actually ended the previous block on,
+                // which already carried whatever the parent fader was then.
+                // Trimming it again would square the parent's gain.
+                let (sub_target_l, sub_target_r) =
+                    (sub_target_l * parent_volume.1, sub_target_r * parent_volume.1);
                 Some(((sub_last_l, sub_target_l), (sub_last_r, sub_target_r)))
             }
             Self::Bounce {
@@ -321,10 +334,17 @@ impl RenderStrategy<'_> {
                 // fan-out lands in one cache file. A regular bounce ramps
                 // between the automated endpoints.
                 if *freeze_raw {
+                    // No parent trim here: freeze captures the parent at
+                    // unity (see `track_disposition`) and the live mixer
+                    // re-applies its fader when the cache plays back.
+                    // Baking it in would apply it twice.
                     let (gain_l, gain_r) = track_stereo_gains(sub_track);
                     Some(((gain_l, gain_l), (gain_r, gain_r)))
                 } else {
-                    Some(bounce_gain_endpoints(track_stereo_gains(sub_track), auto_gain))
+                    let ((l0, l1), (r0, r1)) =
+                        bounce_gain_endpoints(track_stereo_gains(sub_track), auto_gain);
+                    let (pv0, pv1) = parent_volume;
+                    Some(((l0 * pv0, l1 * pv1), (r0 * pv0, r1 * pv1)))
                 }
             }
         }
@@ -952,11 +972,17 @@ pub(crate) fn render_block(
                     if let Some(mutex) = plugins_guard.get(&plugin_id) {
                         if let Some(mut inst) = strategy.lock_fx(mutex) {
                             apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
-                            inst.0.process(
-                                &mut track_buf_l[..frames],
-                                &mut track_buf_r[..frames],
-                                frames,
-                            );
+                            // Same external key as the audio-track branch
+                            // below: a ducker on a synth track is the most
+                            // common sidechain there is, and routing one
+                            // here used to store the route and then key
+                            // off the track's own input (ba doc #275 P0).
+                            let key = sidechain.key_for(sidechain_routes, plugin_id);
+                            let mut outs = [StereoBufMut {
+                                left: &mut track_buf_l[..frames],
+                                right: &mut track_buf_r[..frames],
+                            }];
+                            inst.0.process_multi_with_key(&mut outs, key, frames);
                             has_audio = true;
                         }
                     }
@@ -1137,6 +1163,15 @@ pub(crate) fn render_block(
         // sub-track (if any) and route its scratch buffer through the
         // sub-track's fader / pan / bus.
         if extra_ports_filled > 1 {
+            // The parent's fader is the kit's group trim (ba doc #275
+            // P1.1). Evaluated once per block, outside the tap loop.
+            let parent_volume = auto_volume_ramp(
+                automation,
+                AutomationTarget::TrackGain(track.id),
+                track.volume(),
+                gain_eval_start,
+                gain_eval_end,
+            );
             for sub_track in tracks_guard.values() {
                 let Some((parent_id, port_idx)) = sub_track.sub_track_of else {
                     continue;
@@ -1168,6 +1203,7 @@ pub(crate) fn render_block(
                     silenced,
                     sub_auto_gain,
                     sub_auto_mute,
+                    parent_volume,
                 ) else {
                     continue;
                 };
@@ -1184,10 +1220,26 @@ pub(crate) fn render_block(
                         if let Some(mutex) = plugins_guard.get(&plugin_id) {
                             if let Some(mut inst) = strategy.lock_fx(mutex) {
                                 apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
-                                inst.0.process(&mut pl[..frames], &mut pr[..frames], frames);
+                                let key = sidechain.key_for(sidechain_routes, plugin_id);
+                                let mut outs = [StereoBufMut {
+                                    left: &mut pl[..frames],
+                                    right: &mut pr[..frames],
+                                }];
+                                inst.0.process_multi_with_key(&mut outs, key, frames);
                             }
                         }
                     }
+                }
+
+                // A sub-track is a first-class key source: "duck the bass
+                // from the kick" on a multi-output kit means keying off
+                // the kick TAP, which is the only place that piece exists
+                // as its own signal. Captured post-FX, pre-fader, exactly
+                // like the top-level tracks above.
+                let sub_tap = SendSource::Track(sub_track.id);
+                if sidechain.is_tapped(sub_tap) {
+                    let (pl, pr) = &port_scratch[port_idx];
+                    sidechain.capture(sub_tap, &pl[..frames], &pr[..frames], frames);
                 }
 
                 // Plugin-delay compensation for the sub-track's chain.
@@ -1273,11 +1325,25 @@ pub(crate) fn render_block(
                 if let Some(mutex) = plugins_guard.get(&plugin_id) {
                     if let Some(mut inst) = strategy.lock_fx(mutex) {
                         apply_plugin_params(&mut inst, automation, plugin_id, eval_start);
-                        inst.0
-                            .process(&mut bus_buf_l[..frames], &mut bus_buf_r[..frames], frames);
+                        let key = sidechain.key_for(sidechain_routes, plugin_id);
+                        let mut outs = [StereoBufMut {
+                            left: &mut bus_buf_l[..frames],
+                            right: &mut bus_buf_r[..frames],
+                        }];
+                        inst.0.process_multi_with_key(&mut outs, key, frames);
                     }
                 }
             }
+        }
+
+        // Capture this bus post-FX and pre-fader for anything keying off
+        // it — the bus half of the track tap above. `SendSource::Bus` has
+        // been a legal route target all along (`sidechain::from_bus`), so
+        // without this a bus-sourced route resolved to a slot that was
+        // never written and silently keyed off the plugin's own input.
+        let bus_tap = SendSource::Bus(bus.id);
+        if sidechain.is_tapped(bus_tap) {
+            sidechain.capture(bus_tap, &bus_buf_l[..frames], &bus_buf_r[..frames], frames);
         }
 
         // Bus-stage equalization: pad this bus's chain up to the

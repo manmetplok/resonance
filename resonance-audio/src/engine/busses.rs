@@ -143,6 +143,7 @@ pub(crate) fn handle_add_plugin_to_bus(
             let instance_id = allocate_plugin_instance_id(&mut state.next_plugin_id, id_hint);
             let params = instance.query_params();
             let has_gui = instance.has_gui();
+            let has_sidechain_input = instance.has_sidechain_input();
             ctx.plugins.write().insert(
                 instance_id,
                 parking_lot::Mutex::new(SyncClapInstance(instance)),
@@ -158,6 +159,7 @@ pub(crate) fn handle_add_plugin_to_bus(
                 clap_file_path,
                 params,
                 has_gui,
+                has_sidechain_input,
             });
         }
         Err(e) => {

@@ -162,6 +162,7 @@ fn the_engine_echo_fills_the_placeholder_instead_of_duplicating_it() {
             current_value: 0.0,
         }],
         has_gui: false,
+        has_sidechain_input: false,
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });
@@ -262,6 +263,7 @@ fn the_initializing_window_is_distinguishable_from_the_other_two_failures() {
             current_value: 0.0,
         }],
         has_gui: false,
+        has_sidechain_input: false,
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });

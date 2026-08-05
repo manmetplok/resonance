@@ -78,6 +78,35 @@ pub enum AudioCommand {
     DeleteClip {
         clip_id: ClipId,
     },
+    /// Raise the engine's media-pool id allocator above `above`, so a
+    /// later `ImportAudioToPool` cannot hand out an id a loaded project
+    /// already uses.
+    ///
+    /// The allocator is engine-thread-local and starts at 1 each
+    /// session; a project's assets keep the ids they were saved with,
+    /// and the engine is never told about them (the app restores the
+    /// pool itself). Without this the first import after opening a
+    /// project took id 1 — which some existing asset already had — and
+    /// every clip referencing that id silently started playing the new
+    /// file (ba doc #276 BUG 2). Clip ids have always had this
+    /// high-water treatment via `LoadClipFromWav`; assets did not.
+    ReserveAssetIds {
+        above: crate::types::AssetId,
+    },
+    /// Cut `clip_id` in two at `at_sample` (an absolute timeline
+    /// position). The original keeps the head and its id; the tail
+    /// becomes a second clip with `new_clip_id`, playing the same source
+    /// from the split point.
+    ///
+    /// Both halves are non-destructive trims of the same source, so no
+    /// audio is copied for a memory-mapped clip. A split outside the
+    /// clip's audible span is a no-op — there would be nothing on one
+    /// side of it.
+    SplitClip {
+        clip_id: ClipId,
+        new_clip_id: ClipId,
+        at_sample: SamplePos,
+    },
     /// Set the fade-in/out lengths and curves of an audio clip. The
     /// engine clamps each fade length to the clip's visible duration and
     /// emits `AudioEvent::ClipFadeChanged` with the clamped values.

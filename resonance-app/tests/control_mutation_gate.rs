@@ -77,6 +77,9 @@ fn mutating_methods() -> Vec<&'static str> {
         // measurement of silence that reads like a real one (todo
         // #1219).
         methods::meter::METHODS,
+        // `arrangement.*` restructures the open project's timeline (ba
+        // doc #275 P2).
+        methods::arrangement::METHODS,
         // `pool.list` reads only, but like `master.summary` it describes
         // the OPEN project — an empty asset list reads like "this project
         // has no samples", which is a different claim from "there is no

@@ -1033,6 +1033,8 @@ pub(crate) fn mix_audio(
             track_buf_l,
             track_buf_r,
             transport_snap,
+            sidechain_routes,
+            sidechain,
         );
     }
 

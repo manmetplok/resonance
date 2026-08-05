@@ -160,6 +160,7 @@ fn add_and_echo(app: &mut Resonance, plugin_id: &str) -> u64 {
             },
         ],
         has_gui: false,
+        has_sidechain_input: false,
     });
     instance_id
 }
@@ -653,6 +654,7 @@ fn the_whole_limiter_sequence_runs_over_the_control_api_alone() {
             },
         ],
         has_gui: false,
+        has_sidechain_input: false,
     });
 
     // 3. The stages default to OFF, so an unconfigured mastering plugin

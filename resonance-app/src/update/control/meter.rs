@@ -247,7 +247,7 @@ fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResu
     let master = results
         .iter()
         .find(|m| m.target == StemSource::Master)
-        .map(|m| measure_result(*m, app.sample_rate))?;
+        .map(|m| with_solo(app, measure_result(*m, app.sample_rate)))?;
 
     let tracks = results
         .iter()
@@ -375,7 +375,7 @@ pub(crate) fn mix_measured(
         // measurement comes back.
         proto::MEASURE => results
             .first()
-            .map(|m| measure_result(*m, app.sample_rate))
+            .map(|m| with_solo(app, measure_result(*m, app.sample_rate)))
             .and_then(|r| serde_json::to_value(r).ok()),
         proto::STEMS => stems_result(app, &results).and_then(|r| serde_json::to_value(r).ok()),
         _ => return,
@@ -423,6 +423,9 @@ pub(crate) fn mix_measure_error(app: &mut Resonance, measure_id: u64, message: S
 pub(crate) fn measure_result(m: MixMeasurement, sample_rate: u32) -> MeasureResult {
     let live = m.source == EngineSource::Live;
     MeasureResult {
+        // Filled in by `with_solo` for master targets, which are the
+        // only ones solo can skew.
+        soloed_track_ids: Vec::new(),
         target: wire_target(m.target),
         source: match m.source {
             EngineSource::Render => MeasureSource::Render,
@@ -464,6 +467,32 @@ pub(crate) fn measure_result(m: MixMeasurement, sample_rate: u32) -> MeasureResu
             .then(|| (sample_rate > 0).then(|| m.frames as f64 / f64::from(sample_rate)))
             .flatten(),
     }
+}
+
+/// Stamp a MASTER measurement with the tracks that were soloed while it
+/// was taken (ba doc #275 P1.6).
+///
+/// Solo is honoured by the master render and ignored by every per-track
+/// measurement, so with a track soloed each track reads correct while the
+/// master quietly becomes a solo bounce. Nothing else in the result set
+/// differs, which is what let a "mastered export" of one synth pass every
+/// per-track sanity check. A track or bus target is left alone: it is
+/// unaffected, and listing solo there would read as a warning about
+/// numbers that are fine.
+pub(crate) fn with_solo(app: &Resonance, mut result: MeasureResult) -> MeasureResult {
+    if result.target == MeasureTarget::Master {
+        result.soloed_track_ids = soloed_track_ids(app);
+    }
+    result
+}
+
+/// Every soloed track, in mixer order, as control-wire ids.
+pub(crate) fn soloed_track_ids(app: &Resonance) -> Vec<resonance_control::ids::TrackId> {
+    app.sorted_tracks()
+        .iter()
+        .filter(|t| t.soloed)
+        .map(|t| t.id.into())
+        .collect()
 }
 
 /// `-inf` (silence, or a range shorter than the meter's window) has no

@@ -8,7 +8,8 @@
 //! from a tool whose method the running build simply does not have —
 //! the failure mode when the app binary is older than this MCP server.
 //! It is a lower bound, not a guarantee: a declared method can still
-//! answer `unsupported` (`render.stems` does, always).
+//! answer `unsupported` for a particular argument. A method that is
+//! never implemented (`render.stems`) is kept out of `capabilities`.
 
 use crate::server::ResonanceMcp;
 use resonance_control::methods::control::{self, HelloParams, HelloResult};
@@ -34,11 +35,11 @@ impl ResonanceMcp {
                        help — the app binary is older than this MCP server and both need to be \
                        rebuilt from the same checkout and the app restarted. \
                        \
-                       capabilities is necessary but not sufficient: it lists what the PROTOCOL \
-                       declares this server speaks, so a listed method can still answer \
-                       unsupported — render.mixdown does that for a partial range, and \
-                       render.stems is listed but not implemented at all. Treat a missing method \
-                       as proof it cannot work, and a present one as no promise that it will.",
+                       capabilities lists what this build actually IMPLEMENTS: a name that is \
+                       always unsupported is kept out of it (render.stems is not listed, for \
+                       exactly that reason), so a missing method is proof it cannot work. A \
+                       listed method can still refuse a particular ARGUMENT — render.mixdown \
+                       takes only a whole-song range — but not the call as a whole.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<HelloResult>()
     )]

@@ -80,6 +80,7 @@ pub use external_instrument_ping::{
     ping_deadline_reached, OnsetOutcome,
 };
 pub use clips::transcode_to_wav;
+pub use clips::{partition_deferred_clip_commands, DeferredClipCommand};
 pub use clips::{
     detect_clip_tempo_in_place, set_clip_fade_in_place, set_clip_gain_in_place,
     set_clip_warp_in_place, set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,

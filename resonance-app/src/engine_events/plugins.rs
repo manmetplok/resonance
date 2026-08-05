@@ -17,6 +17,7 @@ pub(super) fn track_added(
     clap_file_path: String,
     params: Vec<ParamInfo>,
     has_gui: bool,
+    has_sidechain_input: bool,
     output_port_count: usize,
     output_port_names: Vec<String>,
 ) {
@@ -31,15 +32,19 @@ pub(super) fn track_added(
         {
             slot.params = params;
             slot.has_gui = has_gui;
+            slot.has_sidechain_input = has_sidechain_input;
         } else {
-            track.plugins.push(PluginSlotState::new(
-                instance_id,
-                plugin_name,
-                clap_plugin_id,
-                clap_file_path,
-                params,
-                has_gui,
-            ));
+            track.plugins.push(
+                PluginSlotState::new(
+                    instance_id,
+                    plugin_name,
+                    clap_plugin_id,
+                    clap_file_path,
+                    params,
+                    has_gui,
+                )
+                .with_sidechain_input(has_sidechain_input),
+            );
             inserted = true;
         }
     }
@@ -294,6 +299,7 @@ pub(super) fn bus_added(
     clap_file_path: String,
     params: Vec<ParamInfo>,
     has_gui: bool,
+    has_sidechain_input: bool,
 ) {
     let mut inserted = false;
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
@@ -304,15 +310,19 @@ pub(super) fn bus_added(
         {
             slot.params = params;
             slot.has_gui = has_gui;
+            slot.has_sidechain_input = has_sidechain_input;
         } else {
-            bus.plugins.push(PluginSlotState::new(
-                instance_id,
-                plugin_name,
-                clap_plugin_id,
-                clap_file_path,
-                params,
-                has_gui,
-            ));
+            bus.plugins.push(
+                PluginSlotState::new(
+                    instance_id,
+                    plugin_name,
+                    clap_plugin_id,
+                    clap_file_path,
+                    params,
+                    has_gui,
+                )
+                .with_sidechain_input(has_sidechain_input),
+            );
             inserted = true;
         }
     }
@@ -377,6 +387,7 @@ pub(super) fn bus_removed(
     r.remove_plugin_index(instance_id);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn master_added(
     r: &mut Resonance,
     instance_id: PluginInstanceId,
@@ -385,6 +396,7 @@ pub(super) fn master_added(
     clap_file_path: String,
     params: Vec<ParamInfo>,
     has_gui: bool,
+    has_sidechain_input: bool,
 ) {
     if let Some(slot) = r
         .master_plugins
@@ -393,15 +405,19 @@ pub(super) fn master_added(
     {
         slot.params = params;
         slot.has_gui = has_gui;
+        slot.has_sidechain_input = has_sidechain_input;
     } else {
-        r.master_plugins.push(PluginSlotState::new(
-            instance_id,
-            plugin_name,
-            clap_plugin_id,
-            clap_file_path,
-            params,
-            has_gui,
-        ));
+        r.master_plugins.push(
+            PluginSlotState::new(
+                instance_id,
+                plugin_name,
+                clap_plugin_id,
+                clap_file_path,
+                params,
+                has_gui,
+            )
+            .with_sidechain_input(has_sidechain_input),
+        );
         r.insert_plugin_index(instance_id, PluginLocator::Master);
     }
     apply_pending_param_overrides(r, instance_id);
