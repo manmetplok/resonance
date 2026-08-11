@@ -167,7 +167,7 @@ pub struct Bands {
 /// engine started, not a window anyone asked for. `source: "live"`
 /// answers "how has this session been going"; only `source: "render"`
 /// measures a *range*.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MeasureResult {
     /// The slice measured, echoed back so a result stands alone.
@@ -239,6 +239,19 @@ pub struct MeasureResult {
     /// every entry of one measurement pass, which is what makes the
     /// numbers comparable.
     pub measured_seconds: Option<f64>,
+
+    /// Tracks that were SOLOED when this was measured, present only on a
+    /// `master` target (a track or bus measurement renders its own audio
+    /// regardless of solo, so solo cannot skew it).
+    ///
+    /// A non-empty list means the master here is **not the mix** — it is
+    /// only these tracks, exactly as `render.mixdown` would write it.
+    /// Every per-track number stays correct while the master silently
+    /// becomes a solo bounce, which is how a "mastered export" came out
+    /// containing nothing but the lead synth and looked plausible in
+    /// every per-track metric (ba doc #275 P1.6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub soloed_track_ids: Vec<TrackId>,
 }
 
 // ---------------------------------------------------------------------------

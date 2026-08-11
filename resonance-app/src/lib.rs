@@ -198,6 +198,14 @@ pub struct Resonance {
     pub(crate) transport: TransportState,
     pub(crate) viewport: ArrangeViewport,
     pub(crate) markers: state::ArrangementMarkers,
+    /// What the last `arrangement.insert_bars` / `remove_bars` moved.
+    ///
+    /// A bar shift touches five collections at once, so its report can
+    /// only be assembled while it runs — the control handler dispatches
+    /// the edit through `update()` (which is what makes it one undo
+    /// entry) and reads the tally back from here. Overwritten by each
+    /// shift and never persisted.
+    pub(crate) last_arrangement_shift: Option<crate::update::arrangement::ShiftOutcome>,
     pub(crate) interaction: ClipInteractionState,
     /// Settings of the MIDI editor's Quantize panel (todo #392). App-level
     /// so the chosen grid/strength/swing/mode persist across clip
@@ -609,6 +617,7 @@ impl Resonance {
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),
             markers: state::ArrangementMarkers::default(),
+            last_arrangement_shift: None,
             interaction: ClipInteractionState::default(),
             midi_quantize: state::MidiQuantizePanelState::default(),
             io: ProjectIoState {

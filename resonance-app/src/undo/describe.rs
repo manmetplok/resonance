@@ -80,6 +80,12 @@ pub fn describe(message: &Message) -> String {
         Message::Automation(_) => "automation edit",
         Message::Freeze(_) => "freeze",
         Message::Marker(_) | Message::MarkerUi(_) => "marker edit",
+        Message::Arrangement(crate::message::ArrangementMessage::InsertBars { .. }) => {
+            "insert bars"
+        }
+        Message::Arrangement(crate::message::ArrangementMessage::RemoveBars { .. }) => {
+            "remove bars"
+        }
         _ => "edit",
     };
     label.to_owned()

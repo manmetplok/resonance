@@ -77,7 +77,12 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Set the song tempo in BPM (undoable edit).",
+        description = "Set the song tempo in BPM (undoable edit). The arrangement keeps its \
+                       MUSICAL positions — clip starts, automation breakpoints, markers, the \
+                       loop range and the playhead all re-anchor, so a clip at bar 9 stays at \
+                       bar 9. Audio clip DURATIONS are not rescaled (a recorded take is real \
+                       time; use clip stretching for that), so a take keeps its length and \
+                       moves to its bar.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<transport::TransportResult>()
     )]

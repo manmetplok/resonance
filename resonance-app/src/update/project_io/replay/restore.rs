@@ -106,6 +106,18 @@ pub(crate) fn restore_pool(
     // `asset_ref`s were set during the clip replay). A clip pointing at
     // an asset that didn't load simply isn't counted.
     r.recompute_pool_usage();
+
+    // Push the engine's id allocator past every restored id (ba doc #276
+    // BUG 2). It is engine-thread-local and starts at 1 each session,
+    // and nothing else tells it about a loaded project's assets — so
+    // without this the first `pool.import` after opening a project
+    // handed out an id the project was already using, and every clip
+    // referencing it silently started playing the newly imported file.
+    if let Some(above) = r.pool.max_asset_id() {
+        let _ = r
+            .engine
+            .send(resonance_audio::types::AudioCommand::ReserveAssetIds { above });
+    }
 }
 
 /// Restore the reference A/B block from a saved project. Wipes any prior

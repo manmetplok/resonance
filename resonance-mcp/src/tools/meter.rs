@@ -29,6 +29,11 @@ impl ResonanceMcp {
                        flight); \"live\" instead reads the master meter as it plays, master \
                        only. Runs as a job — waits up to 5 minutes and returns the final status. \
                        \
+                       SOLO: a track or bus target ignores solo, the master target HONOURS it. \
+                       A master result therefore carries soloed_track_ids whenever anything is \
+                       soloed — non-empty means those numbers describe only those tracks, not \
+                       the mix, even though every per-track entry still reads correct. \
+                       \
                        READING THE RESULT. 1 LU == 1 dB, so differences in LUFS are differences \
                        in dB. lufs_integrated is GATED: a part that plays in 2 of 9 sections \
                        reports how loud it is WHILE IT PLAYS, not an average watered down by \

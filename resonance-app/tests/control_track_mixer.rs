@@ -218,6 +218,7 @@ fn echo_plugin_with_params(
         clap_file_path: format!("/plugins/{plugin_id}.clap"),
         params,
         has_gui: false,
+        has_sidechain_input: false,
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });
@@ -474,6 +475,7 @@ fn echo_plugin_added(app: &mut Resonance, track_id: u64, instance_id: u64, plugi
         clap_file_path: format!("/plugins/{plugin_id}.clap"),
         params: Vec::new(),
         has_gui: false,
+        has_sidechain_input: false,
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });

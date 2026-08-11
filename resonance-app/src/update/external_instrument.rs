@@ -294,12 +294,53 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
 /// callers that just allocated the id (and are about to create the track) skip
 /// it because the engine echo lands the track a beat later.
 pub(crate) fn enable_external_instrument(r: &mut Resonance, track_id: TrackId) {
+    remove_in_app_instrument(r, track_id);
     let state = r
         .external_instruments
         .entry(track_id)
         .or_insert_with(|| ExternalInstrumentState::new(track_id));
     let config = state.config();
     let _ = r.engine.send(AudioCommand::SetExternalInstrument { config });
+}
+
+/// Drop an in-app instrument left at slot 0 when a track goes external.
+///
+/// An external track's audio arrives on its RETURN input and every plugin
+/// in its chain is an insert, so a leftover synth is not merely unused —
+/// it runs as the first insert and OVERWRITES the return signal with its
+/// own (noteless, silent) output. Live monitoring survives on the monitor
+/// path, which is what made this so expensive to diagnose: the take was
+/// audible in the app and every offline render came out at -120 dBFS.
+/// Recovery was GUI-only, because `track.remove_effect` refuses slot 0 as
+/// structural (ba doc #275 P1.2).
+///
+/// Removing it is the honest reading of the request: "this track's
+/// instrument is outboard" and "this track's instrument is a wavetable"
+/// cannot both hold. The removal goes through the same engine command the
+/// GUI uses, so it lands in the undo history with the enable.
+fn remove_in_app_instrument(r: &mut Resonance, track_id: TrackId) {
+    let Some(track) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
+        return;
+    };
+    // Only slot 0, and only when the scanner classifies it as an
+    // instrument: an external track may legitimately carry effects, and a
+    // chain that starts with an EQ must survive untouched.
+    let Some(first) = track.plugins.first() else {
+        return;
+    };
+    let is_instrument = r
+        .available_plugins
+        .iter()
+        .find(|p| p.clap_plugin_id == first.clap_plugin_id)
+        .is_some_and(|p| p.is_instrument);
+    if !is_instrument {
+        return;
+    }
+    let instance_id = first.instance_id;
+    let _ = r.engine.send(AudioCommand::RemovePlugin {
+        track_id,
+        instance_id,
+    });
 }
 
 /// Open `path` in the OS native file manager (Nautilus / Finder / Explorer).

@@ -31,10 +31,27 @@ pub const PLACE: &str = "clip.place";
 pub const MOVE: &str = "clip.move";
 /// `clip.trim` — change which part of the source a clip plays
 /// ([`TrimParams`] -> [`TrimResult`]).
+///
+/// Safe to call immediately after `clip.place`. A clip's audio is loaded
+/// on a worker thread, so for a moment after placing it the engine does
+/// not have it yet; an edit arriving in that window used to hit the
+/// "unknown id ⇒ no-op" rule and vanish, leaving the reported geometry
+/// correct while the render played the clip's WHOLE source. Such an edit
+/// is now parked and applied when the clip lands (ba doc #276 BUG 1).
 pub const TRIM: &str = "clip.trim";
 /// `clip.delete` — remove a clip from the timeline ([`DeleteParams`] ->
 /// `MutationAck`).
 pub const DELETE: &str = "clip.delete";
+/// `clip.split` — cut one audio clip in two at a timeline position
+/// ([`SplitParams`] -> [`SplitResult`]).
+///
+/// Both halves are non-destructive trims of the same audio, so nothing
+/// is copied for a recorded take and the two together play exactly what
+/// the original did. This is the missing half of arrangement editing:
+/// `clip.trim` could shorten a take, but without a split (and without
+/// `clip.place` on external tracks) a hardware performance could be cut
+/// and never copied or re-placed (ba doc #275 P2).
+pub const SPLIT: &str = "clip.split";
 /// `clip.set_gain` — per-clip gain in dB ([`SetGainParams`] ->
 /// `MutationAck`).
 pub const SET_GAIN: &str = "clip.set_gain";
@@ -43,7 +60,7 @@ pub const SET_GAIN: &str = "clip.set_gain";
 pub const SET_FADE: &str = "clip.set_fade";
 
 /// All `clip.*` method names.
-pub const METHODS: &[&str] = &[PLACE, MOVE, TRIM, DELETE, SET_GAIN, SET_FADE];
+pub const METHODS: &[&str] = &[PLACE, MOVE, TRIM, SPLIT, DELETE, SET_GAIN, SET_FADE];
 
 /// Widest per-clip gain the app accepts, in decibels. Values outside
 /// `-inf..=MAX_GAIN_DB` are clamped, not rejected.
@@ -132,9 +149,11 @@ pub enum FadeShape {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PlaceParams {
-    /// The audio track to place on. An instrument/drums/vocal track is
-    /// rejected — audio clips need an audio track (`track.add` with
-    /// `kind: "audio"`).
+    /// The track to place on. Audio tracks and EXTERNAL-INSTRUMENT
+    /// tracks both take audio clips — an external track's sound is
+    /// outboard, so what lands on it is a recorded take, which is why
+    /// `clip.trim` always worked on those. A plain instrument, drums or
+    /// vocal track is rejected: an audio clip on one would never render.
     pub track_id: TrackId,
     /// Place this pool asset. Mutually exclusive with `path`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -175,8 +194,9 @@ pub struct MoveParams {
     pub clip_id: ClipId,
     /// The clip's new start.
     pub start: PositionSpec,
-    /// Move it to this track as well. Must be an audio track; omitted,
-    /// the clip stays where it is.
+    /// Move it to this track as well. Must be a track that takes audio
+    /// clips (audio or external-instrument); omitted, the clip stays
+    /// where it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
 }
@@ -216,6 +236,32 @@ pub struct TrimResult {
     /// What remains audible.
     pub length_samples: u64,
     pub length_beats: f64,
+    pub revision: u64,
+}
+
+/// Params for `clip.split`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SplitParams {
+    pub clip_id: ClipId,
+    /// Where to cut, as a timeline position (not an offset into the
+    /// source). Must fall strictly inside the clip's audible span — a
+    /// cut at either edge would leave one half empty and is refused.
+    pub at: PositionSpec,
+}
+
+/// Result of `clip.split`: both halves, so the caller can address either
+/// without a follow-up query.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SplitResult {
+    /// The original clip, now ending at the cut. Its id is unchanged.
+    pub head_clip_id: ClipId,
+    /// The new clip playing from the cut onwards.
+    pub tail_clip_id: ClipId,
+    pub at: SongPosition,
+    pub head_length_samples: u64,
+    pub tail_length_samples: u64,
     pub revision: u64,
 }
 

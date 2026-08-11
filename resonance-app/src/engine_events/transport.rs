@@ -42,7 +42,7 @@ pub(super) fn bounce_complete(r: &mut Resonance, path: String) {
     // #1157). The engine echoes the requested path verbatim, so the
     // token matches exactly the job that asked for this file. No-op when
     // no control job carries the token (an ordinary GUI bounce).
-    let result = crate::update::control::mixdown_result(&path, r.sample_rate);
+    let result = crate::update::control::mixdown_result(r, &path, r.sample_rate);
     r.control.jobs.complete_token(
         &crate::control_jobs::JobToken::Export {
             path: std::path::PathBuf::from(&path),

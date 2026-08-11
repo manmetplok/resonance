@@ -162,7 +162,11 @@ fn is_whole(range: &RangeSpec) -> bool {
 /// Public to the control module so the engine-event completion hook
 /// (`engine_events::transport::bounce_complete`) shares one definition
 /// of the result shape.
-pub(crate) fn mixdown_result(path: &str, engine_sample_rate: u32) -> serde_json::Value {
+pub(crate) fn mixdown_result(
+    app: &crate::Resonance,
+    path: &str,
+    engine_sample_rate: u32,
+) -> serde_json::Value {
     let (duration_s, sample_rate) = match read_wav_geometry(Path::new(path)) {
         Some(geo) => (geo.duration_s(), geo.sample_rate),
         None => (0.0, engine_sample_rate),
@@ -171,6 +175,10 @@ pub(crate) fn mixdown_result(path: &str, engine_sample_rate: u32) -> serde_json:
         path: path.to_owned(),
         duration_s,
         sample_rate,
+        // A bounce taken with a track soloed contains only that track.
+        // The file is what was asked for, but nothing else in the result
+        // says so (ba doc #275 P1.6).
+        soloed_track_ids: super::meter::soloed_track_ids(app),
     })
     .unwrap_or(serde_json::Value::Null)
 }

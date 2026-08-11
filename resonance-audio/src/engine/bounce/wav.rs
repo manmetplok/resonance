@@ -252,6 +252,10 @@ fn render_range(
             render_frames,
             &everything,
             &|_| false,
+            // A full mixdown renders every track anyway, so nothing is
+            // present only as a key source (ba doc #277).
+            &|_| false,
+            &|_| false,
             true,
             true,
             false,

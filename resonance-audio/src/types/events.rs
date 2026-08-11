@@ -272,6 +272,12 @@ pub enum AudioEvent {
         params: Vec<ParamInfo>,
         /// Whether the plugin exposes a CLAP GUI the host can open.
         has_gui: bool,
+        /// Whether the plugin declares an external sidechain (key) input
+        /// port. Only such a plugin can be handed a key by the mixer, so
+        /// the app rejects a `track.set_sidechain` onto anything else
+        /// rather than storing a route that would never be delivered
+        /// (ba doc #275 P0).
+        has_sidechain_input: bool,
         /// Number of audio output ports declared by this plugin instance.
         /// `1` for every legacy single-output plugin. Multi-output plugins
         /// (e.g. `resonance-drums`) report a larger number and the app
@@ -546,6 +552,8 @@ pub enum AudioEvent {
         clap_file_path: String,
         params: Vec<ParamInfo>,
         has_gui: bool,
+        /// See `PluginAdded::has_sidechain_input`.
+        has_sidechain_input: bool,
     },
     BusPluginRemoved {
         bus_id: BusId,
@@ -602,6 +610,8 @@ pub enum AudioEvent {
         clap_file_path: String,
         params: Vec<ParamInfo>,
         has_gui: bool,
+        /// See `PluginAdded::has_sidechain_input`.
+        has_sidechain_input: bool,
     },
     MasterPluginRemoved {
         instance_id: PluginInstanceId,

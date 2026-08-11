@@ -166,6 +166,8 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | TransportMessage::ToggleLoop => UndoAction::Record,
         },
 
+        // A bar shift touches every timeline collection; one entry.
+        Message::Arrangement(_) => UndoAction::Record,
         Message::Marker(m) => match m {
             // Mutating edits: record an undo entry capturing the
             // pre-edit marker set (markers ride the ProjectFile
@@ -354,7 +356,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Control-endpoint placement edits (`clip.move` / `clip.trim`):
             // atomic and already resolved, so one undo entry each — the
             // Begin/Commit coalescing above exists only for pointer drags.
-            ClipMessage::MoveClipTo { .. } | ClipMessage::TrimClipTo { .. } => UndoAction::Record,
+            ClipMessage::MoveClipTo { .. }
+            | ClipMessage::TrimClipTo { .. }
+            | ClipMessage::SplitClipAt { .. } => UndoAction::Record,
         },
 
         Message::MidiClip(c) => match c {

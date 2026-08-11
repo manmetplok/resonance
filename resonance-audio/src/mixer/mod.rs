@@ -116,9 +116,13 @@ pub fn render_aux_with_comp_for_test(
 
     let in_filter = |_id: TrackId| true;
     let fan_out_only = |_id: TrackId| false;
+    let key_only = |_id: TrackId| false;
+    let key_only_bus = |_id: BusId| false;
     let mut strategy = RenderStrategy::Bounce {
         in_filter: &in_filter,
         fan_out_only: &fan_out_only,
+        key_only: &key_only,
+        key_only_bus: &key_only_bus,
         respect_mute_solo: false,
         freeze_raw: false,
     };
@@ -1033,6 +1037,8 @@ pub(crate) fn mix_audio(
             track_buf_l,
             track_buf_r,
             transport_snap,
+            sidechain_routes,
+            sidechain,
         );
     }
 

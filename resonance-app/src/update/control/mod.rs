@@ -32,6 +32,7 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod arrangement;
 mod bus;
 mod clip;
 mod edit;
@@ -247,6 +248,13 @@ pub fn execute(
     // describes the OPEN project, so it sits below the gate — with nothing
     // open the honest answer is `busy`, not an empty pool.
     if let Some(result) = clip::try_handle(app, conn, request) {
+        return result;
+    }
+
+    // Structural bar shifts (ba doc #275 P2): the one edit that has to
+    // move every timeline collection at once, which is why it cannot be
+    // assembled out of the per-object methods above.
+    if let Some(result) = arrangement::try_handle(app, request) {
         return result;
     }
 

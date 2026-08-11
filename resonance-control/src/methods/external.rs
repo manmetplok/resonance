@@ -39,6 +39,14 @@ where
 
 /// `external.enable` — put an existing track into external-instrument
 /// mode ([`TrackParams`] -> `MutationAck`).
+///
+/// An in-app instrument at slot 0 is **removed** as part of enabling: an
+/// external track's audio arrives on its return input and every plugin in
+/// its chain is an insert, so a leftover synth runs first and overwrites
+/// the return with its own silence. That was audible only in offline
+/// renders (-120 dBFS) and could not be undone over the API, because
+/// `track.remove_effect` refuses slot 0 (ba doc #275 P1.2). Effects are
+/// left alone; the removal is part of the same undo step.
 pub const ENABLE: &str = "external.enable";
 /// `external.disable` — take a track out of external-instrument mode
 /// ([`TrackParams`] -> `MutationAck`).
@@ -65,6 +73,11 @@ pub const SET_LATENCY: &str = "external.set_latency";
 /// a MIDI impulse and timing the return ([`TrackParams`] ->
 /// `MutationAck`). The measurement lands asynchronously; read it back
 /// with [`STATUS`].
+///
+/// The measurement REPLACES the stored offset in either direction. It
+/// used to be clamped up to the existing value as a floor, so a second
+/// detect echoed the first reading and a stale 82 ms survived a 12 ms
+/// re-measurement (ba doc #275 P1.3).
 pub const DETECT_LATENCY: &str = "external.detect_latency";
 /// `external.set_monitor` — hear (or stop hearing) the audio return
 /// ([`SetMonitorParams`] -> `MutationAck`).

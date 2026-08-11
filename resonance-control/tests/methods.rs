@@ -140,6 +140,9 @@ fn done_job_carries_the_method_result_payload() {
         path: "/tmp/mix.wav".to_owned(),
         duration_s: 42.5,
         sample_rate: 48_000,
+        // Nothing soloed: the field is skipped on the wire entirely, so
+        // an existing client sees the shape it always saw.
+        soloed_track_ids: Vec::new(),
     };
     let status = JobStatus {
         job_id: JobId(3),

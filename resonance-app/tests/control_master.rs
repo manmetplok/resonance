@@ -66,6 +66,7 @@ fn summary_reports_the_master_insert_chain() {
         clap_file_path: "/plugins/mastering.clap".to_owned(),
         params: Vec::new(),
         has_gui: false,
+        has_sidechain_input: false,
     });
     app.test_apply_engine_event(AudioEvent::MasterFxBypassChanged { bypassed: true });
 
@@ -258,6 +259,7 @@ fn echo_master_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &st
         clap_file_path: format!("/plugins/{clap_plugin_id}.clap"),
         params: Vec::new(),
         has_gui: false,
+        has_sidechain_input: false,
     });
 }
 

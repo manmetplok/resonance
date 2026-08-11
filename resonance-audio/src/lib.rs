@@ -180,6 +180,12 @@ pub use engine::{
     set_clip_warp_in_place, set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 
+/// Test surface for the deferred-clip-edit queue (ba doc #276 BUG 1):
+/// the pure half of "a clip edit that arrives before its clip finished
+/// loading is parked and replayed, not dropped".
+#[doc(hidden)]
+pub use engine::{partition_deferred_clip_commands, DeferredClipCommand};
+
 /// Test surface for the reference-track (A/B) command handlers. Exposed
 /// so `tests/reference_handlers.rs` can drive each command's mutation +
 /// event emission against a bare `ReferencePlayer` without spinning up

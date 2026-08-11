@@ -3,7 +3,7 @@
 
 use crate::server::ResonanceMcp;
 use resonance_control::job::JobStatus;
-use resonance_control::methods::{clip, pool};
+use resonance_control::methods::{arrangement, clip, pool};
 use resonance_control::MutationAck;
 use rmcp::handler::server::tool::schema_for_output;
 use rmcp::handler::server::wrapper::Parameters;
@@ -75,9 +75,11 @@ impl ResonanceMcp {
                        imported on the way); both or neither is rejected. A path that matches an \
                        asset's original_path reuses that asset instead of importing it twice. \
                        \
-                       track_id must be an AUDIO track (track_add with kind \"audio\"); an \
-                       instrument, drums or vocal track is refused, because an audio clip on one \
-                       would never render. start takes bar [+ beat] (1-based) or sample, and \
+                       track_id must take audio: an AUDIO track (track_add with kind \"audio\") \
+                       or an EXTERNAL-INSTRUMENT track, whose sound is outboard so what lands on \
+                       it is recorded audio. A plain instrument, drums or vocal track is refused, \
+                       because an audio clip on one would never render. start takes bar [+ beat] \
+                       (1-based) or sample, and \
                        defaults to bar 1 — it is NOT snapped to the grid, so the clip lands \
                        exactly where you say. The clip is named after the file's stem. \
                        \
@@ -199,5 +201,74 @@ impl ResonanceMcp {
         Parameters(params): Parameters<clip::SetFadeParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(clip::SET_FADE, &params).await
+    }
+
+    #[tool(
+        description = "Cut an audio clip in two at a timeline position — the missing half of \
+                       arrangement editing. The original keeps its id and ends at the cut; the \
+                       new clip plays from the cut onwards. Both are non-destructive trims of \
+                       the same audio, so nothing is copied and edit_undo restores the single \
+                       clip exactly. \
+                       \
+                       `at` is a POSITION on the timeline ({bar, beat} or {seconds}/{samples}), \
+                       not an offset into the source, and must fall strictly inside the clip — \
+                       a cut at either edge is refused rather than making an empty half. The \
+                       head keeps the fade-in, the tail the fade-out. Returns {head_clip_id, \
+                       tail_clip_id, head_length_samples, tail_length_samples}; both resolve \
+                       immediately in song_tracks. \
+                       \
+                       With clip_place (which accepts external-instrument tracks), this is what \
+                       lets a recorded hardware take be cut, copied and re-placed.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<clip::SplitResult>()
+    )]
+    async fn clip_split(
+        &self,
+        Parameters(params): Parameters<clip::SplitParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(clip::SPLIT, &params).await
+    }
+
+    #[tool(
+        description = "Insert empty bars, moving EVERYTHING that starts at or after at_bar later \
+                       — audio clips, MIDI clips, section placements, markers and automation \
+                       points — in one undoable edit. This is how you give a section more room \
+                       or make space for a new one; doing it by hand means moving every object \
+                       after the cut without missing one. \
+                       \
+                       at_bar is 1-based. Anything that STARTS before at_bar stays put, even if \
+                       it plays across the insertion point (a clip is never stretched). \
+                       Positions move musically, so a project with tempo changes lands on the \
+                       right beat. Returns what moved: {shift_samples, audio_clips_moved, \
+                       midi_clips_moved, placements_moved, markers_moved, \
+                       automation_points_moved}.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<arrangement::ShiftResult>()
+    )]
+    async fn arrangement_insert_bars(
+        &self,
+        Parameters(params): Parameters<arrangement::InsertBarsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(arrangement::INSERT_BARS, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Remove bars, pulling everything after them earlier — the inverse of \
+                       arrangement_insert_bars, and the way to cut a section out of a song. \
+                       \
+                       Anything that STARTS inside the removed bars is DELETED, so the call is \
+                       refused with a count of what would go unless confirm: true. Clips that \
+                       start before the cut are left alone and keep their length. Returns the \
+                       same tally as insert_bars plus clips_deleted and placements_deleted.",
+        annotations(destructive_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<arrangement::ShiftResult>()
+    )]
+    async fn arrangement_remove_bars(
+        &self,
+        Parameters(params): Parameters<arrangement::RemoveBarsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(arrangement::REMOVE_BARS, &params)
+            .await
     }
 }

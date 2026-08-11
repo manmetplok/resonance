@@ -20,11 +20,13 @@ use resonance_audio::types::*;
 const FRAMES: usize = 48;
 const SR: u32 = 48_000;
 
-/// Track/bus gain at unity volume and centre pan: the constant-power pan
-/// law attenuates the centre by −3 dB on each channel (`cos(pi/4)`), the
-/// same value `track_stereo_gains`/`bus_stereo_gains` apply.
+/// Track/bus gain at unity volume and centre pan. The pan control is a
+/// stereo BALANCE (`stereo_balance`), so dead centre is unity on both
+/// channels — the same value `track_stereo_gains` / `bus_stereo_gains`
+/// apply (ba doc #276 BUG 3; it used to be the constant-power `cos(pi/4)`,
+/// which cost every centred track 3 dB).
 fn center_gain() -> f32 {
-    (std::f32::consts::PI * 0.25).cos()
+    1.0
 }
 
 fn db_lin(db: f32) -> f32 {

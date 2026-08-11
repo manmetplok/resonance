@@ -166,6 +166,7 @@ fn reopen(app: &mut Resonance, file: resonance_app::project::ProjectFile) {
         clap_file_path: "/nonexistent/test-synth.clap".to_owned(),
         params: params_at_defaults(),
         has_gui: false,
+        has_sidechain_input: false,
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });

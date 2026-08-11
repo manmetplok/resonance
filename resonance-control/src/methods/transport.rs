@@ -20,6 +20,14 @@ pub const LOOP_SET: &str = "transport.loop_set";
 /// `transport.loop_toggle` — toggle looping. No params.
 pub const LOOP_TOGGLE: &str = "transport.loop_toggle";
 /// `transport.set_tempo` — set the song tempo ([`SetTempoParams`]).
+///
+/// The arrangement keeps its MUSICAL positions: every clip start,
+/// automation breakpoint, marker, the loop range and the playhead are
+/// re-anchored so a clip at bar 9 is still at bar 9 afterwards. Audio
+/// clip *durations* are not rescaled — a recorded take is real time (use
+/// `clip.set_stretch` for that) — so its start moves while its length
+/// stays. Before this, lengths followed the tempo map and starts did not,
+/// which slid a clip at bar 9 to bar 10.33 (ba doc #275 P1.4).
 pub const SET_TEMPO: &str = "transport.set_tempo";
 /// `transport.set_time_signature` — set the time signature
 /// ([`SetTimeSignatureParams`]).

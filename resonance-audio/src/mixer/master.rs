@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use indexmap::IndexMap;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::{StereoBufMut, SyncClapInstance};
 use crate::engine::SharedState;
 use crate::types::*;
 
@@ -28,6 +28,8 @@ pub(super) fn apply_master_fx_chain(
     scratch_l: &mut [f32],
     scratch_r: &mut [f32],
     transport_snap: Option<TransportSnap>,
+    sidechain_routes: &[SidechainRoute],
+    sidechain: &SidechainTaps,
 ) {
     let Some(master_guard) = master.try_read() else {
         return;
@@ -59,8 +61,15 @@ pub(super) fn apply_master_fx_chain(
         if let Some(mutex) = plugins_guard.get(&plugin_id) {
             if let Some(mut inst) = mutex.try_lock() {
                 latch_transport(&mut inst, transport_snap);
-                inst.0
-                    .process(&mut scratch_l[..frames], &mut scratch_r[..frames], frames);
+                // A master-bus ducker keyed off the kick is the classic
+                // "pumping mix" move, so the master chain honours key
+                // routes like every other chain (ba doc #275 P0).
+                let key = sidechain.key_for(sidechain_routes, plugin_id);
+                let mut outs = [StereoBufMut {
+                    left: &mut scratch_l[..frames],
+                    right: &mut scratch_r[..frames],
+                }];
+                inst.0.process_multi_with_key(&mut outs, key, frames);
             }
         }
     }

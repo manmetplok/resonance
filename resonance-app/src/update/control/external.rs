@@ -155,7 +155,10 @@ fn status(app: &Resonance, request: &Request) -> Response {
     )
 }
 
-fn status_label(status: crate::state::ExternalInstrumentStatus) -> String {
+/// The lifecycle word `external.status` reports. `pub(super)` because
+/// `song.summary` reports the same word for a track whose device
+/// definition is unset, so the two views cannot disagree.
+pub(super) fn status_label(status: crate::state::ExternalInstrumentStatus) -> String {
     use crate::state::ExternalInstrumentStatus as S;
     match status {
         S::Unconfigured => "unconfigured",

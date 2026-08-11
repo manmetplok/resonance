@@ -498,9 +498,10 @@ fn render_block_aligns_wet_send_with_dry_master_path() {
         vec![5 + 4],
         "wet return must not smear against the dry path"
     );
-    // Dry (~center-pan gain) and wet (send at 0 dB through the return's
-    // own center-pan fader) sum — i.e. the frame holds MORE than the dry
-    // path alone, proving the wet contribution landed on the same frame.
-    let g = (std::f32::consts::PI * 0.25).cos();
+    // Dry and wet (send at 0 dB through the return's own fader) sum —
+    // i.e. the frame holds MORE than the dry path alone, proving the wet
+    // contribution landed on the same frame. Centre pan is unity on a
+    // stereo-balance track (ba doc #276 BUG 3), so each path is 1.0.
+    let g = 1.0f32;
     assert!((data[(5 + 4) * 2] - 2.0 * g).abs() < 1e-6);
 }

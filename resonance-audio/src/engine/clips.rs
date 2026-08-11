@@ -17,6 +17,146 @@ use resonance_dsp::tempo::{detect_tempo_default, TempoEstimate};
 
 use super::thread::{HandlerCtx, HandlerState};
 
+/// How long a clip edit waits for its clip to finish loading before it
+/// is given up on. Loading is an mmap plus a waveform decimation on a
+/// worker thread — milliseconds for a normal clip, seconds for a very
+/// long one on a busy queue. Ten seconds is far past either, and a
+/// command that waits that long has lost its clip for good.
+const DEFERRED_CLIP_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A clip edit parked until its clip exists (ba doc #276 BUG 1).
+pub struct DeferredClipCommand {
+    pub clip_id: ClipId,
+    pub command: AudioCommand,
+    pub parked_at: std::time::Instant,
+}
+
+/// Park `command` until `clip_id` shows up, instead of dropping it.
+///
+/// The engine's convention everywhere else is that a command naming
+/// something that does not exist is a silent no-op — right for a
+/// deleted target, wrong for one that has not finished loading yet,
+/// which is every clip for the first few milliseconds of its life.
+pub(crate) fn defer_clip_command(state: &mut HandlerState, clip_id: ClipId, command: AudioCommand) {
+    state.deferred_clip_commands.push(DeferredClipCommand {
+        clip_id,
+        command,
+        parked_at: std::time::Instant::now(),
+    });
+}
+
+/// True when `clip_id` is already in the engine's clip list.
+pub(crate) fn clip_exists(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
+    ctx.clips.read().iter().any(|c| c.id == clip_id)
+}
+
+/// Engine-loop hook: apply parked clip edits whose clip has landed, and
+/// give up on ones whose clip never did.
+///
+/// Order is preserved per clip — the queue is scanned front to back, so
+/// a trim followed by a fade lands in that order once the clip appears.
+pub(crate) fn poll_deferred_clip_commands(ctx: &HandlerCtx, state: &mut HandlerState) {
+    if state.deferred_clip_commands.is_empty() {
+        return;
+    }
+    let (ready, expired) = {
+        let clips = ctx.clips.read();
+        let landed = |clip_id: ClipId| clips.iter().any(|c| c.id == clip_id);
+        partition_deferred_clip_commands(
+            &mut state.deferred_clip_commands,
+            landed,
+            std::time::Instant::now(),
+            DEFERRED_CLIP_COMMAND_TIMEOUT,
+        )
+    };
+    for clip_id in expired {
+        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            "clip {clip_id} never finished loading; an edit aimed at it was dropped"
+        )));
+    }
+    for command in ready {
+        apply_clip_command(ctx, command);
+    }
+}
+
+/// Split the parked queue into commands whose clip has landed (to run
+/// now, in the order they were parked) and clips that timed out.
+/// Everything else stays parked.
+///
+/// Pure so the queue's ordering and expiry can be tested without an
+/// engine thread; `landed` answers "is this clip in the engine yet".
+pub fn partition_deferred_clip_commands(
+    deferred: &mut Vec<DeferredClipCommand>,
+    landed: impl Fn(ClipId) -> bool,
+    now: std::time::Instant,
+    timeout: std::time::Duration,
+) -> (Vec<AudioCommand>, Vec<ClipId>) {
+    let mut ready = Vec::new();
+    let mut expired = Vec::new();
+    deferred.retain(|d| {
+        if landed(d.clip_id) {
+            ready.push(d.command.clone());
+            return false;
+        }
+        if now.duration_since(d.parked_at) >= timeout {
+            expired.push(d.clip_id);
+            return false;
+        }
+        true
+    });
+    (ready, expired)
+}
+
+/// Run one previously-parked clip command now that its clip exists.
+///
+/// Only the commands `dispatch_clips` can park are listed; anything else
+/// reaching here would be a parking bug rather than a client error.
+fn apply_clip_command(ctx: &HandlerCtx, command: AudioCommand) {
+    match command {
+        AudioCommand::MoveClip {
+            clip_id,
+            new_start_sample,
+            new_track_id,
+        } => handle_move_clip(ctx, clip_id, new_start_sample, new_track_id),
+        AudioCommand::TrimClip {
+            clip_id,
+            new_start_sample,
+            trim_start_frames,
+            trim_end_frames,
+        } => handle_trim_clip(
+            ctx,
+            clip_id,
+            new_start_sample,
+            trim_start_frames,
+            trim_end_frames,
+        ),
+        AudioCommand::SplitClip {
+            clip_id,
+            new_clip_id,
+            at_sample,
+        } => handle_split_clip(ctx, clip_id, new_clip_id, at_sample),
+        AudioCommand::DeleteClip { clip_id } => handle_delete_clip(ctx, clip_id),
+        AudioCommand::SetClipFade {
+            clip_id,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+        } => handle_set_clip_fade(
+            ctx,
+            clip_id,
+            fade_in_frames,
+            fade_in_curve,
+            fade_out_frames,
+            fade_out_curve,
+        ),
+        AudioCommand::SetClipGain { clip_id, gain_db } => {
+            handle_set_clip_gain(ctx, clip_id, gain_db)
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn handle_import_clip(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -153,6 +293,65 @@ pub(crate) fn handle_trim_clip(
             trim_end_frames,
         });
     }
+}
+
+/// Cut a clip in two at an absolute timeline position (ba doc #275 P2).
+///
+/// The geometry lives in [`AudioClip::split_tail`] /
+/// [`AudioClip::split_head_trim_end`]; this shortens the original to the
+/// head in place and appends the tail, echoing a `ClipTrimmed` for the
+/// first and a `ClipImported` for the second so the app mirrors both
+/// through the paths it already has. A split at or outside either edge
+/// is a no-op.
+pub(crate) fn handle_split_clip(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    new_clip_id: ClipId,
+    at_sample: u64,
+) {
+    let mut clips = ctx.clips.write();
+    let Some(index) = clips.iter().position(|c| c.id == clip_id) else {
+        return;
+    };
+    let (head_trim_end, tail) = {
+        let clip = &clips[index];
+        let Some(tail) = clip.split_tail(new_clip_id, at_sample) else {
+            return;
+        };
+        (clip.split_head_trim_end(at_sample), tail)
+    };
+
+    let head = &mut clips[index];
+    head.trim_end_frames = head_trim_end;
+    head.fade_out_frames = 0;
+    let head_start = head.start_sample;
+    let head_trim_start = head.trim_start_frames;
+    let head_duration = head.duration_frames();
+    let _ = ctx.event_tx.send(AudioEvent::ClipTrimmed {
+        clip_id,
+        new_start_sample: head_start,
+        new_duration_samples: head_duration,
+        trim_start_frames: head_trim_start,
+        trim_end_frames: head_trim_end,
+    });
+
+    let (track_id, start_sample, duration_samples, name) = (
+        tail.track_id,
+        tail.start_sample,
+        tail.duration_frames(),
+        tail.name.clone(),
+    );
+    let waveform_peaks = crate::types::compute_waveform_peaks(tail.source.as_frames());
+    clips.push(tail);
+    drop(clips);
+    let _ = ctx.event_tx.send(AudioEvent::ClipImported {
+        clip_id: new_clip_id,
+        track_id,
+        start_sample,
+        duration_samples,
+        name,
+        waveform_peaks,
+    });
 }
 
 pub(crate) fn handle_delete_clip(ctx: &HandlerCtx, clip_id: ClipId) {

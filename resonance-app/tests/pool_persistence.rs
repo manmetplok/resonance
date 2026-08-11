@@ -300,3 +300,57 @@ fn favourites_and_recent_persist_via_settings_not_project() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// Asset-id collisions (ba doc #276 BUG 2)
+// ---------------------------------------------------------------------------
+
+/// An id arriving with a DIFFERENT file must not rebind the slot.
+///
+/// The engine's asset-id allocator is engine-thread-local and starts at 1
+/// each session, while a loaded project's assets keep their saved ids, so
+/// the first import after opening a project used to be handed an id the
+/// project was already using. `MediaPool::add` replaced in place, and
+/// every clip referencing that id silently started playing the newly
+/// imported file: a clap arrived as id 4 carrying the ride's usage count
+/// of 2, and two clips placed as rides were now claps. Nothing errored.
+///
+/// The allocator is fixed at the source (`ReserveAssetIds` on load); this
+/// is the backstop that turns any remaining collision into a visible
+/// refusal instead of silently wrong audio.
+#[test]
+fn an_id_collision_does_not_rebind_an_existing_asset() {
+    let dir = make_project_dir("collide", &["audio/asset_1.wav"]);
+    let mut app = app_at(&dir);
+    app.test_add_pool_asset(asset(4, "audio/ride.wav"));
+
+    // Same id, different file — an id collision.
+    app.test_add_pool_asset(asset(4, "audio/clap.wav"));
+
+    let assets = &app.test_pool().assets;
+    assert_eq!(assets.len(), 1, "no second asset takes the id");
+    assert_eq!(
+        assets[0].project_relative_path, "audio/ride.wav",
+        "the asset that owns the id keeps it, so clips pointing at 4 still play the ride"
+    );
+}
+
+/// Re-importing the SAME file at the same id still refreshes it — that is
+/// what the replace-in-place behaviour is for.
+#[test]
+fn re_importing_the_same_file_refreshes_the_asset() {
+    let dir = make_project_dir("refresh", &["audio/asset_1.wav"]);
+    let mut app = app_at(&dir);
+    app.test_add_pool_asset(asset(4, "audio/ride.wav"));
+
+    let mut refreshed = asset(4, "audio/ride.wav");
+    refreshed.duration_frames = 96_000;
+    app.test_add_pool_asset(refreshed);
+
+    let assets = &app.test_pool().assets;
+    assert_eq!(assets.len(), 1);
+    assert_eq!(
+        assets[0].duration_frames, 96_000,
+        "the metadata refresh lands"
+    );
+}

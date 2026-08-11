@@ -82,6 +82,29 @@ pub enum ClipSource {
 }
 
 impl ClipSource {
+    /// A second handle on the same audio, for a clip split in two.
+    ///
+    /// `Mapped` shares its mmap through the `Arc` — free, and the case
+    /// that matters (recorded takes and project audio are mapped).
+    /// `Memory` has to copy: an owned `Vec` cannot be shared, and a
+    /// split is a deliberate, one-off edit rather than a hot path.
+    pub fn share(&self) -> ClipSource {
+        match self {
+            ClipSource::Memory(v) => ClipSource::Memory(v.clone()),
+            ClipSource::Mapped {
+                mmap,
+                data_offset_bytes,
+                frame_count,
+                path,
+            } => ClipSource::Mapped {
+                mmap: Arc::clone(mmap),
+                data_offset_bytes: *data_offset_bytes,
+                frame_count: *frame_count,
+                path: path.clone(),
+            },
+        }
+    }
+
     /// Stereo-interleaved f32 samples as a slice: one `[l, r]` pair
     /// per frame. This is called from the mixer hot path, so it must
     /// be O(1) and allocation-free.
@@ -511,6 +534,59 @@ impl AudioClip {
     /// End position on timeline in sample frames.
     pub fn end_sample(&self) -> SamplePos {
         self.start_sample + self.duration_frames()
+    }
+
+    /// The TAIL half of a split at absolute timeline position
+    /// `at_sample`, or `None` when the position is at or outside either
+    /// edge (a cut that leaves one side empty is not a cut).
+    ///
+    /// The caller is expected to shorten `self` to the head — see
+    /// [`AudioClip::split_head_trim_end`], which computes the matching
+    /// `trim_end_frames` — so the two halves together play exactly what
+    /// the original did.
+    ///
+    /// Both halves are non-destructive trims of the same audio. A mapped
+    /// source (every recorded take) is shared through its `Arc`, so the
+    /// split costs nothing; an in-RAM source is COPIED, because owning a
+    /// `Vec` is the one thing that cannot be shared. Warp markers and
+    /// vocal tuning are deliberately dropped on the tail: both are keyed
+    /// to positions in the original clip's timeline and would be wrong
+    /// rather than merely absent.
+    pub fn split_tail(&self, new_id: ClipId, at_sample: SamplePos) -> Option<AudioClip> {
+        if at_sample <= self.start_sample || at_sample >= self.end_sample() {
+            return None;
+        }
+        let head_frames = at_sample - self.start_sample;
+        Some(AudioClip {
+            id: new_id,
+            track_id: self.track_id,
+            start_sample: at_sample,
+            source: self.source.share(),
+            name: self.name.clone(),
+            trim_start_frames: self.trim_start_frames + head_frames,
+            trim_end_frames: self.trim_end_frames,
+            // Fades follow the audible edges: the head keeps the
+            // fade-in, the tail the fade-out. Copying both onto both
+            // would duck the middle of what was one performance.
+            fade_in_frames: 0,
+            fade_in_curve: self.fade_in_curve,
+            fade_out_frames: self.fade_out_frames,
+            fade_out_curve: self.fade_out_curve,
+            gain_db: self.gain_db,
+            vocal_tuning: None,
+            warp_enabled: self.warp_enabled,
+            original_bpm: self.original_bpm,
+            transpose_semitones: self.transpose_semitones,
+            warp_algorithm: self.warp_algorithm,
+            warp_markers: Vec::new(),
+        })
+    }
+
+    /// The `trim_end_frames` the HEAD of a split at `at_sample` needs, so
+    /// it ends exactly where [`AudioClip::split_tail`] begins.
+    pub fn split_head_trim_end(&self, at_sample: SamplePos) -> u64 {
+        let head_frames = at_sample.saturating_sub(self.start_sample);
+        self.trim_end_frames + self.duration_frames().saturating_sub(head_frames)
     }
 
     /// True when the clip carries vocal-tuning data (it has been analysed

@@ -317,6 +317,12 @@ fn the_clip_id_generate_part_returns_resolves_on_the_very_next_request() {
 /// Regenerating a lane must not leave the replaced clip behind in the
 /// app-side mirror — a stale entry would keep a deleted clip visible to
 /// `song.*` and get re-serialized into the next save.
+///
+/// It must also KEEP the slot's clip id (ba doc #275 P1.7): the clip is
+/// rebuilt, but a client that cached the id from `generate.part` can
+/// still address it. Handing out a fresh id per regenerate silently
+/// invalidated every cached id, including on a track rename — the
+/// generated clip name embeds the track name, so renaming re-derives.
 #[test]
 fn regenerating_removes_the_replaced_clip_from_the_mirror() {
     let mut app = app_with_project();
@@ -329,7 +335,7 @@ fn regenerating_removes_the_replaced_clip_from_the_mirror() {
     let second = generate_drums(&mut app, section)
         .clip_id
         .expect("a clip was reported");
-    assert_ne!(first, second, "a regenerate issues a fresh clip");
+    assert_eq!(first, second, "regenerating the same slot keeps its clip id");
 
     let ids = drum_clip_ids(&app);
     assert_eq!(ids, vec![u64::from(second)], "only the live clip remains");

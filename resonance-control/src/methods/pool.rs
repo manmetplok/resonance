@@ -19,6 +19,15 @@ use serde::{Deserialize, Serialize};
 
 /// `pool.list` — the project's imported audio assets ([`PoolView`]).
 /// Read-only.
+///
+/// Asset ids are stable for the life of a project and are never reused:
+/// an asset at `usage_count: 0` keeps its id and stays listed, and a
+/// later import always gets a fresh one. An id cached from this call is
+/// therefore safe to hold. (It was not always: the engine's allocator
+/// restarted at 1 each session while a loaded project's assets kept
+/// their saved ids, so the first import after opening a project could
+/// take an id already in use and silently repoint every clip that
+/// referenced it — ba doc #276 BUG 2.)
 pub const LIST: &str = "pool.list";
 /// `pool.import` — import audio files into the pool without placing them
 /// ([`ImportParams`] -> a job whose result is [`ImportResult`]).

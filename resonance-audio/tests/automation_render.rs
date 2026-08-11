@@ -94,7 +94,10 @@ fn track_gain_fade_ramps_down_and_is_continuous_across_blocks() {
         BLOCK as u64,
     )
     .unwrap();
-    assert!((first.0 .0 - 0.707).abs() < 0.01, "centre-panned unity ≈ 0.707");
+    // Centre pan is UNITY: the pan control is a stereo balance, not a
+    // constant-power pan, so a track at 0 dB and dead centre passes its
+    // signal through untouched (ba doc #276 BUG 3).
+    assert!((first.0 .0 - 1.0).abs() < 0.01, "centre-panned unity is 1.0");
     assert_eq!(prev_end_l, 0.0, "fade lands exactly on silence");
 }
 

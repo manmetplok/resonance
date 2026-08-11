@@ -368,11 +368,15 @@ impl Default for EngineState {
 
 /// What a centre-panned track's signal measures once it reaches master.
 ///
-/// The mixer uses a constant-power pan law, so dead centre is `1/sqrt(2)`
-/// (-3 dB) per channel rather than unity. Every level assertion built on
-/// `PORT_LEVELS` has to go through this, or it is off by 3 dB.
+/// The mixer's pan control is a stereo BALANCE, so dead centre is unity
+/// and this is the identity (ba doc #276 BUG 3 — it used to be the
+/// constant-power `1/sqrt(2)`, which cost every centred track 3 dB and
+/// made a stem placed back into the project measure 3 dB below its
+/// source). Kept as a named function so level assertions still say which
+/// stage they are measuring at, and so a future pan-law change has one
+/// place to land.
 pub fn at_master(level: f32) -> f32 {
-    level * std::f32::consts::FRAC_1_SQRT_2
+    level
 }
 
 /// Peak absolute sample across an interleaved-stereo buffer.

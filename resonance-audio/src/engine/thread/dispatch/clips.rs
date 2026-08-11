@@ -19,6 +19,25 @@ pub(super) fn dispatch_clips(
         AudioCommand::ImportAudioToPool { paths } => {
             import_pool::handle_import_audio_to_pool(ctx, state, paths)
         }
+        // High-water mark for pool ids, the same rule `LoadClipFromWav`
+        // applies to clip ids (ba doc #276 BUG 2).
+        AudioCommand::ReserveAssetIds { above } => {
+            state.next_asset_id = state.next_asset_id.max(above.saturating_add(1));
+        }
+        // Every edit that names an existing clip goes through the
+        // load race first (ba doc #276 BUG 1): the clip may still be
+        // on the import worker, in which case the command is parked
+        // and replayed rather than silently dropped.
+        AudioCommand::MoveClip { clip_id, .. }
+        | AudioCommand::TrimClip { clip_id, .. }
+        | AudioCommand::DeleteClip { clip_id }
+        | AudioCommand::SplitClip { clip_id, .. }
+        | AudioCommand::SetClipFade { clip_id, .. }
+        | AudioCommand::SetClipGain { clip_id, .. }
+            if !clips::clip_exists(ctx, clip_id) =>
+        {
+            clips::defer_clip_command(state, clip_id, cmd)
+        }
         AudioCommand::MoveClip {
             clip_id,
             new_start_sample,
@@ -37,6 +56,11 @@ pub(super) fn dispatch_clips(
             trim_end_frames,
         ),
         AudioCommand::DeleteClip { clip_id } => clips::handle_delete_clip(ctx, clip_id),
+        AudioCommand::SplitClip {
+            clip_id,
+            new_clip_id,
+            at_sample,
+        } => clips::handle_split_clip(ctx, clip_id, new_clip_id, at_sample),
         AudioCommand::SetClipFade {
             clip_id,
             fade_in_frames,

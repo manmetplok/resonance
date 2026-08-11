@@ -1,6 +1,7 @@
 use iced::Task;
 use resonance_audio::types::AudioCommand;
 
+use super::tempo_reanchor::{musical_anchors, reanchor_to_tempo};
 use crate::message::{Message, TransportMessage};
 use crate::state::{LoopDragTarget, ViewMode};
 use crate::Resonance;
@@ -73,16 +74,25 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         }
         TransportMessage::CommitBpm => {
             if let Ok(parsed) = r.transport.bpm_input.trim().parse::<f32>() {
-                r.transport.bpm = parsed.clamp(20.0, 300.0);
-                let _ = r.engine.send(AudioCommand::SetBpm {
-                    bpm: r.transport.bpm,
-                });
+                let bpm = parsed.clamp(20.0, 300.0);
+                // Read every timeline position as a MUSICAL position
+                // BEFORE the grid moves, so it can be put back on the same
+                // bar afterwards (ba doc #275 P1.4). Only a real tempo
+                // change needs it — but the rebuild below runs either way,
+                // because committing the value already showing is how a
+                // fresh project gets its first bar table.
+                let anchors = (bpm != r.transport.bpm).then(|| musical_anchors(r));
+                r.transport.bpm = bpm;
+                let _ = r.engine.send(AudioCommand::SetBpm { bpm });
                 if let Some(first) = r.tempo_events.first_mut() {
                     if first.bar == 0 {
-                        first.bpm = r.transport.bpm;
+                        first.bpm = bpm;
                     }
                 }
                 r.rebuild_and_send_tempo();
+                if let Some(anchors) = anchors {
+                    reanchor_to_tempo(r, anchors);
+                }
             }
             r.transport.bpm_input = format!("{:.1}", r.transport.bpm);
         }

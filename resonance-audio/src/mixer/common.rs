@@ -63,19 +63,32 @@ pub(super) fn advance_playhead_silent(
     new_playhead
 }
 
-/// Compute stereo gains for a track using equal-power pan law.
+/// Compute stereo gains for a track from its fader and pan.
+///
+/// The pan control is a stereo BALANCE, not a constant-power pan: centre
+/// is unity on both channels, and panning attenuates the far side only
+/// (`resonance_dsp::stereo_balance`).
+///
+/// Every track in this engine carries a stereo signal — instruments
+/// render stereo, clips are stereo-interleaved, the monitor path is
+/// de-interleaved to a pair — so the constant-power law this used to
+/// apply was pricing in a mono-to-stereo spread that never happens. Its
+/// centre gain of 1/sqrt(2) meant a stem rendered from the project and
+/// placed straight back measured 3.01 dB below its source, on a fader at
+/// 0 dB with clip gain at 0 (ba doc #276 BUG 3). A hard-panned track is
+/// unchanged by the switch; centre-panned material comes up 3 dB.
 #[inline]
 pub(super) fn track_stereo_gains(track: &Track) -> (f32, f32) {
     let volume = track.volume();
-    let (pan_l, pan_r) = resonance_dsp::constant_power_pan(track.pan());
+    let (pan_l, pan_r) = resonance_dsp::stereo_balance(track.pan());
     (volume * pan_l, volume * pan_r)
 }
 
-/// Compute stereo gains for a bus using the same equal-power pan law.
+/// Compute stereo gains for a bus using the same balance law.
 #[inline]
 pub(super) fn bus_stereo_gains(bus: &Bus) -> (f32, f32) {
     let volume = bus.volume();
-    let (pan_l, pan_r) = resonance_dsp::constant_power_pan(bus.pan());
+    let (pan_l, pan_r) = resonance_dsp::stereo_balance(bus.pan());
     (volume * pan_l, volume * pan_r)
 }
 

@@ -356,6 +356,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             clap_file_path,
             params,
             has_gui,
+            has_sidechain_input,
             output_port_count,
             output_port_names,
         } => plugins::track_added(
@@ -367,6 +368,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             clap_file_path,
             params,
             has_gui,
+            has_sidechain_input,
             output_port_count,
             output_port_names,
         ),
@@ -391,6 +393,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             clap_file_path,
             params,
             has_gui,
+            has_sidechain_input,
         } => plugins::bus_added(
             r,
             bus_id,
@@ -400,6 +403,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             clap_file_path,
             params,
             has_gui,
+            has_sidechain_input,
         ),
         E::BusPluginRemoved {
             bus_id,
@@ -417,6 +421,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             clap_file_path,
             params,
             has_gui,
+            has_sidechain_input,
         } => plugins::master_added(
             r,
             instance_id,
@@ -425,6 +430,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             clap_file_path,
             params,
             has_gui,
+            has_sidechain_input,
         ),
         E::MasterPluginRemoved { instance_id } => plugins::master_removed(r, instance_id),
         E::MasterPluginMoved {

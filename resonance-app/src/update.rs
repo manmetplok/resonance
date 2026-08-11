@@ -5,6 +5,7 @@ use iced::{keyboard, Subscription, Task};
 /// Tick interval (ms) for the subscription timer that drains engine events.
 pub const TICK_INTERVAL_MS: u64 = 16;
 
+pub mod arrangement;
 pub mod automation;
 pub mod browser;
 pub mod bus;
@@ -31,6 +32,7 @@ pub mod pool;
 pub mod project_io;
 pub mod reference;
 pub mod relink;
+pub mod tempo_reanchor;
 pub mod tick;
 pub mod track;
 pub mod transport;
@@ -105,6 +107,21 @@ impl crate::Resonance {
             Message::ChordTrack(m) => chord_track::handle(self, m),
             Message::Transport(m) => transport::handle(self, m),
             Message::Marker(m) => marker::handle(self, m),
+            Message::Arrangement(m) => {
+                use crate::message::ArrangementMessage as A;
+                let outcome = match m {
+                    A::InsertBars { at_bar, count } => {
+                        arrangement::insert_bars(self, at_bar, count)
+                    }
+                    A::RemoveBars { at_bar, count } => {
+                        arrangement::remove_bars(self, at_bar, count)
+                    }
+                };
+                // The control layer reads this back to report what moved;
+                // see `Resonance::last_arrangement_shift`.
+                self.last_arrangement_shift = Some(outcome);
+                Task::none()
+            }
             Message::MarkerUi(m) => marker_ui::handle(self, m),
             Message::Track(m) => track::handle(self, m),
             Message::ExternalInstrument(m) => external_instrument::handle(self, m),

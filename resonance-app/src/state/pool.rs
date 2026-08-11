@@ -145,11 +145,26 @@ impl MediaPool {
         self.assets.iter().any(|a| a.missing)
     }
 
-    /// Add an asset to the pool. If an asset with the same id already
-    /// exists it is replaced in place (re-import / metadata refresh),
+    /// Add an asset to the pool. An asset with the same id AND the same
+    /// project file is replaced in place (re-import / metadata refresh),
     /// preserving its position; otherwise the asset is appended.
+    ///
+    /// An id arriving with a DIFFERENT file is an id collision, and
+    /// replacing in place is the worst possible response: every clip
+    /// referencing that id silently starts playing the new audio, which
+    /// is what happened when the engine's allocator handed out ids a
+    /// loaded project was already using (ba doc #276 BUG 2 — fixed at
+    /// the source by `ReserveAssetIds`). The existing asset wins and the
+    /// collision is reported rather than absorbed.
     pub fn add(&mut self, asset: PoolAsset) {
         if let Some(slot) = self.assets.iter_mut().find(|a| a.id == asset.id) {
+            if slot.project_relative_path != asset.project_relative_path {
+                eprintln!(
+                    "pool: refusing to rebind asset id {} from {:?} to {:?} —                      clips referencing it would silently change audio",
+                    asset.id, slot.project_relative_path, asset.project_relative_path
+                );
+                return;
+            }
             *slot = asset;
         } else {
             self.assets.push(asset);

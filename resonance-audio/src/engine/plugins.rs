@@ -286,6 +286,7 @@ pub(crate) fn handle_add_plugin(
             // instance into shared map.
             let params = instance.query_params();
             let has_gui = instance.has_gui();
+            let has_sidechain_input = instance.has_sidechain_input();
             let output_port_count = instance.output_port_count();
             let output_port_names = instance.output_port_names();
 
@@ -309,6 +310,7 @@ pub(crate) fn handle_add_plugin(
                 clap_file_path,
                 params,
                 has_gui,
+                has_sidechain_input,
                 output_port_count,
                 output_port_names,
             });
