@@ -4,7 +4,7 @@
 use super::{ack, find_track, instance_for, not_found_track, reject};
 use crate::message::{Message, PluginMessage};
 use crate::state::TrackState;
-use crate::update::control::{run_via_update, song};
+use crate::update::control::{run_via_update, view_model};
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::track::{self, RemoveEffectParams};
@@ -92,7 +92,7 @@ pub(super) fn move_effect(app: &mut Resonance, request: &Request) -> (Response, 
     let to_slot = match crate::plugin_chain::resolve_effect_move(app, &t, params.to_slot) {
         Ok(slot) => slot,
         Err(floor) => {
-            let entries = song::plugin_entries(app, &t);
+            let entries = view_model::plugin_entries(app, &t);
             let instrument = entries
                 .iter()
                 .find(|e| e.kind == track::PluginKind::Instrument);
@@ -180,7 +180,7 @@ fn resolve_chain_effect(
     address: ChainAddress<'_>,
     verb: ChainVerb,
 ) -> Result<(track::PluginParamsEntry, resonance_audio::types::PluginInstanceId), RpcError> {
-    let entries = song::plugin_entries(app, t);
+    let entries = view_model::plugin_entries(app, t);
     let entry = match (address.slot, address.plugin_id) {
         (Some(_), Some(_)) => {
             return Err(RpcError::invalid_params(
@@ -213,7 +213,7 @@ fn resolve_chain_effect(
             {
                 Some(entry) => entry.clone(),
                 None => {
-                    return Err(song::unknown_plugin_on_track(app, t, plugin_id, occurrence))
+                    return Err(view_model::unknown_plugin_on_track(app, t, plugin_id, occurrence))
                 }
             }
         }

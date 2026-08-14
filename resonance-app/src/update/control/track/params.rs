@@ -4,7 +4,7 @@
 
 use super::{ack, find_track, instance_for, not_found_track, reject};
 use crate::message::{Message, PluginMessage};
-use crate::update::control::{run_via_update, song};
+use crate::update::control::{run_via_update, view_model};
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::track;
@@ -41,7 +41,7 @@ pub(super) fn set_plugin_param(
 
     // Resolve the plugin: an explicit id, else the track's instrument —
     // the common case for "make this synth sound different".
-    let entries = song::plugin_entries(app, &t);
+    let entries = view_model::plugin_entries(app, &t);
     let occurrence = params.occurrence.unwrap_or(0);
     let entry = match &params.plugin_id {
         Some(id) => entries
@@ -53,7 +53,7 @@ pub(super) fn set_plugin_param(
     };
     let Some(entry) = entry else {
         let error = match &params.plugin_id {
-            Some(id) => song::unknown_plugin_on_track(app, &t, id, occurrence),
+            Some(id) => view_model::unknown_plugin_on_track(app, &t, id, occurrence),
             None => RpcError::invalid_params(format!(
                 "track {} has no instrument; name a plugin_id (it carries: [{}])",
                 t.id,

@@ -50,6 +50,8 @@ mod section;
 mod song;
 mod track;
 mod transport;
+/// App state -> wire projection, shared by every namespace (todo #1256).
+mod view_model;
 mod vocal;
 
 pub(crate) use clip::{import_result, place_result};

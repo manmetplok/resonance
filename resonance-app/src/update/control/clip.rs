@@ -377,7 +377,7 @@ pub(crate) fn place_result(
         clip_id: resonance_control::ids::ClipId(clip_id),
         track_id: resonance_control::ids::TrackId(track_id),
         asset_id: resonance_control::ids::AssetId(asset_id),
-        start: super::song::song_position(app, start_sample),
+        start: super::view_model::song_position(app, start_sample),
         length_beats: samples_to_beats(app, start_sample, length_samples),
         length_samples,
         name,
@@ -515,7 +515,7 @@ fn split(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let result = proto::SplitResult {
         head_clip_id: resonance_control::ids::ClipId(params.clip_id.0),
         tail_clip_id: resonance_control::ids::ClipId(new_clip_id),
-        at: super::song::song_position(app, at_sample),
+        at: super::view_model::song_position(app, at_sample),
         head_length_samples: at_sample - clip_start,
         tail_length_samples: clip_start + duration - at_sample,
         revision: app.revision(),
@@ -591,7 +591,7 @@ fn trim(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         .saturating_sub(new_trim_end);
     let result = TrimResult {
         clip_id: params.clip_id,
-        start: super::song::song_position(app, new_start_sample),
+        start: super::view_model::song_position(app, new_start_sample),
         start_offset_samples: new_trim_start,
         end_offset_samples: new_trim_end,
         length_samples,

@@ -48,8 +48,8 @@ pub(super) fn try_handle(
 /// The `TransportResult` echo built from post-dispatch state.
 fn echo(app: &Resonance, request: &Request) -> Response {
     let result = TransportResult {
-        state: super::song::transport_state(app),
-        playhead: super::song::song_position(app, app.transport.playhead),
+        state: super::view_model::transport_state(app),
+        playhead: super::view_model::song_position(app, app.transport.playhead),
         looping: app.transport.loop_enabled,
         revision: app.revision(),
     };
