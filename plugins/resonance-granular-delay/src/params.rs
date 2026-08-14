@@ -1,5 +1,13 @@
 //! Full parameter set for the granular delay (doc #252 §9).
 //!
+//! Choice parameters (`time_mode`, `fb_route`, `scheduler`,
+//! `pitch_quantize`, `filter_type`, `quality`) only declare their
+//! *range* here — what each integer means, and what the editor labels
+//! it, comes from the matching enum's `choice_param!` table in
+//! `crate::dsp::modes` / `crate::quantize` (ba todo #1267). Widen a
+//! range only together with its enum; `tests/editor_groups.rs` asserts
+//! the two agree.
+//!
 //! Every parameter from the §9 table is declared here so the CLAP id
 //! space is stable from the first release; parameters owned by later
 //! todos in epic #196 are *inert* (declared, saved/restored, but not yet
