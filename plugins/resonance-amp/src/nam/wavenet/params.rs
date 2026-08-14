@@ -7,11 +7,13 @@
 //! value, so a plain A1 layer-array config parses to the same effective
 //! configuration the engine uses today.
 //!
-//! Model construction does not consume [`WaveNetFullConfig`] wholesale yet;
-//! the A2 inference todos (#1105..#1113) wire it into `WaveNetModel`
-//! construction area by area. The gating surface ([`GatingMode`] + secondary
-//! activations, via `parse_gating_config`) is shared with the engine's
-//! legacy config path in `parse.rs` and drives inference already.
+//! This is the ONLY reader of new-format (layer-array) WaveNet config JSON:
+//! `parse::parse_wavenet_config` translates the [`WaveNetFullConfig`] parsed
+//! here into the engine's `WaveNetConfig` rather than re-reading the keys
+//! (ba todo #1262), so a key honoured here cannot be silently dropped on the
+//! way to inference. The one config shape not covered is the original flat
+//! A1 format (layer *counts* instead of layer-array objects), which
+//! `parse::schema::OldWaveNetConfig` mirrors and `parse::config` translates.
 
 use serde_json::Value;
 
@@ -105,10 +107,8 @@ impl FilmParams {
     /// or `null` passed as `None`): `None` or literal `false` means
     /// inactive; an object defaults to `{active: true, shift: true,
     /// groups: 1}` (reference `parse_film_params` in
-    /// NAM/wavenet/model.cpp). Shared between the typed A2 parse and the
-    /// engine config path in `parse.rs` (single source of FiLM-block
-    /// semantics).
-    pub(crate) fn from_json(value: Option<&Value>, ctx: &str, key: &str) -> Result<Self, String> {
+    /// NAM/wavenet/model.cpp).
+    fn from_json(value: Option<&Value>, ctx: &str, key: &str) -> Result<Self, String> {
         match value {
             None | Some(Value::Bool(false)) => Ok(Self::default()),
             Some(Value::Object(f)) => {
@@ -584,11 +584,10 @@ fn parse_activations(
     parse_activation_value(non_null(obj, "activation"), num_layers, ctx)
 }
 
-/// Shared primary-activation parsing (typed A2 parser + engine config
-/// parse): a single config (string or object) is duplicated per layer, a
-/// per-layer array must match the layer count, absent defaults to `"Tanh"`
-/// (A1).
-pub(crate) fn parse_activation_value(
+/// Primary-activation parsing: a single config (string or object) is
+/// duplicated per layer, a per-layer array must match the layer count,
+/// absent defaults to `"Tanh"` (A1).
+fn parse_activation_value(
     value: Option<&Value>,
     num_layers: usize,
     ctx: &str,
@@ -641,15 +640,14 @@ fn parse_gating(
     )
 }
 
-/// Core gating-config semantics, shared between the typed A2 parse above and
-/// the legacy engine config path in `parse.rs` (single source of truth —
-/// wired into model construction by the gating-mode todo #1106).
+/// Core gating-config semantics (all three modes reach inference through
+/// the engine config translated from this surface; gating-mode todo #1106).
 ///
 /// `gating_mode` is the raw JSON value (string or array of strings),
 /// `legacy_gated` the old boolean `gated` field, and `secondary_activation`
 /// the raw secondary activation config (single value or per-layer array).
 #[allow(clippy::type_complexity)]
-pub(crate) fn parse_gating_config(
+fn parse_gating_config(
     gating_mode: Option<&Value>,
     legacy_gated: Option<bool>,
     secondary_json: Option<&Value>,
