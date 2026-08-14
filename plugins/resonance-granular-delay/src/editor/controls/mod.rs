@@ -28,6 +28,9 @@ use egui::Ui;
 use wayland_plugin_gui::egui;
 
 use crate::params::GranularDelayParams;
+use crate::choice::ChoiceParam;
+use crate::dsp::{DampingFilter, FbRoute, QualityTier, Scheduler, TimeMode};
+use crate::quantize::PitchQuantize;
 use crate::sync::DIVISION_LABELS;
 use crate::viz::GranularViz;
 
@@ -103,12 +106,16 @@ pub enum ControlKind {
     Choice(&'static [&'static str]),
 }
 
-pub const TIME_MODE_LABELS: &[&str] = &["Fade", "Repitch", "Grain"];
-pub const SCHEDULER_LABELS: &[&str] = &["Sync", "Async", "Voice"];
-pub const FB_ROUTE_LABELS: &[&str] = &["Wet→Buf", "Out Only", "Pong"];
-pub const QUANTIZE_LABELS: &[&str] = &["Off", "Semi", "Scale"];
-pub const FILTER_TYPE_LABELS: &[&str] = &["LP", "HP"];
-pub const QUALITY_LABELS: &[&str] = &["Lo-Fi", "Norm", "HQ"];
+// The six mode choices keep their cached static slices (the view-perf
+// rule: no per-frame allocation), but the slices are the enums' own
+// label tables — the enum next to the DSP is the one place that knows
+// what each integer means (ba todo #1267).
+pub const TIME_MODE_LABELS: &[&str] = TimeMode::LABELS;
+pub const SCHEDULER_LABELS: &[&str] = Scheduler::LABELS;
+pub const FB_ROUTE_LABELS: &[&str] = FbRoute::LABELS;
+pub const QUANTIZE_LABELS: &[&str] = PitchQuantize::LABELS;
+pub const FILTER_TYPE_LABELS: &[&str] = DampingFilter::LABELS;
+pub const QUALITY_LABELS: &[&str] = QualityTier::LABELS;
 pub const ROOT_LABELS: &[&str] = &[
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];

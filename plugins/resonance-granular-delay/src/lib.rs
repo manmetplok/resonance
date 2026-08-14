@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
-use resonance_dsp::SchedulerMode;
 use resonance_plugin::*;
 
+pub mod choice;
 pub mod dsp;
 pub mod params;
 pub mod pitch_sync;
@@ -36,6 +36,7 @@ pub mod viz;
 #[cfg(feature = "editor")]
 pub mod editor;
 
+use choice::ChoiceParam;
 use dsp::GranularDsp;
 use params::{GranularDelayParams, GranularSmoothers, PARAM_COUNT};
 use viz::GranularViz;
@@ -222,27 +223,24 @@ impl ResonancePlugin for ResonanceGranularDelay {
             dsp::MAX_DELAY_SECONDS,
         );
 
-        // Scheduler 2 = Pitch-Sync (ba todo #1082): the PSOLA voice
-        // path engages in the DSP core while the tracker is voiced; the
+        // Scheduler = Pitch-Sync (ba todo #1082): the PSOLA voice path
+        // engages in the DSP core while the tracker is voiced; the
         // engines run Async underneath as the unvoiced/unlocked
         // fallback (and drain while the voice path is engaged).
-        let scheduler_value = self.params.scheduler.value();
-        let scheduler = match scheduler_value {
-            0 => SchedulerMode::Sync,
-            _ => SchedulerMode::Async,
-        };
+        //
+        // Every choice parameter resolves through its enum's
+        // `from_index` (ba todo #1267) — the one place that knows what
+        // each integer means, and the same table the editor labels come
+        // from.
+        let scheduler = dsp::Scheduler::from_index(self.params.scheduler.value());
 
         let block = dsp::BlockParams {
             delay_seconds,
-            time_mode: match self.params.time_mode.value() {
-                0 => dsp::TimeMode::Fade,
-                1 => dsp::TimeMode::Repitch,
-                _ => dsp::TimeMode::PerGrain,
-            },
-            pitch_sync: scheduler_value == 2,
+            time_mode: dsp::TimeMode::from_index(self.params.time_mode.value()),
+            pitch_sync: scheduler.pitch_sync(),
             grain_seconds: self.params.grain_size_ms.value() * 0.001,
             density_hz: self.params.density_hz.value(),
-            scheduler,
+            scheduler: scheduler.engine_mode(),
             pitch_semitones: self.params.pitch.value(),
             detune_spread_cents: self.params.spread_cents.value(),
             texture: self.params.texture.value(),
@@ -255,17 +253,10 @@ impl ResonancePlugin for ResonanceGranularDelay {
             // µ-law + reduced pool, Normal = Hermite, HQ = 6-pt
             // B-spline + forced anti-alias. Grain-latched, so tier
             // switches are click-free.
-            quality: match self.params.quality.value() {
-                0 => dsp::QualityTier::LoFi,
-                2 => dsp::QualityTier::Hq,
-                _ => dsp::QualityTier::Normal,
-            },
-            fb_route: match self.params.fb_route.value() {
-                0 => dsp::FbRoute::WetToBuffer,
-                2 => dsp::FbRoute::PingPong,
-                _ => dsp::FbRoute::OutputOnly,
-            },
-            filter_is_highpass: self.params.filter_type.value() == 1,
+            quality: dsp::QualityTier::from_index(self.params.quality.value()),
+            fb_route: dsp::FbRoute::from_index(self.params.fb_route.value()),
+            filter_is_highpass: dsp::DampingFilter::from_index(self.params.filter_type.value())
+                .is_highpass(),
             freeze: self.params.freeze.value(),
             fb_pitch: self.params.fb_pitch.value(),
             quantize: quantize::PitchQuantize::from_index(self.params.pitch_quantize.value()),

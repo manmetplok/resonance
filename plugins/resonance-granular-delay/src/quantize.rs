@@ -13,6 +13,8 @@
 
 use resonance_music_theory::{Mode, PitchClass, Scale};
 
+use crate::choice::choice_param;
+
 /// Quantization applied to the per-grain effective transpose at spawn
 /// (the `pitch_quantize` parameter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -26,16 +28,11 @@ pub enum PitchQuantize {
     Scale,
 }
 
-impl PitchQuantize {
-    /// Map the `pitch_quantize` parameter value (0/1/2) to a mode.
-    pub fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Semitones,
-            2 => Self::Scale,
-            _ => Self::Off,
-        }
-    }
-}
+choice_param!(PitchQuantize, fallback: PitchQuantize::Off, {
+    PitchQuantize::Off => "Off",
+    PitchQuantize::Semitones => "Semi",
+    PitchQuantize::Scale => "Scale",
+});
 
 /// Map the `root` parameter (0–11 = C..B) to a pitch class.
 pub fn root_from_index(index: i32) -> PitchClass {

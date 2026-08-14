@@ -4,6 +4,7 @@
 //! A minor, to integer semitones in semitone mode, and pass through
 //! untouched when quantization is off.
 
+use resonance_granular_delay::choice::ChoiceParam;
 use resonance_granular_delay::quantize::{
     mode_from_index, quantize_transpose, root_from_index, PitchQuantize,
 };

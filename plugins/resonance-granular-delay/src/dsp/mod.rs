@@ -56,7 +56,7 @@ use time::TimeMachine;
 use voice::VoiceStage;
 
 pub use grains::DECOR_FADE_MS;
-pub use modes::{FbRoute, QualityTier, TimeMode, LOFI_MAX_GRAINS};
+pub use modes::{DampingFilter, FbRoute, QualityTier, Scheduler, TimeMode, LOFI_MAX_GRAINS};
 pub use source::{FREEZE_RAMP_SECONDS, MAX_DELAY_SECONDS};
 pub use time::{FADE_LEG_SECONDS, REPITCH_TAU_SECONDS};
 pub use voice::VOICE_FADE_SECONDS;
