@@ -564,7 +564,7 @@ fn resolve_range(
         Some(spec) if !spec.is_empty() => super::transport::resolve_position(app, &spec)?,
         _ => 0,
     };
-    let song_end = super::song::song_end_sample(app);
+    let song_end = super::view_model::song_end_sample(app);
     let mut end = match range.end {
         Some(spec) if !spec.is_empty() => super::transport::resolve_position(app, &spec)?,
         // An open-ended range runs to the end of the song. With an empty
