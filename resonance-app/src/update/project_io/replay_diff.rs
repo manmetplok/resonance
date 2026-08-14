@@ -641,11 +641,29 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
 fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     let a_by_id: HashMap<u64, &ProjectSend> = a.sends.iter().map(|s| (s.id, s)).collect();
 
+    // Removals drain FIRST so the reconciliation is order-independent.
+    // Upserting first means a send that REPLACES another edge is checked
+    // for feedback loops against a graph that still holds the edge it
+    // replaces: undo across "delete bus A->B, create bus B->A" would
+    // have the new edge rejected as a loop, then the old one removed,
+    // leaving the engine with neither while the mirror shows the new one.
+    let target_ids: std::collections::HashSet<u64> = b.sends.iter().map(|s| s.id).collect();
+    for sa in &a.sends {
+        if !target_ids.contains(&sa.id) {
+            let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id: sa.id });
+            r.aux.remove(sa.id);
+        }
+    }
+
     for sb in &b.sends {
         if a_by_id.get(&sb.id).copied() == Some(sb) {
             continue;
         }
-        let source = send_source_from_tag(&sb.source_kind, sb.source_id);
+        // Unknown source kind: drop rather than guess (see
+        // `send_source_from_tag`).
+        let Some(source) = send_source_from_tag(&sb.source_kind, sb.source_id) else {
+            continue;
+        };
         let _ = r.engine.send(AudioCommand::SetAuxSend {
             id_hint: Some(sb.id),
             source,
@@ -664,13 +682,6 @@ fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
         });
     }
 
-    let target_ids: std::collections::HashSet<u64> = b.sends.iter().map(|s| s.id).collect();
-    for sa in &a.sends {
-        if !target_ids.contains(&sa.id) {
-            let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id: sa.id });
-            r.aux.remove(sa.id);
-        }
-    }
 }
 
 fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {

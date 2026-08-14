@@ -77,6 +77,10 @@ pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
 }
 
 pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
+    // Aux sends leaving this track die with it (ba todo #1269 review):
+    // the engine drops them without a per-send echo, so nothing else
+    // would prune the mirror that project save serializes.
+    r.aux.drop_sends_touching_track(track_id);
     if let Some(sel_clip_id) = r.interaction.selected_clip {
         if r.clips
             .iter()
@@ -261,6 +265,8 @@ pub(super) fn bus_added(r: &mut Resonance, bus_id: BusId, name: String) {
 }
 
 pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
+    // A bus can be either end of a send edge, so drop both directions.
+    r.aux.drop_sends_touching_bus(bus_id);
     if let Some(sel) = r.mixer.selected_plugin {
         if r.registry
             .busses

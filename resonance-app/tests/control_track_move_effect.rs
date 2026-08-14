@@ -406,3 +406,87 @@ fn the_domain_message_alone_cannot_displace_the_instrument() {
         "a move that respects the floor still reorders"
     );
 }
+
+/// The rule is "the instrument stays put", not merely "nothing lands
+/// below the floor" (ba todo #1261, review follow-up).
+///
+/// Checking only the destination lets the INSTRUMENT walk *down* its own
+/// chain: sending it to the last slot clears a floor of 1, and once it
+/// sits at slot 2 the floor becomes 3 while the last slot is 2 — so it
+/// can never be moved back. The chain is then permanently wrong and no
+/// further move can repair it.
+#[test]
+fn the_instrument_cannot_walk_down_its_own_chain() {
+    let mut app = app();
+    add_instrument(&mut app);
+    add(&mut app, "com.resonance.eq");
+    add(&mut app, "com.resonance.compressor");
+
+    let instrument_id = app
+        .test_track_plugin_instance_ids(TRACK)
+        .into_iter()
+        .next()
+        .expect("the instrument is in slot 0");
+
+    let _ = app.update(Message::Plugin(
+        resonance_app::message::PluginMessage::MovePluginInTrack {
+            track_id: TRACK,
+            instance_id: instrument_id,
+            to_index: 2,
+        },
+    ));
+
+    assert_eq!(
+        short(&order(&mut app)),
+        vec!["wavetable", "eq", "compressor"],
+        "the instrument must not be movable to the end of its own chain"
+    );
+}
+
+/// A refused move must not spend an undo entry or bump the revision
+/// (ba todo #1261, review follow-up).
+///
+/// `update_inner` records undo and bumps the revision BEFORE dispatch,
+/// so refusing inside the handler would leave a phantom edit behind: a
+/// control client polling `revision` sees a concurrent-edit signal that
+/// did not happen, and the user's next undo is consumed restoring an
+/// identical snapshot. The refusal therefore has to gate pre-dispatch.
+#[test]
+fn a_refused_move_costs_neither_a_revision_nor_an_undo_entry() {
+    let mut app = app();
+    add_instrument(&mut app);
+    add(&mut app, "com.resonance.eq");
+    add(&mut app, "com.resonance.compressor");
+
+    let compressor = app
+        .test_track_plugin_instance_ids(TRACK)
+        .into_iter()
+        .nth(2)
+        .expect("three plugins on the chain");
+
+    let revision_before = app.revision();
+    let undo_label_before = app
+        .test_undo_history()
+        .undo_label()
+        .map(|s| s.to_owned());
+
+    let _ = app.update(Message::Plugin(
+        resonance_app::message::PluginMessage::MovePluginInTrack {
+            track_id: TRACK,
+            instance_id: compressor,
+            to_index: 0,
+        },
+    ));
+
+    assert_eq!(
+        app.revision(),
+        revision_before,
+        "a refused move must not bump the revision"
+    );
+    assert_eq!(
+        app.test_undo_history().undo_label().map(|s| s.to_owned()),
+        undo_label_before,
+        "a refused move must not push an undo entry — the top of the \
+         stack must still be whatever the last real edit was"
+    );
+}

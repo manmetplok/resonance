@@ -11,9 +11,19 @@
 //!   formant-preserving resynthesis from `resonance-dsp`. Untuned / identity
 //!   clips have their cache cleared, restoring the zero-overhead path.
 //! * The mixer hot path then reads [`AudioClip::render_frames`], which hands
-//!   back the cached corrected buffer (or the untouched source). Because the
-//!   live mixer and the offline bounce both go through that one accessor,
-//!   a retuned clip sounds identical in playback and in bounce/export.
+//!   back the cached corrected buffer (or the untouched source).
+//!
+//! NOTE on live playback: the cache is only ever built by the four
+//! offline paths (bounce / wav / stem / freeze) -- nothing on the engine
+//! control thread calls [`ensure_tuning_caches`] -- so live playback
+//! reflects a tuning edit only after an export has run. It is not the
+//! "identical in playback and in bounce" guarantee this comment used to
+//! claim. Today that is invisible because nothing in production can set
+//! `has_edits()`: there is no tuning-edit `AudioCommand`, the app sends
+//! only `AnalyzeClipPitch`, and the default correction amount is 0.0.
+//! Whoever lands the tuning-edit handlers has to call
+//! [`ensure_tuning_caches`] from the control thread (or rebuild per
+//! clip on edit) to make the guarantee real.
 //!
 //! The original [`ClipSource`](crate::types::ClipSource) PCM is never
 //! mutated — the cache is a separate owned buffer with the same frame

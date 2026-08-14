@@ -85,6 +85,13 @@ pub fn analyze_clip_pitch_in_place(
         let tuning = clip.vocal_tuning_mut();
         tuning.contour = contour.clone();
         tuning.notes = notes.clone();
+        // The cache was resynthesised against the PREVIOUS note geometry,
+        // which we just replaced, so it is now stale. Nothing else clears
+        // it -- `ensure_tuning_caches` only ever REBUILDS, and only from
+        // the four offline paths (bounce/wav/stem/freeze) -- so without
+        // this the mixer would keep serving audio retuned to the old
+        // notes until the next export.
+        clip.tuning_render_cache = None;
     }
 
     let _ = event_tx.send(AudioEvent::ClipPitchDetected {

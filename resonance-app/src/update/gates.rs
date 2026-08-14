@@ -409,6 +409,44 @@ impl crate::Resonance {
         if self.freeze.any_in_flight() && freeze_blocks_message(message) {
             return true;
         }
+        if self.plugin_move_is_refused(message) {
+            return true;
+        }
         false
+    }
+
+    /// A chain reorder the domain rule refuses (ba todo #1261).
+    ///
+    /// Gated rather than dropped inside the handler because
+    /// `update_inner` records undo and bumps the revision *before*
+    /// dispatch: refusing later would spend an undo entry and signal a
+    /// revision change for a move that never happened, so a control
+    /// client polling `revision` would see a phantom concurrent edit and
+    /// the user's next undo would restore an identical snapshot.
+    ///
+    /// A track or plugin that vanished between message and handler is
+    /// refused here too — there is no chain left to reorder.
+    fn plugin_move_is_refused(&self, message: &crate::message::Message) -> bool {
+        use crate::message::{Message, PluginMessage};
+        let Message::Plugin(PluginMessage::MovePluginInTrack {
+            track_id,
+            instance_id,
+            to_index,
+        }) = message
+        else {
+            return false;
+        };
+        let Some(track) = self.registry.tracks.iter().find(|t| t.id == *track_id) else {
+            return true;
+        };
+        let Some(moving) = track
+            .plugins
+            .iter()
+            .position(|p| p.instance_id == *instance_id)
+        else {
+            return true;
+        };
+        let requested = u32::try_from(*to_index).unwrap_or(u32::MAX);
+        crate::plugin_chain::resolve_effect_move(self, track, moving as u32, requested).is_err()
     }
 }

@@ -63,6 +63,28 @@ impl AuxSendState {
         self.sends.retain(|s| s.id != send_id);
     }
 
+    /// Drop every send that starts at or ends on a deleted endpoint.
+    ///
+    /// A send is an edge, so it stops meaning anything the moment either
+    /// end goes away. The engine drops the route silently on
+    /// `RemoveTrack` / `RemoveBus` without echoing a per-send
+    /// `AuxSendRemoved`, so the mirror has to be pruned alongside — and
+    /// it must be, because the mirror is what project save writes: an
+    /// orphaned send would otherwise be persisted, refused by the loader
+    /// on the next open, and rewritten by every save after that.
+    pub fn drop_sends_touching_track(&mut self, track_id: resonance_audio::types::TrackId) {
+        self.sends
+            .retain(|s| !matches!(s.source, SendSource::Track(id) if id == track_id));
+    }
+
+    /// As [`Self::drop_sends_touching_track`], for a removed bus — which
+    /// can be either end of the edge.
+    pub fn drop_sends_touching_bus(&mut self, bus_id: BusId) {
+        self.sends.retain(|s| {
+            s.dest != bus_id && !matches!(s.source, SendSource::Bus(id) if id == bus_id)
+        });
+    }
+
     /// Allocate a fresh app-chosen send id, skipping past any id already
     /// mirrored from the engine. Handed to the engine as a `SetAuxSend`
     /// hint, so it must not clash with one the engine allocated itself.

@@ -754,3 +754,38 @@ fn extra_state_is_saved_and_restored_through_both_paths() {
     assert!(extra().loaded.lock().unwrap().is_some());
     assert_eq!(get_value(&mut instance, "gain"), 0.75);
 }
+
+/// The two load paths must agree for a value f32 cannot represent
+/// exactly (review follow-up to ba todo #1257).
+///
+/// Every value in `the_active_and_inactive_load_paths_agree_on_hostile_state`
+/// happens to be exactly f32-representable (0.125, 0.375, 40.0 -> 1.0),
+/// so it cannot see this: the inactive path stores through
+/// `FloatParam::set_plain`, which demotes to f32, while the shared path
+/// stored the raw f64. `get_value` reads the atomics on both paths, so
+/// the host reported -- and re-saved -- a different number depending on
+/// whether the plugin happened to be active.
+#[test]
+fn the_load_paths_agree_on_a_value_f32_cannot_represent() {
+    // 0.1 is the canonical case: 0.1f32 widened back to f64 is
+    // 0.10000000149011612, so a raw-f64 store and an f32 store differ.
+    let hostile = serde_json::to_vec(&json!({ "params": { "mix": 0.1 } })).unwrap();
+
+    let mut inactive = bridge_instance();
+    assert!(load_state(&mut inactive, &hostile));
+
+    let mut active = bridge_instance();
+    let processor = active
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(load_state(&mut active, &hostile));
+
+    assert_eq!(
+        get_value(&mut active, "mix"),
+        get_value(&mut inactive, "mix"),
+        "the same preset must restore the same value whether or not the \
+         plugin was active when it was loaded"
+    );
+
+    active.deactivate(processor);
+}

@@ -71,12 +71,14 @@ fn frozen_track_header_and_lane_render() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/frozen_track_header_and_lane_render.png")
-            .expect("matches_image i/o"),
-        "frozen-track render diverged from golden — the frost header / \
-         FROZEN pill / locked chip / dimmed controls / frozen-render lane \
-         changed"
+    // Via the shared helper, not `matches_image` directly, so this test
+    // self-skips under RESONANCE_SKIP_GOLDENS=1 like the other 103
+    // goldens (ba todo #1064). A direct call here would hard-diff pixels
+    // on a non-conformant renderer and wedge the whole scoped-fast gate
+    // for every unrelated todo — the wedge #1064 existed to end.
+    common::assert_golden(
+        &snap,
+        "tests/snapshots/frozen_track_header_and_lane_render.png",
     );
 }
 

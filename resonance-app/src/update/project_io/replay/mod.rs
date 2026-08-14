@@ -338,7 +338,26 @@ fn replay_tracks_and_busses(
 /// mirror was already emptied by [`wipe_registry`].
 fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
     for ps in &project.sends {
-        let source = crate::project::send_source_from_tag(&ps.source_kind, ps.source_id);
+        // An unknown source kind means this build cannot tell what the
+        // send is routed FROM. Dropping it loses a route; guessing wires
+        // the wrong signal into a bus and is worse, so drop.
+        let Some(source) = crate::project::send_source_from_tag(&ps.source_kind, ps.source_id)
+        else {
+            continue;
+        };
+        // Only mirror a send whose endpoints exist in the project we
+        // just loaded. The engine rejects a send with a missing source
+        // or destination, and `AuxSendRejected` does not remove a
+        // seeded entry — so seeding one unconditionally leaves a phantom
+        // the mixer draws and `song.tracks` reports while no audio is
+        // routed, with no way back short of deleting it by hand.
+        let source_exists = match source {
+            SendSource::Track(id) => r.registry.tracks.iter().any(|t| t.id == id),
+            SendSource::Bus(id) => r.registry.busses.iter().any(|b| b.id == id),
+        };
+        if !source_exists || !r.registry.busses.iter().any(|b| b.id == ps.dest_bus) {
+            continue;
+        }
         let _ = r.engine.send(AudioCommand::SetAuxSend {
             id_hint: Some(ps.id),
             source,

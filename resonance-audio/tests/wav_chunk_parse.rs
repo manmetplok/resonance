@@ -206,3 +206,47 @@ fn a_data_chunk_that_is_not_whole_stereo_frames_is_rejected() {
         .expect_err("half a frame is not loadable");
     assert!(err.contains("not a multiple of stereo f32 frames"), "{err}");
 }
+
+/// A `data` chunk that is only 2-byte aligned must still load and play
+/// (review follow-up to ba todo #1260).
+///
+/// RIFF requires chunks to be *word* aligned, not dword, so an
+/// odd-length chunk ahead of `data` — a `LIST`/`INFO` block with an
+/// odd-length string, which several DAWs write — leaves the samples on a
+/// 2-byte boundary. `ClipSource::as_frames` casts the mapped bytes to
+/// `&[f32]` with `bytemuck::cast_slice`, which PANICS on misalignment,
+/// and it runs on the audio thread. `chunks_before_fmt_and_odd_sized_chunks_are_skipped`
+/// blesses exactly this layout as valid but stops at the parser, so it
+/// never reaches the cast.
+#[test]
+fn a_two_byte_aligned_data_chunk_loads_without_panicking() {
+    use resonance_audio::types::ClipSource;
+
+    // 5-byte LIST (padded to 6) puts the data body at offset 58, and
+    // 58 % 4 == 2.
+    let mut body = chunk(b"LIST", b"INFOx");
+    body.extend_from_slice(&chunk(b"fmt ", &fmt_float(2, 48_000, 32)));
+    let samples: Vec<f32> = (0..32).map(|i| i as f32 * 0.01).collect();
+    body.extend_from_slice(&chunk(b"data", bytemuck::cast_slice(&samples)));
+    let file = riff(&body);
+
+    let found = locate_wav_float_data(&file).expect("layout is valid RIFF");
+    assert_eq!(
+        found.data_offset_bytes % std::mem::align_of::<f32>(),
+        2,
+        "this fixture is only meaningful while the data chunk is misaligned"
+    );
+
+    let dir = std::env::temp_dir().join("resonance-wav-align-test");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("misaligned.wav");
+    std::fs::write(&path, &file).expect("write fixture");
+
+    let source = ClipSource::open_wav(&path).expect("a misaligned WAV must still load");
+    // The cast that used to panic.
+    let frames = source.as_frames();
+    assert_eq!(frames.len(), samples.len());
+    assert_eq!(frames, samples.as_slice(), "samples must survive the copy");
+
+    let _ = std::fs::remove_file(&path);
+}

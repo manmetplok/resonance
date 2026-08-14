@@ -52,16 +52,34 @@ pub(crate) fn effect_slot_floor(app: &Resonance, t: &TrackState) -> u32 {
 /// the caller counting the chain (the engine clamps identically, so the
 /// mirrored order agrees with what it does).
 ///
-/// `Err(floor)` means the destination would land on or above the
-/// instrument and displace the track's sound source. Callers refuse:
-/// the control API turns `floor` into a wire error, the GUI path drops
-/// the move.
+/// `Err(floor)` means the move would displace the track's sound source.
+/// Callers refuse: the control API turns `floor` into a wire error, the
+/// GUI path drops the move.
+///
+/// `moving` is the chain index of the plugin being moved, and it is
+/// required: the rule is not "no effect may land below the floor" but
+/// "the instrument stays put and effects stay after it", and those are
+/// different guarantees. Without it the guard refuses an effect moved
+/// onto slot 0 while happily letting the INSTRUMENT walk down its own
+/// chain — `[instrument, eq, comp]` with the instrument sent to slot 2
+/// passes a floor of 1, lands as `[eq, comp, instrument]`, and is then
+/// stuck: the floor becomes 3 while the last slot is 2, so it can never
+/// be moved back.
 pub(crate) fn resolve_effect_move(
     app: &Resonance,
     t: &TrackState,
+    moving: u32,
     to_index: u32,
 ) -> Result<u32, u32> {
     let floor = effect_slot_floor(app, t);
+    // The instrument itself is structural: it does not move at all.
+    // Reported as the floor so the caller's message still reads "effects
+    // sit at or after <floor>", which is the rule being enforced.
+    if let Some(instrument) = instrument_slot(app, t) {
+        if moving == instrument as u32 {
+            return Err(floor);
+        }
+    }
     if to_index < floor {
         return Err(floor);
     }

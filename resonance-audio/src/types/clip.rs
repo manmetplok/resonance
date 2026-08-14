@@ -170,8 +170,27 @@ impl ClipSource {
     /// WAV's own sample rate alongside. The file I/O, the mapping and
     /// the RIFF parse all live in [`crate::io::wav`]; this only puts the
     /// result into the clip's data shape.
+    /// A data chunk that is not 4-byte aligned falls back to an in-RAM
+    /// `Memory` copy: RIFF only requires chunks to be *word* (2-byte)
+    /// aligned, so an odd-length chunk ahead of `data` — a `LIST`/`INFO`
+    /// block with an odd-length string, which several DAWs write — can
+    /// leave the samples on a 2-byte boundary. `as_frames` casts the
+    /// mapped bytes to `&[f32]` with `bytemuck::cast_slice`, which
+    /// PANICS on misalignment, and it runs on the audio thread. Copying
+    /// at load time costs one allocation off the RT path and keeps the
+    /// hot accessor a plain slice cast.
     fn open_wav_inner(path: &Path) -> Result<(Self, u32), String> {
         let mapped = crate::io::wav::map_wav_file(path)?;
+        let aligned = (mapped.mmap.as_ptr() as usize + mapped.data_offset_bytes)
+            % std::mem::align_of::<f32>()
+            == 0;
+        if !aligned {
+            let byte_len = (mapped.frame_count as usize) * 2 * std::mem::size_of::<f32>();
+            let bytes = &mapped.mmap[mapped.data_offset_bytes..mapped.data_offset_bytes + byte_len];
+            let mut samples = vec![0f32; byte_len / std::mem::size_of::<f32>()];
+            bytemuck::cast_slice_mut::<f32, u8>(&mut samples).copy_from_slice(bytes);
+            return Ok((ClipSource::Memory(samples), mapped.sample_rate));
+        }
         Ok((
             ClipSource::Mapped {
                 mmap: Arc::new(mapped.mmap),

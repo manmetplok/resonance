@@ -157,10 +157,21 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
     // a stable on-disk order that doesn't depend on the order the
     // engine's echoes happened to arrive in.
     let sends = {
+        // Only sends whose endpoints still exist. A send is an edge, so
+        // it is meaningless once either end is gone -- and writing a
+        // dangling one is durable damage rather than a cosmetic wart:
+        // the loader refuses it (the engine rejects a missing source or
+        // destination), yet the entry stays in the file and every later
+        // save rewrites it, accumulating one per deleted track.
+        let live_source = |source: SendSource| match source {
+            SendSource::Track(id) => r.registry.tracks.iter().any(|t| t.id == id),
+            SendSource::Bus(id) => r.registry.busses.iter().any(|b| b.id == id),
+        };
         let mut sends: Vec<ProjectSend> = r
             .aux
             .sends
             .iter()
+            .filter(|s| live_source(s.source) && r.registry.busses.iter().any(|b| b.id == s.dest))
             .map(|s| {
                 let (source_kind, source_id) = send_source_tag(s.source);
                 ProjectSend {

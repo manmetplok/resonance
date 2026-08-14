@@ -89,7 +89,8 @@ pub(super) fn move_effect(app: &mut Resonance, request: &Request) -> (Response, 
     // The instrument-floor and end-clamp rules belong to the chain, not
     // to this RPC edge (`plugin_chain`); all this layer adds is wire
     // wording that names the offending slot.
-    let to_slot = match crate::plugin_chain::resolve_effect_move(app, &t, params.to_slot) {
+    let to_slot = match crate::plugin_chain::resolve_effect_move(app, &t, entry.slot, params.to_slot)
+    {
         Ok(slot) => slot,
         Err(floor) => {
             let entries = view_model::plugin_entries(app, &t);

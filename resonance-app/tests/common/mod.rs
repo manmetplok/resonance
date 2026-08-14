@@ -71,6 +71,27 @@ pub fn assert_golden(snapshot: &Snapshot, path: &str) {
         return;
     }
 
+    // `matches_image` CREATES the golden and returns Ok(true) when the
+    // file is absent, so without this check a test whose PNG was never
+    // committed (or was lost to a bad merge / `git clean`) would write a
+    // fresh golden into every checkout and report ok forever — guarding
+    // nothing. Fail loudly instead; blessing a new golden is a
+    // deliberate act, not something a normal test run does silently.
+    //
+    // iced_test rewrites the path to a backend-suffixed file
+    // (`foo.png` -> `foo-wgpu.png`), so probe for that, falling back to
+    // the literal path for any backend that does not rewrite.
+    let stem = path.strip_suffix(".png").unwrap_or(path);
+    let backend_variants = [format!("{stem}-wgpu.png"), path.to_owned()];
+    assert!(
+        backend_variants
+            .iter()
+            .any(|candidate| std::path::Path::new(candidate).exists()),
+        "no golden on disk for {path} — `matches_image` would silently \
+         create it and pass. Bless it deliberately, or restore the \
+         committed PNG."
+    );
+
     let matched = snapshot
         .matches_image(path)
         .unwrap_or_else(|err| panic!("golden comparison i/o for {path}: {err}"));

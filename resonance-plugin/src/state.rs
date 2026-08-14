@@ -64,6 +64,19 @@ pub(crate) fn load_params_from_shared_json(
                 let mut value = val.clamp(meta.min, meta.max);
                 if meta.is_stepped {
                     value = value.round();
+                } else {
+                    // Demote through f32 exactly as `FloatParam::set_plain`
+                    // does (`self.set_value(clamped as f32)`). Without
+                    // this the two load paths still disagree for any
+                    // value f32 cannot represent: `mix: 0.1` loaded while
+                    // INACTIVE becomes f32 0.1 and mirrors back as
+                    // 0.10000000149011612, while loading it ACTIVE leaves
+                    // 0.1 in the atomics — and `get_value` reads the
+                    // atomics either way, so the host reports and re-saves
+                    // a different number depending on plugin state, which
+                    // is the divergence this function exists to close.
+                    // Stepped params hold integers, which are exact.
+                    value = value as f32 as f64;
                 }
                 param_values[i].store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
             }

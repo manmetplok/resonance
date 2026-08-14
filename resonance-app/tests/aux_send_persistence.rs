@@ -383,3 +383,95 @@ fn diff_replay_drops_a_send_added_after_the_snapshot() {
         "the engine must be told to drop the send too"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Review follow-ups: a send is an edge, so it must not outlive either end
+// ---------------------------------------------------------------------------
+
+/// Deleting the source track drops the send from the mirror, so it is
+/// never written to the project file.
+///
+/// Before this, the engine dropped the route silently on `RemoveTrack`
+/// (no per-send echo) while the mirror kept it — and the mirror is what
+/// save serializes. The dangling send was written out, refused by the
+/// loader on reopen, and rewritten by every save after that, one entry
+/// per deleted track, forever.
+#[test]
+fn deleting_the_source_track_drops_its_sends() {
+    let mut app = app_with_send(-6.0, false);
+    assert_eq!(app.test_aux_sends().len(), 1);
+
+    app.test_apply_engine_event(AudioEvent::TrackRemoved { track_id: TRACK });
+
+    assert!(
+        app.test_aux_sends().is_empty(),
+        "a send out of a deleted track must not survive in the mirror"
+    );
+    let file = app.test_build_project_file();
+    assert!(
+        file.sends.is_empty(),
+        "and must not be written to the project file"
+    );
+}
+
+/// Same for the destination bus, which can be either end of the edge.
+#[test]
+fn deleting_the_destination_bus_drops_its_sends() {
+    let mut app = app_with_send(-6.0, false);
+    app.test_apply_engine_event(AudioEvent::BusRemoved {
+        bus_id: RETURN_BUS,
+    });
+
+    assert!(app.test_aux_sends().is_empty());
+    assert!(app.test_build_project_file().sends.is_empty());
+}
+
+/// A send whose endpoints are missing from the file is not mirrored on
+/// load, so the mixer cannot show a route the engine refused.
+///
+/// `AuxSendRejected` only records `last_rejection`; it never removes a
+/// seeded entry. Seeding unconditionally therefore left a phantom send
+/// that the mixer drew and `song.tracks` reported to MCP clients while
+/// no audio was routed at all.
+#[test]
+fn a_send_with_a_missing_endpoint_is_not_mirrored_on_load() {
+    let mut file = app_with_send(-6.0, false).test_build_project_file();
+    // Re-point the send at a track the file does not contain.
+    file.sends[0].source_id = 999;
+
+    let (app, cmds) = save_and_reload(&file);
+
+    assert!(
+        app.test_aux_sends().is_empty(),
+        "a send with a missing source must not appear in the mirror"
+    );
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, AudioCommand::SetAuxSend { .. })),
+        "and no SetAuxSend should be sent for it"
+    );
+}
+
+/// An unrecognised `source_kind` drops the send instead of silently
+/// re-pointing it at a different entity.
+///
+/// Track ids and bus ids are independent namespaces that both start at
+/// 1, so defaulting an unknown tag to `Track(id)` would usually hit a
+/// track that exists and sum the wrong signal into the bus, with no
+/// error anywhere.
+#[test]
+fn an_unknown_source_kind_drops_the_send_rather_than_guessing() {
+    let mut file = app_with_send(-6.0, false).test_build_project_file();
+    file.sends[0].source_kind = "Bus".to_string(); // wrong case: not "bus"
+
+    let (app, cmds) = save_and_reload(&file);
+
+    assert!(
+        app.test_aux_sends().is_empty(),
+        "an unknown source kind must not be guessed into a Track route"
+    );
+    assert!(!cmds
+        .iter()
+        .any(|c| matches!(c, AudioCommand::SetAuxSend { .. })));
+}
