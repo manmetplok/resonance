@@ -6,6 +6,13 @@
 //! allocated id plus any clamping of `level_db`), so the mirror always
 //! matches engine state. A bus's return-role flag is mirrored separately
 //! onto [`BusState::is_return`](super::BusState) from `BusRoleChanged`.
+//!
+//! The one writer that isn't an engine echo is the project-load replay
+//! (ba todo #1269), which seeds the saved graph here at the same moment
+//! it re-registers it with the engine — exactly as it seeds `TrackState`
+//! alongside `AddTrack`. The engine's `AuxSendChanged` echoes land a
+//! moment later and overwrite each seeded entry with the resolved one,
+//! so the engine stays the authority on what is actually live.
 
 use resonance_audio::types::*;
 

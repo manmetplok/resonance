@@ -148,9 +148,8 @@ impl ResonanceMcp {
                        putting it in a room, use 20 ms or more of pre-delay on the reverb \
                        itself; to push it further back, roll off the highs on the return. \
                        \
-                       CAVEAT: aux sends are NOT SAVED YET (ba todo #482). A send created here \
-                       is lost when the project is saved and reloaded, so treat it as a live \
-                       mixing decision and tell the user it will not survive a reload.",
+                       The send is saved with the project — routing, level and tap point all \
+                       come back on reload.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<track::AddSendResult>()
     )]
@@ -169,7 +168,7 @@ impl ResonanceMcp {
                        into a different return). Omitted fields keep their current value, and \
                        setting a value it already has is a no-op. send_id comes from \
                        track_add_send or from the sends array in song_tracks. A route that \
-                       would feed back is refused. Aux sends are not saved yet (ba todo #482).",
+                       would feed back is refused. The edit is saved with the project.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn track_set_send(
@@ -184,8 +183,8 @@ impl ResonanceMcp {
                        return bus keeps its other feeds; only this one tap goes away. send_id \
                        comes from track_add_send or the sends array in song_tracks. To silence \
                        a send but keep it configured, use track_set_send with enabled: false \
-                       instead. Aux sends are not saved yet (ba todo #482), so a send is lost \
-                       on save + reload whether or not you remove it here.",
+                       instead. The removal is saved with the project, so a deleted send does \
+                       not come back on reload.",
         annotations(destructive_hint = true, open_world_hint = false)
     )]
     async fn track_remove_send(

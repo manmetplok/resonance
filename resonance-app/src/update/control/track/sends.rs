@@ -8,10 +8,10 @@
 //! implementation) so a route the engine would refuse is reported as
 //! `invalid_params` here instead of silently vanishing.
 //!
-//! NOTE: aux sends are NOT persisted — nothing in
-//! `update/project_io/serialize.rs` writes the send graph. That is open
-//! ba todo #482; until it lands a send created here is lost on
-//! save + reload, and the MCP tool descriptions say so.
+//! Sends persist with the project (ba todo #1269): `build_project_file`
+//! writes the mirrored graph to `ProjectFile::sends` and the replay path
+//! hands each one back to the engine on load, so a send created here
+//! survives save + reload.
 
 use super::{ack, find_track, not_found_track, reject};
 use crate::message::{Message, MixerMessage};

@@ -254,10 +254,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
 
         // Aux-send edits. A level drag coalesces into one entry per
         // gesture (like the volume/pan faders); every other send action is
-        // a discrete, atomic edit. End-to-end *restoration* of sends on
-        // undo is completed by the persistence slice (ba todo #482), which
-        // teaches the snapshot/replay path about the send graph; here we
-        // only classify the bookkeeping (dirty-mark + redo-clear).
+        // a discrete, atomic edit. The send graph rides the `ProjectFile`
+        // snapshot since ba todo #1269, so these entries restore
+        // end-to-end; here we only classify the bookkeeping (dirty-mark +
+        // redo-clear).
         Message::Mixer(m) => match m {
             MixerMessage::SetSendLevel(send_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::SendLevel(*send_id))

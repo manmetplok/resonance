@@ -709,6 +709,9 @@ fn base_bus(id: u64, order: usize, name: &str) -> ProjectBus {
         muted: false,
         fx_bypassed: false,
         plugins: Vec::new(),
+        // Starter templates route tracks into their busses directly; no
+        // template ships an aux send, so no bus is a return.
+        is_return: false,
     }
 }
 

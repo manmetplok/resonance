@@ -32,6 +32,7 @@ fn make_minimal_project() -> ProjectFile {
         clips: Vec::new(),
         midi_clips: Vec::new(),
         busses: Vec::new(),
+        sends: Vec::new(),
         section_definitions: Vec::new(),
         section_placements: Vec::new(),
         tempo_events: Vec::new(),
@@ -114,6 +115,7 @@ fn make_project_with_content() -> ProjectFile {
             state_file: "plugins/plugin_2.bin".to_string(),
             params: Vec::new(),
         }],
+        is_return: false,
     }];
 
     project
