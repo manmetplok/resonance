@@ -77,6 +77,22 @@ impl Resonance {
         }
     }
 
+    /// Test-only: the instance ids on a track's chain, in slot order, so
+    /// a test can address a plugin the way a GUI would — by where it
+    /// sits — rather than through a control-API wire parameter.
+    #[doc(hidden)]
+    pub fn test_track_plugin_instance_ids(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<resonance_audio::types::PluginInstanceId> {
+        self.registry
+            .tracks
+            .iter()
+            .find(|t| t.id == track_id)
+            .map(|t| t.plugins.iter().map(|p| p.instance_id).collect())
+            .unwrap_or_default()
+    }
+
     /// Test-only: set a plugin param's current value directly (no engine
     /// round-trip), so a fingerprint test can mutate an input and recompute.
     #[doc(hidden)]

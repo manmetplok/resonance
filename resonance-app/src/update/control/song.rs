@@ -10,6 +10,7 @@
 //! GUI edits.
 
 use crate::compose::LaneGeneratorKind;
+use crate::plugin_chain::instrument_slot;
 use crate::state::{BusState, TrackState};
 use crate::Resonance;
 use resonance_audio::types::{TrackOutput, TrackType};
@@ -665,34 +666,6 @@ fn track_kind(app: &Resonance, t: &TrackState) -> TrackKind {
 
 /// Chain index of the track's instrument, if it has one.
 ///
-/// Classified by what the plugin *is* — the scanner records
-/// `is_instrument` from the CLAP descriptor — not by where it sits.
-/// Position alone gets this wrong: `track.add_effect` appends, so an
-/// effect added to a chain-empty instrument track lands at slot 0 and
-/// would otherwise be reported as that track's instrument while the
-/// effects array came back empty.
-fn instrument_slot(app: &Resonance, t: &TrackState) -> Option<usize> {
-    if t.track_type != TrackType::Instrument {
-        return None;
-    }
-    let scanned = |id: &str| app.available_plugins.iter().find(|p| p.clap_plugin_id == id);
-    if let Some(i) = t
-        .plugins
-        .iter()
-        .position(|p| scanned(&p.clap_plugin_id).is_some_and(|s| s.is_instrument))
-    {
-        return Some(i);
-    }
-    // Nothing the scanner knows to be an instrument. Fall back to slot 0
-    // only when the scanner doesn't know that plugin at all — a project
-    // whose instrument is no longer installed still reports the slot it
-    // occupies — never when the scanner positively classified it as an
-    // effect.
-    match t.plugins.first() {
-        Some(p) if scanned(&p.clap_plugin_id).is_none() => Some(0),
-        _ => None,
-    }
-}
 
 /// The track's sound source, compact: the external-instrument device
 /// (`"external:<device-id>"`) when the track drives outboard hardware,

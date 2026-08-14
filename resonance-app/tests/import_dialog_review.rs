@@ -20,6 +20,8 @@
 //! Goldens diverge in this local env, so the golden is authored here and
 //! blessed in CI (as with the recent vocal-rail snapshot).
 
+mod common;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{ImportMessage, Message};
@@ -156,9 +158,5 @@ fn import_dialog_review_stage() {
     let snap = ui
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
-    assert!(
-        snap.matches_image("tests/snapshots/import_dialog_review.png")
-            .expect("matches_image i/o"),
-        "snapshot diverged from golden: tests/snapshots/import_dialog_review.png",
-    );
+    common::assert_golden(&snap, "tests/snapshots/import_dialog_review.png");
 }

@@ -668,39 +668,28 @@ fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
         Err(error) => return reject(request, error),
     };
 
-    // Slot 0 on an instrument track is structural: it is what receives
-    // MIDI and what every sub-track inherits its latency from. Moving an
-    // EFFECT on top of it would displace the instrument, so refuse a
-    // destination that would land above it rather than silently
-    // rearranging the track's sound source.
-    let entries = super::song::plugin_entries(app, &t);
-    let instrument_slot = entries
-        .iter()
-        .find(|e| e.kind == track::PluginKind::Instrument)
-        .map(|e| e.slot);
-    let floor = instrument_slot.map(|s| s + 1).unwrap_or(0);
-    if params.to_slot < floor {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "slot {} on track {} is the track's INSTRUMENT ({}); effects sit after it, so \
-                 to_slot must be at least {floor}",
-                instrument_slot.unwrap_or(0),
-                t.id,
-                entries
-                    .iter()
-                    .find(|e| e.kind == track::PluginKind::Instrument)
-                    .map(|e| e.plugin_id.as_str())
-                    .unwrap_or("?"),
-            )),
-        );
-    }
-
-    // Clamp rather than error: a caller that asks for "last" by naming a
-    // slot past the end means the end (the engine clamps identically, so
-    // the echo agrees with what is mirrored here).
-    let last = t.plugins.len().saturating_sub(1) as u32;
-    let to_slot = params.to_slot.min(last);
+    // The instrument-floor and end-clamp rules belong to the chain, not
+    // to this RPC edge (`plugin_chain`); all this layer adds is wire
+    // wording that names the offending slot.
+    let to_slot = match crate::plugin_chain::resolve_effect_move(app, &t, params.to_slot) {
+        Ok(slot) => slot,
+        Err(floor) => {
+            let entries = super::song::plugin_entries(app, &t);
+            let instrument = entries
+                .iter()
+                .find(|e| e.kind == track::PluginKind::Instrument);
+            return reject(
+                request,
+                RpcError::invalid_params(format!(
+                    "slot {} on track {} is the track's INSTRUMENT ({}); effects sit after it, \
+                     so to_slot must be at least {floor}",
+                    instrument.map(|e| e.slot).unwrap_or(0),
+                    t.id,
+                    instrument.map(|e| e.plugin_id.as_str()).unwrap_or("?"),
+                )),
+            );
+        }
+    };
     if to_slot == entry.slot {
         // A no-op move records no undo entry and sends no command.
         return (ack(app, request), Task::none());

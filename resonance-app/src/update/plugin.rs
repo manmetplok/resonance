@@ -53,6 +53,19 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             instance_id,
             to_index,
         } => {
+            // Slot 0 on an instrument track is structural, so a move
+            // that would land above the instrument is refused here
+            // rather than at any one call site — see `plugin_chain`.
+            // A track that vanished between message and handler has no
+            // chain to reorder, so the move is dropped as well.
+            let Some(track) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
+                return Task::none();
+            };
+            let requested = u32::try_from(to_index).unwrap_or(u32::MAX);
+            let to_index = match crate::plugin_chain::resolve_effect_move(r, track, requested) {
+                Ok(slot) => slot as usize,
+                Err(_) => return Task::none(),
+            };
             let _ = r.engine.send(AudioCommand::MovePlugin {
                 track_id,
                 instance_id,

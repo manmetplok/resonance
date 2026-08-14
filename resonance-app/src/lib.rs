@@ -25,6 +25,7 @@ pub mod demo;
 pub mod engine_events;
 pub mod focus;
 pub mod message;
+pub mod plugin_chain;
 pub mod presets;
 pub mod project;
 pub mod recent;

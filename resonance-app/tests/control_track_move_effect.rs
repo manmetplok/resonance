@@ -347,3 +347,62 @@ fn the_move_is_a_committed_undoable_edit() {
         "undo must find the move and start restoring the pre-move snapshot"
     );
 }
+
+/// The instrument-floor rule belongs to the chain, not to the control
+/// API that happens to be its only caller today (ba todo #1261).
+///
+/// `PluginMessage::MovePluginInTrack` is the domain message every
+/// reorder path goes through — the control handler delegates to it, and
+/// a future mixer drag-to-reorder would emit it directly. Sending it
+/// straight, bypassing `track.move_effect` and its wire validation, must
+/// still leave the instrument in slot 0: otherwise the first GUI caller
+/// silently displaces the track's sound source and serializes the wrong
+/// order into the project.
+#[test]
+fn the_domain_message_alone_cannot_displace_the_instrument() {
+    let mut app = app();
+    add_instrument(&mut app);
+    add(&mut app, "com.resonance.eq");
+    add(&mut app, "com.resonance.compressor");
+    assert_eq!(
+        short(&order(&mut app)),
+        vec!["wavetable", "eq", "compressor"]
+    );
+
+    // The compressor's instance id, addressed the way a GUI would: by
+    // what sits in the chain, not by a wire parameter.
+    let instance_id = app
+        .test_track_plugin_instance_ids(TRACK)
+        .into_iter()
+        .nth(2)
+        .expect("three plugins on the chain");
+
+    let _ = app.update(Message::Plugin(
+        resonance_app::message::PluginMessage::MovePluginInTrack {
+            track_id: TRACK,
+            instance_id,
+            to_index: 0,
+        },
+    ));
+
+    assert_eq!(
+        short(&order(&mut app)),
+        vec!["wavetable", "eq", "compressor"],
+        "an effect moved to slot 0 must not displace the instrument"
+    );
+
+    // The same message with a legal destination still works, so the
+    // guard refuses the invalid move rather than disabling the path.
+    let _ = app.update(Message::Plugin(
+        resonance_app::message::PluginMessage::MovePluginInTrack {
+            track_id: TRACK,
+            instance_id,
+            to_index: 1,
+        },
+    ));
+    assert_eq!(
+        short(&order(&mut app)),
+        vec!["wavetable", "compressor", "eq"],
+        "a move that respects the floor still reorders"
+    );
+}
