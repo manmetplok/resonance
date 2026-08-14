@@ -20,9 +20,10 @@
 //! # Layout (ba todo #1253)
 //!
 //! This file holds only the dispatch table and the handful of helpers
-//! every handler family needs ([`reject`], [`ack`], [`find_track`],
-//! [`not_found_track`], [`instance_for`]); the families themselves live
-//! one per submodule, each with its own error vocabulary:
+//! every handler family needs ([`find_track`], [`instance_for`], plus
+//! the layer-wide [`reply`](super::reply) vocabulary re-exported for the
+//! submodules); the families themselves live one per submodule, each
+//! with its own error vocabulary:
 //!
 //! | module | methods |
 //! |---|---|
@@ -40,7 +41,12 @@ use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::mixer as mixer_methods;
 use resonance_control::methods::track as track_methods;
-use resonance_control::{MutationAck, Request, Response, RpcError};
+use resonance_control::{Request, Response};
+
+/// The reply vocabulary (todo #1258): every family answers with these,
+/// and they are re-exported here so the submodules keep saying
+/// `super::ack` / `super::reject` / `super::not_found_track`.
+pub(super) use super::reply::{ack, not_found_track, reject};
 
 mod chain;
 mod lifecycle;
@@ -85,22 +91,9 @@ pub(super) fn try_handle(
     Some(out)
 }
 
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
-}
-
-/// The `MutationAck` reply carrying the post-edit revision.
-fn ack(app: &Resonance, request: &Request) -> Response {
-    super::success(request, &MutationAck { revision: app.revision() })
-}
-
 /// Look up a live track by wire id, or `None`.
 fn find_track(app: &Resonance, id: u64) -> Option<&TrackState> {
     app.registry.tracks.iter().find(|t| t.id == id)
-}
-
-fn not_found_track(request: &Request, id: u64) -> (Response, Task<Message>) {
-    reject(request, RpcError::not_found(format!("no track with id {id}")))
 }
 
 /// The engine instance id of the `occurrence`-th plugin with this CLAP

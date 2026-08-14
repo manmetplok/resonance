@@ -35,7 +35,7 @@ use resonance_control::methods::generate::{self as proto, GenerateResult, Genera
 use resonance_control::{Request, Response, RpcError};
 use resonance_music_theory::{BassParams, MelodyParams, PadParams};
 
-use super::section::fail;
+use super::reply::{no_track, reject};
 
 pub(super) fn try_handle(
     app: &mut Resonance,
@@ -56,18 +56,18 @@ pub(super) fn try_handle(
 fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::PartParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = super::section::definition_missing(app, definition_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let track_id: u64 = params.track_id.into();
     // The melodic generators target a synth (instrument) track; a drum or
     // vocal track would be a category error (drums have their own method,
     // vocals their own namespace).
     if let Some(e) = require_instrument_track(app, track_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     // The generators read the section's chord grid; with no chords they
     // would silently produce nothing, so refuse up front.
@@ -76,7 +76,7 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         .find_definition(definition_id)
         .is_some_and(|d| !d.chords.is_empty());
     if !has_chords {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params(
                 "section has no chords to generate from; add chords (harmony.*) first",
@@ -89,7 +89,7 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let seed = params.seed.unwrap_or_else(|| seed_from_id(definition_id));
     let kind = match build_kind(params.role, params.options.as_ref()) {
         Ok(k) => k,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let config = LaneGeneratorConfig { kind, seed };
 
@@ -102,7 +102,7 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         }),
     );
     if let Some(error) = app.compose.last_error.take() {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let result = GenerateResult::new(generated_clips(app, definition_id, track_id), app.revision());
     (super::success(request, &result), task)
@@ -173,20 +173,20 @@ fn parse_options<T: serde::de::DeserializeOwned + Default>(
 fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::DrumsParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = super::section::definition_missing(app, definition_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let track_id: u64 = params.track_id.into();
     if let Some(e) = require_drum_track(app, track_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
 
     if let Some(d) = params.density {
         if !d.is_finite() || !(0.0..=1.0).contains(&d) {
-            return fail(
+            return reject(
                 request,
                 RpcError::invalid_params(format!("density must be within 0.0..=1.0 (got {d})")),
             );
@@ -208,7 +208,7 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                     .iter()
                     .map(|p| p.name.clone())
                     .collect();
-                return fail(
+                return reject(
                     request,
                     RpcError::not_found(format!(
                         "no drum pattern named {name:?} (project: {}; built-in: {})",
@@ -223,7 +223,7 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     // An empty bank is only a problem when nothing else can supply the
     // groove — a built-in brings its own.
     if builtin.is_none() && app.compose.drum_patterns.is_empty() {
-        return fail(
+        return reject(
             request,
             RpcError::unsupported(format!(
                 "the project has no drum pattern to generate from; name a built-in groove \
@@ -244,7 +244,7 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         }),
     );
     if let Some(error) = app.compose.last_error.take() {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let result = GenerateResult::new(generated_clips(app, definition_id, track_id), app.revision());
     (super::success(request, &result), task)
@@ -307,5 +307,5 @@ fn track_kind(app: &Resonance, track_id: u64) -> Option<(TrackType, InstrumentTy
 }
 
 fn missing_track(track_id: u64) -> RpcError {
-    RpcError::not_found(format!("no track with id {track_id}"))
+    no_track(track_id)
 }

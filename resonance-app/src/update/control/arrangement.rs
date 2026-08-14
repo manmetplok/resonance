@@ -14,6 +14,8 @@ use resonance_control::methods::arrangement::{
 };
 use resonance_control::{Request, Response, RpcError};
 
+use super::reply::reject;
+
 /// Handle an `arrangement.*` request, or `None` when `method` belongs to
 /// another namespace.
 pub(super) fn try_handle(
@@ -26,10 +28,6 @@ pub(super) fn try_handle(
         _ => return None,
     };
     Some(handled)
-}
-
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
 }
 
 /// Bars are 1-based on the wire and a shift of zero bars is a no-op the

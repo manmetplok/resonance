@@ -23,7 +23,9 @@ use resonance_control::methods::bus::{
 };
 use resonance_control::methods::track;
 use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
-use resonance_control::{MutationAck, Request, Response, RpcError};
+use resonance_control::{Request, Response, RpcError};
+
+use super::reply::{ack, not_found_bus, reject};
 
 /// Handle a `bus.*` request, or `None` when `method` belongs to another
 /// namespace.
@@ -46,20 +48,8 @@ pub(super) fn try_handle(
     Some(out)
 }
 
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
-}
-
-fn ack(app: &Resonance, request: &Request) -> Response {
-    super::success(request, &MutationAck { revision: app.revision() })
-}
-
 fn find_bus(app: &Resonance, id: u64) -> Option<&BusState> {
     app.registry.busses.iter().find(|b| b.id == id)
-}
-
-fn not_found_bus(request: &Request, id: u64) -> (Response, Task<Message>) {
-    reject(request, RpcError::not_found(format!("no bus with id {id}")))
 }
 
 fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {

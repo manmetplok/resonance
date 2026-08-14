@@ -29,10 +29,14 @@ use crate::Resonance;
 use iced::Task;
 use resonance_control::job::JobStarted;
 use resonance_control::methods::vocal as proto;
-use resonance_control::{MutationAck, Request, Response, RpcError};
+use resonance_control::{Request, Response, RpcError};
 use resonance_music_theory::VocalVoicebank;
 
-use super::section::fail;
+// The `vocal.*` writes route ComposeMessages, so they answer with the
+// compose-aware acknowledgement rather than a bare one: a reducer that
+// refused parks its reason on `compose.last_error` instead of returning
+// it (todo #1258).
+use super::reply::{ack_or_compose_error, no_section_definition, no_track, reject};
 
 pub(super) fn try_handle(
     app: &mut Resonance,
@@ -57,12 +61,12 @@ pub(super) fn try_handle(
 fn set_lyrics(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::SetLyricsParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let track_id: u64 = params.track_id.into();
     let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
         Ok(id) => id,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let task = super::run_via_update(
         app,
@@ -72,7 +76,7 @@ fn set_lyrics(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             text: normalize_lyric_text(&params.text, params.syllabify),
         }),
     );
-    ack(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 /// Normalise incoming lyric text into the `·`-marked form the whole
@@ -104,12 +108,12 @@ fn normalize_lyric_text(text: &str, syllabify: bool) -> String {
 fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::SetLineParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let track_id: u64 = params.track_id.into();
     let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
         Ok(id) => id,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     // Range-check against the resolved lane's draft up front so an
     // out-of-range index is a precise error, not a silent no-op.
@@ -123,7 +127,7 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
         })
         .unwrap_or(0);
     if params.line_index >= line_count {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params(format!(
                 "line_index {} out of range (the lane has {line_count} line(s))",
@@ -140,7 +144,7 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
             text: normalize_lyric_text(&params.text, params.syllabify),
         }),
     );
-    ack(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 // ---------------------------------------------------------------------------
@@ -157,12 +161,12 @@ fn set_line(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
 fn generate(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::GenerateParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let track_id: u64 = params.track_id.into();
     let definition_id = match resolve_vocal_lane(app, track_id, params.section_id) {
         Ok(id) => id,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     // The vocal melody is derived from the section's chord grid; with no
     // chords the generator silently produces nothing, so refuse up front
@@ -172,7 +176,7 @@ fn generate(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
         .find_definition(definition_id)
         .is_some_and(|d| !d.chords.is_empty());
     if !has_chords {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params(
                 "the lane's section has no chords to generate from; add chords (harmony.*) first",
@@ -182,7 +186,7 @@ fn generate(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
     // Melody-only on an empty draft would derive nothing: the melody is
     // laid out one note per syllable.
     if !params.lyrics && lane_draft_is_empty(app, definition_id, track_id) {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params(
                 "the lane has no lyrics to sing; write them with vocal.set_lyrics or call \
@@ -201,10 +205,10 @@ fn generate(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
         }),
     );
     if let Some(error) = app.compose.last_error.take() {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let Some(clip_id) = first_derived_clip(app, definition_id, track_id) else {
-        return fail(
+        return reject(
             request,
             RpcError::internal("the vocal lane generated no clip"),
         );
@@ -264,13 +268,13 @@ fn first_derived_clip(app: &Resonance, definition_id: u64, track_id: u64) -> Opt
 fn set_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::SetPronunciationParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     if params.word.trim().is_empty() {
-        return fail(request, RpcError::invalid_params("word cannot be empty"));
+        return reject(request, RpcError::invalid_params("word cannot be empty"));
     }
     if params.phonemes.is_empty() {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params("phonemes cannot be empty; use vocal.clear_pronunciation to remove"),
         );
@@ -285,7 +289,7 @@ fn set_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Task<
             .iter()
             .filter(|p| crate::compose::vocal_svs::canonicalize_phonemes(std::slice::from_ref(*p)).is_empty())
             .collect();
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params(format!(
                 "unknown ARPAbet phoneme(s): {}",
@@ -300,13 +304,13 @@ fn set_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Task<
             phonemes: canonical,
         }),
     );
-    ack(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 fn clear_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::ClearPronunciationParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let key = crate::compose::vocal_svs::clean_word(&params.word);
     let present = app
@@ -316,7 +320,7 @@ fn clear_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Tas
         .iter()
         .any(|e| e.word == key);
     if !present {
-        return fail(
+        return reject(
             request,
             RpcError::not_found(format!("no pronunciation override for {:?}", params.word)),
         );
@@ -325,7 +329,7 @@ fn clear_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Tas
         app,
         Message::Compose(ComposeMessage::ControlClearPronunciation { word: params.word }),
     );
-    ack(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +339,7 @@ fn clear_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Tas
 fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::RenderParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     // An explicitly named voicebank is parsed up front so a typo fails
     // before any job starts. `None` is resolved per lane further down —
@@ -347,7 +351,7 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             None => {
                 let known: Vec<&str> =
                     VocalVoicebank::ALL.iter().map(|vb| vb.as_str()).collect();
-                return fail(
+                return reject(
                     request,
                     RpcError::invalid_params(format!(
                         "unknown voicebank {name:?} (one of: {})",
@@ -370,7 +374,7 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     // matched any rendered WAV, sections that saved out silent.
     let lanes = match resolve_render_lanes(app, params.track_id, params.section_id) {
         Ok(lanes) => lanes,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
 
     // Pre-flight the conditions `rerender_vocal_audio` silently no-ops
@@ -393,7 +397,7 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         }
     }
     if renderable.is_empty() {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params(describe_blocked(app, &blocked)),
         );
@@ -445,7 +449,7 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     }
 
     if started.is_empty() {
-        return fail(request, RpcError::invalid_params(errors.join("; ")));
+        return reject(request, RpcError::invalid_params(errors.join("; ")));
     }
 
     // Register the job covering exactly the lanes that dispatched; it
@@ -509,9 +513,7 @@ fn resolve_render_lanes(
             // A section with no track: every vocal lane that section has.
             let definition_id: u64 = section_id.into();
             let Some(def) = app.compose.find_definition(definition_id) else {
-                return Err(RpcError::not_found(format!(
-                    "no section definition with id {definition_id}"
-                )));
+                return Err(no_section_definition(definition_id));
             };
             let mut lanes: Vec<(u64, u64)> = def
                 .lane_generators
@@ -678,9 +680,7 @@ fn resolve_vocal_lane(
     if let Some(section_id) = section_id {
         let definition_id: u64 = section_id.into();
         let Some(def) = app.compose.find_definition(definition_id) else {
-            return Err(RpcError::not_found(format!(
-                "no section definition with id {definition_id}"
-            )));
+            return Err(no_section_definition(definition_id));
         };
         return match def.lane_generators.get(&track_id).map(|c| &c.kind) {
             Some(crate::compose::LaneGeneratorKind::Vocal(_)) => Ok(definition_id),
@@ -696,7 +696,7 @@ fn resolve_vocal_lane(
                 "track {track_id} has no vocal lane (configure a vocal generator on it first)"
             ))
         } else {
-            RpcError::not_found(format!("no track with id {track_id}"))
+            no_track(track_id)
         }
     })
 }
@@ -712,15 +712,3 @@ fn parse_voicebank(name: &str) -> Option<VocalVoicebank> {
         .find(|vb| vb.as_str().to_ascii_lowercase() == wanted)
 }
 
-/// A `MutationAck` reply plus the routed task, or the compose error left
-/// behind by the dispatch as `invalid_params`.
-fn ack(
-    app: &mut Resonance,
-    request: &Request,
-    task: Task<Message>,
-) -> (Response, Task<Message>) {
-    if let Some(error) = app.compose.last_error.take() {
-        return fail(request, RpcError::invalid_params(error));
-    }
-    (super::success(request, &MutationAck { revision: app.revision() }), task)
-}

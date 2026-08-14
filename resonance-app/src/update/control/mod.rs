@@ -46,6 +46,8 @@ mod meter;
 mod notes;
 mod project;
 mod render;
+/// The reply vocabulary every namespace answers with (todo #1258).
+mod reply;
 mod section;
 mod song;
 mod track;
@@ -53,6 +55,11 @@ mod transport;
 /// App state -> wire projection, shared by every namespace (todo #1256).
 mod view_model;
 mod vocal;
+
+/// Re-exported so every namespace module keeps reaching them as
+/// `super::success` / `super::failure` — one implementation, in
+/// [`reply`], for the whole layer.
+use reply::{failure, success};
 
 pub(crate) use clip::{import_result, place_result};
 pub(crate) use meter::{mix_measure_error, mix_measured};
@@ -383,14 +390,6 @@ pub(super) fn optional_params<T: serde::de::DeserializeOwned + Default>(
     }
 }
 
-/// The `{revision}` acknowledgement every mutating reply carries,
-/// snapshotting the app's monotonic undoable-transaction counter.
-pub(crate) fn mutation_ack(app: &Resonance) -> resonance_control::MutationAck {
-    resonance_control::MutationAck {
-        revision: app.revision(),
-    }
-}
-
 /// Why a mutating control method cannot run right now, or `None` when
 /// the app can take the edit. Mirrors the pre-dispatch gates that would
 /// otherwise silently swallow a synthesized domain message (startup
@@ -413,20 +412,4 @@ pub(crate) fn mutation_gate_error(app: &Resonance) -> Option<RpcError> {
         ));
     }
     None
-}
-
-/// A success reply for `request`; falls back to an internal error if the
-/// result fails to serialize (unreachable for well-formed result types).
-fn success<T: serde::Serialize>(request: &Request, result: &T) -> Response {
-    Response::success(request.id.clone(), result).unwrap_or_else(|e| {
-        Response::failure(
-            Some(request.id.clone()),
-            RpcError::internal(format!("failed to encode result: {e}")),
-        )
-    })
-}
-
-/// An error reply for `request`.
-fn failure(request: &Request, error: RpcError) -> Response {
-    Response::failure(Some(request.id.clone()), error)
 }

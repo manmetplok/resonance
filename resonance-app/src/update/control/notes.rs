@@ -25,7 +25,9 @@ use resonance_control::methods::notes::{
     self, CreateClipParams, CreateClipResult, DeleteParams, EditParams, InsertManyParams,
     InsertManyResult, InsertParams, InsertResult, MoveClipParams, NoteSpec, ReplaceAllParams,
 };
-use resonance_control::{MutationAck, Request, Response, RpcError};
+use resonance_control::{Request, Response, RpcError};
+
+use super::reply::{ack, no_midi_clip, no_track, no_section_placement, reject};
 
 /// Ticks per quarter note — the app's MIDI resolution.
 const TPQ: f64 = resonance_audio::types::TICKS_PER_QUARTER_NOTE as f64;
@@ -48,14 +50,6 @@ pub(super) fn try_handle(
         _ => return None,
     };
     Some(out)
-}
-
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
-}
-
-fn ack(app: &Resonance, request: &Request) -> Response {
-    super::success(request, &MutationAck { revision: app.revision() })
 }
 
 /// The MIDI clip with `clip_id`, or `None`.
@@ -81,12 +75,15 @@ fn frozen_reject(app: &Resonance, track_id: resonance_audio::types::TrackId) -> 
 /// Reject with `not_found`, distinguishing an audio clip (wrong kind)
 /// from a genuinely missing id.
 fn clip_not_found(app: &Resonance, request: &Request, clip_id: u64) -> (Response, Task<Message>) {
-    let detail = if app.clips.iter().any(|c| c.id == clip_id) {
-        format!("clip {clip_id} is an audio clip; notes.* edits MIDI clips")
-    } else {
-        format!("no MIDI clip with id {clip_id}")
-    };
-    reject(request, RpcError::not_found(detail))
+    if app.clips.iter().any(|c| c.id == clip_id) {
+        return reject(
+            request,
+            RpcError::not_found(format!(
+                "clip {clip_id} is an audio clip; notes.* edits MIDI clips"
+            )),
+        );
+    }
+    reject(request, no_midi_clip(clip_id))
 }
 
 /// Beats -> ticks, clamped non-negative.
@@ -358,10 +355,7 @@ fn create_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
         Err(e) => return reject(request, e),
     };
     let Some(track) = app.registry.tracks.iter().find(|t| t.id == params.track_id.0) else {
-        return reject(
-            request,
-            RpcError::not_found(format!("no track with id {}", params.track_id)),
-        );
+        return reject(request, no_track(params.track_id.into()));
     };
     // MIDI clips only live on MIDI-capable tracks (instrument / vocal).
     if !matches!(track.track_type, TrackType::Instrument | TrackType::Vocal) {
@@ -382,10 +376,7 @@ fn create_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
             let Some(placement) =
                 app.compose.placements.iter().find(|p| p.id == u64::from(pid))
             else {
-                return reject(
-                    request,
-                    RpcError::not_found(format!("no section placement with id {pid}")),
-                );
+                return reject(request, no_section_placement(pid.into()));
             };
             let Some(def) = app
                 .compose
@@ -495,10 +486,7 @@ fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         (None, Some(pid)) => {
             let Some(placement) = app.compose.placements.iter().find(|p| p.id == u64::from(pid))
             else {
-                return reject(
-                    request,
-                    RpcError::not_found(format!("no section placement with id {pid}")),
-                );
+                return reject(request, no_section_placement(pid.into()));
             };
             placement.start_bar
         }

@@ -24,7 +24,8 @@ use resonance_control::methods::harmony as proto;
 use resonance_control::{Request, Response, RpcError};
 use resonance_music_theory::{diatonic_chord, parse_chord, Chord, Scale};
 
-use super::section::{ack_or_error, definition_missing, fail, parse_key_scale, take_compose_error};
+use super::reply::{ack_or_compose_error, ack_task, reject};
+use super::section::{definition_missing, parse_key_scale, take_compose_error};
 
 pub(super) fn try_handle(
     app: &mut Resonance,
@@ -47,20 +48,20 @@ pub(super) fn try_handle(
 fn add_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::AddChordParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = definition_missing(app, definition_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let (start_beat, duration_beats) =
         match beats(params.start_beat, params.duration_beats) {
             Ok(v) => v,
-            Err(e) => return fail(request, e),
+            Err(e) => return reject(request, e),
         };
     let chord = match parse_symbol(&params.symbol) {
         Ok(c) => c,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
 
     let before: HashSet<u64> = chord_ids(app, definition_id).into_iter().collect();
@@ -79,13 +80,13 @@ fn add_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         }),
     );
     if let Some(error) = take_compose_error(app) {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let Some(chord_id) = chord_ids(app, definition_id)
         .into_iter()
         .find(|id| !before.contains(id))
     else {
-        return fail(request, RpcError::internal("chord was not created"));
+        return reject(request, RpcError::internal("chord was not created"));
     };
     let result = proto::AddChordResult {
         chord_id: chord_id.into(),
@@ -97,16 +98,16 @@ fn add_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
 fn edit_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::EditChordParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     let chord_id: u64 = params.chord_id.into();
     if let Some(e) = definition_missing(app, definition_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let mut specs = existing_specs(app, definition_id);
     let Some(slot) = specs.iter_mut().find(|s| s.id == Some(chord_id)) else {
-        return fail(
+        return reject(
             request,
             RpcError::not_found(format!(
                 "no chord with id {chord_id} in section {definition_id}"
@@ -115,24 +116,24 @@ fn edit_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message
     };
     if params.symbol.is_none() && params.start_beat.is_none() && params.duration_beats.is_none() {
         // Nothing to change; don't spend an undo entry on a no-op.
-        return (super::success(request, &super::mutation_ack(app)), Task::none());
+        return ack_task(app, request, Task::none());
     }
     if let Some(symbol) = &params.symbol {
         slot.chord = match parse_symbol(symbol) {
             Ok(c) => c,
-            Err(e) => return fail(request, e),
+            Err(e) => return reject(request, e),
         };
     }
     if let Some(start) = params.start_beat {
         slot.start_beat = match whole_beats(start, "start_beat") {
             Ok(b) => b,
-            Err(e) => return fail(request, e),
+            Err(e) => return reject(request, e),
         };
     }
     if let Some(duration) = params.duration_beats {
         slot.duration_beats = match whole_beats(duration, "duration_beats") {
             Ok(b) => b,
-            Err(e) => return fail(request, e),
+            Err(e) => return reject(request, e),
         };
     }
     let task = super::run_via_update(
@@ -142,24 +143,24 @@ fn edit_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             chords: specs,
         }),
     );
-    ack_or_error(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 fn delete_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::DeleteChordParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     let chord_id: u64 = params.chord_id.into();
     if let Some(e) = definition_missing(app, definition_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let mut specs = existing_specs(app, definition_id);
     let len_before = specs.len();
     specs.retain(|s| s.id != Some(chord_id));
     if specs.len() == len_before {
-        return fail(
+        return reject(
             request,
             RpcError::not_found(format!(
                 "no chord with id {chord_id} in section {definition_id}"
@@ -173,28 +174,28 @@ fn delete_chord(app: &mut Resonance, request: &Request) -> (Response, Task<Messa
             chords: specs,
         }),
     );
-    ack_or_error(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 fn apply_progression(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::ApplyProgressionParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = definition_missing(app, definition_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let chords = match resolve_progression(&params) {
         Ok(c) => c,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
 
     let time_sig_num = app.transport.time_sig_num;
     let beats_per_chord = match params.beats_per_chord {
         Some(b) => match whole_beats(b, "beats_per_chord") {
             Ok(0) | Err(_) => {
-                return fail(
+                return reject(
                     request,
                     RpcError::invalid_params(format!(
                         "beats_per_chord must be a positive whole number of beats; got {b}"
@@ -213,7 +214,7 @@ fn apply_progression(app: &mut Resonance, request: &Request) -> (Response, Task<
         .unwrap_or(0);
     let needed = chords.len() as u32 * beats_per_chord;
     if needed > section_beats {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params(format!(
                 "progression needs {needed} beats ({} chords x {beats_per_chord} beats) but the \
@@ -241,7 +242,7 @@ fn apply_progression(app: &mut Resonance, request: &Request) -> (Response, Task<
         }),
     );
     if let Some(error) = take_compose_error(app) {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let result = proto::ApplyProgressionResult {
         chord_ids: chord_ids(app, definition_id)
