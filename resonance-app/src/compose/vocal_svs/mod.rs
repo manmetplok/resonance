@@ -26,6 +26,8 @@ use resonance_music_theory::VocalParams;
 use resonance_svs::pipeline::{self, PipelineArgs};
 use resonance_svs::stages::common::ExecutionProvider;
 
+use crate::compose::expression::ExpressionCurves;
+
 mod paths;
 mod phonemes;
 mod post;
@@ -129,10 +131,12 @@ pub fn vocal_audio_start(
     tempo_map.tick_to_abs_sample(section_start_sample, lead_ticks, sample_rate)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_vocal_clip(
     notes: &[MidiNote],
     params: &VocalParams,
     assigned: &[AssignedSyllable],
+    curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
     engine_sample_rate: u32,
@@ -148,7 +152,7 @@ pub fn render_vocal_clip(
     // Split the clip into independently-renderable units at genuine
     // silences. A continuous phrase yields a single unit whose segment
     // matches the old whole-clip build.
-    let units = split_render_units(notes, params, assigned, ticks_per_quarter, bpm);
+    let units = split_render_units(notes, params, assigned, curves, ticks_per_quarter, bpm);
     if units.iter().all(|u| u.segment.ph_seq.is_empty()) {
         return Ok(None);
     }

@@ -30,7 +30,9 @@ use resonance_music_theory::g2p::AssignedSyllable;
 use resonance_music_theory::VocalParams;
 use resonance_svs::ds::{DsSegment, SampleCurve};
 
-use super::segment::build_segment;
+use crate::compose::expression::ExpressionCurves;
+
+use super::segment::build_segment_windowed;
 use super::SILENCE_GAP_SEC;
 
 /// One independently-renderable slice of a vocal clip: a contiguous run
@@ -73,10 +75,12 @@ fn seconds_per_tick(ticks_per_quarter: u32, bpm: f32) -> f64 {
 /// notes/syllables. A clip with no internal silence yields a single unit
 /// whose segment is identical to the old whole-clip build, so the
 /// common continuous-phrase case is unchanged.
+#[allow(clippy::too_many_arguments)]
 pub fn split_render_units(
     notes: &[MidiNote],
     params: &VocalParams,
     assigned: &[AssignedSyllable],
+    curves: &ExpressionCurves,
     ticks_per_quarter: u32,
     bpm: f32,
 ) -> Vec<RenderUnit> {
@@ -85,6 +89,16 @@ pub fn split_render_units(
     }
     let spt = seconds_per_tick(ticks_per_quarter, bpm);
     let base_tick = notes[0].start_tick;
+    // Tick span of the whole clip (first note's start → last note's end),
+    // used to map each unit onto the clip-normalised time the expression
+    // overlay breakpoints live in, so the overlay isn't re-stretched onto
+    // every unit. Falls back to a full window if the clip is zero-length.
+    let clip_end_tick = notes
+        .iter()
+        .map(|n| n.start_tick + n.duration_ticks)
+        .max()
+        .unwrap_or(base_tick);
+    let clip_span = clip_end_tick.saturating_sub(base_tick) as f32;
 
     // Boundaries between consecutive notes: split where the duration
     // builder would insert a real rest.
@@ -106,7 +120,25 @@ pub fn split_render_units(
         if lo >= hi {
             continue;
         }
-        let segment = build_segment(&notes[lo..hi], params, &assigned[lo..hi], ticks_per_quarter, bpm);
+        // This unit's clip-relative time window for the expression overlay.
+        let window = if clip_span > 0.0 {
+            let w0 = notes[lo].start_tick.saturating_sub(base_tick) as f32 / clip_span;
+            let w1 = (notes[hi - 1].start_tick + notes[hi - 1].duration_ticks)
+                .saturating_sub(base_tick) as f32
+                / clip_span;
+            (w0, w1)
+        } else {
+            (0.0, 1.0)
+        };
+        let segment = build_segment_windowed(
+            &notes[lo..hi],
+            params,
+            &assigned[lo..hi],
+            curves,
+            window,
+            ticks_per_quarter,
+            bpm,
+        );
         let start_sec = (notes[lo].start_tick.saturating_sub(base_tick)) as f64 * spt;
         let syllable_range = assigned[lo].syllable_index..assigned[hi - 1].syllable_index + 1;
         let key = content_key(&segment, params);

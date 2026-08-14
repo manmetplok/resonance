@@ -10,6 +10,8 @@
 //! - [`regenerate`] — derive notes for one lane and the cascade helpers
 //!   that fan chord changes / motif-seed bumps to every dependent lane.
 //! - [`expand`] — expanded piano-roll viewport (open track, scroll, zoom).
+//! - [`expression`] — vocal Expression-dock curve edits (breakpoints, pen/
+//!   snap tool state, depth/smoothing, reset-to-generated).
 
 use iced::Task;
 
@@ -20,6 +22,7 @@ mod chord;
 mod chord_inspector;
 pub(crate) mod drum_groups;
 mod expand;
+mod expression;
 mod lane_inspector;
 pub(crate) mod regenerate;
 mod section;
@@ -354,6 +357,12 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             msg,
         } => return lane_inspector::handle(r, definition_id, track_id, msg),
+
+        ComposeMessage::Expression {
+            definition_id,
+            track_id,
+            msg,
+        } => return expression::handle(r, definition_id, track_id, msg),
 
         // Vocal audio render completion (dispatched from the background
         // SVS task that `lane_inspector::handle` queued).

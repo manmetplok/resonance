@@ -14,6 +14,7 @@ use super::drumroll::{
     KitPadInfo,
 };
 use super::expression::ExpressionCurves;
+use super::expression_edit::ExpressionDockState;
 use super::lane_generator::{LaneGeneratorConfig, LaneGeneratorKind};
 use super::section::{
     ChordState, EditSectionForm, NewSectionForm, SectionDefinitionState, SectionPlacementState,
@@ -200,6 +201,11 @@ pub struct ComposeState {
     /// builder and project file lands in later todos; this just holds the
     /// model.
     pub expression_curves: HashMap<(u64, TrackId), ExpressionCurves>,
+    /// Transient tool state for the vocal Expression dock — active curve,
+    /// pen mode, and snap-to-syllables. Runtime-only UI state (never
+    /// persisted), shared by whichever vocal lane is open in the dock. See
+    /// [`ExpressionDockState`](super::expression_edit::ExpressionDockState).
+    pub expression_dock: ExpressionDockState,
     /// Project-scoped drum pattern bank. Each pattern bundles its own
     /// [`DrumGroup`] list, so a project can carry multiple kit/snare/hat
     /// arrangements and the section picker assigns one pattern per
@@ -271,6 +277,7 @@ impl Default for ComposeState {
             next_derived_clip_id: DERIVED_CLIP_ID_BASE,
             vocal_bulk_lyrics: HashMap::new(),
             expression_curves: HashMap::new(),
+            expression_dock: ExpressionDockState::default(),
             drum_patterns,
             default_drum_pattern_id: default_pattern_id,
             kit_pads: default_kit_pads(),
@@ -601,8 +608,10 @@ impl ComposeState {
         self.vocal_audio.clear();
         self.pronunciation.clear();
         // Expression-curve overlays have no project persistence yet (that
-        // arrives in todo #335); start each load with untouched curves.
+        // arrives in todo #335); start each load with untouched curves and
+        // the dock tool state reset.
         self.expression_curves.clear();
+        self.expression_dock = ExpressionDockState::default();
         self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         self.placements = placements
             .iter()

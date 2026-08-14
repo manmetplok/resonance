@@ -6,7 +6,8 @@ use resonance_music_theory::{
     VoiceType,
 };
 
-use crate::compose::{EntryLength, LaneGeneratorKindTag, RailPanelKey, SelectedLane};
+use crate::compose::vocal_svs::CurveKind;
+use crate::compose::{EntryLength, LaneGeneratorKindTag, PenMode, RailPanelKey, SelectedLane};
 
 /// The two workspace group banners in the Compose lane column. Carried
 /// by [`ComposeMessage::ToggleWorkspaceGroup`].
@@ -303,6 +304,15 @@ pub enum ComposeMessage {
         msg: LaneInspectorMsg,
     },
 
+    /// Vocal Expression-dock edits for the lane `(definition_id, track_id)`:
+    /// active-curve select, pen/snap tool state, breakpoint add/move/remove,
+    /// depth/smoothing, and reset-to-generated. See [`ExpressionMessage`].
+    Expression {
+        definition_id: u64,
+        track_id: TrackId,
+        msg: ExpressionMessage,
+    },
+
     /// SVS rendering completed off-thread — install the WAV as an audio
     /// clip on every placement the renderer was launched for. Boxed
     /// because the payload is large (samples vec).
@@ -335,6 +345,53 @@ pub struct VocalAudioReadyData {
     /// this to the current epoch and drops stale renders so the user
     /// doesn't end up with two audio clips stacked on the same lane.
     pub render_epoch: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Vocal Expression-dock sub-messages
+// ---------------------------------------------------------------------------
+
+/// Edits to a vocal lane's expression curves, dispatched by
+/// [`ComposeMessage::Expression`] (doc #154, todo #336). The tool-state
+/// arms (`SelectCurve` / `SetPenMode` / `SetSnap`) touch only the
+/// [`ExpressionDockState`](crate::compose::ExpressionDockState); the rest
+/// mutate the lane's
+/// [`ExpressionCurves`](crate::compose::ExpressionCurves) and request a
+/// vocal re-render so the WAV reflects the edit.
+///
+/// Each curve-mutating arm names its [`CurveKind`] explicitly rather than
+/// relying on the dock's active curve, so the transition is deterministic
+/// and unit-testable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExpressionMessage {
+    /// Make `kind` the active curve in the dock (canvas + inspector).
+    SelectCurve(CurveKind),
+    /// Switch the pen mode used for canvas edits.
+    SetPenMode(PenMode),
+    /// Toggle snap-to-syllables. When on, breakpoint times quantise to the
+    /// lane's note onsets on add/move.
+    SetSnap(bool),
+    /// Add a breakpoint to `kind`'s overlay at normalised time `t` (snapped
+    /// when snap is on) and `value`.
+    AddBreakpoint { kind: CurveKind, t: f32, value: f32 },
+    /// Move `kind`'s overlay breakpoint at `index` to (`t`, `value`); `t`
+    /// snaps when snap is on and clamps to its neighbours so the index is
+    /// stable.
+    MoveBreakpoint {
+        kind: CurveKind,
+        index: usize,
+        t: f32,
+        value: f32,
+    },
+    /// Remove `kind`'s overlay breakpoint at `index`.
+    RemoveBreakpoint { kind: CurveKind, index: usize },
+    /// Set `kind`'s depth-over-baseline inspector value.
+    SetDepth { kind: CurveKind, depth: f32 },
+    /// Set `kind`'s smoothing window, in milliseconds.
+    SetSmoothing { kind: CurveKind, smoothing: f32 },
+    /// Reset `kind` to its generated baseline: drop the overlay and depth/
+    /// smoothing, flipping the curve's status back to `Auto`.
+    Reset { kind: CurveKind },
 }
 
 // ---------------------------------------------------------------------------

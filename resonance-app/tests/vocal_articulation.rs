@@ -11,6 +11,7 @@
 //! floor when it can, and [`articulation_report`] flags the note when it
 //! cannot.
 
+use resonance_app::compose::expression::ExpressionCurves;
 use resonance_app::compose::vocal_svs::{
     articulation_report, build_segment, comfortable_pitch_range, floor_duration_sec,
     min_articulation_sec, resolve_clip_pronunciation, validate_for_voicebank,
@@ -180,7 +181,14 @@ fn a_roomy_note_gives_every_phoneme_its_floor() {
     // pushed under its audibility floor — the old allocator handed every
     // consonant the same slice and let the cap starve them all.
     let assigned = assign("still", 1);
-    let segment = build_segment(&notes(1, 2.0, 64), &params(), &assigned, TPQ, BPM);
+    let segment = build_segment(
+        &notes(1, 2.0, 64),
+        &params(),
+        &assigned,
+        &ExpressionCurves::default(),
+        TPQ,
+        BPM,
+    );
     for (ph, d) in lexical_durations(&segment.ph_seq, &segment.ph_dur) {
         let floor = floor_duration_sec(&ph);
         assert!(
@@ -198,7 +206,14 @@ fn fricatives_get_more_time_than_stops() {
     // than a `t` before it is identifiable. A flat per-consonant
     // duration cannot express that.
     let assigned = assign("stop", 1);
-    let segment = build_segment(&notes(1, 2.0, 64), &params(), &assigned, TPQ, BPM);
+    let segment = build_segment(
+        &notes(1, 2.0, 64),
+        &params(),
+        &assigned,
+        &ExpressionCurves::default(),
+        TPQ,
+        BPM,
+    );
     let lex = lexical_durations(&segment.ph_seq, &segment.ph_dur);
     let s = lex.iter().find(|(p, _)| p == "s").expect("`s` in {lex:?}").1;
     let t = lex.iter().find(|(p, _)| p == "t").expect("`t` in {lex:?}").1;
@@ -214,7 +229,8 @@ fn phoneme_durations_fill_the_note_exactly() {
     for beats in [0.125, 0.25, 0.5, 1.0, 2.0] {
         let assigned = assign("resolution", 1);
         let ns = notes(1, beats, 64);
-        let segment = build_segment(&ns, &params(), &assigned, TPQ, BPM);
+        let segment =
+            build_segment(&ns, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
         let total: f64 = segment.ph_dur.iter().sum();
         // Leading + trailing 0.3 s pads around the note's own slot.
         let slot = (60.0 / BPM as f64 * beats).max(0.05);
@@ -235,7 +251,7 @@ fn onset_lead_in_moves_the_boundary_without_changing_the_total() {
     let text = g2p::auto_syllabify_text("resolution");
     let assigned = assign(&text, 4);
     let ns = notes(4, 1.0, 64);
-    let segment = build_segment(&ns, &params(), &assigned, TPQ, BPM);
+    let segment = build_segment(&ns, &params(), &assigned, &ExpressionCurves::default(), TPQ, BPM);
     let total: f64 = segment.ph_dur.iter().sum();
     let expected = 0.3 + 4.0 * (60.0 / BPM as f64) + 0.3;
     assert!(

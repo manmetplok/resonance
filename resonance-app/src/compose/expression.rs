@@ -30,6 +30,21 @@ use resonance_music_theory::VocalVoicebank;
 
 use super::vocal_svs::{curve_supported, CurveKind};
 
+/// Neutral depth-over-baseline: the overlay is applied exactly as drawn,
+/// with no extra deviation scaled in. The range is symmetric about zero so
+/// the inspector can surface a signed offset ("+0.32" / "−0.10"); the
+/// segment builder (#334) decides how depth scales the curve on render.
+pub const DEPTH_DEFAULT: f32 = 0.0;
+/// Inclusive `(min, max)` range for [`ExpressionCurve::set_depth`].
+pub const DEPTH_RANGE: (f32, f32) = (-1.0, 1.0);
+/// Neutral smoothing — the curve is fed frame-accurate. Measured in
+/// milliseconds; the segment builder (#334) turns this into a moving-
+/// average window when it samples the curve.
+pub const SMOOTHING_DEFAULT_MS: f32 = 0.0;
+/// Inclusive `(min, max)` millisecond range for
+/// [`ExpressionCurve::set_smoothing`].
+pub const SMOOTHING_RANGE_MS: (f32, f32) = (0.0, 200.0);
+
 /// One editable point in a curve's user overlay.
 ///
 /// `t` is normalised to the clip/segment (`0.0` = start, `1.0` = end);
@@ -77,6 +92,18 @@ pub struct ExpressionCurve {
     /// User overlay, sorted ascending by `t`. Empty means the curve
     /// follows its baseline (the `Auto` status).
     overlay: Vec<Breakpoint>,
+    /// Depth of the shaped curve over its baseline (doc #154 inspector).
+    /// [`DEPTH_DEFAULT`] is neutral; a non-default value alone marks the
+    /// curve `Edited`. Defaults to `0.0` on older project files that
+    /// predate the field, which matches [`DEPTH_DEFAULT`].
+    #[serde(default)]
+    depth: f32,
+    /// Smoothing window in milliseconds applied when the curve is sampled
+    /// for render (doc #154 inspector). [`SMOOTHING_DEFAULT_MS`] is neutral;
+    /// a non-default value alone marks the curve `Edited`. Defaults to
+    /// `0.0` on older project files, matching [`SMOOTHING_DEFAULT_MS`].
+    #[serde(default)]
+    smoothing: f32,
 }
 
 impl ExpressionCurve {
@@ -87,6 +114,8 @@ impl ExpressionCurve {
             kind,
             baseline: Vec::new(),
             overlay: Vec::new(),
+            depth: DEPTH_DEFAULT,
+            smoothing: SMOOTHING_DEFAULT_MS,
         }
     }
 
@@ -101,6 +130,8 @@ impl ExpressionCurve {
             kind,
             baseline,
             overlay: Vec::new(),
+            depth: DEPTH_DEFAULT,
+            smoothing: SMOOTHING_DEFAULT_MS,
         }
     }
 
@@ -127,16 +158,48 @@ impl ExpressionCurve {
         self.baseline = samples.into_iter().map(|v| v.clamp(lo, hi)).collect();
     }
 
-    /// True once the user has shaped this curve (its overlay is non-empty),
-    /// i.e. the effective curve no longer follows the baseline.
-    pub fn is_edited(&self) -> bool {
-        !self.overlay.is_empty()
+    /// The depth-over-baseline inspector value (see [`DEPTH_DEFAULT`]).
+    pub fn depth(&self) -> f32 {
+        self.depth
     }
 
-    /// Drop the user overlay so the curve follows its auto-derived baseline
-    /// again. The baseline (provenance) is preserved.
+    /// The smoothing window in milliseconds (see [`SMOOTHING_DEFAULT_MS`]).
+    pub fn smoothing(&self) -> f32 {
+        self.smoothing
+    }
+
+    /// True once the user has shaped this curve: either it carries overlay
+    /// breakpoints, or its depth / smoothing differs from neutral. Any of
+    /// these means the effective curve no longer simply follows the
+    /// auto-derived baseline.
+    pub fn is_edited(&self) -> bool {
+        !self.overlay.is_empty()
+            || self.depth != DEPTH_DEFAULT
+            || self.smoothing != SMOOTHING_DEFAULT_MS
+    }
+
+    /// Reset the curve to its auto-derived baseline: drop the user overlay
+    /// and return depth / smoothing to neutral. The baseline (provenance)
+    /// is preserved, so the curve's status falls back to `Auto`.
     pub fn reset_to_baseline(&mut self) {
         self.overlay.clear();
+        self.depth = DEPTH_DEFAULT;
+        self.smoothing = SMOOTHING_DEFAULT_MS;
+    }
+
+    /// Set the depth-over-baseline, clamped to [`DEPTH_RANGE`]. A
+    /// non-[`DEPTH_DEFAULT`] value flips the curve to `Edited`.
+    pub fn set_depth(&mut self, depth: f32) {
+        let (lo, hi) = DEPTH_RANGE;
+        self.depth = depth.clamp(lo, hi);
+    }
+
+    /// Set the smoothing window in milliseconds, clamped to
+    /// [`SMOOTHING_RANGE_MS`]. A non-[`SMOOTHING_DEFAULT_MS`] value flips
+    /// the curve to `Edited`.
+    pub fn set_smoothing(&mut self, smoothing_ms: f32) {
+        let (lo, hi) = SMOOTHING_RANGE_MS;
+        self.smoothing = smoothing_ms.clamp(lo, hi);
     }
 
     /// Replace the entire overlay. Each point's `t` is clamped to `[0, 1]`
@@ -167,6 +230,42 @@ impl ExpressionCurve {
             .overlay
             .partition_point(|p| p.t <= bp.t);
         self.overlay.insert(idx, bp);
+    }
+
+    /// Move the overlay breakpoint at `index` to (`t`, `value`). `value` is
+    /// clamped to the kind's range; `t` is clamped both to `[0, 1]` and to
+    /// the gap between its neighbours, so the overlay stays sorted and the
+    /// breakpoint keeps its index — a drag can never reorder points. An
+    /// out-of-bounds `index` is a no-op.
+    pub fn move_breakpoint(&mut self, index: usize, t: f32, value: f32) {
+        let len = self.overlay.len();
+        if index >= len {
+            return;
+        }
+        let (lo, hi) = self.kind.value_range();
+        let min_t = if index > 0 {
+            self.overlay[index - 1].t
+        } else {
+            0.0
+        };
+        let max_t = if index + 1 < len {
+            self.overlay[index + 1].t
+        } else {
+            1.0
+        };
+        let bp = &mut self.overlay[index];
+        bp.t = t.clamp(0.0, 1.0).clamp(min_t, max_t);
+        bp.value = value.clamp(lo, hi);
+    }
+
+    /// Remove the overlay breakpoint at `index`. An out-of-bounds `index`
+    /// is a no-op. Removing the last breakpoint makes the curve follow its
+    /// baseline again (status falls back to `Auto` unless depth / smoothing
+    /// are still non-default).
+    pub fn remove_breakpoint(&mut self, index: usize) {
+        if index < self.overlay.len() {
+            self.overlay.remove(index);
+        }
     }
 
     /// Effective curve value at normalised time `t ∈ [0, 1]` (clamped).
