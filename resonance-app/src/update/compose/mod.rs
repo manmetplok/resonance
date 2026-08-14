@@ -26,8 +26,13 @@ mod expression;
 mod lane_inspector;
 pub(crate) mod regenerate;
 mod section;
+mod vocal_audio_install;
+pub mod vocal_audio_io;
+mod vocal_control;
 mod vocal_lyrics;
+mod vocal_midi_install;
 pub(crate) mod vocal_render;
+pub mod vocal_render_plan;
 
 /// Pure drum-note builder — exposed so integration tests in `tests/` can
 /// assert the materialized `MidiNote` sequence for an arrangement's
@@ -238,7 +243,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             definition_id,
             track_id,
             text,
-        } => vocal_render::control_set_lyrics(r, definition_id, track_id, &text),
+        } => vocal_control::control_set_lyrics(r, definition_id, track_id, &text),
         ComposeMessage::ControlSetVocalLine {
             definition_id,
             track_id,
@@ -246,7 +251,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             text,
         } => {
             let _ =
-                vocal_render::control_set_line(r, definition_id, track_id, line_index, &text);
+                vocal_control::control_set_line(r, definition_id, track_id, line_index, &text);
         }
         ComposeMessage::ControlSetPronunciation { word, phonemes } => {
             control_set_pronunciation(r, word, phonemes);
@@ -258,7 +263,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             definition_id,
             track_id,
             voicebank,
-        } => return vocal_render::control_render(r, definition_id, track_id, voicebank),
+        } => return vocal_control::control_render(r, definition_id, track_id, voicebank),
 
         // Placement CRUD
         ComposeMessage::PlaceSection {
@@ -376,7 +381,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             r.control
                 .jobs
                 .complete_vocal_lane(data.definition_id, data.track_id, r.revision());
-            vocal_render::handle_vocal_audio_ready(r, *data);
+            vocal_audio_install::handle_vocal_audio_ready(r, *data);
         }
         ComposeMessage::VocalAudioFailed { error } => {
             // A vocal render carries no lane identity on failure, so fail
