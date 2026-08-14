@@ -94,8 +94,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                                 // param values at the start of `process()`;
                                 // see the smoothing contract on
                                 // `Param::set_plain`.
-                                self.plugin.param(slot).set_plain(value);
-                                self.shared.set_value(slot, value);
+                                let param = self.plugin.param(slot);
+                                param.set_plain(value);
+                                // The landed value, not the wire value —
+                                // see the note in `clap_bridge/params.rs`.
+                                self.shared.set_value(slot, param.get_plain());
                             }
                         }
                     }

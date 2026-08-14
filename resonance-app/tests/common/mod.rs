@@ -12,7 +12,7 @@
 //! rasterizer the output is deterministic, so a divergence signals a real
 //! rendering change.
 //!
-//! Some environments — notably the CI verification gate, which runs on a
+//! Some environments — notably the ba verify gate, which runs on a
 //! **non-conformant** software Vulkan implementation (radv reports "not a
 //! conformant Vulkan implementation") — produce slightly different pixels for
 //! the *same* UI. Under those renderers every golden diverges regardless of the
@@ -20,7 +20,7 @@
 //!
 //! ## When goldens run vs. skip
 //!
-//! * **Run (default / conformant CI):** when `RESONANCE_SKIP_GOLDENS` is unset
+//! * **Run (default, and on this machine):** when `RESONANCE_SKIP_GOLDENS` is unset
 //!   (or not `"1"`), [`assert_golden`] performs the exact pixel comparison and
 //!   fails the test on divergence. Behavior is identical to the old inline
 //!   `assert!(snap.matches_image(...))`.
@@ -38,9 +38,10 @@ use iced_test::simulator::Snapshot;
 /// Returns `true` when golden-image pixel comparisons should be skipped in this
 /// environment.
 ///
-/// This is `true` iff the `RESONANCE_SKIP_GOLDENS` environment variable is set
-/// to `"1"`, which the CI verification gate sets on non-conformant renderers
-/// where pixel-exact goldens are unreliable.
+/// True iff `RESONANCE_SKIP_GOLDENS` is exactly `"1"` — not `"true"`, not
+/// `"yes"`. The ba verify-gate overrides set `=1`; anything else runs the
+/// pixel diff. There is no CI: this machine is canonical, and goldens are
+/// blessed here (see the note in `project_snapshot_goldens_env_divergent`).
 pub fn should_skip_goldens() -> bool {
     std::env::var("RESONANCE_SKIP_GOLDENS").as_deref() == Ok("1")
 }
@@ -53,8 +54,8 @@ pub fn should_skip_goldens() -> bool {
 /// I/O error — exactly like the previous inline
 /// `assert!(snapshot.matches_image(path).expect(...))`.
 ///
-/// When `RESONANCE_SKIP_GOLDENS=1` is set (the verify gate on a non-conformant
-/// renderer), the pixel comparison is skipped: the snapshot has already been
+/// When `RESONANCE_SKIP_GOLDENS=1` is set (the verify gate on a
+/// non-conformant renderer), the pixel comparison is skipped: the snapshot has already been
 /// rendered by the caller, so the UI code path is still exercised, but the test
 /// passes without diffing pixels. A note is printed so skips are visible in the
 /// test log.
@@ -78,11 +79,15 @@ pub fn assert_golden(snapshot: &Snapshot, path: &str) {
     // nothing. Fail loudly instead; blessing a new golden is a
     // deliberate act, not something a normal test run does silently.
     //
-    // iced_test rewrites the path to a backend-suffixed file
-    // (`foo.png` -> `foo-wgpu.png`), so probe for that, falling back to
-    // the literal path for any backend that does not rewrite.
+    // iced_test ALWAYS rewrites the path to a backend-suffixed file
+    // (`foo.png` -> `foo-<renderer>.png`), and the renderer is chosen at
+    // runtime: the default is a fallback pair, so a machine where wgpu
+    // cannot initialise silently drops to tiny-skia. Probing only
+    // `-wgpu` would then find the committed golden, pass the guard, and
+    // let `matches_image` create a fresh `-tiny-skia.png` and return
+    // Ok(true) — the exact silent pass this check exists to close.
     let stem = path.strip_suffix(".png").unwrap_or(path);
-    let backend_variants = [format!("{stem}-wgpu.png"), path.to_owned()];
+    let backend_variants = [format!("{stem}-wgpu.png"), format!("{stem}-tiny-skia.png")];
     assert!(
         backend_variants
             .iter()

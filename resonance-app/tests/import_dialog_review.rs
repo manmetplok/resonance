@@ -17,8 +17,9 @@
 //! `FileChosen` → `ParseCompleted(Ok(..))` with a conductor/tempo row
 //! plus instrument, drum and vocal tracks and a full `ImportSummary`.
 //!
-//! Goldens diverge in this local env, so the golden is authored here and
-//! blessed in CI (as with the recent vocal-rail snapshot).
+//! The golden is blessed HERE: this machine is canonical and there is no
+//! CI blessing step. A divergence is a real rendering change — re-bless
+//! deliberately, do not assume some other environment will fix it.
 
 mod common;
 

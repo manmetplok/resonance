@@ -90,12 +90,24 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
                 if let CoreEventSpace::ParamValue(e) = core_event {
                     if let Some(clap_id) = e.param_id() {
                         if let Some(slot) = self.shared.find_slot(clap_id.get()) {
-                            self.shared.set_value(slot, e.value());
+                            // Store what the param LANDED on, not the raw
+                            // wire value: `set_plain` clamps, rounds and
+                            // demotes through f32, so storing `e.value()`
+                            // leaves the atomics holding a number the
+                            // plugin never adopted — and `get_value` reads
+                            // the atomics, so the host would report and
+                            // re-save an out-of-range or over-precise
+                            // value. Same divergence `state.rs` closes on
+                            // the load path.
+                            let mut landed = e.value();
                             if let Some(plugin) = &self.plugin {
                                 if slot < plugin.param_count() {
-                                    plugin.param(slot).set_plain(e.value());
+                                    let param = plugin.param(slot);
+                                    param.set_plain(e.value());
+                                    landed = param.get_plain();
                                 }
                             }
+                            self.shared.set_value(slot, landed);
                         }
                     }
                 }

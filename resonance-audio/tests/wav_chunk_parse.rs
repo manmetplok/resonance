@@ -237,16 +237,29 @@ fn a_two_byte_aligned_data_chunk_loads_without_panicking() {
         "this fixture is only meaningful while the data chunk is misaligned"
     );
 
-    let dir = std::env::temp_dir().join("resonance-wav-align-test");
+    // Unique per process: a fixed shared path lets two concurrent
+    // `cargo test` runs delete each other's fixture mid-test, which is a
+    // pure infrastructure flake on a correct tree. Every other
+    // FS-touching test in this crate uniquifies the same way.
+    let dir = std::env::temp_dir().join(format!("resonance-wav-align-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join("misaligned.wav");
     std::fs::write(&path, &file).expect("write fixture");
 
     let source = ClipSource::open_wav(&path).expect("a misaligned WAV must still load");
+    // Pin the MECHANISM, not just the absence of a panic: copying on
+    // every open, or returning a Mapped source with a shifted offset,
+    // would both pass a frames-only assertion.
+    assert!(
+        matches!(source, ClipSource::Memory(_)),
+        "a misaligned data chunk must fall back to an in-RAM copy"
+    );
     // The cast that used to panic.
     let frames = source.as_frames();
     assert_eq!(frames.len(), samples.len());
     assert_eq!(frames, samples.as_slice(), "samples must survive the copy");
 
-    let _ = std::fs::remove_file(&path);
+    // Best-effort: an assertion above panics past this, so the unique
+    // directory is what keeps a failed run from poisoning the next one.
+    let _ = std::fs::remove_dir_all(&dir);
 }

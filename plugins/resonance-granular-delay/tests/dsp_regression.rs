@@ -512,7 +512,7 @@ fn dsp_output_and_viz_are_bit_exact() {
     let rendered = render_all();
     let path = golden_path();
 
-    if std::env::var("RESONANCE_BLESS_GRANULAR_DSP").is_ok() {
+    if std::env::var("RESONANCE_BLESS_GRANULAR_DSP").as_deref() == Ok("1") {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let bytes: Vec<u8> = rendered.iter().flat_map(|w| w.to_le_bytes()).collect();
         std::fs::write(&path, bytes).unwrap();

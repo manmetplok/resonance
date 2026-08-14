@@ -37,12 +37,28 @@ pub(crate) fn instrument_slot(app: &Resonance, t: &TrackState) -> Option<usize> 
     }
 }
 
-/// The lowest chain index an **effect** may occupy on `t`: one past the
-/// instrument, or 0 on a track that has none.
-pub(crate) fn effect_slot_floor(app: &Resonance, t: &TrackState) -> u32 {
-    instrument_slot(app, t)
-        .map(|s| s as u32 + 1)
-        .unwrap_or(0)
+/// The lowest chain index an **effect** may occupy once `moving` has
+/// been lifted out of the chain.
+///
+/// A move is `remove(from)` then `insert(to)` (`TrackState::move_plugin`),
+/// so when the mover sits BELOW the instrument, removing it shifts the
+/// instrument down one and landing at `instrument_slot` already puts the
+/// effect after it. Adding one unconditionally is off by one in that
+/// direction and refuses a legal move: on `[eq, instrument]` it makes
+/// the floor 2 while the last slot is 1, so no destination whatsoever
+/// can reorder that chain.
+fn effect_slot_floor_for(app: &Resonance, t: &TrackState, moving: u32) -> u32 {
+    match instrument_slot(app, t) {
+        None => 0,
+        Some(instrument) => {
+            let instrument = instrument as u32;
+            if moving < instrument {
+                instrument
+            } else {
+                instrument + 1
+            }
+        }
+    }
 }
 
 /// Where a requested move of an effect to `to_index` actually lands.
@@ -63,26 +79,31 @@ pub(crate) fn effect_slot_floor(app: &Resonance, t: &TrackState) -> u32 {
 /// onto slot 0 while happily letting the INSTRUMENT walk down its own
 /// chain — `[instrument, eq, comp]` with the instrument sent to slot 2
 /// passes a floor of 1, lands as `[eq, comp, instrument]`, and is then
-/// stuck: the floor becomes 3 while the last slot is 2, so it can never
-/// be moved back.
+/// stuck.
+///
+/// The clamp is applied BEFORE the floor check, and that ordering is
+/// load-bearing: the control layer validates the raw `to_slot` and then
+/// dispatches the clamped one, so checking the raw value let it ack a
+/// move that the pre-dispatch gate — which only ever sees the clamped
+/// value — then silently refused. Clamping first makes both callers ask
+/// the same question and get the same answer.
 pub(crate) fn resolve_effect_move(
     app: &Resonance,
     t: &TrackState,
     moving: u32,
     to_index: u32,
 ) -> Result<u32, u32> {
-    let floor = effect_slot_floor(app, t);
+    let floor = effect_slot_floor_for(app, t, moving);
     // The instrument itself is structural: it does not move at all.
-    // Reported as the floor so the caller's message still reads "effects
-    // sit at or after <floor>", which is the rule being enforced.
     if let Some(instrument) = instrument_slot(app, t) {
         if moving == instrument as u32 {
             return Err(floor);
         }
     }
-    if to_index < floor {
+    let last = t.plugins.len().saturating_sub(1) as u32;
+    let dest = to_index.min(last);
+    if dest < floor {
         return Err(floor);
     }
-    let last = t.plugins.len().saturating_sub(1) as u32;
-    Ok(to_index.min(last))
+    Ok(dest)
 }

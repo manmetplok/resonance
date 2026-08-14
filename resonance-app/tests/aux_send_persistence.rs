@@ -475,3 +475,72 @@ fn an_unknown_source_kind_drops_the_send_rather_than_guessing() {
         .iter()
         .any(|c| matches!(c, AudioCommand::SetAuxSend { .. })));
 }
+
+/// Pruning the mirror is not enough: the engine keeps its own copy.
+///
+/// `handle_remove_track` / `handle_remove_bus` do NOT touch
+/// `state.aux_sends`, so an orphaned edge would stay in the engine —
+/// still counted by the feedback-cycle check, still in every
+/// `publish_aux_sends` snapshot — while being invisible and unremovable
+/// from the app, because `find_send` resolves ids through the mirror.
+#[test]
+fn removing_a_track_tells_the_engine_to_drop_its_sends() {
+    let mut app = app_with_send(-6.0, false);
+    let rx = app.test_capture_engine();
+
+    app.test_apply_engine_event(AudioEvent::TrackRemoved { track_id: TRACK });
+
+    let cmds = drain(&rx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, AudioCommand::RemoveAuxSend { send_id } if *send_id == SEND)),
+        "expected RemoveAuxSend for the orphaned send, got {cmds:?}"
+    );
+}
+
+/// Same for a removed bus, which can be either end of the edge.
+#[test]
+fn removing_a_bus_tells_the_engine_to_drop_its_sends() {
+    let mut app = app_with_send(-6.0, false);
+    let rx = app.test_capture_engine();
+
+    app.test_apply_engine_event(AudioEvent::BusRemoved {
+        bus_id: RETURN_BUS,
+    });
+
+    let cmds = drain(&rx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, AudioCommand::RemoveAuxSend { send_id } if *send_id == SEND)),
+        "expected RemoveAuxSend for the orphaned send, got {cmds:?}"
+    );
+}
+
+/// A bus-SOURCED send dies with its source bus too, not just with its
+/// destination — the arm that had no coverage.
+#[test]
+fn a_bus_sourced_send_dies_with_its_source_bus() {
+    let mut app = app_with_send(-6.0, false);
+    const SOURCE_BUS: u64 = 20;
+    const SEND2: u64 = 4;
+    app.test_apply_engine_event(AudioEvent::BusAdded {
+        bus_id: SOURCE_BUS,
+        name: "Drum Bus".to_string(),
+    });
+    app.test_apply_engine_event(AudioEvent::AuxSendChanged {
+        send_id: SEND2,
+        source: SendSource::Bus(SOURCE_BUS),
+        dest: RETURN_BUS,
+        level_db: -3.0,
+        pre_fader: false,
+        enabled: true,
+    });
+    assert_eq!(app.test_aux_sends().len(), 2);
+
+    app.test_apply_engine_event(AudioEvent::BusRemoved {
+        bus_id: SOURCE_BUS,
+    });
+
+    let ids: Vec<u64> = app.test_aux_sends().iter().map(|s| s.id).collect();
+    assert_eq!(ids, vec![SEND], "only the bus-sourced send should be gone");
+}

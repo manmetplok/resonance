@@ -43,7 +43,10 @@ pub fn load_params_from_json(params: &[&dyn Param], state: &serde_json::Value) -
 ///   future format could),
 /// - values are clamped to the param's declared range, so a hand-edited
 ///   or corrupted preset can't push the DSP outside what it handles,
-/// - stepped (int/bool) params are rounded to their step.
+/// - stepped (int/bool) params are rounded to their step (and -0.0
+///   normalised to +0.0),
+/// - non-stepped params are demoted through f32, because that is what
+///   `FloatParam::set_plain` stores.
 ///
 /// Without this, reopening the same project restored different values
 /// depending on whether the plugin happened to be active at the time.
@@ -63,7 +66,11 @@ pub(crate) fn load_params_from_shared_json(
                 }
                 let mut value = val.clamp(meta.min, meta.max);
                 if meta.is_stepped {
-                    value = value.round();
+                    // `+ 0.0` normalises -0.0 to +0.0: `(-0.4).round()` is
+                    // -0.0, which the inactive path never produces (it goes
+                    // through i32/bool), so without this the two paths
+                    // still differ in the sign bit.
+                    value = value.round() + 0.0;
                 } else {
                     // Demote through f32 exactly as `FloatParam::set_plain`
                     // does (`self.set_value(clamped as f32)`). Without

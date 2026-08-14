@@ -1,8 +1,10 @@
 //! GUI-side aux-send state, mirrored from the engine.
 //!
-//! The send graph is reconstructed *purely* from `AuxSendChanged` /
+//! The send graph is reconstructed from `AuxSendChanged` /
 //! `AuxSendRemoved` events — the app never reads the send list back from
-//! the engine. `AuxSendChanged` carries the engine-resolved send (the
+//! the engine. Two non-send events also prune it, because the engine
+//! does not: `TrackRemoved` and `BusRemoved` drop the edges that touched
+//! the departed endpoint (see [`Self::drop_sends_touching_track`]). `AuxSendChanged` carries the engine-resolved send (the
 //! allocated id plus any clamping of `level_db`), so the mirror always
 //! matches engine state. A bus's return-role flag is mirrored separately
 //! onto [`BusState::is_return`](super::BusState) from `BusRoleChanged`.
@@ -63,26 +65,39 @@ impl AuxSendState {
         self.sends.retain(|s| s.id != send_id);
     }
 
-    /// Drop every send that starts at or ends on a deleted endpoint.
+    /// Drop every send that starts at or ends on a deleted endpoint,
+    /// returning the ids that were dropped.
     ///
     /// A send is an edge, so it stops meaning anything the moment either
-    /// end goes away. The engine drops the route silently on
-    /// `RemoveTrack` / `RemoveBus` without echoing a per-send
-    /// `AuxSendRemoved`, so the mirror has to be pruned alongside — and
-    /// it must be, because the mirror is what project save writes: an
-    /// orphaned send would otherwise be persisted, refused by the loader
-    /// on the next open, and rewritten by every save after that.
-    pub fn drop_sends_touching_track(&mut self, track_id: resonance_audio::types::TrackId) {
-        self.sends
-            .retain(|s| !matches!(s.source, SendSource::Track(id) if id == track_id));
+    /// end goes away. The caller MUST send `RemoveAuxSend` for each id
+    /// returned: the engine does NOT prune `state.aux_sends` on
+    /// `RemoveTrack` / `RemoveBus`, so pruning only the mirror would
+    /// leave the engine holding an edge that no longer appears in any
+    /// view — unremovable, because `find_send` resolves ids through the
+    /// mirror, and still counted by the feedback-cycle check.
+    #[must_use = "the engine keeps its copy until RemoveAuxSend is sent"]
+    pub fn drop_sends_touching_track(&mut self, track_id: TrackId) -> Vec<SendId> {
+        self.drain_sends(|s| matches!(s.source, SendSource::Track(id) if id == track_id))
     }
 
     /// As [`Self::drop_sends_touching_track`], for a removed bus — which
     /// can be either end of the edge.
-    pub fn drop_sends_touching_bus(&mut self, bus_id: BusId) {
-        self.sends.retain(|s| {
-            s.dest != bus_id && !matches!(s.source, SendSource::Bus(id) if id == bus_id)
-        });
+    #[must_use = "the engine keeps its copy until RemoveAuxSend is sent"]
+    pub fn drop_sends_touching_bus(&mut self, bus_id: BusId) -> Vec<SendId> {
+        self.drain_sends(|s| {
+            s.dest == bus_id || matches!(s.source, SendSource::Bus(id) if id == bus_id)
+        })
+    }
+
+    fn drain_sends(&mut self, doomed: impl Fn(&AuxSend) -> bool) -> Vec<SendId> {
+        let ids: Vec<SendId> = self
+            .sends
+            .iter()
+            .filter(|s| doomed(s))
+            .map(|s| s.id)
+            .collect();
+        self.sends.retain(|s| !doomed(s));
+        ids
     }
 
     /// Allocate a fresh app-chosen send id, skipping past any id already

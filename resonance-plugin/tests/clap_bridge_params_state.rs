@@ -789,3 +789,37 @@ fn the_load_paths_agree_on_a_value_f32_cannot_represent() {
 
     active.deactivate(processor);
 }
+
+/// A host automation write must land the same value in the atomics that
+/// the plugin adopted (review round 2).
+///
+/// The three automation write sites stored the raw wire value beside a
+/// `set_plain` that clamps/rounds/demotes, so `params.get_value` could
+/// report a number outside the range the bridge itself advertised in
+/// `get_info` — and, because `activate` syncs plugin<-shared and never
+/// back, a save-while-active persisted it.
+#[test]
+fn a_flushed_out_of_range_value_is_clamped_in_the_shared_atomics_too() {
+    let mut instance = bridge_instance();
+    flush_inactive(&mut instance, &[("mix", 40.0)]);
+
+    assert_eq!(
+        get_value(&mut instance, "mix"),
+        1.0,
+        "the atomics must hold the clamped value the param adopted, not the raw 40.0"
+    );
+}
+
+/// Same for precision: a flushed value the param demotes to f32 must be
+/// stored demoted, or save-while-active and save-while-inactive differ.
+#[test]
+fn a_flushed_value_is_stored_at_the_precision_the_param_kept() {
+    let mut instance = bridge_instance();
+    flush_inactive(&mut instance, &[("mix", 0.1)]);
+
+    assert_eq!(
+        get_value(&mut instance, "mix"),
+        0.1f32 as f64,
+        "the atomics must hold the f32-demoted value, matching the plugin"
+    );
+}

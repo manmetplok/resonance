@@ -299,7 +299,7 @@ fn render_block_output_is_bit_exact() {
 
     let path = golden_path();
 
-    if std::env::var("RESONANCE_BLESS_RENDER_BLOCK").is_ok() {
+    if std::env::var("RESONANCE_BLESS_RENDER_BLOCK").as_deref() == Ok("1") {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let bytes: Vec<u8> = rendered.iter().flat_map(|s| s.to_le_bytes()).collect();
         std::fs::write(&path, bytes).unwrap();

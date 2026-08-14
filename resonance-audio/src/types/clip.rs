@@ -63,10 +63,13 @@ pub struct PendingNoteEvent {
     pub sample_offset: u32,
 }
 
-/// Backing storage for a clip's PCM samples. Recorded clips and
-/// clips loaded from a project on disk are `Mapped` (memory-mapped
+/// Backing storage for a clip's PCM samples. Recorded clips and clips
+/// loaded from a project on disk are USUALLY `Mapped` (memory-mapped
 /// WAV files); clips that were just decoded in memory but not yet
-/// persisted can also use `Memory` as a transient fallback.
+/// persisted use `Memory`, as does a WAV whose data chunk is not
+/// 4-byte aligned (see [`ClipSource::open_wav`]). Do not rely on
+/// "project audio is always Mapped" — it holds for every file this
+/// app writes, but not for one authored elsewhere.
 #[derive(Debug)]
 pub enum ClipSource {
     /// Owned, in-RAM stereo-interleaved f32 samples.
@@ -138,10 +141,15 @@ impl ClipSource {
         }
     }
 
-    /// Open a 32-bit-float stereo WAV file, memory-map it, and
-    /// return a `Mapped` ClipSource referencing its PCM data chunk.
-    /// Also pre-touches every page to avoid major page faults on
-    /// the audio thread the first time the clip is played.
+    /// Open a 32-bit-float stereo WAV file, memory-map it, and return a
+    /// `Mapped` ClipSource referencing its PCM data chunk. Also
+    /// pre-touches every page to avoid major page faults on the audio
+    /// thread the first time the clip is played.
+    ///
+    /// Returns `Memory` instead when the data chunk is not 4-byte
+    /// aligned — see [`ClipSource::open_wav_inner`]. Every WAV this app
+    /// writes is aligned, so that is a fallback for externally-authored
+    /// files, not a path the app takes on its own output.
     pub fn open_wav(path: &Path) -> Result<Self, String> {
         Self::open_wav_inner(path).map(|(source, _)| source)
     }
@@ -187,8 +195,16 @@ impl ClipSource {
         if !aligned {
             let byte_len = (mapped.frame_count as usize) * 2 * std::mem::size_of::<f32>();
             let bytes = &mapped.mmap[mapped.data_offset_bytes..mapped.data_offset_bytes + byte_len];
-            let mut samples = vec![0f32; byte_len / std::mem::size_of::<f32>()];
-            bytemuck::cast_slice_mut::<f32, u8>(&mut samples).copy_from_slice(bytes);
+            // Decode per 4-byte group rather than casting the slice:
+            // `bytemuck::cast_slice::<u8, f32>` has the SAME alignment
+            // precondition we are here to avoid, so using it would
+            // panic on exactly the input this branch exists for.
+            // `from_le_bytes` has no alignment requirement, and this
+            // also skips the zero-fill a `vec![0.0; n]` + copy would do.
+            let samples: Vec<f32> = bytes
+                .chunks_exact(std::mem::size_of::<f32>())
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
             return Ok((ClipSource::Memory(samples), mapped.sample_rate));
         }
         Ok((
@@ -203,6 +219,11 @@ impl ClipSource {
     }
 
     /// On-disk path backing a `Mapped` source, or `None` for `Memory`.
+    ///
+    /// Test-only in practice: the save path destructures
+    /// `ClipSource::Mapped { path, .. }` directly rather than calling
+    /// this, so "fixing save-as" by editing this accessor would change
+    /// nothing.
     pub fn mapped_path(&self) -> Option<&Path> {
         match self {
             ClipSource::Mapped { path, .. } => Some(path.as_path()),
@@ -351,9 +372,16 @@ pub struct AudioClip {
     /// count as [`ClipSource::as_frames`]). Built off the realtime thread by
     /// [`crate::engine::vocal_render::ensure_tuning_caches`] whenever
     /// [`Self::vocal_tuning`] carries edits, and read on the hot mixer path
-    /// via [`Self::render_frames`] so corrected audio is identical in live
-    /// playback and bounce/export (todo #358). `None` when the clip is
-    /// untuned or its tuning is the identity edit — the zero-overhead path.
+    /// via [`Self::render_frames`]. `None` when the clip is untuned or its
+    /// tuning is the identity edit — the zero-overhead path.
+    ///
+    /// NOTE: the cache is only ever built by the four OFFLINE paths
+    /// (bounce / wav / stem / freeze); nothing on the engine control
+    /// thread calls `ensure_tuning_caches`. Live playback therefore
+    /// reflects a tuning edit only after an export has run — this is NOT
+    /// the "identical in playback and bounce" guarantee this doc used to
+    /// claim. See the module note on
+    /// [`crate::engine::vocal_render`] before depending on it.
     /// The original [`ClipSource`] PCM is never mutated.
     pub tuning_render_cache: Option<Vec<f32>>,
 }

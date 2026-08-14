@@ -343,6 +343,13 @@ fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
         // the wrong signal into a bus and is worse, so drop.
         let Some(source) = crate::project::send_source_from_tag(&ps.source_kind, ps.source_id)
         else {
+            // Loud, because the next save rewrites the file without it:
+            // a silent drop turns "this build does not understand one
+            // edge" into permanent data loss with nothing to notice.
+            eprintln!(
+                "project load: dropping send {} — unknown source kind {:?}",
+                ps.id, ps.source_kind
+            );
             continue;
         };
         // Only mirror a send whose endpoints exist in the project we
@@ -356,6 +363,10 @@ fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
             SendSource::Bus(id) => r.registry.busses.iter().any(|b| b.id == id),
         };
         if !source_exists || !r.registry.busses.iter().any(|b| b.id == ps.dest_bus) {
+            eprintln!(
+                "project load: dropping send {} — endpoint missing (source {:?}, dest bus {})",
+                ps.id, source, ps.dest_bus
+            );
             continue;
         }
         let _ = r.engine.send(AudioCommand::SetAuxSend {

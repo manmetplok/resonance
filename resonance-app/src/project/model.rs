@@ -522,22 +522,17 @@ pub fn send_source_tag(source: SendSource) -> (&'static str, u64) {
     }
 }
 
-/// Rebuild a [`SendSource`] from a persisted `(kind, id)` pair. An
-/// unknown / unexpected tag (a future build's new variant, or a
-/// hand-edited file) falls back to a track source so loading never fails
-/// on the label — mirroring [`fade_curve_from_tag`]. A track source can
-/// never form a feedback cycle, so the fallback is also the safe one;
-/// the engine re-validates the route regardless.
-/// `None` for a tag this build does not know.
+/// Resolve a persisted `(kind, id)` tag pair back to a [`SendSource`].
 ///
-/// Deliberately NOT defaulting to `Track(id)` the way the fade-curve tag
-/// defaults to a curve shape. Track ids and bus ids are independent
-/// namespaces that both start at 1, so an unrecognised tag — a file from
-/// a newer build with a third source kind, or a hand-edited `"Bus"` —
-/// would not merely pick a different flavour of the same route, it would
-/// point the send at a DIFFERENT ENTITY that probably exists, silently
-/// summing the wrong signal into the destination bus with no error
-/// anywhere. Callers drop the send instead.
+/// `None` for a tag this build does not know, and the caller drops the
+/// send. Deliberately NOT defaulting to `Track(id)` the way the
+/// fade-curve tag defaults to a curve shape: track ids and bus ids are
+/// independent namespaces that both start at 1, so an unrecognised tag
+/// — a file from a newer build with a third source kind, or a
+/// hand-edited `"Bus"` — would not pick a different flavour of the same
+/// route, it would point the send at a DIFFERENT ENTITY that probably
+/// exists, silently summing the wrong signal into the destination bus
+/// with no error anywhere.
 pub fn send_source_from_tag(kind: &str, id: u64) -> Option<SendSource> {
     match kind {
         "track" => Some(SendSource::Track(id)),
