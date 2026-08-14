@@ -245,6 +245,14 @@ pub(super) fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProj
         bus_id: pb.id,
         bypassed: pb.fx_bypassed,
     });
+    // Return role — the destination half of the saved send graph (ba doc
+    // #273). Sent unconditionally (the engine no-ops on an unknown bus,
+    // and this one exists), so a bus demoted back to a plain sub-mix
+    // reloads as one.
+    let _ = r.engine.send(AudioCommand::SetBusRole {
+        bus_id: pb.id,
+        is_return: pb.is_return,
+    });
 
     let gui_plugins = replay_plugins(
         r,
@@ -263,6 +271,7 @@ pub(super) fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProj
     bus.pan = pb.pan;
     bus.muted = pb.muted;
     bus.fx_bypassed = pb.fx_bypassed;
+    bus.is_return = pb.is_return;
     bus.plugins = gui_plugins;
     r.registry.busses.push(bus);
     r.registry.next_bus_order += 1;

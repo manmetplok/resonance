@@ -116,16 +116,18 @@ fn descriptions_carry_no_runs_of_padding_whitespace() {
     }
 }
 
-/// The aux-send persistence caveat (ba todo #482) must appear on EVERY
-/// send tool, not most of them: an agent that reads only the one it is
-/// calling must learn that its work is lost on reload (todo #1238 item
-/// 3).
+/// Aux sends are persisted (ba todo #1269), so no send tool may still
+/// carry the old "not saved yet" caveat — an agent that reads only the
+/// tool it is calling must not be told to warn the user about a data
+/// loss that no longer happens. Every send tool has to say, positively,
+/// that the send is saved with the project (todo #1238 item 3: the fact
+/// belongs on each tool, not just the one someone remembered).
 ///
 /// The set is DERIVED from the published tool names rather than listed
 /// here, so a send tool added later is covered the day it is added — a
 /// hardcoded list only pins the tools someone remembered to add to it.
 #[test]
-fn every_send_tool_states_the_persistence_caveat() {
+fn no_send_tool_claims_sends_are_lost_on_reload() {
     let send_tools: Vec<(String, String)> = descriptions()
         .into_iter()
         .filter(|(tool, _)| tool.contains("_send"))
@@ -141,11 +143,15 @@ fn every_send_tool_states_the_persistence_caveat() {
     );
 
     for (tool, description) in send_tools {
+        let lower = description.to_lowercase();
         assert!(
-            description.contains("not SAVED")
-                || description.contains("not saved")
-                || description.contains("NOT SAVED"),
-            "{tool} does not warn that aux sends are lost on save + reload (ba todo #482)"
+            !lower.contains("not saved") && !lower.contains("lost when the project"),
+            "{tool} still claims aux sends are lost on save + reload; they persist since ba \
+             todo #1269"
+        );
+        assert!(
+            lower.contains("saved with the project"),
+            "{tool} does not tell the agent that the send is saved with the project"
         );
     }
 }

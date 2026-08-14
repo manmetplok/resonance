@@ -80,6 +80,7 @@ fn project_with_content() -> ProjectFile {
             state_file: "plugins/plugin_2.bin".to_string(),
             params: Vec::new(),
         }],
+        is_return: false,
     }];
 
     project.master_plugins = vec![ProjectPlugin {

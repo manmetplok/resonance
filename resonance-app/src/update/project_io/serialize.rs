@@ -5,10 +5,10 @@
 use resonance_audio::types::*;
 
 use crate::project::{
-    audio_format_tag, fade_curve_tag, ProjectBus, ProjectClip, ProjectExternalInstrument,
-    ProjectFile, ProjectMidiClip, ProjectPerformance, ProjectPlugin, ProjectPoolAsset,
-    ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings, ProjectTrack,
-    PROJECT_FORMAT_VERSION,
+    audio_format_tag, fade_curve_tag, send_source_tag, ProjectBus, ProjectClip,
+    ProjectExternalInstrument, ProjectFile, ProjectMidiClip, ProjectPerformance, ProjectPlugin,
+    ProjectPoolAsset, ProjectReference, ProjectReferenceMarker, ProjectReferenceSettings,
+    ProjectSend, ProjectTrack, PROJECT_FORMAT_VERSION,
 };
 use crate::Resonance;
 
@@ -147,8 +147,36 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
                 .iter()
                 .map(project_plugin)
                 .collect(),
+            is_return: b.is_return,
         })
         .collect();
+
+    // Aux-send graph (ba doc #273). The GUI mirror is the engine's own
+    // resolved view of the graph — ids allocated, levels clamped — so
+    // saving it verbatim saves what is actually playing. Sorted by id for
+    // a stable on-disk order that doesn't depend on the order the
+    // engine's echoes happened to arrive in.
+    let sends = {
+        let mut sends: Vec<ProjectSend> = r
+            .aux
+            .sends
+            .iter()
+            .map(|s| {
+                let (source_kind, source_id) = send_source_tag(s.source);
+                ProjectSend {
+                    id: s.id,
+                    source_kind: source_kind.to_string(),
+                    source_id,
+                    dest_bus: s.dest,
+                    level_db: s.level_db,
+                    pre_fader: s.pre_fader,
+                    enabled: s.enabled,
+                }
+            })
+            .collect();
+        sends.sort_by_key(|s| s.id);
+        sends
+    };
 
     let clips = r
         .clips
@@ -286,6 +314,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         clips,
         midi_clips,
         busses,
+        sends,
         section_definitions: r.compose.to_project_definitions(),
         section_placements: r.compose.to_project_placements(),
         tempo_events: r.tempo_events.clone(),

@@ -202,8 +202,8 @@ pub struct TrackDetail {
     /// of wherever `output` sends its main signal. Empty when the track
     /// feeds nothing but its output.
     ///
-    /// **Not persisted yet** (ba todo #482): a send created over the
-    /// control API is lost on save + reload.
+    /// Persisted with the project (ba todo #1269), so a send created over
+    /// the control API survives save + reload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sends: Vec<SendView>,
     pub clips: Vec<ClipView>,

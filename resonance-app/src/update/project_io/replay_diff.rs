@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use resonance_audio::types::*;
 
 use crate::project::{
-    fade_curve_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip,
-    ProjectPlugin, ProjectTrack,
+    fade_curve_from_tag, send_source_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile,
+    ProjectMidiClip, ProjectPlugin, ProjectSend, ProjectTrack,
 };
 use crate::undo::UndoExtras;
 use crate::util::db_to_gain;
@@ -69,6 +69,14 @@ pub fn try_diff_replay(
 
     // -- Busses --------------------------------------------------------
     apply_busses(r, &current, target_file);
+
+    // -- Aux sends -----------------------------------------------------
+    // A send is a plain routing edge: `SetAuxSend` upserts one and
+    // `RemoveAuxSend` drops one, both surgical, so adding or removing a
+    // send never has to force the slow path (unlike a plugin instance,
+    // which can only be re-created wholesale). Reconciled after the
+    // busses so a send restored alongside its return bus lands second.
+    apply_sends(r, &current, target_file);
 
     // -- Master FX -----------------------------------------------------
     apply_master(r, &current, target_file);
@@ -602,6 +610,12 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
             name: b.name.clone(),
         });
     }
+    if a.is_return != b.is_return {
+        let _ = r.engine.send(AudioCommand::SetBusRole {
+            bus_id,
+            is_return: b.is_return,
+        });
+    }
     if let Some(bus) = r.registry.busses.iter_mut().find(|x| x.id == bus_id) {
         bus.name = b.name.clone();
         bus.order = b.order;
@@ -609,8 +623,52 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
         bus.pan = b.pan;
         bus.muted = b.muted;
         bus.fx_bypassed = b.fx_bypassed;
+        bus.is_return = b.is_return;
         for (slot, pp) in bus.plugins.iter_mut().zip(b.plugins.iter()) {
             slot.plugin_name = pp.plugin_name.clone();
+        }
+    }
+}
+
+/// Reconcile the aux-send graph (ba doc #273) to the target snapshot:
+/// upsert every send that is new or changed, drop every send the target
+/// no longer has, and mirror both onto [`crate::state::AuxSendState`].
+///
+/// Sends whose fields already match are left untouched, so the common
+/// undo (a fader move somewhere else entirely) emits no send traffic at
+/// all — the same "only push what changed" rule the track and bus
+/// appliers follow.
+fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
+    let a_by_id: HashMap<u64, &ProjectSend> = a.sends.iter().map(|s| (s.id, s)).collect();
+
+    for sb in &b.sends {
+        if a_by_id.get(&sb.id).copied() == Some(sb) {
+            continue;
+        }
+        let source = send_source_from_tag(&sb.source_kind, sb.source_id);
+        let _ = r.engine.send(AudioCommand::SetAuxSend {
+            id_hint: Some(sb.id),
+            source,
+            dest: sb.dest_bus,
+            level_db: sb.level_db,
+            pre_fader: sb.pre_fader,
+            enabled: sb.enabled,
+        });
+        r.aux.upsert(AuxSend {
+            id: sb.id,
+            source,
+            dest: sb.dest_bus,
+            level_db: sb.level_db,
+            pre_fader: sb.pre_fader,
+            enabled: sb.enabled,
+        });
+    }
+
+    let target_ids: std::collections::HashSet<u64> = b.sends.iter().map(|s| s.id).collect();
+    for sa in &a.sends {
+        if !target_ids.contains(&sa.id) {
+            let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id: sa.id });
+            r.aux.remove(sa.id);
         }
     }
 }

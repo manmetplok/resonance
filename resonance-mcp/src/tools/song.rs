@@ -75,7 +75,7 @@ impl ResonanceMcp {
                        \
                        `sends` lists the track's aux sends (send_id, to_bus, level_db, \
                        pre_fader, enabled) — read it back after track_add_send to confirm what \
-                       you wired. Aux sends are not saved yet (ba todo #482).",
+                       you wired. Sends are saved with the project.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<song::TracksView>()
     )]

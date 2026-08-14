@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use resonance_audio::types::{ClipId, FadeCurve, MidiNote, PluginInstanceId};
+use resonance_audio::types::{ClipId, FadeCurve, MidiNote, PluginInstanceId, SendSource};
 
 pub const PROJECT_FORMAT_VERSION: u32 = 2;
 
@@ -51,6 +51,15 @@ pub struct ProjectFile {
     pub midi_clips: Vec<ProjectMidiClip>,
     #[serde(default)]
     pub busses: Vec<ProjectBus>,
+    /// The aux-send graph (ba doc #273): every tap from a track (or bus)
+    /// into a return bus, with its level and pre/post tap point. Sends
+    /// live beside the busses rather than on the source track because a
+    /// send is an edge between two entities, not a property of either —
+    /// the same reason [`ProjectTrack::output_bus`] is only half a route.
+    /// Empty on legacy projects (everything saved before this field
+    /// existed), which load with no sends exactly as they did before.
+    #[serde(default)]
+    pub sends: Vec<ProjectSend>,
     #[serde(default)]
     pub section_definitions: Vec<crate::project::sections::ProjectSectionDefinition>,
     #[serde(default)]
@@ -171,6 +180,7 @@ impl Default for ProjectFile {
             clips: Vec::new(),
             midi_clips: Vec::new(),
             busses: Vec::new(),
+            sends: Vec::new(),
             section_definitions: Vec::new(),
             section_placements: Vec::new(),
             tempo_events: Vec::new(),
@@ -448,6 +458,81 @@ pub struct ProjectBus {
     #[serde(default)]
     pub fx_bypassed: bool,
     pub plugins: Vec<ProjectPlugin>,
+    /// Whether this bus is an FX *return* — the destination half of the
+    /// aux-send graph in [`ProjectFile::sends`]. Set as part of the
+    /// add-send gesture, so it is saved with the sends rather than left
+    /// to be re-derived; without it a reloaded project's return bus
+    /// reads back as an ordinary sub-mix bus. `false` on legacy projects
+    /// and on every plain bus.
+    #[serde(default)]
+    pub is_return: bool,
+}
+
+/// One persisted aux send (ba doc #273): a tap from a track (or bus)
+/// into a return bus, independent of where the source's main output
+/// goes. Mirrors the durable fields of
+/// [`AuxSend`](resonance_audio::types::AuxSend).
+///
+/// The source is stored as a `(kind, id)` pair rather than a tagged
+/// enum because [`SendSource`] carries no serde derive — the same
+/// reason [`ProjectClip::fade_in_curve`] and [`ProjectPoolAsset::format`]
+/// round-trip through short lowercase tags. See [`send_source_tag`] /
+/// [`send_source_from_tag`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectSend {
+    /// Engine-allocated send id. Handed back to the engine on load as a
+    /// `SetAuxSend` id hint, so send ids survive a reload and any
+    /// automation / client reference to one stays valid.
+    pub id: u64,
+    /// What feeds the send: `"track"` or `"bus"` (see
+    /// [`send_source_tag`]). An unknown tag loads as a track source.
+    #[serde(default = "default_send_source_kind")]
+    pub source_kind: String,
+    /// Id of the source track or bus, per [`Self::source_kind`].
+    pub source_id: u64,
+    /// Destination return bus.
+    pub dest_bus: u64,
+    /// Send gain in decibels applied to the tapped signal.
+    #[serde(default)]
+    pub level_db: f32,
+    /// Whether the tap is taken before the source's volume fader.
+    #[serde(default)]
+    pub pre_fader: bool,
+    /// A disabled send keeps its routing and level but passes no signal.
+    /// Defaults to `true` so a hand-written entry that omits the field
+    /// is a live send, which is what writing one down means.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Default [`ProjectSend::source_kind`]: a track tap, by far the common
+/// case and the only one the mixer UI can create today.
+fn default_send_source_kind() -> String {
+    "track".to_string()
+}
+
+/// Split a [`SendSource`] into the `(kind, id)` pair stored on
+/// [`ProjectSend`]. The engine type has no serde derive, so the project
+/// layer owns this round-trip. Kept in sync with
+/// [`send_source_from_tag`].
+pub fn send_source_tag(source: SendSource) -> (&'static str, u64) {
+    match source {
+        SendSource::Track(id) => ("track", id),
+        SendSource::Bus(id) => ("bus", id),
+    }
+}
+
+/// Rebuild a [`SendSource`] from a persisted `(kind, id)` pair. An
+/// unknown / unexpected tag (a future build's new variant, or a
+/// hand-edited file) falls back to a track source so loading never fails
+/// on the label — mirroring [`fade_curve_from_tag`]. A track source can
+/// never form a feedback cycle, so the fallback is also the safe one;
+/// the engine re-validates the route regardless.
+pub fn send_source_from_tag(kind: &str, id: u64) -> SendSource {
+    match kind {
+        "bus" => SendSource::Bus(id),
+        _ => SendSource::Track(id),
+    }
 }
 
 fn default_track_type() -> String {

@@ -223,6 +223,13 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     r.registry.next_track_order = 0;
     r.registry.next_bus_order = 0;
     r.plugin_index.clear();
+    // Drop the previous project's send graph. `ClearAll` empties the
+    // engine's aux-send table without echoing an `AuxSendRemoved` per
+    // send, so the mirror has to be emptied here or the loaded project
+    // inherits routes into busses that no longer exist. `replay_sends`
+    // re-seeds it from the project file afterwards.
+    r.aux.sends.clear();
+    r.aux.last_rejection = None;
     // Drop external-instrument mode so the load starts clean. A fresh
     // project load re-asserts it per-track from `ProjectTrack.external_instrument`
     // in `replay_track`; an undo restore re-asserts it from `UndoExtras`
@@ -264,7 +271,8 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     SavedPluginOrder { tracks, busses, master }
 }
 
-/// Replay tracks, busses, master FX chain, and resolve track→bus routing.
+/// Replay tracks, busses, master FX chain, and resolve routing — both the
+/// track→bus main outputs and the aux-send graph.
 /// Tracks must be replayed before busses (the engine tracks must exist when
 /// routing is set), and busses must exist before `SetTrackOutput` is sent.
 fn replay_tracks_and_busses(
@@ -305,6 +313,48 @@ fn replay_tracks_and_busses(
                 output: TrackOutput::Bus(bus_id),
             });
         }
+    }
+
+    // …and the aux-send graph, whose source tracks and destination busses
+    // both have to exist first (the engine rejects a send naming either
+    // one before it is registered).
+    replay_sends(r, project);
+}
+
+/// Re-register the saved aux sends (ba doc #273) with the engine and seed
+/// the GUI mirror.
+///
+/// Each send goes back as a `SetAuxSend` carrying its saved id as
+/// `id_hint`, which the engine honours (and bumps its own allocator past),
+/// so send ids survive a reload. The engine re-validates every route and
+/// re-clamps every level, then echoes `AuxSendChanged` — which overwrites
+/// the seeded entry with the engine-resolved one, keeping the engine the
+/// authority on what is live. Seeding here rather than waiting for that
+/// echo mirrors what every other entity in this module does (a track's
+/// `TrackState` is pushed alongside its `AddTrack`), so the mixer is
+/// correct the moment the load returns.
+///
+/// Legacy projects carry no sends, so this is a no-op for them — the
+/// mirror was already emptied by [`wipe_registry`].
+fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
+    for ps in &project.sends {
+        let source = crate::project::send_source_from_tag(&ps.source_kind, ps.source_id);
+        let _ = r.engine.send(AudioCommand::SetAuxSend {
+            id_hint: Some(ps.id),
+            source,
+            dest: ps.dest_bus,
+            level_db: ps.level_db,
+            pre_fader: ps.pre_fader,
+            enabled: ps.enabled,
+        });
+        r.aux.upsert(AuxSend {
+            id: ps.id,
+            source,
+            dest: ps.dest_bus,
+            level_db: ps.level_db,
+            pre_fader: ps.pre_fader,
+            enabled: ps.enabled,
+        });
     }
 }
 
