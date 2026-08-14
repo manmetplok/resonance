@@ -15,12 +15,13 @@
 mod app;
 pub mod controls;
 mod factory;
-// Public: the hero layout/mapping helpers (ba todo #1139) are shared
-// with the grain-cloud and direct-manipulation todos.
+// Public: the hero band's layout/draw/interact split (ba todo #1265);
+// the layout half is pure geometry and unit-tested from tests/.
 pub mod hero;
 mod theme;
-// Public: the lavender widget kit (ba todo #1138) is the editor's
-// building-block API for the signal-flow strip and hero todos.
+// Public: the granular bindings of the shared `wayland_plugin_gui`
+// widget kit (ba todo #1138/#1266) — the editor's building blocks for
+// the signal-flow strip.
 pub mod widgets;
 
 pub use factory::GranularEditorFactory;

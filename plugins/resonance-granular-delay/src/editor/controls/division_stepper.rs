@@ -9,7 +9,7 @@ use egui::Ui;
 use wayland_plugin_gui::egui;
 
 use crate::params::GranularDelayParams;
-use crate::sync::DIVISION_LABELS;
+use crate::sync::{self, DIVISION_LABELS};
 
 use super::super::theme;
 use super::super::widgets::MACRO_KNOB_STYLE;
@@ -85,20 +85,12 @@ pub fn division_stepper(ui: &mut Ui, params: &GranularDelayParams, index: usize,
         theme::ACCENT_SOFT,
     );
 
-    // Live effective-time readout from the host tempo (— without one).
+    // Live effective-time readout from the host tempo (— without one),
+    // clamped the way the delay line clamps it so the number is what
+    // the DSP will actually play.
     let readout = if bpm > 0.0 {
-        let tempo = resonance_plugin::TempoInfo {
-            bpm,
-            time_sig_num: 4,
-            time_sig_den: 4,
-            playing: false,
-            song_pos_beats: 0.0,
-        };
-        let seconds = crate::sync::delay_seconds(
-            true,
-            current as usize,
-            0.0,
-            Some(tempo),
+        let seconds = sync::clamp_delay_seconds(
+            sync::division_seconds(bpm, current as usize),
             crate::dsp::MAX_DELAY_SECONDS,
         );
         format!("= {:.1} ms", seconds * 1000.0)
