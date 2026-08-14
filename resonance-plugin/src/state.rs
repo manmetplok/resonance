@@ -29,6 +29,24 @@ pub fn load_params_from_json(params: &[&dyn Param], state: &serde_json::Value) -
 /// Load params from a pre-parsed JSON Value into shared atomic storage
 /// (used when the plugin is in the audio processor and the bridge is
 /// serving save/load from shared state).
+///
+/// This is the *same* on-disk format [`load_params_from_json`] reads, just
+/// written into the shared atomics instead of into the plugin's own
+/// params, so it must land on exactly the same value: the host reads the
+/// atomics back through `params.get_value` and re-saves them through
+/// `state.save` while the plugin is active, and the audio thread copies
+/// them into the plugin on its next block. That means reproducing the
+/// guards [`Param::set_plain`] applies, because nothing else on this path
+/// does:
+///
+/// - non-finite values are ignored (JSON cannot carry them today, but a
+///   future format could),
+/// - values are clamped to the param's declared range, so a hand-edited
+///   or corrupted preset can't push the DSP outside what it handles,
+/// - stepped (int/bool) params are rounded to their step.
+///
+/// Without this, reopening the same project restored different values
+/// depending on whether the plugin happened to be active at the time.
 pub(crate) fn load_params_from_shared_json(
     param_metas: &[crate::clap_bridge::ParamMeta],
     param_values: &[std::sync::atomic::AtomicU64],
@@ -40,7 +58,14 @@ pub(crate) fn load_params_from_shared_json(
     for (i, meta) in param_metas.iter().enumerate() {
         if let Some(val) = param_map.get(&meta.str_id).and_then(|v| v.as_f64()) {
             if i < param_values.len() {
-                param_values[i].store(val.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                if !val.is_finite() {
+                    continue;
+                }
+                let mut value = val.clamp(meta.min, meta.max);
+                if meta.is_stepped {
+                    value = value.round();
+                }
+                param_values[i].store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
