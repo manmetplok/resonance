@@ -90,7 +90,8 @@ pub mod __test_support {
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
         live_instrument_for, monitor_catchup_skip, monitor_read_len, ramped_gain,
-        recorded_monitor_gate, MonitorDrain, CLIP_DECLICK_FRAMES, MONITOR_DRAIN_STREAK,
+        recorded_monitor_gate, MixAudioHarness, MonitorDrain, CLIP_DECLICK_FRAMES,
+        MONITOR_DRAIN_STREAK,
         push_recording_frames, render_aux_for_test, render_aux_with_comp_for_test,
         RenderBenchHarness, sum_to_output,
         sum_to_stereo, transport_pos_beats,

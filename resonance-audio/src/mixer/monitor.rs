@@ -1,12 +1,20 @@
-//! Monitor input handling: de-interleave the cpal input stream, route
-//! each track's chosen channel(s) into its stereo L/R pair, and run
-//! the track's plugin chain on the result.
+//! Monitor input: how live capture reaches the mix.
 //!
-//! Used by the no-playback / count-in branches in `mix_audio` (via
-//! [`mix_monitor_passthrough`]), which keep every audible monitored
-//! track flowing through to the master so the performer can hear
-//! themselves; the playing-back timeline path mixes monitor input
-//! inside `render_core` instead.
+//! Two halves, both owned here:
+//!
+//! - **Ring pacing** — [`monitor_catchup_skip`], [`monitor_read_len`] and
+//!   [`MonitorDrain`] decide how much of the capture ring this callback
+//!   skips and reads, in whole frames only. Pure functions plus one small
+//!   piece of per-session state; the callback's
+//!   [`read_monitor_input`](super::callback::monitor_input::read_monitor_input)
+//!   drives them.
+//! - **Pass-through** — [`mix_monitor_passthrough`] de-interleaves the
+//!   input stream, routes each track's chosen channel(s) into its stereo
+//!   L/R pair, runs the track's plugin chain and sums the result into the
+//!   output. Used by the no-playback / count-in branches of the callback,
+//!   which keep every audible monitored track flowing through to the
+//!   master so the performer can hear themselves; the playing-back
+//!   timeline path mixes monitor input inside `render_core` instead.
 
 use indexmap::IndexMap;
 
@@ -16,6 +24,129 @@ use crate::types::*;
 use super::common::{
     latch_transport, ramped_stereo_peaks, sum_to_output, track_stereo_gains, TransportSnap,
 };
+
+// ---------------------------------------------------------------------------
+// Ring pacing
+// ---------------------------------------------------------------------------
+
+/// Whole-frame catch-up skip for the monitor ring: when `available`
+/// exceeds `needed` plus one quantum of jitter margin, skip down to
+/// that margin (never to exactly `needed`, which would re-overflow on
+/// the next push) in whole frames only.
+#[inline]
+pub fn monitor_catchup_skip(
+    available: usize,
+    needed: usize,
+    quantum: usize,
+    frame_stride: usize,
+) -> usize {
+    let target = needed + quantum * frame_stride;
+    if available > target {
+        (available - target) / frame_stride * frame_stride
+    } else {
+        0
+    }
+}
+
+/// Whole-frame read length for the monitor ring.
+#[inline]
+pub fn monitor_read_len(needed: usize, occupied: usize, frame_stride: usize) -> usize {
+    needed.min(occupied / frame_stride * frame_stride)
+}
+
+/// Adaptive monitor-ring backlog drain for the native PipeWire backend
+/// (doc #260 finding #12). With input and output streams in the same
+/// graph on the same clock, pushes and reads are strictly 1:1 — the
+/// only backlog the ring *needs* is the intra-cycle ordering bound
+/// ([`monitor_catchup_skip`]'s one-quantum margin covers a read that
+/// runs before that cycle's push). A startup burst can still leave one
+/// sticky extra quantum that the margin skip never reclaims. This
+/// tracker watches for backlog that stays above `needed` for
+/// [`MONITOR_DRAIN_STREAK`] consecutive callbacks — only a stable
+/// scheduling order produces that — and then drains the excess down to
+/// `needed`, converging the ring to its true minimum (0 or 1 cycle
+/// depending on ordering). Any low cycle resets the streak, so jittery
+/// ordering keeps the full margin. Inactive on the cpal fallback,
+/// whose independent clock genuinely needs the standing margin.
+///
+/// Zero margin is a gamble on that ordering staying stable: the input
+/// and output streams run on independent RT data loops with no
+/// ordering edge between them, so a cycle where the output callback
+/// runs before that cycle's input push finds the ring empty and drops
+/// a full quantum of monitored input — an audible click with no graph
+/// xrun anywhere. On a graph where that happens the drain would
+/// restore the vulnerability ~43 ms later, clicking on every
+/// subsequent flip. So the first shortfall *after* a drain
+/// ([`Self::note_shortfall`]) locks the drain out for the rest of the
+/// session: the standing one-quantum margin absorbs all further flips,
+/// trading +1 quantum of monitor latency for silence-free monitoring.
+/// Shortfalls before any drain (the ring filling at startup) don't
+/// lock out — they're not evidence about ordering stability, and
+/// locking on them would forfeit the latency win on every session.
+pub struct MonitorDrain {
+    native: bool,
+    high_streak: u32,
+    /// True once this session has drained to zero margin at least once.
+    drained: bool,
+    /// True once a post-drain shortfall proved the scheduling order
+    /// unstable; no further drains this session.
+    locked_out: bool,
+}
+
+/// Consecutive high-backlog callbacks before the excess is drained:
+/// ~43 ms at 48 kHz / q128 — long enough to prove a stable scheduling
+/// order, short enough to reclaim the latency promptly after startup.
+pub const MONITOR_DRAIN_STREAK: u32 = 16;
+
+impl MonitorDrain {
+    pub fn new(native: bool) -> Self {
+        Self {
+            native,
+            high_streak: 0,
+            drained: false,
+            locked_out: false,
+        }
+    }
+
+    /// Whole-frame sample count to drain beyond the margin skip, given
+    /// the ring occupancy right before this callback's read. Non-zero
+    /// only on the native backend after a full high streak, and never
+    /// again after a post-drain shortfall locked the drain out.
+    pub fn excess_drain(&mut self, available: usize, needed: usize, frame_stride: usize) -> usize {
+        if !self.native || self.locked_out {
+            return 0;
+        }
+        if available > needed {
+            self.high_streak += 1;
+        } else {
+            self.high_streak = 0;
+            return 0;
+        }
+        if self.high_streak < MONITOR_DRAIN_STREAK {
+            return 0;
+        }
+        self.high_streak = 0;
+        let drain = (available - needed) / frame_stride.max(1) * frame_stride.max(1);
+        if drain > 0 {
+            self.drained = true;
+        }
+        drain
+    }
+
+    /// The mixer read came up short while monitoring. After at least
+    /// one drain that means the zero-margin gamble lost on this graph:
+    /// lock the drain out so the standing margin absorbs further
+    /// ordering flips.
+    pub fn note_shortfall(&mut self) {
+        if self.drained {
+            self.locked_out = true;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pass-through
+// ---------------------------------------------------------------------------
 
 /// De-interleave monitor input into track buffers and process through plugins.
 /// Returns the number of frames written. `monitor_temp` is interleaved
