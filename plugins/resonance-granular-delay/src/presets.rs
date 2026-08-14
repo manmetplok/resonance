@@ -5,9 +5,12 @@
 //! (`{"params": {id: plain value, ...}}`), so loading is deterministic:
 //! the loader walks the whole param surface and calls `set_plain`.
 //!
-//! Preset names follow the demo states of the approved design prototype
-//! (design/granular-delay-editor/index.html on ba/design-199), plus a
-//! reverse-texture patch.
+//! Preset names follow the demo states of the approved editor design
+//! (ba design doc #264, epic #199), plus a reverse-texture patch. The
+//! HTML prototype that design was signed off from was never merged —
+//! it only exists on the unmerged `ba/design-199` branch — so doc #264
+//! in ba is the reference to read, not a path in this tree
+//! (ba todo #1268).
 
 use crate::params::{GranularDelayParams, PARAM_COUNT};
 
