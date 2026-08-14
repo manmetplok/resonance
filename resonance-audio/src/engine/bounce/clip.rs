@@ -121,6 +121,11 @@ pub fn to_audio_clip(
     // the render before its first chunk.
     shared.bounce_cancel.store(false, Ordering::Relaxed);
 
+    // Refresh the vocal-tuning render caches so the chunk loop below mixes
+    // corrected audio for any retuned clip — identical to live playback,
+    // which reads the same caches through `mix_track_clips` (todo #358).
+    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+
     reset_plugins(plugins);
 
     let bounce_tm = (**tempo_map.load()).clone();
@@ -247,6 +252,7 @@ pub fn to_audio_clip(
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     };
     clips.write().push(clip);
 

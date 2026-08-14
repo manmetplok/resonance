@@ -63,6 +63,7 @@ fn engine_with_dc_clip() -> EngineState {
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     };
 
     EngineState {

@@ -218,6 +218,7 @@ pub(crate) fn handle_import_clip(
                                 transpose_semitones: 0.0,
                                 warp_algorithm: Default::default(),
                                 warp_markers: Vec::new(),
+                                tuning_render_cache: None,
                             };
                             clips_arc.write().push(clip);
                             let _ = thread_event_tx.send(AudioEvent::ClipImported {
@@ -645,6 +646,7 @@ pub(crate) fn handle_load_clip_from_wav(
                     transpose_semitones: 0.0,
                     warp_algorithm: Default::default(),
                     warp_markers: Vec::new(),
+                    tuning_render_cache: None,
                 };
                 clips_arc.write().push(clip);
                 let _ = thread_event_tx.send(AudioEvent::ClipImported {

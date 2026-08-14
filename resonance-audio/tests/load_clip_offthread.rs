@@ -155,6 +155,7 @@ fn worker_publish_does_not_stall_concurrent_reads() {
             transpose_semitones: 0.0,
             warp_algorithm: Default::default(),
             warp_markers: Vec::new(),
+            tuning_render_cache: None,
         };
         worker_clips.write().push(clip);
         total_frames
@@ -228,6 +229,7 @@ fn concurrent_loads_all_publish_without_deadlock() {
                 transpose_semitones: 0.0,
                 warp_algorithm: Default::default(),
                 warp_markers: Vec::new(),
+                tuning_render_cache: None,
             };
             clips_arc.write().push(clip);
         }));
@@ -327,6 +329,7 @@ fn queued_loads_past_the_cap_are_never_dropped() {
                     transpose_semitones: 0.0,
                     warp_algorithm: Default::default(),
                     warp_markers: Vec::new(),
+                    tuning_render_cache: None,
                 };
                 clips_arc.write().push(clip);
                 let _ = tx.send(AudioEvent::ClipImported {

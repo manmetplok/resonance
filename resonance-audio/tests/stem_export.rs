@@ -83,6 +83,7 @@ impl EngineState {
             transpose_semitones: 0.0,
             warp_algorithm: WarpAlgorithm::default(),
             warp_markers: Vec::new(),
+            tuning_render_cache: None,
         });
     }
 

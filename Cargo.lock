@@ -5301,6 +5301,7 @@ dependencies = [
  "resonance-common",
  "resonance-dsp",
  "resonance-metering",
+ "resonance-music-theory",
  "ringbuf",
  "rubato",
  "serde",

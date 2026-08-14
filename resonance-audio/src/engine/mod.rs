@@ -103,6 +103,7 @@ mod vocal_analysis;
 pub use plugins::affects_latency;
 pub use tracks::set_track_playback_source_in_place;
 pub use vocal_analysis::{analyze_clip_pitch_in_place, analyze_pitch};
+pub mod vocal_render;
 
 /// Shared state between the engine control thread and the audio callback.
 /// `pub` (not `pub(crate)`) only so `__test_support` can re-export it for

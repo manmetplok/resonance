@@ -87,6 +87,7 @@ fn audio_clip(track_id: TrackId, id: u64, start: u64, frames: usize) -> AudioCli
         transpose_semitones: 0.0,
         warp_algorithm: WarpAlgorithm::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     }
 }
 

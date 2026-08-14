@@ -78,6 +78,7 @@ fn sample_clip(id: u64, track_id: u64, stereo: Vec<f32>) -> AudioClip {
         transpose_semitones: 0.0,
         warp_algorithm: WarpAlgorithm::Transient,
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     }
 }
 

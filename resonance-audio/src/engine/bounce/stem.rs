@@ -515,6 +515,10 @@ pub fn render_stem(
         return Err("Empty render range".into());
     }
 
+    // Refresh vocal-tuning render caches so each stem mixes corrected audio
+    // for any retuned clip, identical to live playback (todo #358).
+    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+
     let filter = {
         let tracks_guard = tracks.read();
         // Key sources are part of the render even when they are not part

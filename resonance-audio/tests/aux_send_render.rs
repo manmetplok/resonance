@@ -63,6 +63,7 @@ fn dc_track(id: TrackId, output: TrackOutput) -> (Track, AudioClip) {
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     };
     (track, clip)
 }

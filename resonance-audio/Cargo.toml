@@ -14,6 +14,10 @@ libloading = "0.8"
 indexmap = "2"
 resonance-common = { path = "../resonance-common" }
 resonance-dsp = { path = "../resonance-dsp" }
+# Scale/key snap for vocal-tuning retune on the render + bounce path
+# (doc #160, todo #358). No path-dependency cycle: music-theory depends on
+# neither resonance-audio nor resonance-dsp.
+resonance-music-theory = { path = "../resonance-music-theory" }
 # Loudness measurement (integrated LUFS + 4× oversampled true peak) and the
 # polyphase true-peak detector reused by the export normalization pass.
 resonance-metering = { path = "../resonance-metering" }

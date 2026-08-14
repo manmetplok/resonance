@@ -82,6 +82,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, start_sample: u64, data: Vec<f32>) 
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     }
 }
 

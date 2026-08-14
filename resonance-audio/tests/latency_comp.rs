@@ -430,6 +430,7 @@ fn impulse_track(id: TrackId, output: TrackOutput, at: usize, frames: usize) -> 
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     };
     (track, clip)
 }

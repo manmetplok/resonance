@@ -74,6 +74,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, data: Vec<f32>) -> AudioClip {
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     }
 }
 

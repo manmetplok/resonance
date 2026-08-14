@@ -28,6 +28,7 @@ fn make_clip(frames: usize) -> AudioClip {
         transpose_semitones: 0.0,
         warp_algorithm: Default::default(),
         warp_markers: Vec::new(),
+        tuning_render_cache: None,
     }
 }
 

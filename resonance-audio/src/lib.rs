@@ -72,6 +72,7 @@ pub mod __test_support {
         add_external_offsets, bus_chain_latencies, chain_latencies, comp_latency_clamped,
         compensation_delays, master_chain_latency, LatencyComp,
     };
+    pub use crate::engine::vocal_render::{ensure_tuning_caches, pitch_ratio_curve, retune_clip};
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::platform::{pw_delay_to_engine_samples, MonitorResampler};
     pub use crate::recording::apply_take_shift;
