@@ -1,9 +1,14 @@
-//! Coverage for the voicebank manifest scanner.
+//! Coverage for the voicebank manifest scanner — the on-disk half.
 //!
 //! The synthetic-fixture tests build minimal on-disk banks under the temp
 //! dir (configs + phoneme dict + vocoder config, no ONNX needed — the
 //! loaders the manifest exercises only read text/YAML/JSON) and assert
-//! scan/validate behaviour and layout auto-detection.
+//! scan/validate behaviour and layout auto-detection, plus that the scan
+//! wires the resulting inventory into the phonetic model.
+//!
+//! The phonetic model itself (substitution table, alphabet detection,
+//! dict-key resolution, curve capabilities) is asserted without any
+//! filesystem at all in `tests/voicebank_phonetics.rs`.
 //!
 //! The real-bank assertions (TIGER 7 / Lilia 0 / Meiji 4 singers) run only
 //! when `SVS_TIGER_DIR` / `SVS_LILIA_DIR` / `SVS_MEIJI_DIR` point at the
@@ -326,14 +331,14 @@ fn validate_rejects_unusable_vocoder() {
 }
 
 // ---------------------------------------------------------------------------
-// Data-driven per-bank quirks (doc #164).
+// Data-driven per-bank quirks (doc #164): the wiring.
 //
 // These fixtures reproduce the relevant on-disk shape of the three shipped
-// banks so the manifest's data-driven methods can be asserted against the
-// values previously hardcoded per `VocalVoicebank` arm in resonance-app's
-// `vocal_svs/paths.rs` (substitute_phoneme / voicebank_phoneme_name /
-// voicebank_language_id / curve_supported). The `// was: <fn>(...)`
-// comments quote the old hardcoded result each assertion must match.
+// banks and assert that a scan hands the right inventory, languages map and
+// capability flags to the phonetic model, so the manifest's data-driven
+// methods reproduce the values previously hardcoded per `VocalVoicebank` arm
+// in resonance-app's `vocal_svs/paths.rs`. The exhaustive per-phone matrices
+// live in `tests/voicebank_phonetics.rs`, which needs no folder on disk.
 // ---------------------------------------------------------------------------
 
 /// Full lowercase-ARPAbet inventory (silence markers, `cl`, every CMU
@@ -352,10 +357,6 @@ const MEIJI_DICT: &str = r#"["AP", "SP", "hh", "cl", "ban", "vf",
   "en/iy", "en/jh", "en/k", "en/l", "en/m", "en/n", "en/ng", "en/ow",
   "en/oy", "en/p", "en/r", "en/s", "en/sh", "en/t", "en/th", "en/uh",
   "en/uw", "en/v", "en/w", "en/y", "en/z", "en/zh"]"#;
-
-/// A representative spread of G2P-emitted ARPAbet symbols to exercise the
-/// phoneme/language methods across silence markers, consonants and vowels.
-const SAMPLE_PHONEMES: &[&str] = &["AP", "SP", "cl", "hh", "ah", "ae", "f", "v", "s", "t"];
 
 fn tiger_like(name: &str) -> VoicebankManifest {
     let dir = fresh_dir(name);
@@ -410,15 +411,21 @@ fn meiji_like(name: &str) -> VoicebankManifest {
 }
 
 #[test]
-fn all_shipped_banks_target_arpabet() {
+fn scan_detects_the_alphabet_from_the_dict_on_disk() {
     // was: every VocalVoicebank uses bare/`en/`-prefixed ARPAbet, none x-sampa.
-    assert_eq!(tiger_like("q_tiger_tgt").phoneme_target, PhonemeTarget::Arpabet);
-    assert_eq!(lilia_like("q_lilia_tgt").phoneme_target, PhonemeTarget::Arpabet);
-    assert_eq!(meiji_like("q_meiji_tgt").phoneme_target, PhonemeTarget::Arpabet);
-}
+    assert_eq!(
+        tiger_like("q_tiger_tgt").phoneme_target,
+        PhonemeTarget::Arpabet
+    );
+    assert_eq!(
+        lilia_like("q_lilia_tgt").phoneme_target,
+        PhonemeTarget::Arpabet
+    );
+    assert_eq!(
+        meiji_like("q_meiji_tgt").phoneme_target,
+        PhonemeTarget::Arpabet
+    );
 
-#[test]
-fn xsampa_inventory_is_detected() {
     // A bank whose dict mixes in X-SAMPA-only glyphs is classified XSampa.
     let dir = fresh_dir("q_xsampa");
     build_bank(
@@ -433,86 +440,69 @@ fn xsampa_inventory_is_detected() {
 }
 
 #[test]
-fn tiger_quirks_match_hardcoded() {
-    let m = tiger_like("q_tiger");
+fn scan_wires_the_inventory_into_the_phonetic_model() {
+    // The scanned inventory is what the phonetic model answers from, so a
+    // bank shipping `v` substitutes nothing while one missing it sings `f`.
+    // was: substitute_phoneme(Tiger, "v") == "v" / (Lilia, "v") == "f".
+    let tiger = tiger_like("q_tiger");
+    assert_eq!(tiger.substitute_phoneme("v"), "v", "tiger ships v");
+    assert_eq!(tiger.inventory().substitute_phoneme("v"), "v");
 
-    for &ph in SAMPLE_PHONEMES {
-        // was: substitute_phoneme(Tiger, ph) == ph (identity — full inventory).
-        assert_eq!(m.substitute_phoneme(ph), ph, "tiger sub {ph}");
-        // was: voicebank_phoneme_name(Tiger, ph) == ph (bare ARPAbet).
-        assert_eq!(m.phoneme_name(ph), ph, "tiger name {ph}");
-        // was: voicebank_language_id(Tiger, ph) == None (no languages input).
-        assert_eq!(m.language_id(ph), None, "tiger lang {ph}");
-    }
-
-    // was: curve_supported(Tiger, …) — dynamics/pitch yes, tension/breath no.
-    assert!(m.supports_curve(ExpressionCurve::Dynamics));
-    assert!(m.supports_curve(ExpressionCurve::PitchBend));
-    assert!(!m.supports_curve(ExpressionCurve::Tension));
-    assert!(!m.supports_curve(ExpressionCurve::Breathiness));
+    let lilia = lilia_like("q_lilia");
+    assert_eq!(lilia.substitute_phoneme("v"), "f", "lilia v->f");
+    assert_eq!(lilia.inventory().substitute_phoneme("v"), "f");
+    // was: voicebank_phoneme_name(Lilia, ph) == ph (bare ARPAbet).
+    assert_eq!(lilia.phoneme_name("ah"), "ah");
 }
 
 #[test]
-fn lilia_quirks_match_hardcoded() {
-    let m = lilia_like("q_lilia");
-
-    // was: substitute_phoneme(Lilia, "v") == "f" (only documented sub).
-    assert_eq!(m.substitute_phoneme("v"), "f", "lilia v->f");
-    // Every other sampled phone is present, so substitution is identity.
-    for &ph in SAMPLE_PHONEMES.iter().filter(|p| **p != "v") {
-        assert_eq!(m.substitute_phoneme(ph), ph, "lilia sub {ph}");
-    }
-    for &ph in SAMPLE_PHONEMES {
-        // was: voicebank_phoneme_name(Lilia, ph) == ph (bare ARPAbet).
-        assert_eq!(m.phoneme_name(ph), ph, "lilia name {ph}");
-        // was: voicebank_language_id(Lilia, ph) == None.
-        assert_eq!(m.language_id(ph), None, "lilia lang {ph}");
-    }
-
-    // was: curve_supported(Lilia, …) — all four supported.
-    for c in [
-        ExpressionCurve::Dynamics,
-        ExpressionCurve::Tension,
-        ExpressionCurve::Breathiness,
-        ExpressionCurve::PitchBend,
-    ] {
-        assert!(m.supports_curve(c), "lilia curve {c:?}");
-    }
-}
-
-#[test]
-fn meiji_quirks_match_hardcoded() {
+fn scan_wires_languages_and_namespacing_into_the_phonetic_model() {
     let m = meiji_like("q_meiji");
 
-    // was: substitute_phoneme(Meiji, ph) == ph (full English set present).
-    for &ph in SAMPLE_PHONEMES {
-        assert_eq!(m.substitute_phoneme(ph), ph, "meiji sub {ph}");
-    }
-
     // was: voicebank_phoneme_name(Meiji, ph) — universal bucket bare, rest `en/`.
-    for &uni in &["AP", "SP", "cl", "hh"] {
-        assert_eq!(m.phoneme_name(uni), uni, "meiji universal {uni}");
-    }
-    for &(ph, want) in &[("ah", "en/ah"), ("ae", "en/ae"), ("f", "en/f"), ("v", "en/v")] {
-        assert_eq!(m.phoneme_name(ph), want, "meiji name {ph}");
-    }
+    assert_eq!(m.phoneme_name("hh"), "hh", "meiji universal hh");
+    assert_eq!(m.phoneme_name("ah"), "en/ah", "meiji name ah");
+    // was: substitute_phoneme(Meiji, ph) == ph (full English set present).
+    assert_eq!(m.substitute_phoneme("v"), "v", "meiji ships en/v");
 
     // was: voicebank_language_id(Meiji, ph) — 0 for the bucket, 3 for English.
-    for &uni in &["AP", "SP", "cl", "hh"] {
-        assert_eq!(m.language_id(uni), Some(0), "meiji lang {uni}");
-    }
-    for &ph in &["ah", "ae", "f", "v"] {
-        assert_eq!(m.language_id(ph), Some(3), "meiji lang {ph}");
-    }
+    // The ids come from the scanned languages.json, not a hardcoded table.
+    assert_eq!(m.language_id("hh"), Some(0), "meiji lang hh");
+    assert_eq!(m.language_id("ah"), Some(3), "meiji lang ah");
+}
 
-    // was: curve_supported(Meiji, …) — all four supported.
-    for c in [
-        ExpressionCurve::Dynamics,
-        ExpressionCurve::Tension,
-        ExpressionCurve::Breathiness,
-        ExpressionCurve::PitchBend,
-    ] {
-        assert!(m.supports_curve(c), "meiji curve {c:?}");
+#[test]
+fn language_id_is_gated_on_the_acoustic_models_languages_input() {
+    // was: voicebank_language_id(Tiger|Lilia, ph) == None — banks whose
+    // model takes no `languages` input report nothing, whatever their dict
+    // says. This gate is the manifest's, not the inventory's.
+    for m in [tiger_like("q_tiger_lang"), lilia_like("q_lilia_lang")] {
+        assert!(!m.accepts_language_id);
+        for ph in ["AP", "ah", "f"] {
+            assert_eq!(m.language_id(ph), None, "lang {ph}");
+        }
+    }
+}
+
+#[test]
+fn scan_wires_the_acoustic_embeds_into_curve_support() {
+    // was: curve_supported(Tiger, …) — dynamics/pitch yes, tension/breath no.
+    let tiger = tiger_like("q_tiger_curves");
+    assert!(tiger.supports_curve(ExpressionCurve::Dynamics));
+    assert!(tiger.supports_curve(ExpressionCurve::PitchBend));
+    assert!(!tiger.supports_curve(ExpressionCurve::Tension));
+    assert!(!tiger.supports_curve(ExpressionCurve::Breathiness));
+
+    // was: curve_supported(Lilia|Meiji, …) — all four supported.
+    for m in [lilia_like("q_lilia_curves"), meiji_like("q_meiji_curves")] {
+        for c in [
+            ExpressionCurve::Dynamics,
+            ExpressionCurve::Tension,
+            ExpressionCurve::Breathiness,
+            ExpressionCurve::PitchBend,
+        ] {
+            assert!(m.supports_curve(c), "{} curve {c:?}", m.id);
+        }
     }
 }
 
