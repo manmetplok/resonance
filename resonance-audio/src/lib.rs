@@ -13,6 +13,7 @@ pub(crate) mod cycle_load;
 pub(crate) mod decode;
 mod engine;
 mod input_handle;
+pub(crate) mod io;
 pub(crate) mod latency;
 #[cfg(target_os = "linux")]
 mod input_pipewire;
@@ -68,6 +69,10 @@ pub mod __test_support {
     /// The engine's plugin instance-id allocation rule, shared by the
     /// track / bus / master add paths — see `tests/plugin_id_ranges.rs`.
     pub use crate::engine::plugins::allocate_plugin_instance_id;
+    /// The RIFF/WAVE chunk walk behind `ClipSource::open_wav` — a pure
+    /// function over bytes, so `tests/wav_chunk_parse.rs` can drive every
+    /// malformed-header case without touching the filesystem.
+    pub use crate::io::wav::{locate_wav_float_data, WavDataChunk};
     pub use crate::latency::{
         add_external_offsets, bus_chain_latencies, chain_latencies, comp_latency_clamped,
         compensation_delays, master_chain_latency, LatencyComp,
