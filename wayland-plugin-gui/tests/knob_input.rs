@@ -33,9 +33,14 @@ fn full_scale_sweep_is_two_hundred_pixels() {
 
 #[test]
 fn shift_is_the_finer_of_the_two_speeds() {
-    assert_eq!(KNOB_DRAG_SPEED_FINE, 0.004);
-    // The Shift speed must be the slower of the two.
+    assert_eq!(KNOB_DRAG_SPEED_FINE, 0.001);
+    // The Shift speed must be the slower of the two — and by enough to
+    // feel like a different gesture. Merely slower is not enough: this
+    // was briefly 0.004 against a 0.005 normal speed, a 20% difference
+    // no one can perceive while dragging. Require at least 3x finer so
+    // a future tweak cannot quietly reduce Shift to a no-op again.
     const { assert!(KNOB_DRAG_SPEED_FINE < KNOB_DRAG_SPEED) };
+    const { assert!(KNOB_DRAG_SPEED >= KNOB_DRAG_SPEED_FINE * 3.0) };
     let coarse = knob_drag_unit(0.5, -20.0, false);
     let fine = knob_drag_unit(0.5, -20.0, true);
     assert!(

@@ -42,8 +42,15 @@ const ARC_END: f32 = ARC_START + 270.0 * PI / 180.0;
 pub const KNOB_DRAG_SPEED: f32 = 0.005;
 
 /// Drag sensitivity while Shift is held (fine adjust), same units as
-/// [`KNOB_DRAG_SPEED`]: 250 px per full-scale sweep.
-pub const KNOB_DRAG_SPEED_FINE: f32 = 0.004;
+/// [`KNOB_DRAG_SPEED`]: 1000 px per full-scale sweep, five times finer
+/// than a normal drag.
+///
+/// It has to be *several* times finer to be worth a modifier: ba todo
+/// #1266 first set this to 0.004, which is only 20% finer than the
+/// 0.005 normal speed and reads as the same gesture. 0.004 was the
+/// shared kit's old *logarithmic-knob* sensitivity, never a fine-drag
+/// value — the kit had no fine mode before #1266 added one.
+pub const KNOB_DRAG_SPEED_FINE: f32 = 0.001;
 
 /// Apply one frame of vertical drag to a knob value in unit (`0..1`)
 /// space, and clamp.
@@ -56,7 +63,7 @@ pub const KNOB_DRAG_SPEED_FINE: f32 = 0.004;
 /// several first-party plugins are hosted in the same GUI runtime, so
 /// the same gesture has to produce the same value change in all of
 /// them. The chosen numbers are [`KNOB_DRAG_SPEED`] = 0.005 per pixel
-/// and [`KNOB_DRAG_SPEED_FINE`] = 0.004 per pixel with Shift; before
+/// and [`KNOB_DRAG_SPEED_FINE`] = 0.001 per pixel with Shift; before
 /// ba todo #1266 the granular-delay editor carried a forked handler at
 /// 0.008 / 0.002 and answered the same drag differently.
 pub fn knob_drag_unit(unit: f32, drag_y: f32, fine: bool) -> f32 {
