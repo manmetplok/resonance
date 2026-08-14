@@ -603,6 +603,10 @@ fn fill_from_frozen_source(
 /// click-free. An explicit fade that is longer than the overlap reshapes
 /// the crossfade (the longer of the two lengths wins).
 ///
+/// Edges that no fade and no overlap cover still get the short
+/// [`CLIP_DECLICK_FRAMES`] ramp, so a trimmed, split or butt-joined clip
+/// cannot step the signal on its first and last frame.
+///
 /// Shared verbatim by the live mixer and the offline bounce/export (both
 /// reach it through [`render_block`]), so playback and bounced WAV render
 /// identically. Allocation-free and `O(1)` per output frame (the
@@ -639,8 +643,12 @@ pub fn mix_track_clips(
         // an overlap at the clip's head/tail behaves like a fade of that
         // length, and the explicit fade wins only when it is longer.
         let (head_xfade, tail_xfade) = clip_crossfade_lengths(clip, clips, clip_frames);
-        let fade_in_len = clip.fade_in_frames.max(head_xfade);
-        let fade_out_len = clip.fade_out_frames.max(tail_xfade);
+        // Anti-click ramp on both audible edges — see `CLIP_DECLICK_FRAMES`.
+        // Whichever of the three is longest shapes the edge, so an explicit
+        // fade or a crossfade always subsumes the declick.
+        let declick = declick_frames(clip_frames);
+        let fade_in_len = clip.fade_in_frames.max(head_xfade).max(declick);
+        let fade_out_len = clip.fade_out_frames.max(tail_xfade).max(declick);
         let gain_lin = if clip.gain_db == 0.0 {
             1.0
         } else {
@@ -672,6 +680,34 @@ pub fn mix_track_clips(
     }
 
     has_audio
+}
+
+/// Length of the automatic anti-click ("declick") ramp applied to both
+/// audible edges of every audio clip: 2 ms at 48 kHz.
+///
+/// A clip edge is a splice. Trimming a take, splitting it, or butting two
+/// takes together almost never lands on a zero crossing, so playing the
+/// raw samples steps the signal from silence to whatever the waveform
+/// happened to be doing — an audible click, and one that a downstream amp
+/// sim or delay then amplifies and repeats. Every clip therefore ramps in
+/// and out over this many frames unless a longer explicit fade or an
+/// overlap crossfade already shapes that edge.
+///
+/// 2 ms is long enough to remove the step for the lowest musical
+/// fundamentals and short enough to leave a transient sliced at its attack
+/// sounding like a transient (Ardour declicks over ~64 frames, Reaper over
+/// 10 ms; this sits deliberately between them). Expressed in frames rather
+/// than seconds because the clip mix is rate-agnostic — at 44.1 kHz it is
+/// 2.2 ms, which is the same thing musically.
+pub const CLIP_DECLICK_FRAMES: u64 = 96;
+
+/// The declick ramp length for a clip of `clip_frames` audible frames,
+/// capped at half the clip so the head and tail ramps of a very short clip
+/// (a sliced grain, a drum hit) meet at its midpoint instead of overlapping
+/// into a double attenuation.
+#[inline]
+fn declick_frames(clip_frames: u64) -> u64 {
+    CLIP_DECLICK_FRAMES.min(clip_frames / 2)
 }
 
 /// Linear gain coefficient applied to `clip` at absolute timeline frame

@@ -14,10 +14,14 @@
 //! accumulated aux-send contribution — so the tap can be asserted in
 //! isolation from the return bus's own fader/pan.
 
-use resonance_audio::__test_support::render_aux_for_test;
+use resonance_audio::__test_support::{render_aux_for_test, CLIP_DECLICK_FRAMES};
 use resonance_audio::types::*;
 
-const FRAMES: usize = 48;
+const FRAMES: usize = 512;
+/// First frame past a clip's automatic edge declick — every level
+/// assertion here is about routing, so it reads the steady interior of
+/// the DC clip rather than its ramped edges.
+const STEADY: usize = CLIP_DECLICK_FRAMES as usize;
 const SR: u32 = 48_000;
 
 /// Track/bus gain at unity volume and centre pan. The pan control is a
@@ -34,7 +38,9 @@ fn db_lin(db: f32) -> f32 {
 }
 
 /// A track that mixes a constant `1.0` DC clip across the whole block, so
-/// its post-plugin (pre-fader) buffer is exactly `1.0` per sample.
+/// its post-plugin (pre-fader) buffer is exactly `1.0` per sample from
+/// [`STEADY`] on. The clip outlasts the block so only its head declick
+/// falls inside the render window.
 fn dc_track(id: TrackId, output: TrackOutput) -> (Track, AudioClip) {
     let track = Track::new(id, format!("t{id}"));
     track.set_output(output);
@@ -42,7 +48,7 @@ fn dc_track(id: TrackId, output: TrackOutput) -> (Track, AudioClip) {
         id,
         track_id: id,
         start_sample: 0,
-        source: ClipSource::Memory(vec![1.0; FRAMES * 2]),
+        source: ClipSource::Memory(vec![1.0; FRAMES * 4 * 2]),
         name: "dc".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -116,7 +122,7 @@ fn two_tracks_post_fader_sum_into_return_with_dry_intact() {
     // The return buffer is the post-fader sum: each track's DC (1.0) times
     // its fader/pan gain `g` times the send's linear level.
     let expected_return = g * db_lin(lvl1) + g * db_lin(lvl2);
-    for f in 0..FRAMES {
+    for f in STEADY..FRAMES {
         assert!(
             (bufs[0].0[f] - expected_return).abs() < 1e-5,
             "return L frame {f}: {} != {expected_return}",
@@ -128,7 +134,7 @@ fn two_tracks_post_fader_sum_into_return_with_dry_intact() {
     // Dry signal intact: the only change at the master is the return bus's
     // own contribution (its accumulated sends through its fader `g`). The
     // direct track paths are untouched.
-    for f in 0..FRAMES {
+    for f in STEADY..FRAMES {
         let delta = master[f * 2] - dry_master[f * 2];
         assert!(
             (delta - expected_return * g).abs() < 1e-5,
@@ -158,7 +164,7 @@ fn pre_fader_send_ignores_fader_post_fader_follows_it() {
         SR,
     );
     let expected_post = g * 0.5;
-    assert!((post_bufs[0].0[0] - expected_post).abs() < 1e-5);
+    assert!((post_bufs[0].0[STEADY] - expected_post).abs() < 1e-5);
 
     // Pre-fader: the same 0.5 fader is bypassed → tap is the raw DC (1.0).
     let (tpre, cpre) = dc_track(1, TrackOutput::Master);
@@ -171,9 +177,9 @@ fn pre_fader_send_ignores_fader_post_fader_follows_it() {
         FRAMES,
         SR,
     );
-    assert!((pre_bufs[0].0[0] - 1.0).abs() < 1e-5, "pre-fader tap should be the raw signal");
+    assert!((pre_bufs[0].0[STEADY] - 1.0).abs() < 1e-5, "pre-fader tap should be the raw signal");
     assert!(
-        pre_bufs[0].0[0] > post_bufs[0].0[0],
+        pre_bufs[0].0[STEADY] > post_bufs[0].0[STEADY],
         "pre-fader send must exceed the fader-attenuated post-fader send"
     );
 }
@@ -216,12 +222,12 @@ fn bus_to_bus_send_taps_post_fader() {
     );
 
     // Bus A buffer = track DC (1.0) routed post-fader = g.
-    assert!((bufs[0].0[0] - g).abs() < 1e-5, "bus A should hold the routed track signal");
+    assert!((bufs[0].0[STEADY] - g).abs() < 1e-5, "bus A should hold the routed track signal");
     // Bus B buffer = bus A's post-fader signal (g) times A's fader (g).
     let expected_b = g * g;
     assert!(
-        (bufs[1].0[0] - expected_b).abs() < 1e-5,
+        (bufs[1].0[STEADY] - expected_b).abs() < 1e-5,
         "bus B should hold A's post-fader send: {} != {expected_b}",
-        bufs[1].0[0]
+        bufs[1].0[STEADY]
     );
 }

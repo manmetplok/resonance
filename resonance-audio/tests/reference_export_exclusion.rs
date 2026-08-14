@@ -14,7 +14,7 @@ use crossbeam_channel::unbounded;
 use indexmap::IndexMap;
 use parking_lot::{Mutex, RwLock};
 
-use resonance_audio::__test_support::{to_wav, SharedState, SyncClapInstance};
+use resonance_audio::__test_support::{to_wav, SharedState, SyncClapInstance, CLIP_DECLICK_FRAMES};
 use resonance_audio::types::*;
 use resonance_audio::{
     handle_reference_analyzed, handle_set_ab_source, handle_set_active_reference,
@@ -22,7 +22,9 @@ use resonance_audio::{
 };
 
 const SR: u32 = 48_000;
-const FRAMES: usize = 64;
+const FRAMES: usize = 512;
+/// The clip's steady interior, clear of the automatic edge declick.
+const STEADY: usize = CLIP_DECLICK_FRAMES as usize;
 const MIX_DC: f32 = 0.5;
 const REF_DC: f32 = -0.9;
 
@@ -131,15 +133,18 @@ fn bounce_excludes_the_reference_and_renders_the_mix() {
     // exact value doesn't matter — what matters is that it's the *mix*,
     // never the reference.
     let expected_mix = MIX_DC;
+    // Read the clip's interior: its edges carry the automatic declick ramp.
+    let interior = &samples[STEADY * 2..(FRAMES - STEADY) * 2];
     assert!(
-        samples.iter().all(|&s| (s - expected_mix).abs() < 1e-4),
+        interior.iter().all(|&s| (s - expected_mix).abs() < 1e-4),
         "bounce must contain the mix (~{expected_mix}), got e.g. {}",
-        samples[0]
+        interior[0]
     );
     // Decisive exclusion check: the reference DC is negative; the mix is
-    // positive. Not a single sample may resemble the reference PCM.
+    // positive (declick ramps only ever scale it toward zero). Not a
+    // single sample may resemble the reference PCM.
     assert!(
-        samples.iter().all(|&s| s > 0.0 && (s - REF_DC).abs() > 0.1),
+        samples.iter().all(|&s| s >= 0.0 && (s - REF_DC).abs() > 0.1),
         "bounce must never contain the reference PCM ({REF_DC})"
     );
 }

@@ -470,8 +470,11 @@ fn render_block_aligns_wet_send_with_dry_master_path() {
     // is latency-free (padded by the full 4): the wet return and the
     // dry master path must land on the same output frame — the exact
     // wet/dry alignment finding #7 is about.
-    const FRAMES: usize = 48;
-    let (track, clip) = impulse_track(1, TrackOutput::Master, 5, FRAMES);
+    // The impulse sits past the clip's automatic edge declick so its
+    // amplitude — not just its position — can be asserted exactly.
+    const FRAMES: usize = 512;
+    const AT: usize = 200;
+    let (track, clip) = impulse_track(1, TrackOutput::Master, AT, FRAMES);
     let ret = Bus::new(10, "return".into());
     let send = AuxSend {
         id: 1 as SendId,
@@ -495,7 +498,7 @@ fn render_block_aligns_wet_send_with_dry_master_path() {
     // One single frame carries all the energy: dry + wet, together.
     assert_eq!(
         nonzero_frames(&data),
-        vec![5 + 4],
+        vec![AT + 4],
         "wet return must not smear against the dry path"
     );
     // Dry and wet (send at 0 dB through the return's own fader) sum —
@@ -503,5 +506,5 @@ fn render_block_aligns_wet_send_with_dry_master_path() {
     // contribution landed on the same frame. Centre pan is unity on a
     // stereo-balance track (ba doc #276 BUG 3), so each path is 1.0.
     let g = 1.0f32;
-    assert!((data[(5 + 4) * 2] - 2.0 * g).abs() < 1e-6);
+    assert!((data[(AT + 4) * 2] - 2.0 * g).abs() < 1e-6);
 }

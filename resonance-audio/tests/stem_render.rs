@@ -26,6 +26,9 @@ use resonance_audio::__test_support::{
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
+/// First frame past a clip's automatic edge declick — level assertions
+/// below read a clip's steady interior rather than its ramped edges.
+const STEADY: usize = resonance_audio::__test_support::CLIP_DECLICK_FRAMES as usize;
 
 struct EngineState {
     shared: Arc<SharedState>,
@@ -270,8 +273,8 @@ fn two_track_stems_over_shared_range_are_equal_length_and_aligned() {
     state.add_track(1, TrackOutput::Master);
     state.add_track(2, TrackOutput::Master);
     // Two clips at different positions; the shared range spans both.
-    state.add_dc_clip(1, 1, 0, 100, 0.5); // track 1: frames [0,100)
-    state.add_dc_clip(2, 2, 200, 100, 0.25); // track 2: frames [200,300)
+    state.add_dc_clip(1, 1, 0, 400, 0.5); // track 1: frames [0,400)
+    state.add_dc_clip(2, 2, 800, 400, 0.25); // track 2: frames [800,1200)
 
     let (start, end) = stem_project_range(
         &state.clips,
@@ -281,7 +284,7 @@ fn two_track_stems_over_shared_range_are_equal_length_and_aligned() {
     )
     .expect("project has clips");
     assert_eq!(start, 0);
-    assert_eq!(end, 300);
+    assert_eq!(end, 1200);
 
     let stem1 = state.render(StemSource::Track(1), start, end).unwrap();
     let stem2 = state.render(StemSource::Track(2), start, end).unwrap();
@@ -291,19 +294,23 @@ fn two_track_stems_over_shared_range_are_equal_length_and_aligned() {
     assert_eq!(stem1.len(), expected_len);
     assert_eq!(stem2.len(), expected_len);
 
-    // Sample alignment: stem 1's clip sits at frames [0,100) and is
-    // silent afterwards; stem 2's clip sits at frames [200,300) and is
+    // Sample alignment: stem 1's clip sits at frames [0,400) and is
+    // silent afterwards; stem 2's clip sits at frames [800,1200) and is
     // silent before. Both share frame 0 as the zero origin. (Absolute
     // levels are scaled by the track pan law, so assert presence vs
-    // silence rather than exact amplitudes.)
-    assert!(stem1[0].abs() > 0.1, "stem1 frame 0 carries its clip");
-    assert!(stem1[99 * 2].abs() > 0.1, "stem1 clip runs to frame 99");
-    assert!(stem1[200 * 2].abs() < 1e-6, "stem1 is silent where track 2 plays");
-    assert!(stem2[0].abs() < 1e-6, "stem2 is silent where track 1 plays");
-    assert!(stem2[199 * 2].abs() < 1e-6, "stem2 still silent at frame 199");
+    // silence rather than exact amplitudes; a clip's own edges ramp over
+    // the declick, so presence is read `STEADY` frames in.)
+    assert!(stem1[STEADY * 2].abs() > 0.1, "stem1 carries its clip from frame 0");
     assert!(
-        stem2[200 * 2].abs() > 0.05,
-        "stem2 frame 200 carries its clip, aligned to the shared origin"
+        stem1[(400 - STEADY) * 2].abs() > 0.1,
+        "stem1 clip runs to frame 399"
+    );
+    assert!(stem1[800 * 2].abs() < 1e-6, "stem1 is silent where track 2 plays");
+    assert!(stem2[STEADY * 2].abs() < 1e-6, "stem2 is silent where track 1 plays");
+    assert!(stem2[799 * 2].abs() < 1e-6, "stem2 still silent at frame 799");
+    assert!(
+        stem2[(800 + STEADY) * 2].abs() > 0.05,
+        "stem2 carries its clip from frame 800, aligned to the shared origin"
     );
 }
 
@@ -316,17 +323,17 @@ fn stem_isolates_its_source_from_other_tracks() {
     // stem leaked the other track, both stems would carry the identical
     // summed level; isolated, each stem reflects only its own clip, so
     // their levels keep the source clips' 5:3 ratio.
-    state.add_dc_clip(1, 1, 0, 64, 0.5);
-    state.add_dc_clip(2, 2, 0, 64, 0.3);
+    state.add_dc_clip(1, 1, 0, 512, 0.5);
+    state.add_dc_clip(2, 2, 0, 512, 0.3);
 
-    let stem1 = state.render(StemSource::Track(1), 0, 64).unwrap();
-    let stem2 = state.render(StemSource::Track(2), 0, 64).unwrap();
+    let stem1 = state.render(StemSource::Track(1), 0, 512).unwrap();
+    let stem2 = state.render(StemSource::Track(2), 0, 512).unwrap();
 
-    let l1 = stem1[0];
-    let l2 = stem2[0];
+    let l1 = stem1[STEADY * 2];
+    let l2 = stem2[STEADY * 2];
     assert!(l1 > 0.0 && l2 > 0.0, "both stems carry their own audio");
-    // Each stem is a constant DC level across the clip.
-    for frame in 0..64 {
+    // Each stem is a constant DC level across the clip's interior.
+    for frame in STEADY..512 - STEADY {
         assert!((stem1[frame * 2] - l1).abs() < 1e-6, "stem1 is constant DC");
         assert!((stem2[frame * 2] - l2).abs() < 1e-6, "stem2 is constant DC");
     }

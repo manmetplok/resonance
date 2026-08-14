@@ -18,9 +18,12 @@ use resonance_audio::types::*;
 use resonance_common::{real_to_lane_value, AutomationLane, AutomationTarget, Breakpoint, CurveKind};
 
 const TRACK: u64 = 1;
-const BLOCK: usize = 32;
+const BLOCK: usize = 512;
 const DELAY: u64 = 4;
 
+/// A DC clip several blocks long, so the rendered window sits entirely
+/// inside it — clear of the automatic edge declick, which would otherwise
+/// shape the very frames these tests measure.
 fn dc_clip(frames: usize) -> AudioClip {
     AudioClip {
         id: 10,
@@ -77,7 +80,7 @@ fn track_gain_automation_is_evaluated_at_the_comp_delayed_position() {
     let (data, _busses) = render_aux_with_comp_for_test(
         vec![track],
         vec![],
-        vec![dc_clip(BLOCK)],
+        vec![dc_clip(BLOCK * 4)],
         vec![],
         BLOCK,
         48_000,
@@ -135,7 +138,7 @@ fn zero_latency_comp_keeps_raw_evaluation() {
     let (data, _busses) = render_aux_with_comp_for_test(
         vec![track],
         vec![],
-        vec![dc_clip(BLOCK)],
+        vec![dc_clip(BLOCK * 4)],
         vec![],
         BLOCK,
         48_000,
