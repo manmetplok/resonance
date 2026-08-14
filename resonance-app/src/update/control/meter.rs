@@ -529,7 +529,7 @@ fn resolve_target(app: &Resonance, target: MeasureTarget) -> Result<StemSource, 
             } else if app.sorted_busses().iter().any(|b| b.id == raw) {
                 Ok(StemSource::Bus(raw))
             } else {
-                Err(RpcError::not_found(format!("no track with id {raw}")))
+                Err(super::reply::no_track(raw))
             }
         }
         MeasureTarget::Bus(id) => {
@@ -537,7 +537,7 @@ fn resolve_target(app: &Resonance, target: MeasureTarget) -> Result<StemSource, 
             if app.sorted_busses().iter().any(|b| b.id == raw) {
                 Ok(StemSource::Bus(raw))
             } else {
-                Err(RpcError::not_found(format!("no bus with id {raw}")))
+                Err(super::reply::no_bus(raw))
             }
         }
     }

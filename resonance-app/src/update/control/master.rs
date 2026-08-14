@@ -22,7 +22,9 @@ use resonance_control::methods::master::{
 };
 use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
 use resonance_control::methods::track;
-use resonance_control::{MutationAck, Request, Response, RpcError};
+use resonance_control::{Request, Response, RpcError};
+
+use super::reply::{ack, reject};
 
 /// Handle a `master.*` request, or `None` when `method` belongs to
 /// another namespace.
@@ -578,10 +580,3 @@ fn chain_description(app: &Resonance) -> String {
         .join(", ")
 }
 
-fn ack(app: &Resonance, request: &Request) -> Response {
-    super::success(request, &MutationAck { revision: app.revision() })
-}
-
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
-}

@@ -18,6 +18,8 @@ use resonance_control::methods::transport::{
     TransportResult,
 };
 use resonance_control::{PositionSpec, Request, Response, RpcError};
+
+use super::reply::reject;
 use resonance_music_theory::{Mode, PitchClass, Scale};
 
 /// BPM range the transport accepts (mirrors `CommitBpm`'s clamp — the
@@ -54,10 +56,6 @@ fn echo(app: &Resonance, request: &Request) -> Response {
         revision: app.revision(),
     };
     super::success(request, &result)
-}
-
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
 }
 
 /// A no-params method that maps 1:1 onto one transport message.

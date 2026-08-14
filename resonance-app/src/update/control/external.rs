@@ -28,6 +28,8 @@ use resonance_control::methods::external::{
 };
 use resonance_control::{Request, Response, RpcError};
 
+use super::reply::{ack, no_track, reject};
+
 /// Handle an `external.*` request, or `None` when `method` belongs to
 /// another namespace.
 pub(super) fn try_handle(
@@ -53,14 +55,6 @@ pub(super) fn try_handle(
     Some(out)
 }
 
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
-}
-
-fn ack(app: &Resonance, request: &Request) -> Response {
-    super::success(request, &super::mutation_ack(app))
-}
-
 fn find_track(app: &Resonance, id: u64) -> Option<&TrackState> {
     app.registry.tracks.iter().find(|t| t.id == id)
 }
@@ -69,7 +63,7 @@ fn find_track(app: &Resonance, id: u64) -> Option<&TrackState> {
 /// Separating "no such track" from "not external" matters: the second is
 /// fixable with `external.enable`, and saying so saves a round trip.
 fn require_external(app: &Resonance, id: u64) -> Result<&TrackState, RpcError> {
-    let track = find_track(app, id).ok_or_else(|| RpcError::not_found(format!("no track with id {id}")))?;
+    let track = find_track(app, id).ok_or_else(|| no_track(id))?;
     if !app.external_instruments.contains_key(&id) {
         return Err(RpcError::invalid_params(format!(
             "track {id} is not an external instrument; call external.enable first"
@@ -111,7 +105,7 @@ fn status(app: &Resonance, request: &Request) -> Response {
     let wanted = params.track_id.map(|t| t.0);
     if let Some(id) = wanted {
         if find_track(app, id).is_none() {
-            return super::failure(request, RpcError::not_found(format!("no track with id {id}")));
+            return super::failure(request, no_track(id));
         }
     }
 
@@ -187,7 +181,7 @@ fn enable(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     };
     let id = params.track_id.0;
     let Some(track) = find_track(app, id) else {
-        return reject(request, RpcError::not_found(format!("no track with id {id}")));
+        return reject(request, no_track(id));
     };
     // A sub-track is fed by its parent's plugin fan-out and has no clips
     // or chain of its own, so there is nothing for a hardware route to

@@ -21,6 +21,8 @@ use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::section as proto;
 use resonance_control::{KeyScale, Request, Response, RpcError};
+
+use super::reply::{ack_or_compose_error, no_section_definition, no_section_placement, reject};
 use resonance_music_theory::{
     parse_chord, BassParams, ChordQuality, MelodyParams, Mode, PadParams, PitchClass, Scale,
     VocalParams,
@@ -51,21 +53,21 @@ pub(super) fn try_handle(
 fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::CreateParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let name = params.name.trim().to_owned();
     if name.is_empty() {
-        return fail(request, RpcError::invalid_params("section name cannot be empty"));
+        return reject(request, RpcError::invalid_params("section name cannot be empty"));
     }
     if params.length_bars == 0 {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params("section length must be at least 1 bar"),
         );
     }
     let scale = match params.scale.as_ref().map(parse_key_scale).transpose() {
         Ok(s) => s,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
 
     let before: HashSet<u64> = app.compose.definitions.iter().map(|d| d.id).collect();
@@ -84,7 +86,7 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         }),
     );
     if let Some(error) = take_compose_error(app) {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let Some(section_id) = app
         .compose
@@ -93,7 +95,7 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         .map(|d| d.id)
         .find(|id| !before.contains(id))
     else {
-        return fail(request, RpcError::internal("section was not created"));
+        return reject(request, RpcError::internal("section was not created"));
     };
     if let Some(scale) = scale {
         let set = super::run_via_update(
@@ -115,14 +117,14 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 fn rename(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::RenameParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     if let Some(e) = definition_missing(app, params.section_id.into()) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let name = params.name.trim().to_owned();
     if name.is_empty() {
-        return fail(request, RpcError::invalid_params("section name cannot be empty"));
+        return reject(request, RpcError::invalid_params("section name cannot be empty"));
     }
     let task = super::run_via_update(
         app,
@@ -131,19 +133,19 @@ fn rename(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             name,
         }),
     );
-    ack_or_error(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 fn resize(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::ResizeParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     if let Some(e) = definition_missing(app, params.section_id.into()) {
-        return fail(request, e);
+        return reject(request, e);
     }
     if params.length_bars == 0 {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params("section length must be at least 1 bar"),
         );
@@ -155,20 +157,17 @@ fn resize(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             length_bars: params.length_bars,
         }),
     );
-    ack_or_error(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::DeleteParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     let Some(def) = app.compose.find_definition(definition_id) else {
-        return fail(
-            request,
-            RpcError::not_found(format!("no section definition with id {definition_id}")),
-        );
+        return reject(request, no_section_definition(definition_id));
     };
     if !params.confirm {
         let placements = app
@@ -177,7 +176,7 @@ fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             .iter()
             .filter(|p| p.definition_id == definition_id)
             .count();
-        return fail(
+        return reject(
             request,
             RpcError::needs_confirmation(format!(
                 "deleting section {:?} removes {} arrangement placement(s), {} chord(s), and \
@@ -192,20 +191,20 @@ fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         app,
         Message::Compose(ComposeMessage::DeleteSectionWithPlacements { definition_id }),
     );
-    ack_or_error(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 fn place(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::PlaceParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     if let Some(e) = definition_missing(app, params.definition_id.into()) {
-        return fail(request, e);
+        return reject(request, e);
     }
     // Wire bars are 1-based; the app's placement grid is 0-based.
     if params.start_bar == 0 {
-        return fail(
+        return reject(
             request,
             RpcError::invalid_params("start_bar is 1-based; bar 0 does not exist"),
         );
@@ -219,7 +218,7 @@ fn place(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         }),
     );
     if let Some(error) = take_compose_error(app) {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let Some(placement_id) = app
         .compose
@@ -228,7 +227,7 @@ fn place(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         .map(|p| p.id)
         .find(|id| !before.contains(id))
     else {
-        return fail(request, RpcError::internal("placement was not created"));
+        return reject(request, RpcError::internal("placement was not created"));
     };
     let result = proto::PlaceResult {
         placement_id: placement_id.into(),
@@ -240,33 +239,30 @@ fn place(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 fn remove_placement(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::RemovePlacementParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let placement_id: u64 = params.placement_id.into();
     if app.compose.find_placement(placement_id).is_none() {
-        return fail(
-            request,
-            RpcError::not_found(format!("no section placement with id {placement_id}")),
-        );
+        return reject(request, no_section_placement(placement_id));
     }
     let task = super::run_via_update(
         app,
         Message::Compose(ComposeMessage::DeleteSectionPlacement { placement_id }),
     );
-    ack_or_error(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 fn set_scale(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::SetScaleParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     if let Some(e) = definition_missing(app, params.section_id.into()) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let scale = match parse_key_scale(&params.scale) {
         Ok(s) => s,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let task = super::run_via_update(
         app,
@@ -275,7 +271,7 @@ fn set_scale(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
             scale: Some(scale),
         }),
     );
-    ack_or_error(app, request, task)
+    ack_or_compose_error(app, request, task)
 }
 
 /// `section.set_lane_generator` (ba doc #268): configure — or with
@@ -286,11 +282,11 @@ fn set_scale(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
 fn set_lane_generator(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: proto::SetLaneGeneratorParams = match request.params() {
         Ok(p) => p,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = definition_missing(app, definition_id) {
-        return fail(request, e);
+        return reject(request, e);
     }
     let track_id: u64 = params.track_id.into();
     // Kind decides the track a lane may live on: vocal generators only
@@ -301,12 +297,12 @@ fn set_lane_generator(app: &mut Resonance, request: &Request) -> (Response, Task
         proto::LaneKind::Vocal => super::generate::require_vocal_track(app, track_id),
         _ => super::generate::require_instrument_track(app, track_id),
     } {
-        return fail(request, e);
+        return reject(request, e);
     }
 
     let config = match build_lane_config(definition_id, &params) {
         Ok(c) => c,
-        Err(e) => return fail(request, e),
+        Err(e) => return reject(request, e),
     };
     let task = super::run_via_update(
         app,
@@ -317,7 +313,7 @@ fn set_lane_generator(app: &mut Resonance, request: &Request) -> (Response, Task
         }),
     );
     if let Some(error) = take_compose_error(app) {
-        return fail(request, RpcError::invalid_params(error));
+        return reject(request, RpcError::invalid_params(error));
     }
     let result = proto::SetLaneGeneratorResult {
         revision: app.revision(),
@@ -384,9 +380,7 @@ fn parse_options<T: serde::de::DeserializeOwned + Default>(
 /// `not_found` when no section definition has `definition_id`.
 pub(super) fn definition_missing(app: &Resonance, definition_id: u64) -> Option<RpcError> {
     if app.compose.find_definition(definition_id).is_none() {
-        return Some(RpcError::not_found(format!(
-            "no section definition with id {definition_id}"
-        )));
+        return Some(no_section_definition(definition_id));
     }
     None
 }
@@ -396,24 +390,6 @@ pub(super) fn definition_missing(app: &Resonance, definition_id: u64) -> Option<
 /// an error banner for an edit the GUI user never made.
 pub(super) fn take_compose_error(app: &mut Resonance) -> Option<String> {
     app.compose.last_error.take()
-}
-
-/// A `MutationAck` reply, unless the dispatch left a compose error
-/// behind — then that error, as `invalid_params`.
-pub(super) fn ack_or_error(
-    app: &mut Resonance,
-    request: &Request,
-    task: Task<Message>,
-) -> (Response, Task<Message>) {
-    if let Some(error) = take_compose_error(app) {
-        return fail(request, RpcError::invalid_params(error));
-    }
-    (super::success(request, &super::mutation_ack(app)), task)
-}
-
-/// An error reply that still forwards the (usually empty) task.
-pub(super) fn fail(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
 }
 
 /// Parse the wire `{tonic, scale}` pair into the app's [`Scale`].

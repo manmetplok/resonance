@@ -45,7 +45,9 @@ use resonance_control::methods::clip::{
     SetFadeParams, SetGainParams, TrimParams, TrimResult,
 };
 use resonance_control::methods::pool::{self as pool_proto, ImportParams, PoolAssetView, PoolView};
-use resonance_control::{MutationAck, PositionSpec, Request, Response, RpcError};
+use resonance_control::{PositionSpec, Request, Response, RpcError};
+
+use super::reply::{ack, no_track, reject};
 use std::path::{Path, PathBuf};
 
 /// Handle a `pool.*` / `clip.*` request, or `None` when `method` belongs
@@ -69,19 +71,6 @@ pub(super) fn try_handle(
         _ => return None,
     };
     Some(handled)
-}
-
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
-}
-
-fn ack(app: &Resonance, request: &Request) -> Response {
-    super::success(
-        request,
-        &MutationAck {
-            revision: app.revision(),
-        },
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -222,10 +211,7 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
     // vocal track would accept the clip into a lane that never renders it.
     let track_id = params.track_id.0;
     let Some(track) = app.registry.tracks.iter().find(|t| t.id == track_id) else {
-        return reject(
-            request,
-            RpcError::not_found(format!("no track with id {track_id}")),
-        );
+        return reject(request, no_track(track_id));
     };
     if !takes_audio_clips(app, track) {
         return reject(
@@ -443,12 +429,7 @@ fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
                     )),
                 )
             }
-            None => {
-                return reject(
-                    request,
-                    RpcError::not_found(format!("no track with id {id}")),
-                )
-            }
+            None => return reject(request, no_track(id.into())),
         },
         None => current_track,
     };

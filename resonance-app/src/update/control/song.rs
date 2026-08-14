@@ -123,7 +123,7 @@ fn tracks(app: &Resonance, request: &Request) -> Response {
         if let Some(id) = params.track_id {
             // Busses appear in `song.summary` but carry no clips; a
             // bus id here is a miss like any other unknown id.
-            return super::failure(request, RpcError::not_found(format!("no track with id {id}")));
+            return super::failure(request, super::reply::no_track(id.into()));
         }
     }
     let result = TracksView {
@@ -188,7 +188,7 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
     let track = match params.track_id {
         Some(id) => {
             let Some(t) = app.sorted_tracks().iter().find(|t| t.id == id.0) else {
-                return super::failure(request, RpcError::not_found(format!("no track with id {id}")));
+                return super::failure(request, super::reply::no_track(id.into()));
             };
             if t.track_type != TrackType::Vocal {
                 return super::failure(
@@ -390,10 +390,7 @@ fn plugin_params(app: &Resonance, request: &Request) -> Response {
         Err(e) => return super::failure(request, e),
     };
     let Some(t) = app.registry.tracks.iter().find(|t| t.id == params.track_id.0) else {
-        return super::failure(
-            request,
-            RpcError::not_found(format!("no track with id {}", params.track_id)),
-        );
+        return super::failure(request, super::reply::no_track(params.track_id.into()));
     };
 
     let entries = view_model::plugin_entries(app, t);

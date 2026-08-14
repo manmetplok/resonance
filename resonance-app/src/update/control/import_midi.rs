@@ -22,6 +22,8 @@ use resonance_control::methods::notes::{
 };
 use resonance_control::{Request, Response, RpcError};
 
+use super::reply::{no_midi_clip, no_track, reject};
+
 /// Upper bound on notes accepted from one file. A part this size is
 /// already far past anything musical; refusing beats spending minutes
 /// rebuilding the engine's note tables for a pathological file.
@@ -100,10 +102,6 @@ pub(super) fn handle(app: &mut Resonance, request: &Request) -> (Response, Task<
         revision: app.revision(),
     };
     (super::success(request, &result), Task::batch([task, write]))
-}
-
-fn reject(request: &Request, error: RpcError) -> (Response, Task<Message>) {
-    (super::failure(request, error), Task::none())
 }
 
 /// The file's bytes, from exactly one of `path` / `data_base64`.
@@ -244,7 +242,7 @@ fn resolve_target(
                 .iter()
                 .find(|c| c.id == clip_id.0)
                 .ok_or_else(|| {
-                    RpcError::not_found(format!("no MIDI clip with id {clip_id}"))
+                    no_midi_clip(clip_id.into())
                 })?;
             let track_id = clip.track_id;
             if let Some(error) = frozen_reject(app, track_id) {
@@ -258,7 +256,7 @@ fn resolve_target(
                 .tracks
                 .iter()
                 .find(|t| t.id == track_id.0)
-                .ok_or_else(|| RpcError::not_found(format!("no track with id {track_id}")))?;
+                .ok_or_else(|| no_track(track_id.into()))?;
             if !matches!(track.track_type, TrackType::Instrument | TrackType::Vocal) {
                 return Err(RpcError::invalid_params(format!(
                     "track {track_id} is an audio track; MIDI needs an instrument/vocal track"
