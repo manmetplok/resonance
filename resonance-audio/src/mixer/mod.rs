@@ -4,8 +4,9 @@
 //! The work is split across submodules by concern:
 //! - [`midi_events`]: per-block MIDI tick→sample collection.
 //! - [`monitor`]: live-input monitoring and per-track de-interleave.
-//! - [`render_core`]: per-track / per-bus / sub-track render core shared
-//!   with the offline bounce path, parameterized by `RenderStrategy`.
+//! - [`render_core`]: the order of the phases in one render block, shared
+//!   with the offline bounce path and parameterized by `RenderStrategy`;
+//!   the phases themselves live in [`render`].
 //! - [`track_block`]: live wrapper over `render_core`.
 //! - [`master`]: master FX insert chain + master volume / peaks.
 //! - [`click`]: count-in and timeline metronome click synthesis.
@@ -25,6 +26,7 @@ mod master;
 mod midi_events;
 mod midi_stash;
 mod monitor;
+mod render;
 mod render_core;
 mod track_block;
 
@@ -33,7 +35,7 @@ pub use common::{ramped_gain, sum_to_output, sum_to_stereo, transport_pos_beats}
 pub use midi_events::collect_midi_events_bounce;
 pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink};
-pub(crate) use render_core::{render_block, RenderStrategy};
+pub(crate) use render_core::{render_block, BlockInputs, BlockScratch, RenderStrategy};
 pub use render_core::{mix_track_clips, recorded_monitor_gate, CLIP_DECLICK_FRAMES};
 pub use automation_apply::{auto_gain_ramp, auto_master_volume, auto_muted};
 
@@ -127,30 +129,35 @@ pub fn render_aux_with_comp_for_test(
         freeze_raw: false,
     };
 
+    let mut sidechain = SidechainTaps::new(frames);
     render_block(
-        &mut data,
-        2,
-        &tracks_guard,
-        &busses_guard,
-        &clips,
-        &midi_clips,
-        &plugins_guard,
-        &tempo_map,
-        sample_rate,
-        false,
-        active_busses,
-        &aux_sends,
-        &[],
-        &mut SidechainTaps::new(frames),
-        0,
-        frames,
-        &mut track_buf_l,
-        &mut track_buf_r,
-        &mut bus_bufs,
-        &mut port_scratch,
-        &mut note_buf,
-        &latency,
-        &automation,
+        BlockInputs {
+            channels: 2,
+            tracks: &tracks_guard,
+            busses: &busses_guard,
+            clips: &clips,
+            midi_clips: &midi_clips,
+            plugins: &plugins_guard,
+            tempo_map: &tempo_map,
+            sample_rate,
+            any_solo: false,
+            active_busses,
+            aux_sends: &aux_sends,
+            sidechain_routes: &[],
+            playhead: 0,
+            frames,
+            latency_comp: &latency,
+            automation: &automation,
+        },
+        &mut BlockScratch {
+            data: &mut data,
+            track_buf_l: &mut track_buf_l,
+            track_buf_r: &mut track_buf_r,
+            bus_bufs: &mut bus_bufs,
+            port_scratch: &mut port_scratch,
+            note_event_buf: &mut note_buf,
+            sidechain: &mut sidechain,
+        },
         &mut strategy,
     );
 
@@ -253,29 +260,33 @@ impl RenderBenchHarness {
             input_channels: 0,
         };
         render_block(
-            &mut self.data[..frames * 2],
-            2,
-            &self.tracks,
-            &self.busses,
-            &self.clips,
-            &self.midi_clips,
-            &self.plugins,
-            &self.tempo_map,
-            self.sample_rate,
-            false,
-            active_busses,
-            &self.aux_sends,
-            &[],
-            &mut self.sidechain,
-            playhead,
-            frames,
-            &mut self.track_buf_l,
-            &mut self.track_buf_r,
-            &mut self.bus_bufs,
-            &mut self.port_scratch,
-            &mut self.note_buf,
-            &self.latency,
-            &self.automation,
+            BlockInputs {
+                channels: 2,
+                tracks: &self.tracks,
+                busses: &self.busses,
+                clips: &self.clips,
+                midi_clips: &self.midi_clips,
+                plugins: &self.plugins,
+                tempo_map: &self.tempo_map,
+                sample_rate: self.sample_rate,
+                any_solo: false,
+                active_busses,
+                aux_sends: &self.aux_sends,
+                sidechain_routes: &[],
+                playhead,
+                frames,
+                latency_comp: &self.latency,
+                automation: &self.automation,
+            },
+            &mut BlockScratch {
+                data: &mut self.data[..frames * 2],
+                track_buf_l: &mut self.track_buf_l,
+                track_buf_r: &mut self.track_buf_r,
+                bus_bufs: &mut self.bus_bufs,
+                port_scratch: &mut self.port_scratch,
+                note_event_buf: &mut self.note_buf,
+                sidechain: &mut self.sidechain,
+            },
             &mut strategy,
         );
         &self.data

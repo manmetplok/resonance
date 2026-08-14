@@ -16,7 +16,7 @@ use crate::types::*;
 
 use super::common::TransportSnap;
 use super::midi_stash::MidiStash;
-use super::render_core::{render_block, RenderStrategy};
+use super::render_core::{render_block, BlockInputs, BlockScratch, RenderStrategy};
 
 /// Render one contiguous timeline sub-block into a slice of the output.
 /// Separated from `mix_audio` so that a buffer which crosses the loop seam
@@ -70,29 +70,33 @@ pub(super) fn render_timeline_block(
         input_channels,
     };
     render_block(
-        data,
-        channels,
-        tracks_guard,
-        busses_guard,
-        clips_guard,
-        midi_clips_guard,
-        plugins_guard,
-        tempo_map,
-        sample_rate,
-        any_solo,
-        active_busses,
-        aux_sends,
-        sidechain_routes,
-        sidechain,
-        playhead,
-        frames,
-        track_buf_l,
-        track_buf_r,
-        bus_bufs,
-        port_scratch,
-        note_event_buf,
-        latency_comp,
-        automation,
+        BlockInputs {
+            channels,
+            tracks: tracks_guard,
+            busses: busses_guard,
+            clips: clips_guard,
+            midi_clips: midi_clips_guard,
+            plugins: plugins_guard,
+            tempo_map,
+            sample_rate,
+            any_solo,
+            active_busses,
+            aux_sends,
+            sidechain_routes,
+            playhead,
+            frames,
+            latency_comp,
+            automation,
+        },
+        &mut BlockScratch {
+            data,
+            track_buf_l,
+            track_buf_r,
+            bus_bufs,
+            port_scratch,
+            note_event_buf,
+            sidechain,
+        },
         &mut strategy,
     );
 }
