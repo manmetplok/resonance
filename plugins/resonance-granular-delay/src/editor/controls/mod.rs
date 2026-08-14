@@ -17,6 +17,12 @@
 //! a pure function of the param values; every param stays reachable
 //! in some param state and nothing is orphaned (division/time are the
 //! two faces of the same tap).
+//!
+//! The two composites that only make sense here — the division stepper
+//! that swaps in for the Time knob and the amber FREEZE latch — sit in
+//! the submodules beside this file; the generic knobs/segments/chips
+//! they are laid out with come from [`super::widgets`], which is now a
+//! thin binding over the shared `wayland_plugin_gui` kit.
 
 use egui::Ui;
 use wayland_plugin_gui::egui;
@@ -27,9 +33,18 @@ use crate::viz::GranularViz;
 
 use super::theme;
 use super::widgets::{
-    division_stepper, feedback_knob, freeze_latch, macro_knob, param_chip, param_choice,
-    param_segmented, param_segmented_vertical, texture_knob_labeled,
+    feedback_knob, macro_knob, param_chip, param_choice, param_segmented,
+    param_segmented_vertical, texture_knob_labeled,
 };
+
+// The two granular-specific composites of the strip. They are controls,
+// not generic widgets, so they live here rather than in the widget kit
+// (ba todo #1266).
+mod division_stepper;
+mod freeze_latch;
+
+pub use division_stepper::division_stepper;
+pub use freeze_latch::freeze_latch;
 
 /// One titled group of parameter controls.
 pub struct ParamGroup {

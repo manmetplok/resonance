@@ -2,11 +2,18 @@
 //!
 //! Provides two rotary-knob families so plugin UIs share a consistent
 //! look and compact layout: a range-mapped [`knob`] (classic palette)
-//! and the theme-driven [`knob_unipolar`] / [`knob_bipolar`] pair
-//! (lavender palette). Everything here is pure egui — helpers that bind
-//! these widgets to plugin parameter types live downstream in
+//! and the theme-driven [`knob_themed`] family (lavender palette), of
+//! which [`knob_unipolar`] / [`knob_bipolar`] are the default-styled
+//! shorthands. Everything here is pure egui — helpers that bind these
+//! widgets to plugin parameter types live downstream in
 //! `resonance_plugin::editor_widgets`, keeping this crate free of
 //! plugin-framework dependencies.
+//!
+//! Both families drag through [`knob_drag_unit`], so every knob in
+//! every plugin answers the same mouse gesture the same way. A plugin
+//! that needs a different size, a bipolar centre tick or an extra arc
+//! zone configures [`ThemedKnob`] / [`KnobStyle`] rather than forking
+//! the widget (ba todo #1266).
 //!
 //! Most builders take 8 arguments (label, value, range, step, formatter,
 //! …) because the widgets need to expose every visual + interaction
@@ -25,6 +32,41 @@ use std::f32::consts::PI;
 /// Arc sweep: 270° starting at 135° (bottom-left) to -45° (bottom-right).
 const ARC_START: f32 = 135.0 * PI / 180.0;
 const ARC_END: f32 = ARC_START + 270.0 * PI / 180.0;
+
+// ---------------------------------------------------------------------------
+// Knob drag feel — one rule for the whole platform
+// ---------------------------------------------------------------------------
+
+/// Vertical drag sensitivity of every knob in every plugin editor, in
+/// unit value (`0..1`) per pixel: a full-scale sweep is 200 px of drag.
+pub const KNOB_DRAG_SPEED: f32 = 0.005;
+
+/// Drag sensitivity while Shift is held (fine adjust), same units as
+/// [`KNOB_DRAG_SPEED`]: 250 px per full-scale sweep.
+pub const KNOB_DRAG_SPEED_FINE: f32 = 0.004;
+
+/// Apply one frame of vertical drag to a knob value in unit (`0..1`)
+/// space, and clamp.
+///
+/// `drag_y` is egui's raw `drag_delta().y` — positive is downward
+/// pointer motion, which lowers the value. `fine` is the Shift
+/// modifier.
+///
+/// Both knob families route their drag through here on purpose:
+/// several first-party plugins are hosted in the same GUI runtime, so
+/// the same gesture has to produce the same value change in all of
+/// them. The chosen numbers are [`KNOB_DRAG_SPEED`] = 0.005 per pixel
+/// and [`KNOB_DRAG_SPEED_FINE`] = 0.004 per pixel with Shift; before
+/// ba todo #1266 the granular-delay editor carried a forked handler at
+/// 0.008 / 0.002 and answered the same drag differently.
+pub fn knob_drag_unit(unit: f32, drag_y: f32, fine: bool) -> f32 {
+    let speed = if fine {
+        KNOB_DRAG_SPEED_FINE
+    } else {
+        KNOB_DRAG_SPEED
+    };
+    (unit - drag_y * speed).clamp(0.0, 1.0)
+}
 
 /// Knob colours — intentionally a fixed palette so all plugins look the same.
 const TRACK_COLOR: Color32 = Color32::from_rgb(0x30, 0x30, 0x38);
@@ -88,36 +130,39 @@ fn handle_knob_input(
     default: f32,
     logarithmic: bool,
 ) -> bool {
-    let mut changed = false;
-
     // Double-click to reset to default.
     if response.double_clicked() {
         *value = default;
         return true;
     }
 
-    if response.dragged() {
-        let delta_y = -response.drag_delta().y;
-        let sensitivity = if logarithmic { 0.004 } else { 0.005 };
-
-        if logarithmic {
-            let min = range.start().max(0.001);
-            let max = *range.end();
-            let log_min = min.ln();
-            let log_max = max.ln();
-            let log_v = value.max(min).ln();
-            let normalized = (log_v - log_min) / (log_max - log_min);
-            let new_norm = (normalized + delta_y * sensitivity).clamp(0.0, 1.0);
-            *value = (log_min + new_norm * (log_max - log_min)).exp();
-        } else {
-            let span = range.end() - range.start();
-            *value += delta_y * sensitivity * span;
-        }
-        *value = value.clamp(*range.start(), *range.end());
-        changed = true;
+    if !response.dragged() {
+        return false;
     }
+    let drag_y = response.drag_delta().y;
+    if drag_y == 0.0 {
+        return false;
+    }
+    let fine = response.ctx.input(|i| i.modifiers.shift);
 
-    changed
+    // Drag happens in unit space (shared with the themed knob), then
+    // maps back onto the value range — linearly, or along the log axis.
+    if logarithmic {
+        let min = range.start().max(0.001);
+        let log_min = min.ln();
+        let log_span = range.end().ln() - log_min;
+        let unit = if log_span.abs() < f32::EPSILON {
+            0.0
+        } else {
+            (value.max(min).ln() - log_min) / log_span
+        };
+        *value = (log_min + knob_drag_unit(unit, drag_y, fine) * log_span).exp();
+    } else {
+        let unit = knob_drag_unit(normalize(*value, range), drag_y, fine);
+        *value = range.start() + unit * (range.end() - range.start());
+    }
+    *value = value.clamp(*range.start(), *range.end());
+    true
 }
 
 fn draw_knob(
@@ -261,6 +306,119 @@ use crate::theme::lavender as theme;
 const SIZE: f32 = 52.0;
 const CELL_H: f32 = SIZE + 32.0;
 
+/// Geometry and type scale of one themed knob cell.
+///
+/// The dial is centred in the cell's top `diameter` px; the value and
+/// label rows sit underneath it. A plugin that needs a different knob
+/// size or type scale picks a style — it does not fork the widget.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KnobStyle {
+    /// Dial diameter, px.
+    pub diameter: f32,
+    /// Horizontal padding added to the diameter to form the cell.
+    pub pad_x: f32,
+    /// Cell height added under the dial for the value + label rows.
+    pub text_h: f32,
+    /// Top of the value row, px below the dial.
+    pub value_dy: f32,
+    /// Top of the label row, px below the dial.
+    pub label_dy: f32,
+    /// Value row font size (monospace).
+    pub value_font: f32,
+    /// Label row font size (proportional).
+    pub label_font: f32,
+    /// The indicator line stops this far inside the dial edge.
+    pub indicator_inset: f32,
+}
+
+impl KnobStyle {
+    /// The default 52 px lavender cell used by [`knob_unipolar`] and
+    /// [`knob_bipolar`].
+    pub const LAVENDER: Self = Self {
+        diameter: SIZE,
+        pad_x: 8.0,
+        text_h: CELL_H - SIZE,
+        value_dy: 5.0,
+        label_dy: 19.0,
+        value_font: 10.5,
+        label_font: 9.0,
+        indicator_inset: 6.0,
+    };
+
+    /// The full cell this style occupies (dial + text rows). Callers
+    /// that swap another widget in for a knob (e.g. a stepper) allocate
+    /// this exact size so the swap causes no layout jump.
+    pub fn cell(&self) -> Vec2 {
+        Vec2::new(self.diameter + self.pad_x, self.diameter + self.text_h)
+    }
+}
+
+impl Default for KnobStyle {
+    fn default() -> Self {
+        Self::LAVENDER
+    }
+}
+
+/// One themed knob cell, in unit (`0..1`) value space.
+///
+/// Build with [`ThemedKnob::new`] and the modifiers below, then draw
+/// with [`knob_themed`].
+#[derive(Debug, Clone, Copy)]
+pub struct ThemedKnob<'a> {
+    /// Caption under the value row (rendered upper-case).
+    pub label: &'a str,
+    /// Current value, `0..1`.
+    pub value_unit: f32,
+    /// Pre-formatted value text (the widget never formats values — the
+    /// plugin's parameter knows its own units).
+    pub formatted_value: &'a str,
+    /// Value a double-click resets to, `0..1`.
+    pub default_unit: f32,
+    /// Fill the active arc outward from the 12-o'clock centre, with a
+    /// centre tick (pitch-style parameters).
+    pub bipolar: bool,
+    /// Unit position where a warm "over-unity" zone starts: the track
+    /// is marked from there to full scale, and the active arc switches
+    /// to the warm token beyond it (the granular delay's >100 %
+    /// feedback region). Ignored when `bipolar`.
+    pub warm_from: Option<f32>,
+    /// Cell geometry and type scale.
+    pub style: KnobStyle,
+}
+
+impl<'a> ThemedKnob<'a> {
+    /// A default-styled unipolar knob.
+    pub fn new(label: &'a str, value_unit: f32, formatted_value: &'a str, default_unit: f32) -> Self {
+        Self {
+            label,
+            value_unit,
+            formatted_value,
+            default_unit,
+            bipolar: false,
+            warm_from: None,
+            style: KnobStyle::LAVENDER,
+        }
+    }
+
+    /// Fill outward from the centre instead of from the minimum.
+    pub fn bipolar(mut self, bipolar: bool) -> Self {
+        self.bipolar = bipolar;
+        self
+    }
+
+    /// Mark an over-unity zone starting at this unit position.
+    pub fn warm_from(mut self, warm_from: Option<f32>) -> Self {
+        self.warm_from = warm_from;
+        self
+    }
+
+    /// Use a non-default cell geometry / type scale.
+    pub fn style(mut self, style: KnobStyle) -> Self {
+        self.style = style;
+        self
+    }
+}
+
 /// Unipolar knob driving a 0..1 value. Returns the new value if changed.
 pub fn knob_unipolar(
     ui: &mut egui::Ui,
@@ -269,7 +427,7 @@ pub fn knob_unipolar(
     formatted_value: &str,
     default: f32,
 ) -> Option<f32> {
-    draw_themed_knob(ui, label, value, formatted_value, default, false)
+    knob_themed(ui, &ThemedKnob::new(label, value, formatted_value, default))
 }
 
 /// Bipolar knob driving a -1..1 value (or any range mapped to that). Returns
@@ -284,39 +442,47 @@ pub fn knob_bipolar(
     // Map -1..1 to 0..1 for arc geometry.
     let unit = (value + 1.0) * 0.5;
     let default_unit = (default + 1.0) * 0.5;
-    let new = draw_themed_knob(ui, label, unit, formatted_value, default_unit, true)?;
+    let knob = ThemedKnob::new(label, unit, formatted_value, default_unit).bipolar(true);
+    let new = knob_themed(ui, &knob)?;
     Some(new * 2.0 - 1.0)
 }
 
-fn draw_themed_knob(
-    ui: &mut egui::Ui,
-    label: &str,
-    value_unit: f32,
-    formatted_value: &str,
-    default_unit: f32,
-    bipolar: bool,
-) -> Option<f32> {
-    let cell = egui::vec2(SIZE + 8.0, CELL_H);
-    let (rect, response) = ui.allocate_exact_size(cell, egui::Sense::click_and_drag());
+/// Draw a configured themed knob and handle its input. Returns the new
+/// unit value when the drag or a double-click changed it.
+pub fn knob_themed(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> Option<f32> {
+    let style = knob.style;
+    let (rect, response) = ui.allocate_exact_size(style.cell(), egui::Sense::click_and_drag());
+    let unit = knob.value_unit.clamp(0.0, 1.0);
+    if !ui.is_rect_visible(rect) {
+        return themed_knob_input(&response, unit, knob.default_unit);
+    }
 
-    let knob_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.center().x, rect.top() + SIZE * 0.5 + 1.0),
-        egui::vec2(SIZE, SIZE),
-    );
+    let center = egui::pos2(rect.center().x, rect.top() + style.diameter * 0.5 + 1.0);
+    let radius = style.diameter * 0.5 - 2.0;
     let painter = ui.painter_at(rect);
 
-    // Outer ring (dial face).
-    let center = knob_rect.center();
-    let radius = SIZE * 0.5 - 2.0;
+    // Dial face.
     painter.circle_filled(center, radius, theme::BG_1);
     painter.circle_stroke(center, radius, egui::Stroke::new(1.0, theme::LINE_2));
 
-    // Track arc background (dim).
-    arc(&painter, center, radius - 3.0, -135.0, 135.0, theme::LINE, 2.0);
+    // Track arc background (dim), then the over-unity zone marking.
+    let arc_r = radius - 3.0;
+    arc(&painter, center, arc_r, -135.0, 135.0, theme::LINE, 2.0);
+    if let Some(f) = knob.warm_from {
+        let from_deg = -135.0 + f.clamp(0.0, 1.0) * 270.0;
+        arc(
+            &painter,
+            center,
+            arc_r,
+            from_deg,
+            135.0,
+            theme::WARM.gamma_multiply(0.45),
+            2.0,
+        );
+    }
 
     // Active arc.
-    let unit = value_unit.clamp(0.0, 1.0);
-    if bipolar {
+    if knob.bipolar {
         // Fill from centre (12 o'clock = 0°) outwards.
         let centre_deg = 0.0;
         let target_deg = (unit - 0.5) * 2.0 * 135.0;
@@ -325,7 +491,7 @@ fn draw_themed_knob(
         } else {
             (target_deg, centre_deg, theme::WARM)
         };
-        arc(&painter, center, radius - 3.0, start, end, color, 2.4);
+        arc(&painter, center, arc_r, start, end, color, 2.4);
         // Centre tick.
         let (sx, sy) = polar(center, radius - 6.0, 0.0);
         let (ex, ey) = polar(center, radius - 1.0, 0.0);
@@ -335,27 +501,33 @@ fn draw_themed_knob(
         );
     } else {
         let target_deg = -135.0 + unit * 270.0;
-        arc(
-            &painter,
-            center,
-            radius - 3.0,
-            -135.0,
-            target_deg,
-            theme::ACCENT,
-            2.4,
-        );
+        match knob.warm_from {
+            // Split the active arc at the over-unity boundary: accent
+            // below it, warm beyond.
+            Some(f) if unit > f => {
+                let split_deg = -135.0 + f.clamp(0.0, 1.0) * 270.0;
+                arc(&painter, center, arc_r, -135.0, split_deg, theme::ACCENT, 2.4);
+                arc(&painter, center, arc_r, split_deg, target_deg, theme::WARM, 2.4);
+            }
+            _ => arc(&painter, center, arc_r, -135.0, target_deg, theme::ACCENT, 2.4),
+        }
     }
 
     // Indicator line.
     let angle = (-135.0 + unit * 270.0).to_radians();
     let inner = radius * 0.32;
-    let outer = radius - 6.0;
-    let ix = center.x + angle.sin() * inner;
-    let iy = center.y - angle.cos() * inner;
-    let ox = center.x + angle.sin() * outer;
-    let oy = center.y - angle.cos() * outer;
+    let outer = radius - style.indicator_inset;
     painter.line_segment(
-        [egui::pos2(ix, iy), egui::pos2(ox, oy)],
+        [
+            egui::pos2(
+                center.x + angle.sin() * inner,
+                center.y - angle.cos() * inner,
+            ),
+            egui::pos2(
+                center.x + angle.sin() * outer,
+                center.y - angle.cos() * outer,
+            ),
+        ],
         egui::Stroke::new(1.6, theme::TEXT_1),
     );
 
@@ -369,38 +541,39 @@ fn draw_themed_knob(
     }
 
     // Value + label below.
-    let val_pos = egui::pos2(rect.center().x, knob_rect.bottom() + 4.0);
+    let text_top = rect.top() + style.diameter;
     painter.text(
-        val_pos,
+        egui::pos2(rect.center().x, text_top + style.value_dy),
         egui::Align2::CENTER_TOP,
-        formatted_value,
-        egui::FontId::monospace(10.5),
+        knob.formatted_value,
+        egui::FontId::monospace(style.value_font),
         theme::TEXT_1,
     );
-    let lab_pos = egui::pos2(rect.center().x, knob_rect.bottom() + 18.0);
     painter.text(
-        lab_pos,
+        egui::pos2(rect.center().x, text_top + style.label_dy),
         egui::Align2::CENTER_TOP,
-        label.to_uppercase(),
-        egui::FontId::proportional(9.0),
+        knob.label.to_uppercase(),
+        egui::FontId::proportional(style.label_font),
         theme::TEXT_3,
     );
 
-    // Interaction: vertical drag changes value.
-    let mut new_value: Option<f32> = None;
+    themed_knob_input(&response, unit, knob.default_unit)
+}
+
+/// Vertical drag / double-click handling of a themed knob, in unit
+/// space. Shares [`knob_drag_unit`] with the classic knob family.
+fn themed_knob_input(response: &Response, unit: f32, default_unit: f32) -> Option<f32> {
+    if response.double_clicked() {
+        return Some(default_unit.clamp(0.0, 1.0));
+    }
     if response.dragged() {
-        let drag = response.drag_delta().y;
-        if drag.abs() > 0.0 {
-            let modifiers = ui.input(|i| i.modifiers);
-            let speed = if modifiers.shift { 0.002 } else { 0.008 };
-            let next = (unit - drag * speed).clamp(0.0, 1.0);
-            new_value = Some(next);
+        let drag_y = response.drag_delta().y;
+        if drag_y != 0.0 {
+            let fine = response.ctx.input(|i| i.modifiers.shift);
+            return Some(knob_drag_unit(unit, drag_y, fine));
         }
     }
-    if response.double_clicked() {
-        new_value = Some(default_unit.clamp(0.0, 1.0));
-    }
-    new_value
+    None
 }
 
 fn arc(
@@ -421,6 +594,12 @@ fn arc(
         return;
     }
     let steps = (((b - a).abs() / 5.0).ceil() as usize).max(2);
+    // One owned, exactly-sized Vec per arc is the floor here, same as
+    // `draw_arc` above: epaint's `PathShape` owns `points: Vec<Pos2>`,
+    // so the polyline has to be handed over by value — a reused scratch
+    // buffer (or a `SmallVec`) would be copied into a fresh Vec anyway.
+    // What it does buy is one `Shape` per arc instead of one per
+    // segment, with proper joins.
     let mut points: Vec<egui::Pos2> = Vec::with_capacity(steps + 1);
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
