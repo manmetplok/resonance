@@ -1,4 +1,8 @@
 //! Audio and MIDI clip data structures, plus the waveform peak helper.
+//!
+//! Pure data and pure helpers: the WAV file I/O these clips are loaded
+//! from lives in [`crate::io::wav`], so this module stays usable without
+//! a filesystem (ba todo #1260).
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -162,48 +166,20 @@ impl ClipSource {
         )))
     }
 
+    /// Map the file and wrap it as a `Mapped` source, returning the
+    /// WAV's own sample rate alongside. The file I/O, the mapping and
+    /// the RIFF parse all live in [`crate::io::wav`]; this only puts the
+    /// result into the clip's data shape.
     fn open_wav_inner(path: &Path) -> Result<(Self, u32), String> {
-        let file =
-            std::fs::File::open(path).map_err(|e| format!("open wav {}: {e}", path.display()))?;
-        // SAFETY: `Mmap::map` is unsafe because the kernel can serve a
-        // shared mapping whose backing file is truncated or written by
-        // another process while we hold a `&[u8]` over it — a UB hazard
-        // in general. We control the lifecycle here: vocal WAVs come from
-        // our own renderer, sample-imported WAVs are user-owned read-only
-        // files, and the `unlink` paths in `vocal_render::tear_down_old_*`
-        // run only after the mixer has dropped the `Mapped` ClipSource
-        // referring to them. There is no writer to this file while the
-        // mapping is live. Outside that contract — e.g. another process
-        // truncating an imported file — the worst case is the mixer
-        // reading a SIGBUS-poisoned page; that's a failure mode we accept
-        // in exchange for zero-copy audio streaming.
-        let mmap = unsafe { memmap2::Mmap::map(&file) }
-            .map_err(|e| format!("mmap {}: {e}", path.display()))?;
-
-        let (data_offset_bytes, data_len_bytes, sample_rate) = locate_wav_float_data(&mmap)
-            .map_err(|e| format!("parse wav {}: {e}", path.display()))?;
-        if data_len_bytes % (2 * std::mem::size_of::<f32>()) != 0 {
-            return Err(format!(
-                "parse wav {}: data chunk length {} not a multiple of stereo f32 frames",
-                path.display(),
-                data_len_bytes
-            ));
-        }
-        let frame_count = (data_len_bytes / (2 * std::mem::size_of::<f32>())) as u64;
-
-        // Pre-touch: read one byte per 4 KiB page across the data
-        // chunk so that the first mixer access doesn't trigger
-        // major page faults on the realtime audio thread.
-        pre_touch(&mmap[data_offset_bytes..data_offset_bytes + data_len_bytes]);
-
+        let mapped = crate::io::wav::map_wav_file(path)?;
         Ok((
             ClipSource::Mapped {
-                mmap: Arc::new(mmap),
-                data_offset_bytes,
-                frame_count,
+                mmap: Arc::new(mapped.mmap),
+                data_offset_bytes: mapped.data_offset_bytes,
+                frame_count: mapped.frame_count,
                 path: path.to_path_buf(),
             },
-            sample_rate,
+            mapped.sample_rate,
         ))
     }
 
@@ -214,126 +190,6 @@ impl ClipSource {
             ClipSource::Memory(_) => None,
         }
     }
-}
-
-/// Parse a minimal RIFF/WAVE header and return the byte offset and
-/// length of the PCM `data` chunk plus the fmt-chunk sample rate,
-/// verifying that the format chunk declares 32-bit IEEE float stereo.
-/// Does not depend on `hound`.
-fn locate_wav_float_data(bytes: &[u8]) -> Result<(usize, usize, u32), String> {
-    if bytes.len() < 12 {
-        return Err("file too short".into());
-    }
-    if &bytes[0..4] != b"RIFF" {
-        return Err("missing RIFF header".into());
-    }
-    if &bytes[8..12] != b"WAVE" {
-        return Err("not a WAVE file".into());
-    }
-
-    let mut cursor = 12usize;
-    let mut fmt_sample_rate: Option<u32> = None;
-    while cursor + 8 <= bytes.len() {
-        let id = &bytes[cursor..cursor + 4];
-        let size = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
-        let chunk_start = cursor + 8;
-        let chunk_end = chunk_start + size;
-        if chunk_end > bytes.len() {
-            return Err(format!("chunk {:?} overruns file", std::str::from_utf8(id)));
-        }
-
-        if id == b"fmt " {
-            if size < 16 {
-                return Err("fmt chunk too small".into());
-            }
-            let format =
-                u16::from_le_bytes(bytes[chunk_start..chunk_start + 2].try_into().unwrap());
-            let channels =
-                u16::from_le_bytes(bytes[chunk_start + 2..chunk_start + 4].try_into().unwrap());
-            let sample_rate =
-                u32::from_le_bytes(bytes[chunk_start + 4..chunk_start + 8].try_into().unwrap());
-            let bits_per_sample = u16::from_le_bytes(
-                bytes[chunk_start + 14..chunk_start + 16]
-                    .try_into()
-                    .unwrap(),
-            );
-            // `hound` writes float WAVs using WAVE_FORMAT_EXTENSIBLE
-            // (0xFFFE) with a SubFormat GUID. The first two bytes
-            // of that GUID carry the real format code, so we
-            // inspect them instead of the outer format tag.
-            const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
-            const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
-            let effective_format = if format == WAVE_FORMAT_EXTENSIBLE {
-                if size < 40 {
-                    return Err("extensible fmt chunk too small".into());
-                }
-                u16::from_le_bytes(
-                    bytes[chunk_start + 24..chunk_start + 26]
-                        .try_into()
-                        .unwrap(),
-                )
-            } else {
-                format
-            };
-            if effective_format != WAVE_FORMAT_IEEE_FLOAT {
-                return Err(format!(
-                    "unsupported format code {} (expected 3, IEEE float)",
-                    effective_format
-                ));
-            }
-            if channels != 2 {
-                return Err(format!("expected stereo, got {} channels", channels));
-            }
-            if bits_per_sample != 32 {
-                return Err(format!(
-                    "expected 32-bit float, got {} bits",
-                    bits_per_sample
-                ));
-            }
-            if sample_rate == 0 {
-                return Err("fmt chunk declares zero sample rate".into());
-            }
-            fmt_sample_rate = Some(sample_rate);
-        } else if id == b"data" {
-            let Some(sample_rate) = fmt_sample_rate else {
-                return Err("data chunk before fmt chunk".into());
-            };
-            return Ok((chunk_start, size, sample_rate));
-        }
-
-        // RIFF chunks are word-aligned: an odd size is padded.
-        cursor = chunk_end + (size & 1);
-    }
-    Err("no data chunk found".into())
-}
-
-/// Fault in every page of `bytes` by reading one byte per 4 KiB.
-///
-/// The 4 KiB step is deliberate, including on systems with transparent
-/// huge pages enabled. The THP sysfs knobs
-/// (`/sys/kernel/mm/transparent_hugepage/enabled` / `shmem_enabled`)
-/// govern anonymous and tmpfs/shmem memory; this is a private read-only
-/// *file-backed* mapping, which the page cache populates with base
-/// pages (or filesystem-chosen large folios, independent of those
-/// knobs). Stepping by `hpage_pmd_size` whenever the knob reads
-/// `[always]` would therefore skip 511 of every 512 pages in the common
-/// case where the mapping is in fact 4 KiB-paged — reintroducing major
-/// faults on the realtime mixer thread, the exact failure this function
-/// exists to prevent. When the kernel does back a region with a larger
-/// folio, the surplus reads are one cache-hot load per 4 KiB (no
-/// fault), which is noise next to the mmap + WAV parse around this
-/// call. Discovering the actual folio size would mean parsing
-/// `/proc/self/smaps` per mapping; not worth it for that noise.
-fn pre_touch(bytes: &[u8]) {
-    let page = 4096usize;
-    let mut i = 0usize;
-    let mut acc: u8 = 0;
-    while i < bytes.len() {
-        acc ^= bytes[i];
-        i += page;
-    }
-    // Prevent the read loop from being optimised away.
-    std::hint::black_box(acc);
 }
 
 /// Shape of a fade ramp (and, where two clips overlap, the automatic
