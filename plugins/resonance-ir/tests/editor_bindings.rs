@@ -19,10 +19,12 @@
 //!   `format!` readouts. A scan of the call sites is what stops those
 //!   arguments from creeping back in a future edit.
 
+use resonance_ir::dsp::{LatencyMode, LATENCY_MODE_LABELS};
 use resonance_ir::params::IrParams;
 use resonance_plugin::{FloatParam, Param};
 
 const CONTROLS_SRC: &str = include_str!("../src/editor/controls.rs");
+const LATENCY_SRC: &str = include_str!("../src/editor/latency.rs");
 const PARAMS_SRC: &str = include_str!("../src/params.rs");
 
 const EPS: f32 = 1e-4;
@@ -341,4 +343,98 @@ fn every_float_param_is_reachable_through_a_bound_knob() {
         2,
         "one knob per float param, and no knob without one"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The latency-mode picker (ba todo #1300, audit finding I1)
+// ---------------------------------------------------------------------------
+
+/// `src/editor/latency.rs` with its comments stripped — the prose there
+/// names the modes on purpose, and a scan for restated facts must look at
+/// the code only.
+fn latency_code() -> String {
+    LATENCY_SRC
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_latency_picker_reads_its_entries_off_the_parameter() {
+    let code = latency_code();
+
+    // The entries and their text come from the param's own choice table
+    // and formatter, so a mode added in `dsp.rs` shows up in the editor
+    // without anyone editing the editor.
+    for required in [".choices()", ".display(", "params.latency_mode"] {
+        assert!(
+            code.contains(required),
+            "the picker must build itself from the parameter; `{required}` is missing"
+        );
+    }
+
+    // A mode name spelled out here would be a second source of truth for
+    // the same table — exactly the drift ba todo #1284 removed from the
+    // knobs.
+    for label in LATENCY_MODE_LABELS {
+        assert!(
+            !code.contains(&format!("\"{label}\"")),
+            "the mode name {label:?} is restated in the editor; it belongs to the \
+             parameter's choice table"
+        );
+    }
+
+    // Milliseconds are computed in one place (`dsp::latency_ms`, reached
+    // through `latency::readout`), not re-derived next to the label.
+    for banned in ["1000.0", "sample_rate", "latency_ms"] {
+        assert!(
+            !code.contains(banned),
+            "latency.rs still contains `{banned}` — the conversion belongs in dsp.rs"
+        );
+    }
+}
+
+#[test]
+fn every_int_param_is_reachable_through_a_control() {
+    // Same guard as the float params: an int param without a control is
+    // a capability the GUI cannot reach — the audit's whole subject.
+    let declared: Vec<&str> = PARAMS_SRC
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(": IntParam,"))
+        .filter_map(|name| name.strip_prefix("pub "))
+        .collect();
+    assert_eq!(
+        declared,
+        vec!["file_select", "latency_mode"],
+        "IrParams' int parameters changed; update the editor to match"
+    );
+
+    // `file_select` is the header's Prev/Next browser; `latency_mode` is
+    // the picker in the bottom strip.
+    let header = include_str!("../src/editor/header.rs");
+    assert!(header.contains("params.file_select"));
+    assert!(latency_code().contains("params.latency_mode"));
+}
+
+#[test]
+fn the_picker_writes_the_declared_mode_values() {
+    // The picker offers `range().min() + offset` for each choice; check
+    // that ladder is exactly the modes the DSP knows, so no entry can
+    // select a value `LatencyMode::from_index` would reject.
+    let params = IrParams::default();
+    let min = params.latency_mode.range().min();
+    for (offset, label) in LATENCY_MODE_LABELS.iter().enumerate() {
+        let value = min + offset as i32;
+        assert_eq!(
+            &params.latency_mode.display(value as f64),
+            label,
+            "entry {offset} of the picker does not read as its mode"
+        );
+        assert_eq!(
+            LatencyMode::from_index(value).index(),
+            value,
+            "entry {offset} of the picker selects a value the DSP does not recognise"
+        );
+    }
 }

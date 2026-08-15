@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 pub mod dsp;
 pub mod ir_loader;
+pub mod latency;
 pub mod loader;
 pub mod params;
 pub mod state;
@@ -15,7 +16,7 @@ pub mod viz;
 #[cfg(feature = "editor")]
 mod editor;
 
-use dsp::{IrEngine, StereoConvolver};
+use dsp::{IrEngine, LatencyMode, StereoConvolver};
 use loader::{LoaderDeps, LoaderHandle};
 use params::{IrParams, IrSmoothers};
 use state::IrExtraState;
@@ -45,6 +46,11 @@ pub struct ResonanceIr {
     load_request: Arc<AtomicI32>,
     /// Handle to the persistent loader thread; dropped on plugin drop.
     loader_handle: Option<LoaderHandle>,
+    /// Handle back to the host, from `set_host`. The only way to report a
+    /// latency change once the plugin is active (ba todo #1296) — which is
+    /// exactly what a latency-mode change is. `None` outside a CLAP host
+    /// (unit tests, benches).
+    host: Option<Arc<HostHandle>>,
 }
 
 impl ResonanceIr {
@@ -62,6 +68,19 @@ impl ResonanceIr {
             sample_rate: self.sample_rate,
             block_size: self.engine.block_size(),
         }));
+    }
+
+    /// The latency mode the parameter currently selects.
+    fn latency_mode(&self) -> LatencyMode {
+        LatencyMode::from_index(self.params.latency_mode.value())
+    }
+
+    /// The convolution block size the selected mode asks for at the current
+    /// sample rate — the plugin's *target* latency. Equals
+    /// `self.engine.block_size()` except between a mode change and the
+    /// reactivation that applies it.
+    fn target_block_size(&self) -> usize {
+        dsp::block_size_for(self.sample_rate, self.latency_mode())
     }
 }
 
@@ -85,7 +104,7 @@ impl ResonancePlugin for ResonanceIr {
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
-        let block_size = dsp::block_size_for_sample_rate(44100.0);
+        let block_size = dsp::block_size_for(44100.0, LatencyMode::default());
         Self {
             params: Arc::new(IrParams::default()),
             smoothers: IrSmoothers::new(),
@@ -98,11 +117,12 @@ impl ResonancePlugin for ResonanceIr {
             sample_rate: 44100.0,
             load_request: Arc::new(AtomicI32::new(-1)),
             loader_handle: None,
+            host: None,
         }
     }
 
     fn param_count(&self) -> usize {
-        3
+        4
     }
 
     fn param(&self, index: usize) -> &dyn Param {
@@ -110,14 +130,25 @@ impl ResonancePlugin for ResonanceIr {
             0 => &self.params.file_select,
             1 => &self.params.dry_wet,
             2 => &self.params.output_gain,
+            3 => &self.params.latency_mode,
             _ => &self.params.file_select,
         }
     }
 
+    fn set_host(&mut self, host: Arc<HostHandle>) {
+        self.host = Some(host);
+    }
+
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.sample_rate = sample_rate;
-        self.engine
-            .set_block_size(dsp::block_size_for_sample_rate(sample_rate));
+        // This is where a latency-mode change becomes real: the host has
+        // just (re)activated us — the one moment the reported latency is
+        // allowed to move and the delay lines may be reallocated. The
+        // block size the parameter asks for is what the whole rest of
+        // this function, and `latency_samples()`, then agree on.
+        let block_size = self.target_block_size();
+        self.engine.set_block_size(block_size);
+        self.viz.store_engine_block(block_size, sample_rate);
         self.smoothers.prepare(sample_rate, &self.params);
 
         let path = self.params.ir_path.lock().clone();
@@ -177,6 +208,20 @@ impl ResonancePlugin for ResonanceIr {
             self.load_request.store(current_index, Ordering::Release);
         }
 
+        // Detect a latency-mode change (host automation, the editor's
+        // picker, `track.set_plugin_param`). The block size cannot change
+        // here — new delay lines and a re-partitioned convolver are both
+        // allocations, and CLAP forbids the reported latency moving while
+        // active — so report it and let the host cycle us: it deactivates,
+        // reactivates, and `initialize()` above applies it. Reporting the
+        // same figure twice is a no-op inside the handle, so this costs two
+        // atomic loads a block once the change has landed.
+        if self.target_block_size() != self.engine.block_size() {
+            if let Some(host) = &self.host {
+                host.set_latency_samples(self.target_block_size() as u32);
+            }
+        }
+
         self.smoothers.retarget_from(&self.params);
 
         let peaks = self.engine.process_block(
@@ -209,8 +254,24 @@ impl ResonancePlugin for ResonanceIr {
         }))
     }
 
+    /// The convolution block size, which is exactly this plugin's
+    /// algorithmic delay (one hop of the partitioned convolver), and the
+    /// dry path is delayed to match — see `dsp::IrEngine`.
+    ///
+    /// Derived from the *parameter*, not from the engine's current block
+    /// size, so the two answers this can be asked always agree:
+    ///
+    /// * the bridge reads it at every activation, right after
+    ///   `initialize()` has applied the mode — so it is the engine's
+    ///   figure;
+    /// * a host may read it while the plugin is inactive, where the honest
+    ///   answer is what the plugin *will* impose when it is next
+    ///   activated, which is the mode the parameter selects.
+    ///
+    /// It also keeps [`HostHandle::set_latency_samples`]'s contract: the
+    /// figure we push is already the one this returns.
     fn latency_samples(&self) -> u32 {
-        self.engine.block_size() as u32
+        self.target_block_size() as u32
     }
 
     #[cfg(feature = "editor")]
