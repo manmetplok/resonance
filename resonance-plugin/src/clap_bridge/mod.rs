@@ -26,6 +26,7 @@ use clack_plugin::prelude::*;
 use crate::plugin::ResonancePlugin;
 
 mod gui;
+mod midi;
 mod params;
 mod ports;
 mod process;
@@ -39,6 +40,9 @@ pub use shared::{ClapAudioProcessor, ClapMainThread, ClapShared};
 // Sidechain (key) input-port policy — also consumed by the host mixer that
 // delivers the external key to the target plugin's sidechain port.
 pub use ports::{input_port_count, sidechain_port_index, SIDECHAIN_PORT_ID};
+
+// Raw MIDI decoding, exposed for the bridge's own tests.
+pub use midi::decode_midi;
 
 // Param metadata is `pub(crate)` and accessed through `clap_bridge::shared`.
 pub(crate) use shared::ParamMeta;
