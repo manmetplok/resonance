@@ -14,6 +14,8 @@ editor-widgets = ["dep:wayland-plugin-gui"]
 clack-plugin = { workspace = true }
 clack-extensions = { workspace = true }
 resonance-common = { path = "../resonance-common" }
+# User-preset directory resolution ($XDG_DATA_HOME/resonance/plugin-presets).
+dirs.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true

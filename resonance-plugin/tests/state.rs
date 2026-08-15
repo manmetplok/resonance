@@ -9,10 +9,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use resonance_plugin::state::{load_params_from_json, params_to_json};
+use resonance_plugin::state::{load_params_from_json, migrate, params_to_json, version_of};
 use resonance_plugin::{
     BoolParam, EventIterator, ExtraStateSaver, FloatParam, FloatRange, IntParam, IntRange,
-    OutputBuffer, Param, ResonancePlugin, TempoInfo,
+    OutputBuffer, Param, ParamRename, ResonancePlugin, TempoInfo, STATE_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -75,10 +75,12 @@ fn params_to_json_writes_every_param_under_a_params_object() {
     assert_eq!(map["bypass"], json!(0.0));
     assert_eq!(map["internal"], json!(-6.0));
 
-    // Nothing else lands at the top level.
+    // Nothing lands at the top level except the params and the format
+    // version.
     let top = state.as_object().expect("state must be an object");
-    assert_eq!(top.len(), 1);
+    assert_eq!(top.len(), 2, "{top:?}");
     assert!(top.contains_key("params"));
+    assert_eq!(top["version"], json!(resonance_plugin::STATE_VERSION));
 }
 
 #[test]
@@ -425,4 +427,140 @@ fn a_plugin_without_extra_state_can_still_load_state_that_has_some() {
     let mut plain = StatePlugin::new();
     assert!(plain.load_state(&bytes));
     assert_eq!(plain.params.mix.value(), 0.9);
+}
+
+// ---------------------------------------------------------------------------
+// The version field and the rename migration it exists for (ba todo #1332)
+// ---------------------------------------------------------------------------
+
+/// The same plugin after a rename: the parameter the user knows as "Mix"
+/// used to be saved under the id `wet`.
+struct RenamedPlugin {
+    params: TestParams,
+}
+
+const RENAMES: &[ParamRename] = &[ParamRename {
+    since_version: 1,
+    from: "wet",
+    to: "mix",
+}];
+
+impl ResonancePlugin for RenamedPlugin {
+    const CLAP_ID: &'static str = "test.renamed";
+    const NAME: &'static str = "Renamed";
+    const VENDOR: &'static str = "test";
+    const VERSION: &'static str = "0.0.0";
+    const DESCRIPTION: &'static str = "";
+    const FEATURES: &'static [&'static str] = &[];
+    const INPUT_CHANNELS: Option<u32> = Some(2);
+
+    fn new() -> Self {
+        Self {
+            params: TestParams::new(),
+        }
+    }
+    fn param_count(&self) -> usize {
+        4
+    }
+    fn param(&self, index: usize) -> &dyn Param {
+        self.params.refs()[index]
+    }
+    fn initialize(&mut self, _sample_rate: f32, _max_buffer_size: u32) -> bool {
+        true
+    }
+    fn reset(&mut self) {}
+    fn process(
+        &mut self,
+        _outputs: &mut [OutputBuffer<'_>],
+        _frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+    }
+    fn param_renames(&self) -> &'static [ParamRename] {
+        RENAMES
+    }
+}
+
+#[test]
+fn state_written_before_the_version_field_reads_as_version_zero() {
+    let legacy: Value = serde_json::from_str(r#"{"params":{"mix":0.25}}"#).unwrap();
+    assert_eq!(version_of(&legacy), 0);
+    assert_eq!(version_of(&params_to_json(&TestParams::new().refs())), 1);
+    assert_eq!(STATE_VERSION, 1);
+}
+
+#[test]
+fn a_renamed_param_still_loads_from_pre_rename_state() {
+    // The exact blob the finding describes: written by a build that
+    // called the parameter `wet`, opened by one that calls it `mix`.
+    let legacy = br#"{"params":{"wet":0.2,"taps":6.0,"bypass":1.0,"internal":3.0}}"#;
+
+    let mut renamed = RenamedPlugin::new();
+    assert!(renamed.load_state(legacy));
+    assert_eq!(
+        renamed.params.mix.value(),
+        0.2,
+        "the declared rename must carry the old id across"
+    );
+    assert_eq!(renamed.params.taps.value(), 6);
+
+    // The control, and the reason the version field is worth having: the
+    // same blob into a plugin that renamed the id without declaring it
+    // silently restores the default.
+    let mut undeclared = StatePlugin::new();
+    assert!(undeclared.load_state(legacy));
+    assert_eq!(undeclared.params.mix.value(), 0.5);
+}
+
+#[test]
+fn a_version_bump_round_trips_through_save_and_load() {
+    // Save from the post-rename build…
+    let source = RenamedPlugin::new();
+    source.params.mix.set_plain(0.8);
+    source.params.taps.set_plain(2.0);
+    let bytes = source.save_state();
+
+    let state: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(version_of(&state), STATE_VERSION);
+    assert!(params_object(&state).contains_key("mix"));
+    assert!(!params_object(&state).contains_key("wet"));
+
+    // …and load it back: a blob already at the current version is not
+    // migrated again, and nothing is lost.
+    let mut target = RenamedPlugin::new();
+    assert!(target.load_state(&bytes));
+    assert_eq!(target.params.mix.value(), 0.8);
+    assert_eq!(target.params.taps.value(), 2);
+}
+
+#[test]
+fn a_stale_id_in_an_already_migrated_blob_is_ignored() {
+    // Version 1 means "written with the new id". A stray `wet` in such a
+    // blob is a leftover, not the source of truth.
+    let mixed = br#"{"version":1,"params":{"wet":0.1,"mix":0.9}}"#;
+    let mut plugin = RenamedPlugin::new();
+    assert!(plugin.load_state(mixed));
+    assert_eq!(plugin.params.mix.value(), 0.9);
+}
+
+#[test]
+fn migrating_never_clobbers_a_value_already_under_the_new_id() {
+    let mut state: Value = serde_json::from_str(r#"{"params":{"wet":0.1,"mix":0.9}}"#).unwrap();
+    assert_eq!(migrate(&mut state, RENAMES), 0);
+    let map = params_object(&state);
+    assert_eq!(map["mix"], json!(0.9));
+    assert!(!map.contains_key("wet"), "the stale id is dropped");
+}
+
+#[test]
+fn state_from_a_newer_build_still_loads_the_ids_it_shares() {
+    // Forward compatibility: opening a project saved by a newer build
+    // must restore every parameter that still exists rather than
+    // refusing the whole blob.
+    let future = br#"{"version":99,"params":{"mix":0.3,"taps":7.0,"nova":1.0}}"#;
+    let mut plugin = RenamedPlugin::new();
+    assert!(plugin.load_state(future));
+    assert_eq!(plugin.params.mix.value(), 0.3);
+    assert_eq!(plugin.params.taps.value(), 7);
 }
