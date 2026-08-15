@@ -5,8 +5,9 @@
 //! disagrees means typing back the displayed value silently changes it.
 
 use resonance_plugin::{
-    s2v_f32_gain_to_db, s2v_f32_percentage, v2s_f32_db, v2s_f32_gain_to_db, v2s_f32_hz, v2s_f32_ms,
-    v2s_f32_percent, v2s_f32_percentage, v2s_f32_ratio, v2s_f32_rounded,
+    s2v_f32_gain_to_db, s2v_f32_hz, s2v_f32_percentage, s2v_f32_ratio, v2s_f32_db,
+    v2s_f32_gain_to_db, v2s_f32_hz, v2s_f32_ms, v2s_f32_percent, v2s_f32_percentage, v2s_f32_ratio,
+    v2s_f32_rounded,
 };
 
 // ---------------------------------------------------------------------------
@@ -156,6 +157,40 @@ fn frequencies_switch_to_kilohertz_above_a_kilohertz() {
 }
 
 #[test]
+fn frequency_text_parses_back_to_hertz() {
+    let f = s2v_f32_hz();
+
+    assert_eq!(f("440"), Some(440.0));
+    assert_eq!(f("440 Hz"), Some(440.0));
+    assert_eq!(f(" 440hz "), Some(440.0));
+    // The kHz form the formatter itself produces above 1 kHz.
+    assert_eq!(f("1.50 kHz"), Some(1500.0));
+    assert_eq!(f("1.5KHZ"), Some(1500.0));
+    // And the shorthand a user reaches for.
+    assert_eq!(f("1.2k"), Some(1200.0));
+    assert_eq!(f("nope"), None);
+    assert_eq!(f(""), None);
+    assert_eq!(f("Hz"), None);
+}
+
+#[test]
+fn frequency_formatting_round_trips_through_its_parser() {
+    // The pair has to agree on both sides of the kHz switchover, or a
+    // typed-back readout silently moves the value (ba todo #1287).
+    let to_text = v2s_f32_hz();
+    let to_value = s2v_f32_hz();
+
+    for hz in [20.0_f32, 80.0, 440.0, 999.0, 1000.0, 1500.0, 20_000.0] {
+        let back = to_value(&to_text(hz)).expect("the parser must read its own output");
+        assert!(
+            (back - hz).abs() <= hz * 1e-3,
+            "{hz} Hz rendered as {:?} and came back as {back}",
+            to_text(hz)
+        );
+    }
+}
+
+#[test]
 fn compression_ratios_render_against_one() {
     let f = v2s_f32_ratio();
 
@@ -163,4 +198,17 @@ fn compression_ratios_render_against_one() {
     assert_eq!(f(4.0), "4.0:1");
     assert_eq!(f(2.5), "2.5:1");
     assert_eq!(f(20.0), "20.0:1");
+}
+
+#[test]
+fn ratio_text_parses_in_both_the_written_and_the_bare_form() {
+    let f = s2v_f32_ratio();
+
+    assert_eq!(f("4.0:1"), Some(4.0));
+    assert_eq!(f(" 2.5 : 1 "), Some(2.5));
+    assert_eq!(f("4"), Some(4.0), "a bare number is the ratio");
+    // `4:2` is not a form this parameter has a value for — refuse it
+    // rather than silently reading it as 4.
+    assert_eq!(f("4:2"), None);
+    assert_eq!(f("nope"), None);
 }

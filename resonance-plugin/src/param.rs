@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use crate::range::{FloatRange, IntRange};
-use crate::smoother::{Smoother, SmoothingStyle};
 
 // ---------------------------------------------------------------------------
 // Param trait -- common interface for enumeration by the CLAP bridge
@@ -34,14 +33,19 @@ pub trait Param: Send + Sync {
     /// by calling this method directly at the top of each process block —
     /// the new value lands instantly and the bridge performs **no
     /// smoothing of its own**. De-zippering is the plugin's job: plugins
-    /// with continuous parameters must feed a [`Smoother`] from the
-    /// current param value at the start of every `process()` call
+    /// with continuous parameters must feed a
+    /// [`crate::smoother::Smoother`] **of their own** from the current
+    /// param value at the start of every `process()` call
     /// (`smoother.set_target(param.value())` — see
     /// `ReverbSmoothers::update_targets` in resonance-reverb for the
     /// canonical block-rate pattern), or smooth implicitly through their
     /// own envelopes/ramps (e.g. a compressor's attack/release stage).
     /// A plugin that multiplies a raw param value straight into the
     /// signal will zipper/click under host automation.
+    ///
+    /// "Of their own" is the whole design: a smoother has to live where
+    /// something holds it `&mut`, which a param — shared behind an `Arc`
+    /// and read through `&self` — never can.
     fn set_plain(&self, v: f64);
     /// Default value as plain f64.
     fn default_plain(&self) -> f64;
@@ -53,6 +57,28 @@ pub trait Param: Send + Sync {
     fn display(&self, value: f64) -> String;
     /// Parse a display string back to a value.
     fn parse(&self, text: &str) -> Option<f64>;
+    /// Apply a value the user typed in, parsed through this parameter's
+    /// own [`Param::parse`] (ba todo #1287, finding F5).
+    ///
+    /// Returns `false` — leaving the parameter untouched — when the text
+    /// is not something this parameter understands, so an editor can
+    /// reject an entry rather than resolve it to zero. Range clamping is
+    /// [`Param::set_plain`]'s, which is what makes an out-of-range entry
+    /// land on the nearest declared bound instead of being refused.
+    ///
+    /// `parse` and its `text_to_value` bridge path were implemented and
+    /// unit-tested long before anything called them: there was no way to
+    /// type a value into any control in any editor, so a compressor could
+    /// not be set to exactly -18.0 dB.
+    fn apply_typed_entry(&self, text: &str) -> bool {
+        match self.parse(text) {
+            Some(v) if v.is_finite() => {
+                self.set_plain(v);
+                true
+            }
+            _ => false,
+        }
+    }
     /// The parameter's group, as a `/`-separated path (ba todo #1289,
     /// finding X7).
     ///
@@ -92,8 +118,14 @@ pub struct FloatParam {
     default: f32,
     range: FloatRange,
     /// Atomic storage for thread-safe value access (bit-punned f32).
+    ///
+    /// Note there is deliberately no smoother here — see the smoothing
+    /// contract on [`Param::set_plain`]. A param is shared behind an
+    /// `Arc` and handed out as `&self`, while `Smoother::next` needs
+    /// `&mut self`, so a smoother stored on a param could never advance.
+    /// Every plugin owns its smoothers in its own DSP struct instead
+    /// (ba todo #1288).
     value: AtomicU32,
-    pub smoother: Smoother,
     unit: &'static str,
     module: &'static str,
     value_to_string: Option<Arc<dyn Fn(f32) -> String + Send + Sync>>,
@@ -109,18 +141,12 @@ impl FloatParam {
             default,
             range,
             value: AtomicU32::new(default.to_bits()),
-            smoother: Smoother::new(SmoothingStyle::None),
             unit: "",
             module: "",
             value_to_string: None,
             string_to_value: None,
             hidden: false,
         }
-    }
-
-    pub fn with_smoother(mut self, style: SmoothingStyle) -> Self {
-        self.smoother = Smoother::new(style);
-        self
     }
 
     pub fn with_unit(mut self, unit: &'static str) -> Self {
@@ -253,7 +279,13 @@ impl Param for FloatParam {
     fn display(&self, value: f64) -> String {
         if let Some(f) = &self.value_to_string {
             let s = f(value as f32);
-            if !self.unit.is_empty() && !s.contains(self.unit) {
+            // Compare on the unit's *word*, not the string with its
+            // leading space: a param declaring `" Hz"` whose formatter
+            // switches to `"1.00 kHz"` above a kilohertz was getting the
+            // unit appended anyway, so every host read `"1.00 kHz Hz"` —
+            // and nothing could parse that back (ba todo #1287).
+            let word = self.unit.trim();
+            if !word.is_empty() && !s.contains(word) {
                 format!("{}{}", s, self.unit)
             } else {
                 s
