@@ -5,8 +5,11 @@
 //! struct is what lets the kernel take a single `&BlockPlan` instead of a
 //! dozen loose arguments.
 
+use resonance_plugin::TempoInfo;
+
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::envelope::EnvCoeffs;
+use crate::dsp::lfo::TransportPlan;
 use crate::dsp::render::snapshot::ParamSnapshot;
 use crate::dsp::voice::VoiceState;
 
@@ -45,13 +48,22 @@ pub(crate) struct BlockPlan {
     pub amp_coeffs: EnvCoeffs,
     pub mod_coeffs: EnvCoeffs,
 
+    /// Effective frequency of each LFO for this block. A free or retriggered
+    /// LFO gets `lfoN_rate`; a tempo-synced one gets the rate its division
+    /// implies at the host's tempo (ba todo #1324).
+    pub lfo_rates: [f32; 3],
+
     pub sample_rate: f32,
 }
 
 impl SynthEngine {
     /// Resolve the block-constant plan and push block-rate state (LFO rates,
     /// cache invalidation, the active-voice list) into the engine.
-    pub(crate) fn plan_block(&mut self, snap: &ParamSnapshot) -> BlockPlan {
+    pub(crate) fn plan_block(
+        &mut self,
+        snap: &ParamSnapshot,
+        tempo: Option<TempoInfo>,
+    ) -> BlockPlan {
         // Missing wavetable indices fall back to `None` and silently skip
         // that oscillator's output.
         let wt1_idx = (snap.osc1_wt < self.wavetables.len()).then_some(snap.osc1_wt);
@@ -59,15 +71,38 @@ impl SynthEngine {
         let oscs_active =
             (snap.osc1_enabled && wt1_idx.is_some()) || (snap.osc2_enabled && wt2_idx.is_some());
 
+        // Resolve the transport once, then each LFO's effective rate: the
+        // rate param when free, the division-at-tempo when synced.
+        let transport = TransportPlan::resolve(tempo);
+        let lfo_rates = [
+            transport.lfo_rate_hz(snap.lfo1_mode, snap.lfo1_division, snap.lfo1_rate),
+            transport.lfo_rate_hz(snap.lfo2_mode, snap.lfo2_division, snap.lfo2_rate),
+            transport.lfo_rate_hz(snap.lfo3_mode, snap.lfo3_division, snap.lfo3_rate),
+        ];
+
         // Global LFO rates only need to be refreshed when the rate param
         // itself changes, but `set_rate` is a single division -- cheap
         // enough to call once per block unconditionally.
-        self.global_lfo1.set_rate(snap.lfo1_rate, self.sample_rate);
-        self.global_lfo2.set_rate(snap.lfo2_rate, self.sample_rate);
-        self.global_lfo3.set_rate(snap.lfo3_rate, self.sample_rate);
+        self.global_lfo1.set_rate(lfo_rates[0], self.sample_rate);
+        self.global_lfo2.set_rate(lfo_rates[1], self.sample_rate);
+        self.global_lfo3.set_rate(lfo_rates[2], self.sample_rate);
+
+        // A synced LFO re-anchors on the song position every block rather
+        // than integrating its own phase, so it stays locked through a tempo
+        // change or a locate instead of drifting from wherever it happened
+        // to be.
+        if let Some(p) = transport.lfo_anchor_phase(snap.lfo1_mode, snap.lfo1_division) {
+            self.global_lfo1.set_phase(p);
+        }
+        if let Some(p) = transport.lfo_anchor_phase(snap.lfo2_mode, snap.lfo2_division) {
+            self.global_lfo2.set_phase(p);
+        }
+        if let Some(p) = transport.lfo_anchor_phase(snap.lfo3_mode, snap.lfo3_division) {
+            self.global_lfo3.set_phase(p);
+        }
 
         self.refresh_active();
-        self.seed_voice_lfo_rates(snap, true);
+        self.seed_voice_lfo_rates(lfo_rates, true);
 
         BlockPlan {
             wt1_idx,
@@ -91,6 +126,7 @@ impl SynthEngine {
                 snap.mod_curve,
                 self.sample_rate,
             ),
+            lfo_rates,
             sample_rate: self.sample_rate,
         }
     }
@@ -106,17 +142,13 @@ impl SynthEngine {
     /// of the next one. Mid-block (after a note-on) the snapshot has not
     /// moved, so only the rates are reseeded; `trigger()` has already marked
     /// the new voice's cache dirty by itself.
-    pub(crate) fn seed_voice_lfo_rates(
-        &mut self,
-        snap: &ParamSnapshot,
-        invalidate_osc_setup: bool,
-    ) {
+    pub(crate) fn seed_voice_lfo_rates(&mut self, lfo_rates: [f32; 3], invalidate_osc_setup: bool) {
         let sample_rate = self.sample_rate;
         for voice in &mut self.voices {
             if voice.state != VoiceState::Idle {
-                voice.lfo1.set_rate(snap.lfo1_rate, sample_rate);
-                voice.lfo2.set_rate(snap.lfo2_rate, sample_rate);
-                voice.lfo3.set_rate(snap.lfo3_rate, sample_rate);
+                voice.lfo1.set_rate(lfo_rates[0], sample_rate);
+                voice.lfo2.set_rate(lfo_rates[1], sample_rate);
+                voice.lfo3.set_rate(lfo_rates[2], sample_rate);
                 if invalidate_osc_setup {
                     voice.osc_setup_dirty = true;
                 }

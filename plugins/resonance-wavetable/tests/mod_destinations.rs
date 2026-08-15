@@ -61,7 +61,7 @@ fn render_note(params: &WavetableParams) -> Vec<f32> {
         timing: 0,
     }];
     let mut iter = EventIterator::new(&events);
-    engine.render_block(&mut left, &mut right, BLOCK, params, &mut iter);
+    engine.render_block(&mut left, &mut right, BLOCK, params, &mut iter, None);
     left.extend_from_slice(&right);
     left
 }
