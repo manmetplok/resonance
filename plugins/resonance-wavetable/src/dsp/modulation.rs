@@ -135,19 +135,12 @@ impl ModDest {
     /// reads, so the editor can offer it as unavailable instead of drawing
     /// a routing that does nothing.
     ///
-    /// `OscBalance` and `UnisonDetune` land in [`ModState`] fields that no
-    /// consumer touches: the oscillator mix reads the `osc_balance` param
-    /// directly, and unison detune is baked into the voice at note-on.
-    ///
-    /// Implemented by **ba todo #1323** (make both destinations reach the
-    /// oscillator). Delete the arm when it lands.
+    /// Every destination is implemented as of ba todo #1323, which wired the
+    /// last two (`OscBalance` and `UnisonDetune`) into `refresh_osc_setups`.
+    /// The hook stays because it costs nothing and the source side still
+    /// needs it — see [`ModSource::unavailable_reason`].
     pub fn unavailable_reason(self) -> Option<&'static str> {
-        match self {
-            Self::OscBalance | Self::UnisonDetune => {
-                Some("Computed but not read by the oscillator yet (ba todo #1323)")
-            }
-            _ => None,
-        }
+        None
     }
 
     /// True when modulation sent here changes the sound.
@@ -230,6 +223,10 @@ impl ModState {
             && self.osc2_pitch == other.osc2_pitch
             && self.osc1_pan == other.osc1_pan
             && self.osc2_pan == other.osc2_pan
+            // Both feed `OscSetup` (level crossfade, per-unison detune), so a
+            // moving one has to invalidate the cache like the others.
+            && self.osc_balance == other.osc_balance
+            && self.unison_detune == other.unison_detune
     }
 }
 

@@ -87,7 +87,8 @@ fn widget_kinds_match_declared_param_ranges() {
 
 #[test]
 fn toggles_are_exactly_the_boolean_params() {
-    let expected = [0usize, 6, 9, 19]; // sync, fb_pitch, density_sync, freeze
+    // sync, fb_pitch, density_sync, freeze, align
+    let expected = [0usize, 6, 9, 19, 29];
     for index in 0..PARAM_COUNT {
         let is_toggle = matches!(control_kind(index), ControlKind::Toggle);
         assert_eq!(

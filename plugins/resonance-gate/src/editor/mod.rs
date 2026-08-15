@@ -1,7 +1,8 @@
 //! Gate plugin editor: an egui UI hosted in `wayland-plugin-gui`.
 //!
-//! Deliberately plain — a title band and three captioned clusters of
-//! parameter knobs. The gate has no visualisation worth the frame
+//! Deliberately plain — a title band with the factory-preset combo and
+//! three captioned clusters of parameter knobs. The gate has no
+//! visualisation worth the frame
 //! budget: its interesting state is a single open/closed bit and a
 //! gain-reduction number, both of which the host's own meters already
 //! show on the channel it sits on.
@@ -24,6 +25,7 @@ use std::sync::Arc;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::{GateParams, PARAM_COUNT};
+use crate::presets::{load_preset, PRESETS};
 
 use widgets::param_knob;
 
@@ -66,11 +68,20 @@ pub const GROUPS: &[KnobGroup] = &[
 
 pub(crate) struct GateEditorApp {
     pub(crate) params: Arc<GateParams>,
+    /// Index into [`crate::presets::PRESETS`] of the preset last loaded
+    /// from the header combo. Display only — the combo shows what was
+    /// loaded rather than a permanent placeholder (ba todo #1280);
+    /// editing a knob afterwards does not clear it, because the plugin
+    /// has no way to tell a user edit from a host automation write.
+    selected_preset: Option<usize>,
 }
 
 impl GateEditorApp {
     pub fn new(params: Arc<GateParams>) -> Self {
-        Self { params }
+        Self {
+            params,
+            selected_preset: None,
+        }
     }
 }
 
@@ -82,7 +93,7 @@ impl EditorApp for GateEditorApp {
 
         egui::Panel::top("gate_header")
             .exact_size(HEADER_H)
-            .show_inside(ui, draw_header);
+            .show_inside(ui, |ui| draw_header(ui, self));
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_body(ui, &self.params));
 
@@ -90,9 +101,10 @@ impl EditorApp for GateEditorApp {
     }
 }
 
-/// The title band: product name in the brand accent, then the one line
-/// that explains what the key port does.
-fn draw_header(ui: &mut egui::Ui) {
+/// The title band: product name in the brand accent, then the factory
+/// preset combo — the same affordance, in the same place, as the
+/// compressor's and the granular delay's.
+fn draw_header(ui: &mut egui::Ui, app: &mut GateEditorApp) {
     ui.horizontal_centered(|ui| {
         ui.add_space(12.0);
         ui.label(
@@ -103,12 +115,25 @@ fn draw_header(ui: &mut egui::Ui) {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(
-                "Keys off its own input, or off the sidechain source the host connects.",
-            )
-            .color(theme::TEXT_2),
-        );
+
+        ui.label(egui::RichText::new("Preset").color(theme::TEXT_3));
+        let selected_text = app
+            .selected_preset
+            .and_then(|i| PRESETS.get(i))
+            .map_or("— preset —", |e| e.name);
+        egui::ComboBox::from_id_salt("gate_preset_combo")
+            .width(200.0)
+            .selected_text(selected_text)
+            .show_ui(ui, |ui| {
+                for (i, entry) in PRESETS.iter().enumerate() {
+                    let selected = app.selected_preset == Some(i);
+                    if ui.selectable_label(selected, entry.name).clicked()
+                        && load_preset(&app.params, entry.json)
+                    {
+                        app.selected_preset = Some(i);
+                    }
+                }
+            });
     });
 }
 
@@ -120,6 +145,17 @@ fn draw_body(ui: &mut egui::Ui, params: &GateParams) {
             draw_group(ui, params, group);
             ui.add_space(8.0);
         }
+    });
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "Keys off its own input, or off the sidechain source the host connects.",
+            )
+            .color(theme::TEXT_3)
+            .size(11.0),
+        );
     });
 }
 

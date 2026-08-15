@@ -189,7 +189,9 @@ impl SynthEngine {
         self.voice_counter += 1;
         let glide = params.glide_enabled.value() && self.last_note.is_some();
         let unison_count = params.unison.voices.value().max(1) as usize;
-        let detune = params.unison.detune.value();
+        // Detune width is *not* read here: it comes from the block snapshot
+        // at control rate so `ModDest::UnisonDetune` can move it on a
+        // sounding voice (ba todo #1323).
         let spread = params.unison.spread.value();
 
         let voice = &mut self.voices[voice_idx];
@@ -198,7 +200,6 @@ impl SynthEngine {
             velocity,
             self.voice_counter,
             unison_count,
-            detune,
             spread,
             glide,
             params.lfo1.retrigger.value(),

@@ -21,6 +21,7 @@ pub mod kit;
 pub mod kit_loader;
 mod mic_catalog;
 pub mod params;
+pub mod rr_display;
 pub mod sample_info;
 pub mod voice;
 
@@ -67,8 +68,9 @@ pub struct KitBridge {
     /// alternate piece name (e.g. "ohne Teppich"). Persisted via plugin state.
     pub articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
     /// Last-played round-robin display state. Written by the audio thread
-    /// after each `note_on`, read by the editor for per-pad RR indicators.
-    /// Packed as `rr_index | (n_rrs << 16)`; zero means "never triggered".
+    /// after each `note_on`, read by the editor for per-pad "take N of M"
+    /// indicators. Packed and unpacked by [`rr_display`]; zero means
+    /// "never triggered".
     pub last_rr: Arc<[AtomicU32; NUM_PADS]>,
     /// Frames in the last block the host asked us to render. Written by
     /// `process` on the audio thread, read by the editor's status bar.

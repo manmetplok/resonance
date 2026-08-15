@@ -122,14 +122,16 @@ impl DelayDsp {
         let wow = lfo_val * effective_mod * wow_range;
 
         let delay_l_samp = (delay_samples + wow).clamp(1.0, self.max_delay_samples - 4.0);
-        let delay_r_samp = match routing {
-            2 => {
-                // Dual: apply stereo offset
-                let offset = stereo_offset * delay_samples;
-                (delay_samples + offset + wow).clamp(1.0, self.max_delay_samples - 4.0)
-            }
-            _ => delay_l_samp,
-        };
+        // Stereo offset skews the RIGHT read tap, and it does so on all
+        // three routes (ba todo #1331). Every route has its own right
+        // delay line, so nothing about ping-pong or the stereo route
+        // prevents an offset read position — the offset was simply only
+        // wired into the dual branch. On stereo/dual it spreads the two
+        // repeat trains; on ping-pong it makes the bounce uneven
+        // (long-short-long), the classic "swung" ping-pong. Offset 0 is
+        // unchanged behaviour, so existing patches are unaffected.
+        let offset = stereo_offset * delay_samples;
+        let delay_r_samp = (delay_samples + offset + wow).clamp(1.0, self.max_delay_samples - 4.0);
 
         let wet_l = self.delay_l.tap_linear(delay_l_samp);
         let wet_r = self.delay_r.tap_linear(delay_r_samp);

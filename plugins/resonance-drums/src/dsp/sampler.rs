@@ -241,10 +241,12 @@ impl DrumSampler {
         let n_rrs = layer.round_robins.len();
         let rr_index = pick_rr(&mut self.rr_counters[pad_index][counter_slot], n_rrs);
 
-        // Publish the last-played RR for the editor display.
+        // Publish the last-played RR for the editor display: both which
+        // take fired and how many the layer holds, so the pad can show
+        // "take 2 of 3" rather than just "something played".
         if let Some(ref last_rr) = self.last_rr {
             last_rr[pad_index].store(
-                (rr_index as u32) | ((n_rrs as u32) << 16),
+                crate::rr_display::pack(rr_index, n_rrs),
                 Ordering::Relaxed,
             );
         }

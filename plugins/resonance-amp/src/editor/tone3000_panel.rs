@@ -26,6 +26,7 @@ use std::sync::Arc;
 use wayland_plugin_gui::egui;
 
 use super::theme;
+use crate::tone3000::client::ArchitectureFilter;
 use crate::tone3000::worker::{Command, Status, WorkerHandle};
 
 /// Sort modes surfaced in the UI dropdown. The string values match the
@@ -73,6 +74,11 @@ pub struct Tone3000PanelState {
     pub open: bool,
     pub query: String,
     pub sort: SortMode,
+    /// Which NAM architectures to browse. Defaults to
+    /// [`ArchitectureFilter::All`] — the engine plays A1 and A2 alike,
+    /// so the browser shows the whole catalogue unless the user narrows
+    /// it deliberately.
+    pub architecture: ArchitectureFilter,
     /// Set once after the user connects so we auto-populate the tone
     /// list with the default popularity sort instead of showing an
     /// empty panel.
@@ -85,7 +91,19 @@ impl Default for Tone3000PanelState {
             open: false,
             query: String::new(),
             sort: SortMode::Trending,
+            architecture: ArchitectureFilter::All,
             did_initial_fetch: false,
+        }
+    }
+}
+
+impl Tone3000PanelState {
+    /// The search command this panel's current filters describe.
+    fn search_command(&self) -> Command {
+        Command::Search {
+            query: self.query.clone(),
+            sort: self.sort.api_value().to_string(),
+            architecture: self.architecture,
         }
     }
 }
@@ -127,10 +145,7 @@ fn draw_contents(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc
     let connected = matches!(worker.state.lock().status, Status::Connected);
     if connected && !panel.did_initial_fetch {
         panel.did_initial_fetch = true;
-        worker.send(Command::Search {
-            query: panel.query.clone(),
-            sort: panel.sort.api_value().to_string(),
-        });
+        worker.send(panel.search_command());
     }
 
     draw_search_row(ui, panel, worker);
@@ -138,30 +153,23 @@ fn draw_contents(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc
     ui.separator();
     ui.add_space(6.0);
 
-    let status_snapshot;
-    let tones_snapshot;
-    let models_snapshot;
-    let selected_tone;
-    let error_snapshot;
-    {
+    // One lock, one consistent snapshot for the whole frame.
+    let snapshot = {
         let s = worker.state.lock();
-        status_snapshot = s.status.clone();
-        tones_snapshot = s.tones.clone();
-        models_snapshot = s.models.clone();
-        selected_tone = s.selected_tone;
-        error_snapshot = s.last_error.clone();
-    }
+        Snapshot {
+            status: s.status.clone(),
+            tones: s.tones.clone(),
+            models: s.models.clone(),
+            selected_tone: s.selected_tone,
+            error: s.last_error.clone(),
+            total_tones: s.total_tones,
+            has_more: s.has_more,
+        }
+    };
 
-    draw_results(
-        ui,
-        worker,
-        &tones_snapshot,
-        &models_snapshot,
-        selected_tone,
-        &status_snapshot,
-    );
+    draw_results(ui, worker, &snapshot);
 
-    if let Some(err) = error_snapshot {
+    if let Some(err) = snapshot.error {
         ui.add_space(4.0);
         ui.label(egui::RichText::new(err).color(theme::DANGER).size(11.0));
     }
@@ -236,15 +244,30 @@ fn draw_search_row(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &A
             let submitted = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
             let sort_changed = draw_sort_dropdown(ui, &mut panel.sort);
+            let arch_changed = draw_architecture_dropdown(ui, &mut panel.architecture);
 
-            if ui.button("Search").clicked() || submitted || sort_changed {
-                worker.send(Command::Search {
-                    query: panel.query.clone(),
-                    sort: panel.sort.api_value().to_string(),
-                });
+            if ui.button("Search").clicked() || submitted || sort_changed || arch_changed {
+                worker.send(panel.search_command());
             }
         });
     });
+}
+
+/// Architecture filter dropdown. Replaces the hidden Architecture-2 pin
+/// that used to hide most of the catalogue (ba todo #1315).
+fn draw_architecture_dropdown(ui: &mut egui::Ui, arch: &mut ArchitectureFilter) -> bool {
+    let mut changed = false;
+    egui::ComboBox::from_id_salt("tone3000_arch_combo")
+        .selected_text(arch.label())
+        .show_ui(ui, |ui| {
+            for &mode in ArchitectureFilter::ALL {
+                if ui.selectable_label(*arch == mode, mode.label()).clicked() {
+                    *arch = mode;
+                    changed = true;
+                }
+            }
+        });
+    changed
 }
 
 fn draw_sort_dropdown(ui: &mut egui::Ui, sort: &mut SortMode) -> bool {
@@ -262,14 +285,30 @@ fn draw_sort_dropdown(ui: &mut egui::Ui, sort: &mut SortMode) -> bool {
     changed
 }
 
-fn draw_results(
-    ui: &mut egui::Ui,
-    worker: &Arc<WorkerHandle>,
-    tones: &[crate::tone3000::types::Tone],
-    models: &[crate::tone3000::types::Model],
+/// Everything the results area renders, copied out of the worker state
+/// under one lock so a frame can't tear across two reads.
+struct Snapshot {
+    status: Status,
+    tones: Vec<crate::tone3000::types::Tone>,
+    models: Vec<crate::tone3000::types::Model>,
     selected_tone: Option<i64>,
-    status: &Status,
-) {
+    error: Option<String>,
+    total_tones: Option<u32>,
+    has_more: bool,
+}
+
+fn draw_results(ui: &mut egui::Ui, worker: &Arc<WorkerHandle>, snap: &Snapshot) {
+    let Snapshot {
+        status,
+        tones,
+        models,
+        selected_tone,
+        total_tones,
+        has_more,
+        ..
+    } = snap;
+    let (selected_tone, total_tones, has_more) = (*selected_tone, *total_tones, *has_more);
+
     let avail = ui.available_size_before_wrap();
     let left_w = (avail.x * 0.55).max(280.0).min(avail.x - 280.0);
 
@@ -279,7 +318,7 @@ fn draw_results(
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
                 ui.label(
-                    egui::RichText::new(format!("Tones ({})", tones.len()))
+                    egui::RichText::new(tones_heading(tones.len(), total_tones))
                         .color(theme::TEXT_DIM)
                         .size(11.0),
                 );
@@ -297,6 +336,17 @@ fn draw_results(
                                     .color(theme::TEXT_DIM)
                                     .size(11.0),
                             );
+                        }
+                        if has_more {
+                            ui.add_space(4.0);
+                            ui.vertical_centered(|ui| {
+                                ui.add_enabled_ui(!status.is_busy(), |ui| {
+                                    if ui.button("Load more").clicked() {
+                                        worker.send(Command::LoadMore);
+                                    }
+                                });
+                            });
+                            ui.add_space(4.0);
                         }
                     });
             },
@@ -340,6 +390,16 @@ fn draw_results(
             },
         );
     });
+}
+
+/// Heading over the tone list. Shows how many of the server's total are
+/// on screen, so 25 rows no longer read as "that is the whole catalogue".
+pub fn tones_heading(shown: usize, total: Option<u32>) -> String {
+    match total {
+        Some(total) if (total as usize) > shown => format!("Tones ({shown} of {total})"),
+        Some(total) => format!("Tones ({total})"),
+        None => format!("Tones ({shown})"),
+    }
 }
 
 fn draw_tone_row(

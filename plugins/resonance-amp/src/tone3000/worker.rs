@@ -21,7 +21,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 
 use super::auth;
-use super::client::{ClientError, Tone3000Client};
+use super::client::{ArchitectureFilter, ClientError, SearchPage, Tone3000Client};
 use super::types::{Model, StoredTokens, Tone};
 
 /// Commands accepted by the worker. Each corresponds to one UI action.
@@ -33,16 +33,42 @@ pub enum Command {
     Authenticate,
     /// Drop in-memory tokens and delete the config file.
     Disconnect,
-    /// Search tones; results are written to `State::tones`. The second
-    /// field is the `sort` query value (e.g. `trending`,
-    /// `downloads-all-time`).
-    Search { query: String, sort: String },
+    /// Search tones from page 1, replacing `State::tones`.
+    Search {
+        query: String,
+        /// `sort` query value (e.g. `trending`, `downloads-all-time`).
+        sort: String,
+        architecture: ArchitectureFilter,
+    },
+    /// Fetch the next page of the last search and append it. No-op if
+    /// the last page has already been reached.
+    LoadMore,
     /// Load the model list for a tone; results go to `State::models`.
     ListModels(i64),
     /// Download a model to disk and queue it for loading.
     Download(Model),
     /// Gracefully stop the worker thread.
     Shutdown,
+}
+
+/// The search the worker is currently showing, kept so
+/// [`Command::LoadMore`] can repeat it for the next page and
+/// [`Command::ListModels`] can use the same architecture filter.
+#[derive(Debug, Clone)]
+struct ActiveSearch {
+    query: String,
+    sort: String,
+    architecture: ArchitectureFilter,
+}
+
+impl Default for ActiveSearch {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            sort: "trending".to_string(),
+            architecture: ArchitectureFilter::default(),
+        }
+    }
 }
 
 /// Connection / activity status. Drives the header of the browser panel
@@ -80,6 +106,13 @@ pub struct State {
     pub models: Vec<Model>,
     pub last_error: Option<String>,
     pub last_downloaded: Option<PathBuf>,
+    /// Total matching tones the server reports, so the panel can say
+    /// "25 of 1 284" instead of implying 25 is all there is.
+    pub total_tones: Option<u32>,
+    /// Highest page fetched so far (1-based); 0 before the first search.
+    pub page: u32,
+    /// Whether another page exists — drives the "Load more" button.
+    pub has_more: bool,
 }
 
 impl Default for State {
@@ -91,8 +124,48 @@ impl Default for State {
             models: Vec::new(),
             last_error: None,
             last_downloaded: None,
+            total_tones: None,
+            page: 0,
+            has_more: false,
         }
     }
+}
+
+/// Fold a fetched page into the browser state.
+///
+/// `append` is false for a fresh search (replace everything) and true
+/// for "Load more" (extend, skipping ids already on screen — the
+/// architecture sub-queries and the server's own ranking can both
+/// re-serve a row).
+///
+/// Pure and public so the pagination rules are testable without a
+/// network.
+pub fn apply_search_page(state: &mut State, page: SearchPage, append: bool) {
+    if !append {
+        state.tones.clear();
+        state.models.clear();
+        state.selected_tone = None;
+    }
+    let fetched = page.tones.len();
+    for tone in page.tones {
+        if state.tones.iter().any(|t| t.id == tone.id) {
+            continue;
+        }
+        state.tones.push(tone);
+    }
+    state.page = page.page;
+    state.total_tones = page.total;
+    state.has_more = match page.total_pages {
+        // The server told us how far the result set goes.
+        Some(total_pages) => page.page < total_pages,
+        // No `total_pages`: fall back on the running count against the
+        // reported total, and failing that assume a page that came back
+        // empty is the end.
+        None => match page.total {
+            Some(total) => (state.tones.len() as u32) < total,
+            None => fetched > 0,
+        },
+    };
 }
 
 /// Shared handles the worker needs to reach into to hand off a freshly
@@ -150,6 +223,7 @@ pub fn spawn(hooks: PluginHooks) -> WorkerHandle {
 fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHooks) {
     let client = Tone3000Client::new();
     let mut tokens: Option<StoredTokens> = None;
+    let mut active = ActiveSearch::default();
 
     loop {
         let cmd = match rx.recv() {
@@ -188,30 +262,46 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHoo
                 s.tones.clear();
                 s.models.clear();
                 s.selected_tone = None;
+                s.total_tones = None;
+                s.page = 0;
+                s.has_more = false;
             }
-            Command::Search { query, sort } => {
+            Command::Search {
+                query,
+                sort,
+                architecture,
+            } => {
+                active = ActiveSearch {
+                    query,
+                    sort,
+                    architecture,
+                };
                 let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
                     continue;
                 };
                 state.lock().status = Status::Searching;
-                match client.search_tones(&tok, &query, &sort, 1) {
-                    Ok(tones) => {
-                        let mut s = state.lock();
-                        s.tones = tones;
-                        s.models.clear();
-                        s.selected_tone = None;
-                        s.status = Status::Connected;
+                fetch_page(&client, &tok, &active, 1, false, &mut tokens, &state);
+            }
+            Command::LoadMore => {
+                let next_page = {
+                    let s = state.lock();
+                    if !s.has_more {
+                        continue;
                     }
-                    Err(ClientError::Unauthorized) => handle_unauthorized(&mut tokens, &state),
-                    Err(e) => set_error(&state, &format!("search failed: {e}")),
-                }
+                    s.page + 1
+                };
+                let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
+                    continue;
+                };
+                state.lock().status = Status::Searching;
+                fetch_page(&client, &tok, &active, next_page, true, &mut tokens, &state);
             }
             Command::ListModels(tone_id) => {
                 let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
                     continue;
                 };
                 state.lock().status = Status::LoadingModels;
-                match client.list_models(&tok, tone_id) {
+                match client.list_models(&tok, tone_id, active.architecture) {
                     Ok(models) => {
                         let mut s = state.lock();
                         s.models = models;
@@ -245,6 +335,35 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHoo
                 }
             }
         }
+    }
+}
+
+/// Run one search request and fold the result into the shared state.
+/// Shared by the initial search and by "Load more" — the only
+/// difference between them is `append` and the page number.
+fn fetch_page(
+    client: &Tone3000Client,
+    token: &str,
+    active: &ActiveSearch,
+    page: u32,
+    append: bool,
+    tokens: &mut Option<StoredTokens>,
+    state: &Arc<Mutex<State>>,
+) {
+    match client.search_tones(
+        token,
+        &active.query,
+        &active.sort,
+        active.architecture,
+        page,
+    ) {
+        Ok(result) => {
+            let mut s = state.lock();
+            apply_search_page(&mut s, result, append);
+            s.status = Status::Connected;
+        }
+        Err(ClientError::Unauthorized) => handle_unauthorized(tokens, state),
+        Err(e) => set_error(state, &format!("search failed: {e}")),
     }
 }
 

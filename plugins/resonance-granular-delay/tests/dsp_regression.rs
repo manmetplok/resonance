@@ -437,6 +437,27 @@ fn scenarios() -> Vec<Scenario> {
                 p.division.set_value(9 + (block / 7 % 3) as i32);
             }),
         },
+        // 14. Tempo-locked grain rate with the density division stepped
+        //     (ba todo #1322): the sync resolution feeding the grain
+        //     scheduler, and the re-lock when the division changes. At
+        //     320 BPM, 1/16 = 16 grains/s and 1/16T = 32 grains/s.
+        Scenario {
+            name: "density_sync_locked",
+            signal: Signal::Mixed,
+            blocks: &[64, 96],
+            tempo: Some(tempo(320.0)),
+            setup: |p| {
+                base(p);
+                p.density_sync.set_value(true);
+                p.density_division.set_value(11);
+                p.grain_size_ms.set_value(45.0);
+                p.feedback.set_value(0.3);
+            },
+            edit: Some(|p, block| {
+                p.density_division
+                    .set_value(if block % 16 >= 8 { 10 } else { 11 });
+            }),
+        },
     ]
 }
 

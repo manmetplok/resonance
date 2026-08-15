@@ -3,6 +3,7 @@
 //! Per-row layout (left to right):
 //!   • Status LED (purple/green/dim)
 //!   • Pad name
+//!   • Round-robin readout ("2/3" — take that last fired, of how many)
 //!   • MIDI note badge
 //!   • Mute "M" button
 
@@ -17,6 +18,7 @@ use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
 use crate::kit::OutputGroup;
 use crate::kit_loader::KitStatus;
 use crate::params::DrumParams;
+use crate::rr_display;
 use crate::KitBridge;
 
 use super::download_panel::DownloadPanelState;
@@ -253,8 +255,8 @@ fn draw_pad_list(
         for i in group_idx {
             let mapping = &PAD_MAPPINGS[i];
             let selected = *selected_pad == i;
-            let has_sound = bridge.last_rr[i].load(Ordering::Relaxed) != 0;
-            draw_pad_row(ui, params, mapping, i, selected, has_sound, |idx| {
+            let rr = rr_display::unpack(bridge.last_rr[i].load(Ordering::Relaxed));
+            draw_pad_row(ui, params, mapping, i, selected, rr, |idx| {
                 *selected_pad = idx;
             });
             shown_in_group += 1;
@@ -267,13 +269,17 @@ fn draw_pad_list(
     }
 }
 
+/// One pad row. `rr` is the round-robin state the audio thread last
+/// published for this pad: `None` until the pad fires, then which take of
+/// how many, shown as a compact `2/3` before the note badge (ba todo
+/// #1329 — the row used to reduce it to "has fired at all").
 fn draw_pad_row(
     ui: &mut egui::Ui,
     params: &DrumParams,
     mapping: &crate::drum_map::PadMapping,
     pad_idx: usize,
     selected: bool,
-    has_sound: bool,
+    rr: Option<rr_display::RoundRobin>,
     mut on_select: impl FnMut(usize),
 ) {
     let row_h = 22.0;
@@ -296,7 +302,7 @@ fn draw_pad_row(
     let led_y = rect.center().y;
     let led_color = if selected {
         theme::ACCENT
-    } else if has_sound {
+    } else if rr.is_some() {
         theme::GOOD
     } else {
         theme::TEXT_4
@@ -339,6 +345,23 @@ fn draw_pad_row(
     } else {
         (theme::BG_1, theme::LINE_2, theme::TEXT_3)
     };
+    // Round-robin readout: which take last fired, of how many.
+    if let Some(rr) = rr {
+        let rr_font = egui::FontId::monospace(9.5);
+        let rr_color = if rr.cycles() {
+            theme::ACCENT_SOFT
+        } else {
+            theme::TEXT_4
+        };
+        p.text(
+            egui::pos2(badge_rect.left() - 6.0, led_y),
+            egui::Align2::RIGHT_CENTER,
+            rr.compact(),
+            rr_font,
+            rr_color,
+        );
+    }
+
     p.rect_filled(badge_rect, 3.0, badge_bg);
     p.rect_stroke(
         badge_rect,

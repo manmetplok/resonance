@@ -1,10 +1,16 @@
 //! The actual egui app: state and update/view orchestration for the drums editor.
 //!
 //! `DrumsEditorApp` is the `EditorApp` the runtime drives each frame. It
-//! paints the chrome (brand + tab bar + status bar) on the outside, and
-//! dispatches the central body to whichever tab is selected. The Pads tab
-//! renders the canonical two-column layout (pad list + per-pad detail)
-//! plus a bottom row of KIT and GLOBAL cards.
+//! paints the chrome (brand + tab bar + status bar) on the outside and the
+//! Pads body in the middle: the canonical two-column layout (pad list +
+//! per-pad detail) plus a bottom row of KIT and GLOBAL cards.
+//!
+//! Pads is the only view. The editor used to offer four more tabs, each
+//! rendering a placeholder that said the feature was not built yet —
+//! including Mics and Articulations, whose pickers already ship inside the
+//! pad inspector, so those two tabs denied features the plugin has. They
+//! were removed rather than left lying (ba todo #1327);
+//! `chrome::draw_tab_bar` points at where the pickers live.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -21,20 +27,10 @@ use super::{
     chrome, download_panel, kit_browser, pad_grid, pad_inspector, theme, widgets,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DrumsTab {
-    Pads,
-    Mics,
-    Articulations,
-    Mod,
-    Fx,
-}
-
 pub(crate) struct DrumsEditorApp {
     pub(crate) params: Arc<DrumParams>,
     pub(crate) bridge: KitBridge,
     pub(crate) selected_pad: usize,
-    pub(crate) selected_tab: DrumsTab,
     pub(crate) pad_filter: String,
     pub(crate) download_worker: Arc<WorkerHandle>,
     pub(crate) download_panel: download_panel::DownloadPanelState,
@@ -54,18 +50,10 @@ impl DrumsEditorApp {
         download_worker: Arc<WorkerHandle>,
     ) -> Self {
         let installed_kits = kit_browser::refresh_installed_kits();
-        let selected_tab = match std::env::var("DRUMS_TAB").as_deref() {
-            Ok("mics") => DrumsTab::Mics,
-            Ok("articulations") => DrumsTab::Articulations,
-            Ok("mod") => DrumsTab::Mod,
-            Ok("fx") => DrumsTab::Fx,
-            _ => DrumsTab::Pads,
-        };
         Self {
             params,
             bridge,
             selected_pad: 0,
-            selected_tab,
             pad_filter: String::new(),
             download_worker,
             download_panel: download_panel::DownloadPanelState::default(),
@@ -159,13 +147,7 @@ impl EditorApp for DrumsEditorApp {
                     .fill(theme::BG_0)
                     .inner_margin(egui::Margin::same(12)),
             )
-            .show_inside(ui, |ui| match self.selected_tab {
-                DrumsTab::Pads => draw_pads_body(ui, self),
-                DrumsTab::Mics => draw_placeholder_tab(ui, "Mics"),
-                DrumsTab::Articulations => draw_placeholder_tab(ui, "Articulations"),
-                DrumsTab::Mod => draw_placeholder_tab(ui, "Mod"),
-                DrumsTab::Fx => draw_placeholder_tab(ui, "FX"),
-            });
+            .show_inside(ui, |ui| draw_pads_body(ui, self));
 
         if self.download_panel.open {
             download_panel::draw(ui, &mut self.download_panel, &self.download_worker);
@@ -231,31 +213,6 @@ fn draw_pads_body(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         });
         ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
             draw_global_row_card(ui);
-        });
-    });
-}
-
-fn draw_placeholder_tab(ui: &mut egui::Ui, name: &str) {
-    let frame = egui::Frame::default()
-        .fill(theme::BG_2)
-        .stroke(egui::Stroke::new(1.0, theme::LINE_2))
-        .corner_radius(theme::RADIUS_PANEL)
-        .inner_margin(egui::Margin::same(32));
-    frame.show(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(20.0);
-            ui.label(
-                egui::RichText::new(name)
-                    .italics()
-                    .color(theme::TEXT_2)
-                    .size(20.0),
-            );
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Coming soon — open the Pads tab to edit kit and pads.")
-                    .color(theme::TEXT_3)
-                    .size(11.0),
-            );
         });
     });
 }
