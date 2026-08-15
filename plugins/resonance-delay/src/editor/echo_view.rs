@@ -19,6 +19,23 @@ pub fn draw(painter: &Painter, rect: Rect, viz: &DelayViz) {
     let mid_y = rect.center().y;
     let half_h = rect.height() * 0.4;
 
+    // The two trains differ once a stereo offset or ping-pong is in
+    // play (ba todo #1331), so say which half is which.
+    painter.text(
+        egui::pos2(rect.left() + 6.0, mid_y - half_h),
+        egui::Align2::LEFT_TOP,
+        "L",
+        egui::FontId::proportional(10.0),
+        theme::ECHO_L,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 6.0, mid_y + half_h),
+        egui::Align2::LEFT_BOTTOM,
+        "R",
+        egui::FontId::proportional(10.0),
+        theme::ECHO_R,
+    );
+
     for i in 0..times_l.len() {
         let t = times_l[i];
         let level = levels_l[i];

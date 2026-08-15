@@ -11,6 +11,7 @@ mod master_strip;
 pub(crate) mod picks;
 mod plugin_panel;
 mod reference_panel;
+pub(crate) mod reorder;
 mod track_strip;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
@@ -217,13 +218,24 @@ impl crate::Resonance {
             .into()
     }
 
-    /// Render a single plugin slot row (name button + remove button).
-    /// If `is_instrument_slot` is true, the name is tinted to distinguish it.
+    /// Render a single plugin slot row (name button + ▲/▼ reorder pair +
+    /// remove button). If `is_instrument_slot` is true, the name is
+    /// tinted to distinguish it.
+    ///
+    /// `index` is the slot's position in `owner`'s chain and `len` the
+    /// chain's length — the two the reorder controls need to know which
+    /// direction is still available (ba todo #1302). They are the
+    /// position in the FULL chain, not in the section being drawn: the
+    /// track strip renders the instrument and the effects as two
+    /// sections, and the instrument-floor rule is stated in chain
+    /// indices.
     fn view_plugin_slot_row(
         &self,
         owner: PluginOwner,
         plugin: &PluginSlotState,
         is_instrument_slot: bool,
+        index: usize,
+        len: usize,
     ) -> Element<'_, Message> {
         // ASCII ".." suffix (not '…') — this pill's width was tuned
         // around the narrower two-dot tail.
@@ -337,9 +349,14 @@ impl crate::Resonance {
             .style(|_theme, status| theme::small_button_style(status))
             .padding(1);
 
+        // Chain reorder (ba todo #1302). The strip is 140 px wide, so
+        // the carets are drawn at the same 9 px as the delete glyph and
+        // sit between the name and the ×: order first, then removal.
+        let moves = reorder::chain_moves(self, owner, pid, index, len);
+
         // Button takes Length::Fill so it stretches to the strip width;
-        // the delete button hugs the right edge.
-        row![name_btn, plugin_del]
+        // the reorder pair and the delete button hug the right edge.
+        row![name_btn, reorder::move_buttons(&moves, 9.0), plugin_del]
             .spacing(2)
             .align_y(alignment::Vertical::Center)
             .into()

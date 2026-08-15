@@ -22,21 +22,26 @@ use resonance_plugin::*;
 
 pub mod dsp;
 pub mod params;
+pub mod presets;
+pub mod viz;
 
+/// Public so the editor's layout table (`editor::GROUPS`) can be
+/// checked from `tests/`; the app itself stays crate-private.
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::{GateDsp, GateSettings};
 use params::{GateParams, PARAM_COUNT};
+use viz::GateViz;
 
 pub struct ResonanceGate {
     /// Params shared with the editor via `Arc`; all storage is atomic
     /// internally so `&GateParams` is safe from audio and UI threads.
     pub params: Arc<GateParams>,
     dsp: Option<GateDsp>,
-    /// True while the host has a key signal connected — surfaced so the
-    /// editor can tell the user which detector is actually running.
-    key_connected: bool,
+    /// Detector status shared with the editor: which detector is
+    /// running, and what it is doing (ba todo #1314).
+    viz: Arc<GateViz>,
 }
 
 impl ResonanceGate {
@@ -56,7 +61,13 @@ impl ResonanceGate {
 
     /// Whether the last processed block ran off an external key.
     pub fn key_connected(&self) -> bool {
-        self.key_connected
+        self.viz.key_connected()
+    }
+
+    /// Detector status the editor reads, shared by `Arc` with the audio
+    /// thread.
+    pub fn viz(&self) -> &Arc<GateViz> {
+        &self.viz
     }
 }
 
@@ -76,7 +87,7 @@ impl ResonancePlugin for ResonanceGate {
         Self {
             params: Arc::new(GateParams::default()),
             dsp: None,
-            key_connected: false,
+            viz: GateViz::new(),
         }
     }
 
@@ -97,7 +108,7 @@ impl ResonancePlugin for ResonanceGate {
         if let Some(dsp) = &mut self.dsp {
             dsp.reset();
         }
-        self.key_connected = false;
+        self.viz.clear();
     }
 
     /// Never called directly by the bridge (it always calls
@@ -123,7 +134,9 @@ impl ResonancePlugin for ResonanceGate {
         _tempo: Option<TempoInfo>,
     ) {
         let settings = self.settings();
-        self.key_connected = key.is_some();
+        // Which detector is running is known even on the paths that
+        // return before the DSP runs, so it is published first.
+        self.viz.store_key_connected(key.is_some());
 
         let Some(main) = outputs.first_mut() else {
             return;
@@ -140,12 +153,15 @@ impl ResonancePlugin for ResonanceGate {
             frames,
             &settings,
         );
+        self.viz
+            .store_block(dsp.last_state, dsp.last_gr_db, dsp.last_detector_db);
     }
 
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::GateEditorFactory::new(
             self.params.clone(),
+            self.viz.clone(),
         )))
     }
 }

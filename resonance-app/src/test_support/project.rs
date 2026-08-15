@@ -239,4 +239,49 @@ impl Resonance {
         };
         crate::update::project_io::replay_loaded_project(self, Box::new(loaded));
     }
+
+    /// Test-only: replay a whole [`crate::project::LoadedProject`] — the
+    /// shape [`crate::project::load_project`] returns, opaque plugin-state
+    /// blobs included. Unlike [`Self::test_replay_loaded_project`] this
+    /// lets a test open a project that really came off disk, which is the
+    /// only way to exercise what happens to a plugin's blob when the
+    /// plugin itself can't be instantiated.
+    #[doc(hidden)]
+    pub fn test_replay_loaded_project_from(&mut self, loaded: crate::project::LoadedProject) {
+        crate::update::project_io::replay_loaded_project(self, Box::new(loaded));
+    }
+
+    /// Test-only: the plugin-state blobs a save would write, given the
+    /// blobs the engine reported for its live instances (empty for a
+    /// project whose plugins all failed to instantiate). Exactly what the
+    /// save collector and template capture use.
+    #[doc(hidden)]
+    pub fn test_plugin_states_for_save(
+        &self,
+        engine_states: Vec<(resonance_audio::types::PluginInstanceId, Vec<u8>)>,
+    ) -> Vec<(resonance_audio::types::PluginInstanceId, Vec<u8>)> {
+        crate::update::plugin_states_for_save(self, engine_states)
+    }
+
+    /// Test-only: capture the open project as a user template under
+    /// `root`, instead of the user's real template library. Drives the
+    /// same body the `SaveAsTemplate` message runs.
+    #[doc(hidden)]
+    pub fn test_save_as_template_in(
+        &self,
+        root: &std::path::Path,
+        name: &str,
+        description: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        crate::update::project_io::save_current_as_template_in(
+            self,
+            root,
+            name,
+            description,
+            crate::update::project_io::TemplateCaptureOptions {
+                include_markers_and_tempo: true,
+                include_master_chain: true,
+            },
+        )
+    }
 }

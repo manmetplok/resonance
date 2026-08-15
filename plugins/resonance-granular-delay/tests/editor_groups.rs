@@ -11,10 +11,11 @@ use resonance_granular_delay::dsp::{
     DampingFilter, FbRoute, QualityTier, Scheduler, TimeMode,
 };
 use resonance_granular_delay::editor::controls::{
-    control_kind, ControlKind, FB_ROUTE_LABELS, FILTER_TYPE_LABELS, GROUPS, GROUP_ROWS,
-    QUALITY_LABELS, QUANTIZE_LABELS, ROOT_LABELS, SCALE_LABELS, SCHEDULER_LABELS,
-    TIME_MODE_LABELS,
+    control_kind, pending_dsp, ControlKind, FB_ROUTE_LABELS, FILTER_TYPE_LABELS, GROUPS,
+    GROUP_ROWS, PENDING_DSP, QUALITY_LABELS, QUANTIZE_LABELS, ROOT_LABELS, SCALE_LABELS,
+    SCHEDULER_LABELS, TIME_MODE_LABELS,
 };
+use resonance_granular_delay::presets::PRESETS;
 use resonance_granular_delay::params::{GranularDelayParams, PARAM_COUNT};
 use resonance_granular_delay::quantize::PitchQuantize;
 use resonance_music_theory::Mode;
@@ -86,7 +87,8 @@ fn widget_kinds_match_declared_param_ranges() {
 
 #[test]
 fn toggles_are_exactly_the_boolean_params() {
-    let expected = [0usize, 6, 9, 19]; // sync, fb_pitch, density_sync, freeze
+    // sync, fb_pitch, density_sync, freeze, align
+    let expected = [0usize, 6, 9, 19, 29];
     for index in 0..PARAM_COUNT {
         let is_toggle = matches!(control_kind(index), ControlKind::Toggle);
         assert_eq!(
@@ -257,5 +259,76 @@ fn root_labels_cover_the_twelve_pitch_classes() {
     let mut set = std::collections::HashSet::new();
     for label in ROOT_LABELS {
         assert!(set.insert(*label), "duplicate root label {label}");
+    }
+}
+
+// --- Controls whose DSP does not exist yet (ba todo #1277) ---
+
+/// The stopgap register itself: every entry points at a real parameter,
+/// names the epic #203 todo that will implement it, and `pending_dsp`
+/// answers for exactly those indices. When a todo lands its entry goes —
+/// and until then this test keeps the register from rotting.
+#[test]
+fn pending_dsp_entries_name_their_implementing_todo() {
+    let params = GranularDelayParams::default();
+    for &(index, reason) in PENDING_DSP {
+        assert!(
+            index < PARAM_COUNT,
+            "PENDING_DSP references out-of-range param index {index}"
+        );
+        assert_eq!(
+            pending_dsp(index),
+            Some(reason),
+            "pending_dsp({index}) disagrees with the PENDING_DSP table"
+        );
+        assert!(
+            reason.contains("not implemented yet"),
+            "param '{}' must say it is not implemented: {reason}",
+            params.param_at(index).id()
+        );
+        assert!(
+            reason.contains("ba todo #"),
+            "param '{}' must name the todo that implements it: {reason}",
+            params.param_at(index).id()
+        );
+    }
+    for index in 0..PARAM_COUNT {
+        assert_eq!(
+            pending_dsp(index).is_some(),
+            PENDING_DSP.iter().any(|(i, _)| *i == index),
+            "pending_dsp({index}) does not match the table"
+        );
+    }
+}
+
+/// No factory preset may imply behaviour the DSP does not have: a
+/// parameter that is still inert must sit at its neutral default in
+/// every shipped preset (ba todo #1277 — `eighth_triplet_echo` used to
+/// set `density_sync` to 1, promising a tempo-locked grain rate that
+/// never happened).
+#[test]
+fn no_preset_sets_a_control_whose_dsp_is_missing() {
+    let params = GranularDelayParams::default();
+    for &(index, _) in PENDING_DSP {
+        let p = params.param_at(index);
+        let neutral = p.default_plain();
+        for entry in PRESETS {
+            let value: serde_json::Value = serde_json::from_str(entry.json)
+                .unwrap_or_else(|e| panic!("preset '{}' is invalid JSON: {e}", entry.name));
+            let got = value
+                .get("params")
+                .and_then(|m| m.get(p.id()))
+                .and_then(|v| v.as_f64())
+                .unwrap_or_else(|| {
+                    panic!("preset '{}' is missing param '{}'", entry.name, p.id())
+                });
+            assert!(
+                (got - neutral).abs() < 1e-6,
+                "preset '{}' sets inert param '{}' to {got} (must stay at its neutral \
+                 {neutral} until the DSP lands)",
+                entry.name,
+                p.id()
+            );
+        }
     }
 }

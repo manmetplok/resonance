@@ -19,7 +19,9 @@ mod meters;
 mod scope_view;
 mod theme;
 #[cfg(feature = "editor")]
-mod tone3000_panel;
+// `pub` so `tests/tone3000_browser.rs` can assert the presentation-only
+// helpers (result heading, filter labels) without an egui context.
+pub mod tone3000_panel;
 pub mod tuner_view;
 
 pub use factory::AmpEditorFactory;

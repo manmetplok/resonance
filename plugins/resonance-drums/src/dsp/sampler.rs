@@ -32,6 +32,10 @@ pub struct DrumSampler {
     /// Shared display state for the editor: packed `rr_index | (n_rrs << 16)`.
     /// Written after each `note_on`; `None` when running headless / in tests.
     last_rr: Option<Arc<[AtomicU32; NUM_PADS]>>,
+    /// Shared OUT meter for the editor: this block's peak across every
+    /// output port as `f32::to_bits`, `[left, right]`. Written at the end
+    /// of `render_block`; `None` when running headless / in tests.
+    out_peak: Option<Arc<[AtomicU32; 2]>>,
     /// Receives new kit versions from the loader thread. The audio thread is
     /// the sole consumer; `try_recv` at the top of each process block swaps
     /// in a freshly loaded kit without blocking.
@@ -74,6 +78,7 @@ impl DrumSampler {
             voice_counter: 0,
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
             last_rr: None,
+            out_peak: None,
             kit_receiver,
             janitor_sender,
             retired_pads: None,
@@ -90,6 +95,20 @@ impl DrumSampler {
     /// per-pad round-robin indicators.
     pub fn set_last_rr(&mut self, last_rr: Arc<[AtomicU32; NUM_PADS]>) {
         self.last_rr = Some(last_rr);
+    }
+
+    /// Attach the shared OUT meter so the editor's status bar can show the
+    /// plugin's real output level instead of a dead bar.
+    pub fn set_out_peak(&mut self, out_peak: Arc<[AtomicU32; 2]>) {
+        self.out_peak = Some(out_peak);
+    }
+
+    /// Bytes of decoded sample data this kit holds, counting every mic
+    /// bank, velocity layer and round-robin take. Used for the status
+    /// bar's memory readout, which is a measurement of the kit — not a
+    /// guess at the process's RSS.
+    pub fn total_sample_bytes(&self) -> usize {
+        crate::sample_info::total_sample_bytes(&self.pads)
     }
 
     /// Load the embedded default samples as a single-bank fallback kit.
@@ -222,10 +241,12 @@ impl DrumSampler {
         let n_rrs = layer.round_robins.len();
         let rr_index = pick_rr(&mut self.rr_counters[pad_index][counter_slot], n_rrs);
 
-        // Publish the last-played RR for the editor display.
+        // Publish the last-played RR for the editor display: both which
+        // take fired and how many the layer holds, so the pad can show
+        // "take 2 of 3" rather than just "something played".
         if let Some(ref last_rr) = self.last_rr {
             last_rr[pad_index].store(
-                (rr_index as u32) | ((n_rrs as u32) << 16),
+                crate::rr_display::pack(rr_index, n_rrs),
                 Ordering::Relaxed,
             );
         }
@@ -341,6 +362,9 @@ impl DrumSampler {
         }
 
         if self.pads.is_empty() && self.retired_pads.is_none() {
+            // Nothing to render — the ports are silent, and the OUT meter
+            // must say so rather than hold its last value.
+            self.publish_out_peak(outputs, frames);
             return;
         }
 
@@ -547,6 +571,29 @@ impl DrumSampler {
             }
         }
         self.prev_master_volume = master_vol;
+
+        self.publish_out_peak(outputs, frames);
+    }
+
+    /// Publish this block's peak level across every output port for the
+    /// editor's OUT meter. Written every block (including silent ones) so
+    /// the meter falls back to −∞ instead of freezing at the last hit.
+    fn publish_out_peak(&self, outputs: &[PortBuffers<'_>], frames: usize) {
+        let Some(ref out_peak) = self.out_peak else {
+            return;
+        };
+        let mut peak_l = 0.0f32;
+        let mut peak_r = 0.0f32;
+        for port in outputs.iter() {
+            for s in port.left[..frames].iter() {
+                peak_l = peak_l.max(s.abs());
+            }
+            for s in port.right[..frames].iter() {
+                peak_r = peak_r.max(s.abs());
+            }
+        }
+        out_peak[0].store(peak_l.to_bits(), Ordering::Relaxed);
+        out_peak[1].store(peak_r.to_bits(), Ordering::Relaxed);
     }
 
     /// Kill all active voices immediately.

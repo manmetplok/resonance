@@ -15,7 +15,14 @@
 
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 29;
+pub const PARAM_COUNT: usize = 31;
+
+/// Declared range of the free-running grain density, grains per second.
+/// The tempo-locked rate (`density_sync`, ba todo #1322) is clamped to
+/// the same range, so a very slow or very fast host tempo can never
+/// drive the cloud outside what the knob can ask for.
+pub const DENSITY_MIN_HZ: f32 = 0.5;
+pub const DENSITY_MAX_HZ: f32 = 100.0;
 
 pub struct GranularDelayParams {
     // --- Time -----------------------------------------------------------
@@ -52,8 +59,20 @@ pub struct GranularDelayParams {
     // --- Grains ---------------------------------------------------------
     pub grain_size_ms: FloatParam,
     pub density_hz: FloatParam,
-    /// Tempo-synced density (grains per beat division). TODO(epic-196).
+    /// Tempo-synced density (ba todo #1322): on, one grain is spawned
+    /// per [`Self::density_division`] of the host tempo instead of at
+    /// the free-running [`Self::density_hz`] rate, and the cloud
+    /// re-locks on every tempo change (the rate is resolved per block).
+    /// Falls back to `density_hz` when the host reports no tempo. The
+    /// resolved rate is clamped to [`DENSITY_MIN_HZ`]..=[`DENSITY_MAX_HZ`].
     pub density_sync: BoolParam,
+    /// Note value one grain is spawned per while [`Self::density_sync`]
+    /// is on; indexes the same table as [`Self::division`] (see
+    /// `crate::sync`). Deliberately its *own* division rather than the
+    /// delay's: the grain rate is a texture, and locking it to the tap
+    /// division would leave "1/4 delay, 1/16 grains" unreachable
+    /// (ba todo #1322).
+    pub density_division: IntParam,
     /// 0 = Sync, 1 = Async, 2 = Pitch-Sync (ba todo #1082, doc #252
     /// §4): PSOLA-style Voice/Mono mode — the real-time tracker runs on
     /// the written input; while voiced, grain onsets snap to pitch
@@ -61,6 +80,16 @@ pub struct GranularDelayParams {
     /// formants preserved); unvoiced spans fall back to Async
     /// transparently.
     pub scheduler: IntParam,
+    /// WSOLA-style correlation-aligned grain onsets (ba todo #1320,
+    /// doc #252 §4-5): before a grain spawns, the engine searches a few
+    /// milliseconds around its nominal read position for the lag that
+    /// maximizes cross-correlation with the natural continuation of the
+    /// previous grain, and snaps the onset there. Splices become
+    /// phase-coherent with the sounding material — most of the
+    /// pitch-synchronous quality benefit with no pitch tracker, and it
+    /// works on polyphonic material. Off is bit-identical to the
+    /// unaligned engine and costs nothing.
+    pub align: BoolParam,
 
     // --- Pitch ----------------------------------------------------------
     pub pitch: FloatParam,
@@ -97,8 +126,14 @@ pub struct GranularDelayParams {
     /// Damping filter cutoff in the feedback loop (smoothed; the
     /// coefficient updates at block rate).
     pub filter_hz: FloatParam,
-    /// Allpass smear of the wet path. TODO(epic-196): follow-up; not in
-    /// #1074's feedback DoD.
+    /// Allpass smear of the wet path.
+    ///
+    /// NOT IMPLEMENTED: this is not a field of `BlockParams` and no
+    /// stage in `crate::dsp` reads it. Implemented by **ba todo #1321**
+    /// (epic #203); until then the editor renders the Diffuse knob
+    /// unavailable and every factory preset leaves it at 0 — see
+    /// `crate::editor::controls::PENDING_DSP` (ba todo #1277). Remove
+    /// this note, and its `PENDING_DSP` entry, when #1321 lands.
     pub diffusion: FloatParam,
     pub pan_spread: FloatParam,
     /// M/S width on the wet sum, 0–150 % (smoothed; ba todo #1077).
@@ -147,6 +182,9 @@ impl GranularDelayParams {
             // stays stable (ba todo #1078).
             27 => &self.root,
             28 => &self.scale,
+            // Appended for the same reason (ba todos #1320, #1322).
+            29 => &self.align,
+            30 => &self.density_division,
             _ => &self.sync,
         }
     }
@@ -223,8 +261,8 @@ impl Default for GranularDelayParams {
                 "Density",
                 22.0,
                 FloatRange::Skewed {
-                    min: 0.5,
-                    max: 100.0,
+                    min: DENSITY_MIN_HZ,
+                    max: DENSITY_MAX_HZ,
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
@@ -233,12 +271,24 @@ impl Default for GranularDelayParams {
 
             density_sync: BoolParam::new("density_sync", "Density Sync", false),
 
+            density_division: IntParam::new(
+                "density_division",
+                "Density Div",
+                10, // 1/16 — a grain per sixteenth is a usable default
+                IntRange::Linear { min: 0, max: 11 },
+            ),
+
             scheduler: IntParam::new(
                 "scheduler",
                 "Scheduler",
                 1, // Async (doc #252 §9 default)
                 IntRange::Linear { min: 0, max: 2 },
             ),
+
+            // Off by default: the aligned and unaligned paths are two
+            // different (both valid) grain characters, and off keeps
+            // every existing project and preset bit-identical.
+            align: BoolParam::new("align", "Align", false),
 
             pitch: FloatParam::new(
                 "pitch",

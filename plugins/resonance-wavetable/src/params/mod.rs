@@ -64,7 +64,6 @@ impl WavetableParams {
                 0.8,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1)),
 
             glide_time: FloatParam::new(
@@ -98,7 +97,6 @@ impl WavetableParams {
                     max: 1.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             // Oscillators

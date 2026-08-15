@@ -1,8 +1,10 @@
 /// Plugin parameters: master volume + per-pad volume, pan, mute, OH blend,
-/// balance, and articulation toggle.
+/// balance, and articulation choice.
 use resonance_plugin::*;
 
-use crate::drum_map::NUM_PADS;
+use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
+use crate::choice::ChoiceParam;
+use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
 
 /// Number of param fields per pad, used for param indexing.
 pub const PARAMS_PER_PAD: usize = 6;
@@ -27,6 +29,18 @@ impl Default for DrumParams {
     }
 }
 
+impl DrumParams {
+    /// The articulation of every pad, in the shape the kit loader takes:
+    /// false = primary piece, true = the alternate one.
+    ///
+    /// Derived — the parameters are the source of truth. Anything that
+    /// needs the articulation set (the loader, the editor, the watcher)
+    /// reads it from here rather than keeping its own copy.
+    pub fn articulations(&self) -> [bool; NUM_PADS] {
+        std::array::from_fn(|i| self.pads[i].articulation.value() != ARTICULATION_PRIMARY)
+    }
+}
+
 pub struct PadParams {
     pub volume: FloatParam,
     pub pan: FloatParam,
@@ -48,10 +62,21 @@ pub struct PadParams {
     /// snare Top), 1.0 favours the "right" side (kick Out or snare
     /// Btm). Ignored for pads with fewer than two close-mic banks.
     pub balance: FloatParam,
-    /// Articulation toggle: when true, use the alternate sample set
-    /// (e.g. "ohne Teppich" instead of "mit Teppich"). Only
-    /// meaningful for pads whose `PadMapping::has_articulation` is true.
-    pub articulation: BoolParam,
+    /// Articulation choice: which recorded variant of the piece this pad
+    /// plays, labelled by [`ARTICULATION_LABELS`] (0 = "mit Teppich",
+    /// 1 = "ohne Teppich").
+    ///
+    /// **This parameter is the source of truth.** The kit loader builds
+    /// the pad from the piece it selects, so writing it — from the
+    /// inspector's chips, a host automation lane, or `set_plugin_param`
+    /// over the control API — reloads the pad's samples through the same
+    /// path (see [`crate::articulation`]).
+    ///
+    /// Hidden for pads the kit has no alternate recording of: they would
+    /// be a control that cannot move anything, so the host is not offered
+    /// one. The id still exists and still persists, so nothing that was
+    /// saved against it breaks.
+    pub articulation: ChoiceParam,
 }
 
 impl PadParams {
@@ -105,7 +130,15 @@ impl PadParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            articulation: BoolParam::new(art_id, art_name, false),
+            articulation: {
+                let param =
+                    ChoiceParam::new(art_id, art_name, ARTICULATION_PRIMARY, ARTICULATION_LABELS);
+                if PAD_MAPPINGS[index].has_articulation {
+                    param
+                } else {
+                    param.hidden()
+                }
+            },
         }
     }
 }

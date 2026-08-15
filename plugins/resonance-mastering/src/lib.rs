@@ -19,7 +19,7 @@ pub mod stages;
 pub mod viz;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use chain::Chain;
 use params::MasteringParams;

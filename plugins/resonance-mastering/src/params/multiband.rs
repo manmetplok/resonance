@@ -45,6 +45,7 @@ impl MultibandBandParams {
                 2.0,
                 FloatRange::Linear { min: 1.0, max: 8.0 },
             )
+            .with_unit(":1")
             .with_value_to_string(v2s_f32_ratio()),
             gain: FloatParam::new(
                 leak(format!("{prefix}_b{index}_gain")),

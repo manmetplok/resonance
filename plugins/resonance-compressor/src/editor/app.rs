@@ -7,7 +7,7 @@ use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::CompressorParams;
 use crate::presets::PRESETS;
-use crate::viz::CompressorViz;
+use crate::viz::{CompressorViz, DetectorSource};
 
 use super::{control_strip, curve, history, meters, theme};
 
@@ -67,6 +67,37 @@ fn draw_header(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
                     }
                 }
             });
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(8.0);
+        draw_detector_pill(ui, app.viz.detector_source());
+    });
+}
+
+/// States, in words, which signal the detector is listening to. Without
+/// this the only clue that a key is connected is the GR meter moving
+/// while the input meter sits still, which reads as a malfunction.
+fn draw_detector_pill(ui: &mut egui::Ui, detector: DetectorSource) {
+    let (color, dot) = if detector.key_connected() {
+        (theme::ACCENT, "\u{25cf}")
+    } else {
+        (theme::TEXT_DIM, "\u{25cb}")
+    };
+    ui.label(egui::RichText::new(dot).color(color).size(9.0));
+    ui.add_space(3.0);
+    let text = egui::RichText::new(detector.header_text()).color(color);
+    let text = if detector.key_connected() {
+        text.strong()
+    } else {
+        text
+    };
+    ui.label(text).on_hover_text(if detector.key_connected() {
+        "An external sidechain key is connected: gain reduction follows the key, \
+         not this track. The IN meter still shows this track's input."
+    } else {
+        "No sidechain key is connected: the compressor keys off its own input, \
+         which is what the IN/DET meter shows."
     });
 }
 
@@ -123,7 +154,12 @@ fn draw_center(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
         egui::pos2(gr_rect.max.x + meter_gap, meters_rect.min.y),
         egui::pos2(gr_rect.max.x + meter_gap + meter_w, meters_rect.max.y),
     );
-    meters::draw_input_meter(&painter, in_rect, app.viz.read_input_db());
+    meters::draw_input_meter(
+        &painter,
+        in_rect,
+        app.viz.read_input_db(),
+        app.viz.detector_source(),
+    );
     meters::draw_gr_meter(&painter, gr_rect, app.viz.read_gr_db());
     meters::draw_output_meter(&painter, out_rect, app.viz.read_output_db());
 }

@@ -11,6 +11,8 @@ use drum_map::NUM_PADS;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use resonance_plugin::*;
 
+pub mod articulation;
+pub mod choice;
 #[cfg(feature = "editor")]
 pub(crate) mod download;
 pub mod drum_map;
@@ -21,8 +23,12 @@ pub mod kit;
 pub mod kit_loader;
 mod mic_catalog;
 pub mod params;
+pub mod reload;
+pub mod rr_display;
+pub mod sample_info;
 pub mod voice;
 
+use articulation::ArticulationWatcher;
 #[cfg(feature = "editor")]
 use download::WorkerHandle;
 use kit::LoadedPad;
@@ -62,13 +68,57 @@ pub struct KitBridge {
     /// User-chosen global overhead setup key. Defaults to
     /// `DEFAULT_OVERHEAD_SETUP` and persists via plugin state.
     pub overhead_setup_key: Arc<Mutex<String>>,
-    /// Per-pad articulation toggle state. When true, the loader uses the
-    /// alternate piece name (e.g. "ohne Teppich"). Persisted via plugin state.
-    pub articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
+    /// The plugin's parameters. Shared here so everything off the audio
+    /// thread — the editor, the loader, the articulation watcher — reads
+    /// a pad's articulation from the one place that holds it (see
+    /// [`articulation`]), instead of from a private mirror.
+    pub params: Arc<params::DrumParams>,
+    /// The articulation set the kit currently in memory (or the load in
+    /// flight) was built from. Not a second source of truth: it is a
+    /// record of what was decoded, which is what tells the watcher a
+    /// parameter has moved since. Written by [`kit_loader::spawn_loader`].
+    pub loaded_articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
+    /// Wakes the articulation watcher so an editor click reloads without
+    /// waiting for its poll. Bounded and best-effort: a full channel
+    /// already has a pending wake, which is all a ping means.
+    pub articulation_wake: Sender<()>,
     /// Last-played round-robin display state. Written by the audio thread
-    /// after each `note_on`, read by the editor for per-pad RR indicators.
-    /// Packed as `rr_index | (n_rrs << 16)`; zero means "never triggered".
+    /// after each `note_on`, read by the editor for per-pad "take N of M"
+    /// indicators. Packed and unpacked by [`rr_display`]; zero means
+    /// "never triggered".
     pub last_rr: Arc<[AtomicU32; NUM_PADS]>,
+    /// Frames in the last block the host asked us to render. Written by
+    /// `process` on the audio thread, read by the editor's status bar.
+    /// Sentinel `0` means "no block has been processed yet".
+    pub block_frames: Arc<AtomicU32>,
+    /// Block peak of the plugin's output, across every port, as
+    /// `f32::to_bits`: `[left, right]`. Written by the sampler at the end
+    /// of every render, read (and decayed) by the editor's OUT meter.
+    pub out_peak: Arc<[AtomicU32; 2]>,
+    /// Bytes of decoded sample data currently held in memory. Published by
+    /// whoever built the live kit — the loader thread on a successful load,
+    /// `initialize` for the embedded fallback. Sentinel `0` = nothing loaded.
+    pub kit_bytes: Arc<AtomicU64>,
+    /// Per-pad identity of the sample a full-velocity hit plays, measured
+    /// from the decoded takes. Published alongside every kit build; read by
+    /// the inspector's SAMPLE stage. Empty until the first kit is built.
+    pub pad_samples: Arc<Mutex<Vec<Option<sample_info::PadSampleInfo>>>>,
+}
+
+impl KitBridge {
+    /// Per-pad articulation, derived from the parameters: false = the
+    /// pad's primary piece, true = its alternate one. This is what the
+    /// kit loader is built from, so a parameter write — from the editor,
+    /// host automation, or `set_plugin_param` — is what selects samples.
+    pub fn articulations(&self) -> [bool; drum_map::NUM_PADS] {
+        self.params.articulations()
+    }
+
+    /// Ask the articulation watcher to look now rather than at its next
+    /// poll. Best-effort by design — see [`Self::articulation_wake`].
+    pub fn wake_articulation_watcher(&self) {
+        let _ = self.articulation_wake.try_send(());
+    }
 }
 
 pub struct ResonanceDrums {
@@ -80,6 +130,9 @@ pub struct ResonanceDrums {
     sampler: DrumSampler,
     #[doc(hidden)]
     pub bridge: KitBridge,
+    /// Keeps the articulation watcher thread running for as long as this
+    /// plugin instance lives. Never read — dropping it stops the thread.
+    _articulation_watcher: ArticulationWatcher,
     /// Download worker for fetching drumkits from the server. Only present
     /// in editor builds.
     #[cfg(feature = "editor")]
@@ -103,6 +156,10 @@ impl ResonancePlugin for ResonanceDrums {
         // newest loaded kit reaches the audio thread.
         let (kit_sender, kit_receiver): (Sender<Vec<LoadedPad>>, Receiver<Vec<LoadedPad>>) =
             bounded(1);
+        // Articulation wake-ups carry no payload, so a depth of one is
+        // enough: a queued ping already says "look again".
+        let (articulation_wake, articulation_wake_rx): (Sender<()>, Receiver<()>) = bounded(1);
+        let params = Arc::new(DrumParams::default());
         let bridge = KitBridge {
             kit_path: Arc::new(Mutex::new(None)),
             kit_status: Arc::new(Mutex::new(KitStatus::Empty)),
@@ -114,15 +171,24 @@ impl ResonancePlugin for ResonanceDrums {
                 PadMicChoices::default()
             }))),
             overhead_setup_key: Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string())),
-            articulations: Arc::new(Mutex::new([false; drum_map::NUM_PADS])),
+            params: params.clone(),
+            loaded_articulations: Arc::new(Mutex::new(params.articulations())),
+            articulation_wake,
             last_rr: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+            block_frames: Arc::new(AtomicU32::new(0)),
+            out_peak: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+            kit_bytes: Arc::new(AtomicU64::new(0)),
+            pad_samples: Arc::new(Mutex::new(Vec::new())),
         };
         let mut sampler = DrumSampler::new(kit_receiver);
         sampler.set_last_rr(bridge.last_rr.clone());
+        sampler.set_out_peak(bridge.out_peak.clone());
+        let watcher = articulation::spawn_watcher(&bridge, articulation_wake_rx);
         Self {
-            params: Arc::new(DrumParams::default()),
+            params,
             sampler,
             bridge,
+            _articulation_watcher: watcher,
             #[cfg(feature = "editor")]
             download_worker: Arc::new(download::spawn()),
         }
@@ -152,17 +218,18 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn output_layout(&self) -> Vec<resonance_plugin::OutputPortSpec> {
-        // 7 stereo output ports: Main + 5 drum groups + Overhead. See the
-        // pad mapping in `drum_map.rs` for which pad feeds which port.
-        [
-            "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
-        ]
-        .iter()
-        .map(|name| resonance_plugin::OutputPortSpec {
-            name: std::borrow::Cow::Borrowed(name),
-            channel_count: 2,
-        })
-        .collect()
+        // 7 stereo output ports: Main + 5 drum groups + Overhead, declared
+        // unconditionally — the plugin has no stereo-only mode. See the pad
+        // mapping in `drum_map.rs` for which pad feeds which port, and
+        // `kit::OUTPUT_PORT_NAMES` for the shared name list the editor's KIT
+        // card reads back.
+        kit::OUTPUT_PORT_NAMES
+            .iter()
+            .map(|name| resonance_plugin::OutputPortSpec {
+                name: std::borrow::Cow::Borrowed(name),
+                channel_count: 2,
+            })
+            .collect()
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
@@ -170,6 +237,10 @@ impl ResonancePlugin for ResonanceDrums {
             .sample_rate
             .store(sample_rate.to_bits(), Ordering::Release);
         self.sampler.load_defaults(sample_rate);
+        // Publish what the fallback kit actually costs and what it holds,
+        // so the status bar and the inspector's SAMPLE stage describe the
+        // kit that is really loaded rather than a placeholder.
+        self.publish_kit_facts(sample_rate);
 
         // If a kit path was set (either by a prior session via load_state or
         // by the editor) re-kick the loader at the current sample rate so the
@@ -178,7 +249,7 @@ impl ResonancePlugin for ResonanceDrums {
         if let Some(path) = path {
             let overhead_key = self.bridge.overhead_setup_key.lock().clone();
             let choices = self.bridge.pad_choices.lock().clone();
-            let articulations = *self.bridge.articulations.lock();
+            let articulations = self.bridge.articulations();
             kit_loader::spawn_loader(
                 path,
                 sample_rate,
@@ -204,6 +275,11 @@ impl ResonancePlugin for ResonanceDrums {
         _tempo: Option<TempoInfo>,
     ) {
         resonance_common::flush_denormals();
+
+        // Real block size for the editor's status bar.
+        self.bridge
+            .block_frames
+            .store(frames as u32, Ordering::Relaxed);
 
         // Swap in a freshly loaded kit if one is waiting.
         self.sampler.try_swap_kit();
@@ -258,7 +334,7 @@ impl ResonancePlugin for ResonanceDrums {
             kit_path: self.bridge.kit_path.clone(),
             overhead_setup_key: self.bridge.overhead_setup_key.clone(),
             pad_choices: self.bridge.pad_choices.clone(),
-            articulations: self.bridge.articulations.clone(),
+            params: self.params.clone(),
         }))
     }
 
@@ -272,18 +348,43 @@ impl ResonancePlugin for ResonanceDrums {
     }
 }
 
+impl ResonanceDrums {
+    /// Measure the kit the sampler currently holds and publish the two
+    /// facts the editor displays about it: how much decoded audio is in
+    /// memory, and what sample each pad plays at full velocity.
+    ///
+    /// Called from `initialize` for the embedded fallback kit; the loader
+    /// thread publishes the same two facts for kits it loads from disk
+    /// (see `kit_loader::spawn_loader`). Both callers are off the audio
+    /// thread — nothing here runs in `process`.
+    fn publish_kit_facts(&self, sample_rate: f32) {
+        self.bridge
+            .kit_bytes
+            .store(self.sampler.total_sample_bytes() as u64, Ordering::Relaxed);
+        *self.bridge.pad_samples.lock() =
+            sample_info::infos_for_pads(&self.sampler.pads, sample_rate);
+    }
+}
+
 /// Persists the drum plugin's kit path, the globally selected overhead
-/// setup, per-pad close-mic picks, and per-pad articulation toggles
-/// alongside the plugin's params.
+/// setup, and per-pad close-mic picks alongside the plugin's params.
 /// The saver holds only shared Arcs so the CLAP bridge can call save/load
 /// from the main thread while the plugin is in the audio processor
 /// without touching audio-thread state.
+///
+/// Articulations are **not** state of their own any more: they are
+/// parameters, so `params_to_json` already carries them. The legacy
+/// `articulations` array is still written for older builds to read, and
+/// still read back for pads whose parameter is missing from the file —
+/// see [`DrumsExtraState::load`].
 #[doc(hidden)]
 pub struct DrumsExtraState {
     pub kit_path: Arc<Mutex<Option<PathBuf>>>,
     pub overhead_setup_key: Arc<Mutex<String>>,
     pub pad_choices: Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
-    pub articulations: Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
+    /// Read-only here: the saver mirrors the articulation params into the
+    /// legacy key on save, and migrates the legacy key into them on load.
+    pub params: Arc<DrumParams>,
 }
 
 impl ExtraStateSaver for DrumsExtraState {
@@ -322,10 +423,16 @@ impl ExtraStateSaver for DrumsExtraState {
             "pad_mic_choices".to_string(),
             serde_json::Value::Array(pads_array),
         );
-        // Per-pad articulation toggles as an array of booleans.
-        let arts = self.articulations.lock();
-        let arts_array: Vec<serde_json::Value> =
-            arts.iter().map(|&v| serde_json::Value::Bool(v)).collect();
+        // Per-pad articulation toggles as an array of booleans. Derived
+        // from the params (which `params_to_json` also saves under
+        // `pad_N_articulation`); written so a build older than ba todo
+        // #1325 can still open the project.
+        let arts_array: Vec<serde_json::Value> = self
+            .params
+            .articulations()
+            .iter()
+            .map(|&v| serde_json::Value::Bool(v))
+            .collect();
         map.insert(
             "articulations".to_string(),
             serde_json::Value::Array(arts_array),
@@ -362,11 +469,25 @@ impl ExtraStateSaver for DrumsExtraState {
             }
         }
 
+        // Legacy migration only. A project saved by any build that had
+        // the `pad_N_articulation` param carries the value there, and
+        // `load_params_from_json` has already applied it; re-applying the
+        // array would be a second source of truth for the same fact. So
+        // adopt an entry only for a pad whose param the file does not
+        // have.
         if let Some(arr) = state.get("articulations").and_then(|v| v.as_array()) {
-            let mut guard = self.articulations.lock();
+            let saved_params = state.get("params").and_then(|v| v.as_object());
             for (i, val) in arr.iter().enumerate().take(drum_map::NUM_PADS) {
-                if let Some(b) = val.as_bool() {
-                    guard[i] = b;
+                let Some(b) = val.as_bool() else { continue };
+                let has_param = saved_params
+                    .map(|m| m.contains_key(&format!("pad_{i}_articulation")))
+                    .unwrap_or(false);
+                if !has_param {
+                    self.params.pads[i].articulation.set_value(if b {
+                        articulation::ARTICULATION_ALT
+                    } else {
+                        articulation::ARTICULATION_PRIMARY
+                    });
                 }
             }
         }

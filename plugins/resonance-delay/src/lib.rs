@@ -175,27 +175,16 @@ impl ResonancePlugin for ResonanceDelay {
         let delay_ms = self.smoothers.delay_samples.current() / self.sample_rate * 1000.0;
         self.viz.store_delay_time_ms(delay_ms);
 
-        // Compute echo tap positions for the viz.
-        let mut echo_times_l = [0.0f32; viz::MAX_ECHO_TAPS];
-        let mut echo_levels_l = [f32::NEG_INFINITY; viz::MAX_ECHO_TAPS];
-        let mut echo_times_r = [0.0f32; viz::MAX_ECHO_TAPS];
-        let mut echo_levels_r = [f32::NEG_INFINITY; viz::MAX_ECHO_TAPS];
-        let fb = self.smoothers.feedback.current().min(1.0);
-        // Running product instead of fb.powf(n) per tap: tap n's level
-        // is fb^n, accumulated multiplicatively across the loop.
-        let mut fb_gain = 1.0f32;
-        for tap in 0..viz::MAX_ECHO_TAPS {
-            let n_taps = (tap + 1) as f32;
-            let t_ms = delay_ms * n_taps;
-            fb_gain *= fb;
-            let level = linear_to_db(fb_gain);
-            echo_times_l[tap] = t_ms;
-            echo_levels_l[tap] = level;
-            echo_times_r[tap] = t_ms;
-            echo_levels_r[tap] = level;
-        }
-        self.viz
-            .store_echo_taps(&echo_times_l, &echo_levels_l, &echo_times_r, &echo_levels_r);
+        // Echo tap positions for the viz. The right train carries the
+        // stereo offset and, on ping-pong, alternates channels — so the
+        // picture matches what the DSP above actually does.
+        let delay_r_ms = delay_ms * (1.0 + stereo_offset);
+        self.viz.store_taps(&viz::echo_taps(
+            delay_ms,
+            delay_r_ms,
+            self.smoothers.feedback.current(),
+            routing,
+        ));
     }
 
     #[cfg(feature = "editor")]

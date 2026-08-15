@@ -42,7 +42,14 @@ pub struct OscSetup {
 pub struct UnisonSubVoice {
     pub osc1_phase: f64,
     pub osc2_phase: f64,
-    pub detune_cents: f32,
+    /// This sub-voice's symmetric position in the unison stack, -1..=1 (0 for
+    /// a single sub-voice).
+    ///
+    /// Detune used to be resolved to absolute cents here at note-on. It is
+    /// now the *shape* of the stack only, and the width comes from the block
+    /// snapshot at control rate — which is what lets `ModDest::UnisonDetune`
+    /// widen or narrow a voice that is already sounding (ba todo #1323).
+    pub detune_spread: f32,
     pub pan_offset: f32,
     /// Control-rate cached oscillator setup, refreshed by the render loop.
     pub osc1_setup: OscSetup,
@@ -54,7 +61,7 @@ impl UnisonSubVoice {
         Self {
             osc1_phase: 0.0,
             osc2_phase: 0.0,
-            detune_cents: 0.0,
+            detune_spread: 0.0,
             pan_offset: 0.0,
             osc1_setup: OscSetup::default(),
             osc2_setup: OscSetup::default(),
@@ -172,7 +179,6 @@ impl Voice {
         velocity: f32,
         age: u64,
         unison_count: usize,
-        detune_cents: f32,
         spread: f32,
         glide: bool,
         lfo1_retrigger: bool,
@@ -214,7 +220,7 @@ impl Voice {
         for u in 0..MAX_UNISON {
             self.unison[u].reset();
         }
-        distribute_unison(&mut self.unison, self.unison_count, detune_cents, spread);
+        distribute_unison(&mut self.unison, self.unison_count, spread);
     }
 
     pub fn release(&mut self) {
@@ -232,21 +238,20 @@ impl Voice {
     }
 }
 
-/// Distribute unison sub-voices symmetrically with detune and stereo spread.
-fn distribute_unison(
-    unison: &mut [UnisonSubVoice; MAX_UNISON],
-    count: usize,
-    detune_cents: f32,
-    spread: f32,
-) {
+/// Distribute unison sub-voices symmetrically across the stereo field and
+/// give each its position in the detune spread.
+///
+/// The detune *width* is deliberately not resolved here — see
+/// [`UnisonSubVoice::detune_spread`].
+fn distribute_unison(unison: &mut [UnisonSubVoice; MAX_UNISON], count: usize, spread: f32) {
     if count == 1 {
-        unison[0].detune_cents = 0.0;
+        unison[0].detune_spread = 0.0;
         unison[0].pan_offset = 0.0;
         return;
     }
     for (i, u) in unison.iter_mut().enumerate().take(count) {
         let t = (i as f32 / (count - 1) as f32) * 2.0 - 1.0; // -1 to +1
-        u.detune_cents = t * detune_cents * 0.5;
+        u.detune_spread = t;
         u.pan_offset = t * spread;
     }
 }

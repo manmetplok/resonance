@@ -26,6 +26,20 @@ pub fn division_beats(division: usize) -> f32 {
     DIVISION_BEATS[division.min(DIVISION_BEATS.len() - 1)]
 }
 
+/// Musical label for `division` ("1/8D", …), clamped to the table.
+pub fn division_label(division: usize) -> &'static str {
+    DIVISION_LABELS[division.min(DIVISION_LABELS.len() - 1)]
+}
+
+/// Index of a division label, matched case-insensitively. `None` for
+/// anything that is not in the table.
+pub fn division_from_label(text: &str) -> Option<usize> {
+    let text = text.trim();
+    DIVISION_LABELS
+        .iter()
+        .position(|l| l.eq_ignore_ascii_case(text))
+}
+
 pub fn delay_samples(
     sync: bool,
     division: usize,

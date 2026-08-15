@@ -8,8 +8,10 @@ use std::sync::atomic::Ordering;
 use wayland_plugin_gui::egui;
 
 use crate::kit_loader::KitStatus;
+use crate::rr_display;
+use crate::sample_info;
 
-use super::app::{DrumsEditorApp, DrumsTab};
+use super::app::DrumsEditorApp;
 use super::{kit_browser, theme, widgets};
 
 pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut DrumsEditorApp) {
@@ -46,6 +48,12 @@ pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut DrumsEditorApp) {
     });
 }
 
+/// Tab bar. The editor has exactly one view, so it advertises exactly one
+/// tab. It used to carry five, four of which rendered a "not built yet"
+/// placeholder — and two of those (Mics, Articulations) hid pickers that
+/// ship inside the Pads inspector, so a user went looking and was told the
+/// feature did not exist (ba todo #1327). The hint next to the tab points
+/// at where those pickers actually live.
 pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.horizontal_centered(|ui| {
         ui.label(
@@ -56,36 +64,35 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         );
         ui.add_space(8.0);
 
-        let labels = ["Pads", "Mics", "Articulations", "Mod", "FX"];
-        let selected_idx = match app.selected_tab {
-            DrumsTab::Pads => 0,
-            DrumsTab::Mics => 1,
-            DrumsTab::Articulations => 2,
-            DrumsTab::Mod => 3,
-            DrumsTab::Fx => 4,
-        };
-        if let Some(i) = widgets::segmented(ui, &labels, selected_idx, false) {
-            app.selected_tab = match i {
-                0 => DrumsTab::Pads,
-                1 => DrumsTab::Mics,
-                2 => DrumsTab::Articulations,
-                3 => DrumsTab::Mod,
-                _ => DrumsTab::Fx,
-            };
-        }
+        let _ = widgets::segmented(ui, &["Pads"], 0, false);
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new("Mic and articulation pickers live in each pad's inspector →")
+                .color(theme::TEXT_4)
+                .size(10.0),
+        );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // PADS voice-count badge — show total pads and how many were
-            // last triggered (non-zero last_rr).
+            // PADS badge — total pads, how many have fired, and how many
+            // of those actually have takes to cycle. The per-pad "take N
+            // of M" readouts live in the pad list and the inspector.
             let total = app.bridge.last_rr.len();
-            let lit = app
+            let fired: Vec<_> = app
                 .bridge
                 .last_rr
                 .iter()
-                .filter(|a| a.load(Ordering::Relaxed) != 0)
-                .count();
-            let badge_text = format!("{} · {} lit", total, lit);
-            draw_pads_badge(ui, &badge_text);
+                .filter_map(|a| rr_display::unpack(a.load(Ordering::Relaxed)))
+                .collect();
+            let cycling = fired.iter().filter(|rr| rr.cycles()).count();
+            let badge_text = format!("{} · {} lit", total, fired.len());
+            draw_pads_badge(ui, &badge_text)
+                .on_hover_text(format!(
+                    "{} of {} pads have played; {} of those cycle through \
+                     multiple round-robin takes.",
+                    fired.len(),
+                    total,
+                    cycling,
+                ));
 
             ui.add_space(8.0);
 
@@ -194,7 +201,14 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     });
 }
 
+/// Status bar. Every figure here is a measurement published by the audio
+/// thread or the kit loader — sample rate and block size from `process`,
+/// decoded-sample memory from whoever built the live kit, and the OUT
+/// meter from the sampler's per-block peak. Nothing is estimated: the
+/// invented CPU / RAM / "Streamed" readouts this bar used to carry were
+/// removed rather than guessed at (ba todo #1276).
 pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
+    let peak = app.tick_out_meter();
     ui.horizontal_centered(|ui| {
         // Sample rate from bridge; fall back to "—" before activation.
         let sr_bits = app.bridge.sample_rate.load(Ordering::Acquire);
@@ -206,42 +220,35 @@ pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         };
         mono(ui, &sr_text, "kHz");
         ui.add_space(8.0);
-        mono(ui, "128", "samples");
+
+        // Real block size, as last requested by the host.
+        let frames = app.bridge.block_frames.load(Ordering::Relaxed);
+        let block_text = if frames == 0 {
+            "—".to_string()
+        } else {
+            frames.to_string()
+        };
+        mono(ui, &block_text, "samples");
         ui.add_space(14.0);
 
-        // CPU / RAM / Streamed — no real measurements, render placeholders.
-        plain(ui, "CPU", "3.1%");
-        ui.add_space(14.0);
-        plain(ui, "RAM", "214 MB");
-        ui.add_space(14.0);
-        plain(ui, "Streamed", "0 samples");
+        // Decoded sample memory held by the live kit.
+        let bytes = app.bridge.kit_bytes.load(Ordering::Relaxed);
+        let kit_text = if bytes == 0 {
+            "—".to_string()
+        } else {
+            sample_info::format_bytes(bytes)
+        };
+        plain(ui, "SAMPLES", &kit_text);
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
-                egui::RichText::new("−∞ dB")
-                    .color(theme::TEXT_3)
+                egui::RichText::new(peak_db_text(peak))
+                    .color(theme::TEXT_2)
                     .size(10.0)
                     .monospace(),
             );
             ui.add_space(8.0);
-            let bar_w = 80.0;
-            let bar_h = 3.0;
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(bar_w, bar_h * 2.0 + 2.0), egui::Sense::hover());
-            let p = ui.painter_at(rect);
-            p.rect_filled(
-                egui::Rect::from_min_size(rect.left_top(), egui::vec2(bar_w, bar_h)),
-                1.5,
-                theme::BG_3,
-            );
-            p.rect_filled(
-                egui::Rect::from_min_size(
-                    rect.left_top() + egui::vec2(0.0, bar_h + 2.0),
-                    egui::vec2(bar_w, bar_h),
-                ),
-                1.5,
-                theme::BG_3,
-            );
+            draw_out_meter(ui, peak);
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("OUT")
@@ -251,6 +258,51 @@ pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             );
         });
     });
+}
+
+/// Two stacked bars (left / right) filled from the decayed output peak.
+fn draw_out_meter(ui: &mut egui::Ui, peak: [f32; 2]) {
+    let bar_w = 80.0;
+    let bar_h = 3.0;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(bar_w, bar_h * 2.0 + 2.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    for (channel, level) in peak.iter().enumerate() {
+        let top = rect.left_top() + egui::vec2(0.0, channel as f32 * (bar_h + 2.0));
+        p.rect_filled(
+            egui::Rect::from_min_size(top, egui::vec2(bar_w, bar_h)),
+            1.5,
+            theme::BG_3,
+        );
+        let filled = meter_fraction(*level) * bar_w;
+        if filled > 0.0 {
+            let color = if *level >= 1.0 { theme::BAD } else { theme::GOOD };
+            p.rect_filled(
+                egui::Rect::from_min_size(top, egui::vec2(filled, bar_h)),
+                1.5,
+                color,
+            );
+        }
+    }
+    response.on_hover_text("Peak level summed across all 7 output ports.");
+}
+
+/// Map a linear peak to bar fill, -60 dBFS .. 0 dBFS.
+fn meter_fraction(peak: f32) -> f32 {
+    if peak <= 0.0 {
+        return 0.0;
+    }
+    let db = 20.0 * peak.log10();
+    ((db + 60.0) / 60.0).clamp(0.0, 1.0)
+}
+
+fn peak_db_text(peak: [f32; 2]) -> String {
+    let loudest = peak[0].max(peak[1]);
+    if loudest <= 0.0 {
+        "−∞ dB".to_string()
+    } else {
+        format!("{:.1} dB", 20.0 * loudest.log10())
+    }
 }
 
 fn mono(ui: &mut egui::Ui, value: &str, label: &str) {
@@ -300,7 +352,7 @@ fn current_kit_name(app: &DrumsEditorApp) -> String {
 }
 
 /// Draw the lavender PADS badge: `PADS  30 · 6 lit`.
-fn draw_pads_badge(ui: &mut egui::Ui, count_text: &str) {
+fn draw_pads_badge(ui: &mut egui::Ui, count_text: &str) -> egui::Response {
     let label = "PADS";
     let pad_x = 10.0;
     let gap = 6.0;
@@ -324,7 +376,7 @@ fn draw_pads_badge(ui: &mut egui::Ui, count_text: &str) {
 
     let inner_w = label_w + gap + count_w;
     let total = egui::vec2(inner_w + pad_x * 2.0, 22.0);
-    let (rect, _) = ui.allocate_exact_size(total, egui::Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(total, egui::Sense::hover());
 
     let p = ui.painter_at(rect.expand(2.0));
     p.rect_filled(rect, 11.0, theme::ACCENT_DIM);
@@ -351,4 +403,5 @@ fn draw_pads_badge(ui: &mut egui::Ui, count_text: &str) {
         count_font,
         theme::ACCENT_SOFT,
     );
+    response
 }
