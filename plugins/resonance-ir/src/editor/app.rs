@@ -13,7 +13,7 @@ use wayland_plugin_gui::{egui, EditorApp};
 use crate::params::IrParams;
 use crate::viz::IrViz;
 
-use super::{controls, header, meters, response_view, theme, waveform_view};
+use super::{controls, header, latency, meters, response_view, theme, waveform_view};
 
 pub(crate) struct IrEditorApp {
     pub(crate) params: Arc<IrParams>,
@@ -35,7 +35,15 @@ impl EditorApp for IrEditorApp {
 
         egui::Panel::bottom("ir_strip")
             .exact_size(120.0)
-            .show_inside(ui, |ui| controls::draw(ui, &self.params));
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    controls::draw(ui, &self.params);
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(16.0);
+                    latency::draw(ui, self);
+                });
+            });
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
     }
