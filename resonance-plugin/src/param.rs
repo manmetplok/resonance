@@ -145,6 +145,55 @@ impl FloatParam {
     pub fn range(&self) -> &FloatRange {
         &self.range
     }
+
+    /// The declared default, as a plain value.
+    pub fn default_value(&self) -> f32 {
+        self.default
+    }
+
+    /// The declared unit suffix (`""` when the param declares none).
+    pub fn unit(&self) -> &'static str {
+        self.unit
+    }
+
+    // -- normalized (0..1) view -------------------------------------------
+    //
+    // Every editor control moves in 0..1 travel — a knob arc, a slider
+    // groove — while the parameter itself is a plain value on a possibly
+    // skewed range. These three map between the two through the param's
+    // *own* `FloatRange`, so a control can never follow a curve or reach
+    // an endpoint the parameter does not declare. They are the contract
+    // `editor_widgets::float_knob` / `float_slider` are built on, and are
+    // testable without a GUI.
+
+    /// Where the current value sits on the control's 0..1 travel.
+    pub fn normalized_value(&self) -> f32 {
+        self.range.normalize(self.value())
+    }
+
+    /// Where the default sits on the control's 0..1 travel (the position
+    /// a double-click-to-reset returns to).
+    pub fn default_normalized(&self) -> f32 {
+        self.range.normalize(self.default)
+    }
+
+    /// The plain value a 0..1 control position maps to.
+    pub fn plain_at_normalized(&self, normalized: f32) -> f32 {
+        self.range.denormalize(normalized)
+    }
+
+    /// Move the parameter to a 0..1 control position.
+    ///
+    /// Landing exactly on [`FloatParam::default_normalized`] writes the
+    /// declared default verbatim: a reset gesture has to produce `2.0 s`,
+    /// not the `1.9999998` the curve's round trip would otherwise leave.
+    pub fn set_normalized(&self, normalized: f32) {
+        if normalized == self.default_normalized() {
+            self.set_value(self.default);
+        } else {
+            self.set_value(self.plain_at_normalized(normalized));
+        }
+    }
 }
 
 impl Param for FloatParam {
