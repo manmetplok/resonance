@@ -5,14 +5,13 @@
 //! master FX chain runs. The chunk scratch buffers live here so both
 //! call sites can size and allocate them identically.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use indexmap::IndexMap;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::{PluginMap, SyncClapInstance};
 use crate::latency::LatencyComp;
 use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 use crate::mixer;
@@ -110,6 +109,12 @@ pub(super) struct ChunkScratch {
     pub port_scratch: Vec<(Vec<f32>, Vec<f32>)>,
     pub note_buf: Vec<PendingNoteEvent>,
     pub mix_buf: Vec<f32>,
+    /// Dry staging for the bypass crossfades. An offline render only ever
+    /// sees *settled* bypass states (see `crate::bypass`), so this never
+    /// actually stages a fade — it is here because the shared render core
+    /// requires it, and because it keeps the offline path structurally
+    /// identical to the live one.
+    pub fx_dry: crate::bypass::FxDryScratch,
 }
 
 impl ChunkScratch {
@@ -126,6 +131,7 @@ impl ChunkScratch {
                 .collect(),
             note_buf: Vec::with_capacity(256),
             mix_buf: vec![0.0f32; BOUNCE_CHUNK * 2],
+            fx_dry: crate::bypass::FxDryScratch::new(BOUNCE_CHUNK),
         }
     }
 }
@@ -141,7 +147,7 @@ pub(super) struct ChunkCtx<'a> {
     pub master: &'a Arc<RwLock<MasterBus>>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
-    pub plugins: &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    pub plugins: &'a Arc<RwLock<PluginMap>>,
     pub tempo_map: &'a TempoMap,
     pub sample_rate: u32,
     pub master_vol: f32,
@@ -167,7 +173,7 @@ pub(super) fn build_latency_comp(
     shared: &Arc<SharedState>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
-    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
 ) -> LatencyComp {
     let tracks_guard = tracks.read();
     let busses_guard = busses.read();
@@ -175,7 +181,15 @@ pub(super) fn build_latency_comp(
     let latency_of = |id: PluginInstanceId| {
         plugins_guard
             .get(&id)
-            .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
+            .map(|slot| {
+                // Locking the instance is only worth it for a slot that
+                // actually runs (ba doc #275 finding X3).
+                let host_bypassed = slot.host_bypassed();
+                let reported = (!host_bypassed)
+                    .then(|| lock_plugin_for_bounce(slot).0.latency_samples() as u64)
+                    .unwrap_or(0);
+                crate::latency::slot_latency(reported, host_bypassed)
+            })
             .unwrap_or(0)
     };
     let mut chains = crate::latency::chain_latencies(&tracks_guard, latency_of);
@@ -198,17 +212,23 @@ pub(super) fn build_latency_comp(
 pub(super) fn master_fx_latency(
     shared: &Arc<SharedState>,
     master: &Arc<RwLock<MasterBus>>,
-    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
 ) -> u64 {
     let master_guard = master.read();
     let plugins_guard = plugins.read();
     crate::latency::master_chain_latency(
         &master_guard.plugin_ids,
-        shared.master_fx_bypassed.load(Ordering::Relaxed),
+        shared.master_fx_bypass.bypassed(),
         |id| {
             plugins_guard
                 .get(&id)
-                .map(|m| lock_plugin_for_bounce(m).0.latency_samples() as u64)
+                .map(|slot| {
+                    let host_bypassed = slot.host_bypassed();
+                    let reported = (!host_bypassed)
+                        .then(|| lock_plugin_for_bounce(slot).0.latency_samples() as u64)
+                        .unwrap_or(0);
+                    crate::latency::slot_latency(reported, host_bypassed)
+                })
                 .unwrap_or(0)
         },
     )
@@ -230,7 +250,7 @@ pub fn chunk_span(remaining: u64) -> (usize, usize) {
 /// this, leftover envelope phase / reverb tail / etc. from previous
 /// playback would bleed into the first frame.
 pub(super) fn reset_plugins(
-    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
 ) {
     let plugins_guard = plugins.read();
     for mutex in plugins_guard.values() {
@@ -342,6 +362,7 @@ pub(super) fn render_chunk(
             port_scratch: &mut scratch.port_scratch,
             note_event_buf: &mut scratch.note_buf,
             sidechain: &mut scratch.sidechain,
+            fx_dry: &mut scratch.fx_dry,
         },
         &mut strategy,
     );
@@ -349,7 +370,7 @@ pub(super) fn render_chunk(
     // Master FX chain: run over the summed mix in place. Skipped when
     // the caller asked us to leave the raw bus-summed mix alone (so the
     // master FX won't be applied twice when the result plays back).
-    if include_master_fx && !ctx.shared.master_fx_bypassed.load(Ordering::Relaxed) {
+    if include_master_fx && !ctx.shared.master_fx_bypass.bypassed() {
         let master_guard = ctx.master.read();
         if !master_guard.plugin_ids.is_empty() {
             for f in 0..frames {
@@ -357,8 +378,16 @@ pub(super) fn render_chunk(
                 scratch.track_buf_r[f] = scratch.mix_buf[f * 2 + 1];
             }
             for &plugin_id in &master_guard.plugin_ids {
-                if let Some(mutex) = plugins_guard.get(&plugin_id) {
-                    let mut inst = lock_plugin_for_bounce(mutex);
+                if let Some(slot) = plugins_guard.get(&plugin_id) {
+                    // Offline renders see settled bypass states only: a
+                    // host-bypassed slot is skipped for the whole file
+                    // rather than faded out over its first few
+                    // milliseconds (`crate::bypass`).
+                    if slot.host_bypassed() {
+                        continue;
+                    }
+                    let mut inst = lock_plugin_for_bounce(slot);
+                    slot.sync_own_bypass(&mut inst.0);
                     // Same key routing as the live master chain, so a
                     // bounced mix pumps exactly like playback.
                     let key = scratch.sidechain.key_for(&sidechain_guard, plugin_id);

@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::clap_host::{ClapBundle, SyncClapInstance};
+use crate::clap_host::ClapBundle;
 use crate::types::*;
 
 use super::external_instrument::ExternalInstruments;
@@ -65,6 +65,12 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             | AudioCommand::LoadPluginState { .. }
             | AudioCommand::SetTrackFxBypass { .. }
             | AudioCommand::SetBusFxBypass { .. }
+            // Per-slot bypass: a host-bypassed slot stops running and its
+            // latency leaves its chain (`latency::slot_latency`). A slot
+            // that bypasses itself through its own parameter keeps its
+            // latency, and the recompute is then a cheap no-op that
+            // `delays_match` drops before any delay line is reset.
+            | AudioCommand::SetPluginBypass { .. }
             // Master-chain edits don't change per-track comp (master
             // delays every path equally) but they feed the published
             // master-latency figure the reference A/B monitor is
@@ -93,7 +99,16 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
         let latency_of = |id: crate::types::PluginInstanceId| {
             plugins_guard
                 .get(&id)
-                .map(|m| super::try_lock_with_backoff(m).0.latency_samples() as u64)
+                .map(|slot| {
+                    // A host-bypassed slot is never processed, so it adds
+                    // no latency — and its instance need not be locked to
+                    // find that out (ba doc #275 finding X3).
+                    let host_bypassed = slot.host_bypassed();
+                    let reported = (!host_bypassed)
+                        .then(|| super::try_lock_with_backoff(slot).0.latency_samples() as u64)
+                        .unwrap_or(0);
+                    crate::latency::slot_latency(reported, host_bypassed)
+                })
                 .unwrap_or(0)
         };
         (
@@ -101,9 +116,7 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
             crate::latency::bus_chain_latencies(&busses_guard, latency_of),
             crate::latency::master_chain_latency(
                 &master_guard.plugin_ids,
-                ctx.shared
-                    .master_fx_bypassed
-                    .load(std::sync::atomic::Ordering::Relaxed),
+                ctx.shared.master_fx_bypass.bypassed(),
                 latency_of,
             ),
         )
@@ -292,7 +305,7 @@ pub(crate) fn handle_add_plugin(
 
             ctx.plugins.write().insert(
                 instance_id,
-                parking_lot::Mutex::new(SyncClapInstance(instance)),
+                crate::clap_host::PluginSlot::new(instance),
             );
 
             // `push_plugin` publishes the new chain via `ArcSwap::store`,
@@ -436,6 +449,70 @@ pub(crate) fn handle_set_plugin_param(
             });
         }
     }
+}
+
+/// Apply a bypass request to one [`BypassFade`], choosing between the
+/// crossfade and an immediate landing.
+///
+/// A crossfade only earns its keep when there is audio to protect. While
+/// nothing is rendering — transport stopped and no input monitoring — the
+/// change lands outright, which is what makes **project load correct**:
+/// the app restores saved bypass state through the very same commands a
+/// user toggle uses, and a restore must not spend the first few
+/// milliseconds of playback in the state the project was *not* saved in.
+///
+/// Shared by the track, bus, master and per-slot handlers so the four
+/// cannot drift.
+pub fn apply_bypass_request(
+    shared: &super::SharedState,
+    fade: &crate::bypass::BypassFade,
+    bypassed: bool,
+) {
+    use std::sync::atomic::Ordering;
+    let rendering =
+        shared.playing.load(Ordering::Relaxed) || shared.monitoring.load(Ordering::Relaxed);
+    if rendering {
+        fade.set_bypassed(bypassed);
+    } else {
+        fade.set_bypassed_settled(bypassed);
+    }
+}
+
+/// Bypass (or re-engage) one chain slot — ba doc #275 finding X3.
+///
+/// Nothing about the audio switches here: the flag the render path fades
+/// towards is set, and the mixer crossfades over the next few
+/// milliseconds. The instance is *not* locked, so this can never contend
+/// with the audio callback and never needs the re-enqueue dance the
+/// parameter / state handlers do.
+///
+/// A slot whose plugin declares its own bypass parameter keeps running
+/// while bypassed, so its latency stays in the chain; a slot the host
+/// skips loses its latency. Either way the caller (the engine loop, via
+/// [`affects_latency`]) republishes the compensation table right after
+/// this returns, so PDC is correct across the toggle.
+pub(crate) fn handle_set_plugin_bypass(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    bypassed: bool,
+) {
+    let own_bypass_param = {
+        let plugins_guard = ctx.plugins.read();
+        let Some(slot) = plugins_guard.get(&instance_id) else {
+            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                "Cannot bypass plugin {}: no such plugin instance",
+                instance_id
+            )));
+            return;
+        };
+        apply_bypass_request(ctx.shared, &slot.bypass, bypassed);
+        slot.bypass_param.is_some()
+    };
+    let _ = ctx.event_tx.send(AudioEvent::PluginBypassChanged {
+        instance_id,
+        bypassed,
+        own_bypass_param,
+    });
 }
 
 pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {

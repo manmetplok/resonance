@@ -230,6 +230,42 @@ impl ClapInstance {
         names
     }
 
+    /// The id of the plugin's own bypass parameter, if it declares one
+    /// (`CLAP_PARAM_IS_BYPASS`).
+    ///
+    /// A plugin that flags a parameter this way is telling the host "let
+    /// me handle bypass myself" — it knows how to fade its own tail out
+    /// and, crucially, it keeps reporting the same latency while
+    /// bypassed, so the compensation table never has to move. The host
+    /// therefore drives this parameter instead of skipping the slot (see
+    /// [`super::PluginSlot`]).
+    ///
+    /// Deliberately *not* filtered by `CLAP_PARAM_IS_HIDDEN`, unlike
+    /// [`Self::query_params`]: a bypass parameter is frequently hidden
+    /// from the host's generic parameter list precisely because the host
+    /// is expected to drive it from its own bypass control.
+    ///
+    /// Engine-thread call (it walks the plugin's parameter list); the
+    /// result is cached in the plugin slot.
+    pub fn bypass_param_id(&self) -> Option<u32> {
+        let params = self.params_ext?;
+        let count_fn = unsafe { (*params).count }?;
+        let count = unsafe { count_fn(self.plugin) };
+        let get_info = unsafe { (*params).get_info }?;
+        for i in 0..count {
+            let mut info =
+                std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+            if !unsafe { get_info(self.plugin, i, info.as_mut_ptr()) } {
+                continue;
+            }
+            let info = unsafe { info.assume_init() };
+            if info.flags & clap_sys::ext::params::CLAP_PARAM_IS_BYPASS != 0 {
+                return Some(info.id);
+            }
+        }
+        None
+    }
+
     /// Query all parameters from the plugin. Called from the engine thread.
     pub fn query_params(&self) -> Vec<ParamInfo> {
         let params = match self.params_ext {

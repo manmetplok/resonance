@@ -13,11 +13,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{
-    to_audio_clip, AutomationSnapshot, SharedState, SyncClapInstance,
-};
+use resonance_audio::__test_support::{AutomationSnapshot, PluginMap, SharedState, to_audio_clip};
 use resonance_audio::types::*;
 
 struct EngineState {
@@ -27,7 +25,7 @@ struct EngineState {
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 

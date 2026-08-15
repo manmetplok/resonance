@@ -14,9 +14,9 @@
 //! automation frames.
 
 use indexmap::IndexMap;
-use parking_lot::Mutex;
 
-use crate::clap_host::{StereoBufMut, SyncClapInstance};
+use crate::bypass::{run_faded, BypassFade, FadeStage, FxDryScratch};
+use crate::clap_host::{PluginMap, StereoBufMut};
 use crate::engine::AutomationSnapshot;
 use crate::latency::LatencyComp;
 use crate::mixer::automation_apply::apply_plugin_params;
@@ -48,7 +48,7 @@ pub(crate) struct BlockInputs<'a> {
     pub(crate) busses: &'a IndexMap<BusId, Bus>,
     pub(crate) clips: &'a [AudioClip],
     pub(crate) midi_clips: &'a [MidiClip],
-    pub(crate) plugins: &'a IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>,
+    pub(crate) plugins: &'a PluginMap,
     pub(crate) tempo_map: &'a TempoMap,
     pub(crate) sample_rate: u32,
     pub(crate) any_solo: bool,
@@ -79,6 +79,10 @@ pub(crate) struct BlockScratch<'a> {
     pub(crate) port_scratch: &'a mut [(Vec<f32>, Vec<f32>)],
     pub(crate) note_event_buf: &'a mut Vec<PendingNoteEvent>,
     pub(crate) sidechain: &'a mut SidechainTaps,
+    /// Dry-signal staging for the bypass crossfades (`crate::bypass`).
+    /// Pre-allocated by the scratch's owner so a bypass transition never
+    /// allocates on the audio thread.
+    pub(crate) fx_dry: &'a mut FxDryScratch,
 }
 
 /// The frames at which this block evaluates automation.
@@ -143,41 +147,76 @@ impl<'a> BlockCtx<'a> {
 /// the track, sub-track and bus passes — the only difference between them
 /// is which buffer they hand over.
 ///
+/// Bypass runs at two levels, both click-free (ba doc #275 finding X3):
+///
+/// - `chain` is the whole chain's bypass — the track's / sub-track's /
+///   bus's `fx_bypass`. Settled-bypassed, the chain is skipped and the
+///   buffer passes through untouched; mid-transition, the chain runs and
+///   its output is crossfaded against the chain's own input, so a reverb
+///   tail fades out over [`crate::bypass::BYPASS_FADE_MS`] instead of
+///   being truncated.
+/// - each slot carries its own [`crate::bypass::BypassFade`], applied the
+///   same way over that one plugin's input. A slot whose plugin declares
+///   a bypass parameter of its own is driven through that parameter
+///   instead of being skipped, which keeps its latency (and therefore the
+///   whole comp table) untouched across the toggle.
+///
 /// Returns whether any plugin actually ran; a plugin whose instance is
 /// missing, or (live) whose lock is contended, is skipped for this block.
 pub(crate) fn run_fx_chain(
     ids: impl Iterator<Item = PluginInstanceId>,
+    chain: &BypassFade,
     ctx: &BlockCtx<'_>,
     sidechain: &SidechainTaps,
     bufs: (&mut [f32], &mut [f32]),
+    dry: &mut FxDryScratch,
     strategy: &mut RenderStrategy<'_>,
 ) -> bool {
     let frames = ctx.inputs.frames;
-    let (buf_l, buf_r) = bufs;
-    let mut ran = false;
-    for plugin_id in ids {
-        let Some(mutex) = ctx.inputs.plugins.get(&plugin_id) else {
-            continue;
-        };
-        let Some(mut inst) = strategy.lock_fx(mutex) else {
-            continue;
-        };
-        apply_plugin_params(
-            &mut inst,
-            ctx.inputs.automation,
-            plugin_id,
-            ctx.evals.eval_start,
-        );
-        // An external key, when this instance is routed one and actually
-        // declares a key port. The taps are borrowed immutably here and
-        // mutably at the capture phases, so the two never overlap.
-        let key = sidechain.key_for(ctx.inputs.sidechain_routes, plugin_id);
-        let mut outs = [StereoBufMut {
-            left: &mut buf_l[..frames],
-            right: &mut buf_r[..frames],
-        }];
-        inst.0.process_multi_with_key(&mut outs, key, frames);
-        ran = true;
-    }
-    ran
+    let sample_rate = ctx.inputs.sample_rate;
+    let live = strategy.is_live();
+    let chain_stage = chain.stage(sample_rate, frames, live);
+    let (chain_dry, slot_dry) = dry.split();
+    run_faded(chain_stage, frames, bufs, chain_dry, |buf_l, buf_r| {
+        let mut ran = false;
+        for plugin_id in ids {
+            let Some(slot) = ctx.inputs.plugins.get(&plugin_id) else {
+                continue;
+            };
+            let slot_stage = slot.stage(sample_rate, frames, live);
+            if slot_stage == FadeStage::Dry {
+                continue;
+            }
+            let Some(mut inst) = strategy.lock_fx(slot) else {
+                continue;
+            };
+            apply_plugin_params(
+                &mut inst,
+                ctx.inputs.automation,
+                plugin_id,
+                ctx.evals.eval_start,
+            );
+            slot.sync_own_bypass(&mut inst.0);
+            // An external key, when this instance is routed one and
+            // actually declares a key port. The taps are borrowed
+            // immutably here and mutably at the capture phases, so the two
+            // never overlap.
+            let key = sidechain.key_for(ctx.inputs.sidechain_routes, plugin_id);
+            ran |= run_faded(
+                slot_stage,
+                frames,
+                (&mut *buf_l, &mut *buf_r),
+                (&mut *slot_dry.0, &mut *slot_dry.1),
+                |l, r| {
+                    let mut outs = [StereoBufMut {
+                        left: &mut l[..frames],
+                        right: &mut r[..frames],
+                    }];
+                    inst.0.process_multi_with_key(&mut outs, key, frames);
+                    true
+                },
+            );
+        }
+        ran
+    })
 }

@@ -61,7 +61,7 @@ pub(crate) fn handle_set_track_playback_source(
 
 pub(crate) fn handle_set_track_fx_bypass(ctx: &HandlerCtx, track_id: TrackId, bypassed: bool) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
-        track.set_fx_bypassed(bypassed);
+        super::plugins::apply_bypass_request(ctx.shared, track.fx_bypass(), bypassed);
     }
     let _ = ctx
         .event_tx
@@ -424,9 +424,9 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
 
     // Clear master FX chain
     ctx.master.write().plugin_ids.clear();
-    ctx.shared
-        .master_fx_bypassed
-        .store(false, Ordering::Relaxed);
+    // A cleared project has no audio to click: land the bypass on
+    // "engaged" outright rather than fading there.
+    ctx.shared.master_fx_bypass.set_bypassed_settled(false);
 
     // Clear clips -- collect to drop outside lock
     let removed_clips: Vec<_> = ctx.clips.write().drain(..).collect();

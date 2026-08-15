@@ -8,6 +8,7 @@
 //   by the app's vocal-SVS post-processing path)
 // - `midi_io` stays public — it's a small, stable utility surface for
 //   reading/writing .mid files used by project save/load.
+pub(crate) mod bypass;
 pub(crate) mod clap_host;
 pub(crate) mod cycle_load;
 pub(crate) mod decode;
@@ -56,7 +57,7 @@ pub use types::*;
 /// without forcing the parent module public.
 #[doc(hidden)]
 pub mod __test_support {
-    pub use crate::clap_host::{ClapBundle, ClapInstance, SyncClapInstance};
+    pub use crate::clap_host::{ClapBundle, ClapInstance, PluginMap, PluginSlot, SyncClapInstance};
     /// Build a `ClapInstance` around a hand-rolled raw `clap_plugin` —
     /// see `tests/clap_latency_tracking.rs` (doc #260 finding #10).
     pub use crate::clap_host::__instance_from_raw_for_test;
@@ -76,6 +77,9 @@ pub mod __test_support {
     };
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
+    /// The "crossfade or land immediately" rule every bypass handler
+    /// shares — see `tests/plugin_bypass.rs`.
+    pub use crate::engine::plugins::apply_bypass_request;
     /// The engine's plugin instance-id allocation rule, shared by the
     /// track / bus / master add paths — see `tests/plugin_id_ranges.rs`.
     pub use crate::engine::plugins::allocate_plugin_instance_id;
@@ -85,7 +89,16 @@ pub mod __test_support {
     pub use crate::io::wav::{locate_wav_float_data, WavDataChunk};
     pub use crate::latency::{
         add_external_offsets, bus_chain_latencies, chain_latencies, comp_latency_clamped,
-        compensation_delays, master_chain_latency, LatencyComp,
+        compensation_delays, master_chain_latency, slot_latency, LatencyComp,
+    };
+    /// The click-free bypass crossfade (ba doc #275 finding X3): the fade
+    /// state machine every chain / slot bypass runs through, and the
+    /// crossfade the render paths apply. Exposed so
+    /// `tests/plugin_bypass.rs` can drive the exact production code path
+    /// with a synthetic "plugin" closure — no CLAP instance needed.
+    pub use crate::bypass::{
+        can_fade, crossfade_to_dry, fade_frames, fade_weight, run_faded, save_dry, BypassFade,
+        FadeStage, FxDryScratch, BYPASS_FADE_MS,
     };
     pub use crate::engine::vocal_render::{ensure_tuning_caches, pitch_ratio_curve, retune_clip};
     pub use crate::limits::MAX_COMP_LATENCY;

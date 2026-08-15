@@ -154,7 +154,7 @@ pub(super) fn chain_row(
             Space::new().width(8),
             text(name.to_string()).size(12).color(label_color),
             Space::new().width(Length::Fill),
-            reorder::move_buttons(moves, 10.0),
+            reorder::move_buttons(moves, 10.0, 3),
             Space::new().width(8),
             text("BYP")
                 .size(9)

@@ -6,7 +6,7 @@
 use indexmap::IndexMap;
 use std::sync::atomic::Ordering;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::{PluginMap, SyncClapInstance};
 use crate::engine::SharedState;
 use crate::types::*;
 
@@ -186,7 +186,7 @@ pub(super) fn ramped_stereo_peaks(
 /// successful lock instead of being lost.
 pub(super) fn panic_instrument_tracks(
     tracks_guard: &IndexMap<TrackId, Track>,
-    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    plugins_guard: &PluginMap,
     midi_stash: &mut super::midi_stash::MidiStash,
 ) {
     for track in tracks_guard.values() {

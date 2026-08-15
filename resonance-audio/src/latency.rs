@@ -59,6 +59,34 @@ use resonance_dsp::DelayLine;
 use crate::limits::MAX_COMP_LATENCY;
 use crate::types::{Bus, BusId, PluginInstanceId, Track, TrackId, TrackType};
 
+/// The latency one chain slot actually contributes, given the plugin's
+/// reported latency and whether the mixer skips it (ba doc #275 finding
+/// X3).
+///
+/// Per-slot bypass has two shapes, and only one of them moves the comp
+/// table:
+///
+/// - **Host bypass** — the plugin declares no bypass parameter, so the
+///   mixer stops calling it. Nothing runs, nothing delays: the slot
+///   contributes 0 and the rest of the mix re-aligns around it, exactly
+///   as it already does for a whole bypassed chain.
+/// - **The plugin's own bypass parameter** — the plugin keeps running
+///   and keeps reporting the same latency, so its contribution is
+///   unchanged and the comp table does not move at all. This is why the
+///   host prefers a plugin's own bypass when it declares one: it is the
+///   only way to bypass a latency-carrying plugin without re-publishing
+///   (and thereby resetting) every delay line.
+///
+/// `host_bypassed` is `PluginSlot::host_bypassed()`.
+#[inline]
+pub fn slot_latency(reported: u64, host_bypassed: bool) -> u64 {
+    if host_bypassed {
+        0
+    } else {
+        reported
+    }
+}
+
 /// Track-stage chain latency per track (see the module doc). Returns
 /// one entry per track, sub-tracks included. `plugin_latency` resolves
 /// one plugin instance's latency in samples. Bus chains are *not*
@@ -73,6 +101,9 @@ use crate::types::{Bus, BusId, PluginInstanceId, Track, TrackId, TrackType};
 /// - FX bypass skips a track's effect chain (on instrument tracks the
 ///   instrument itself still runs and still counts; sub-track chains
 ///   are all FX);
+/// - an individually bypassed *slot* drops out of its chain's sum — the
+///   caller's `plugin_latency` closure resolves that through
+///   [`slot_latency`], so this function needs no per-slot knowledge;
 /// - a frozen parent skips its instrument fan-out, so its sub-tracks
 ///   don't inherit the parent-instrument latency.
 pub fn chain_latencies(

@@ -453,6 +453,13 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::MasterFxBypassChanged { bypassed } => {
             plugins::master_fx_bypass_changed(r, bypassed)
         }
+        // Per-slot bypass echo (ba doc #275 finding X3). The engine half
+        // (todo #1304) is complete and reachable over
+        // `AudioCommand::SetPluginBypass`; the GUI toggle, project
+        // persistence and `track.set_fx_bypass` control method are todo
+        // #1305, which is where this event gets mirrored into app state.
+        // Consumed for exhaustiveness until then.
+        E::PluginBypassChanged { .. } => {}
 
         // Peak meter snapshot — drive the VU decay+update from the
         // engine's view of the world. See `update::tick`.

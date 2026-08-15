@@ -17,11 +17,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
-use parking_lot::Mutex;
 use resonance_common::{AutomationLane, AutomationTarget, PluginInstanceId};
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::types::AudioEvent;
 
 /// Engine-thread-local map of automation lanes, one per target.
@@ -69,7 +67,7 @@ impl AutomationSnapshot {
     /// the next time the lane set changes after the plugin loads.
     pub fn build(
         lanes: &AutomationLanes,
-        plugins: &IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>,
+        plugins: &PluginMap,
     ) -> Self {
         let mut snap = AutomationSnapshot::default();
         for lane in lanes.values() {

@@ -5,7 +5,6 @@
 
 use std::path::Path;
 
-use crate::clap_host::SyncClapInstance;
 use crate::types::*;
 
 use super::plugins::{allocate_plugin_instance_id, ensure_bundle, resolve_plugin_id};
@@ -95,7 +94,7 @@ pub(crate) fn handle_set_bus_mute(ctx: &HandlerCtx, bus_id: BusId, muted: bool) 
 
 pub(crate) fn handle_set_bus_fx_bypass(ctx: &HandlerCtx, bus_id: BusId, bypassed: bool) {
     if let Some(bus) = ctx.busses.read().get(&bus_id) {
-        bus.set_fx_bypassed(bypassed);
+        super::plugins::apply_bypass_request(ctx.shared, bus.fx_bypass(), bypassed);
     }
     let _ = ctx
         .event_tx
@@ -146,7 +145,7 @@ pub(crate) fn handle_add_plugin_to_bus(
             let has_sidechain_input = instance.has_sidechain_input();
             ctx.plugins.write().insert(
                 instance_id,
-                parking_lot::Mutex::new(SyncClapInstance(instance)),
+                crate::clap_host::PluginSlot::new(instance),
             );
             if let Some(bus) = ctx.busses.write().get_mut(&bus_id) {
                 bus.plugin_ids.push(instance_id);

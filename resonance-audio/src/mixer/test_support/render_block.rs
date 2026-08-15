@@ -7,9 +7,8 @@
 //! the `indexmap` / scratch-buffer plumbing out of the `tests/` crate.
 
 use indexmap::IndexMap;
-use parking_lot::Mutex;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::engine::AutomationSnapshot;
 use crate::types::*;
 
@@ -65,7 +64,7 @@ pub fn render_aux_with_comp_for_test(
 ) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
     let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
     let busses_guard: IndexMap<BusId, Bus> = busses.into_iter().map(|b| (b.id, b)).collect();
-    let plugins_guard: IndexMap<PluginInstanceId, Mutex<SyncClapInstance>> = IndexMap::new();
+    let plugins_guard: PluginMap = IndexMap::new();
     let midi_clips: Vec<MidiClip> = Vec::new();
     let tempo_map = TempoMap::default();
     let active_busses = busses_guard.len();
@@ -78,6 +77,7 @@ pub fn render_aux_with_comp_for_test(
         .collect();
     let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
     let mut note_buf: Vec<PendingNoteEvent> = Vec::new();
+    let mut fx_dry = crate::bypass::FxDryScratch::new(frames);
 
     let in_filter = |_id: TrackId| true;
     let fan_out_only = |_id: TrackId| false;
@@ -118,6 +118,7 @@ pub fn render_aux_with_comp_for_test(
             track_buf_r: &mut track_buf_r,
             bus_bufs: &mut bus_bufs,
             port_scratch: &mut port_scratch,
+            fx_dry: &mut fx_dry,
             note_event_buf: &mut note_buf,
             sidechain: &mut sidechain,
         },
@@ -141,7 +142,7 @@ pub struct RenderBenchHarness {
     busses: IndexMap<BusId, Bus>,
     clips: Vec<AudioClip>,
     midi_clips: Vec<MidiClip>,
-    plugins: IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>,
+    plugins: PluginMap,
     tempo_map: TempoMap,
     aux_sends: Vec<AuxSend>,
     sidechain: SidechainTaps,
@@ -153,6 +154,7 @@ pub struct RenderBenchHarness {
     bus_bufs: Vec<(Vec<f32>, Vec<f32>)>,
     port_scratch: Vec<(Vec<f32>, Vec<f32>)>,
     note_buf: Vec<PendingNoteEvent>,
+    fx_dry: crate::bypass::FxDryScratch,
     midi_stash: MidiStash,
     frames: usize,
     sample_rate: u32,
@@ -195,6 +197,7 @@ impl RenderBenchHarness {
                 .map(|_| (vec![0.0; frames], vec![0.0; frames]))
                 .collect(),
             note_buf: Vec::with_capacity(MAX_MIDI_EVENTS_PER_BUFFER),
+            fx_dry: crate::bypass::FxDryScratch::new(frames),
             midi_stash: MidiStash::new(),
             frames,
             sample_rate,
@@ -248,6 +251,7 @@ impl RenderBenchHarness {
                 port_scratch: &mut self.port_scratch,
                 note_event_buf: &mut self.note_buf,
                 sidechain: &mut self.sidechain,
+                fx_dry: &mut self.fx_dry,
             },
             &mut strategy,
         );

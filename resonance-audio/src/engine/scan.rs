@@ -10,13 +10,13 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use crate::clap_host::{ClapBundle, SyncClapInstance};
+use crate::clap_host::{ClapBundle, PluginMap};
 use crate::types::*;
 
 pub(crate) fn scan_plugins(
-    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     bundles: &mut Vec<ClapBundle>,
     event_tx: &Sender<AudioEvent>,
