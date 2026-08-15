@@ -23,11 +23,11 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 use resonance_common::FreezeCacheRef;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::SharedState;
@@ -148,7 +148,7 @@ pub fn to_wav(
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
-    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -195,7 +195,7 @@ pub(crate) fn export_spawn(
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
@@ -243,7 +243,7 @@ pub(crate) fn to_audio_clip_spawn(
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
@@ -292,7 +292,7 @@ pub fn to_freeze_cache_spawn(
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,

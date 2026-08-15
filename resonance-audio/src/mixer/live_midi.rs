@@ -43,9 +43,7 @@ pub(super) fn pickup_live_midi(
     live_midi_rx: &crossbeam_channel::Receiver<LiveMidiEvent>,
     live_midi_fwd: &crossbeam_channel::Sender<LiveMidiEvent>,
     tracks: &parking_lot::RwLock<indexmap::IndexMap<TrackId, Track>>,
-    plugins: &parking_lot::RwLock<
-        indexmap::IndexMap<PluginInstanceId, parking_lot::Mutex<crate::clap_host::SyncClapInstance>>,
-    >,
+    plugins: &parking_lot::RwLock<crate::clap_host::PluginMap>,
     midi_stash: &mut MidiStash,
     sample_rate: u32,
     frames: usize,

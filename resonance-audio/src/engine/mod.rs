@@ -20,7 +20,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use ringbuf::traits::Split;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::midi_clock::MidiClockEvent;
 use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer;
@@ -127,9 +127,11 @@ pub struct SharedState {
     pub master_peak_l_bits: AtomicU32,
     /// Master peak level R (AtomicU32 bit-punned f32), for VU meters.
     pub master_peak_r_bits: AtomicU32,
-    /// When true, the mixer skips the master FX chain (everything in
-    /// `MasterBus::plugin_ids`). Fader + peak metering are unaffected.
-    pub master_fx_bypassed: AtomicBool,
+    /// When bypassed, the mixer skips the master FX chain (everything in
+    /// `MasterBus::plugin_ids`); fader + peak metering are unaffected.
+    /// Toggling it crossfades over a few milliseconds, so a mastering
+    /// chain can be A/B-ed mid-playback without a click.
+    pub master_fx_bypass: crate::bypass::BypassFade,
     /// Flag: recording ring buffer overflowed (samples were dropped).
     pub recording_overflow: AtomicBool,
     /// Channel count of the currently-active input stream, or 0 when
@@ -346,7 +348,7 @@ impl Default for SharedState {
             master_last_volume_bits: AtomicU32::new(1.0f32.to_bits()),
             master_peak_l_bits: AtomicU32::new(0),
             master_peak_r_bits: AtomicU32::new(0),
-            master_fx_bypassed: AtomicBool::new(false),
+            master_fx_bypass: crate::bypass::BypassFade::new(),
             recording_overflow: AtomicBool::new(false),
             input_channels: AtomicU16::new(0),
             loop_enabled: AtomicBool::new(false),
@@ -460,7 +462,7 @@ pub struct AudioEngine {
     clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
     plugins:
-        Arc<parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>>,
+        Arc<parking_lot::RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     /// Monitor input ring buffer's producer. Wrapped in `Mutex` solely
     /// so the same `Arc` can be handed to successive input-stream
@@ -560,7 +562,7 @@ impl AudioEngine {
 
         // Plugin instances shared between engine thread and audio callback
         let plugins: Arc<
-            parking_lot::RwLock<IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>>,
+            parking_lot::RwLock<PluginMap>,
         > = Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let plugins_audio = Arc::clone(&plugins);
 
@@ -658,6 +660,9 @@ impl AudioEngine {
             // Sidechain key capture, pre-allocated for the widest block
             // the callback can hand us so the realtime path never grows it.
             let mut sidechain = crate::types::SidechainTaps::new(audio_buf_frames);
+            // Dry staging for the bypass crossfades, sized for the widest
+            // block so toggling a bypass never allocates in the callback.
+            let mut fx_dry = crate::bypass::FxDryScratch::new(audio_buf_frames);
             // Native backend: the monitor ring may adaptively drain its
             // sticky startup backlog (same graph clock); the cpal
             // fallback keeps the standing margin (doc #260 finding #12).
@@ -730,6 +735,7 @@ impl AudioEngine {
                             monitor_drain: &mut monitor_drain,
                             ab_meters: &mut ab_meters,
                             sidechain: &mut sidechain,
+                            fx_dry: &mut fx_dry,
                         },
                     );
                     let mix_end = std::time::Instant::now();

@@ -8,9 +8,7 @@
 //! that the plugin list lives on `MasterBus` instead of a keyed `Bus`.
 
 use std::path::Path;
-use std::sync::atomic::Ordering;
 
-use crate::clap_host::SyncClapInstance;
 use crate::types::*;
 
 use super::plugins::{allocate_plugin_instance_id, ensure_bundle, resolve_plugin_id};
@@ -47,7 +45,7 @@ pub(crate) fn handle_add_plugin_to_master(
             let has_sidechain_input = instance.has_sidechain_input();
             ctx.plugins.write().insert(
                 instance_id,
-                parking_lot::Mutex::new(SyncClapInstance(instance)),
+                crate::clap_host::PluginSlot::new(instance),
             );
             ctx.master.write().plugin_ids.push(instance_id);
             let _ = ctx.event_tx.send(AudioEvent::MasterPluginAdded {
@@ -107,9 +105,7 @@ pub(crate) fn handle_move_plugin_in_master(
 }
 
 pub(crate) fn handle_set_master_fx_bypass(ctx: &HandlerCtx, bypassed: bool) {
-    ctx.shared
-        .master_fx_bypassed
-        .store(bypassed, Ordering::Relaxed);
+    super::plugins::apply_bypass_request(ctx.shared, &ctx.shared.master_fx_bypass, bypassed);
     let _ = ctx
         .event_tx
         .send(AudioEvent::MasterFxBypassChanged { bypassed });

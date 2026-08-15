@@ -116,15 +116,17 @@ fn render_sub_track_tap(
     // before peak metering and bus/master routing. Sub-tracks never host
     // an instrument, so every entry in the plugin chain is treated as an
     // audio effect and is subject to the sub-track's own FX-bypass flag.
-    if !sub_track.fx_bypassed() {
+    {
         let sub_plugins = sub_track.plugins();
         let (pl, pr) = &mut scratch.port_scratch[port_idx];
         let (pl, pr) = (pl.as_mut_slice(), pr.as_mut_slice());
         run_fx_chain(
             sub_plugins.iter().copied(),
+            sub_track.fx_bypass(),
             ctx,
             scratch.sidechain,
             (pl, pr),
+            scratch.fx_dry,
             strategy,
         );
     }

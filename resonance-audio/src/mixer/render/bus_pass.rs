@@ -62,15 +62,17 @@ fn render_one_bus(
     };
 
     // Process the bus plugin chain in place over the accumulated buffer
-    // (skipped when the bus's FX are bypassed).
-    if !bus.fx_bypassed() {
+    // (skipped once the bus's bypass fade has fully landed).
+    {
         let (bus_buf_l, bus_buf_r) = &mut scratch.bus_bufs[bus_idx];
         let (bus_buf_l, bus_buf_r) = (bus_buf_l.as_mut_slice(), bus_buf_r.as_mut_slice());
         run_fx_chain(
             bus.plugin_ids.iter().copied(),
+            bus.fx_bypass(),
             ctx,
             scratch.sidechain,
             (bus_buf_l, bus_buf_r),
+            scratch.fx_dry,
             strategy,
         );
     }
