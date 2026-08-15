@@ -152,12 +152,17 @@ fn the_control_list_covers_every_float_parameter() {
     }
 
     // ...and the counts add up, which is what proves nothing was left out:
-    // 51 floats + 26 ints + 10 bools is the whole parameter list.
+    // 51 floats + 29 ints + 13 bools is the whole parameter list.
+    //
+    // Was 51/26/10 == 87 when this guard was written. ba todo #1324 (LFO tempo
+    // sync) added three `lfoN_sync` bools and three `lfoN_division` ints, so the
+    // whole list is 93. The float count is deliberately unchanged — #1324 added
+    // no float — which is what makes this a real check rather than a tautology.
     let mut ids: Vec<&str> = floats.iter().map(|(_, p)| p.id()).collect();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 51, "the control list repeats a parameter");
-    assert_eq!(51 + 26 + 10, PARAM_COUNT);
+    assert_eq!(51 + 29 + 13, PARAM_COUNT);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,18 +223,22 @@ fn no_control_call_site_restates_a_param_fact() {
 }
 
 #[test]
-fn only_the_lfo_shape_still_carries_its_own_label_table() {
-    // `int_knob_fmt` is the one remaining formatter argument: the LFO
-    // shape's label table lives in `dsp::lfo`, and ba todo #1292 moves it
-    // onto the parameter with `IntParam::with_choices`. Pinned to one call
-    // site so it cannot spread in the meantime.
+fn only_known_seams_still_carry_their_own_label_table() {
+    // `int_knob_fmt` is the remaining formatter argument. Two call sites, each
+    // with a todo that removes it:
+    //   - LFO Shape  -> ba todo #1292 moves `dsp::lfo`'s table onto the param;
+    //   - LFO Div    -> ba todo #1356 does the same for `SyncDivision::LABELS`,
+    //     which could not land with #1292 because #1324 (which introduced Div)
+    //     and #1289 (`with_choices`) were on different epic branches until
+    //     integration merged them.
+    // Pinned to exactly two so it cannot spread in the meantime.
     let uses: usize = TABS
         .iter()
         .map(|(_, src)| src.matches("int_knob_fmt(").count())
         .sum();
     assert_eq!(
-        uses, 1,
-        "int_knob_fmt is the ba todo #1292 seam — exactly one call site (LFO Shape)"
+        uses, 2,
+        "int_knob_fmt is the #1292/#1356 seam — exactly two call sites (LFO Shape, LFO Div)"
     );
 }
 

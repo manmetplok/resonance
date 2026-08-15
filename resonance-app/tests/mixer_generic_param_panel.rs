@@ -55,6 +55,11 @@ fn app_with_plugin(has_gui: bool) -> Resonance {
                 max_value: 24.0,
                 default_value: 0.0,
                 current_value: 3.0,
+                // ba todo #1290 added text/unit/stepped/choices/module/hidden.
+                // Defaulting them keeps this fixture's subject the panel's
+                // routing, not its formatting: empty `text` is exactly the
+                // case that falls back to the old `{:.2}` rendering.
+                ..Default::default()
             }],
             has_gui,
         ),
