@@ -203,6 +203,8 @@ impl crate::Resonance {
                         PluginOwner::Track(track.id),
                         plugin,
                         true,
+                        0,
+                        track.plugins.len(),
                     ))
                 } else if !self.view_caches.instrument_plugins.is_empty() {
                     let track_id = track.id;
@@ -231,16 +233,23 @@ impl crate::Resonance {
         // Built into its own column so we can wrap it in a vertical
         // scrollable below.
         let mut fx_column = column![].spacing(4).width(Length::Fill);
-        let fx_iter: Box<dyn Iterator<Item = &PluginSlotState>> = if is_instrument_track {
-            Box::new(track.plugins.iter().skip(1))
+        // `.enumerate()` runs BEFORE the skip so each row keeps its index
+        // in the full chain: the reorder controls (#1302) and the
+        // instrument-floor rule are both stated in chain slots, and the
+        // instrument is drawn in its own section above.
+        let chain_len = track.plugins.len();
+        let fx_iter: Box<dyn Iterator<Item = (usize, &PluginSlotState)>> = if is_instrument_track {
+            Box::new(track.plugins.iter().enumerate().skip(1))
         } else {
-            Box::new(track.plugins.iter())
+            Box::new(track.plugins.iter().enumerate())
         };
-        for plugin in fx_iter {
+        for (index, plugin) in fx_iter {
             fx_column = fx_column.push(self.view_plugin_slot_row(
                 PluginOwner::Track(track.id),
                 plugin,
                 false,
+                index,
+                chain_len,
             ));
         }
 
