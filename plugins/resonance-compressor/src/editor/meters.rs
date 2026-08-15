@@ -8,15 +8,25 @@
 use wayland_plugin_gui::egui;
 
 use crate::editor::theme;
+use crate::viz::DetectorSource;
 
-pub fn draw_input_meter(painter: &egui::Painter, rect: egui::Rect, db: f32) {
+/// The input meter always shows the plugin's own input. Its *label*
+/// depends on the detector source: without a key the input is also what
+/// the detector hears, and with a key it is not, so the label says which
+/// of the two the bar means.
+pub fn draw_input_meter(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    db: f32,
+    detector: DetectorSource,
+) {
     draw_level_meter(
         painter,
         rect,
         db,
         LevelMode::FromBottom,
         theme::ACCENT,
-        "IN",
+        detector.input_meter_label(),
     );
 }
 
