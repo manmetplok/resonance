@@ -12,6 +12,7 @@ use resonance_common::registry::InstalledItem;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::download::WorkerHandle;
+use crate::kit;
 use crate::params::DrumParams;
 use crate::KitBridge;
 
@@ -311,7 +312,10 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 let _ = widgets::slider_bipolar(ui, col, 0.0);
             });
             ui.add_space(18.0);
-            // Routing (preview only).
+            // Routing — a readout, not a control. The plugin declares all
+            // `kit::NUM_OUTPUT_PORTS` ports unconditionally (see
+            // `ResonanceDrums::output_layout`); there is no stereo-only mode
+            // to switch to, so nothing here is clickable.
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
@@ -325,15 +329,24 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
                             ui.label(
-                                egui::RichText::new("stereo")
-                                    .color(theme::TEXT_3)
+                                egui::RichText::new(kit::routing_summary())
+                                    .color(theme::TEXT_1)
                                     .size(11.0)
                                     .monospace(),
                             );
                         },
                     );
                 });
-                let _ = widgets::segmented(ui, &["Stereo", "Multi-out"], 0, false);
+                ui.label(
+                    egui::RichText::new(kit::routing_port_list())
+                        .color(theme::TEXT_3)
+                        .size(9.5)
+                        .monospace(),
+                )
+                .on_hover_text(
+                    "Every drum group has its own stereo output port. Route them \
+                     in the host's mixer — the plugin always declares all of them.",
+                );
             });
         });
     });
