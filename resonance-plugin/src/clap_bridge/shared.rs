@@ -10,7 +10,7 @@ use clack_extensions::latency::HostLatency;
 use clack_plugin::prelude::*;
 
 use crate::gui::{EditorFactory, PluginEditor};
-use crate::plugin::{NoteEvent, OutputPortSpec, ResonancePlugin};
+use crate::plugin::{OutputPortSpec, PluginEvent, ResonancePlugin};
 
 // ---------------------------------------------------------------------------
 // Param metadata stored in SharedState
@@ -194,6 +194,7 @@ pub struct ClapAudioProcessor<'a, P: ResonancePlugin> {
     /// output port. Populated by the plugin on each `process()` call and
     /// then copied back into the CLAP audio buffers.
     pub(crate) output_scratch: Vec<(Vec<f32>, Vec<f32>)>,
-    /// Pre-allocated buffer for note events (avoids audio-thread allocation).
-    pub(crate) note_events: Vec<NoteEvent>,
+    /// Pre-allocated buffer for input events — notes *and* MIDI controllers,
+    /// interleaved in host order (avoids audio-thread allocation).
+    pub(crate) input_events: Vec<PluginEvent>,
 }
