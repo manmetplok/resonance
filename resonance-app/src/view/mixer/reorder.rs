@@ -119,19 +119,31 @@ pub(crate) fn chain_moves(
 
 /// The ▲ / ▼ pair for one chain row.
 ///
-/// `size` scales the caret so the roomy inspector row and the cramped
-/// 140 px strip slot can share one widget instead of drifting into two.
-pub(crate) fn move_buttons(moves: &ChainMoves, size: f32) -> Element<'static, Message> {
+/// `size` scales the caret and `pad_x` its horizontal padding, so the
+/// roomy inspector row and the cramped 140 px strip slot can share one
+/// widget instead of drifting into two. The strip slot has to fit four
+/// icon controls beside the plugin's name and runs at 1 px (see
+/// `SLOT_ICON_PAD_X`); the inspector has the width for 3.
+pub(crate) fn move_buttons(
+    moves: &ChainMoves,
+    size: f32,
+    pad_x: u16,
+) -> Element<'static, Message> {
     row![
-        move_button(theme::fa::CARET_UP, moves.up.clone(), size),
-        move_button(theme::fa::CARET_DOWN, moves.down.clone(), size),
+        move_button(theme::fa::CARET_UP, moves.up.clone(), size, pad_x),
+        move_button(theme::fa::CARET_DOWN, moves.down.clone(), size, pad_x),
     ]
     .spacing(1)
     .align_y(Vertical::Center)
     .into()
 }
 
-fn move_button(glyph: char, message: Option<Message>, size: f32) -> Element<'static, Message> {
+fn move_button(
+    glyph: char,
+    message: Option<Message>,
+    size: f32,
+    pad_x: u16,
+) -> Element<'static, Message> {
     // TEXT_4 is the faintest step in the ramp: the control stays legible
     // as a chain-shape hint at the ends without reading as actionable.
     let color = if message.is_some() {
@@ -141,7 +153,7 @@ fn move_button(glyph: char, message: Option<Message>, size: f32) -> Element<'sta
     };
     let mut b = button(theme::icon(glyph).size(size).color(color))
         .style(|_theme, status| theme::small_button_style(status))
-        .padding([1, 3]);
+        .padding([1, pad_x]);
     if let Some(message) = message {
         b = b.on_press(message);
     }
