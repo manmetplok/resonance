@@ -41,7 +41,17 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // main-thread latency extension can no longer reach it; the host's
         // single post-activation `latency.get()` is served from this cached
         // value instead (CLAP only defines the query while active).
-        main_thread.last_latency = plugin.latency_samples();
+        //
+        // This is also the point where a runtime latency change becomes
+        // official: a plugin that pushed a new figure through
+        // `HostHandle::set_latency_samples` asked for a restart, and the
+        // re-activation that follows lands here and re-reads it.
+        main_thread
+            .host_handle
+            .store_latency(plugin.latency_samples());
+        // From here on the plugin is active, so a further latency change
+        // needs a restart request rather than a bare notification.
+        main_thread.host_handle.set_active(true);
 
         let max_frames = audio_config.max_frames_count as usize;
         let port_count = shared.output_ports.len();
@@ -356,6 +366,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
     }
 
     fn deactivate(self, main_thread: &mut ClapMainThread<'a, P>) {
+        main_thread.host_handle.set_active(false);
         main_thread.plugin = Some(self.plugin);
     }
 

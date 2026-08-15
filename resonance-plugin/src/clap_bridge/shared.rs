@@ -6,6 +6,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use clack_extensions::latency::HostLatency;
 use clack_plugin::prelude::*;
 
 use crate::gui::{EditorFactory, PluginEditor};
@@ -35,7 +36,9 @@ pub(crate) struct ParamMeta {
 // ---------------------------------------------------------------------------
 
 pub struct ClapShared<'a> {
-    #[allow(dead_code)]
+    /// The thread-safe host handle. Wrapped into the plugin-facing
+    /// [`HostHandle`](crate::host::HostHandle) in `new_main_thread`, which is
+    /// what lets a plugin report a runtime latency change (ba todo #1296).
     pub(super) host: HostSharedHandle<'a>,
     pub(crate) param_metas: Vec<ParamMeta>,
     /// Indices into `param_metas` of non-hidden params, computed once
@@ -109,16 +112,20 @@ impl<'a> PluginShared<'a> for ClapShared<'a> {}
 // ---------------------------------------------------------------------------
 
 pub struct ClapMainThread<'a, P: ResonancePlugin> {
-    #[allow(dead_code)]
+    /// Main-thread host handle. Used to call `clap_host_latency.changed()`,
+    /// which the CLAP spec restricts to this thread.
     pub(super) host: HostMainThreadHandle<'a>,
     pub(crate) shared: &'a ClapShared<'a>,
     pub(crate) plugin: Option<P>,
-    /// Latency (in samples) captured from the plugin after `initialize()`
-    /// inside `activate`, and refreshed by any direct main-thread query
-    /// while inactive. The CLAP latency extension serves this value while
-    /// the plugin object lives in the audio processor — in particular for
-    /// the host's single post-activation `latency.get()` query.
-    pub(crate) last_latency: u32,
+    /// The plugin-facing host handle, also held by the plugin itself (it is
+    /// handed over in `ResonancePlugin::set_host`). Carries the latency the
+    /// plugin last reported: captured from the plugin after `initialize()`
+    /// inside `activate`, refreshed by any direct main-thread query while
+    /// inactive, and *pushed* by the plugin when its latency changes at
+    /// runtime. The CLAP latency extension serves this value while the
+    /// plugin object lives in the audio processor — in particular for the
+    /// host's post-activation `latency.get()` query.
+    pub(crate) host_handle: std::sync::Arc<crate::host::HostHandle>,
     /// Editor factory harvested from the plugin at construction time. `None`
     /// if the plugin has no GUI. Kept alive across activate/deactivate so
     /// the host can open the editor while audio is running.
@@ -133,7 +140,37 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     pub(crate) extra_state_saver: Option<std::sync::Arc<dyn crate::plugin::ExtraStateSaver>>,
 }
 
-impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {}
+impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {
+    /// Runs on the main thread in response to `clap_host.request_callback()`.
+    ///
+    /// The only thing the bridge defers here is the latency notification:
+    /// `clap_host_latency.changed()` is `[main-thread]`, but a plugin reports
+    /// its new latency from wherever it noticed — typically the audio thread
+    /// inside `process()`, or an editor thread. `set_latency_samples` asks
+    /// for this callback; here we tell the host to re-query, which is what
+    /// makes it recompute plugin delay compensation (ba todo #1296).
+    fn on_main_thread(&mut self) {
+        if !self.host_handle.take_latency_dirty() {
+            return;
+        }
+        if let Some(latency) = self.host.shared().get_extension::<HostLatency>() {
+            latency.changed(&mut self.host);
+        }
+    }
+}
+
+/// Retire the plugin-facing host handle when the instance is destroyed.
+///
+/// The handle stores the `clap_host` pointer with an erased lifetime so the
+/// plugin (which is `'static`) can hold it. This drop runs while that pointer
+/// is still valid and flips the handle inert, so a clone that outlived the
+/// instance — leaked into an editor thread, say — degrades to no-ops instead
+/// of calling through a dangling pointer.
+impl<P: ResonancePlugin> Drop for ClapMainThread<'_, P> {
+    fn drop(&mut self) {
+        self.host_handle.retire();
+    }
+}
 
 // ---------------------------------------------------------------------------
 // AudioProcessor
