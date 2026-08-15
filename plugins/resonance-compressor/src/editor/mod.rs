@@ -7,7 +7,10 @@
 
 mod app;
 mod control_strip;
-mod curve;
+// Public so `tests/curve_axis.rs` can hold the plot's dB window to the
+// threshold parameter's declared range (ba todo #1346); the drawing
+// itself still needs a live egui painter and is not exercised there.
+pub mod curve;
 mod factory;
 mod history;
 mod meters;

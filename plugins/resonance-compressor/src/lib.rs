@@ -26,7 +26,7 @@ pub mod presets;
 pub mod viz;
 
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::CompressorDsp;
 use params::{CompressorParams, PARAM_COUNT};

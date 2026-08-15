@@ -152,6 +152,9 @@ fn draw_center(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
         &painter,
         curve_rect,
         curve::CurveParams {
+            // The plot window comes off the threshold parameter itself,
+            // so the threshold indicator can never leave the plot.
+            axis: curve::DbAxis::from_threshold(&app.params.threshold),
             threshold: app.params.threshold.value(),
             ratio: app.params.ratio.value(),
             knee: app.params.knee.value(),
