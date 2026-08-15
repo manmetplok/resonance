@@ -230,6 +230,12 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // re-seeds it from the project file afterwards.
     r.aux.sends.clear();
     r.aux.last_rejection = None;
+    // Likewise the key-routing mirror (ba todo #1311): `ClearAll` empties
+    // the engine's route table without echoing a `SidechainRouteChanged`
+    // per route, so loading a project on top of another would otherwise
+    // leave the new one keying plugins from the old one's tracks.
+    // `replay_sidechain_routes` re-seeds it from the project file.
+    r.sidechain.clear();
     // Drop external-instrument mode so the load starts clean. A fresh
     // project load re-asserts it per-track from `ProjectTrack.external_instrument`
     // in `replay_track`; an undo restore re-asserts it from `UndoExtras`
@@ -319,6 +325,11 @@ fn replay_tracks_and_busses(
     // both have to exist first (the engine rejects a send naming either
     // one before it is registered).
     replay_sends(r, project);
+
+    // …and the sidechain key routes, which need BOTH the source entity and
+    // the target plugin to have been replayed — hence last, after the
+    // track, bus and master chains have all gone out.
+    replay_sidechain_routes(r, project);
 }
 
 /// Re-register the saved aux sends (ba doc #273) with the engine and seed
@@ -384,6 +395,87 @@ fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
             level_db: ps.level_db,
             pre_fader: ps.pre_fader,
             enabled: ps.enabled,
+        });
+    }
+}
+
+/// Every plugin instance id the project file carries, across track, bus
+/// and master chains. The membership test for a saved key route's
+/// target: a route onto a plugin this project no longer contains is
+/// dropped rather than replayed.
+///
+/// Derived from the project file rather than from `r.plugin_index`
+/// because the index is only rebuilt in `finalize_plugin_chains`, after
+/// this runs — and because the file is the thing being validated.
+fn saved_plugin_instance_ids(project: &ProjectFile) -> std::collections::HashSet<u64> {
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| t.plugins.iter())
+        .chain(project.busses.iter().flat_map(|b| b.plugins.iter()))
+        .chain(project.master_plugins.iter())
+        .map(|p| p.instance_id)
+        .collect()
+}
+
+/// Re-register the saved sidechain key routes (ba doc #157/#159, todo
+/// #1311) with the engine and seed the GUI mirror.
+///
+/// Each route goes back as a `SetSidechainRoute` naming the target
+/// plugin's saved instance id, which is the same id `replay_plugins`
+/// just handed the engine as an `id_hint` — so a route survives a reload
+/// without any id remapping. The engine echoes `SidechainRouteChanged`,
+/// which overwrites the seeded entry with the resolved one; seeding here
+/// rather than waiting for that echo is what every other entity in this
+/// module does, and it is what makes a save taken immediately after a
+/// load write the same routes back out.
+///
+/// Legacy projects carry no routes, so this is a no-op for them — the
+/// mirror was already emptied by [`wipe_registry`].
+fn replay_sidechain_routes(r: &mut Resonance, project: &ProjectFile) {
+    if project.sidechain_routes.is_empty() {
+        return;
+    }
+    let known_plugins = saved_plugin_instance_ids(project);
+    for pr in &project.sidechain_routes {
+        // An unknown source kind means this build cannot tell what the
+        // route is keyed FROM. Dropping it loses a duck; guessing points
+        // the detector at a different channel — track and bus ids are
+        // independent namespaces that both start at 1 — and a wrongly
+        // keyed compressor is far harder to notice than an unkeyed one.
+        let Some(source) = crate::project::send_source_from_tag(&pr.source_kind, pr.source_id)
+        else {
+            // Loud, because the next save rewrites the file without it.
+            eprintln!(
+                "project load: dropping sidechain route onto plugin {} — unknown source kind {:?}",
+                pr.plugin_instance_id, pr.source_kind
+            );
+            continue;
+        };
+        let source_exists = match source {
+            SendSource::Track(id) => r.registry.tracks.iter().any(|t| t.id == id),
+            SendSource::Bus(id) => r.registry.busses.iter().any(|b| b.id == id),
+        };
+        if !source_exists || !known_plugins.contains(&pr.plugin_instance_id) {
+            // Same reasoning as the send case: seeding a route whose
+            // endpoints are missing leaves a phantom the mixer would draw
+            // while no key is delivered at all.
+            eprintln!(
+                "project load: dropping sidechain route onto plugin {} — endpoint missing \
+                 (source {:?})",
+                pr.plugin_instance_id, source
+            );
+            continue;
+        }
+        let _ = r.engine.send(AudioCommand::SetSidechainRoute {
+            plugin: pr.plugin_instance_id,
+            source,
+            enabled: pr.enabled,
+        });
+        r.sidechain.upsert(SidechainRoute {
+            plugin: pr.plugin_instance_id,
+            source,
+            enabled: pr.enabled,
         });
     }
 }

@@ -39,6 +39,12 @@ pub const PLUGIN_PARAMS: &str = "bus.plugin_params";
 /// `bus.set_plugin_param` — set one parameter on a bus plugin
 /// ([`SetPluginParamParams`] -> `MutationAck`).
 pub const SET_PLUGIN_PARAM: &str = "bus.set_plugin_param";
+/// `bus.set_sidechain` — key a plugin on a bus's chain from another
+/// track or bus ([`SetSidechainParams`] -> `MutationAck`).
+pub const SET_SIDECHAIN: &str = "bus.set_sidechain";
+/// `bus.clear_sidechain` — remove a bus plugin's key route
+/// ([`ClearSidechainParams`] -> `MutationAck`).
+pub const CLEAR_SIDECHAIN: &str = "bus.clear_sidechain";
 
 /// All `bus.*` method names.
 pub const METHODS: &[&str] = &[
@@ -51,6 +57,8 @@ pub const METHODS: &[&str] = &[
     SET_FX_BYPASS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    SET_SIDECHAIN,
+    CLEAR_SIDECHAIN,
 ];
 
 /// Params for `bus.create`.
@@ -244,4 +252,73 @@ pub struct SetPluginParamParams {
     /// that rounds onto an f32-declared bound is accepted and clamped,
     /// anything past that tolerance is rejected.
     pub value: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Sidechain (key) routing onto a bus chain (ba doc #275 P4, todo #1311)
+// ---------------------------------------------------------------------------
+
+/// Params for `bus.set_sidechain` — feed another track's or bus's audio
+/// into the key input of a plugin **on a bus chain**.
+///
+/// This is the arm the control API was missing. `track.set_sidechain` is
+/// keyed on `track_id`, so a compressor on the bass *bus* — the single
+/// most common place a keyed ducker actually lives, because the point is
+/// to duck a whole group from one hit — could not be keyed at all. The
+/// engine never had that limitation: its route table is keyed by plugin
+/// instance, and the mixer connects a key port wherever the plugin sits.
+///
+/// A separate method rather than an overload of `track.set_sidechain`,
+/// for the reason [`SetPluginParamParams`] gives: `resonance-mcp`
+/// publishes one tool per method, so an overload would smuggle two
+/// meanings through one field an agent reads once.
+///
+/// Addressing and the two safety rules are otherwise identical to
+/// [`crate::methods::track::SetSidechainParams`]: an omitted `plugin_id`
+/// targets the first plugin on the bus that declares a key port, and a
+/// route onto a plugin with no key port is refused rather than stored
+/// inertly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetSidechainParams {
+    /// The bus hosting the plugin whose key is being routed.
+    pub bus_id: TrackId,
+    /// CLAP id of the plugin to address; omitted targets the first
+    /// plugin on the bus that declares a key port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based; defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Feed the key from this track's audio. A sub-track (one tap of a
+    /// multi-output instrument, e.g. the kick of a kit) is a valid
+    /// source and is captured post-FX, pre-fader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_track_id: Option<TrackId>,
+    /// Feed the key from this bus's audio. A bus may legally key a
+    /// plugin on itself — the key is delivered one block late by
+    /// construction, so the route cannot feed back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_bus_id: Option<TrackId>,
+    /// A disabled route keeps its configuration but delivers no key, so
+    /// the plugin falls back to keying off its own input. Defaults true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Params for `bus.clear_sidechain`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ClearSidechainParams {
+    pub bus_id: TrackId,
+    /// Omitted targets the same plugin `bus.set_sidechain` would: the
+    /// first on the bus with a key port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
 }
