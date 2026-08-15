@@ -38,6 +38,37 @@ fn tab_strip_lists_only_the_pads_view() {
     );
 }
 
+/// No control in the body may throw its interaction away (ba todo
+/// #1326). `let _ = widgets::slider…` / `widgets::segmented…` is the
+/// exact shape the audit found four times in this file: a control that
+/// looks live, moves under the pointer, and changes nothing. Either it
+/// writes a parameter or it should not be drawn.
+///
+/// The one legitimate discard is in `chrome.rs` — the tab strip has a
+/// single tab, so its click has nowhere to go — and this test does not
+/// cover that file.
+#[test]
+fn no_control_in_the_body_discards_its_interaction() {
+    for line in APP.lines() {
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.starts_with("let _ = widgets::"),
+            "a drawn control discards its interaction: {trimmed}"
+        );
+    }
+}
+
+/// "preview" was the badge the GLOBAL card wore to admit its controls
+/// did nothing. The controls work now, so the badge must not survive —
+/// a working card labelled "preview" is its own kind of lie.
+#[test]
+fn no_card_is_labelled_preview() {
+    assert!(
+        !APP.contains("\"preview\""),
+        "a card still advertises itself as a preview"
+    );
+}
+
 /// A user who wants mic selection must be told where it lives, since the
 /// tab that used to (falsely) promise it is gone.
 #[test]

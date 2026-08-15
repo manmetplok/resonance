@@ -20,7 +20,9 @@ use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::download::WorkerHandle;
 use crate::kit;
-use crate::params::DrumParams;
+use crate::params::{DrumParams, ROUND_ROBIN_LABELS};
+use crate::velocity;
+use crate::voice::MAX_VOICES;
 use crate::KitBridge;
 
 use super::{
@@ -212,7 +214,7 @@ fn draw_pads_body(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             draw_kit_row_card(ui, app);
         });
         ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
-            draw_global_row_card(ui);
+            draw_global_row_card(ui, &app.params);
         });
     });
 }
@@ -244,9 +246,10 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         });
         ui.add_space(4.0);
 
-        // Three-column field row.
+        // Two-column field row: master volume and the routing readout,
+        // separated by one 18 px gap.
         let avail = ui.available_width();
-        let col = (avail - 36.0) / 3.0;
+        let col = (avail - 18.0) / 2.0;
 
         ui.horizontal(|ui| {
             // Master.
@@ -277,31 +280,14 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 }
             });
             ui.add_space(18.0);
-            // Bus tone (preview only).
-            ui.vertical(|ui| {
-                ui.set_min_width(col);
-                ui.set_max_width(col);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("BUS TONE")
-                            .color(theme::TEXT_3)
-                            .size(10.0),
-                    );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new("+0.00")
-                                    .color(theme::TEXT_3)
-                                    .size(11.0)
-                                    .monospace(),
-                            );
-                        },
-                    );
-                });
-                let _ = widgets::slider_bipolar(ui, col, 0.0);
-            });
-            ui.add_space(18.0);
+            // BUS TONE used to sit here: a bipolar slider reading
+            // "+0.00" that discarded every drag, because the plugin has
+            // no bus tone control anywhere in its DSP. It is the same
+            // defect as the GLOBAL card's three (ba todo #1326) and the
+            // audit register missed it, so it goes the way the other
+            // unimplemented controls went — out, rather than left drawn
+            // for a user to drag at.
+
             // Routing — a readout, not a control. The plugin declares all
             // `kit::NUM_OUTPUT_PORTS` ports unconditionally (see
             // `ResonanceDrums::output_layout`); there is no stereo-only mode
@@ -342,7 +328,13 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     });
 }
 
-fn draw_global_row_card(ui: &mut egui::Ui) {
+/// The GLOBAL card: polyphony, velocity curve and round-robin mode.
+///
+/// Every control here writes a parameter (ba todo #1326) — before that
+/// they were drawn from constants and threw their interaction away. The
+/// parameters are what the sampler reads, so these three are reachable
+/// from a host automation lane and `set_plugin_param` as well.
+fn draw_global_row_card(ui: &mut egui::Ui, params: &DrumParams) {
     let frame = egui::Frame::default()
         .fill(theme::BG_2)
         .stroke(egui::Stroke::new(1.0, theme::LINE_2))
@@ -357,94 +349,67 @@ fn draw_global_row_card(ui: &mut egui::Ui) {
                     .size(10.5)
                     .strong(),
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new("preview")
-                        .color(theme::TEXT_3)
-                        .size(10.5)
-                        .monospace(),
-                );
-            });
         });
         ui.add_space(4.0);
 
         let avail = ui.available_width();
         let col = (avail - 36.0) / 3.0;
         ui.horizontal(|ui| {
-            // Polyphony.
+            // Polyphony — voice ceiling, 1..MAX_VOICES.
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("POLYPHONY")
-                            .color(theme::TEXT_3)
-                            .size(10.0),
-                    );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new("64")
-                                    .color(theme::TEXT_3)
-                                    .size(11.0)
-                                    .monospace(),
-                            );
-                        },
-                    );
-                });
-                let _ = widgets::slider_unipolar(ui, col, 0.5);
+                let voices = params.polyphony.value();
+                global_control_head(ui, "POLYPHONY", &voices.to_string());
+                let span = (MAX_VOICES - 1) as f32;
+                let unit = (voices - 1) as f32 / span;
+                if let Some(new_unit) = widgets::slider_unipolar(ui, col, unit) {
+                    params
+                        .polyphony
+                        .set_value(1 + (new_unit * span).round() as i32);
+                }
             });
             ui.add_space(18.0);
-            // Velocity curve.
+            // Velocity curve — bipolar, centred on linear.
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("VELOCITY CURVE")
-                            .color(theme::TEXT_3)
-                            .size(10.0),
-                    );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new("linear")
-                                    .color(theme::TEXT_3)
-                                    .size(11.0)
-                                    .monospace(),
-                            );
-                        },
-                    );
-                });
-                let _ = widgets::slider_bipolar(ui, col, 0.0);
+                let curve = params.velocity_curve.value();
+                global_control_head(ui, "VELOCITY CURVE", &velocity::curve_label(curve));
+                if let Some(new_curve) = widgets::slider_bipolar(ui, col, curve) {
+                    params.velocity_curve.set_value(new_curve);
+                }
             });
             ui.add_space(18.0);
-            // Round robin.
+            // Round robin — how a layer's takes are walked.
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("ROUND ROBIN")
-                            .color(theme::TEXT_3)
-                            .size(10.0),
-                    );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new("cycle")
-                                    .color(theme::TEXT_3)
-                                    .size(11.0)
-                                    .monospace(),
-                            );
-                        },
-                    );
-                });
-                let _ = widgets::segmented(ui, &["Cycle", "Random"], 0, false);
+                let mode = params.round_robin_mode.value();
+                global_control_head(ui, "ROUND ROBIN", params.round_robin_mode.label());
+                if let Some(picked) =
+                    widgets::segmented(ui, ROUND_ROBIN_LABELS, mode.max(0) as usize, false)
+                {
+                    params.round_robin_mode.set_value(picked as i32);
+                }
             });
+        });
+    });
+}
+
+/// Label + right-aligned value readout, the header every GLOBAL control
+/// shares. The readout is the parameter's own text, so the card and the
+/// host's automation lane can never disagree about what is set.
+fn global_control_head(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).color(theme::TEXT_3).size(10.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(value.to_lowercase())
+                    .color(theme::TEXT_3)
+                    .size(11.0)
+                    .monospace(),
+            );
         });
     });
 }
