@@ -7,8 +7,8 @@ use iced::{alignment, Color, Element, Length};
 use crate::message::*;
 use crate::presets::TrackPreset;
 use crate::state::{
-    ArrangementMarker, FreezeStatus, MarkerMenuState, MarkerRenameState, TrackMenuState,
-    TrackState,
+    ArrangementMarker, FreezeStatus, MarkerMenuState, MarkerRenameState, PresetSaveState,
+    TrackMenuState, TrackState,
 };
 use crate::theme::{self, fa};
 use crate::Resonance;
@@ -53,9 +53,11 @@ fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
 
     let preset_clone = preset.clone();
     button(btn_row)
-        .on_press(Message::Track(TrackMessage::AddTrackFromPreset(Box::new(
-            preset_clone,
-        ))))
+        .on_press(Message::Track(TrackMessage::AddTrackFromPreset {
+            preset: Box::new(preset_clone),
+            id_hint: None,
+            name: None,
+        }))
         .width(Length::Fill)
         .padding([4, 10])
         .style(|_theme, status| theme::transport_button_style(status))
@@ -425,6 +427,10 @@ fn marker_rename_overlay(rename: &MarkerRenameState) -> Element<'_, Message> {
 /// selected tracks / Freeze all tracks (⇧⌘F) / Reveal freeze cache….
 /// Renders nothing when no menu is open (or its track is gone).
 pub(crate) fn view_track_menu_overlay(r: &Resonance) -> Element<'_, Message> {
+    // The name prompt takes over from the menu that opened it.
+    if let Some(prompt) = &r.interaction.preset_save {
+        return preset_save_overlay(prompt);
+    }
     if let Some(menu) = &r.interaction.track_menu {
         if let Some(track) = r.registry.tracks.iter().find(|t| t.id == menu.track_id) {
             return track_menu_overlay(r, menu, track);
@@ -539,6 +545,15 @@ fn track_menu_overlay<'a>(
             can_freeze_all,
         ),
         marker_menu_sep(),
+        // The other half of a preset menu that could only ever be read
+        // from (ba todo #1303): every track carries what a preset needs.
+        track_menu_item(
+            "Save as preset\u{2026}",
+            None,
+            Message::Track(TrackMessage::OpenSavePresetPrompt(id)),
+            true,
+        ),
+        marker_menu_sep(),
         track_menu_item(
             "Reveal freeze cache\u{2026}",
             None,
@@ -572,4 +587,105 @@ fn track_menu_overlay<'a>(
         });
 
     stack![backdrop, positioned].into()
+}
+
+/// The "Save track as preset" prompt (ba todo #1303, finding P1).
+///
+/// One field and two buttons, and the only subtlety is the one that
+/// matters: when the typed name already exists the action button says
+/// **Overwrite**, because saving replaces the file. That is the same
+/// promise `track.save_preset` keeps with its `overwrite` flag — a
+/// preset is never silently replaced on either surface.
+fn preset_save_overlay(prompt: &PresetSaveState) -> Element<'_, Message> {
+    let backdrop = mouse_area(
+        container(Space::new().width(Length::Fill).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgba(
+                    0.0, 0.0, 0.0, 0.5,
+                ))),
+                ..Default::default()
+            }),
+    )
+    .on_press(Message::Track(TrackMessage::CloseSavePresetPrompt));
+
+    let named = !prompt.name.trim().is_empty();
+    let save_msg = Message::Track(TrackMessage::SaveTrackAsPreset {
+        track_id: prompt.track_id,
+        name: prompt.name.clone(),
+        // The button's label already told the user which of the two
+        // things it is about to do.
+        overwrite: prompt.exists,
+    });
+
+    let field = text_input("Preset name", &prompt.name)
+        .on_input(|s| Message::Track(TrackMessage::SetSavePresetName(s)))
+        .on_submit(save_msg.clone())
+        .size(13)
+        .padding([6, 8])
+        .width(Length::Fill);
+
+    let mut body = column![
+        text("Save track as preset").size(14).color(theme::TEXT),
+        Space::new().height(8),
+        field,
+    ]
+    .spacing(2)
+    .width(300);
+
+    if prompt.exists {
+        body = body.push(
+            text(format!(
+                "Replaces the existing preset {:?}",
+                prompt.name.trim()
+            ))
+            .size(10)
+            .color(theme::WARM),
+        );
+    }
+
+    let mut save_btn = button(
+        text(if prompt.exists { "Overwrite" } else { "Save" })
+            .size(12)
+            .color(theme::TEXT),
+    )
+    .padding([4, 12])
+    .style(|_theme, status| theme::transport_button_style(status));
+    if named {
+        save_btn = save_btn.on_press(save_msg);
+    }
+
+    let cancel_btn = button(text("Cancel").size(12).color(theme::TEXT_DIM))
+        .on_press(Message::Track(TrackMessage::CloseSavePresetPrompt))
+        .padding([4, 12])
+        .style(|_theme, status| theme::transport_button_style(status));
+
+    body = body.push(Space::new().height(10)).push(
+        row![
+            Space::new().width(Length::Fill),
+            cancel_btn,
+            Space::new().width(6),
+            save_btn,
+        ]
+        .align_y(alignment::Vertical::Center),
+    );
+
+    let boxed = container(opaque(body.padding(14))).style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::PANEL)),
+        border: iced::Border {
+            color: theme::SEPARATOR,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    });
+
+    let centered = container(boxed)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+
+    stack![backdrop, centered].into()
 }

@@ -165,8 +165,35 @@ pub fn default_presets() -> Vec<TrackPreset> {
 // ---- User preset persistence ---------------------------------------------
 
 /// Directory for user-saved track presets.
+/// Where user presets live.
+///
+/// `RESONANCE_PRESET_DIR` overrides the default, which is what lets a
+/// test save and re-read a preset without writing into the machine's
+/// real preset folder (ba todo #1303) — the same escape hatch
+/// `RESONANCE_SVS_MODELS_DIR` gives the voicebank loader.
 fn presets_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os(PRESET_DIR_ENV) {
+        return Some(PathBuf::from(dir));
+    }
     dirs::data_dir().map(|d| d.join("resonance/track-presets"))
+}
+
+/// Environment override for [`presets_dir`].
+pub const PRESET_DIR_ENV: &str = "RESONANCE_PRESET_DIR";
+
+/// Whether a user preset by this name already exists on disk.
+///
+/// Saving is a file write that replaces whatever is there, so both
+/// surfaces ask first: the GUI turns its button into "Overwrite" and
+/// `track.save_preset` refuses without `overwrite: true` (the control
+/// API's destructive-operation convention). Compared on the SANITIZED
+/// name, because that is what decides the filename — "My Bass" and
+/// "My/Bass" would otherwise look distinct and land on one file.
+pub fn user_preset_exists(name: &str) -> bool {
+    let Some(dir) = presets_dir() else {
+        return false;
+    };
+    dir.join(format!("{}.json", sanitize_filename(name))).exists()
 }
 
 /// Load all user presets from disk.

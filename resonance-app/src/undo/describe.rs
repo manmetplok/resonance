@@ -28,7 +28,7 @@ pub fn describe(message: &Message) -> String {
             TrackMessage::ToggleSolo(_) => "track solo",
             TrackMessage::SetTrackName(..) => "rename track",
             TrackMessage::SetTrackOutput(..) => "track routing",
-            TrackMessage::AddControlTrack { .. } | TrackMessage::AddTrackFromPreset(_) => {
+            TrackMessage::AddControlTrack { .. } | TrackMessage::AddTrackFromPreset { .. } => {
                 "add track"
             }
             TrackMessage::RequestRemoveTrack(_) | TrackMessage::ConfirmRemoveTrack => {

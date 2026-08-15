@@ -46,6 +46,20 @@ pub use message::Message;
 use state::*;
 use undo::UndoHistory;
 
+/// A track-preset save waiting for the engine to hand back its plugins'
+/// state blobs (ba todo #1303).
+///
+/// See [`Resonance::pending_preset_save`] for why the save is split in
+/// two.
+#[derive(Debug, Clone)]
+pub struct PendingPresetSave {
+    /// The track being captured.
+    pub track_id: resonance_audio::types::TrackId,
+    /// What to call the preset. Already trimmed, and already checked
+    /// against an existing preset of the same name.
+    pub name: String,
+}
+
 /// Application state.
 /// A plugin-preset capture waiting on the engine's state echo.
 #[derive(Debug, Clone)]
@@ -371,8 +385,16 @@ pub struct Resonance {
     /// event will apply this preset to the newly created track.
     pub(crate) pending_track_preset: Option<presets::TrackPreset>,
     /// When set, the next `AllPluginStatesSaved` event will capture
-    /// plugin states for this track and save it as a user preset.
-    pub(crate) pending_preset_save: Option<resonance_audio::types::TrackId>,
+    /// plugin states for this track and save it as a user preset under
+    /// this name (ba todo #1303).
+    ///
+    /// The capture cannot be synchronous: a preset carries each plugin's
+    /// opaque CLAP state blob, and only the engine can ask a plugin for
+    /// one. So the save is armed here, `SaveAllPluginStates` goes out,
+    /// and the echo finishes it — which is also why the name has to be
+    /// carried along rather than re-derived from the track (it may have
+    /// been renamed, and the user may have typed something else).
+    pub(crate) pending_preset_save: Option<PendingPresetSave>,
     /// A `*.save_plugin_preset` waiting for the plugin to hand back its
     /// state (ba todo #1333).
     ///

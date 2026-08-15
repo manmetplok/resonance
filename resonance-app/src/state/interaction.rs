@@ -175,6 +175,10 @@ pub struct ClipInteractionState {
     /// doc #181, todo #581). Rendered as a floating overlay over the
     /// arrange main area, anchored at `x` / `y`.
     pub track_menu: Option<TrackMenuState>,
+    /// In-progress "Save track as preset" name prompt, if any (ba todo
+    /// #1303). Holds the live edit buffer and whether the typed name
+    /// already exists, which is what turns the button into "Overwrite".
+    pub preset_save: Option<PresetSaveState>,
     /// Tracks whose automation lanes are expanded into dedicated slim
     /// arrange sub-rows (doc #256, todo #1096). Transient view state —
     /// not project data, not undoable, not persisted. Toggled by
@@ -234,6 +238,23 @@ pub struct TrackMenuState {
     pub track_id: TrackId,
     pub x: f32,
     pub y: f32,
+}
+
+/// An in-progress "Save track as preset" prompt (ba todo #1303).
+///
+/// A preset is a file, and a name that already exists would replace one
+/// — so the prompt asks for the name and says, before the click, which
+/// of the two things the button is about to do.
+#[derive(Debug, Clone)]
+pub struct PresetSaveState {
+    /// The track being captured.
+    pub track_id: TrackId,
+    /// Live edit buffer, seeded with the track's own name.
+    pub name: String,
+    /// Whether a user preset of this name is already on disk.
+    /// Recomputed on every keystroke, so the button label follows what
+    /// is actually typed.
+    pub exists: bool,
 }
 
 /// An in-progress inline marker rename. `text` is the live edit buffer,

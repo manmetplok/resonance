@@ -67,6 +67,15 @@ pub const SET_SIDECHAIN: &str = "track.set_sidechain";
 /// `track.clear_sidechain` — remove a plugin's key route
 /// ([`ClearSidechainParams`] -> `MutationAck`).
 pub const CLEAR_SIDECHAIN: &str = "track.clear_sidechain";
+/// `track.save_preset` — capture a dialled-in track as a reusable
+/// preset ([`SavePresetParams`] -> `MutationAck`).
+pub const SAVE_PRESET: &str = "track.save_preset";
+/// `track.presets` — the preset library, built-in and user-saved
+/// (no params -> [`PresetsView`]).
+pub const PRESETS: &str = "track.presets";
+/// `track.apply_preset` — stamp out a new track from a preset
+/// ([`ApplyPresetParams`] -> [`AddResult`]).
+pub const APPLY_PRESET: &str = "track.apply_preset";
 
 /// All `track.*` method names.
 pub const METHODS: &[&str] = &[
@@ -88,6 +97,9 @@ pub const METHODS: &[&str] = &[
     SAVE_PLUGIN_PRESET,
     SET_SIDECHAIN,
     CLEAR_SIDECHAIN,
+    SAVE_PRESET,
+    PRESETS,
+    APPLY_PRESET,
 ];
 
 /// Params for `track.set_sidechain`.
@@ -705,4 +717,77 @@ pub struct SavePluginPresetParams {
     pub name: String,
     #[serde(default)]
     pub overwrite: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Track presets (ba todo #1303, finding P1)
+// ---------------------------------------------------------------------------
+//
+// A preset is a track worth keeping: its type, its mixer settings, its
+// instrument identity and its whole plugin chain WITH each plugin's
+// opaque state, so recalling it restores the sound and not just the
+// names. The app has been able to apply one since forever and could not
+// create one — the preset menu listed only what someone had hand-written
+// as JSON. These three methods are the same capability the GUI's
+// "Save as preset..." now has, so a dialled-in track can be captured and
+// stamped out again over the wire.
+
+/// Params for `track.save_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SavePresetParams {
+    /// The track to capture, exactly as it stands.
+    pub track_id: TrackId,
+    /// What to call it. Omitted takes the track's own name — which is
+    /// usually right, and always visible in `track.presets` afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Required (`true`) to replace a preset that already carries this
+    /// name, per the control API's destructive-operation convention: a
+    /// preset is a file, and saving over one loses whatever was in it.
+    /// Without it, a colliding name is refused and says so.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// Result of `track.presets`: everything a new track can be stamped from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PresetsView {
+    pub presets: Vec<PresetView>,
+}
+
+/// One preset in the library.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PresetView {
+    /// The name `track.apply_preset` takes, and the name a save
+    /// collides with.
+    pub name: String,
+    /// The kind of track it makes.
+    pub kind: TrackKind,
+    /// Whether it ships with the app or was saved from a track.
+    /// Built-ins carry no plugin chain; a saved one usually does.
+    pub builtin: bool,
+    /// CLAP ids of the plugins it restores, in chain order — the
+    /// instrument first on an instrument preset. Empty for a preset that
+    /// only carries mixer settings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<String>,
+}
+
+/// Params for `track.apply_preset`.
+///
+/// Applying a preset CREATES a track from it, exactly as picking it in
+/// the app's add-track menu does — it does not overwrite an existing
+/// track's chain, and so needs no confirmation. The new track's id comes
+/// back in [`AddResult`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ApplyPresetParams {
+    /// A name from `track.presets`, matched case-insensitively.
+    pub preset: String,
+    /// Name for the new track. Omitted takes the preset's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }

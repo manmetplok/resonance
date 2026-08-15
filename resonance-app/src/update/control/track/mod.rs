@@ -53,6 +53,8 @@ mod lifecycle;
 mod mixer;
 mod output;
 mod params;
+/// The preset library: capture a track, list what can be stamped out,
+/// stamp one out (todo #1303).
 mod presets;
 mod sends;
 mod sidechain;
@@ -85,6 +87,9 @@ pub(super) fn try_handle(
         track_methods::SAVE_PLUGIN_PRESET => presets::save_plugin_preset(app, request),
         track_methods::SET_SIDECHAIN => sidechain::set_sidechain(app, request),
         track_methods::CLEAR_SIDECHAIN => sidechain::clear_sidechain(app, request),
+        track_methods::SAVE_PRESET => presets::save_preset(app, request),
+        track_methods::PRESETS => (presets::presets(app, request), Task::none()),
+        track_methods::APPLY_PRESET => presets::apply_preset(app, request),
         mixer_methods::SET_VOLUME => mixer::set_volume(app, request),
         mixer_methods::SET_VOLUME_DB => mixer::set_volume_db(app, request),
         mixer_methods::SET_PAN => mixer::set_pan(app, request),

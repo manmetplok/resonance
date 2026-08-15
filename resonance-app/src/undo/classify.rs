@@ -219,8 +219,15 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Dismissing the delete-confirmation dialog is a transient
             // UI gesture — nothing to undo.
             TrackMessage::CancelRemoveTrack => UndoAction::Skip,
-            // Preset operations that don't mutate project state.
-            TrackMessage::DeleteUserPreset(_) => UndoAction::Skip,
+            // Preset operations that don't mutate project state: a
+            // preset is a file on the machine, and saving one leaves the
+            // project exactly as it was (ba todo #1303). The prompt
+            // around it is transient UI for the same reason.
+            TrackMessage::DeleteUserPreset(_)
+            | TrackMessage::SaveTrackAsPreset { .. }
+            | TrackMessage::OpenSavePresetPrompt(_)
+            | TrackMessage::SetSavePresetName(_)
+            | TrackMessage::CloseSavePresetPrompt => UndoAction::Skip,
             _ => UndoAction::Record,
         },
 

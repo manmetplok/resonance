@@ -319,9 +319,45 @@ pub enum TrackMessage {
     ToggleSubTracksVisible(TrackId),
     SetTrackOutput(TrackId, TrackOutput),
     /// Create a new track from a preset template.
-    AddTrackFromPreset(Box<TrackPreset>),
+    ///
+    /// `id_hint` is the app-allocated track id, so a caller can address
+    /// the new track without waiting for the engine's `*TrackAdded`
+    /// echo; `None` lets the engine allocate, which is the GUI's path
+    /// (the same split as `PluginMessage::AddPluginToTrackWithId`).
+    /// `name` overrides the preset's own name for the track only — the
+    /// preset keeps its name in the library (ba todo #1303).
+    AddTrackFromPreset {
+        preset: Box<TrackPreset>,
+        id_hint: Option<TrackId>,
+        name: Option<String>,
+    },
     /// Delete a user preset by name.
     DeleteUserPreset(String),
+    /// Open the "Save track as preset" name prompt, seeded with the
+    /// track's own name (ba todo #1303, finding P1).
+    OpenSavePresetPrompt(TrackId),
+    /// Live edit of the name in that prompt.
+    SetSavePresetName(String),
+    /// Dismiss the prompt without saving.
+    CloseSavePresetPrompt,
+    /// Capture a track — its mixer settings, its instrument identity and
+    /// its whole plugin chain including each plugin's opaque state — as
+    /// a reusable user preset (ba todo #1303, finding P1; control method
+    /// `track.save_preset`).
+    ///
+    /// The capture pipeline behind this has always worked; nothing ever
+    /// started it, so the preset menu could only list presets a user had
+    /// hand-written as JSON. Saving is a two-step: this arms
+    /// `pending_preset_save` and asks the engine for the plugins' state
+    /// blobs, and the `AllPluginStatesSaved` echo writes the file.
+    ///
+    /// `overwrite` is the destructive-operation flag: without it, a name
+    /// that already exists is refused rather than replaced.
+    SaveTrackAsPreset {
+        track_id: TrackId,
+        name: String,
+        overwrite: bool,
+    },
     /// "Bounce in place" — render this instrument track to a fresh
     /// audio track and mute the source. Routes to either the offline
     /// bounce (for tracks with an internal synth) or the bounce

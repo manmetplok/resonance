@@ -367,24 +367,64 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 .send(AudioCommand::SetTrackOutput { track_id, output });
             r.with_track_mut(track_id, |t| t.output = output);
         }
-        TrackMessage::AddTrackFromPreset(preset) => {
+        TrackMessage::AddTrackFromPreset {
+            preset,
+            id_hint,
+            name,
+        } => {
+            let track_name = Some(name.unwrap_or_else(|| preset.name.clone()));
             let cmd = match preset.track_type.as_str() {
                 "instrument" => AudioCommand::AddInstrumentTrack {
-                    id_hint: None,
-                    name: Some(preset.name.clone()),
+                    id_hint,
+                    name: track_name,
                 },
                 "vocal" => AudioCommand::AddVocalTrack {
-                    id_hint: None,
-                    name: Some(preset.name.clone()),
+                    id_hint,
+                    name: track_name,
                 },
                 _ => AudioCommand::AddTrack {
-                    id_hint: None,
-                    name: Some(preset.name.clone()),
+                    id_hint,
+                    name: track_name,
                 },
             };
             let _ = r.engine.send(cmd);
             r.pending_track_preset = Some(*preset);
             r.mixer.add_track_menu_open = false;
+        }
+        TrackMessage::OpenSavePresetPrompt(track_id) => {
+            // Seed with the track's own name: it is right often enough
+            // to be worth a single Enter, and wrong in a way the user
+            // can see before committing.
+            let name = r
+                .registry
+                .tracks
+                .iter()
+                .find(|t| t.id == track_id)
+                .map(|t| t.name.clone())
+                .unwrap_or_default();
+            let exists = crate::presets::user_preset_exists(&name);
+            r.interaction.preset_save = Some(crate::state::PresetSaveState {
+                track_id,
+                name,
+                exists,
+            });
+            r.interaction.track_menu = None;
+        }
+        TrackMessage::SetSavePresetName(name) => {
+            if let Some(prompt) = r.interaction.preset_save.as_mut() {
+                prompt.exists = crate::presets::user_preset_exists(name.trim());
+                prompt.name = name;
+            }
+        }
+        TrackMessage::CloseSavePresetPrompt => {
+            r.interaction.preset_save = None;
+        }
+        TrackMessage::SaveTrackAsPreset {
+            track_id,
+            name,
+            overwrite,
+        } => {
+            handle_save_track_as_preset(r, track_id, name, overwrite);
         }
         TrackMessage::DeleteUserPreset(name) => {
             if let Err(e) = crate::presets::delete_user_preset(&name) {
@@ -479,6 +519,50 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
 /// Dispatch a "bounce in place" request — runs the source-track
 /// classifier and either fires the offline render command (internal
 /// synth) or opens the realtime input-picker dialog (external MIDI).
+/// Arm a track-preset capture (ba todo #1303, finding P1).
+///
+/// Everything a preset needs except the plugins' opaque state blobs is
+/// already in the app; only the engine can ask a plugin for one. So this
+/// stores the intent and sends `SaveAllPluginStates`, and the echo
+/// (`engine_events::project_io::all_plugin_states_saved`) writes the
+/// file. `pending_preset_save` has existed — declared, initialised to
+/// `None`, taken on that echo — with nothing in the app ever setting it,
+/// which is why the preset menu could only list presets someone had
+/// written by hand.
+///
+/// Refuses rather than replaces: a name already on disk needs
+/// `overwrite`, the same rule `track.delete` and the render targets
+/// follow. Both surfaces come through here, so the refusal cannot differ
+/// between them.
+fn handle_save_track_as_preset(
+    r: &mut Resonance,
+    track_id: resonance_audio::types::TrackId,
+    name: String,
+    overwrite: bool,
+) {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        r.error_message = Some("Save preset: name a preset before saving it".to_string());
+        return;
+    }
+    if !r.registry.tracks.iter().any(|t| t.id == track_id) {
+        r.error_message = Some(format!("Save preset: no track {track_id}"));
+        return;
+    }
+    if !overwrite && crate::presets::user_preset_exists(&name) {
+        // The GUI reaches this only if the prompt's own guard was
+        // bypassed; it normally offers "Overwrite" instead.
+        r.error_message = Some(format!(
+            "Save preset: a preset named {name:?} already exists — save it under another name,              or overwrite it"
+        ));
+        return;
+    }
+
+    r.pending_preset_save = Some(crate::PendingPresetSave { track_id, name });
+    let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
+    r.interaction.preset_save = None;
+}
+
 fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::TrackId) {
     let Some(source) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
         r.error_message = Some("Bounce: source track not found".into());

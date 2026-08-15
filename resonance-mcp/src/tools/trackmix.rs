@@ -303,6 +303,65 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Save a track as a reusable preset: its type, mixer settings, instrument \
+                       identity and its whole plugin chain INCLUDING each plugin's internal \
+                       state, so recalling it restores the sound and not just the plugin names. \
+                       This is how a dialled-in track becomes something you can stamp out \
+                       again — with track_apply_preset, or from the app's add-track menu. \
+                       \
+                       name defaults to the track's own name. A name that already exists is \
+                       REFUSED unless you pass overwrite: true, because saving replaces the \
+                       stored preset. \
+                       \
+                       The reply means the capture was started, not finished: the plugins' \
+                       state blobs come back from the audio engine a moment later and the \
+                       preset is written then. Read track_presets to confirm it landed.",
+        annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false)
+    )]
+    async fn track_save_preset(
+        &self,
+        Parameters(params): Parameters<track::SavePresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::SAVE_PRESET, &params).await
+    }
+
+    #[tool(
+        description = "List the track presets available to stamp new tracks from: the built-ins \
+                       that ship with the app and everything saved with track_save_preset. Each \
+                       entry carries its name (what track_apply_preset takes), the kind of \
+                       track it makes, whether it is builtin, and the CLAP ids of the plugins \
+                       it restores — an empty plugins list means the preset carries mixer \
+                       settings only and the new track will make no sound on its own. Takes no \
+                       arguments.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<track::PresetsView>()
+    )]
+    async fn track_presets(&self) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::PRESETS, &()).await
+    }
+
+    #[tool(
+        description = "Create a new track from a preset — the fastest way to get a known sound \
+                       onto the timeline, and the counterpart to track_save_preset. preset is a \
+                       name from track_presets, matched case-insensitively; name renames the \
+                       new track only, leaving the preset's own name alone. Returns the new \
+                       track_id. \
+                       \
+                       This CREATES a track: it never overwrites an existing one, so it needs \
+                       no confirmation. The preset's plugin chain is restored a moment after \
+                       the track appears (the audio engine loads it), so read track_plugin_params \
+                       rather than assuming the chain is there in the same breath.",
+        annotations(destructive_hint = false, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<track::AddResult>()
+    )]
+    async fn track_apply_preset(
+        &self,
+        Parameters(params): Parameters<track::ApplyPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::APPLY_PRESET, &params).await
+    }
+
+    #[tool(
         description = "The built-in plugin catalog: every installed plugin's CLAP id (\
                        \"com.resonance.wavetable\", \"com.resonance.reverb\", ...) with its name \
                        and kind (instrument | effect). These ids are what track_add_instrument / \

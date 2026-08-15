@@ -2,7 +2,7 @@
 //! signal a track was added (apply) or a per-plugin state was captured
 //! (save).
 
-use resonance_audio::types::{AudioCommand, TrackId, TrackType};
+use resonance_audio::types::{AudioCommand, TrackType};
 
 use crate::state::TrackState;
 use crate::Resonance;
@@ -61,8 +61,8 @@ pub(super) fn apply_preset_to_track(
 /// Complete a "Save track as preset" operation. Builds a `TrackPreset`
 /// from the track's current state and the freshly-captured plugin
 /// state blobs, then writes it to disk.
-pub(super) fn finish_preset_save(r: &mut Resonance, track_id: TrackId) {
-    let track = match r.registry.tracks.iter().find(|t| t.id == track_id) {
+pub(super) fn finish_preset_save(r: &mut Resonance, pending: &crate::PendingPresetSave) {
+    let track = match r.registry.tracks.iter().find(|t| t.id == pending.track_id) {
         Some(t) => t,
         None => return,
     };
@@ -79,7 +79,10 @@ pub(super) fn finish_preset_save(r: &mut Resonance, track_id: TrackId) {
         .collect();
 
     let preset = crate::presets::TrackPreset {
-        name: track.name.clone(),
+        // The user's name, not the track's: a preset is a template
+        // ("Dark Pad"), and the track it came from is often called
+        // something else by the time it is worth saving.
+        name: pending.name.clone(),
         track_type: match track.track_type {
             TrackType::Audio => "audio".to_string(),
             TrackType::Instrument => "instrument".to_string(),
