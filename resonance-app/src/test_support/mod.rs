@@ -18,6 +18,7 @@
 //! callers — tests keep calling `app.test_*()` methods unchanged.
 
 mod mixer_plugins;
+pub use mixer_plugins::SendSlotAffordances;
 mod pool_media;
 mod project;
 mod timeline;

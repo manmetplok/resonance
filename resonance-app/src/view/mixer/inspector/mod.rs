@@ -11,6 +11,7 @@
 //! - `onboarding`        — status badge + onboarding card (doc #169)
 //! - `io`                — audio/MIDI input/output picker blocks
 //! - `routing`           — ROUTING group orchestration
+//! - `sends`             — the SENDS block inside ROUTING (doc #172)
 //! - `external_instrument` — EXTERNAL INSTRUMENT group (todo #454)
 //! - `chain`             — CHAIN group (plugin rows + add picker)
 //! - `bus`               — the whole pane for a selected BUS strip
@@ -26,6 +27,7 @@ mod external_instrument;
 mod io;
 mod onboarding;
 mod routing;
+pub(crate) mod sends;
 mod widgets;
 
 use iced::widget::{column, container, row, text, Space};
@@ -250,6 +252,31 @@ pub(crate) fn inspector_fingerprint(
     for p in &t.plugins {
         p.instance_id.hash(&mut h);
         p.plugin_name.hash(&mut h);
+    }
+    // The SENDS block (ba todo #1310) renders every send tapped off this
+    // track, so each field a slot draws has to be here — otherwise the
+    // retained tree survives an `AuxSendChanged` echo and the slider
+    // snaps back to the pre-drag value (or a removed send lingers).
+    for s in sends::sends_for_track(r, t.id) {
+        s.id.hash(&mut h);
+        s.dest.hash(&mut h);
+        s.level_db.to_bits().hash(&mut h);
+        s.pre_fader.hash(&mut h);
+        s.enabled.hash(&mut h);
+    }
+    // …and the destination pickers are a function of the bus list, which
+    // `output_choices` only half-covers: it carries names but not the
+    // return-role flag that decides which busses are offered at all.
+    for b in &r.registry.busses {
+        b.id.hash(&mut h);
+        b.name.hash(&mut h);
+        b.is_return.hash(&mut h);
+    }
+    // A rejected route renders an inline note under the picker.
+    if let Some(rejection) = r.aux.last_rejection.as_ref() {
+        rejection.source.hash(&mut h);
+        rejection.dest.hash(&mut h);
+        rejection.reason.hash(&mut h);
     }
     // Cache pointers — when these Rcs are replaced, the inspector
     // needs to redraw with the new options.
