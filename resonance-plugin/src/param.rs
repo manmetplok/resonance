@@ -53,6 +53,28 @@ pub trait Param: Send + Sync {
     fn display(&self, value: f64) -> String;
     /// Parse a display string back to a value.
     fn parse(&self, text: &str) -> Option<f64>;
+    /// Apply a value the user typed in, parsed through this parameter's
+    /// own [`Param::parse`] (ba todo #1287, finding F5).
+    ///
+    /// Returns `false` — leaving the parameter untouched — when the text
+    /// is not something this parameter understands, so an editor can
+    /// reject an entry rather than resolve it to zero. Range clamping is
+    /// [`Param::set_plain`]'s, which is what makes an out-of-range entry
+    /// land on the nearest declared bound instead of being refused.
+    ///
+    /// `parse` and its `text_to_value` bridge path were implemented and
+    /// unit-tested long before anything called them: there was no way to
+    /// type a value into any control in any editor, so a compressor could
+    /// not be set to exactly -18.0 dB.
+    fn apply_typed_entry(&self, text: &str) -> bool {
+        match self.parse(text) {
+            Some(v) if v.is_finite() => {
+                self.set_plain(v);
+                true
+            }
+            _ => false,
+        }
+    }
     /// The parameter's group, as a `/`-separated path (ba todo #1289,
     /// finding X7).
     ///
@@ -253,7 +275,13 @@ impl Param for FloatParam {
     fn display(&self, value: f64) -> String {
         if let Some(f) = &self.value_to_string {
             let s = f(value as f32);
-            if !self.unit.is_empty() && !s.contains(self.unit) {
+            // Compare on the unit's *word*, not the string with its
+            // leading space: a param declaring `" Hz"` whose formatter
+            // switches to `"1.00 kHz"` above a kilohertz was getting the
+            // unit appended anyway, so every host read `"1.00 kHz Hz"` —
+            // and nothing could parse that back (ba todo #1287).
+            let word = self.unit.trim();
+            if !word.is_empty() && !s.contains(word) {
                 format!("{}{}", s, self.unit)
             } else {
                 s
