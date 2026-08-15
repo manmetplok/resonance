@@ -5,7 +5,7 @@
 //! Q, gain). [`EqStageParams::snapshot`] converts the atomics into a
 //! plain `[BandConfig; NUM_BANDS]` array ready for the DSP engine.
 
-use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_hz};
+use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_hz, v2s_f32_rounded};
 use resonance_plugin::*;
 
 use crate::stages::linear_phase_eq::{BandConfig, BandType, NUM_BANDS};
@@ -66,7 +66,13 @@ impl BandParams {
                     max: 24.0,
                     factor: FloatRange::skew_factor(-1.5),
                 },
-            ),
+            )
+            // Q is dimensionless, but an unlabelled float in a host
+            // automation lane reads as "0.71" with no clue what it is.
+            // Print the quantity name as the unit so the lane says
+            // "0.71 Q", and round to two decimals like every other EQ.
+            .with_unit(" Q")
+            .with_value_to_string(v2s_f32_rounded(2)),
             gain: FloatParam::new(
                 leak_id(format!("{prefix}_b{band_index}_gain")),
                 leak_name(format!(
