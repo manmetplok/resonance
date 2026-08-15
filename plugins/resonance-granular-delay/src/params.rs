@@ -15,7 +15,7 @@
 
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 29;
+pub const PARAM_COUNT: usize = 30;
 
 pub struct GranularDelayParams {
     // --- Time -----------------------------------------------------------
@@ -68,6 +68,16 @@ pub struct GranularDelayParams {
     /// formants preserved); unvoiced spans fall back to Async
     /// transparently.
     pub scheduler: IntParam,
+    /// WSOLA-style correlation-aligned grain onsets (ba todo #1320,
+    /// doc #252 §4-5): before a grain spawns, the engine searches a few
+    /// milliseconds around its nominal read position for the lag that
+    /// maximizes cross-correlation with the natural continuation of the
+    /// previous grain, and snaps the onset there. Splices become
+    /// phase-coherent with the sounding material — most of the
+    /// pitch-synchronous quality benefit with no pitch tracker, and it
+    /// works on polyphonic material. Off is bit-identical to the
+    /// unaligned engine and costs nothing.
+    pub align: BoolParam,
 
     // --- Pitch ----------------------------------------------------------
     pub pitch: FloatParam,
@@ -160,6 +170,8 @@ impl GranularDelayParams {
             // stays stable (ba todo #1078).
             27 => &self.root,
             28 => &self.scale,
+            // Appended for the same reason (ba todo #1320).
+            29 => &self.align,
             _ => &self.sync,
         }
     }
@@ -252,6 +264,11 @@ impl Default for GranularDelayParams {
                 1, // Async (doc #252 §9 default)
                 IntRange::Linear { min: 0, max: 2 },
             ),
+
+            // Off by default: the aligned and unaligned paths are two
+            // different (both valid) grain characters, and off keeps
+            // every existing project and preset bit-identical.
+            align: BoolParam::new("align", "Align", false),
 
             pitch: FloatParam::new(
                 "pitch",
