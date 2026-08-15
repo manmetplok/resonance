@@ -13,9 +13,13 @@ pub struct AmpParams {
     /// File selector index exposed as a DAW parameter.
     /// The host can automate this to switch between .nam files
     /// found in the same directory as the loaded model.
+    ///
+    /// Visible, like resonance-ir's identical `file_select` — see the
+    /// declaration below for why it stopped being `.hidden()`.
     pub file_select: IntParam,
 
-    /// Shared file list used by both the display closure and the plugin.
+    /// Shared file list the header browser and the loader thread index
+    /// with `file_select`.
     pub file_list: Arc<Mutex<Vec<String>>>,
 
     pub input_gain: FloatParam,
@@ -50,6 +54,30 @@ impl Default for AmpParams {
         Self {
             model_path: Arc::new(Mutex::new(String::new())),
             file_list: Arc::new(Mutex::new(Vec::new())),
+            // Not `.hidden()` (ba todo #1283, audit finding A6). The
+            // identical parameter in resonance-ir is visible, and there
+            // is nothing about switching the loaded model that a host —
+            // or the app's own `track.plugin_params` — should be kept
+            // from: it is the single most consequential choice this
+            // plugin offers.
+            //
+            // Hiding it never protected anything either. `hidden` is a
+            // display hint, not a storage switch: the CLAP bridge always
+            // wrote every param to plugin state, and since ba todo #1290
+            // the engine reports hidden params to the app *flagged*
+            // rather than dropping them — dropping them was what cost
+            // them on save, because `ProjectPlugin.params` is derived
+            // from the app mirror. So unhiding changes exactly what the
+            // finding asks for (the host's param list, the generic
+            // parameter panel and the automation-lane picker all stop
+            // skipping it) and nothing about persistence.
+            //
+            // Stepped and 1000 values wide, which is deliberately past
+            // the engine's `MAX_CHOICE_STEPS` (64): `ParamInfo.choices`
+            // does not walk it, so a visible selector costs no per-query
+            // label enumeration. The value is an index into `file_list`,
+            // whose contents depend on the directory the model was
+            // loaded from, so there is no fixed label set to publish.
             file_select: IntParam::new(
                 "file_select",
                 "Model Select",
@@ -58,8 +86,7 @@ impl Default for AmpParams {
                     min: 0,
                     max: MAX_FILE_INDEX,
                 },
-            )
-            .hidden(),
+            ),
             // Smoothers live on the plugin struct, not here, because
             // sharing `Arc<AmpParams>` with the editor thread forbids
             // `&mut` access through the Arc.
