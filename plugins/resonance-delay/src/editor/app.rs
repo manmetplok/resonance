@@ -10,7 +10,7 @@ use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::DelayParams;
 use crate::presets::{load_preset, PRESETS};
-use crate::sync::DIVISION_LABELS;
+use crate::sync::division_label;
 use crate::viz::DelayViz;
 
 use super::{controls, echo_view, theme};
@@ -85,11 +85,17 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
         ui.label(egui::RichText::new(format!("{delay_ms:.1} ms")).color(theme::TEXT_DIM));
 
         if app.params.sync.value() {
-            let div = app.params.division.value() as usize;
-            if let Some(label) = DIVISION_LABELS.get(div) {
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(*label).color(theme::ACCENT));
-            }
+            ui.add_space(8.0);
+            let label = division_label(app.params.division.value() as usize);
+            ui.label(egui::RichText::new(label).color(theme::ACCENT));
+        }
+
+        // Gate rate reads as a division too, so "1/4 delay, 1/16 gate"
+        // is legible without opening the knob.
+        if app.params.gate_on.value() {
+            ui.add_space(8.0);
+            let label = division_label(app.params.gate_rate.value() as usize);
+            ui.label(egui::RichText::new(format!("GATE {label}")).color(theme::ACCENT));
         }
 
         // Character + Routing readout.
