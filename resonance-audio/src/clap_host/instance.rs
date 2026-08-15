@@ -503,7 +503,7 @@ impl Drop for ClapInstance {
     fn drop(&mut self) {
         // Tear down any open GUI first so the plugin can release its editor
         // thread before the rest of the plugin goes away.
-        self.close_gui();
+        let _ = self.close_gui();
         if self.active {
             if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
                 unsafe { stop(self.plugin) };

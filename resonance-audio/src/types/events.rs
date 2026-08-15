@@ -75,6 +75,66 @@ pub enum ExportErrorKind {
     TransportRunning,
 }
 
+/// Why a plugin's editor window could not be opened
+/// ([`AudioEvent::PluginEditorState`], ba todo #1347).
+///
+/// The engine's editor-open path used to report failure as a bare
+/// `AudioEvent::Error("Failed to open plugin editor")` — no instance id
+/// and no reason, so the app could neither correct the slot it had
+/// optimistically marked open nor tell the user anything useful. Each
+/// variant here names the step of the CLAP GUI negotiation
+/// (`is_api_supported` → `create` → `get_size`/`set_size` → `show`) that
+/// refused, which is what the app needs to choose between "this plugin
+/// has no editor, use the generic parameter panel" and "this plugin's
+/// editor is broken right now".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginEditorFailure {
+    /// No plugin instance with that id lives in the engine. The app's
+    /// mirror is ahead of (or behind) the engine — the accompanying
+    /// event still reports `open: false`, which is the truth.
+    UnknownInstance,
+    /// The plugin declares no `clap.gui` extension at all: it has no
+    /// editor and never will. Permanent — the app should offer the
+    /// generic parameter panel instead of retrying.
+    NoEditor,
+    /// The plugin's GUI does not support the host's window API
+    /// (floating Wayland). Permanent for this build of the plugin.
+    UnsupportedWindowApi,
+    /// `clap_plugin_gui.create` is missing or returned false. Usually
+    /// transient — a plugin whose windowing stack is in a bad state
+    /// fails here (see ba todo #1352, where the third editor opened in
+    /// one process dies during EGL init), so retrying later can work.
+    CreateFailed,
+    /// The window was created but `clap_plugin_gui.show` is missing or
+    /// refused. The host rolled the `create` back, so the plugin is left
+    /// exactly as it was before the attempt. Usually transient.
+    ShowFailed,
+}
+
+impl PluginEditorFailure {
+    /// One-sentence, user-facing explanation. The app is free to write
+    /// its own copy from the variant; this exists so a failure can be
+    /// reported without every consumer re-deriving the wording.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::UnknownInstance => "the engine has no such plugin instance",
+            Self::NoEditor => "this plugin has no editor window",
+            Self::UnsupportedWindowApi => "this plugin's editor does not support Wayland",
+            Self::CreateFailed => "the plugin could not create its editor window",
+            Self::ShowFailed => "the plugin created its editor window but could not show it",
+        }
+    }
+
+    /// Whether retrying the same open could plausibly succeed.
+    /// `false` for the two structural refusals ([`Self::NoEditor`],
+    /// [`Self::UnsupportedWindowApi`], [`Self::UnknownInstance`]), so an
+    /// app can fall back to the generic parameter panel permanently
+    /// rather than leaving an "Open Editor" affordance that can never work.
+    pub fn is_transient(self) -> bool {
+        matches!(self, Self::CreateFailed | Self::ShowFailed)
+    }
+}
+
 /// Events sent from the audio engine back to the GUI.
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
@@ -375,6 +435,37 @@ pub enum AudioEvent {
     PluginStateSaved {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
+    },
+    /// A plugin instance's editor window changed state (ba todo #1347).
+    /// This is the ONLY source of truth for "is this plugin's editor
+    /// open" — the app must mirror it rather than assuming a sent
+    /// `OpenPluginEditor` succeeded.
+    ///
+    /// Emitted for every editor transition, on track, sub-track, bus and
+    /// master chains alike (a plugin instance id is unique across all of
+    /// them, so no chain discriminant is needed):
+    ///
+    /// * opened — `open: true`, `failure: None`;
+    /// * failed to open — `open: false`, `failure: Some(..)`, the
+    ///   editor is exactly as closed as it was before the attempt;
+    /// * closed — `open: false`, `failure: None`, whether the close came
+    ///   from `AudioCommand::ClosePluginEditor` or from the user closing
+    ///   the floating window from its own titlebar (the plugin reports
+    ///   that through `clap_host_gui.closed()`, which the engine polls
+    ///   once per loop iteration).
+    ///
+    /// Invariant: `open == true` implies `failure.is_none()`.
+    ///
+    /// Not emitted when the command is deferred: if the audio callback
+    /// holds the instance's lock the command is re-enqueued and the
+    /// event follows the retry that actually ran.
+    PluginEditorState {
+        instance_id: PluginInstanceId,
+        /// The editor's state *after* this transition.
+        open: bool,
+        /// Set only when an open attempt failed. See
+        /// [`PluginEditorFailure`].
+        failure: Option<PluginEditorFailure>,
     },
     BounceComplete {
         path: String,

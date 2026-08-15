@@ -204,6 +204,18 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
             let Some(mut inst) = mutex.try_lock() else {
                 continue;
             };
+            // The user closed the editor from the floating window's own
+            // titlebar and the plugin told us via `clap_host_gui.closed()`
+            // (ba todo #1347). `take_gui_closed` finishes the CLAP-side
+            // teardown; the event is what stops the app's slot from
+            // claiming an editor that is gone.
+            if inst.0.take_gui_closed() {
+                let _ = ctx.event_tx.send(AudioEvent::PluginEditorState {
+                    instance_id,
+                    open: false,
+                    failure: None,
+                });
+            }
             if !inst.0.take_host_restart_request() {
                 continue;
             }
@@ -522,21 +534,68 @@ pub(crate) fn handle_set_plugin_bypass(
     });
 }
 
+/// The pair of events that report a failed editor open (ba todo #1347).
+///
+/// Split out as a pure function so the wording and the structured
+/// payload cannot drift, and so `tests/plugin_editor_state.rs` can pin
+/// the failure path — the one that used to lie, reporting only
+/// `AudioEvent::Error("Failed to open plugin editor")` with no instance
+/// id and no reason.
+///
+/// Two events, deliberately:
+/// * [`AudioEvent::PluginEditorState`] is the correlatable truth the app
+///   mirrors onto its slot (`open: false`, so an optimistic "editor is
+///   open" is corrected);
+/// * [`AudioEvent::Error`] keeps the existing user-facing banner working
+///   — but it now names the instance and the reason instead of a bare
+///   string. Once the app renders its own message from the structured
+///   event (ba todo #1306) this second event can go.
+pub fn plugin_editor_failure_events(
+    instance_id: PluginInstanceId,
+    failure: PluginEditorFailure,
+) -> [AudioEvent; 2] {
+    [
+        AudioEvent::PluginEditorState {
+            instance_id,
+            open: false,
+            failure: Some(failure),
+        },
+        AudioEvent::Error(format!(
+            "Could not open the editor for plugin instance {}: {}.",
+            instance_id,
+            failure.message()
+        )),
+    ]
+}
+
 pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
+    let mut outcome = Err(PluginEditorFailure::UnknownInstance);
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         // open_gui is a main-thread operation; the audio thread holds
         // a different lock. Block briefly if the audio thread is
         // mid-process and retry.
         if let Some(mut inst) = mutex.try_lock() {
-            if !inst.0.open_gui() {
-                let _ = ctx.event_tx.send(AudioEvent::Error(
-                    "Failed to open plugin editor".to_string(),
-                ));
-            }
+            outcome = inst.0.open_gui();
         } else {
+            // Deferred, not decided: the retry emits the event.
             let _ = ctx
                 .cmd_tx_retry
                 .send(AudioCommand::OpenPluginEditor { instance_id });
+            return;
+        }
+    }
+    match outcome {
+        Ok(()) => {
+            let _ = ctx.event_tx.send(AudioEvent::PluginEditorState {
+                instance_id,
+                open: true,
+                failure: None,
+            });
+        }
+        Err(failure) => {
+            for event in plugin_editor_failure_events(instance_id, failure) {
+                let _ = ctx.event_tx.send(event);
+            }
         }
     }
 }
@@ -544,13 +603,26 @@ pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginIns
 pub(crate) fn handle_close_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
-            inst.0.close_gui();
+            // Whether this actually closed an open editor or was a
+            // no-op, the reported state below is the same: closed.
+            let _ = inst.0.close_gui();
         } else {
+            // Deferred: the retry reports the close.
             let _ = ctx
                 .cmd_tx_retry
                 .send(AudioCommand::ClosePluginEditor { instance_id });
+            return;
         }
     }
+    // Reported unconditionally, including for an instance the engine
+    // does not have and for a close that was already a no-op: "closed"
+    // is the truth in every one of those cases, and an app mirror that
+    // set `editor_open` optimistically needs it cleared.
+    let _ = ctx.event_tx.send(AudioEvent::PluginEditorState {
+        instance_id,
+        open: false,
+        failure: None,
+    });
 }
 
 pub(crate) fn handle_save_plugin_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {

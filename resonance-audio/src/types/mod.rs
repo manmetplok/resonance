@@ -91,7 +91,7 @@ pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
 pub use events::{
-    AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage,
+    AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage, PluginEditorFailure,
 };
 pub use reference::{ABSource, ReferenceAnalysisStage, ReferenceId, ReferenceMarker};
 pub use measure::{MeasureSource, MixMeasurement};

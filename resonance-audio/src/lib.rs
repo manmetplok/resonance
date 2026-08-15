@@ -91,6 +91,9 @@ pub mod __test_support {
     /// the two lookups that can produce a reason for it — see
     /// `tests/plugin_load_failure.rs` (ba doc #275 P5, todo #1309).
     pub use crate::engine::plugins::{ensure_bundle, plugin_load_failed_event};
+    /// The event pair the engine emits when a plugin editor refuses to
+    /// open (ba todo #1347) — see `tests/plugin_editor_state.rs`.
+    pub use crate::engine::plugins::plugin_editor_failure_events;
     /// The RIFF/WAVE chunk walk behind `ClipSource::open_wav` — a pure
     /// function over bytes, so `tests/wav_chunk_parse.rs` can drive every
     /// malformed-header case without touching the filesystem.

@@ -19,7 +19,10 @@
 //!   engine thread (doc #260 finding #10): `clap_host_latency.changed()`
 //!   and `request_restart()` both flag the instance so the engine
 //!   deactivates → reactivates it at the next safe point and re-reads
-//!   its latency.
+//!   its latency. `clap_host_gui.closed()` (ba todo #1347) is latched
+//!   the same way: the engine's poll finishes the teardown and reports
+//!   `AudioEvent::PluginEditorState` so a window the user closed from
+//!   its own titlebar stops reading as open.
 
 mod bundle;
 mod gui;
@@ -38,6 +41,7 @@ use std::pin::Pin;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 
+use clap_sys::ext::gui::{clap_host_gui, CLAP_EXT_GUI};
 use clap_sys::ext::latency::{clap_host_latency, CLAP_EXT_LATENCY};
 use clap_sys::host::clap_host;
 use clap_sys::version::CLAP_VERSION;
@@ -68,6 +72,35 @@ pub(super) struct HostData {
     /// deactivate → reactivate cycle. Consumed by
     /// [`ClapInstance::take_host_restart_request`].
     pub restart_requested: AtomicBool,
+    /// `clap_host_gui` vtable served from `host_get_extension`. Lives
+    /// inside the pinned `HostData` for the same reason as
+    /// `latency_ext`: the pointer we hand the plugin must stay valid
+    /// for the instance's lifetime.
+    pub gui_ext: clap_host_gui,
+    /// Set by `clap_host_gui.closed()`: the plugin's editor window went
+    /// away without the host asking — in practice the user closed the
+    /// floating window from its own titlebar (ba todo #1347). Consumed
+    /// by [`ClapInstance::take_gui_closed`] on the engine thread, which
+    /// turns it into `AudioEvent::PluginEditorState`.
+    gui_closed: AtomicBool,
+    /// Companion to `gui_closed`: the `was_destroyed` argument of the
+    /// notification. `true` means the plugin already destroyed its own
+    /// window and the host must NOT call `gui.destroy()` again. Written
+    /// before `gui_closed` is set and read after it is taken, so the
+    /// release/acquire pair on `gui_closed` publishes it.
+    gui_closed_was_destroyed: AtomicBool,
+}
+
+impl HostData {
+    /// Consume a pending `clap_host_gui.closed()` notification.
+    /// `Some(was_destroyed)` when one had fired since the last call.
+    pub(super) fn take_gui_closed(&self) -> Option<bool> {
+        if self.gui_closed.swap(false, Ordering::AcqRel) {
+            Some(self.gui_closed_was_destroyed.load(Ordering::Acquire))
+        } else {
+            None
+        }
+    }
 }
 
 /// Recover the `HostData` behind a `clap_host` pointer handed back by a
@@ -91,8 +124,12 @@ unsafe extern "C" fn host_get_extension(
     if extension_id.is_null() {
         return ptr::null();
     }
-    if CStr::from_ptr(extension_id).to_bytes() == CLAP_EXT_LATENCY.to_bytes() {
+    let id = CStr::from_ptr(extension_id).to_bytes();
+    if id == CLAP_EXT_LATENCY.to_bytes() {
         return &data.latency_ext as *const clap_host_latency as *const c_void;
+    }
+    if id == CLAP_EXT_GUI.to_bytes() {
+        return &data.gui_ext as *const clap_host_gui as *const c_void;
     }
     ptr::null()
 }
@@ -113,6 +150,50 @@ unsafe extern "C" fn host_request_restart(host: *const clap_host) {
     if let Some(data) = host_data_from(host) {
         data.restart_requested.store(true, Ordering::Release);
     }
+}
+
+/// `clap_host_gui.closed()` — the plugin's editor window is gone
+/// without the host having asked (ba todo #1347): the user closed the
+/// floating window from its own titlebar, or the plugin tore its editor
+/// down itself. Main-thread callback; we only latch the flag, the
+/// engine thread's `poll_plugin_host_requests` performs the teardown
+/// (`destroy` unless `was_destroyed`) and emits the event.
+unsafe extern "C" fn host_gui_closed(host: *const clap_host, was_destroyed: bool) {
+    if let Some(data) = host_data_from(host) {
+        data.gui_closed_was_destroyed
+            .store(was_destroyed, Ordering::Release);
+        data.gui_closed.store(true, Ordering::Release);
+    }
+}
+
+/// `clap_host_gui.resize_hints_changed()` — every editor we open is a
+/// floating top-level window the plugin sizes itself, so there are no
+/// host-side hints to invalidate.
+unsafe extern "C" fn host_gui_resize_hints_changed(_host: *const clap_host) {}
+
+/// `clap_host_gui.request_resize()` — only meaningful for embedded
+/// windows, whose parent the host owns. We embed nothing (floating
+/// only), so refuse rather than claim a resize we cannot perform.
+unsafe extern "C" fn host_gui_request_resize(
+    _host: *const clap_host,
+    _width: u32,
+    _height: u32,
+) -> bool {
+    false
+}
+
+/// `clap_host_gui.request_show()` / `request_hide()` — the plugin asking
+/// the host to show/hide its editor. The host drives visibility from
+/// `AudioCommand::Open/ClosePluginEditor`; honouring a plugin-initiated
+/// show here would open a window the app does not know about (and the
+/// GUI ext must be driven from the main thread, which this callback is
+/// not guaranteed to be). Refuse.
+unsafe extern "C" fn host_gui_request_show(_host: *const clap_host) -> bool {
+    false
+}
+
+unsafe extern "C" fn host_gui_request_hide(_host: *const clap_host) -> bool {
+    false
 }
 
 unsafe extern "C" fn host_request_process(_host: *const clap_host) {}
@@ -137,6 +218,15 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
         },
         latency_changed: AtomicBool::new(false),
         restart_requested: AtomicBool::new(false),
+        gui_ext: clap_host_gui {
+            resize_hints_changed: Some(host_gui_resize_hints_changed),
+            request_resize: Some(host_gui_request_resize),
+            request_show: Some(host_gui_request_show),
+            request_hide: Some(host_gui_request_hide),
+            closed: Some(host_gui_closed),
+        },
+        gui_closed: AtomicBool::new(false),
+        gui_closed_was_destroyed: AtomicBool::new(false),
     });
     let ptr = &*host_data as *const HostData as *mut c_void;
     unsafe {
