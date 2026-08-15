@@ -9,8 +9,9 @@
 //! Before the migration this file passed its own `0.0..=1.0` / `0.5`
 //! for the mix (the param declares a default of 1.0, fully wet), its
 //! own `0.1..=10.0` / `1.0` plus a hardcoded logarithmic arc for the
-//! output gain (the param declares `FloatRange::Skewed` with
-//! `gain_skew_factor(-20, 20)`), and hand-rolled `format!` readouts
+//! output gain (the param declares a `FloatRange::Skewed` whose skew
+//! puts unity at dial centre, ba todo #1345), and hand-rolled `format!`
+//! readouts
 //! that bypassed the params' own formatters. `tests/editor_bindings.rs`
 //! pins the result so a control cannot drift from its parameter again.
 

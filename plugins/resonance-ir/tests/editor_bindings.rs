@@ -133,9 +133,9 @@ fn the_output_gain_arc_follows_the_declared_skew() {
     assert_arc_follows_the_param(&params.output_gain, "output_gain");
 
     // The editor used to draw this knob as a logarithmic sweep of
-    // 0.1..=10.0, which threw the declared `gain_skew_factor(-20, 20)`
-    // away. Half travel is now whatever the parameter says it is, and
-    // that is emphatically not the arithmetic midpoint of the range.
+    // 0.1..=10.0, which threw the declared skew away. Half travel is now
+    // whatever the parameter says it is, and that is emphatically not
+    // the arithmetic midpoint of the range.
     params.output_gain.set_normalized(0.5);
     let mid = params.output_gain.value();
     assert_close(
@@ -149,26 +149,66 @@ fn the_output_gain_arc_follows_the_declared_skew() {
         (mid - arithmetic_mid).abs() > 1.0,
         "a skewed gain range must not behave linearly, got {mid} vs {arithmetic_mid}"
     );
+}
 
-    // The declared skew bunches the low end, so unity gain — the
-    // default — sits below the middle of the travel rather than at it.
-    let unity_travel = params.output_gain.default_normalized();
-    assert!(
-        (0.0..0.5).contains(&unity_travel),
-        "unity gain should sit in the lower half of a low-bunched arc, got {unity_travel}"
-    );
+/// Where unity sits on the dial (ba todo #1345).
+///
+/// The declaration this replaced — `gain_skew_factor(-20, 20)` over the
+/// linear range `0.1..=10.0` — parked unity at ~30 % of the travel and
+/// put +8.2 dB at half travel. A gain trim is expected to rest at its
+/// centre, so the skew is now derived from that requirement. This test
+/// is the guard: it fails if the declaration drifts back to a factor
+/// that was never computed for this range.
+#[test]
+fn unity_gain_sits_at_the_centre_of_the_output_gain_dial() {
+    let params = IrParams::default();
+
+    // The default *is* unity, so the knob's rest position is dial centre
+    // and a double-click reset lands there.
+    assert_close(params.output_gain.default_value(), 1.0, "declared default");
     assert_close(
-        params.output_gain.plain_at_normalized(unity_travel),
-        1.0,
-        "the default travel position maps back to unity gain",
+        params.output_gain.default_normalized(),
+        0.5,
+        "unity gain must sit at the centre of the arc",
     );
-    params.output_gain.set_normalized(unity_travel);
+
+    // Read the same fact from the other direction: half travel is 0 dB.
+    assert_close(
+        params.output_gain.plain_at_normalized(0.5),
+        1.0,
+        "half travel is unity gain",
+    );
+    params.output_gain.set_normalized(0.5);
     assert_eq!(
         params
             .output_gain
             .display(params.output_gain.value() as f64),
         "0.00 dB",
-        "the readout at the default is the param's dB formatter"
+        "the readout at half travel is the param's dB formatter"
+    );
+
+    // And the ends stay where the range says: symmetric -20/+20 dB.
+    for (travel, expected_db) in [(0.0_f32, -20.0_f32), (1.0, 20.0)] {
+        params.output_gain.set_normalized(travel);
+        let db = 20.0 * params.output_gain.value().log10();
+        assert!(
+            (db - expected_db).abs() < 0.01,
+            "gain at {travel} of the arc should be {expected_db} dB, got {db}"
+        );
+    }
+
+    // Boost and cut are not mirror images (the mapping is a power law,
+    // not a logarithm) but neither half may collapse: each quarter-turn
+    // away from centre must move the gain by a usable amount.
+    let quarter_db = 20.0 * params.output_gain.plain_at_normalized(0.25).log10();
+    let three_quarter_db = 20.0 * params.output_gain.plain_at_normalized(0.75).log10();
+    assert!(
+        (-19.0..-3.0).contains(&quarter_db),
+        "a quarter turn down should be a moderate cut, got {quarter_db} dB"
+    );
+    assert!(
+        (3.0..19.0).contains(&three_quarter_db),
+        "a quarter turn up should be a moderate boost, got {three_quarter_db} dB"
     );
 }
 
