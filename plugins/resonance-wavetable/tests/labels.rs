@@ -91,13 +91,16 @@ fn routing_summary_lists_the_destinations_actually_wired() {
 }
 
 #[test]
-fn routing_summary_marks_inert_destinations() {
-    // A patch that routes to an unimplemented destination must degrade
-    // visibly, not silently — see ba todo #1278.
-    let slots = vec![slot(ModSource::Lfo3, ModDest::OscBalance, 0.2)];
+fn osc_balance_and_unison_detune_are_ordinary_targets() {
+    // They were marked "(inert)" by the ba todo #1278 stopgap; ba todo #1323
+    // implemented both, so the marker must be gone.
+    let slots = vec![
+        slot(ModSource::Lfo3, ModDest::OscBalance, 0.2),
+        slot(ModSource::Lfo3, ModDest::UnisonDetune, 0.4),
+    ];
     assert_eq!(
         routing_summary(&slots, ModSource::Lfo3),
-        "→ Osc Balance (inert)"
+        "→ Osc Balance · Unison Detune"
     );
 }
 

@@ -22,6 +22,11 @@ use crate::dsp::render::snapshot::ParamSnapshot;
 use crate::dsp::voice::{OscSetup, Voice, VoiceState};
 use crate::dsp::wavetable::Wavetable;
 
+/// Cents of unison detune a full-scale (±1.0) `ModDest::UnisonDetune`
+/// modulation adds — the whole range of the `unison_detune` parameter, so
+/// an amount of +1.0 can open a stack from 0 to fully detuned.
+const UNISON_DETUNE_MOD_CENTS: f32 = 100.0;
+
 /// The handful of values that change from sample to sample but are shared by
 /// every voice in that sample.
 pub(crate) struct SampleCtx {
@@ -205,9 +210,21 @@ fn refresh_osc_setups(
         return;
     }
 
+    // Osc balance and unison detune are modulation destinations, so both are
+    // resolved here (control rate, per voice) rather than block-constant.
+    // With no routing to either, `mods.osc_balance` / `mods.unison_detune`
+    // are 0.0 and these reduce to the block-constant expressions they
+    // replaced, term for term.
+    let balance = (snap.osc_balance + mods.osc_balance).clamp(-1.0, 1.0);
+    let osc1_level = plan.osc1_level * (1.0 - balance.max(0.0));
+    let osc2_level = plan.osc2_level * (1.0 - balance.min(0.0).abs());
+    // Full-scale modulation sweeps the detune param's whole 0..100 ct range.
+    let detune_cents =
+        (snap.unison_detune + mods.unison_detune * UNISON_DETUNE_MOD_CENTS).clamp(0.0, 100.0);
+
     for u in 0..voice.unison_count {
         let sub = &mut voice.unison[u];
-        let detune = sub.detune_cents / 100.0;
+        let detune = sub.detune_spread * detune_cents * 0.5 / 100.0;
 
         if let Some(idx) = plan.wt1_idx {
             let wt = &wavetables[idx];
@@ -223,7 +240,7 @@ fn refresh_osc_setups(
             sub.osc1_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
                 tap: oscillator::plan_tap(wt, pos, freq),
-                level: plan.osc1_level,
+                level: osc1_level,
                 pan_l,
                 pan_r,
             };
@@ -243,7 +260,7 @@ fn refresh_osc_setups(
             sub.osc2_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
                 tap: oscillator::plan_tap(wt, pos, freq),
-                level: plan.osc2_level,
+                level: osc2_level,
                 pan_l,
                 pan_r,
             };

@@ -34,13 +34,15 @@ fn exactly_two_sources_are_unavailable() {
 }
 
 #[test]
-fn exactly_two_destinations_are_unavailable() {
+fn every_destination_is_available() {
+    // "Osc Balance" and "Unison Detune" were the last two holdouts; ba todo
+    // #1323 wired both into the oscillator.
     let unavailable: Vec<&str> = (0..ModDest::LABELS.len())
         .map(|i| ModDest::from_int(i as i32))
         .filter(|d| !d.is_available())
         .map(|d| d.label())
         .collect();
-    assert_eq!(unavailable, vec!["Osc Balance", "Unison Detune"]);
+    assert!(unavailable.is_empty(), "unimplemented: {unavailable:?}");
 }
 
 #[test]
@@ -72,8 +74,9 @@ fn a_slot_is_effective_only_when_both_ends_are_wired_and_implemented() {
     assert!(!slot(ModSource::Lfo1, ModDest::None, 1.0).is_effective());
     assert!(!slot(ModSource::ModWheel, ModDest::FilterCutoff, 1.0).is_effective());
     assert!(!slot(ModSource::Aftertouch, ModDest::FilterCutoff, 1.0).is_effective());
-    assert!(!slot(ModSource::Lfo1, ModDest::OscBalance, 1.0).is_effective());
-    assert!(!slot(ModSource::Lfo1, ModDest::UnisonDetune, 1.0).is_effective());
+    // Both implemented by ba todo #1323.
+    assert!(slot(ModSource::Lfo1, ModDest::OscBalance, 1.0).is_effective());
+    assert!(slot(ModSource::Lfo1, ModDest::UnisonDetune, 1.0).is_effective());
 }
 
 // ---------------------------------------------------------------------------
@@ -96,14 +99,15 @@ fn an_unavailable_source_contributes_no_modulation() {
 }
 
 #[test]
-fn an_unavailable_destination_receives_no_modulation() {
+fn osc_balance_and_unison_detune_accumulate() {
+    // ba todo #1323: these two used to be filtered out as unavailable.
     let slots = vec![
         slot(ModSource::Lfo1, ModDest::OscBalance, 1.0),
         slot(ModSource::Env2, ModDest::UnisonDetune, 1.0),
     ];
-    let state = evaluate_mod_matrix(&slots, 1.0, 0.0, 0.0, 1.0, 1.0, 60.0);
-    assert_eq!(state.osc_balance, 0.0);
-    assert_eq!(state.unison_detune, 0.0);
+    let state = evaluate_mod_matrix(&slots, 0.75, 0.0, 0.0, 1.0, 1.0, 60.0);
+    assert_eq!(state.osc_balance, 0.75);
+    assert_eq!(state.unison_detune, 1.0);
 }
 
 #[test]
@@ -118,15 +122,13 @@ fn available_routings_still_evaluate() {
 // Factory presets that reference one
 // ---------------------------------------------------------------------------
 
-/// Preset routings the editor has to flag as inert. They are kept rather
-/// than deleted: ba todo #1323 implements both destinations, at which point
-/// they start working as their patch designer intended and this list should
-/// go empty.
-const KNOWN_INERT_PRESET_ROUTINGS: &[(&str, usize, &str)] = &[
-    ("Pad — Glass Shimmer", 3, "Osc Balance"),
-    ("Pad — Evolving Choir", 4, "Unison Detune"),
-    ("FX — Risers", 3, "Unison Detune"),
-];
+/// Preset routings the editor has to flag as inert.
+///
+/// This was three entries (two to Osc Balance / Unison Detune) until ba todo
+/// #1323 implemented both destinations; those presets now sound as their
+/// designer intended. It stays empty unless a preset picks up a `Mod Wheel`
+/// or `Aftertouch` source before ba todo #1301 lands.
+const KNOWN_INERT_PRESET_ROUTINGS: &[(&str, usize, &str)] = &[];
 
 #[test]
 fn factory_presets_reference_only_the_known_inert_routings() {
