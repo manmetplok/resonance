@@ -91,6 +91,17 @@ fn routing_summary_lists_the_destinations_actually_wired() {
 }
 
 #[test]
+fn routing_summary_marks_inert_destinations() {
+    // A patch that routes to an unimplemented destination must degrade
+    // visibly, not silently — see ba todo #1278.
+    let slots = vec![slot(ModSource::Lfo3, ModDest::OscBalance, 0.2)];
+    assert_eq!(
+        routing_summary(&slots, ModSource::Lfo3),
+        "→ Osc Balance (inert)"
+    );
+}
+
+#[test]
 fn routing_summary_ignores_slots_that_cannot_be_heard() {
     // Destination None, or a zero amount, is not a routing.
     let slots = vec![
