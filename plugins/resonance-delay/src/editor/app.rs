@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use wayland_plugin_gui::{egui, EditorApp};
 
-use crate::params::{DelayParams, PARAM_COUNT};
-use crate::presets::PRESETS;
+use crate::params::DelayParams;
+use crate::presets::{load_preset, PRESETS};
 use crate::sync::DIVISION_LABELS;
 use crate::viz::DelayViz;
 
@@ -63,6 +63,9 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
             .show_ui(ui, |ui| {
                 for entry in PRESETS {
                     if ui.selectable_label(false, entry.name).clicked() {
+                        // Full snapshots (see `presets.rs`), so this is a
+                        // complete recall — nothing survives from the
+                        // previously loaded patch.
                         load_preset(&app.params, entry.json);
                     }
                 }
@@ -131,8 +134,4 @@ fn draw_center(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
     );
     let painter = ui.painter_at(avail);
     echo_view::draw(&painter, viz_rect, &app.viz);
-}
-
-fn load_preset(params: &DelayParams, json: &str) {
-    resonance_plugin::presets::load(json, PARAM_COUNT, |i| params.param_at(i));
 }
