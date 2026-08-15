@@ -12,6 +12,11 @@ pub enum LfoShape {
 }
 
 impl LfoShape {
+    /// Display names, indexed by the `lfoN_shape` parameter's integer value.
+    /// The editor's shape control reads this array instead of printing the
+    /// bare integer.
+    pub const LABELS: [&'static str; 5] = ["Sine", "Tri", "Saw", "Square", "S&H"];
+
     pub fn from_int(v: i32) -> Self {
         match v {
             0 => Self::Sine,
@@ -21,6 +26,10 @@ impl LfoShape {
             4 => Self::SampleAndHold,
             _ => Self::Sine,
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        Self::LABELS[self as usize]
     }
 }
 

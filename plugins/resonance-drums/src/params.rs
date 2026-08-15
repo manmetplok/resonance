@@ -7,6 +7,13 @@ use crate::drum_map::NUM_PADS;
 /// Number of param fields per pad, used for param indexing.
 pub const PARAMS_PER_PAD: usize = 6;
 
+/// Appended to the display name of every parameter the plugin exposes to
+/// the host but does not act on, so a user reading the host's parameter
+/// list (or an agent reading `plugin_params` over MCP) can see that
+/// automating it does nothing. Today that is only the per-pad
+/// articulation toggle — see [`PadParams::articulation`].
+pub const EDITOR_ONLY_SUFFIX: &str = " (editor only)";
+
 pub struct DrumParams {
     pub master_volume: FloatParam,
     pub pads: [PadParams; NUM_PADS],
@@ -51,6 +58,19 @@ pub struct PadParams {
     /// Articulation toggle: when true, use the alternate sample set
     /// (e.g. "ohne Teppich" instead of "mit Teppich"). Only
     /// meaningful for pads whose `PadMapping::has_articulation` is true.
+    ///
+    /// **Editor mirror only — nothing reads this param.** The kit loader
+    /// and the DSP read `KitBridge::articulations`, which is what the
+    /// inspector's articulation chips write (they set this param too, so
+    /// the host sees the value move, but the write is one-way). A host
+    /// automation lane or an MCP `set_plugin_param` call therefore changes
+    /// nothing audible, which is why the param's display name carries the
+    /// [`EDITOR_ONLY_SUFFIX`] marker.
+    ///
+    /// ba todo #1325 makes the param and the bridge one source of truth;
+    /// when it lands, drop the marker from the name here. The string id
+    /// (`pad_N_articulation`) is deliberately left untouched so saved
+    /// projects and automation lanes survive that change.
     pub articulation: BoolParam,
 }
 
@@ -69,8 +89,11 @@ impl PadParams {
         let bal_name: &'static str = Box::leak(format!("Pad {} Balance", index).into_boxed_str());
         let art_id: &'static str =
             Box::leak(format!("pad_{}_articulation", index).into_boxed_str());
-        let art_name: &'static str =
-            Box::leak(format!("Pad {} Articulation", index).into_boxed_str());
+        // The marker suffix is part of the *name*, never the id: ba todo
+        // #1325 removes it once the param actually drives the loader.
+        let art_name: &'static str = Box::leak(
+            format!("Pad {} Articulation{}", index, EDITOR_ONLY_SUFFIX).into_boxed_str(),
+        );
 
         Self {
             volume: FloatParam::new(

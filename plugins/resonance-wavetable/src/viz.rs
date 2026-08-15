@@ -40,6 +40,12 @@ pub struct WavetableVizState {
     pub scope_front: [AtomicU32; SCOPE_LEN],
     /// Monotonic total samples pushed into the scope (for rate display).
     pub scope_sample_count: AtomicU32,
+    /// Host sample rate in Hz (f32 bits), as passed to `initialize`.
+    /// Zero until the host has activated the plugin.
+    pub sample_rate: AtomicU32,
+    /// Host maximum block size in frames, as passed to `initialize`.
+    /// Zero until the host has activated the plugin.
+    pub max_block_frames: AtomicU32,
 }
 
 impl WavetableVizState {
@@ -56,7 +62,19 @@ impl WavetableVizState {
             scope_seq: AtomicU32::new(0),
             scope_front: [const { AtomicU32::new(0) }; SCOPE_LEN],
             scope_sample_count: AtomicU32::new(0),
+            sample_rate: AtomicU32::new(0),
+            max_block_frames: AtomicU32::new(0),
         }
+    }
+
+    /// Publish the host's audio configuration. Called from `initialize`, so
+    /// the status bar shows the real numbers instead of literals — and shows
+    /// nothing at all before the host has activated the plugin.
+    pub fn store_io_config(&self, sample_rate: f32, max_block_frames: u32) {
+        self.sample_rate
+            .store(sample_rate.to_bits(), Ordering::Relaxed);
+        self.max_block_frames
+            .store(max_block_frames, Ordering::Relaxed);
     }
 
     // -- scalar writers (audio thread) -------------------------------------
@@ -160,6 +178,8 @@ impl WavetableVizState {
             active_voice_count: self.active_voice_count.load(Ordering::Relaxed),
             scope_samples,
             scope_sample_count: self.scope_sample_count.load(Ordering::Relaxed),
+            sample_rate: f32::from_bits(self.sample_rate.load(Ordering::Relaxed)),
+            max_block_frames: self.max_block_frames.load(Ordering::Relaxed),
         }
     }
 }
@@ -188,6 +208,10 @@ pub struct VizSnapshot {
     pub active_voice_count: u32,
     pub scope_samples: [f32; SCOPE_LEN],
     pub scope_sample_count: u32,
+    /// Host sample rate in Hz; 0.0 before the host activates the plugin.
+    pub sample_rate: f32,
+    /// Host maximum block size in frames; 0 before activation.
+    pub max_block_frames: u32,
 }
 
 // ---------------------------------------------------------------------------
