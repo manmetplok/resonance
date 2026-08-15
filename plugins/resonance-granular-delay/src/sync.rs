@@ -66,6 +66,35 @@ pub fn division_ms(bpm: f32, division: usize) -> f32 {
     division_seconds(bpm, division) * 1000.0
 }
 
+/// Grains per second when one grain is spawned per `division` at
+/// `bpm` — the tempo-locked grain rate of `density_sync` (ba todo
+/// #1322). Clamped to the declared density range so neither a crawling
+/// nor a runaway host tempo can drive the cloud outside what the
+/// Density knob itself can ask for.
+pub fn density_hz(bpm: f32, division: usize) -> f32 {
+    let seconds = division_seconds(bpm, division);
+    (1.0 / seconds.max(f32::MIN_POSITIVE)).clamp(
+        crate::params::DENSITY_MIN_HZ,
+        crate::params::DENSITY_MAX_HZ,
+    )
+}
+
+/// Resolve the grain rate for a block: the tempo-locked rate while
+/// `sync` is on and the host reports a tempo, otherwise the
+/// free-running `density_hz` knob. Re-resolved every block, so the
+/// cloud re-locks the moment the tempo moves.
+pub fn grain_density_hz(
+    sync: bool,
+    division: usize,
+    free_hz: f32,
+    tempo: Option<TempoInfo>,
+) -> f32 {
+    match (sync, tempo) {
+        (true, Some(t)) => density_hz(t.bpm, division),
+        _ => free_hz,
+    }
+}
+
 /// Index of the division whose length is closest to `target_ms` at
 /// `bpm` (the drag-to-snap grid). Ties resolve to the longer division,
 /// i.e. the lower index; a target outside the table snaps to its

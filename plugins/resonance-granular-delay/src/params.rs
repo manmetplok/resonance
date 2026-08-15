@@ -15,7 +15,14 @@
 
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 30;
+pub const PARAM_COUNT: usize = 31;
+
+/// Declared range of the free-running grain density, grains per second.
+/// The tempo-locked rate (`density_sync`, ba todo #1322) is clamped to
+/// the same range, so a very slow or very fast host tempo can never
+/// drive the cloud outside what the knob can ask for.
+pub const DENSITY_MIN_HZ: f32 = 0.5;
+pub const DENSITY_MAX_HZ: f32 = 100.0;
 
 pub struct GranularDelayParams {
     // --- Time -----------------------------------------------------------
@@ -52,15 +59,20 @@ pub struct GranularDelayParams {
     // --- Grains ---------------------------------------------------------
     pub grain_size_ms: FloatParam,
     pub density_hz: FloatParam,
-    /// Tempo-synced density (grains per beat division).
-    ///
-    /// NOT IMPLEMENTED: the DSP never reads this, so the grain rate
-    /// does not follow the host tempo. Implemented by **ba todo #1322**
-    /// (epic #203); until then the editor renders the PER-BEAT chip
-    /// unavailable and no factory preset sets it — see
-    /// `crate::editor::controls::PENDING_DSP` (ba todo #1277). Remove
-    /// this note, and its `PENDING_DSP` entry, when #1322 lands.
+    /// Tempo-synced density (ba todo #1322): on, one grain is spawned
+    /// per [`Self::density_division`] of the host tempo instead of at
+    /// the free-running [`Self::density_hz`] rate, and the cloud
+    /// re-locks on every tempo change (the rate is resolved per block).
+    /// Falls back to `density_hz` when the host reports no tempo. The
+    /// resolved rate is clamped to [`DENSITY_MIN_HZ`]..=[`DENSITY_MAX_HZ`].
     pub density_sync: BoolParam,
+    /// Note value one grain is spawned per while [`Self::density_sync`]
+    /// is on; indexes the same table as [`Self::division`] (see
+    /// `crate::sync`). Deliberately its *own* division rather than the
+    /// delay's: the grain rate is a texture, and locking it to the tap
+    /// division would leave "1/4 delay, 1/16 grains" unreachable
+    /// (ba todo #1322).
+    pub density_division: IntParam,
     /// 0 = Sync, 1 = Async, 2 = Pitch-Sync (ba todo #1082, doc #252
     /// §4): PSOLA-style Voice/Mono mode — the real-time tracker runs on
     /// the written input; while voiced, grain onsets snap to pitch
@@ -170,8 +182,9 @@ impl GranularDelayParams {
             // stays stable (ba todo #1078).
             27 => &self.root,
             28 => &self.scale,
-            // Appended for the same reason (ba todo #1320).
+            // Appended for the same reason (ba todos #1320, #1322).
             29 => &self.align,
+            30 => &self.density_division,
             _ => &self.sync,
         }
     }
@@ -248,8 +261,8 @@ impl Default for GranularDelayParams {
                 "Density",
                 22.0,
                 FloatRange::Skewed {
-                    min: 0.5,
-                    max: 100.0,
+                    min: DENSITY_MIN_HZ,
+                    max: DENSITY_MAX_HZ,
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
@@ -257,6 +270,13 @@ impl Default for GranularDelayParams {
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
 
             density_sync: BoolParam::new("density_sync", "Density Sync", false),
+
+            density_division: IntParam::new(
+                "density_division",
+                "Density Div",
+                10, // 1/16 — a grain per sixteenth is a usable default
+                IntRange::Linear { min: 0, max: 11 },
+            ),
 
             scheduler: IntParam::new(
                 "scheduler",
