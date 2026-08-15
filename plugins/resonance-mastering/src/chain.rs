@@ -175,11 +175,14 @@ impl Chain {
 
         self.meters.feed(left, right, viz);
 
-        // Publish the stage GR meters for the UI header.
+        // Publish the stage GR meters for the UI header, and the four
+        // per-band multiband GR values for the Multiband tab. All of
+        // these are already computed by the stages themselves.
         viz.store_gr(
             self.glue_compressor.meter_gr_db(),
             self.limiter.meter_gr_db(),
         );
+        viz.store_band_gr(self.multiband.band_gr_db());
 
         // Feed the post-chain audio into the assistant's capture ring.
         // Runs unconditionally so the user can click Analyze at any

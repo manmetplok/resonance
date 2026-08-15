@@ -8,8 +8,9 @@
 
 use wayland_plugin_gui::egui;
 
-use crate::assistant::{Assistant, Genre};
+use crate::assistant::Genre;
 use crate::params::MasteringParams;
+use crate::viz::MasteringViz;
 
 use super::theme;
 use super::TargetSource;
@@ -18,6 +19,7 @@ mod assistant;
 mod dither;
 mod eq;
 mod glue;
+pub mod gr_meter;
 mod imager;
 mod limiter;
 pub mod multiband;
@@ -91,7 +93,7 @@ pub(crate) fn draw_stage_panel(
     ui: &mut egui::Ui,
     stage: StageTab,
     params: &MasteringParams,
-    assistant: &Assistant,
+    viz: &MasteringViz,
     selected_genre: &mut Genre,
     target_source: &mut TargetSource,
     reference_path: &mut String,
@@ -110,7 +112,7 @@ pub(crate) fn draw_stage_panel(
         StageTab::Assistant => assistant::draw(
             ui,
             params,
-            assistant,
+            &viz.assistant,
             selected_genre,
             target_source,
             reference_path,
@@ -119,7 +121,7 @@ pub(crate) fn draw_stage_panel(
         StageTab::Glue => glue::draw(ui, &params.glue_compressor),
         StageTab::Saturator => saturator::draw(ui, &params.saturator),
         StageTab::TonalEq => eq::draw(ui, &params.tonal_eq, "Tonal EQ"),
-        StageTab::Multiband => multiband::draw(ui, &params.multiband),
+        StageTab::Multiband => multiband::draw(ui, &params.multiband, viz.band_gr_db()),
         StageTab::Imager => imager::draw(ui, &params.imager),
         StageTab::Limiter => limiter::draw(ui, &params.limiter),
         StageTab::Dither => dither::draw(ui, &params.dither),
