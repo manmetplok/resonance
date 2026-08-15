@@ -267,4 +267,19 @@ fn the_division_parameter_names_its_note_values() {
     // taken for one.
     assert_eq!(division.parse("4"), Some(4.0));
     assert_eq!(division.parse("1/3"), None);
+
+    // The gate reads its period off the same table, and nothing else
+    // asserts that those labels reach the wire.
+    let gate_rate = &plugin.params.gate_rate;
+    assert_eq!(
+        gate_rate.choices(),
+        Some(resonance_delay::sync::DIVISION_LABELS)
+    );
+    assert_eq!(gate_rate.display(7.0), "1/8");
+    assert_eq!(gate_rate.parse("1/16"), Some(10.0));
+
+    // Both ranges are the table's, so a label can never index past it.
+    let last = resonance_delay::sync::DIVISION_LABELS.len() as f64 - 1.0;
+    assert_eq!(division.max_plain(), last);
+    assert_eq!(gate_rate.max_plain(), last);
 }

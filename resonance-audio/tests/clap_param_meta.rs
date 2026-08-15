@@ -24,8 +24,15 @@ use clap_sys::ext::params::{
 };
 use clap_sys::plugin::clap_plugin;
 
-use resonance_audio::__test_support::{choice_labels, ClapInstance, __instance_from_raw_for_test};
+use indexmap::IndexMap;
+use parking_lot::Mutex;
+use resonance_audio::__test_support::{
+    choice_labels, AutomationSnapshot, ClapInstance, SyncClapInstance,
+    __instance_from_raw_for_test,
+};
 use resonance_audio::unit_from_text;
+use resonance_audio::AutomationLanes;
+use resonance_common::automation::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
 
 // ---------------------------------------------------------------------------
 // unit_from_text
@@ -137,6 +144,14 @@ const FILTER_MODES: [&str; 3] = ["Low-pass", "Band-pass", "High-pass"];
 
 struct FakeState {
     filter: f64,
+    /// How many times the host asked the plugin to FORMAT a value.
+    ///
+    /// The point of counting: `query_params` is allowed to be expensive
+    /// (it collects a parameter's whole meaning, once, at instantiation)
+    /// but the automation path is not — it resolves a lane's range on
+    /// every breakpoint edit, holding a lock the audio thread drops a
+    /// block rather than wait for (ba todo #1290 review).
+    text_calls: u32,
 }
 
 unsafe fn fake_state<'a>(plugin: *const clap_plugin) -> &'a mut FakeState {
@@ -236,12 +251,13 @@ unsafe extern "C" fn fake_get_value(
 }
 
 unsafe extern "C" fn fake_value_to_text(
-    _plugin: *const clap_plugin,
+    plugin: *const clap_plugin,
     param_id: u32,
     value: f64,
     out: *mut c_char,
     capacity: u32,
 ) -> bool {
+    fake_state(plugin).text_calls += 1;
     let text = match param_id {
         P_FILTER => match FILTER_MODES.get(value.round() as usize) {
             Some(label) => (*label).to_string(),
@@ -278,9 +294,20 @@ unsafe extern "C" fn fake_get_extension(
 /// A `ClapInstance` around the fake plugin above. Plugin and state are
 /// leaked on purpose: `Drop` still dereferences them.
 fn make_instance() -> ClapInstance {
-    __instance_from_raw_for_test(
+    make_instance_with_state().0
+}
+
+/// The same, plus a raw pointer to the plugin's backing state so a test
+/// can read how often it was asked to format a value.
+fn make_instance_with_state() -> (ClapInstance, *mut FakeState) {
+    let mut state_ptr: *mut FakeState = ptr::null_mut();
+    let instance = __instance_from_raw_for_test(
         |_host| {
-            let state = Box::into_raw(Box::new(FakeState { filter: 1.0 }));
+            let state = Box::into_raw(Box::new(FakeState {
+                filter: 1.0,
+                text_calls: 0,
+            }));
+            state_ptr = state;
             let plugin = Box::new(clap_plugin {
                 desc: ptr::null(),
                 plugin_data: state as *mut c_void,
@@ -299,7 +326,8 @@ fn make_instance() -> ClapInstance {
         },
         48_000,
     )
-    .expect("fake plugin instance")
+    .expect("fake plugin instance");
+    (instance, state_ptr)
 }
 
 // ---------------------------------------------------------------------------
@@ -379,4 +407,109 @@ fn param_text_formats_any_value_not_just_the_current_one() {
     // A value the plugin refuses to format, and an unknown parameter.
     assert_eq!(instance.param_text(P_FILTER, 9.0), None);
     assert_eq!(instance.param_text(999, 0.0), None);
+}
+
+// ---------------------------------------------------------------------------
+// The cheap path: a range without a formatter
+// ---------------------------------------------------------------------------
+
+/// Drive the real `AutomationSnapshot::build` over one plugin-param
+/// lane on the fake plugin, and report how many times the plugin was
+/// asked to format a value along the way.
+fn snapshot_for_one_lane(
+    instance: ClapInstance,
+    state: *mut FakeState,
+    param_id: u32,
+) -> (AutomationSnapshot, u32) {
+    let state = unsafe { &mut *state };
+    state.text_calls = 0;
+
+    let mut plugins: IndexMap<u64, Mutex<SyncClapInstance>> = IndexMap::new();
+    plugins.insert(7, Mutex::new(SyncClapInstance(instance)));
+
+    let mut lanes: AutomationLanes = AutomationLanes::new();
+    let target = AutomationTarget::PluginParam {
+        instance: 7,
+        param_id,
+    };
+    lanes.insert(
+        target.clone(),
+        AutomationLane::new(
+            1,
+            target,
+            vec![Breakpoint::new(0, 0.25, CurveKind::Linear)],
+        ),
+    );
+
+    let snapshot = AutomationSnapshot::build(&lanes, &plugins);
+    (snapshot, state.text_calls)
+}
+
+#[test]
+fn the_automation_snapshot_resolves_a_range_without_formatting_anything() {
+    // `build` runs on every SetAutomationLane — which is what a
+    // breakpoint drag emits — while holding the instance lock the audio
+    // thread abandons a block rather than wait for. Resolving the range
+    // through `query_params` would format every parameter of the plugin,
+    // per lane, per drag event, and throw all of it away (ba todo #1290
+    // review).
+    let (instance, state) = make_instance_with_state();
+    let (snapshot, text_calls) = snapshot_for_one_lane(instance, state, P_MIX);
+
+    let resolved = snapshot
+        .plugin_params
+        .get(&7)
+        .and_then(|lanes| lanes.first())
+        .expect("the lane resolved against the plugin's declared range");
+    assert_eq!((resolved.min, resolved.max), (0.0, 1.0));
+    assert_eq!(
+        text_calls, 0,
+        "the snapshot wanted two numbers and must not have paid for the \
+         plugin's formatter to get them"
+    );
+}
+
+#[test]
+fn a_range_lookup_never_asks_the_plugin_to_format_anything() {
+    // `AutomationSnapshot::build` resolves a lane's min/max on every
+    // SetAutomationLane — which is what a breakpoint drag emits — while
+    // holding the instance lock the audio thread abandons a block rather
+    // than wait for. Going through `query_params` there would format
+    // every parameter of the plugin, per lane, per drag event, and throw
+    // all of it away (ba todo #1290 review).
+    let (instance, state) = make_instance_with_state();
+    let state = unsafe { &mut *state };
+    state.text_calls = 0;
+
+    assert_eq!(instance.param_range(P_MIX), Some((0.0, 1.0)));
+    assert_eq!(instance.param_range(P_FILTER), Some((0.0, 2.0)));
+    assert_eq!(
+        state.text_calls, 0,
+        "a range lookup must not call value_to_text — it is the expensive \
+         thing this accessor exists to avoid"
+    );
+
+    // An unknown id is None, not a panic and not a guess.
+    assert_eq!(instance.param_range(999), None);
+    assert_eq!(state.text_calls, 0);
+}
+
+#[test]
+fn collecting_a_parameters_meaning_is_what_costs_the_formatter_calls() {
+    // The counterpart: `query_params` DOES format, on purpose, once per
+    // instantiation. Asserting it here is what makes the previous test
+    // mean something — otherwise a formatter that was never called at
+    // all would pass both.
+    let (instance, state) = make_instance_with_state();
+    let state = unsafe { &mut *state };
+    state.text_calls = 0;
+
+    let params = instance.query_params();
+    assert_eq!(params.len(), 4);
+    assert!(
+        state.text_calls >= 4,
+        "one formatting call per parameter at minimum, plus the choice \
+         walk; got {}",
+        state.text_calls
+    );
 }

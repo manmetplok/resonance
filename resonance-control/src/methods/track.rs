@@ -519,6 +519,15 @@ pub struct PluginParamView {
 /// [`PluginParamView::choices`]. A label sent to a parameter that has no
 /// choices, or one that matches none of them, is rejected with the
 /// accepted labels rather than parsed as a number.
+///
+/// A string that parses as a number is taken as that NUMBER, before any
+/// label is considered — clients that stringify every value are common,
+/// and `"0.75"` from one of them means three quarters. The ambiguity is
+/// therefore known and resolved number-first: a plugin whose choice
+/// labels were themselves numeric (`"0.5"`, `"2"`) could not be reached
+/// by name. Nothing in the fleet has such a table — divisions, filter
+/// types, LFO shapes and cabinet names all fail to parse as numbers —
+/// and such a parameter would still be settable by its index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]

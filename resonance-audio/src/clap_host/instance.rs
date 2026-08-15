@@ -324,6 +324,41 @@ impl ClapInstance {
         result
     }
 
+    /// One parameter's `min..=max`, without touching its formatting
+    /// (ba todo #1290).
+    ///
+    /// [`query_params`](Self::query_params) answers this too, but it now
+    /// carries a parameter's whole meaning — a `value_to_text` call per
+    /// parameter plus a choice-label walk per stepped one — and a caller
+    /// that only wants a range would pay all of it and discard it. The
+    /// automation snapshot resolves a lane's range while holding the
+    /// instance lock that the audio thread abandons a block rather than
+    /// wait for, and a breakpoint drag re-resolves per event, so on an
+    /// 87-parameter plugin that is a stutter mechanism.
+    ///
+    /// This walks `get_info` only, allocates nothing, and stops at the
+    /// id. Engine/main thread, like the rest of the params extension.
+    pub fn param_range(&self, param_id: u32) -> Option<(f64, f64)> {
+        let params = self.params_ext?;
+        let count_fn = unsafe { (*params).count }?;
+        let get_info = unsafe { (*params).get_info }?;
+        let count = unsafe { count_fn(self.plugin) };
+
+        for i in 0..count {
+            let mut info =
+                std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+            let ok = unsafe { get_info(self.plugin, i, info.as_mut_ptr()) };
+            if !ok {
+                continue;
+            }
+            let info = unsafe { info.assume_init() };
+            if info.id == param_id {
+                return Some((info.min_value, info.max_value));
+            }
+        }
+        None
+    }
+
     /// The plugin's own rendering of `value` for one parameter — `"40 %"`,
     /// `"-6.0 dB"`, `"Low-pass"` — or `None` when it offers no
     /// conversion (ba todo #1290).
