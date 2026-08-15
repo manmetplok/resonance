@@ -18,6 +18,10 @@ pub struct PaginatedResponse<T> {
     pub page_size: Option<u32>,
     #[serde(default)]
     pub total: Option<u32>,
+    /// How many pages of `page_size` the server will serve. The browser
+    /// uses this to decide whether a "Load more" button is offered.
+    #[serde(default)]
+    pub total_pages: Option<u32>,
 }
 
 /// A Tone3000 "tone" entry returned from `/tones/search`. A tone is a
