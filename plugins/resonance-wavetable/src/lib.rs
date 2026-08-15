@@ -54,8 +54,11 @@ impl ResonancePlugin for ResonanceWavetable {
         self.params.param_at(index)
     }
 
-    fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
+    fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
         self.engine.initialize(sample_rate);
+        // Publish the host's real audio config so the editor's status bar
+        // reports it instead of printing invented literals.
+        self.viz.store_io_config(sample_rate, max_buffer_size);
         // Start the master-volume smoother at the current param value so a
         // fresh instance doesn't fade in from zero (same pattern as
         // resonance-eq's output-gain smoother).
