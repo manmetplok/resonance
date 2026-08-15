@@ -139,6 +139,13 @@ impl CompressorDsp {
         params: &CompressorParams,
         viz: &CompressorViz,
     ) {
+        // Publish the detector source before anything else — including
+        // before the empty-block bail-out, since routing is a fact about
+        // the connection, not about this block having audio in it. It is
+        // set here, rather than at the call site, so the flag the editor
+        // reads is the same `Option` the detector below branches on.
+        viz.store_key_connected(key.is_some());
+
         let frames = left.len().min(right.len());
         if frames == 0 {
             return;
