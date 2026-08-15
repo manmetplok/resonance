@@ -131,11 +131,34 @@ fn debug_log(msg: &str) {
     }
 }
 
-fn build_authorize_url(redirect_uri: &str, challenge: &str, state: &str) -> String {
+/// Build the authorize URL for the standard authorization-code flow.
+///
+/// Public so `tests/tone3000_browser.rs` can assert over the produced
+/// string: this is the one request the plugin makes that no test could
+/// otherwise reach, which is exactly how an `architecture=2` pin
+/// survived here after it had been lifted from the two API endpoints
+/// (ba todo #1315).
+///
+/// On the `gears`/`format`/`architecture` trio: per the tone3000 API
+/// docs these are *catalogue filters for the tone-picker UI* and apply
+/// only to the `prompt=select_tone` and `prompt=load_tone` flows. They
+/// do not scope the grant, and they do not constrain what a token may
+/// later fetch — `/tones/search` and `/models` are filtered by their own
+/// query parameters (see `client::search_query_params`). We send no
+/// `prompt`, so no picker is shown and all three are inert today.
+///
+/// `architecture=2` is therefore dropped rather than kept: inert or not,
+/// a hardcoded A2 pin sitting in the auth path is the very thing this
+/// todo removed from the browser, and leaving it would re-assert
+/// "this plugin is A2-only" in the one place nothing tests. `gears` and
+/// `format` stay because they state the plugin's actual scope — amp and
+/// amp+cab NAM captures, matching `client::GEARS_AMP` — and would be the
+/// correct picker filter if a `select_tone` flow is ever added.
+pub fn build_authorize_url(redirect_uri: &str, challenge: &str, state: &str) -> String {
     // Hand-build the query string so we don't pull in url::Url just for
-    // five parameters. All values are either our own constants or fresh
-    // base64url — no characters that would need escaping beyond `:` and
-    // `/` in the redirect, which we percent-encode by hand.
+    // a handful of parameters. All values are either our own constants
+    // or fresh base64url — no characters that would need escaping beyond
+    // `:` and `/` in the redirect, which we percent-encode by hand.
     let encoded_redirect = percent_encode(redirect_uri);
     format!(
         "{API_BASE}/api/v1/oauth/authorize?client_id={TONE3000_CLIENT_ID}\
@@ -145,8 +168,7 @@ fn build_authorize_url(redirect_uri: &str, challenge: &str, state: &str) -> Stri
          &code_challenge_method=S256\
          &state={state}\
          &gears=amp_amp-cab\
-         &format=nam\
-         &architecture=2"
+         &format=nam"
     )
 }
 
