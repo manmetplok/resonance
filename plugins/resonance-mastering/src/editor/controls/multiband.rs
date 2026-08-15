@@ -17,6 +17,7 @@ use wayland_plugin_gui::egui;
 use crate::params::{MultibandBandParams, MultibandParams};
 use crate::stages::multiband::NUM_BANDS;
 
+use super::gr_meter;
 use super::theme;
 use super::widgets;
 
@@ -39,14 +40,27 @@ pub const BANDS_W: f32 =
     LEFT_MARGIN + BAND_COLUMN_W * NUM_BANDS as f32 + BAND_GAP * (NUM_BANDS as f32 - 1.0);
 
 /// Height this panel needs: the crossover row, then each band's title
-/// row over two knob lines. `stage_panel_height` must give it at least
-/// this much or the bottom line of knobs is clipped.
-pub const REQUIRED_PANEL_H: f32 = 6.0 + KNOB_H + 4.0 + 18.0 + 3.0 + KNOB_H + 3.0 + KNOB_H;
+/// row, its gain-reduction meter and two knob lines.
+/// `stage_panel_height` must give it at least this much or the bottom
+/// line of knobs is clipped.
+pub const REQUIRED_PANEL_H: f32 = 6.0
+    + KNOB_H
+    + 4.0
+    + 18.0
+    + 3.0
+    + gr_meter::HEIGHT
+    + 3.0
+    + KNOB_H
+    + 3.0
+    + KNOB_H;
 
 /// Band names, low to high.
 pub const BAND_NAMES: [&str; NUM_BANDS] = ["Low", "Low-Mid", "High-Mid", "High"];
 
-pub fn draw(ui: &mut egui::Ui, params: &MultibandParams) {
+/// `band_gr_db` is the live gain reduction of each band's compressor in
+/// dB (positive = attenuation), low band first, as published by the
+/// audio thread.
+pub fn draw(ui: &mut egui::Ui, params: &MultibandParams, band_gr_db: [f32; NUM_BANDS]) {
     ui.vertical(|ui| {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -76,7 +90,7 @@ pub fn draw(ui: &mut egui::Ui, params: &MultibandParams) {
         ui.horizontal_top(|ui| {
             ui.add_space(LEFT_MARGIN);
             for (i, name) in BAND_NAMES.iter().enumerate() {
-                draw_band(ui, &params.bands[i], name);
+                draw_band(ui, &params.bands[i], name, band_gr_db[i]);
                 if i + 1 < NUM_BANDS {
                     ui.add_space(BAND_GAP);
                 }
@@ -85,7 +99,7 @@ pub fn draw(ui: &mut egui::Ui, params: &MultibandParams) {
     });
 }
 
-fn draw_band(ui: &mut egui::Ui, band: &MultibandBandParams, title: &str) {
+fn draw_band(ui: &mut egui::Ui, band: &MultibandBandParams, title: &str, gr_db: f32) {
     ui.vertical(|ui| {
         ui.set_min_width(BAND_COLUMN_W);
         ui.set_max_width(BAND_COLUMN_W);
@@ -98,6 +112,14 @@ fn draw_band(ui: &mut egui::Ui, band: &MultibandBandParams, title: &str) {
             );
             widgets::bool_checkbox(ui, &band.on, "On");
         });
+        // Live gain reduction, so Threshold is set with feedback rather
+        // than blind. Sits directly under the band's name, above the
+        // controls that cause it.
+        let (meter_rect, _) = ui.allocate_exact_size(
+            egui::vec2(BAND_COLUMN_W, gr_meter::HEIGHT),
+            egui::Sense::hover(),
+        );
+        gr_meter::draw(&ui.painter_at(meter_rect), meter_rect, gr_db);
         // Line 1 — what the band does. Gain is a band output trim, so it
         // works with this band's compressor off, which is what makes the
         // stage usable as a static four-band tone balancer.
