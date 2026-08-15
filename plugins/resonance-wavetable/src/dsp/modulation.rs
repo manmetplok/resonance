@@ -49,6 +49,30 @@ impl ModSource {
     pub fn label(self) -> &'static str {
         Self::LABELS[self as usize]
     }
+
+    /// `Some(reason)` for a source this build cannot evaluate, so the editor
+    /// can offer it as unavailable instead of pretending it works.
+    ///
+    /// `ModWheel` and `Aftertouch` evaluate to a constant 0.0 because the
+    /// framework's `NoteEvent` carries only NoteOn/NoteOff/Choke — no CC,
+    /// aftertouch or pitch-bend reaches a plugin at all.
+    ///
+    /// Implemented by **ba todo #1295** (MIDI CC / aftertouch / pitch-bend
+    /// through the CLAP bridge) and then **ba todo #1301** (wire them up as
+    /// wavetable mod sources). Delete the arm when #1301 lands.
+    pub fn unavailable_reason(self) -> Option<&'static str> {
+        match self {
+            Self::ModWheel | Self::Aftertouch => {
+                Some("No MIDI CC or aftertouch reaches plugins yet (ba todo #1295, #1301)")
+            }
+            _ => None,
+        }
+    }
+
+    /// True when this source produces modulation the DSP can actually act on.
+    pub fn is_available(self) -> bool {
+        self.unavailable_reason().is_none()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -106,6 +130,23 @@ impl ModDest {
     pub fn label(self) -> &'static str {
         Self::LABELS[self as usize]
     }
+
+    /// `Some(reason)` for a destination this build accumulates but never
+    /// reads, so the editor can offer it as unavailable instead of drawing
+    /// a routing that does nothing.
+    ///
+    /// Every destination is implemented as of ba todo #1323, which wired the
+    /// last two (`OscBalance` and `UnisonDetune`) into `refresh_osc_setups`.
+    /// The hook stays because it costs nothing and the source side still
+    /// needs it — see [`ModSource::unavailable_reason`].
+    pub fn unavailable_reason(self) -> Option<&'static str> {
+        None
+    }
+
+    /// True when modulation sent here changes the sound.
+    pub fn is_available(self) -> bool {
+        self.unavailable_reason().is_none()
+    }
 }
 
 /// Summarise what a modulation source is actually routed to, for display
@@ -117,14 +158,20 @@ impl ModDest {
 ///
 /// Slots whose destination is `None` are skipped, as are slots whose amount
 /// is zero — a routing that contributes nothing is not a routing the user
-/// can hear.
+/// can hear. A routing to a destination the DSP does not read is listed and
+/// marked `(inert)` rather than hidden, so a patch that uses one degrades
+/// visibly.
 pub fn routing_summary(slots: &[ModSlot], source: ModSource) -> String {
-    let mut names: Vec<&'static str> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
     for slot in slots {
         if slot.source != source || slot.dest == ModDest::None || slot.amount == 0.0 {
             continue;
         }
-        let name = slot.dest.label();
+        let name = if slot.dest.is_available() {
+            slot.dest.label().to_string()
+        } else {
+            format!("{} (inert)", slot.dest.label())
+        };
         if !names.contains(&name) {
             names.push(name);
         }
@@ -176,6 +223,10 @@ impl ModState {
             && self.osc2_pitch == other.osc2_pitch
             && self.osc1_pan == other.osc1_pan
             && self.osc2_pan == other.osc2_pan
+            // Both feed `OscSetup` (level crossfade, per-unison detune), so a
+            // moving one has to invalidate the cache like the others.
+            && self.osc_balance == other.osc_balance
+            && self.unison_detune == other.unison_detune
     }
 }
 
@@ -184,6 +235,19 @@ pub struct ModSlot {
     pub source: ModSource,
     pub dest: ModDest,
     pub amount: f32,
+}
+
+impl ModSlot {
+    /// True when this slot is wired at both ends *and* both ends are
+    /// implemented, i.e. it can change the sound. The editor uses this for
+    /// its "N active" count so the header cannot claim routings that do
+    /// nothing.
+    pub fn is_effective(&self) -> bool {
+        self.source != ModSource::None
+            && self.dest != ModDest::None
+            && self.source.is_available()
+            && self.dest.is_available()
+    }
 }
 
 /// Evaluate all modulation slots and return accumulated ModState.
@@ -200,7 +264,13 @@ pub fn evaluate_mod_matrix(
     let key_track = (note - 60.0) / 60.0; // normalized around middle C
 
     for slot in slots {
-        if slot.source == ModSource::None || slot.dest == ModDest::None {
+        // Unimplemented ends are skipped outright rather than evaluated to
+        // a constant 0.0 (sources) or accumulated into a field nothing reads
+        // (destinations). Identical output, and there is now exactly one
+        // place that decides what this build can modulate — the same place
+        // the editor reads to grey the option out. See
+        // `ModSource::unavailable_reason` / `ModDest::unavailable_reason`.
+        if !slot.is_effective() {
             continue;
         }
 
@@ -211,9 +281,9 @@ pub fn evaluate_mod_matrix(
             ModSource::Env2 => mod_env_val * 2.0 - 1.0, // 0..1 -> -1..1
             ModSource::Velocity => velocity * 2.0 - 1.0,
             ModSource::KeyTrack => key_track,
-            ModSource::ModWheel => 0.0,   // future: MIDI CC
-            ModSource::Aftertouch => 0.0, // future
-            ModSource::None => 0.0,
+            // Unreachable: filtered by `is_effective` above. Kept exhaustive
+            // so #1301 has to come back here when CC delivery lands.
+            ModSource::ModWheel | ModSource::Aftertouch | ModSource::None => 0.0,
         };
 
         let mod_value = source_value * slot.amount;
