@@ -241,24 +241,24 @@ impl crate::Resonance {
         // around the narrower two-dot tail.
         let pname = crate::util::short_with(&plugin.plugin_name, 14, "..");
         let pid = plugin.instance_id;
-        // Plugins that expose a floating editor (has_gui) are driven
-        // entirely from that window — clicking the name in the strip
-        // toggles the editor open/closed rather than showing the
-        // generic params in the bottom panel. Plugins without a
-        // floating editor still fall back to the bottom panel path.
-        let (click_msg, is_selected) = if plugin.has_gui {
-            let msg = if plugin.editor_open {
-                Message::Plugin(PluginMessage::ClosePluginEditor(pid))
-            } else {
-                Message::Plugin(PluginMessage::OpenPluginEditor(pid))
-            };
-            (msg, plugin.editor_open)
-        } else {
-            (
-                Message::Plugin(PluginMessage::TogglePluginPanel(pid)),
-                self.mixer.selected_plugin == Some(pid),
-            )
-        };
+        // The name opens the generic parameter panel — for every plugin,
+        // GUI or not (ba todo #1306, audit finding X4).
+        //
+        // This used to route to the panel only when `has_gui == false`,
+        // and since all eleven bundled plugins declare a GUI, that made
+        // the generic panel unreachable for the entire fleet: the one
+        // surface that shows a plugin's parameters as plain numbers, and
+        // the only thing left to fall back on when a floating editor
+        // fails to open. The control API never had the restriction, so
+        // an agent could read and set those parameters while a human
+        // could not see them at all.
+        //
+        // The floating editor is not lost — it moves to its own control
+        // below, because "show me the parameters" and "open the plugin's
+        // own window" are two different requests and one button cannot
+        // be both.
+        let click_msg = Message::Plugin(PluginMessage::TogglePluginPanel(pid));
+        let is_selected = self.mixer.selected_plugin == Some(pid);
 
         // Instrument slots get the design's lavender pill: ◆ glyph
         // followed by the plugin name on a tinted ACCENT_DIM background
@@ -355,10 +355,49 @@ impl crate::Resonance {
         let moves = reorder::chain_moves(self, owner, pid, index, len);
 
         // Button takes Length::Fill so it stretches to the strip width;
-        // the reorder pair and the delete button hug the right edge.
-        row![name_btn, reorder::move_buttons(&moves, 9.0), plugin_del]
-            .spacing(2)
+        // the editor toggle, the reorder pair and the delete button hug
+        // the right edge.
+        let mut slot = row![name_btn].spacing(2);
+        if let Some(editor) = editor_toggle(plugin) {
+            slot = slot.push(editor);
+        }
+        slot.push(reorder::move_buttons(&moves, 9.0))
+            .push(plugin_del)
             .align_y(alignment::Vertical::Center)
             .into()
     }
+}
+
+/// The strip slot's floating-editor toggle — the sliders glyph, tinted
+/// while the editor is open (ba todo #1306).
+///
+/// `None` for a plugin that declares no GUI: there is no window to open,
+/// and the generic parameter panel behind the name button is the whole
+/// surface such a plugin has.
+///
+/// It is a control of its own rather than a second meaning for the name
+/// button. Before, the name meant "toggle the editor" on GUI plugins and
+/// "toggle the parameter panel" on the rest, so which surface a click
+/// reached depended on a property of the plugin the user cannot see —
+/// and the parameter panel had no route at all on the eleven bundled
+/// plugins, every one of which declares a GUI.
+fn editor_toggle(plugin: &PluginSlotState) -> Option<Element<'static, Message>> {
+    if !plugin.has_gui {
+        return None;
+    }
+    let pid = plugin.instance_id;
+    let open = plugin.editor_open;
+    let message = if open {
+        Message::Plugin(PluginMessage::ClosePluginEditor(pid))
+    } else {
+        Message::Plugin(PluginMessage::OpenPluginEditor(pid))
+    };
+    let color = if open { theme::ACCENT } else { theme::TEXT_DIM };
+    Some(
+        button(theme::icon(theme::fa::SLIDERS).size(9.0).color(color))
+            .on_press(message)
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding([1, 3])
+            .into(),
+    )
 }
