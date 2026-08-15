@@ -33,6 +33,14 @@ impl Resonance {
         self.aux.upsert(send);
     }
 
+    /// Test-only: read the mirrored sidechain (key) routes, one per keyed
+    /// plugin instance. Drives `tests/sidechain_persistence.rs`, which
+    /// asserts routes survive a real save + reload (ba todo #1311).
+    #[doc(hidden)]
+    pub fn test_sidechain_routes(&self) -> &[resonance_audio::types::SidechainRoute] {
+        &self.sidechain.routes
+    }
+
     /// Test-only: read the most recent aux-send rejection forwarded to
     /// the UI (`None` once a later send succeeds).
     #[doc(hidden)]

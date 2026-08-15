@@ -8,6 +8,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use rmcp::{tool, tool_router};
 use resonance_control::methods::master;
+use resonance_control::MutationAck;
 
 #[tool_router(router = router_master, vis = "pub(crate)")]
 impl ResonanceMcp {
@@ -195,5 +196,50 @@ impl ResonanceMcp {
         Parameters(params): Parameters<master::SetFxBypassParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke(master::SET_FX_BYPASS, &params).await
+    }
+
+    #[tool(
+        description = "Route a track's or bus's audio into the external SIDECHAIN KEY of a \
+                       plugin ON THE MASTER CHAIN — the detector input. The mastering use is \
+                       narrow but real: a bus compressor on the master keyed from the kick, so \
+                       the mix breathes with the rhythm instead of with whichever transient \
+                       happens to be loudest. There is no master_id — there is one master. \
+                       \
+                       Addressed like master_set_plugin_param: an optional plugin_id (+ \
+                       occurrence); omitted targets the first plugin on the chain that HAS a key \
+                       port. Name the key source with EITHER source_track_id OR source_bus_id. \
+                       Sources are tapped post-FX and PRE-fader, so a key source can sit at -inf \
+                       and still key. enabled defaults to true; false keeps the routing \
+                       configured but stops delivering the key. \
+                       \
+                       Only the DETECTOR changes: the key never reaches the output. Routing a \
+                       key into a plugin with no key port is REFUSED, naming the ones on the \
+                       master that accept it — note that \"com.resonance.mastering\" does NOT \
+                       take a key; use \"com.resonance.compressor\". The key is delivered one \
+                       audio block late by design (~2.7 ms), so no routing can feed back. Routes \
+                       are saved with the project. Undoable with edit_undo.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn master_set_sidechain(
+        &self,
+        Parameters(params): Parameters<master::SetSidechainParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(master::SET_SIDECHAIN, &params).await
+    }
+
+    #[tool(
+        description = "Remove a master plugin's external sidechain key route, so its detector \
+                       goes back to reading the mix itself. Addressed exactly as \
+                       master_set_sidechain. Clearing a plugin that had no route is not an error.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn master_clear_sidechain(
+        &self,
+        Parameters(params): Parameters<master::ClearSidechainParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(master::CLEAR_SIDECHAIN, &params)
+            .await
     }
 }

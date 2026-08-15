@@ -36,6 +36,12 @@ pub const PLUGIN_PARAMS: &str = "master.plugin_params";
 /// `master.set_plugin_param` — set one parameter on a master plugin
 /// ([`SetPluginParamParams`] -> `MutationAck`).
 pub const SET_PLUGIN_PARAM: &str = "master.set_plugin_param";
+/// `master.set_sidechain` — key a plugin on the master chain from a
+/// track or bus ([`SetSidechainParams`] -> `MutationAck`).
+pub const SET_SIDECHAIN: &str = "master.set_sidechain";
+/// `master.clear_sidechain` — remove a master plugin's key route
+/// ([`ClearSidechainParams`] -> `MutationAck`).
+pub const CLEAR_SIDECHAIN: &str = "master.clear_sidechain";
 
 /// All `master.*` method names.
 pub const METHODS: &[&str] = &[
@@ -47,6 +53,8 @@ pub const METHODS: &[&str] = &[
     SET_FX_BYPASS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    SET_SIDECHAIN,
+    CLEAR_SIDECHAIN,
 ];
 
 /// Result of `master.summary`.
@@ -237,4 +245,59 @@ pub struct SetPluginParamParams {
     /// anything past that tolerance is rejected with the range, and a
     /// label resolves to the step it names.
     pub value: crate::methods::track::ParamValue,
+}
+
+// ---------------------------------------------------------------------------
+// Sidechain (key) routing onto the master chain (ba doc #275 P4, todo #1311)
+// ---------------------------------------------------------------------------
+
+/// Params for `master.set_sidechain` — feed a track's or bus's audio
+/// into the key input of a plugin **on the master chain**.
+///
+/// The mastering use for this is narrow but real: a bus compressor on
+/// the master keyed from the kick, so the whole mix breathes with the
+/// rhythm rather than with whatever transient happens to be loudest.
+/// There is no `master_id` field because there is exactly one master.
+///
+/// Addressing and the two safety rules match
+/// [`crate::methods::track::SetSidechainParams`]: an omitted `plugin_id`
+/// targets the first plugin on the master that declares a key port, and
+/// a route onto a plugin with no key port is refused rather than stored
+/// where it could never be delivered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetSidechainParams {
+    /// CLAP id of the plugin on the master to address; omitted targets
+    /// the first plugin on the chain that declares a key port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based; defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Feed the key from this track's audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_track_id: Option<crate::ids::TrackId>,
+    /// Feed the key from this bus's audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_bus_id: Option<crate::ids::TrackId>,
+    /// A disabled route keeps its configuration but delivers no key, so
+    /// the plugin falls back to keying off its own input. Defaults true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Params for `master.clear_sidechain`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ClearSidechainParams {
+    /// Omitted targets the same plugin `master.set_sidechain` would: the
+    /// first on the master with a key port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
 }

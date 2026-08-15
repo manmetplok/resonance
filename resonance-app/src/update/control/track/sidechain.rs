@@ -1,9 +1,17 @@
 //! `track.set_sidechain` / `track.clear_sidechain` — the key route into
-//! a plugin's external sidechain input.
+//! a plugin's external sidechain input, for a plugin on a **track**.
+//!
+//! The bus and master arms live in `super::super::bus` / `master`; the
+//! rules all three share (one source, key port required, unqualified
+//! calls target the first keyable plugin) live in
+//! [`super::super::sidechain`] so they cannot drift apart.
 
 use super::{ack, find_track, instance_for, not_found_track, reject};
-use crate::message::{Message, PluginMessage};
+use crate::message::Message;
 use crate::state::TrackState;
+use crate::update::control::sidechain::{
+    first_keyable, require_key_port, resolve_key_source, route_message,
+};
 use crate::update::control::{run_via_update, view_model};
 use crate::Resonance;
 use iced::Task;
@@ -25,8 +33,8 @@ fn resolve_keyed_plugin(
     // a synth, which has no key port — so the route was stored on the
     // one plugin in the chain guaranteed to ignore it (ba doc #275 P0).
     if plugin_id.is_none() {
-        if let Some(slot) = t.plugins.iter().find(|p| p.has_sidechain_input) {
-            return Ok(slot.instance_id);
+        if let Some(instance_id) = first_keyable(&t.plugins) {
+            return Ok(instance_id);
         }
     }
 
@@ -66,10 +74,7 @@ fn resolve_keyed_plugin(
 /// plugin's external key input.
 ///
 /// The key replaces the plugin's DETECTOR source only; it never reaches
-/// the output. Plugins that declare no key port (most of them) store the
-/// route inertly — the mixer only connects a port the plugin actually
-/// declared — so this is not rejected on plugin kind, which would break
-/// the moment an instance's plugin were swapped.
+/// the output.
 pub(super) fn set_sidechain(
     app: &mut Resonance,
     request: &Request,
@@ -82,42 +87,14 @@ pub(super) fn set_sidechain(
         return not_found_track(request, params.track_id.0);
     };
 
-    // Exactly one source.
-    let source = match (params.source_track_id, params.source_bus_id) {
-        (Some(track), None) => {
-            if find_track(app, track.0).is_none() {
-                return reject(
-                    request,
-                    RpcError::not_found(format!("no source track with id {track}")),
-                );
-            }
-            resonance_audio::types::SendSource::Track(track.0)
-        }
-        (None, Some(bus)) => {
-            if !app.registry.busses.iter().any(|b| b.id == bus.0) {
-                return reject(
-                    request,
-                    RpcError::not_found(format!("no source bus with id {bus}")),
-                );
-            }
-            resonance_audio::types::SendSource::Bus(bus.0)
-        }
-        (Some(_), Some(_)) => {
-            return reject(
-                request,
-                RpcError::invalid_params(
-                    "give exactly one of source_track_id or source_bus_id, not both",
-                ),
-            )
-        }
-        (None, None) => {
-            return reject(
-                request,
-                RpcError::invalid_params(
-                    "track.set_sidechain needs a source_track_id or a source_bus_id",
-                ),
-            )
-        }
+    let source = match resolve_key_source(
+        app,
+        track::SET_SIDECHAIN,
+        params.source_track_id,
+        params.source_bus_id,
+    ) {
+        Ok(source) => source,
+        Err(e) => return reject(request, e),
     };
 
     let instance_id = match resolve_keyed_plugin(
@@ -130,61 +107,15 @@ pub(super) fn set_sidechain(
         Err(e) => return reject(request, e),
     };
 
-    // A plugin that declares no key port can never be handed one — the
-    // mixer drops the key rather than connect a port the plugin never
-    // declared. Storing the route anyway is the failure mode ba doc #275
-    // reports as most expensive: the call succeeds, the audio is
-    // unchanged, and a client with no ears has nothing to go on. This is
-    // the one place that can say so, so it refuses here.
-    if let Err(e) = require_key_port(&t, instance_id) {
+    if let Err(e) = require_key_port(&t.plugins, instance_id, &format!("track {}", t.id)) {
         return reject(request, e);
     }
 
     let task = run_via_update(
         app,
-        Message::Plugin(PluginMessage::SetPluginSidechain {
-            instance_id,
-            source: Some(source),
-            enabled: params.enabled,
-        }),
+        route_message(instance_id, Some(source), params.enabled),
     );
     (ack(app, request), task)
-}
-
-/// Refuse a key route onto a plugin instance with no sidechain input,
-/// naming the plugins on this track that do have one.
-///
-/// The flag comes from the engine's `PluginAdded` echo (the same
-/// `has_sidechain_input` the mixer keys off), so this predicate cannot
-/// drift from the one that decides delivery.
-fn require_key_port(
-    t: &TrackState,
-    instance_id: resonance_audio::types::PluginInstanceId,
-) -> Result<(), RpcError> {
-    let Some(slot) = t.plugins.iter().find(|p| p.instance_id == instance_id) else {
-        return Ok(());
-    };
-    if slot.has_sidechain_input {
-        return Ok(());
-    }
-    let keyable: Vec<&str> = t
-        .plugins
-        .iter()
-        .filter(|p| p.has_sidechain_input)
-        .map(|p| p.clap_plugin_id.as_str())
-        .collect();
-    let hint = if keyable.is_empty() {
-        "no plugin on this track declares one — add a plugin that does \
-         (com.resonance.compressor, com.resonance.gate) and route the key into that"
-            .to_string()
-    } else {
-        format!("plugins on this track that accept a key: [{}]", keyable.join(", "))
-    };
-    Err(RpcError::invalid_params(format!(
-        "plugin {} on track {} declares no sidechain (key) input, so a key routed \
-         into it would be silently ignored; {hint}",
-        slot.clap_plugin_id, t.id
-    )))
 }
 
 /// `track.clear_sidechain` — drop a plugin's key route so it falls back
@@ -209,13 +140,6 @@ pub(super) fn clear_sidechain(
         Ok(id) => id,
         Err(e) => return reject(request, e),
     };
-    let task = run_via_update(
-        app,
-        Message::Plugin(PluginMessage::SetPluginSidechain {
-            instance_id,
-            source: None,
-            enabled: false,
-        }),
-    );
+    let task = run_via_update(app, route_message(instance_id, None, false));
     (ack(app, request), task)
 }
