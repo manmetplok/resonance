@@ -1,6 +1,7 @@
 use parking_lot::Mutex;
 /// Resonance IR - An impulse response convolution CLAP plugin for cab and room emulation.
 use resonance_plugin::*;
+use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
@@ -70,8 +71,16 @@ impl ResonancePlugin for ResonanceIr {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str = "Impulse response convolution for cabinet and room emulation";
-    const FEATURES: &'static [&'static str] =
-        &["audio-effect", "stereo", "cabinet_simulator", "reverb"];
+    // `cabinet_simulator` (underscore) was silently dropped by the old
+    // whitelist; CLAP has no cabinet-simulator feature at all, so the
+    // namespaced constant carries that intent and `reverb` is the
+    // category a host can actually file a convolver under (ba todo #1298).
+    const FEATURES: &'static [&'static CStr] = &[
+        features::AUDIO_EFFECT,
+        features::REVERB,
+        features::CABINET_SIMULATOR,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

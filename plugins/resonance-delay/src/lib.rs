@@ -37,7 +37,8 @@ impl ResonancePlugin for ResonanceDelay {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str = "Tempo-synced stereo delay with digital and analog modes";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "stereo", "delay"];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[features::AUDIO_EFFECT, features::DELAY, features::STEREO];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

@@ -78,7 +78,10 @@ impl ResonancePlugin for ResonanceGate {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str =
         "Stereo noise gate / downward expander with hold, hysteresis and an external sidechain key";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "gate", "stereo", "dynamics"];
+    // `gate` is standard CLAP and never reached a host before
+    // (ba todo #1298); `dynamics` was not a CLAP feature at all.
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[features::AUDIO_EFFECT, features::GATE, features::STEREO];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
     const SIDECHAIN_INPUT: Option<u32> = Some(2);
