@@ -34,7 +34,7 @@ fn render_blocks(
             Vec::new()
         };
         let mut iter = EventIterator::new(&events);
-        engine.render_block(&mut left, &mut right, BLOCK, params, &mut iter);
+        engine.render_block(&mut left, &mut right, BLOCK, params, &mut iter, None);
         out.extend_from_slice(&left);
     }
 }

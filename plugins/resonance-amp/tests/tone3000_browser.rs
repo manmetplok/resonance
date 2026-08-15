@@ -7,6 +7,7 @@
 //! path is covered too.
 
 use resonance_amp::editor::tone3000_panel::tones_heading;
+use resonance_amp::tone3000::auth::build_authorize_url;
 use resonance_amp::tone3000::client::{
     merge_model_pages, merge_search_pages, models_query_params, search_query_params,
     ArchitectureFilter,
@@ -319,6 +320,42 @@ fn an_empty_page_with_no_totals_ends_pagination() {
     );
     assert!(!state.has_more);
     assert!(state.tones.is_empty());
+}
+
+// -------------------------------------------------------- authorize URL
+
+/// The pin that survived the first pass at this todo. `architecture=2`
+/// lived in `build_authorize_url` as a bare literal rather than via the
+/// `ARCHITECTURE_A2` constant, so lifting the pin from the two API
+/// endpoints — and grepping the constant to check — missed it entirely.
+/// This is the search-path assertion above, mirrored onto the one
+/// request that has no other test.
+#[test]
+fn authorize_url_omits_architecture() {
+    let url = build_authorize_url("http://localhost:47834/", "chal", "st8");
+    assert!(
+        !url.contains("architecture"),
+        "authorize URL must not pin an architecture, got {url}"
+    );
+}
+
+#[test]
+fn authorize_url_keeps_the_oauth_parameters_and_gear_scope() {
+    let url = build_authorize_url("http://localhost:47834/", "chal", "st8");
+    // PKCE + CSRF essentials, percent-encoded redirect included.
+    assert!(
+        url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A47834%2F"),
+        "{url}"
+    );
+    assert!(url.contains("response_type=code"), "{url}");
+    assert!(url.contains("code_challenge=chal"), "{url}");
+    assert!(url.contains("code_challenge_method=S256"), "{url}");
+    assert!(url.contains("state=st8"), "{url}");
+    // Same deliberate, recorded scope as the search query.
+    assert!(url.contains("gears=amp_amp-cab"), "{url}");
+    assert!(url.contains("format=nam"), "{url}");
+    // No stray whitespace from the multi-line format! continuation.
+    assert!(!url.contains(' '), "{url}");
 }
 
 // -------------------------------------------------------------- heading

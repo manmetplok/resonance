@@ -205,9 +205,11 @@ impl SynthEngine {
             unison_count,
             spread,
             glide,
-            params.lfo1.retrigger.value(),
-            params.lfo2.retrigger.value(),
-            params.lfo3.retrigger.value(),
+            // A synced LFO is anchored to the timeline, so a note-on must not
+            // reset its phase even if `retrigger` happens to be set.
+            params.lfo1.retrigger.value() && !params.lfo1.sync.value(),
+            params.lfo2.retrigger.value() && !params.lfo2.sync.value(),
+            params.lfo3.retrigger.value() && !params.lfo3.sync.value(),
         );
 
         self.last_note = Some(note);

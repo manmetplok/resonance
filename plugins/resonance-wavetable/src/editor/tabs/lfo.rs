@@ -6,7 +6,7 @@ use wayland_plugin_gui::egui;
 use crate::editor::theme;
 use crate::editor::viz::lfo_shape;
 use crate::editor::widgets;
-use crate::dsp::lfo::LfoShape;
+use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{routing_summary, ModSource};
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
@@ -111,14 +111,20 @@ fn draw_lfo_card(
                 );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Exactly the two states `lfoN_retrigger` has. The third
-                    // segment used to be "Env", which no parameter backed, so
-                    // clicking it snapped straight back; "Sync" named tempo
-                    // sync, which this bool has never been.
-                    let labels = ["Free", "Retrig"];
-                    let mode = usize::from(lfo.retrigger.value());
-                    if let Some(i) = widgets::segmented(ui, &labels, mode, false) {
-                        lfo.retrigger.set_plain(i as f64);
+                    // Three modes, each a state the DSP has. Selecting one
+                    // writes both backing params via `LfoMode::to_params`, so
+                    // no combination exists that the control cannot show.
+                    let mode = LfoMode::from_params(lfo.sync.value(), lfo.retrigger.value());
+                    if let Some(i) =
+                        widgets::segmented(ui, &LfoMode::LABELS, mode as usize, false)
+                    {
+                        let (sync, retrigger) = match i {
+                            1 => LfoMode::Retrig.to_params(),
+                            2 => LfoMode::Sync.to_params(),
+                            _ => LfoMode::Free.to_params(),
+                        };
+                        lfo.sync.set_plain(sync as u8 as f64);
+                        lfo.retrigger.set_plain(retrigger as u8 as f64);
                     }
                 });
             });
@@ -134,7 +140,15 @@ fn draw_lfo_card(
                 int_knob_fmt(ui, "Shape", &lfo.shape, |v| {
                     LfoShape::from_int(v).label().to_string()
                 });
-                float_knob(ui, "Rate", &lfo.rate);
+                // Only one of these is live at a time, so only one is drawn:
+                // a synced LFO ignores its rate param entirely.
+                if lfo.sync.value() {
+                    int_knob_fmt(ui, "Div", &lfo.division, |v| {
+                        SyncDivision::from_int(v).label().to_string()
+                    });
+                } else {
+                    float_knob(ui, "Rate", &lfo.rate);
+                }
                 float_knob(ui, "Depth", &lfo.depth);
             });
         });

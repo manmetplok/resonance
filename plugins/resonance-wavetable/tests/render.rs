@@ -10,7 +10,7 @@ fn render(engine: &mut SynthEngine, params: &WavetableParams, events: &[NoteEven
     let mut left = vec![0.0f32; BLOCK];
     let mut right = vec![0.0f32; BLOCK];
     let mut iter = EventIterator::new(events);
-    engine.render_block(&mut left, &mut right, BLOCK, params, &mut iter);
+    engine.render_block(&mut left, &mut right, BLOCK, params, &mut iter, None);
     left.extend_from_slice(&right);
     left
 }

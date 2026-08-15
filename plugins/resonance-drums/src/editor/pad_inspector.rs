@@ -60,7 +60,7 @@ pub fn draw(
         // audio thread on every note-on.
         let rr = rr_display::unpack(bridge.last_rr[selected_pad].load(Ordering::Relaxed));
 
-        draw_pad_head(ui, mapping, pad, rr);
+        draw_pad_head(ui, bridge, mapping, pad, rr);
         draw_sample_stage(ui, sample_info.as_ref());
         draw_knob_grid(ui, pad, mapping);
 
@@ -74,6 +74,7 @@ pub fn draw(
 
 fn draw_pad_head(
     ui: &mut egui::Ui,
+    bridge: &KitBridge,
     mapping: &crate::drum_map::PadMapping,
     pad: &crate::params::PadParams,
     rr: Option<rr_display::RoundRobin>,
@@ -135,27 +136,28 @@ fn draw_pad_head(
             let enabled = !pad.mute.value();
             draw_enabled_chip(ui, pad, enabled);
             ui.add_space(8.0);
-            // Audition needs an editor -> audio-thread trigger channel,
-            // which does not exist yet (ba todo #1328 builds it). Until
-            // then the control is drawn disabled with the reason on hover
-            // rather than as a live button that swallows the click.
-            ui.add_enabled(
-                false,
-                egui::Button::new(
-                    egui::RichText::new("▶ Audition")
-                        .color(theme::TEXT_4)
-                        .size(11.0),
+            // Audition: hand the pad's note to the audio thread through
+            // the bridge's trigger queue (ba todo #1328). The audio side
+            // feeds it to the same `note_on` a MIDI hit takes, so this
+            // sounds like playing the pad — and it works with the
+            // transport stopped, because the plugin renders regardless.
+            let clicked = ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("▶ Audition")
+                            .color(theme::TEXT_2)
+                            .size(11.0),
+                    )
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, theme::LINE_2))
+                    .corner_radius(6.0)
+                    .min_size(egui::vec2(0.0, 24.0)),
                 )
-                .fill(egui::Color32::TRANSPARENT)
-                .stroke(egui::Stroke::new(1.0, theme::LINE_2))
-                .corner_radius(6.0)
-                .min_size(egui::vec2(0.0, 24.0)),
-            )
-            .on_disabled_hover_text(
-                "Auditioning from the editor is not wired up yet — the plugin \
-                 has no editor-to-audio trigger. Play the pad's MIDI note to \
-                 hear it.",
-            );
+                .on_hover_text("Play this pad once, at a firm velocity.")
+                .clicked();
+            if clicked {
+                bridge.audition(mapping.note);
+            }
         });
     });
     ui.add_space(2.0);

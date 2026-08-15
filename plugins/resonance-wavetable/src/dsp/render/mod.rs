@@ -29,10 +29,11 @@ mod kernel;
 mod plan;
 mod snapshot;
 
-use resonance_plugin::{EventIterator, NoteEvent};
+use resonance_plugin::{EventIterator, NoteEvent, TempoInfo};
 
 use crate::dsp::effects::Distortion;
 use crate::dsp::engine::SynthEngine;
+use crate::dsp::lfo::LfoMode;
 use crate::dsp::voice::VoiceState;
 use crate::params::WavetableParams;
 
@@ -55,6 +56,11 @@ impl SynthEngine {
     /// with sample-accurate timing. Replaces the old `render_frame`-per-sample
     /// entry point; all atomic parameter loads happen once up front rather
     /// than per sample.
+    ///
+    /// `tempo` is the host's transport snapshot for this block. It drives
+    /// tempo-synced LFOs; `None` (an offline render, a host with no
+    /// transport) makes them free-run at the equivalent rate for
+    /// [`FALLBACK_BPM`](crate::dsp::lfo::FALLBACK_BPM).
     pub fn render_block(
         &mut self,
         left: &mut [f32],
@@ -62,16 +68,17 @@ impl SynthEngine {
         frames: usize,
         params: &WavetableParams,
         events: &mut EventIterator<'_>,
+        tempo: Option<TempoInfo>,
     ) {
         let snap = ParamSnapshot::capture(params, self.sample_rate);
         self.retarget_smoothers(&snap);
-        let plan = self.plan_block(&snap);
+        let plan = self.plan_block(&snap, tempo);
 
         let mut next_event = events.next_event();
 
         for sample_id in 0..frames {
             let triggered_here =
-                self.drain_events(sample_id, &snap, params, events, &mut next_event);
+                self.drain_events(sample_id, &plan, params, events, &mut next_event);
             let ctx = self.advance_global_lfos(&snap, sample_id, triggered_here);
 
             let (mix_l, mix_r) = self.mix_voices(&snap, &plan, &ctx);
@@ -121,7 +128,7 @@ impl SynthEngine {
     fn drain_events(
         &mut self,
         sample_id: usize,
-        snap: &ParamSnapshot,
+        plan: &BlockPlan,
         params: &WavetableParams,
         events: &mut EventIterator<'_>,
         next_event: &mut Option<NoteEvent>,
@@ -139,7 +146,7 @@ impl SynthEngine {
                     // seeded for this block. (`trigger()` already marks its
                     // `OscSetup` cache dirty, and the snapshot has not moved
                     // mid-block, so the other caches stay valid.)
-                    self.seed_voice_lfo_rates(snap, false);
+                    self.seed_voice_lfo_rates(plan.lfo_rates, false);
                     self.refresh_active();
                 }
                 NoteEvent::NoteOff { note, .. } => self.note_off(*note),
@@ -297,9 +304,20 @@ impl SynthEngine {
             let mods = voice.cached_mods;
             voice.last_osc1_pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
             voice.last_osc2_pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
-            voice.last_lfo_phases[0] = if snap.lfo1_retrigger { voice.lfo1.phase } else { g1 };
-            voice.last_lfo_phases[1] = if snap.lfo2_retrigger { voice.lfo2.phase } else { g2 };
-            voice.last_lfo_phases[2] = if snap.lfo3_retrigger { voice.lfo3.phase } else { g3 };
+            // Only a retriggered LFO has a per-voice phase; free and synced
+            // both read the engine-wide one.
+            voice.last_lfo_phases[0] = match snap.lfo1_mode {
+                LfoMode::Retrig => voice.lfo1.phase,
+                _ => g1,
+            };
+            voice.last_lfo_phases[1] = match snap.lfo2_mode {
+                LfoMode::Retrig => voice.lfo2.phase,
+                _ => g2,
+            };
+            voice.last_lfo_phases[2] = match snap.lfo3_mode {
+                LfoMode::Retrig => voice.lfo3.phase,
+                _ => g3,
+            };
         }
     }
 

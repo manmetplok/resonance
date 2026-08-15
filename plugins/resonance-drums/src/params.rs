@@ -1,16 +1,44 @@
-/// Plugin parameters: master volume + per-pad volume, pan, mute, OH blend,
-/// balance, and articulation choice.
+/// Plugin parameters: master volume, the global voice/velocity/round-robin
+/// controls, and per-pad volume, pan, mute, OH blend, balance and
+/// articulation choice.
+use std::sync::Arc;
+
 use resonance_plugin::*;
 
 use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
 use crate::choice::ChoiceParam;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
+use crate::velocity;
+use crate::voice::MAX_VOICES;
 
 /// Number of param fields per pad, used for param indexing.
 pub const PARAMS_PER_PAD: usize = 6;
 
+/// Number of global params ahead of the per-pad block, used for param
+/// indexing. The flat index is an enumeration order, not an identity:
+/// hosts and the control API address a param by its string id (which the
+/// CLAP bridge hashes into a stable numeric id), so adding a global
+/// param moves the pad block along without disturbing anything saved.
+pub const GLOBAL_PARAMS: usize = 4;
+
+/// Labels for the round-robin mode choice, indexed by parameter value.
+pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
+
 pub struct DrumParams {
     pub master_volume: FloatParam,
+    /// Ceiling on simultaneously sounding voices. A hit uses one voice
+    /// per loaded mic bank (a kick with in/out mics plus overheads uses
+    /// three), matching how the sampler counts them. Defaults to
+    /// [`MAX_VOICES`], the hard cap the plugin has always had, so the
+    /// parameter changes nothing until it is turned down.
+    pub polyphony: IntParam,
+    /// Global velocity curve, -1 (hard) … 0 (linear) … +1 (soft). See
+    /// [`crate::velocity`]; 0 is an exact identity.
+    pub velocity_curve: FloatParam,
+    /// How the sampler walks a layer's recorded takes — see
+    /// [`crate::dsp::voice_pick::RoundRobinMode`]. Defaults to Cycle,
+    /// which is what the sampler always did.
+    pub round_robin_mode: ChoiceParam,
     pub pads: [PadParams; NUM_PADS],
 }
 
@@ -24,6 +52,32 @@ impl Default for DrumParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            polyphony: IntParam::new(
+                "polyphony",
+                "Polyphony",
+                MAX_VOICES as i32,
+                IntRange::Linear {
+                    min: 1,
+                    max: MAX_VOICES as i32,
+                },
+            ),
+            velocity_curve: FloatParam::new(
+                "velocity_curve",
+                "Velocity Curve",
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            )
+            .with_value_to_string(Arc::new(velocity::curve_label))
+            .with_string_to_value(Arc::new(velocity::curve_from_label)),
+            round_robin_mode: ChoiceParam::new(
+                "round_robin_mode",
+                "Round Robin",
+                0,
+                ROUND_ROBIN_LABELS,
+            ),
             pads: std::array::from_fn(PadParams::new),
         }
     }

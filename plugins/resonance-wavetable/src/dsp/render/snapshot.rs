@@ -6,7 +6,7 @@
 //! [`WavetableParams`] and contains no `Param::value()` call at all.
 
 use crate::dsp::filter::FilterType;
-use crate::dsp::lfo::LfoShape;
+use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
 use crate::params::WavetableParams;
 
@@ -60,17 +60,20 @@ pub(crate) struct ParamSnapshot {
     pub lfo1_shape: LfoShape,
     pub lfo1_rate: f32,
     pub lfo1_depth: f32,
-    pub lfo1_retrigger: bool,
+    pub lfo1_mode: LfoMode,
+    pub lfo1_division: SyncDivision,
 
     pub lfo2_shape: LfoShape,
     pub lfo2_rate: f32,
     pub lfo2_depth: f32,
-    pub lfo2_retrigger: bool,
+    pub lfo2_mode: LfoMode,
+    pub lfo2_division: SyncDivision,
 
     pub lfo3_shape: LfoShape,
     pub lfo3_rate: f32,
     pub lfo3_depth: f32,
-    pub lfo3_retrigger: bool,
+    pub lfo3_mode: LfoMode,
+    pub lfo3_division: SyncDivision,
 
     pub glide_coeff: f32,
     pub mod_slots: [ModSlot; NUM_MOD_SLOTS],
@@ -150,17 +153,29 @@ impl ParamSnapshot {
             lfo1_shape: LfoShape::from_int(params.lfo1.shape.value()),
             lfo1_rate: params.lfo1.rate.value(),
             lfo1_depth: params.lfo1.depth.value(),
-            lfo1_retrigger: params.lfo1.retrigger.value(),
+            lfo1_mode: LfoMode::from_params(
+                params.lfo1.sync.value(),
+                params.lfo1.retrigger.value(),
+            ),
+            lfo1_division: SyncDivision::from_int(params.lfo1.division.value()),
 
             lfo2_shape: LfoShape::from_int(params.lfo2.shape.value()),
             lfo2_rate: params.lfo2.rate.value(),
             lfo2_depth: params.lfo2.depth.value(),
-            lfo2_retrigger: params.lfo2.retrigger.value(),
+            lfo2_mode: LfoMode::from_params(
+                params.lfo2.sync.value(),
+                params.lfo2.retrigger.value(),
+            ),
+            lfo2_division: SyncDivision::from_int(params.lfo2.division.value()),
 
             lfo3_shape: LfoShape::from_int(params.lfo3.shape.value()),
             lfo3_rate: params.lfo3.rate.value(),
             lfo3_depth: params.lfo3.depth.value(),
-            lfo3_retrigger: params.lfo3.retrigger.value(),
+            lfo3_mode: LfoMode::from_params(
+                params.lfo3.sync.value(),
+                params.lfo3.retrigger.value(),
+            ),
+            lfo3_division: SyncDivision::from_int(params.lfo3.division.value()),
 
             glide_coeff,
             mod_slots,

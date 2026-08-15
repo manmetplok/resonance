@@ -28,7 +28,7 @@ pub use eq_stage::{
 pub use glue_compressor::GlueCompressorParams;
 pub use imager::ImagerParams;
 pub use limiter::LimiterParams;
-pub use multiband::MultibandParams;
+pub use multiband::{MultibandBandParams, MultibandParams};
 pub use saturator::SaturatorParams;
 
 /// Number of global (non-stage) params at the top of the list.
@@ -53,7 +53,7 @@ const LIM_BASE: usize = IMG_BASE + IMG_PARAM_COUNT;
 const DITH_BASE: usize = LIM_BASE + LIM_PARAM_COUNT;
 
 /// Total plugin param count:
-/// 3 + 20 + 8 + 5 + 20 + 20 + 4 + 3 + 3 = 86.
+/// 3 + 20 + 8 + 5 + 20 + 36 + 4 + 3 + 3 = 102.
 pub const PARAM_COUNT: usize = DITH_BASE + DITH_PARAM_COUNT;
 
 pub struct MasteringParams {

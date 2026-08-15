@@ -458,6 +458,37 @@ fn scenarios() -> Vec<Scenario> {
                     .set_value(if block % 16 >= 8 { 10 } else { 11 });
             }),
         },
+        // 15. Diffusion swept through the bypass boundary in both
+        //     directions (ba todo #1321): the allpass chains, the
+        //     smoothed crossfade, and the arm/disarm transition where
+        //     the chain is cleared before it fades back in. Stereo
+        //     width is off centre so the two chains' different lengths
+        //     land in the golden as well.
+        Scenario {
+            name: "diffusion_smear",
+            signal: Signal::Mixed,
+            blocks: &[64, 96, 37],
+            tempo: None,
+            setup: |p| {
+                base(p);
+                p.diffusion.set_value(0.0);
+                p.feedback.set_value(0.45);
+                p.pan_spread.set_value(0.5);
+                p.width.set_value(1.2);
+                p.density_hz.set_value(35.0);
+            },
+            edit: Some(|p, block| {
+                // 0 for the first third, ramp to 1, then back to 0 —
+                // so the golden pins the bypass, the sweep and both
+                // boundary crossings.
+                let t = block as f32 / BLOCKS as f32;
+                p.diffusion.set_value(match t {
+                    t if t < 0.25 => 0.0,
+                    t if t < 0.75 => (t - 0.25) * 2.0,
+                    _ => 0.0,
+                });
+            }),
+        },
     ]
 }
 
