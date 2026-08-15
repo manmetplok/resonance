@@ -715,6 +715,11 @@ fn push_plugin_states(r: &mut Resonance, target: &LoadedProject, plugins: &[Proj
                 instance_id: pp.instance_id,
                 data: blob.clone(),
             });
+            // Track what was just pushed, so the cache matches the state
+            // the engine now holds. For an instance that isn't live (a
+            // missing `.clap`) this is the only copy that exists, and it
+            // has to survive undo/redo as well as save (ba doc #275, P5).
+            r.plugin_state_cache.insert(pp.instance_id, blob.clone());
         }
     }
 }

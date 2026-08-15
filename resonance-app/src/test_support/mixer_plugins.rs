@@ -5,6 +5,17 @@
 use crate::state;
 use crate::Resonance;
 
+/// Which plugin chain a [`Resonance::test_chain_move_affordances`] query
+/// is about. Mirrors the view's private `PluginOwner` so a test can name
+/// a chain without the whole mixer view module going public.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub enum TestChain {
+    Track(resonance_audio::types::TrackId),
+    Bus(resonance_audio::types::BusId),
+    Master,
+}
+
 impl Resonance {
     /// Test-only: read the mirrored aux-send graph. Driven from
     /// `tests/aux_send_mirror.rs` to assert events reconstruct state.
@@ -91,6 +102,62 @@ impl Resonance {
             .find(|t| t.id == track_id)
             .map(|t| t.plugins.iter().map(|p| p.instance_id).collect())
             .unwrap_or_default()
+    }
+
+    /// Test-only: the chain-reorder affordances the mixer draws for one
+    /// chain, slot by slot — the exact `(▲, ▼)` messages the inspector
+    /// row and the strip slot attach to their carets, with `None` where
+    /// the caret renders disabled (ba todo #1302).
+    ///
+    /// Returned as messages rather than booleans so a test can both
+    /// assert what the GUI offers AND feed it straight back through
+    /// `update`, which is the only way to prove the button a human
+    /// presses lands the same reorder the control API does.
+    #[doc(hidden)]
+    pub fn test_chain_move_affordances(
+        &self,
+        chain: TestChain,
+    ) -> Vec<(Option<crate::message::Message>, Option<crate::message::Message>)> {
+        use crate::view::mixer::picks::PluginOwner;
+        let (owner, slots): (PluginOwner, Vec<_>) = match chain {
+            TestChain::Track(track_id) => {
+                let Some(t) = self.registry.tracks.iter().find(|t| t.id == track_id) else {
+                    return Vec::new();
+                };
+                (
+                    PluginOwner::Track(track_id),
+                    t.plugins.iter().map(|p| p.instance_id).collect(),
+                )
+            }
+            TestChain::Bus(bus_id) => {
+                let Some(b) = self.registry.busses.iter().find(|b| b.id == bus_id) else {
+                    return Vec::new();
+                };
+                (
+                    PluginOwner::Bus(bus_id),
+                    b.plugins.iter().map(|p| p.instance_id).collect(),
+                )
+            }
+            TestChain::Master => (
+                PluginOwner::Master,
+                self.master_plugins.iter().map(|p| p.instance_id).collect(),
+            ),
+        };
+        let len = slots.len();
+        slots
+            .into_iter()
+            .enumerate()
+            .map(|(index, instance_id)| {
+                let m = crate::view::mixer::reorder::chain_moves(
+                    self,
+                    owner,
+                    instance_id,
+                    index,
+                    len,
+                );
+                (m.up, m.down)
+            })
+            .collect()
     }
 
     /// Test-only: set a plugin param's current value directly (no engine

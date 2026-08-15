@@ -1,5 +1,10 @@
 //! The control strip at the bottom of the reverb editor.
 //! Uses rotary knobs in a grid layout for compact, consistent display.
+//!
+//! Every knob is built straight from its `FloatParam` (ba todo #1281):
+//! range, default, skew and the value readout come from `params.rs`, so
+//! the four knobs that had drifted from their own declarations cannot
+//! drift again.
 
 use resonance_plugin::editor_widgets;
 use wayland_plugin_gui::egui;
@@ -25,131 +30,32 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams) {
         // Two rows of 6 knobs each.
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.predelay,
-                0.0..=250.0,
-                0.0,
-                "Pre-delay",
-                "before tail",
-                &format!("{:.0} ms", params.predelay.value()),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.predelay, "Pre-delay", "before tail");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.er_level,
-                0.0..=1.0,
-                0.4,
-                "ER Level",
-                "early refl.",
-                &format!("{:.2}", params.er_level.value()),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.er_level, "ER Level", "early refl.");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.er_time,
-                0.0..=1.0,
-                0.5,
-                "ER Time",
-                "tap spread",
-                &format!("{:.2}", params.er_time.value()),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.er_time, "ER Time", "tap spread");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.size,
-                0.0..=1.0,
-                0.5,
-                "Size",
-                "",
-                &format!("{:.0}%", params.size.value() * 100.0),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.size, "Size", "");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.decay,
-                0.1..=30.0,
-                2.0,
-                "Decay",
-                "RT60",
-                &format!("{:.2} s", params.decay.value()),
-                true,
-            );
+            editor_widgets::float_knob(ui, &params.decay, "Decay", "RT60");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.damping,
-                200.0..=20000.0,
-                8000.0,
-                "Damping",
-                "HF cutoff",
-                &format!("{:.0} Hz", params.damping.value()),
-                true,
-            );
+            editor_widgets::float_knob(ui, &params.damping, "Damping", "HF cutoff");
         });
 
         ui.add_space(2.0);
 
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.diffusion,
-                0.0..=1.0,
-                0.8,
-                "Diffusion",
-                "",
-                &format!("{:.2}", params.diffusion.value()),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.diffusion, "Diffusion", "");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.mod_rate,
-                0.0..=5.0,
-                1.0,
-                "Mod Rate",
-                "chorus",
-                &format!("{:.2} Hz", params.mod_rate.value()),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.mod_rate, "Mod Rate", "chorus");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.mod_depth,
-                0.0..=1.0,
-                0.3,
-                "Mod Depth",
-                "",
-                &format!("{:.2}", params.mod_depth.value()),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.mod_depth, "Mod Depth", "");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.width,
-                0.0..=1.0,
-                1.0,
-                "Width",
-                "stereo",
-                &format!("{:.0}%", params.width.value() * 100.0),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.width, "Width", "stereo");
             ui.add_space(4.0);
-            editor_widgets::float_knob(
-                ui,
-                &params.mix,
-                0.0..=1.0,
-                0.5,
-                "Mix",
-                "dry/wet",
-                &format!("{:.0}%", params.mix.value() * 100.0),
-                false,
-            );
+            editor_widgets::float_knob(ui, &params.mix, "Mix", "dry/wet");
             ui.add_space(4.0);
 
             // Freeze is a toggle, not a knob — render as a checkbox.

@@ -118,10 +118,10 @@ fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceI
     let applied = r
         .with_plugin_mut(instance_id, |slot| {
             let mut applied = Vec::new();
-            for (param_id, value) in &overrides {
-                if let Some(param) = slot.params.iter_mut().find(|p| p.id == *param_id) {
-                    param.current_value = *value;
-                    applied.push((*param_id, *value));
+            for saved in &overrides {
+                if let Some(param) = slot.params.iter_mut().find(|p| p.id == saved.id) {
+                    param.current_value = saved.value;
+                    applied.push((saved.id, saved.value));
                 }
             }
             applied
@@ -221,6 +221,10 @@ pub(super) fn track_removed(
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
     r.plugin_state_cache.remove(&instance_id);
+    // Drop the load-time copies too, so a removed slot can neither
+    // resurrect a `plugin_*.bin` nothing references nor lend its parked
+    // parameter list to a later instance that reuses the id.
+    r.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
 }
 
@@ -384,6 +388,10 @@ pub(super) fn bus_removed(
         r.mixer.selected_plugin = None;
     }
     r.plugin_state_cache.remove(&instance_id);
+    // Drop the load-time copies too, so a removed slot can neither
+    // resurrect a `plugin_*.bin` nothing references nor lend its parked
+    // parameter list to a later instance that reuses the id.
+    r.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
 }
 
@@ -463,6 +471,10 @@ pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
         r.mixer.selected_plugin = None;
     }
     r.plugin_state_cache.remove(&instance_id);
+    // Drop the load-time copies too, so a removed slot can neither
+    // resurrect a `plugin_*.bin` nothing references nor lend its parked
+    // parameter list to a later instance that reuses the id.
+    r.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
 }
 

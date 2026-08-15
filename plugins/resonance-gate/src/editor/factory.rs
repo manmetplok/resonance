@@ -12,6 +12,7 @@ use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use wayland_plugin_gui::{Editor as RuntimeEditor, EditorOptions};
 
 use crate::params::GateParams;
+use crate::viz::GateViz;
 
 use super::GateEditorApp;
 
@@ -20,11 +21,12 @@ const WINDOW_H: u32 = 320;
 
 pub struct GateEditorFactory {
     params: Arc<GateParams>,
+    viz: Arc<GateViz>,
 }
 
 impl GateEditorFactory {
-    pub fn new(params: Arc<GateParams>) -> Self {
-        Self { params }
+    pub fn new(params: Arc<GateParams>, viz: Arc<GateViz>) -> Self {
+        Self { params, viz }
     }
 }
 
@@ -42,7 +44,7 @@ impl EditorFactory for GateEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = GateEditorApp::new(self.params.clone());
+        let app = GateEditorApp::new(self.params.clone(), self.viz.clone());
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {

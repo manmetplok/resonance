@@ -41,41 +41,9 @@ pub fn draw(ui: &mut egui::Ui, params: &SaturatorParams) {
             });
             ui.add_space(8.0);
 
-            let v = params.drive.value();
-            widgets::float_knob(
-                ui,
-                &params.drive,
-                0.0..=18.0,
-                3.0,
-                "Drive",
-                "",
-                &format!("{:.1} dB", v),
-                false,
-            );
-
-            let v = params.character.value();
-            widgets::float_knob(
-                ui,
-                &params.character,
-                0.0..=1.0,
-                0.3,
-                "Character",
-                "tube \u{2194} tape",
-                &format!("{:.0}%", v * 100.0),
-                false,
-            );
-
-            let v = params.mix.value();
-            widgets::float_knob(
-                ui,
-                &params.mix,
-                0.0..=1.0,
-                1.0,
-                "Mix",
-                "",
-                &format!("{:.0}%", v * 100.0),
-                false,
-            );
+            widgets::float_knob(ui, &params.drive, "Drive", "");
+            widgets::float_knob(ui, &params.character, "Character", "tube \u{2194} tape");
+            widgets::float_knob(ui, &params.mix, "Mix", "");
         });
     });
 }

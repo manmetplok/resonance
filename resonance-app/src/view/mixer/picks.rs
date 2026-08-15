@@ -10,7 +10,7 @@ use resonance_audio::types::*;
 /// can emit the right remove message regardless of whether it's rendering
 /// a track's plugin or a bus's plugin.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum PluginOwner {
+pub(crate) enum PluginOwner {
     Track(TrackId),
     Bus(BusId),
     Master,
