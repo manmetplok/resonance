@@ -33,6 +33,8 @@ pub mod reference;
 pub mod settings;
 pub mod state;
 mod test_support;
+#[doc(hidden)]
+pub use test_support::TestChain;
 pub mod theme;
 pub mod undo;
 pub mod update;
