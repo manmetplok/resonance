@@ -36,6 +36,7 @@ mod editor;
 mod egl_context;
 mod error;
 mod input;
+mod size;
 pub mod theme;
 pub mod widgets;
 mod window_thread;
@@ -55,3 +56,9 @@ pub use egui;
 /// the live paint path uses, without an in-crate `#[cfg(test)]` module.
 #[doc(hidden)]
 pub use window_thread::decorations as csd_geometry;
+
+/// The compositor-driven size feedback cell, exposed for integration
+/// tests only (same rationale as [`csd_geometry`]): plugins read the
+/// live size through [`Editor::get_size`], never through this type.
+#[doc(hidden)]
+pub use size::SharedSize;
