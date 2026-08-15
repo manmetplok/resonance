@@ -126,14 +126,13 @@ pub struct GranularDelayParams {
     /// Damping filter cutoff in the feedback loop (smoothed; the
     /// coefficient updates at block rate).
     pub filter_hz: FloatParam,
-    /// Allpass smear of the wet path.
-    ///
-    /// NOT IMPLEMENTED: this is not a field of `BlockParams` and no
-    /// stage in `crate::dsp` reads it. Implemented by **ba todo #1321**
-    /// (epic #203); until then the editor renders the Diffuse knob
-    /// unavailable and every factory preset leaves it at 0 — see
-    /// `crate::editor::controls::PENDING_DSP` (ba todo #1277). Remove
-    /// this note, and its `PENDING_DSP` entry, when #1321 lands.
+    /// Allpass smear of the wet path, 0–100 % (ba todo #1321): four
+    /// cascaded Schroeder allpasses per channel, crossfaded in by this
+    /// knob, sitting after the feedback tap so the smear is heard on
+    /// every repeat without accumulating inside the loop. See
+    /// `crate::dsp::diffusion` for the design and why the amount is a
+    /// crossfade rather than the allpass coefficient. 0 skips the stage
+    /// outright, so it is exactly the pre-#1321 wet path.
     pub diffusion: FloatParam,
     pub pan_spread: FloatParam,
     /// M/S width on the wet sum, 0–150 % (smoothed; ba todo #1077).
@@ -477,6 +476,9 @@ pub struct GranularSmoothers {
     pub filter_hz: Smoother,
     /// M/S width on the wet sum (per-sample application).
     pub width: Smoother,
+    /// Allpass-smear amount (ba todo #1321; per-sample crossfade
+    /// between the dry and diffused wet path).
+    pub diffusion: Smoother,
     /// Equal-power crossfade position between the lock-stepped right
     /// engine (0) and the decorrelated one (1); the target is the
     /// binary gate `pan_spread > 0`, smoothed so toggling the spread
@@ -497,6 +499,7 @@ impl GranularSmoothers {
             feedback: Smoother::new(SmoothingStyle::Linear(50.0)),
             filter_hz: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             width: Smoother::new(SmoothingStyle::Linear(50.0)),
+            diffusion: Smoother::new(SmoothingStyle::Linear(50.0)),
             decor: Smoother::new(SmoothingStyle::Linear(crate::dsp::DECOR_FADE_MS)),
         }
     }
@@ -520,6 +523,8 @@ impl GranularSmoothers {
         self.filter_hz.reset(params.filter_hz.value());
         self.width.set_sample_rate(sample_rate);
         self.width.reset(params.width.value());
+        self.diffusion.set_sample_rate(sample_rate);
+        self.diffusion.reset(params.diffusion.value());
         self.decor.set_sample_rate(sample_rate);
         self.decor.reset(Self::decor_gate(params));
     }
@@ -529,6 +534,7 @@ impl GranularSmoothers {
         self.feedback.set_target(params.feedback.value());
         self.filter_hz.set_target(params.filter_hz.value());
         self.width.set_target(params.width.value());
+        self.diffusion.set_target(params.diffusion.value());
         self.decor.set_target(Self::decor_gate(params));
     }
 }

@@ -159,6 +159,15 @@ impl ResonanceGranularDelay {
             .as_ref()
             .map_or(0.0, GranularDsp::max_align_lag_samples)
     }
+
+    /// Whether the diffusion stage touched the wet path on the last
+    /// block (ba todo #1321; test/metering aid — false at Diffusion 0,
+    /// which is what makes the bypass exact).
+    pub fn diffusion_engaged(&self) -> bool {
+        self.dsp
+            .as_ref()
+            .is_some_and(GranularDsp::diffusion_engaged)
+    }
 }
 
 impl ResonancePlugin for ResonanceGranularDelay {
@@ -287,6 +296,9 @@ impl ResonancePlugin for ResonanceGranularDelay {
                 .is_highpass(),
             freeze: self.params.freeze.value(),
             fb_pitch: self.params.fb_pitch.value(),
+            // Allpass smear of the wet path (ba todo #1321); smoothed
+            // per sample off `GranularSmoothers::diffusion`.
+            diffusion: self.params.diffusion.value(),
             quantize: quantize::PitchQuantize::from_index(self.params.pitch_quantize.value()),
             scale: resonance_music_theory::Scale::new(
                 quantize::root_from_index(self.params.root.value()),

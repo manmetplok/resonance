@@ -28,9 +28,11 @@
 //! | [`grains`]     | the three engine pairs and their wet buses              |
 //! | [`quant`]      | the plugin-side quantized-transpose draw                |
 //! | [`feedback`]   | conditioning chains, wet bus, recirc rings and clock    |
+//! | [`diffusion`]  | allpass smear of the wet path, after the tap (#1321)    |
 //! | [`mix`]        | M/S width and the equal-power dry/wet mix               |
 //! | [`viz_publish`]| editor presentation only — never read by the DSP        |
 
+mod diffusion;
 mod feedback;
 mod grains;
 mod mix;
@@ -48,6 +50,7 @@ use crate::params::GranularSmoothers;
 use crate::quantize::PitchQuantize;
 use crate::viz::GranularViz;
 
+use diffusion::DiffusionStage;
 use feedback::FeedbackStage;
 use grains::GrainBank;
 use quant::QuantDraw;
@@ -109,6 +112,9 @@ pub struct BlockParams {
     /// feedback tap re-granulates without transpose (constant-pitch
     /// repeats).
     pub fb_pitch: bool,
+    /// Allpass smear of the wet path, 0..=1 (ba todo #1321): 0 skips
+    /// the stage outright, so the wet buses keep their exact bits.
+    pub diffusion: f32,
     /// Per-grain transpose quantization at spawn (ba todo #1078).
     pub quantize: PitchQuantize,
     /// Root/mode for [`PitchQuantize::Scale`].
@@ -131,6 +137,8 @@ pub struct GranularDsp {
     quant: QuantDraw,
     /// Feedback topology (ba todo #1074/#1075).
     feedback: FeedbackStage,
+    /// Allpass smear of the wet path (ba todo #1321).
+    diffusion: DiffusionStage,
 }
 
 impl GranularDsp {
@@ -145,6 +153,7 @@ impl GranularDsp {
             grains: GrainBank::new(sample_rate, max_block),
             quant: QuantDraw::new(),
             feedback: FeedbackStage::new(ring_len, max_block),
+            diffusion: DiffusionStage::new(sample_rate),
         }
     }
 
@@ -181,6 +190,13 @@ impl GranularDsp {
         self.grains.engine_l.max_abs_align_lag_samples()
     }
 
+    /// Whether the diffusion stage touched the wet buses on the last
+    /// block (ba todo #1321; test/metering aid — false is the proof
+    /// that Diffusion 0 cannot have altered a sample).
+    pub fn diffusion_engaged(&self) -> bool {
+        self.diffusion.engaged()
+    }
+
     /// Playback rates of the currently sounding audible grains (left
     /// lock-stepped engine; test/metering aid). With pitch quantization
     /// on, every rate sits on the quantized semitone/scale lattice
@@ -209,6 +225,7 @@ impl GranularDsp {
         self.grains.clear();
         self.quant.clear();
         self.feedback.clear();
+        self.diffusion.clear();
         self.voice.clear();
         self.time.clear(self.sample_rate);
     }
@@ -384,6 +401,18 @@ impl GranularDsp {
             params,
             gates.unity_tap,
             &plan,
+            smoothers,
+        );
+        // Diffusion (ba todo #1321) sits *after* the feedback tap and
+        // before the width/mix stage, so the loop recirculates the
+        // undiffused wet: the smear is heard on every repeat but never
+        // accumulates inside the loop. At 0 the stage is skipped
+        // outright, leaving the wet buses bit-identical.
+        self.diffusion.run(
+            &mut self.grains.wet_l,
+            &mut self.grains.wet_r,
+            frames,
+            params.diffusion,
             smoothers,
         );
         mix::mix_output(&self.grains, left, right, frames, smoothers);
