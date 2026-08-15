@@ -57,7 +57,7 @@ pub(super) fn load_installed_kit(bridge: &KitBridge, item: &InstalledItem) {
     let target_sr = f32::from_bits(sr_bits);
     let overhead_key = bridge.overhead_setup_key.lock().clone();
     let choices = bridge.pad_choices.lock().clone();
-    let articulations = *bridge.articulations.lock();
+    let articulations = bridge.articulations();
     kit_loader::spawn_loader(
         manifest_path,
         target_sr,
@@ -89,7 +89,7 @@ pub(super) fn load_kit_clicked(bridge: &KitBridge) {
     let target_sr = f32::from_bits(sr_bits);
     let overhead_key = bridge.overhead_setup_key.lock().clone();
     let choices = bridge.pad_choices.lock().clone();
-    let articulations = *bridge.articulations.lock();
+    let articulations = bridge.articulations();
     kit_loader::spawn_loader(
         path,
         target_sr,
