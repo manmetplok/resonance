@@ -14,7 +14,20 @@ pub struct GateParams {
 }
 
 impl GateParams {
-    pub fn param_at(&self, index: usize) -> &dyn Param {
+    /// The parameter at a host/editor index, as the concrete
+    /// [`FloatParam`] — every parameter the gate declares is one.
+    ///
+    /// The editor needs the concrete type, not `&dyn Param`, because
+    /// `editor_widgets::float_knob` reads the range, the default *and*
+    /// the declared skew off the parameter it is handed (ba todos
+    /// #1281/#1286). Going through `&dyn Param` is what cost the gate
+    /// its skew: the trait exposes `min_plain`/`max_plain` but not the
+    /// `FloatRange`, so the old strip could only ask the widget for a
+    /// linear arc.
+    ///
+    /// Out-of-range indices fall back to `threshold`, matching
+    /// [`GateParams::param_at`], which the CLAP bridge relies on.
+    pub fn float_at(&self, index: usize) -> &FloatParam {
         match index {
             0 => &self.threshold,
             1 => &self.ratio,
@@ -26,6 +39,13 @@ impl GateParams {
             7 => &self.key_hpf,
             _ => &self.threshold,
         }
+    }
+
+    /// The same parameter as [`GateParams::float_at`], type-erased for
+    /// the CLAP bridge. Delegating keeps one index table rather than
+    /// two that can disagree.
+    pub fn param_at(&self, index: usize) -> &dyn Param {
+        self.float_at(index)
     }
 }
 
