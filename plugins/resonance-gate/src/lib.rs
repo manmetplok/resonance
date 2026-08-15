@@ -23,8 +23,10 @@ use resonance_plugin::*;
 pub mod dsp;
 pub mod params;
 
+/// Public so the editor's layout table (`editor::GROUPS`) can be
+/// checked from `tests/`; the app itself stays crate-private.
 #[cfg(feature = "editor")]
-mod editor;
+pub mod editor;
 
 use dsp::{GateDsp, GateSettings};
 use params::{GateParams, PARAM_COUNT};
