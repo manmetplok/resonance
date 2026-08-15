@@ -55,7 +55,7 @@ use source::SourceRing;
 use time::TimeMachine;
 use voice::VoiceStage;
 
-pub use grains::DECOR_FADE_MS;
+pub use grains::{ALIGN_WINDOW_SECONDS, DECOR_FADE_MS};
 pub use modes::{DampingFilter, FbRoute, QualityTier, Scheduler, TimeMode, LOFI_MAX_GRAINS};
 pub use source::{FREEZE_RAMP_SECONDS, MAX_DELAY_SECONDS};
 pub use time::{FADE_LEG_SECONDS, REPITCH_TAU_SECONDS};
@@ -78,6 +78,11 @@ pub struct BlockParams {
     pub grain_seconds: f32,
     pub density_hz: f32,
     pub scheduler: SchedulerMode,
+    /// WSOLA-style correlation-aligned grain onsets (ba todo #1320):
+    /// every grain engine snaps each onset to the lag within
+    /// [`ALIGN_WINDOW_SECONDS`] that best continues the previously
+    /// spawned grain. Off is the unaligned engine, bit for bit.
+    pub align: bool,
     pub pitch_semitones: f32,
     pub detune_spread_cents: f32,
     pub texture: f32,
@@ -158,6 +163,22 @@ impl GranularDsp {
     /// Currently sounding grains (metering aid).
     pub fn active_grains(&self) -> usize {
         self.grains.engine_l.active_grains()
+    }
+
+    /// Grain onsets the WSOLA aligner has moved off their nominal
+    /// position since construction (ba todo #1320; audible-path
+    /// metering aid, left *internal* — it drives tests and any future
+    /// diagnostic readout, and the editor deliberately draws no lag
+    /// meter: the alignment decision is audible, a per-spawn lag count
+    /// is not something a user acts on).
+    pub fn aligned_spawns(&self) -> u64 {
+        self.grains.engine_l.aligned_spawns()
+    }
+
+    /// Largest onset-alignment lag magnitude applied so far, in samples
+    /// (metering aid; bounded by [`ALIGN_WINDOW_SECONDS`]).
+    pub fn max_align_lag_samples(&self) -> f64 {
+        self.grains.engine_l.max_abs_align_lag_samples()
     }
 
     /// Playback rates of the currently sounding audible grains (left

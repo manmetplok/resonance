@@ -64,9 +64,10 @@ pub const GROUPS: &[ParamGroup] = &[
     },
     ParamGroup {
         name: "Grains",
-        // grain_size, density, density_sync, scheduler + the TEXTURE
-        // sub-row: texture, spray, size_jitter, level_jitter, reverse
-        params: &[7, 8, 9, 10, 14, 15, 16, 17, 18],
+        // grain_size, density, density_sync, align, scheduler + the
+        // TEXTURE sub-row: texture, spray, size_jitter, level_jitter,
+        // reverse
+        params: &[7, 8, 9, 29, 10, 14, 15, 16, 17, 18],
     },
     ParamGroup {
         name: "Pitch",
@@ -169,7 +170,8 @@ pub fn pending_dsp(index: usize) -> Option<&'static str> {
 /// `GranularDelayParams::param_at` for the index table).
 pub fn control_kind(index: usize) -> ControlKind {
     match index {
-        0 | 6 | 9 | 19 => ControlKind::Toggle, // sync, fb_pitch, density_sync, freeze
+        // sync, fb_pitch, density_sync, freeze, align
+        0 | 6 | 9 | 19 | 29 => ControlKind::Toggle,
         1 => ControlKind::Choice(DIVISION_LABELS),
         3 => ControlKind::Choice(TIME_MODE_LABELS),
         5 => ControlKind::Choice(FB_ROUTE_LABELS),
@@ -303,8 +305,9 @@ fn draw_time(ui: &mut Ui, params: &GranularDelayParams, bpm: f32) {
     });
 }
 
-/// GRAINS: Size + Density macro knobs (PER-BEAT chip under Density),
-/// the vertical scheduler segmented, and the bordered TEXTURE sub-row.
+/// GRAINS: Size + Density macro knobs (the PER-BEAT and ALIGN chips
+/// under Density), the vertical scheduler segmented, and the bordered
+/// TEXTURE sub-row.
 fn draw_grains(ui: &mut Ui, params: &GranularDelayParams) {
     ui.horizontal(|ui| {
         macro_knob(ui, params, 7);
@@ -320,6 +323,10 @@ fn draw_grains(ui: &mut Ui, params: &GranularDelayParams) {
                     }),
                     None => param_chip(ui, params, 9, "PER-BEAT", true),
                 }
+                // WSOLA onset alignment (ba todo #1320): a plain bool
+                // param, so the same switch is reachable over
+                // set_plugin_param.
+                param_chip(ui, params, 29, "ALIGN", true);
             });
         });
         ui.add_space(6.0);
