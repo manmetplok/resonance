@@ -1,10 +1,14 @@
 use resonance_plugin::*;
 
+use crate::sync::DivisionParam;
+
 pub const PARAM_COUNT: usize = 22;
 
 pub struct DelayParams {
     pub sync: BoolParam,
-    pub division: IntParam,
+    /// Delay time as a musical division; reads as "1/8D", never as "8"
+    /// (see [`DivisionParam`]).
+    pub division: DivisionParam,
     pub time_ms: FloatParam,
     pub feedback: FloatParam,
     pub mix: FloatParam,
@@ -22,7 +26,9 @@ pub struct DelayParams {
     // Both shape the wet path only, after the tap and before the mix, so
     // the feedback loop never re-records a chopped or ducked signal.
     pub gate_on: BoolParam,
-    pub gate_rate: IntParam,
+    /// Gate period as a musical division, labelled from the same table
+    /// as [`DelayParams::division`].
+    pub gate_rate: DivisionParam,
     pub gate_width: FloatParam,
     pub gate_shape: FloatParam,
     pub gate_depth: FloatParam,
@@ -66,12 +72,7 @@ impl Default for DelayParams {
         Self {
             sync: BoolParam::new("sync", "Sync", true),
 
-            division: IntParam::new(
-                "division",
-                "Division",
-                4,
-                IntRange::Linear { min: 0, max: 11 },
-            ),
+            division: DivisionParam::new("division", "Division", 4),
 
             time_ms: FloatParam::new(
                 "time_ms",
@@ -196,12 +197,7 @@ impl Default for DelayParams {
 
             // Same division table as the delay time, so "1/8 delay,
             // 1/16 gate" reads the way it sounds.
-            gate_rate: IntParam::new(
-                "gate_rate",
-                "Gate Rate",
-                7,
-                IntRange::Linear { min: 0, max: 11 },
-            ),
+            gate_rate: DivisionParam::new("gate_rate", "Gate Rate", 7),
 
             // Duty cycle: how much of each period the wet is open for.
             gate_width: FloatParam::new(
