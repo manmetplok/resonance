@@ -10,7 +10,7 @@ use wayland_plugin_gui::egui;
 use crate::kit_loader::KitStatus;
 use crate::sample_info;
 
-use super::app::{DrumsEditorApp, DrumsTab};
+use super::app::DrumsEditorApp;
 use super::{kit_browser, theme, widgets};
 
 pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut DrumsEditorApp) {
@@ -47,6 +47,12 @@ pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut DrumsEditorApp) {
     });
 }
 
+/// Tab bar. The editor has exactly one view, so it advertises exactly one
+/// tab. It used to carry five, four of which rendered a "not built yet"
+/// placeholder — and two of those (Mics, Articulations) hid pickers that
+/// ship inside the Pads inspector, so a user went looking and was told the
+/// feature did not exist (ba todo #1327). The hint next to the tab points
+/// at where those pickers actually live.
 pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.horizontal_centered(|ui| {
         ui.label(
@@ -57,23 +63,13 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         );
         ui.add_space(8.0);
 
-        let labels = ["Pads", "Mics", "Articulations", "Mod", "FX"];
-        let selected_idx = match app.selected_tab {
-            DrumsTab::Pads => 0,
-            DrumsTab::Mics => 1,
-            DrumsTab::Articulations => 2,
-            DrumsTab::Mod => 3,
-            DrumsTab::Fx => 4,
-        };
-        if let Some(i) = widgets::segmented(ui, &labels, selected_idx, false) {
-            app.selected_tab = match i {
-                0 => DrumsTab::Pads,
-                1 => DrumsTab::Mics,
-                2 => DrumsTab::Articulations,
-                3 => DrumsTab::Mod,
-                _ => DrumsTab::Fx,
-            };
-        }
+        let _ = widgets::segmented(ui, &["Pads"], 0, false);
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new("Mic and articulation pickers live in each pad's inspector →")
+                .color(theme::TEXT_4)
+                .size(10.0),
+        );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // PADS voice-count badge — show total pads and how many were
