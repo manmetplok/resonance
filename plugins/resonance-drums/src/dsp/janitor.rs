@@ -32,17 +32,32 @@ pub fn spawn() -> Sender<Vec<LoadedPad>> {
 }
 
 /// Find the best voice slot to use: free voice > oldest same-pad > oldest overall.
-pub(super) fn find_free_voice(voices: &[Voice], pad_index: usize) -> usize {
-    // Prefer an inactive voice
-    if let Some(idx) = voices.iter().position(|v| !v.active) {
-        return idx;
+///
+/// `max_voices` is the polyphony ceiling (ba todo #1326). A free slot is
+/// only taken while fewer than that many voices are sounding; past the
+/// ceiling the same stealing rules apply as when every slot is busy, so
+/// turning polyphony down thins the kit rather than dropping hits. At
+/// the default (`MAX_VOICES`) this is exactly the old behaviour: there
+/// is a free slot if and only if fewer than `MAX_VOICES` are active.
+pub(super) fn find_free_voice(voices: &[Voice], pad_index: usize, max_voices: usize) -> usize {
+    let active_count = voices.iter().filter(|v| v.active).count();
+
+    // Prefer an inactive voice, as long as we're under the ceiling
+    if active_count < max_voices {
+        if let Some(idx) = voices.iter().position(|v| !v.active) {
+            return idx;
+        }
     }
 
-    // Steal the oldest voice playing the same pad
+    // Steal the oldest voice playing the same pad. Only *active* voices
+    // are candidates: below the ceiling an idle slot would otherwise win
+    // on age and quietly lift the polyphony limit. When every slot is
+    // busy — the only case before the limit existed — every voice is
+    // active, so this filter changes nothing.
     if let Some(idx) = voices
         .iter()
         .enumerate()
-        .filter(|(_, v)| v.pad_index == pad_index)
+        .filter(|(_, v)| v.active && v.pad_index == pad_index)
         .min_by_key(|(_, v)| v.age)
         .map(|(i, _)| i)
     {
@@ -53,6 +68,7 @@ pub(super) fn find_free_voice(voices: &[Voice], pad_index: usize) -> usize {
     voices
         .iter()
         .enumerate()
+        .filter(|(_, v)| v.active)
         .min_by_key(|(_, v)| v.age)
         .map(|(i, _)| i)
         .unwrap_or(0)
