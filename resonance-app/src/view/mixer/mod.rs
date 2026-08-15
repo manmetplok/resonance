@@ -344,29 +344,66 @@ impl crate::Resonance {
             PluginOwner::Bus(bus_id) => Message::Bus(BusMessage::RemovePluginFromBus(bus_id, pid)),
             PluginOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(pid)),
         };
-        let plugin_del = button(text("\u{00d7}").size(9).color(theme::TEXT_DIM))
+        let plugin_del = button(text("\u{00d7}").size(SLOT_ICON_SIZE).color(theme::TEXT_DIM))
             .on_press(remove_msg)
             .style(|_theme, status| theme::small_button_style(status))
-            .padding(1);
+            .padding([1, SLOT_ICON_PAD_X]);
 
         // Chain reorder (ba todo #1302). The strip is 140 px wide, so
-        // the carets are drawn at the same 9 px as the delete glyph and
-        // sit between the name and the ×: order first, then removal.
+        // the carets share the slot-row icon metrics with the editor
+        // toggle and the delete glyph, and sit between the two: order
+        // first, then removal.
         let moves = reorder::chain_moves(self, owner, pid, index, len);
 
-        // Button takes Length::Fill so it stretches to the strip width;
-        // the editor toggle, the reorder pair and the delete button hug
-        // the right edge.
-        let mut slot = row![name_btn].spacing(2);
+        // The icon cluster is one group so the gap *inside* it can be
+        // tighter than the gap that separates it from the name.
+        let mut icons = row![].spacing(SLOT_ICON_GAP);
         if let Some(editor) = editor_toggle(plugin) {
-            slot = slot.push(editor);
+            icons = icons.push(editor);
         }
-        slot.push(reorder::move_buttons(&moves, 9.0))
+        let icons = icons
+            .push(reorder::move_buttons(
+                &moves,
+                SLOT_ICON_SIZE,
+                SLOT_ICON_PAD_X,
+            ))
             .push(plugin_del)
+            .align_y(alignment::Vertical::Center);
+
+        // The name takes Length::Fill so it stretches to the strip
+        // width; the icon cluster hugs the right edge.
+        row![name_btn, icons]
+            .spacing(SLOT_ICON_GAP + 1.0)
             .align_y(alignment::Vertical::Center)
             .into()
     }
 }
+
+/// Glyph size for the plugin slot row's icon controls.
+const SLOT_ICON_SIZE: f32 = 9.0;
+
+/// Horizontal padding around each of those glyphs.
+///
+/// One pixel, not the three a roomier surface would use, because the
+/// slot row has to fit **four** icon controls — the editor toggle (ba
+/// todo #1306), the ▲/▼ reorder pair (#1302) and the delete × — beside
+/// the plugin's name inside a 140 px strip.
+///
+/// The budget is genuinely that tight: measured off
+/// `mixer_sub_tracks_expanded`, an icon at the old 3 px padding cost 17
+/// px of row, and the instrument pill had **half a pixel** of slack
+/// left over at three icons. Adding a fourth without tightening the
+/// cluster pushed the pill 17 px narrower than its own text, so the
+/// name overflowed its border and ran under the new glyph. Trimming the
+/// padding and the gaps hands those 17 px back to the name, which is
+/// why the pill in that golden is the same width as it was before the
+/// toggle existed.
+///
+/// The inspector's CHAIN rows are not on this budget and keep 3 px.
+const SLOT_ICON_PAD_X: u16 = 1;
+
+/// Gap between the slot row's icon controls.
+const SLOT_ICON_GAP: f32 = 1.0;
 
 /// The strip slot's floating-editor toggle — the sliders glyph, tinted
 /// while the editor is open (ba todo #1306).
@@ -382,6 +419,34 @@ impl crate::Resonance {
 /// and the parameter panel had no route at all on the eleven bundled
 /// plugins, every one of which declares a GUI.
 fn editor_toggle(plugin: &PluginSlotState) -> Option<Element<'static, Message>> {
+    let (message, color) = editor_toggle_spec(plugin)?;
+    Some(
+        button(
+            theme::icon(theme::fa::SLIDERS)
+                .size(SLOT_ICON_SIZE)
+                .color(color),
+        )
+        .on_press(message)
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding([1, SLOT_ICON_PAD_X])
+        .into(),
+    )
+}
+
+/// What the strip's editor toggle carries and how it is tinted: the
+/// message a press raises, and the glyph colour.
+///
+/// `None` is the "draw no control at all" answer, for a plugin that
+/// declares no GUI.
+///
+/// Split out from [`editor_toggle`] so the decision has exactly one
+/// home and a test can read it back (`test_strip_editor_toggle`). The
+/// tint is not observable through the widget tree — `iced_test` sees a
+/// text candidate's content, never its colour — and "the glyph lights
+/// up while the window is open" is the only feedback the user gets that
+/// the press did anything, since the engine reports neither success nor
+/// failure per instance (split out as ba todo #1347).
+pub(crate) fn editor_toggle_spec(plugin: &PluginSlotState) -> Option<(Message, Color)> {
     if !plugin.has_gui {
         return None;
     }
@@ -393,11 +458,5 @@ fn editor_toggle(plugin: &PluginSlotState) -> Option<Element<'static, Message>> 
         Message::Plugin(PluginMessage::OpenPluginEditor(pid))
     };
     let color = if open { theme::ACCENT } else { theme::TEXT_DIM };
-    Some(
-        button(theme::icon(theme::fa::SLIDERS).size(9.0).color(color))
-            .on_press(message)
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding([1, 3])
-            .into(),
-    )
+    Some((message, color))
 }
