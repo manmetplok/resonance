@@ -1,6 +1,8 @@
 //! Plugin-facing params for the glue compressor stage.
 
-use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_ms, v2s_f32_percent, v2s_f32_ratio};
+use resonance_plugin::formatters::{
+    s2v_f32_percentage, v2s_f32_db, v2s_f32_ms, v2s_f32_percent, v2s_f32_ratio,
+};
 use resonance_plugin::*;
 
 use crate::stages::glue_compressor::GlueCompressorConfig;
@@ -68,6 +70,7 @@ impl Default for GlueCompressorParams {
                 2.0,
                 FloatRange::Linear { min: 1.0, max: 8.0 },
             )
+            .with_unit(":1")
             .with_value_to_string(v2s_f32_ratio()),
             attack: FloatParam::new(
                 "glue_attack",
@@ -121,6 +124,10 @@ impl Default for GlueCompressorParams {
                 1.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
+            .with_unit("%")
+            // The value is 0..1 but displays as 0..100 %, so the unit
+            // alone would make the default parser read "50%" as 50.0.
+            .with_string_to_value(s2v_f32_percentage())
             .with_value_to_string(v2s_f32_percent(0)),
         }
     }

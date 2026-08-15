@@ -9,7 +9,7 @@ use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
-use super::{float_knob, float_knob_bipolar, int_knob};
+use super::{float_knob, float_knob_bipolar, float_knob_fmt, int_knob};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -289,7 +289,11 @@ fn draw_global_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             float_knob(ui, "Master", &app.params.master_volume, None);
-            float_knob(ui, "Glide", &app.params.glide_time, Some("s"));
+            // `glide_time` is milliseconds over 0..2000; the knob used to
+            // label it "s" and print two decimals of a millisecond count.
+            float_knob_fmt(ui, "Glide", &app.params.glide_time, |v| {
+                format!("{:.0} ms", v)
+            });
             int_knob(ui, "Max", &app.params.max_voices);
         });
 
