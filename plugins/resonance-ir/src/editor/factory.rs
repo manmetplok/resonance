@@ -116,7 +116,15 @@ impl PluginEditor for RuntimeEditorHandle {
     }
 
     fn size(&self) -> (u32, u32) {
-        self.size
+        // The compositor owns the window size, so report what the
+        // runtime last applied rather than what was last requested:
+        // that is what lets the host persist and restore the size the
+        // user actually left the window at (ba todo #1337). The cached
+        // field is only a fallback for a handle whose runtime is gone.
+        self.runtime
+            .as_ref()
+            .map(|r| r.get_size())
+            .unwrap_or(self.size)
     }
 
     fn set_size(&mut self, width: u32, height: u32) -> bool {
