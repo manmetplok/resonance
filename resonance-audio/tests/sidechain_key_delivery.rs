@@ -38,11 +38,10 @@ use clap_sys::ext::audio_ports::{
 use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
-use parking_lot::Mutex;
 
 use multi_out_harness::{at_master, peak, EngineState, PARENT, SR, TAP_A, TAP_B};
 use resonance_audio::__test_support::{
-    __instance_from_raw_for_test, render_stem, StemSource, SyncClapInstance,
+    __instance_from_raw_for_test, render_stem, PluginSlot, StemSource,
 };
 use resonance_audio::types::*;
 
@@ -193,7 +192,7 @@ unsafe extern "C" fn m_get_extension(
     ptr::null()
 }
 
-fn key_monitor() -> SyncClapInstance {
+fn key_monitor() -> PluginSlot {
     let inst = __instance_from_raw_for_test(
         move |_host| {
             let state = Box::into_raw(Box::new(MonitorState { active: false }));
@@ -220,7 +219,7 @@ fn key_monitor() -> SyncClapInstance {
         inst.has_sidechain_input(),
         "the monitor must declare a key port, or it can never be handed one"
     );
-    SyncClapInstance(inst)
+    PluginSlot::new(inst)
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +238,7 @@ fn fixture() -> EngineState {
     state
         .plugins
         .write()
-        .insert(MONITOR_ID, Mutex::new(key_monitor()));
+        .insert(MONITOR_ID, key_monitor());
     for tap in [TAP_A, TAP_B] {
         state.tracks.read().get(&tap).unwrap().set_volume(0.0);
     }

@@ -8,10 +8,10 @@
 //! a CLAP plugin or the engine thread.
 
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use ringbuf::traits::{Producer, Split};
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::engine::reference::ABMeters;
 use crate::engine::{AutomationSnapshot, SharedState};
 use crate::midi_hardware::LiveMidiEvent;
@@ -64,6 +64,7 @@ macro_rules! run_callback {
                 monitor_drain: &mut $h.monitor_drain,
                 ab_meters: &mut $h.ab_meters,
                 sidechain: &mut $h.sidechain,
+                fx_dry: &mut $h.fx_dry,
             },
         )
     };
@@ -87,7 +88,7 @@ pub struct MixAudioHarness {
     master: RwLock<MasterBus>,
     clips: RwLock<Vec<AudioClip>>,
     midi_clips: RwLock<Vec<MidiClip>>,
-    plugins: RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>,
+    plugins: RwLock<PluginMap>,
     tempo_map: arc_swap::ArcSwap<TempoMap>,
     latency_comp: arc_swap::ArcSwap<crate::latency::LatencyComp>,
     automation: arc_swap::ArcSwap<AutomationSnapshot>,
@@ -108,6 +109,7 @@ pub struct MixAudioHarness {
     monitor_drain: MonitorDrain,
     ab_meters: ABMeters,
     sidechain: SidechainTaps,
+    fx_dry: crate::bypass::FxDryScratch,
     live_midi_tx: crossbeam_channel::Sender<LiveMidiEvent>,
     live_midi_rx: crossbeam_channel::Receiver<LiveMidiEvent>,
     live_fwd_tx: crossbeam_channel::Sender<LiveMidiEvent>,
@@ -176,6 +178,7 @@ impl MixAudioHarness {
             monitor_drain: MonitorDrain::new(native_drain),
             ab_meters,
             sidechain: SidechainTaps::new(frames),
+            fx_dry: crate::bypass::FxDryScratch::new(frames),
             live_midi_tx,
             live_midi_rx,
             live_fwd_tx,

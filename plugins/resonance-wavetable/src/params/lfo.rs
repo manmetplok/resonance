@@ -57,7 +57,6 @@ impl LfoParams {
                 default_depth,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             retrigger: BoolParam::new(rtr_id, rtr_name, default_retrigger),
             sync: BoolParam::new(sync_id, sync_name, false),

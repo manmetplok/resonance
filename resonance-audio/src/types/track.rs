@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 use resonance_common::{DeviceParam, PlaybackSource};
 
+use crate::bypass::BypassFade;
+
 use super::{BusId, FrozenSource, PluginInstanceId, TrackId, TrackOutput, TrackType};
 
 /// Sentinel value used in `Track::output_bus_bits` to encode
@@ -26,10 +28,12 @@ pub struct Track {
     pan_bits: AtomicU32,
     muted: AtomicBool,
     soloed: AtomicBool,
-    /// When true, the mixer skips every effect plugin on this track.
+    /// When bypassed, the mixer skips every effect plugin on this track.
     /// Instrument plugins (the first slot on instrument tracks) still
-    /// play — only the effects chain after them is bypassed.
-    fx_bypassed: AtomicBool,
+    /// play — only the effects chain after them is bypassed. Toggling it
+    /// crossfades over a few milliseconds rather than switching the path
+    /// on a sample boundary (see [`BypassFade`]).
+    fx_bypass: BypassFade,
     pub name: String,
     record_armed: AtomicBool,
     monitor_enabled: AtomicBool,
@@ -149,7 +153,7 @@ impl Track {
             pan_bits: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
             soloed: AtomicBool::new(false),
-            fx_bypassed: AtomicBool::new(false),
+            fx_bypass: BypassFade::new(),
             name,
             record_armed: AtomicBool::new(false),
             monitor_enabled: AtomicBool::new(false),
@@ -246,11 +250,19 @@ impl Track {
     }
 
     pub fn fx_bypassed(&self) -> bool {
-        self.fx_bypassed.load(Ordering::Relaxed)
+        self.fx_bypass.bypassed()
     }
 
+    /// Ask for the chain to be bypassed (or re-engaged). The mixer
+    /// crossfades to the new state over [`crate::bypass::BYPASS_FADE_MS`];
+    /// nothing switches on this call.
     pub fn set_fx_bypassed(&self, v: bool) {
-        self.fx_bypassed.store(v, Ordering::Relaxed);
+        self.fx_bypass.set_bypassed(v);
+    }
+
+    /// The chain-level bypass crossfade, for the render path.
+    pub fn fx_bypass(&self) -> &BypassFade {
+        &self.fx_bypass
     }
 
     pub fn record_armed(&self) -> bool {
@@ -482,8 +494,9 @@ pub struct Bus {
     volume_bits: AtomicU32,
     pan_bits: AtomicU32,
     muted: AtomicBool,
-    /// When true, the mixer skips every plugin in this bus's FX chain.
-    fx_bypassed: AtomicBool,
+    /// When bypassed, the mixer skips every plugin in this bus's FX
+    /// chain, crossfading over the transition (see [`BypassFade`]).
+    fx_bypass: BypassFade,
     /// When true, this bus acts as an aux *return* bus — the destination
     /// of aux sends rather than (or in addition to) a track-output
     /// group. Purely a role marker today; it does not change summing.
@@ -506,7 +519,7 @@ impl Bus {
             volume_bits: AtomicU32::new(1.0f32.to_bits()),
             pan_bits: AtomicU32::new(0.0f32.to_bits()),
             muted: AtomicBool::new(false),
-            fx_bypassed: AtomicBool::new(false),
+            fx_bypass: BypassFade::new(),
             is_return: AtomicBool::new(false),
             name,
             peak_l_bits: AtomicU32::new(0),
@@ -542,11 +555,19 @@ impl Bus {
     }
 
     pub fn fx_bypassed(&self) -> bool {
-        self.fx_bypassed.load(Ordering::Relaxed)
+        self.fx_bypass.bypassed()
     }
 
+    /// Ask for the chain to be bypassed (or re-engaged). The mixer
+    /// crossfades to the new state over [`crate::bypass::BYPASS_FADE_MS`];
+    /// nothing switches on this call.
     pub fn set_fx_bypassed(&self, v: bool) {
-        self.fx_bypassed.store(v, Ordering::Relaxed);
+        self.fx_bypass.set_bypassed(v);
+    }
+
+    /// The chain-level bypass crossfade, for the render path.
+    pub fn fx_bypass(&self) -> &BypassFade {
+        &self.fx_bypass
     }
 
     /// Reorder this bus's insert chain: move `instance_id` to

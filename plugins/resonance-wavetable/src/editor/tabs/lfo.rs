@@ -147,9 +147,9 @@ fn draw_lfo_card(
                         SyncDivision::from_int(v).label().to_string()
                     });
                 } else {
-                    float_knob(ui, "Rate", &lfo.rate, Some("Hz"));
+                    float_knob(ui, "Rate", &lfo.rate);
                 }
-                float_knob(ui, "Depth", &lfo.depth, None);
+                float_knob(ui, "Depth", &lfo.depth);
             });
         });
 

@@ -26,6 +26,8 @@ use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
 use resonance_control::{Request, Response, RpcError};
 
 use super::reply::{ack, not_found_bus, reject};
+use super::sidechain;
+use super::view_model;
 
 /// Handle a `bus.*` request, or `None` when `method` belongs to another
 /// namespace.
@@ -43,9 +45,84 @@ pub(super) fn try_handle(
         bus::SET_FX_BYPASS => set_fx_bypass(app, request),
         bus::PLUGIN_PARAMS => plugin_params(app, request),
         bus::SET_PLUGIN_PARAM => set_plugin_param(app, request),
+        bus::SET_SIDECHAIN => set_sidechain(app, request),
+        bus::CLEAR_SIDECHAIN => clear_sidechain(app, request),
         _ => return None,
     };
     Some(out)
+}
+
+/// `bus.set_sidechain` — key a plugin on this bus's chain from another
+/// track or bus (ba doc #275 P4, todo #1311).
+///
+/// The bus chain is where a keyed ducker usually belongs: the point of
+/// ducking is to move a whole group out of the way of one hit, and the
+/// group only exists at the bus. Until this method existed the control
+/// API could not express that at all — `track.set_sidechain` is keyed on
+/// `track_id` — even though the engine's route table has always been
+/// keyed by plugin instance and would have accepted it.
+fn set_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::SetSidechainParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(b) = find_bus(app, params.bus_id.0) else {
+        return not_found_bus(request, params.bus_id.0);
+    };
+    let chain = b.plugins.clone();
+    let host = format!("bus {}", params.bus_id.0);
+
+    let source = match sidechain::resolve_key_source(
+        app,
+        bus::SET_SIDECHAIN,
+        params.source_track_id,
+        params.source_bus_id,
+    ) {
+        Ok(source) => source,
+        Err(e) => return reject(request, e),
+    };
+    let instance_id = match sidechain::resolve_chain_target(
+        &chain,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        &host,
+    ) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+    if let Err(e) = sidechain::require_key_port(&chain, instance_id, &host) {
+        return reject(request, e);
+    }
+
+    let task = super::run_via_update(
+        app,
+        sidechain::route_message(instance_id, Some(source), params.enabled),
+    );
+    (ack(app, request), task)
+}
+
+/// `bus.clear_sidechain` — drop a bus plugin's key route so its detector
+/// goes back to the bus's own signal.
+fn clear_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::ClearSidechainParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(b) = find_bus(app, params.bus_id.0) else {
+        return not_found_bus(request, params.bus_id.0);
+    };
+    let chain = b.plugins.clone();
+    let instance_id = match sidechain::resolve_chain_target(
+        &chain,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        &format!("bus {}", params.bus_id.0),
+    ) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+    let task = super::run_via_update(app, sidechain::route_message(instance_id, None, false));
+    (ack(app, request), task)
 }
 
 fn find_bus(app: &Resonance, id: u64) -> Option<&BusState> {
@@ -196,18 +273,7 @@ fn bus_plugin_entries(bus: &BusState) -> Vec<track::PluginParamsEntry> {
                 slot: i as u32,
                 occurrence: *occurrence,
                 kind: track::PluginKind::Effect,
-                params: p
-                    .params
-                    .iter()
-                    .map(|param| track::PluginParamView {
-                        id: param.id,
-                        name: param.name.clone(),
-                        value: param.current_value,
-                        min: param.min_value,
-                        max: param.max_value,
-                        default: param.default_value,
-                    })
-                    .collect(),
+                params: p.params.iter().map(view_model::param_view).collect(),
             }
         })
         .collect()
@@ -513,12 +579,6 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if !params.value.is_finite() {
-        return reject(
-            request,
-            RpcError::invalid_params(format!("value must be finite (got {})", params.value)),
-        );
-    }
     let Some(b) = find_bus(app, params.bus_id.0) else {
         return not_found_bus(request, params.bus_id.0);
     };
@@ -589,17 +649,11 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     };
 
     // Shared with `track.set_plugin_param` so the f32-declared-bounds
-    // tolerance (todo #1235) behaves identically on both surfaces.
-    let Some(value) =
-        super::track::clamp_within_tolerance(params.value, param.min, param.max)
-    else {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "{} must be within {}..={} (got {})",
-                param.name, param.min, param.max, params.value
-            )),
-        );
+    // tolerance (todo #1235) and choice-label resolution (todo #1290)
+    // behave identically on all three chains.
+    let value = match super::track::resolve_param_value(param, &params.value) {
+        Ok(value) => value,
+        Err(e) => return reject(request, e),
     };
 
     let Some(instance_id) = b

@@ -10,6 +10,9 @@ pub const SWAP_FADE_SAMPLES: u32 = 64;
 
 /// Choose a block size that keeps latency around ~2.7ms regardless of sample rate.
 /// Returns a power-of-two block size.
+///
+/// This is the [`LatencyMode::Normal`] base; the other modes scale it — see
+/// [`block_size_for`].
 pub fn block_size_for_sample_rate(sample_rate: f32) -> usize {
     if sample_rate > 88_000.0 {
         512
@@ -18,6 +21,102 @@ pub fn block_size_for_sample_rate(sample_rate: f32) -> usize {
     } else {
         128
     }
+}
+
+/// Smallest convolution block the plugin will run (0.7 ms at 44.1 kHz).
+/// Below this the per-sample FFT cost stops being worth the milliseconds.
+pub const MIN_BLOCK_SIZE: usize = 32;
+/// Largest convolution block the plugin will run (46 ms at 44.1 kHz).
+pub const MAX_BLOCK_SIZE: usize = 2048;
+
+/// How much latency the user is willing to spend on convolution — ba todo
+/// #1300, audit finding I1.
+///
+/// The convolution block size *is* this plugin's reported latency (the
+/// uniformly-partitioned convolver's algorithmic delay is exactly one hop),
+/// and until this existed it was derived from the sample rate alone with no
+/// user control and no readout: a player tracking a cabinet through the
+/// plugin ate ~2.9 ms and could not see it, let alone shorten it.
+///
+/// The trade is latency against CPU, *not* against sound: a partitioned
+/// convolver computes the same convolution whatever the hop, it just runs
+/// more, smaller FFTs when the hop is short. That is why the long block is
+/// called `Efficient` rather than "HQ" — it is not higher quality, it is
+/// cheaper.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LatencyMode {
+    /// A quarter of the normal block: the lowest latency the plugin offers,
+    /// for playing or singing through it live. Costs roughly 4x the
+    /// convolution CPU.
+    Tracking,
+    /// The historical behaviour and the default — ~2.7-2.9 ms, which is
+    /// inaudible against monitoring latency while mixing.
+    #[default]
+    Normal,
+    /// Four times the normal block: the cheapest mode, for a session that is
+    /// past tracking and short on CPU.
+    Efficient,
+}
+
+/// Display labels, in range order. Handed to `IntParam::with_choices` in
+/// `params.rs`, which is what makes the editor, a host automation lane and
+/// the control API all read "Tracking" instead of "0".
+pub const LATENCY_MODE_LABELS: &[&str] = &["Tracking", "Normal", "Efficient"];
+
+impl LatencyMode {
+    /// Every mode, in the order [`LATENCY_MODE_LABELS`] declares them.
+    pub const ALL: [LatencyMode; 3] = [Self::Tracking, Self::Normal, Self::Efficient];
+
+    /// The mode a parameter value selects. Out-of-range values fall back to
+    /// [`LatencyMode::Normal`] rather than to an end of the table, so a
+    /// nonsense automation value cannot silently park the plugin at 46 ms.
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            0 => Self::Tracking,
+            2 => Self::Efficient,
+            _ => Self::Normal,
+        }
+    }
+
+    /// This mode's parameter value — its position in [`LATENCY_MODE_LABELS`].
+    pub fn index(self) -> i32 {
+        match self {
+            Self::Tracking => 0,
+            Self::Normal => 1,
+            Self::Efficient => 2,
+        }
+    }
+
+    /// Power-of-two shift applied to the sample-rate base block size.
+    fn shift(self) -> i32 {
+        match self {
+            Self::Tracking => -2,
+            Self::Normal => 0,
+            Self::Efficient => 2,
+        }
+    }
+}
+
+/// The convolution block size — and therefore the reported latency in
+/// samples — for a sample rate and a mode.
+pub fn block_size_for(sample_rate: f32, mode: LatencyMode) -> usize {
+    let base = block_size_for_sample_rate(sample_rate);
+    let shift = mode.shift();
+    let scaled = if shift < 0 {
+        base >> (-shift) as u32
+    } else {
+        base << shift as u32
+    };
+    scaled.clamp(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+}
+
+/// A block size expressed as milliseconds of latency. The single place that
+/// conversion is written: the editor's readout and the tests both call it.
+pub fn latency_ms(block_size: usize, sample_rate: f32) -> f32 {
+    if sample_rate <= 0.0 {
+        return 0.0;
+    }
+    block_size as f32 * 1000.0 / sample_rate
 }
 
 /// Stereo convolver: handles mono IR (applied to both channels) or stereo IR.

@@ -65,6 +65,19 @@ fn build_app(expanded: bool) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
     let (mut app, _task) = Resonance::new();
     demo::seed_demo_with_drum_subtracks(&mut app);
+    // Two of the seeded instruments declare a GUI, so these goldens
+    // pixel-check the plugin slot in the configuration all eleven
+    // bundled plugins actually ship in (ba todo #1306). Every seeded
+    // plugin used to default to `has_gui: false`, which meant no golden
+    // in the repo had ever rendered the slot's editor toggle — and the
+    // 140 px row now carries five controls (name, editor, ▲, ▼, ×).
+    //
+    // Drums has the longest name of the two, so its pill shows the
+    // truncated-name worst case; Synth Bass is a plain 140 px strip in
+    // both the expanded and the collapsed layout (the drum parent
+    // widens when collapsed, so it alone would not prove the fit).
+    app.test_set_plugin_has_gui(100, true);
+    app.test_set_plugin_has_gui(200, true);
     if !expanded {
         // Helper seeds expanded — toggle off if a test wants the
         // collapsed cluster.

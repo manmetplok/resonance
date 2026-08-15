@@ -21,10 +21,10 @@
 use std::ops::Range;
 
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::atomic::Ordering;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::engine::reference::ABMeters;
 use crate::engine::{AutomationSnapshot, SharedState};
 use crate::latency::LatencyComp;
@@ -48,7 +48,7 @@ pub(crate) struct CallbackInputs<'a> {
     pub(crate) master: &'a RwLock<MasterBus>,
     pub(crate) clips: &'a RwLock<Vec<AudioClip>>,
     pub(crate) midi_clips: &'a RwLock<Vec<MidiClip>>,
-    pub(crate) plugins: &'a RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>,
+    pub(crate) plugins: &'a RwLock<PluginMap>,
     pub(crate) tempo_map: &'a arc_swap::ArcSwap<TempoMap>,
     pub(crate) latency_comp: &'a arc_swap::ArcSwap<LatencyComp>,
     pub(crate) automation: &'a arc_swap::ArcSwap<AutomationSnapshot>,
@@ -90,6 +90,9 @@ pub(crate) struct CallbackScratch<'a> {
     /// the audio thread and pre-allocated, so routing a sidechain never
     /// allocates on the realtime path.
     pub(crate) sidechain: &'a mut SidechainTaps,
+    /// Dry staging for the click-free bypass crossfades (`crate::bypass`),
+    /// pre-allocated for the same reason.
+    pub(crate) fx_dry: &'a mut crate::bypass::FxDryScratch,
 }
 
 impl CallbackScratch<'_> {
@@ -114,6 +117,7 @@ impl CallbackScratch<'_> {
                 port_scratch: &mut *self.port_scratch,
                 note_event_buf: &mut *self.note_event_buf,
                 sidechain: &mut *self.sidechain,
+                fx_dry: &mut *self.fx_dry,
             },
             &mut *self.midi_stash,
             &self.monitor_temp[mon],

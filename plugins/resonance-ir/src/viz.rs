@@ -61,6 +61,17 @@ pub struct IrViz {
     out_l_db: AtomicU32,
     out_r_db: AtomicU32,
 
+    /// Convolution block size the engine is *currently* running, in
+    /// samples — which is the latency the plugin imposes right now (ba
+    /// todo #1300). Published from `initialize()`, where a latency-mode
+    /// change is applied; the editor compares it against the mode the
+    /// parameter selects to tell "in effect" from "waiting for the
+    /// restart".
+    active_block: AtomicU32,
+    /// Sample rate the engine was last initialized at, so the editor can
+    /// turn `active_block` into milliseconds.
+    sample_rate: AtomicU32,
+
     /// Latest IR snapshot. `None` until the first IR finishes loading.
     snapshot: Mutex<Option<IrSnapshot>>,
 }
@@ -72,8 +83,30 @@ impl IrViz {
             in_r_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             out_l_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             out_r_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
+            active_block: AtomicU32::new(0),
+            sample_rate: AtomicU32::new(0.0_f32.to_bits()),
             snapshot: Mutex::new(None),
         })
+    }
+
+    /// Publish the block size the engine now runs at, and the rate it runs
+    /// at. Called from `initialize()`.
+    pub fn store_engine_block(&self, block_size: usize, sample_rate: f32) {
+        self.active_block.store(block_size as u32, Ordering::Release);
+        self.sample_rate
+            .store(sample_rate.to_bits(), Ordering::Release);
+    }
+
+    /// The block size the engine is running and the rate it runs at, or
+    /// `None` before the first `initialize()` — the editor can be open on a
+    /// plugin the host has not activated yet.
+    pub fn engine_block(&self) -> Option<(usize, f32)> {
+        let block = self.active_block.load(Ordering::Acquire);
+        let sample_rate = f32::from_bits(self.sample_rate.load(Ordering::Acquire));
+        if block == 0 || sample_rate.is_nan() || sample_rate <= 0.0 {
+            return None;
+        }
+        Some((block as usize, sample_rate))
     }
 
     pub fn store_peaks(&self, in_l_db: f32, in_r_db: f32, out_l_db: f32, out_r_db: f32) {

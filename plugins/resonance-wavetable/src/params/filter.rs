@@ -29,7 +29,6 @@ impl FilterParams {
                     factor: -2.5,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(5.0))
             .with_unit(" Hz")
             .with_value_to_string(formatters::v2s_f32_rounded(0)),
             resonance: FloatParam::new(
@@ -38,7 +37,6 @@ impl FilterParams {
                 0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             env_depth: FloatParam::new(
                 "filter_env_depth",
@@ -49,7 +47,6 @@ impl FilterParams {
                     max: 1.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
             keytrack: FloatParam::new(
                 "filter_keytrack",
@@ -65,7 +62,6 @@ impl FilterParams {
                 0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
         }
     }

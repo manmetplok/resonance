@@ -49,6 +49,7 @@ mod render;
 /// The reply vocabulary every namespace answers with (todo #1258).
 mod reply;
 mod section;
+mod sidechain;
 mod song;
 mod track;
 mod transport;

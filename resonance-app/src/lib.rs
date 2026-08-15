@@ -35,6 +35,7 @@ pub mod state;
 mod test_support;
 #[doc(hidden)]
 pub use test_support::TestChain;
+pub use test_support::SendSlotAffordances;
 pub mod theme;
 pub mod undo;
 pub mod update;
@@ -223,6 +224,12 @@ pub struct Resonance {
     /// purely from `AuxSendChanged` / `AuxSendRemoved` / `AuxSendRejected`
     /// events. Bus return-role rides on `BusState::is_return`.
     pub(crate) aux: state::AuxSendState,
+    /// GUI-side mirror of the engine's sidechain (key) routing table, one
+    /// entry per keyed plugin instance (ba todo #1311). Seeded by the
+    /// project-load replay and reconciled from `SidechainRouteChanged`.
+    /// This is what makes a key route persistable: the save path
+    /// serializes app state, and until this existed no app state held it.
+    pub(crate) sidechain: state::SidechainState,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
     /// External-instrument tracks: per-track bank/program/latency config plus
@@ -658,6 +665,7 @@ impl Resonance {
             },
             track_groups: state::TrackGroupRegistry::new(),
             aux: state::AuxSendState::default(),
+            sidechain: state::SidechainState::default(),
             undo: UndoHistory::new(),
             external_instruments: std::collections::HashMap::new(),
             device_registry,

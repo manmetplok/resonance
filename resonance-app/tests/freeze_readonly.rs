@@ -93,6 +93,7 @@ fn synth_plugin() -> PluginSlotState {
             max_value: 1.0,
             default_value: 0.0,
             current_value: 0.0,
+            ..Default::default()
         }],
         false,
     )

@@ -26,7 +26,7 @@
     "freeze": 0,
     "filter_type": 0,
     "filter_hz": 7000.0,
-    "diffusion": 0.0,
+    "diffusion": 0.45,
     "pan_spread": 0.6,
     "width": 1.2,
     "mix": 0.45,

@@ -105,6 +105,7 @@ fn params_as_dialled_in() -> Vec<ParamInfo> {
             max_value: 1.0,
             default_value: 0.5,
             current_value: 0.83,
+            ..Default::default()
         },
         ParamInfo {
             id: DECAY_ID,
@@ -113,6 +114,7 @@ fn params_as_dialled_in() -> Vec<ParamInfo> {
             max_value: 20.0,
             default_value: 2.0,
             current_value: 11.25,
+            ..Default::default()
         },
     ]
 }

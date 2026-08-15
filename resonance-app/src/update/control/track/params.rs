@@ -29,12 +29,6 @@ pub(super) fn set_plugin_param(
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if !params.value.is_finite() {
-        return reject(
-            request,
-            RpcError::invalid_params(format!("value must be finite (got {})", params.value)),
-        );
-    }
     let Some(t) = find_track(app, params.track_id.0).cloned() else {
         return not_found_track(request, params.track_id.0);
     };
@@ -125,17 +119,12 @@ pub(super) fn set_plugin_param(
     // lands inside the band — the DSP never sees a value below the
     // plugin's real minimum, and a genuinely out-of-range request is
     // still refused with the same message it always got.
-    let value = match clamp_within_tolerance(params.value, param.min, param.max) {
-        Some(value) => value,
-        None => {
-            return reject(
-                request,
-                RpcError::invalid_params(format!(
-                    "{} must be within {}..={} (got {})",
-                    param.name, param.min, param.max, params.value
-                )),
-            )
-        }
+    //
+    // `resolve_param_value` also turns a choice label into its step, so
+    // a caller can send what the parameter calls itself.
+    let value = match resolve_param_value(param, &params.value) {
+        Ok(value) => value,
+        Err(e) => return reject(request, e),
     };
 
     // The instance id is the engine's handle; it is not on the wire, so
@@ -155,6 +144,48 @@ pub(super) fn set_plugin_param(
         Message::Plugin(PluginMessage::SetPluginParam(instance_id, param.id, value)),
     );
     (ack(app, request), task)
+}
+
+/// The number a `set_plugin_param` request means for one parameter, or
+/// the error explaining why it means none (ba todo #1290).
+///
+/// Three things happen here, in the order a caller's mistake is easiest
+/// to describe:
+///
+/// 1. a choice LABEL becomes the step it names — `"Low-pass"` is the
+///    value the parameter reports as its text, so it must also be a
+///    value it accepts, and a wrong label comes back with the ones that
+///    would have worked rather than as an out-of-range number;
+/// 2. a non-finite number is refused, because NaN compares false against
+///    every bound and would sail through the range check;
+/// 3. the f32-declared-bounds tolerance ([`clamp_within_tolerance`]) is
+///    applied.
+///
+/// Shared by the track, bus and master setters so one label resolves the
+/// same way wherever the plugin sits.
+pub(crate) fn resolve_param_value(
+    param: &track::PluginParamView,
+    requested: &track::ParamValue,
+) -> Result<f64, RpcError> {
+    let value = requested
+        .resolve(param)
+        .map_err(|e| RpcError::invalid_params(format!("{}: {e}", param.name)))?;
+    if !value.is_finite() {
+        return Err(RpcError::invalid_params(format!(
+            "value must be finite (got {value})"
+        )));
+    }
+    clamp_within_tolerance(value, param.min, param.max).ok_or_else(|| {
+        let choices = if param.choices.is_empty() {
+            String::new()
+        } else {
+            format!(" — its choices are [{}]", param.choices.join(", "))
+        };
+        RpcError::invalid_params(format!(
+            "{} must be within {}..={} (got {value}){choices}",
+            param.name, param.min, param.max
+        ))
+    })
 }
 
 /// `value` clamped into `min..=max`, or `None` when it lies genuinely

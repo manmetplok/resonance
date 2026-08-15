@@ -165,7 +165,15 @@ impl<'a, P: ResonancePlugin> PluginNotePortsImpl for ClapMainThread<'a, P> {
             writer.set(&NotePortInfo {
                 id: ClapId::new(1),
                 name: b"Note Input",
-                supported_dialects: NoteDialects::CLAP,
+                // CLAP *and* MIDI. The CLAP dialect carries notes and
+                // per-note expression but has no control change at all, so a
+                // plugin that wants a mod wheel, aftertouch or pitch bend can
+                // only get them as raw MIDI 1.0 — which a host will not send
+                // unless the port says it understands that dialect
+                // (ba todo #1295). Notes keep arriving in the preferred CLAP
+                // dialect; `process()` decodes only the controller messages
+                // out of the MIDI stream.
+                supported_dialects: NoteDialects::CLAP | NoteDialects::MIDI,
                 preferred_dialect: Some(NoteDialect::Clap),
             });
         }

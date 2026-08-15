@@ -2,12 +2,10 @@
 //! arrangement has been rendered: master FX, metronome, master volume and
 //! the A/B mix meter.
 
-use std::sync::atomic::Ordering;
 
-use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLockReadGuard};
+use parking_lot::RwLockReadGuard;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::engine::AutomationSnapshot;
 use crate::mixer::automation_apply::auto_master_volume;
 use crate::mixer::click::render_metronome_clicks;
@@ -23,7 +21,7 @@ pub(super) struct MasterTail<'a> {
     /// the FX chain no longer needs it — before the click and volume
     /// passes, which is a meaningful window on the realtime thread.
     pub(super) plugins_guard:
-        RwLockReadGuard<'a, IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>,
+        RwLockReadGuard<'a, PluginMap>,
     pub(super) sidechain_routes: &'a [SidechainRoute],
     pub(super) automation: &'a AutomationSnapshot,
     /// The block's total compensation latency, for the comp-delayed
@@ -45,20 +43,22 @@ pub(super) fn run_master_passes(
 
     // Master FX chain: run over the full callback buffer post-bus-sum,
     // before the metronome click is layered in and before the master volume
-    // pass. Skipped when globally bypassed.
-    if !shared.master_fx_bypassed.load(Ordering::Relaxed) {
-        apply_master_fx_chain(
-            scratch.data,
-            channels,
-            inputs.master,
-            &tail.plugins_guard,
-            scratch.track_buf_l,
-            scratch.track_buf_r,
-            timing.transport,
-            tail.sidechain_routes,
-            scratch.sidechain,
-        );
-    }
+    // pass. Bypass (chain-level and per-slot) is handled inside, with the
+    // click-free crossfade every other chain uses.
+    apply_master_fx_chain(
+        scratch.data,
+        channels,
+        inputs.master,
+        &tail.plugins_guard,
+        scratch.track_buf_l,
+        scratch.track_buf_r,
+        scratch.fx_dry,
+        timing.transport,
+        tail.sidechain_routes,
+        scratch.sidechain,
+        &shared.master_fx_bypass,
+        inputs.sample_rate,
+    );
 
     drop(tail.plugins_guard);
 

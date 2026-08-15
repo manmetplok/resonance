@@ -23,7 +23,7 @@ use crossbeam_channel::{Receiver, Sender};
 use indexmap::IndexMap;
 use parking_lot::{Mutex, RwLock};
 
-use crate::clap_host::{ClapBundle, SyncClapInstance};
+use crate::clap_host::{ClapBundle, PluginMap};
 use crate::midi_clock::{
     ClockTempoTracker, MidiClockEvent, MidiClockReceiver, MidiClockSender,
 };
@@ -50,7 +50,7 @@ pub(crate) struct HandlerCtx<'a> {
     pub master: &'a Arc<RwLock<MasterBus>>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
-    pub plugins: &'a Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    pub plugins: &'a Arc<RwLock<PluginMap>>,
     pub tempo_map: &'a Arc<arc_swap::ArcSwap<TempoMap>>,
     pub latency_comp: &'a Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     /// Parameter-automation snapshot published to the audio callback and
@@ -235,7 +235,7 @@ pub(crate) fn engine_thread(
     clips_arc: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
-    plugins_arc: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins_arc: Arc<RwLock<PluginMap>>,
     latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
@@ -527,7 +527,7 @@ pub(crate) fn engine_thread(
     // the contents out under the write lock, then drop the swapped-
     // out IndexMap with the lock released so the audio callback's
     // `try_read` isn't held off any longer than the swap itself.
-    let drained_plugins: IndexMap<PluginInstanceId, Mutex<SyncClapInstance>> =
+    let drained_plugins: PluginMap =
         std::mem::take(&mut *plugins_arc.write());
     drop(drained_plugins);
 }

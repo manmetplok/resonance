@@ -33,7 +33,11 @@ impl ResonancePlugin for ResonanceWavetable {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str = "A wavetable synthesizer instrument";
-    const FEATURES: &'static [&'static str] = &["instrument", "synthesizer", "stereo"];
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::INSTRUMENT,
+        features::SYNTHESIZER,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = None;
     const MIDI_INPUT: bool = true;

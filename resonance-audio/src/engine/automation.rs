@@ -17,11 +17,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
-use parking_lot::Mutex;
 use resonance_common::{AutomationLane, AutomationTarget, PluginInstanceId};
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::types::AudioEvent;
 
 /// Engine-thread-local map of automation lanes, one per target.
@@ -69,7 +67,7 @@ impl AutomationSnapshot {
     /// the next time the lane set changes after the plugin loads.
     pub fn build(
         lanes: &AutomationLanes,
-        plugins: &IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>,
+        plugins: &PluginMap,
     ) -> Self {
         let mut snap = AutomationSnapshot::default();
         for lane in lanes.values() {
@@ -84,12 +82,14 @@ impl AutomationSnapshot {
                     // Engine thread: a brief blocking lock (spin +
                     // back-off) is fine and matches the bounce path.
                     let inst = crate::engine::try_lock_with_backoff(mutex);
-                    let range = inst
-                        .0
-                        .query_params()
-                        .into_iter()
-                        .find(|p| p.id == param_id)
-                        .map(|p| (p.min_value, p.max_value));
+                    // `param_range`, not `query_params`: this runs per
+                    // lane on every SetAutomationLane — which is what a
+                    // breakpoint drag emits — while holding the lock the
+                    // audio thread drops a block rather than wait for.
+                    // `query_params` carries every parameter's text,
+                    // unit and choice labels (ba todo #1290), and this
+                    // call site wants two numbers (ba todo #1290 review).
+                    let range = inst.0.param_range(param_id);
                     drop(inst);
                     let Some((min, max)) = range else {
                         continue;

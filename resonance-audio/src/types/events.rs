@@ -306,6 +306,32 @@ pub enum AudioEvent {
     PluginsScanned {
         plugins: Vec<ScannedPlugin>,
     },
+    /// How the plugin renders a parameter it was just given, so the
+    /// app's mirror can say `"Low-pass"` or `"40 %"` about the value it
+    /// now holds instead of the one the plugin had when it loaded (ba
+    /// todo #1290).
+    ///
+    /// Only the plugin can format its own value, and the app's param
+    /// cache is filled once at instantiation, so without this echo every
+    /// reader — the generic panel, `track.plugin_params` and its MCP
+    /// tool — would keep showing the *load-time* text under a value that
+    /// has since moved.
+    ///
+    /// `value` is the value the change was made with, not the value the
+    /// plugin landed on: it lets the app drop an echo overtaken by a
+    /// newer write (a knob drag issues one per frame) rather than
+    /// flicker back through stale text.
+    ///
+    /// Raised only for changes that came through `SetPluginParam` —
+    /// engine-internal automation moves parameters without one, by
+    /// design: at block rate this would be a flood, and finding F1's
+    /// re-query is the mechanism for that case.
+    PluginParamText {
+        instance_id: PluginInstanceId,
+        param_id: u32,
+        value: f64,
+        text: String,
+    },
     PluginStateSaved {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
@@ -645,6 +671,22 @@ pub enum AudioEvent {
     },
     MasterFxBypassChanged {
         bypassed: bool,
+    },
+    /// Echo of [`AudioCommand::SetPluginBypass`](super::AudioCommand::SetPluginBypass):
+    /// one chain slot's bypass changed (ba doc #275 finding X3). Emitted
+    /// only when the instance exists, so an app mirror never records a
+    /// bypass for a slot the engine doesn't have.
+    ///
+    /// `own_bypass_param` reports *how* the engine bypasses it: `true`
+    /// means the plugin declares its own `CLAP_PARAM_IS_BYPASS` parameter
+    /// and keeps running (its reported latency, and therefore the delay
+    /// compensation, is unchanged); `false` means the host skips the slot
+    /// once the crossfade lands, and its latency leaves the chain. Purely
+    /// informational — the GUI toggle behaves the same either way.
+    PluginBypassChanged {
+        instance_id: PluginInstanceId,
+        bypassed: bool,
+        own_bypass_param: bool,
     },
 
     // -- Hardware MIDI I/O --

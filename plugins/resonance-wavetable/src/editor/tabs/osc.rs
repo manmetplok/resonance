@@ -9,7 +9,7 @@ use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
-use super::{float_knob, float_knob_bipolar, float_knob_fmt, int_knob};
+use super::{float_knob, float_slider, int_knob, readout};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -69,16 +69,13 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(format!("{:+.2}", app.params.osc_balance.value()))
+                    egui::RichText::new(readout(&app.params.osc_balance))
                         .monospace()
                         .color(theme::TEXT_1)
                         .size(11.0),
                 );
                 ui.add_space(8.0);
-                let new = widgets::slider_bipolar(ui, 110.0, app.params.osc_balance.value());
-                if let Some(v) = new {
-                    app.params.osc_balance.set_value(v);
-                }
+                float_slider(ui, 110.0, &app.params.osc_balance);
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new("BALANCE")
@@ -213,11 +210,11 @@ fn draw_params_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         // Knob row.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-            float_knob(ui, "Position", &osc_params.position, None);
+            float_knob(ui, "Position", &osc_params.position);
             int_knob(ui, "Coarse", &osc_params.coarse);
-            float_knob_bipolar(ui, "Fine", &osc_params.fine, Some("ct"));
-            float_knob(ui, "Level", &osc_params.level, None);
-            float_knob_bipolar(ui, "Pan", &osc_params.pan, None);
+            float_knob(ui, "Fine", &osc_params.fine);
+            float_knob(ui, "Level", &osc_params.level);
+            float_knob(ui, "Pan", &osc_params.pan);
         });
 
         // Routes-to footer.
@@ -265,8 +262,8 @@ fn draw_unison_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             int_knob(ui, "Voices", &app.params.unison.voices);
-            float_knob(ui, "Detune", &app.params.unison.detune, Some("ct"));
-            float_knob(ui, "Spread", &app.params.unison.spread, None);
+            float_knob(ui, "Detune", &app.params.unison.detune);
+            float_knob(ui, "Spread", &app.params.unison.spread);
         });
     });
 }
@@ -288,12 +285,8 @@ fn draw_global_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         });
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-            float_knob(ui, "Master", &app.params.master_volume, None);
-            // `glide_time` is milliseconds over 0..2000; the knob used to
-            // label it "s" and print two decimals of a millisecond count.
-            float_knob_fmt(ui, "Glide", &app.params.glide_time, |v| {
-                format!("{:.0} ms", v)
-            });
+            float_knob(ui, "Master", &app.params.master_volume);
+            float_knob(ui, "Glide", &app.params.glide_time);
             int_knob(ui, "Max", &app.params.max_voices);
         });
 

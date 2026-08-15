@@ -105,10 +105,17 @@ fn draw_csd_frame(
 /// (`EglContext::resize` is a no-op when unchanged), so a scale change —
 /// which alters the physical size without touching `pending_size` — also
 /// resizes the buffer before the next paint.
+///
+/// This is the *only* place `state.size` changes, which is why it is
+/// also where the new size is published back to the public handle: a
+/// user dragging the window edge produces a configure, the configure
+/// lands here, and `Editor::get_size` reports the new size from that
+/// moment on (ba todo #1337).
 pub(super) fn apply_pending_resize(state: &mut State, egl_ctx: &mut EglContext) {
     if let Some((w, h)) = state.pending_size.take() {
         if (w, h) != state.size {
             state.size = (w, h);
+            state.shared_size.set((w, h));
             state.needs_redraw = true;
         }
     }

@@ -305,15 +305,15 @@ fn render_instrument_source(
         // track is rendering.
         scratch.track_buf_l[..frames].fill(0.0);
         scratch.track_buf_r[..frames].fill(0.0);
-    } else if !track.fx_bypassed()
-        && run_fx_chain(
-            plugin_iter.copied(),
-            ctx,
-            scratch.sidechain,
-            (&mut *scratch.track_buf_l, &mut *scratch.track_buf_r),
-            strategy,
-        )
-    {
+    } else if run_fx_chain(
+        plugin_iter.copied(),
+        track.fx_bypass(),
+        ctx,
+        scratch.sidechain,
+        (&mut *scratch.track_buf_l, &mut *scratch.track_buf_r),
+        scratch.fx_dry,
+        strategy,
+    ) {
         // A ducker on a synth track is the most common sidechain there
         // is, so the key resolution here is the same as on an audio
         // track; routing one used to store the route and then key off
@@ -367,15 +367,17 @@ fn render_audio_source(
         has_audio = true;
     }
 
-    // Process through the plugin chain (skipped when FX are bypassed).
+    // Process through the plugin chain (skipped once the chain's bypass
+    // fade has fully landed on "bypassed").
     let track_plugins = track.plugins();
     if !track_plugins.is_empty()
-        && !track.fx_bypassed()
         && run_fx_chain(
             track_plugins.iter().copied(),
+            track.fx_bypass(),
             ctx,
             scratch.sidechain,
             (&mut *scratch.track_buf_l, &mut *scratch.track_buf_r),
+            scratch.fx_dry,
             strategy,
         )
     {

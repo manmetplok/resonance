@@ -35,7 +35,9 @@ pub(super) fn render_stopped_block(
         monitor.input_channels,
         scratch.track_buf_l,
         scratch.track_buf_r,
+        scratch.fx_dry,
         timing.transport,
+        inputs.sample_rate,
     );
     if any_monitor {
         // Apply master volume and compute master peak levels.

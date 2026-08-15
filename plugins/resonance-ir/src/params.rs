@@ -8,6 +8,8 @@ use parking_lot::Mutex;
 use resonance_plugin::*;
 use std::sync::Arc;
 
+use crate::dsp::{LatencyMode, LATENCY_MODE_LABELS};
+
 pub const MAX_FILE_INDEX: i32 = 999;
 
 /// Linear-gain bounds of the output trim: 0.1 is -20 dB, 10.0 is +20 dB,
@@ -78,6 +80,20 @@ pub struct IrParams {
     pub dry_wet: FloatParam,
 
     pub output_gain: FloatParam,
+
+    /// Convolution latency mode — see [`crate::dsp::LatencyMode`].
+    ///
+    /// A *parameter*, not an editor-only switch (ba todo #1300, audit
+    /// finding I1): the block size is the plugin's reported latency, and
+    /// making it a parameter is what puts it in the editor, in a host
+    /// automation lane and behind `track.set_plugin_param` at once.
+    ///
+    /// Reading it is not the same as applying it — the block size can only
+    /// change while the plugin is deactivated (CLAP only allows a reported
+    /// latency to change then, and the engine's delay lines are reallocated
+    /// with it), so `lib.rs` pushes the new latency to the host and applies
+    /// the change in `initialize()` on the reactivation that follows.
+    pub latency_mode: IntParam,
 }
 
 impl Default for IrParams {
@@ -118,6 +134,19 @@ impl Default for IrParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            latency_mode: IntParam::new(
+                "latency_mode",
+                "Latency Mode",
+                LatencyMode::default().index(),
+                IntRange::Linear {
+                    min: 0,
+                    max: LATENCY_MODE_LABELS.len() as i32 - 1,
+                },
+            )
+            // Display *and* parse come off this one table, so every
+            // surface — the editor's picker, a host automation lane,
+            // `track.plugin_params` — reads the mode's name.
+            .with_choices(LATENCY_MODE_LABELS),
         }
     }
 }

@@ -238,6 +238,7 @@ fn param(
         max_value: max,
         default_value: current,
         current_value: current,
+        ..Default::default()
     }
 }
 

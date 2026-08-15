@@ -33,6 +33,7 @@ fn make_minimal_project() -> ProjectFile {
         midi_clips: Vec::new(),
         busses: Vec::new(),
         sends: Vec::new(),
+        sidechain_routes: Vec::new(),
         section_definitions: Vec::new(),
         section_placements: Vec::new(),
         tempo_events: Vec::new(),

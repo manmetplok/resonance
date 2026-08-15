@@ -17,7 +17,7 @@
 //! Both shared one root cause: the engine control thread held the
 //! `Vec<ClapBundle>` inside `HandlerState`, and let `state` fall out
 //! of scope at thread exit. That dropped the bundles (`dlclose`)
-//! while `Arc<RwLock<IndexMap<_, Mutex<SyncClapInstance>>>>` was
+//! while `Arc<RwLock<IndexMap<_, PluginSlot>>>` was
 //! still pinned by other clones (the audio callback closure inside
 //! `_stream`, and the main thread's `engine.plugins`). The instances
 //! lived on with dangling function pointers into freed memory.
@@ -38,10 +38,10 @@
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::Arc;
 
-use resonance_audio::__test_support::{ClapBundle, SyncClapInstance};
+use resonance_audio::__test_support::{ClapBundle, PluginSlot};
 
 /// Find a locally-built CLAP bundle to load. Returns `None` if none
 /// of the candidate paths exist — the test then becomes a no-op so it
@@ -62,7 +62,7 @@ fn find_bundled_clap() -> Option<PathBuf> {
 }
 
 /// Mirror of the engine thread's plugin map type.
-type PluginsArc = Arc<RwLock<IndexMap<u32, Mutex<SyncClapInstance>>>>;
+type PluginsArc = Arc<RwLock<IndexMap<u32, PluginSlot>>>;
 
 #[test]
 fn dropping_plugins_before_bundles_does_not_segfault() {
@@ -84,7 +84,7 @@ fn dropping_plugins_before_bundles_does_not_segfault() {
 
     // Wrap the bundle in the same `Vec<ClapBundle>` shape the engine
     // thread holds in `HandlerState`, and the plugins map in the same
-    // `Arc<RwLock<IndexMap<_, Mutex<...>>>>` shape it shares with
+    // `Arc<RwLock<IndexMap<_, PluginSlot>>>` shape it shares with
     // `Resonance` and the audio callback.
     let bundles: Vec<ClapBundle> = vec![bundle];
 
@@ -97,7 +97,7 @@ fn dropping_plugins_before_bundles_does_not_segfault() {
         .expect("create_instance");
     plugins
         .write()
-        .insert(1, Mutex::new(SyncClapInstance(instance)));
+        .insert(1, PluginSlot::new(instance));
 
     // Clone the Arc so we still have a reference outside the engine
     // thread when "engine_thread" returns — this mirrors what the
@@ -110,7 +110,7 @@ fn dropping_plugins_before_bundles_does_not_segfault() {
     // 1. Swap the plugins map out under the write lock. Dropping
     //    the swapped-out map runs `ClapInstance::drop` while the
     //    parent `.clap` is still mapped in.
-    let drained: IndexMap<u32, Mutex<SyncClapInstance>> = std::mem::take(&mut *plugins.write());
+    let drained: IndexMap<u32, PluginSlot> = std::mem::take(&mut *plugins.write());
     drop(drained);
     // 2. Drop the bundles last (`dlclose`). At this point the map
     //    is empty so no instance still holds a function pointer
@@ -159,12 +159,12 @@ fn second_instance_after_first_is_destroyed_safely() {
             .expect("create_instance");
         plugins
             .write()
-            .insert(id, Mutex::new(SyncClapInstance(inst)));
+            .insert(id, PluginSlot::new(inst));
     }
 
     assert_eq!(plugins.read().len(), 2);
 
-    let drained: IndexMap<u32, Mutex<SyncClapInstance>> = std::mem::take(&mut *plugins.write());
+    let drained: IndexMap<u32, PluginSlot> = std::mem::take(&mut *plugins.write());
     assert_eq!(plugins.read().len(), 0);
     drop(drained);
     drop(bundles);

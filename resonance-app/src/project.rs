@@ -43,7 +43,8 @@ pub use model::{
     LoadedProject, ProjectBus, ProjectClip, ProjectExternalInstrument, ProjectFile,
     ProjectMidiClip, ProjectPerformance, ProjectPlugin, ProjectPluginParam, ProjectPoolAsset,
     ProjectReference,
-    ProjectReferenceMarker, ProjectReferenceSettings, ProjectSend, ProjectTrack, SaveCollector,
+    ProjectReferenceMarker, ProjectReferenceSettings, ProjectSend, ProjectSidechainRoute,
+    ProjectTrack, SaveCollector,
     audio_format_from_tag, audio_format_tag, fade_curve_from_tag, fade_curve_tag,
     send_source_from_tag, send_source_tag,
 };

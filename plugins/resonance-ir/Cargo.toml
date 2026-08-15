@@ -28,6 +28,12 @@ rfd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+# `tests/latency_mode_host.rs` drives a real (in-process) CLAP host across
+# the C ABI, which is the only way to exercise the host handle a runtime
+# latency change goes through.
+clack-host = { workspace = true }
+clack-plugin = { workspace = true }
+clack-extensions = { workspace = true, features = ["clack-host"] }
 
 # Per-block DSP benchmark. `harness = false` hands main() to criterion.
 [[bench]]

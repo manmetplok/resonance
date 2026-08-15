@@ -7,6 +7,7 @@ use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 
 use crate::app::EditorApp;
 use crate::error::EditorError;
+use crate::size::SharedSize;
 use crate::window_thread::{Command, EditorThread};
 
 /// Options passed to [`Editor::new`].
@@ -46,24 +47,27 @@ impl Default for EditorOptions {
 pub struct Editor {
     sender: calloop_channel::Sender<Command>,
     thread: Option<JoinHandle<()>>,
-    size: (u32, u32),
+    /// The window's live size, published by the editor thread on every
+    /// size it applies (see [`crate::size`]).
+    size: SharedSize,
     resizable: bool,
 }
 
 impl Editor {
     /// Create (but do not show) an editor window. Spawns the editor thread.
     pub fn new<A: EditorApp>(app: A, options: EditorOptions) -> Result<Self, EditorError> {
-        let size = options.initial_size;
+        let size = SharedSize::new(options.initial_size);
         let resizable = options.resizable;
 
         let (sender, cmd_channel) = calloop_channel::channel::<Command>();
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), EditorError>>(1);
 
         let thread_opts = options.clone();
+        let thread_size = size.clone();
         let thread = std::thread::Builder::new()
             .name("wayland-plugin-gui".to_string())
             .spawn(move || {
-                EditorThread::run(Box::new(app), thread_opts, cmd_channel, ready_tx);
+                EditorThread::run(Box::new(app), thread_opts, cmd_channel, ready_tx, thread_size);
             })
             .map_err(EditorError::ThreadSpawn)?;
 
@@ -100,20 +104,29 @@ impl Editor {
     ///
     /// On success the handle's bookkeeping is updated immediately, so a
     /// following [`Editor::get_size`] returns the requested size even
-    /// though the editor thread applies the resize asynchronously.
+    /// though the editor thread applies the resize asynchronously. The
+    /// compositor has the last word: whatever size it configures the
+    /// window to — which may not be the one asked for — replaces this
+    /// value as soon as the editor thread applies it.
     pub fn set_size(&mut self, width: u32, height: u32) -> Result<(), EditorError> {
         self.sender
             .send(Command::Resize(width, height))
             .map_err(|_| EditorError::ChannelClosed)?;
-        self.size = (width, height);
+        self.size.set((width, height));
         Ok(())
     }
 
-    /// The last size requested via [`EditorOptions::initial_size`] or
-    /// [`Editor::set_size`]. Interactive resizes done by the user through
-    /// the compositor are not fed back into this handle.
+    /// The window's current logical size.
+    ///
+    /// This tracks what the window *is*, not what was last asked for:
+    /// the editor thread publishes every size it applies, so a resize the
+    /// user performed through the compositor (dragging an edge, tiling,
+    /// maximising) shows up here. That is what makes a host persist and
+    /// restore the size the user actually left the editor at — before ba
+    /// todo #1337 this returned the last requested size and every
+    /// interactive resize was lost on save.
     pub fn get_size(&self) -> (u32, u32) {
-        self.size
+        self.size.get()
     }
 
     pub fn is_resizable(&self) -> bool {

@@ -85,9 +85,50 @@ pub fn v2s_f32_hz() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     })
 }
 
+/// Parse a frequency string back to Hz, accepting everything
+/// [`v2s_f32_hz`] can print plus the shorthands a user reaches for:
+/// `440`, `440 Hz`, `1.2 kHz`, `1.2k`, `1.2K`.
+///
+/// A param formatted with `v2s_f32_hz` needs this to be typeable (ba
+/// todo #1287): the default parse only strips the declared unit, so it
+/// reads `440 Hz` but chokes on the `kHz` form its own display produces
+/// above 1 kHz.
+pub fn s2v_f32_hz() -> Arc<dyn Fn(&str) -> Option<f32> + Send + Sync> {
+    Arc::new(|s: &str| {
+        let s = s.trim();
+        let lower = s.to_ascii_lowercase();
+        let (number, multiplier) = if let Some(rest) = lower.strip_suffix("khz") {
+            (rest, 1000.0)
+        } else if let Some(rest) = lower.strip_suffix("hz") {
+            (rest, 1.0)
+        } else if let Some(rest) = lower.strip_suffix('k') {
+            (rest, 1000.0)
+        } else {
+            (lower.as_str(), 1.0)
+        };
+        number.trim().parse::<f32>().ok().map(|v| v * multiplier)
+    })
+}
+
 /// Format a compression ratio as `N.N:1`.
 pub fn v2s_f32_ratio() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     Arc::new(|value: f32| format!("{:.1}:1", value))
+}
+
+/// Parse a compression ratio, accepting both the `4.0:1` form
+/// [`v2s_f32_ratio`] prints and a bare `4`.
+pub fn s2v_f32_ratio() -> Arc<dyn Fn(&str) -> Option<f32> + Send + Sync> {
+    Arc::new(|s: &str| {
+        let s = s.trim();
+        let number = match s.split_once(':') {
+            // Only `N:1` means the ratio N; anything else (`4:2`) is not
+            // a form this parameter has a value for.
+            Some((left, right)) if right.trim() == "1" => left,
+            Some(_) => return None,
+            None => s,
+        };
+        number.trim().parse::<f32>().ok()
+    })
 }
 
 /// Format a 0..1 mix value as a percentage with the given decimal

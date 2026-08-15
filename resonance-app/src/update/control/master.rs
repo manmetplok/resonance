@@ -25,6 +25,8 @@ use resonance_control::methods::track;
 use resonance_control::{Request, Response, RpcError};
 
 use super::reply::{ack, reject};
+use super::sidechain;
+use super::view_model;
 
 /// Handle a `master.*` request, or `None` when `method` belongs to
 /// another namespace.
@@ -41,9 +43,76 @@ pub(super) fn try_handle(
         master::SET_FX_BYPASS => set_fx_bypass(app, request),
         master::PLUGIN_PARAMS => plugin_params(app, request),
         master::SET_PLUGIN_PARAM => set_plugin_param(app, request),
+        master::SET_SIDECHAIN => set_sidechain(app, request),
+        master::CLEAR_SIDECHAIN => clear_sidechain(app, request),
         _ => return None,
     };
     Some(out)
+}
+
+/// `master.set_sidechain` — key a plugin on the master chain from a
+/// track or bus (ba doc #275 P4, todo #1311).
+///
+/// The narrow but real mastering case: a bus compressor on the master
+/// keyed from the kick, so the mix breathes with the rhythm rather than
+/// with whichever transient happens to be loudest. No `master_id` — there
+/// is exactly one master.
+fn set_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::SetSidechainParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let chain = app.master_plugins.clone();
+    const HOST: &str = "the master chain";
+
+    let source = match sidechain::resolve_key_source(
+        app,
+        master::SET_SIDECHAIN,
+        params.source_track_id,
+        params.source_bus_id,
+    ) {
+        Ok(source) => source,
+        Err(e) => return reject(request, e),
+    };
+    let instance_id = match sidechain::resolve_chain_target(
+        &chain,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        HOST,
+    ) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+    if let Err(e) = sidechain::require_key_port(&chain, instance_id, HOST) {
+        return reject(request, e);
+    }
+
+    let task = super::run_via_update(
+        app,
+        sidechain::route_message(instance_id, Some(source), params.enabled),
+    );
+    (ack(app, request), task)
+}
+
+/// `master.clear_sidechain` — drop a master plugin's key route so its
+/// detector goes back to the mix itself.
+fn clear_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::ClearSidechainParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let chain = app.master_plugins.clone();
+    let instance_id = match sidechain::resolve_chain_target(
+        &chain,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        "the master chain",
+    ) {
+        Ok(id) => id,
+        Err(e) => return reject(request, e),
+    };
+    let task = super::run_via_update(app, sidechain::route_message(instance_id, None, false));
+    (ack(app, request), task)
 }
 
 fn summary(app: &Resonance, request: &Request) -> Response {
@@ -168,18 +237,7 @@ fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
                 slot: i as u32,
                 occurrence: *occurrence,
                 kind: track::PluginKind::Effect,
-                params: p
-                    .params
-                    .iter()
-                    .map(|param| track::PluginParamView {
-                        id: param.id,
-                        name: param.name.clone(),
-                        value: param.current_value,
-                        min: param.min_value,
-                        max: param.max_value,
-                        default: param.default_value,
-                    })
-                    .collect(),
+                params: p.params.iter().map(view_model::param_view).collect(),
             }
         })
         .collect()
@@ -444,12 +502,6 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if !params.value.is_finite() {
-        return reject(
-            request,
-            RpcError::invalid_params(format!("value must be finite (got {})", params.value)),
-        );
-    }
     let entries = master_plugin_entries(app);
     let occurrence = params.occurrence.unwrap_or(0);
     let entry = match &params.plugin_id {
@@ -515,16 +567,11 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     };
 
     // Shared with `track.set_plugin_param` so the f32-declared-bounds
-    // tolerance (todo #1235) behaves identically on all three surfaces.
-    let Some(value) = super::track::clamp_within_tolerance(params.value, param.min, param.max)
-    else {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "{} must be within {}..={} (got {})",
-                param.name, param.min, param.max, params.value
-            )),
-        );
+    // tolerance (todo #1235) and choice-label resolution (todo #1290)
+    // behave identically on all three chains.
+    let value = match super::track::resolve_param_value(param, &params.value) {
+        Ok(value) => value,
+        Err(e) => return reject(request, e),
     };
 
     let Some(instance_id) = app
