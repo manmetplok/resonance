@@ -36,7 +36,10 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
         info.set(&ParamInfo {
             id: ClapId::new(meta.clap_id),
             name: meta.name.as_bytes(),
-            module: b"",
+            // The param's group. Empty for an ungrouped param, which is
+            // what CLAP expects; a `/`-separated path otherwise, which
+            // hosts nest in their automation-lane picker (ba todo #1289).
+            module: meta.module.as_bytes(),
             default_value: meta.default,
             min_value: meta.min,
             max_value: meta.max,

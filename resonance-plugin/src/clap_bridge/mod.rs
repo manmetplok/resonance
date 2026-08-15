@@ -158,6 +158,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 clap_id,
                 str_id: p.id().to_string(),
                 name: p.name().to_string(),
+                module: p.module().to_string(),
                 min: p.min_plain(),
                 max: p.max_plain(),
                 default: p.default_plain(),

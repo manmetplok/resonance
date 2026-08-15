@@ -256,6 +256,149 @@ fn hidden_int_params_report_hidden() {
 }
 
 // ---------------------------------------------------------------------------
+// IntParam display / choices (ba todo #1289, finding X9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_int_param_can_carry_its_own_formatter() {
+    // Before #1289 there was no builder at all, so every choice param in
+    // the fleet reached a host as a bare integer.
+    let p = IntParam::new("shape", "Shape", 0, IntRange::Linear { min: 0, max: 2 })
+        .with_value_to_string(Arc::new(|v: i32| format!("Shape {}", v + 1)));
+
+    assert_eq!(p.display(0.0), "Shape 1");
+    assert_eq!(p.display(2.0), "Shape 3");
+    // Rounding still happens before the formatter sees the value.
+    assert_eq!(p.display(1.6), "Shape 3");
+}
+
+#[test]
+fn an_int_param_can_carry_its_own_parser() {
+    let p = IntParam::new("shape", "Shape", 0, IntRange::Linear { min: 0, max: 2 })
+        .with_string_to_value(Arc::new(|s: &str| match s.trim() {
+            "first" => Some(0),
+            _ => None,
+        }));
+
+    assert_eq!(p.parse(" first "), Some(0.0));
+    // A custom parser replaces the numeric fallback entirely, as it does
+    // for FloatParam.
+    assert_eq!(p.parse("1"), None);
+}
+
+const FILTER_TYPES: &[&str] = &["Low-pass", "High-pass", "Band-pass", "Notch"];
+
+#[test]
+fn choices_display_as_labels_and_parse_from_either_form() {
+    let p = IntParam::new(
+        "filter_type",
+        "Filter Type",
+        0,
+        IntRange::Linear { min: 0, max: 3 },
+    )
+    .with_choices(FILTER_TYPES);
+
+    assert_eq!(p.choices(), Some(FILTER_TYPES));
+    for (i, label) in FILTER_TYPES.iter().enumerate() {
+        assert_eq!(p.display(i as f64), *label);
+        // An agent sends the label…
+        assert_eq!(p.parse(label), Some(i as f64), "parse({label:?})");
+        // …a host sends the index. Both must land on the same value.
+        assert_eq!(p.parse(&i.to_string()), Some(i as f64));
+    }
+
+    // Labels match case-insensitively and ignore surrounding space, so a
+    // typed entry does not have to reproduce the exact casing.
+    assert_eq!(p.parse("  band-pass "), Some(2.0));
+    assert_eq!(p.parse("no such mode"), None);
+}
+
+#[test]
+fn choices_are_indexed_from_the_ranges_minimum() {
+    // A choice param whose range does not start at zero (a semitone
+    // offset, a bipolar mode select) must still map label 0 to `min`.
+    const MODES: &[&str] = &["Down", "Centre", "Up"];
+    let p =
+        IntParam::new("mode", "Mode", 0, IntRange::Linear { min: -1, max: 1 }).with_choices(MODES);
+
+    assert_eq!(p.display(-1.0), "Down");
+    assert_eq!(p.display(0.0), "Centre");
+    assert_eq!(p.display(1.0), "Up");
+    assert_eq!(p.parse("Up"), Some(1.0));
+    assert_eq!(p.parse("Down"), Some(-1.0));
+}
+
+#[test]
+fn a_value_outside_the_choice_table_shows_the_number() {
+    // A range/table mismatch has to be visible, not silently read as the
+    // last label.
+    const TWO: &[&str] = &["A", "B"];
+    let p = IntParam::new("x", "X", 0, IntRange::Linear { min: 0, max: 5 }).with_choices(TWO);
+
+    assert_eq!(p.display(1.0), "B");
+    assert_eq!(p.display(4.0), "4");
+    assert_eq!(p.display(-3.0), "-3");
+}
+
+#[test]
+fn a_choice_param_round_trips_its_own_display() {
+    let p = IntParam::new(
+        "filter_type",
+        "Filter Type",
+        0,
+        IntRange::Linear { min: 0, max: 3 },
+    )
+    .with_choices(FILTER_TYPES);
+
+    for i in 0..=3 {
+        p.set_plain(i as f64);
+        let text = p.display(p.get_plain());
+        assert_eq!(p.parse(&text), Some(i as f64), "round trip of {text:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Param::module (ba todo #1289, finding X7)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn params_are_ungrouped_unless_they_declare_a_module() {
+    let f = FloatParam::new("mix", "Mix", 0.0, linear(0.0, 1.0));
+    let i = IntParam::new("taps", "Taps", 1, IntRange::Linear { min: 1, max: 8 });
+    let b = BoolParam::new("on", "On", false);
+
+    assert_eq!(f.module(), "");
+    assert_eq!(i.module(), "");
+    assert_eq!(b.module(), "");
+}
+
+#[test]
+fn every_param_type_can_declare_a_module() {
+    // Mastering's ~60 params live in 8 stages; a `/` nests them further
+    // (the multiband's four bands under the multiband stage).
+    let f = FloatParam::new("mb_low_thr", "Threshold", 0.0, linear(-40.0, 0.0))
+        .with_module("Multiband/Low");
+    let i = IntParam::new("eq_type", "Type", 0, IntRange::Linear { min: 0, max: 4 })
+        .with_module("Tonal EQ");
+    let b = BoolParam::new("glue_on", "On", false).with_module("Glue");
+
+    assert_eq!(f.module(), "Multiband/Low");
+    assert_eq!(i.module(), "Tonal EQ");
+    assert_eq!(b.module(), "Glue");
+}
+
+#[test]
+fn a_module_changes_nothing_else_about_the_param() {
+    let p = FloatParam::new("mix", "Mix", 0.25, linear(0.0, 1.0)).with_module("Stage");
+
+    assert_eq!(p.id(), "mix");
+    assert_eq!(p.default_plain(), 0.25);
+    p.set_plain(0.75);
+    assert_eq!(p.get_plain(), 0.75);
+    assert!(!p.is_hidden());
+}
+
+// ---------------------------------------------------------------------------
 // BoolParam
 // ---------------------------------------------------------------------------
 
