@@ -30,6 +30,10 @@ pub(crate) struct BlockPlan {
     /// Per-oscillator level, constant for the block. Kept as a separate
     /// factor from the pan gains so the per-sample multiply order stays
     /// `sample * level * pan`.
+    ///
+    /// This is the raw `oscN_level` param: the osc-balance crossfade is
+    /// applied per voice in `refresh_osc_setups`, because balance is a
+    /// modulation destination and so is not block-constant (ba todo #1323).
     pub osc1_level: f32,
     pub osc2_level: f32,
 
@@ -69,8 +73,8 @@ impl SynthEngine {
             wt1_idx,
             wt2_idx,
             oscs_active,
-            osc1_level: snap.osc1_level * (1.0 - snap.osc_balance.max(0.0)),
-            osc2_level: snap.osc2_level * (1.0 - snap.osc_balance.min(0.0).abs()),
+            osc1_level: snap.osc1_level,
+            osc2_level: snap.osc2_level,
             amp_coeffs: EnvCoeffs::for_params(
                 snap.amp_attack,
                 snap.amp_decay,

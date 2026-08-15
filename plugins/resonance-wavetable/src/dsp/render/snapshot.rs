@@ -33,6 +33,10 @@ pub(crate) struct ParamSnapshot {
     pub osc1_pan: f32,
     pub osc2_pan: f32,
 
+    /// Unison detune width in cents. Read per block (not baked at note-on)
+    /// so `ModDest::UnisonDetune` can move it on a sounding voice.
+    pub unison_detune: f32,
+
     pub filter_enabled: bool,
     pub filter_type: FilterType,
     pub filter_cutoff: f32,
@@ -120,6 +124,8 @@ impl ParamSnapshot {
             osc2_level: params.osc2.level.value(),
             osc1_pan: params.osc1.pan.value(),
             osc2_pan: params.osc2.pan.value(),
+
+            unison_detune: params.unison.detune.value(),
 
             filter_enabled: params.filter.enabled.value(),
             filter_type: FilterType::from_int(params.filter.filter_type.value()),
