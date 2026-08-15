@@ -289,6 +289,17 @@ pub struct Resonance {
     /// plugin internal state via `LoadPluginState`. Stale between
     /// refreshes — parameter values in snapshots always come from live
     /// GUI state instead.
+    ///
+    /// Also **seeded from the project file at load time** (see
+    /// `update::project_io::replay::entity::replay_plugins`), which is
+    /// what keeps a slot whose `.clap` is missing from losing its opaque
+    /// state: the engine can never report a blob for an instance it
+    /// failed to create, so without the seed the first Save As wrote
+    /// nothing for it and the settings were gone (ba doc #275, P5).
+    /// Every writer of project state reads this map — the save collector
+    /// via [`crate::update::project_io::plugin_states_for_save`], template
+    /// capture, "save track as preset", and the undo snapshot — so the
+    /// blob survives all of them.
     pub(crate) plugin_state_cache:
         std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<u8>>,
 
@@ -349,8 +360,20 @@ pub struct Resonance {
     /// here and `engine_events::plugins::apply_pending_param_overrides`
     /// applies them (to the app-side mirror and to the engine) the moment
     /// the event arrives. Entries are consumed on use.
-    pub(crate) pending_plugin_param_overrides:
-        std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<(u32, f64)>>,
+    ///
+    /// An entry that is *never* consumed is the signature of a plugin the
+    /// host could not instantiate — a missing `.clap`. Its slot's
+    /// `params` mirror stays empty forever, so serialization reads the
+    /// parked list back out instead (see
+    /// `update::project_io::serialize::project_plugin`) rather than
+    /// writing an empty `params` array and destroying the user's settings
+    /// on the first Save As (ba doc #275, P5). That is why the values are
+    /// held in their on-disk [`crate::project::ProjectPluginParam`] shape,
+    /// names included: what comes off disk is written back verbatim.
+    pub(crate) pending_plugin_param_overrides: std::collections::HashMap<
+        resonance_audio::types::PluginInstanceId,
+        Vec<crate::project::ProjectPluginParam>,
+    >,
 }
 
 /// Startup tab requested via `--tab arrange|mixer|compose|performance`. Read

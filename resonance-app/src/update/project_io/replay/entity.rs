@@ -301,6 +301,19 @@ pub(super) fn replay_master(
 /// blob, and collect placeholder GUI slots. The placeholders' params +
 /// has_gui are overwritten when the subsequent PluginAdded event
 /// arrives from the engine.
+///
+/// **A plugin that never comes back.** `AddPlugin` is fire-and-forget:
+/// if the `.clap` isn't on this machine the engine replies with a
+/// generic `AudioEvent::Error` and no `PluginAdded`, so the placeholder
+/// stays in the chain with an empty `params` mirror and the engine has
+/// no instance to save state from. Everything this loop parks app-side —
+/// the opaque blob in `plugin_state_cache`, the parameter values in
+/// `pending_plugin_param_overrides` — is therefore the *only* surviving
+/// copy of that plugin's settings, and every project-writing path reads
+/// it back so a Save As on a machine without the plugin no longer
+/// destroys them (ba doc #275, P5). Both are dropped again the moment
+/// the instance does turn up (`engine_events::plugins`), where the
+/// engine becomes the source of truth.
 pub(super) fn replay_plugins(
     r: &mut Resonance,
     plugins: &[ProjectPlugin],
@@ -315,6 +328,13 @@ pub(super) fn replay_plugins(
                 instance_id: pp.instance_id,
                 data: state_data.clone(),
             });
+            // Keep the blob app-side, byte for byte, as the plugin's
+            // last known state. A live plugin overwrites this entry with
+            // its own fresh blob on the `PluginStateSaved` echo that
+            // follows `PluginAdded`; a missing one never does, and this
+            // copy is what the next save writes.
+            r.plugin_state_cache
+                .insert(pp.instance_id, state_data.clone());
         }
         // Park the saved parameter overrides until `PluginAdded` reports
         // this instance's param list. Applying them here would be undone:
@@ -322,10 +342,8 @@ pub(super) fn replay_plugins(
         // defaults) and overwrites `slot.params` wholesale. See
         // `Resonance::pending_plugin_param_overrides`.
         if !pp.params.is_empty() {
-            r.pending_plugin_param_overrides.insert(
-                pp.instance_id,
-                pp.params.iter().map(|p| (p.id, p.value)).collect(),
-            );
+            r.pending_plugin_param_overrides
+                .insert(pp.instance_id, pp.params.clone());
         }
         gui_plugins.push(PluginSlotState::new(
             pp.instance_id,
