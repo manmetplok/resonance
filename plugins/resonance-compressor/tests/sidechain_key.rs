@@ -7,7 +7,7 @@
 
 use resonance_compressor::dsp::CompressorDsp;
 use resonance_compressor::params::CompressorParams;
-use resonance_compressor::viz::CompressorViz;
+use resonance_compressor::viz::{CompressorViz, DetectorSource};
 use resonance_compressor::ResonanceCompressor;
 use resonance_plugin::{Param, ResonancePlugin};
 
@@ -174,6 +174,97 @@ fn the_sidechain_hpf_still_applies_to_an_external_key() {
         filtered > unfiltered,
         "the HPF should have reduced the key's grip: {filtered} vs {unfiltered}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Detector source published to the editor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_fresh_viz_reports_no_key() {
+    // Before the first block the editor must not claim a key: the honest
+    // default is the ordinary self-keyed compressor.
+    let viz = CompressorViz::new();
+    assert_eq!(viz.detector_source(), DetectorSource::Input);
+    assert!(!viz.detector_source().key_connected());
+}
+
+#[test]
+fn processing_with_a_key_publishes_the_connection() {
+    let p = params();
+    let viz = CompressorViz::new();
+    let mut dsp = CompressorDsp::new(SR, &p);
+    let mut l = tone(0.3, 512);
+    let mut r = l.clone();
+    let key = tone(0.9, 512);
+    let key_r = key.clone();
+    dsp.process_stereo(&mut l, &mut r, Some((&key, &key_r)), &p, &viz);
+
+    assert_eq!(viz.detector_source(), DetectorSource::ExternalKey);
+}
+
+#[test]
+fn dropping_the_key_clears_the_connection() {
+    // The host stops handing over a key the moment the route is removed,
+    // so the editor has to go back to saying "input" without any other
+    // notification.
+    let p = params();
+    let viz = CompressorViz::new();
+    let mut dsp = CompressorDsp::new(SR, &p);
+    let mut l = tone(0.3, 512);
+    let mut r = l.clone();
+    let key = tone(0.9, 512);
+    let key_r = key.clone();
+    dsp.process_stereo(&mut l, &mut r, Some((&key, &key_r)), &p, &viz);
+    assert_eq!(viz.detector_source(), DetectorSource::ExternalKey);
+
+    dsp.process_stereo(&mut l, &mut r, None, &p, &viz);
+    assert_eq!(viz.detector_source(), DetectorSource::Input);
+}
+
+#[test]
+fn a_silent_key_still_counts_as_connected() {
+    // Presence is about routing, not about level — a key that happens to
+    // be silent this block is still what the detector is listening to,
+    // and that is exactly when the user most needs to be told.
+    let p = params();
+    let viz = CompressorViz::new();
+    let mut dsp = CompressorDsp::new(SR, &p);
+    let mut l = tone(0.9, 512);
+    let mut r = l.clone();
+    let silent = vec![0.0f32; 512];
+    dsp.process_stereo(&mut l, &mut r, Some((&silent, &silent)), &p, &viz);
+
+    assert_eq!(viz.detector_source(), DetectorSource::ExternalKey);
+}
+
+#[test]
+fn an_empty_block_still_publishes_the_connection() {
+    // Routing is a fact about the connection, not about this block having
+    // audio in it, so a zero-length block must not blank the editor's
+    // status line.
+    let p = params();
+    let viz = CompressorViz::new();
+    let mut dsp = CompressorDsp::new(SR, &p);
+    let empty: [f32; 0] = [];
+    let mut l = empty;
+    let mut r = empty;
+    dsp.process_stereo(&mut l, &mut r, Some((&empty, &empty)), &p, &viz);
+
+    assert_eq!(viz.detector_source(), DetectorSource::ExternalKey);
+}
+
+#[test]
+fn the_meter_label_says_which_signal_the_detector_hears() {
+    // Self-keyed, the IN bar is also the detector's source; keyed, it is
+    // not, and the label must stop claiming otherwise.
+    assert_eq!(DetectorSource::Input.input_meter_label(), "IN/DET");
+    assert_eq!(DetectorSource::ExternalKey.input_meter_label(), "IN");
+    assert_ne!(
+        DetectorSource::Input.header_text(),
+        DetectorSource::ExternalKey.header_text()
+    );
+    assert!(DetectorSource::ExternalKey.header_text().contains("KEY"));
 }
 
 #[test]

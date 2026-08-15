@@ -7,7 +7,7 @@
 //! tolerate the (very rare) one-sample straddle at frame boundaries
 //! since this is purely a viz trace.
 
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Number of samples kept in the GR history ring buffer.
@@ -20,6 +20,50 @@ pub const HISTORY_LEN: usize = 256;
 /// 60 FPS.
 pub const HISTORY_STEP_SAMPLES: u32 = 256;
 
+/// Which signal the detector is listening to, as observed by the audio
+/// thread on its last processed block.
+///
+/// This is the one thing about a sidechain compressor a user cannot infer
+/// from the meters: with a key connected the GR meter is driven by a
+/// signal that is nowhere on screen, so an idle IN meter next to a moving
+/// GR meter looks like a bug rather than like ducking working correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectorSource {
+    /// No key connected — the compressor keys off its own input.
+    Input,
+    /// The host connected an external sidechain key; the detector listens
+    /// to the key, and the IN meter shows a signal that is *not* driving
+    /// the gain reduction.
+    ExternalKey,
+}
+
+impl DetectorSource {
+    /// True when the host has an external key wired into the plugin's
+    /// sidechain port.
+    pub fn key_connected(self) -> bool {
+        matches!(self, Self::ExternalKey)
+    }
+
+    /// Label for the input meter. Without a key the input *is* the
+    /// detector source, and saying so is what keeps "IN" from being read
+    /// as "the thing moving the GR meter" once a key takes over.
+    pub fn input_meter_label(self) -> &'static str {
+        match self {
+            Self::Input => "IN/DET",
+            Self::ExternalKey => "IN",
+        }
+    }
+
+    /// One-line statement of what the detector is listening to, for the
+    /// editor header.
+    pub fn header_text(self) -> &'static str {
+        match self {
+            Self::Input => "DETECTOR: INPUT",
+            Self::ExternalKey => "DETECTOR: SIDECHAIN KEY",
+        }
+    }
+}
+
 pub struct CompressorViz {
     /// Most recent input peak in dBFS (`-inf` when silent).
     pub input_db: AtomicU32,
@@ -27,6 +71,10 @@ pub struct CompressorViz {
     pub output_db: AtomicU32,
     /// Most recent gain reduction in dB (positive = reducing).
     pub gr_db: AtomicU32,
+    /// Whether the last processed block had an external key connected.
+    /// Published by the DSP, where the detector source is actually chosen,
+    /// so the flag can never disagree with what the detector did.
+    pub key_connected: AtomicBool,
     /// Rolling history of GR samples, newest at `write_pos`.
     pub history: GrHistory,
 }
@@ -69,8 +117,15 @@ impl CompressorViz {
             input_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             output_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             gr_db: AtomicU32::new(0.0f32.to_bits()),
+            key_connected: AtomicBool::new(false),
             history: GrHistory::new(),
         })
+    }
+
+    /// Publish whether an external key is feeding the detector. Called
+    /// once per block from the audio thread; wait-free.
+    pub fn store_key_connected(&self, connected: bool) {
+        self.key_connected.store(connected, Ordering::Relaxed);
     }
 
     pub fn store_levels(&self, input_db: f32, output_db: f32, gr_db: f32) {
@@ -93,5 +148,14 @@ impl CompressorViz {
 
     pub fn read_gr_db(&self) -> f32 {
         f32::from_bits(self.gr_db.load(Ordering::Relaxed))
+    }
+
+    /// What the detector was listening to on the last processed block.
+    pub fn detector_source(&self) -> DetectorSource {
+        if self.key_connected.load(Ordering::Relaxed) {
+            DetectorSource::ExternalKey
+        } else {
+            DetectorSource::Input
+        }
     }
 }
