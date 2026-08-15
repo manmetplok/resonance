@@ -15,12 +15,13 @@ mod factory;
 mod kit_browser;
 mod pad_grid;
 mod pad_inspector;
-mod reload;
 mod theme;
 mod widgets;
 
 pub use factory::DrumsEditorFactory;
 
 // Re-exported so the per-section modules (`pad_inspector`, `kit_browser`)
-// can keep their existing `super::reload_kit` import path.
-pub(crate) use reload::reload_kit;
+// can keep their existing `super::reload_kit` import path. The helper
+// itself lives at `crate::reload` because the articulation watcher needs
+// it in headless builds too.
+pub(crate) use crate::reload::reload_kit;
