@@ -179,6 +179,16 @@ impl Multiband {
         LinearPhaseLowpass::latency()
     }
 
+    /// Current gain reduction of each band's compressor in dB (positive
+    /// = attenuation), low band first.
+    ///
+    /// Free: every band compressor already tracks this for its own
+    /// meter, decayed over ~250 ms so the value is readable rather than
+    /// flickering. Reading it adds nothing to the audio thread.
+    pub fn band_gr_db(&self) -> [f32; NUM_BANDS] {
+        std::array::from_fn(|i| self.band_comps[i].meter_gr_db())
+    }
+
     /// Process a stereo block in place.
     ///
     /// Scratch is sized for `max_buffer` frames, which the plugin's

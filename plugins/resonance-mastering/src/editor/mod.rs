@@ -172,7 +172,7 @@ impl EditorApp for MasteringEditorApp {
                     ui,
                     self.current_stage,
                     &self.params,
-                    &self.viz.assistant,
+                    &self.viz,
                     &mut self.selected_genre,
                     &mut self.target_source,
                     &mut self.reference_path,
