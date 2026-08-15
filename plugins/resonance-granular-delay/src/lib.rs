@@ -144,6 +144,21 @@ impl ResonanceGranularDelay {
             .as_ref()
             .map_or(0.0, GranularDsp::tracked_period_samples)
     }
+
+    /// Grain onsets the WSOLA aligner moved off their nominal position
+    /// since activation (ba todo #1320; test/metering aid — 0 whenever
+    /// the Align parameter is off).
+    pub fn aligned_spawns(&self) -> u64 {
+        self.dsp.as_ref().map_or(0, GranularDsp::aligned_spawns)
+    }
+
+    /// Largest onset-alignment lag magnitude applied since activation,
+    /// in samples (test/metering aid).
+    pub fn max_align_lag_samples(&self) -> f64 {
+        self.dsp
+            .as_ref()
+            .map_or(0.0, GranularDsp::max_align_lag_samples)
+    }
 }
 
 impl ResonancePlugin for ResonanceGranularDelay {
@@ -241,6 +256,10 @@ impl ResonancePlugin for ResonanceGranularDelay {
             grain_seconds: self.params.grain_size_ms.value() * 0.001,
             density_hz: self.params.density_hz.value(),
             scheduler: scheduler.engine_mode(),
+            // WSOLA onset alignment (ba todo #1320): a plain bool
+            // parameter, so it is reachable from the editor chip and
+            // from track/bus/master.set_plugin_param alike.
+            align: self.params.align.value(),
             pitch_semitones: self.params.pitch.value(),
             detune_spread_cents: self.params.spread_cents.value(),
             texture: self.params.texture.value(),
