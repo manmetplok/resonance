@@ -6,6 +6,7 @@
 //! renders the canonical two-column layout (pad list + per-pad detail)
 //! plus a bottom row of KIT and GLOBAL cards.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use resonance_common::registry::InstalledItem;
@@ -40,6 +41,10 @@ pub(crate) struct DrumsEditorApp {
     /// Cached list of installed drum kits from the shared registry.
     pub(crate) installed_kits: Vec<InstalledItem>,
     installed_kits_refresh: u32,
+    /// Displayed OUT meter level per channel. Rises instantly to the peak
+    /// the audio thread published and falls back with a fixed decay, so
+    /// the bar tracks real output instead of sitting dead.
+    out_meter: [f32; 2],
 }
 
 impl DrumsEditorApp {
@@ -66,7 +71,35 @@ impl DrumsEditorApp {
             download_panel: download_panel::DownloadPanelState::default(),
             installed_kits,
             installed_kits_refresh: 0,
+            out_meter: [0.0; 2],
         }
+    }
+
+    /// Fold the audio thread's latest block peak into the displayed OUT
+    /// meter and return the level to draw. The editor repaints at ~10 Hz
+    /// while the audio thread publishes every block, so the peak is taken
+    /// as an instant rise and a 0.75×-per-frame fall — a real reading with
+    /// readable ballistics, never a value we made up.
+    pub(crate) fn tick_out_meter(&mut self) -> [f32; 2] {
+        const DECAY: f32 = 0.75;
+        for (channel, level) in self.out_meter.iter_mut().enumerate() {
+            let published =
+                f32::from_bits(self.bridge.out_peak[channel].load(Ordering::Relaxed));
+            let published = if published.is_finite() && published > 0.0 {
+                published
+            } else {
+                0.0
+            };
+            *level = if published >= *level {
+                published
+            } else {
+                (*level * DECAY).max(published)
+            };
+            if *level < 1.0e-5 {
+                *level = 0.0;
+            }
+        }
+        self.out_meter
     }
 
     fn maybe_refresh_installed_kits(&mut self) {

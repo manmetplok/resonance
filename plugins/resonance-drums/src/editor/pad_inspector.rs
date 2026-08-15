@@ -2,7 +2,7 @@
 //!
 //! Layout, top-to-bottom:
 //!   • Pad title (Instrument Serif italic) + meta + Audition + Enabled chip
-//!   • Sample stage (placeholder waveform canvas)
+//!   • Sample stage (waveform of the take this pad plays at full velocity)
 //!   • 4-knob row: Volume / Pan / OH Blend / Balance
 //!   • Articulations chips (only when the pad supports articulation)
 //!   • Close mics card (mic pickers + balance slider) + Overhead Blend card
@@ -18,6 +18,7 @@ use resonance_plugin::param::Param;
 use crate::drum_map::PAD_MAPPINGS;
 use crate::mic_catalog::ManifestMicCatalog;
 use crate::params::DrumParams;
+use crate::sample_info::PadSampleInfo;
 use crate::KitBridge;
 
 use super::{reload_kit, theme, widgets};
@@ -43,8 +44,17 @@ pub fn draw(
         let mapping = &PAD_MAPPINGS[selected_pad];
         let pad = &params.pads[selected_pad];
 
+        // Sample identity is published by whoever built the live kit; the
+        // clone keeps the bridge lock off the whole inspector frame.
+        let sample_info = bridge
+            .pad_samples
+            .lock()
+            .get(selected_pad)
+            .cloned()
+            .flatten();
+
         draw_pad_head(ui, mapping, pad);
-        draw_sample_stage(ui);
+        draw_sample_stage(ui, sample_info.as_ref());
         draw_knob_grid(ui, pad, mapping);
 
         if mapping.has_articulation {
@@ -140,7 +150,13 @@ fn draw_enabled_chip(ui: &mut egui::Ui, pad: &crate::params::PadParams, enabled:
     }
 }
 
-fn draw_sample_stage(ui: &mut egui::Ui) {
+/// SAMPLE stage: the waveform of the take this pad plays at full velocity.
+///
+/// Everything drawn here comes from [`PadSampleInfo`], measured from the
+/// decoded take by whoever built the kit. When no info has been published
+/// for this pad — no kit loaded yet, or the pad has no bank in this kit —
+/// the stage says so instead of drawing an invented shape (ba todo #1276).
+fn draw_sample_stage(ui: &mut egui::Ui, info: Option<&PadSampleInfo>) {
     let frame = egui::Frame::default()
         .fill(theme::BG_1)
         .stroke(egui::Stroke::new(1.0, theme::LINE_2))
@@ -181,32 +197,44 @@ fn draw_sample_stage(ui: &mut egui::Ui) {
             egui::FontId::proportional(10.0),
             theme::TEXT_3,
         );
-        // Top-right filename placeholder.
+
+        let Some(info) = info else {
+            p.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "no sample detail available — load a kit",
+                egui::FontId::proportional(11.0),
+                theme::TEXT_4,
+            );
+            return;
+        };
+
+        // Top-right: which bank the shown take came from.
         p.text(
             rect.right_top() + egui::vec2(-10.0, 10.0),
             egui::Align2::RIGHT_TOP,
-            "—",
+            info.source_text(),
             egui::FontId::monospace(10.0),
             theme::TEXT_2,
         );
 
-        // Placeholder waveform — a soft decaying sinusoid centered.
-        let n = 240usize;
-        let mut pts: Vec<egui::Pos2> = Vec::with_capacity(n);
-        for i in 0..n {
-            let t = i as f32 / (n - 1) as f32;
-            let env = (-t * 4.0).exp();
-            let osc = (t * 18.0).sin();
-            let y = mid_y - env * osc * (h * 0.32);
-            let x = rect.left() + t * avail;
-            pts.push(egui::pos2(x, y));
+        // Waveform — the published min/max envelope of the real take.
+        let half = h * 0.36;
+        let buckets = info.envelope.len();
+        if buckets > 0 {
+            let bucket_w = avail / buckets as f32;
+            for (i, (lo, hi)) in info.envelope.iter().enumerate() {
+                let x = rect.left() + i as f32 * bucket_w;
+                let y_hi = mid_y - hi.clamp(-1.0, 1.0) * half;
+                let y_lo = mid_y - lo.clamp(-1.0, 1.0) * half;
+                p.line_segment(
+                    [egui::pos2(x, y_hi), egui::pos2(x, y_lo.max(y_hi + 0.5))],
+                    egui::Stroke::new(bucket_w.max(0.9), theme::ACCENT_SOFT),
+                );
+            }
         }
-        p.add(egui::Shape::line(
-            pts.clone(),
-            egui::Stroke::new(0.9, theme::ACCENT_SOFT),
-        ));
 
-        // Start/end markers as dashed yellow ticks at 4 px from the edge.
+        // Start/end markers as ticks at the take's boundaries.
         let mk = |x: f32| {
             p.line_segment(
                 [
@@ -216,21 +244,21 @@ fn draw_sample_stage(ui: &mut egui::Ui) {
                 egui::Stroke::new(0.6, theme::WARM),
             );
         };
-        mk(rect.left() + 6.0);
-        mk(rect.right() - 6.0);
+        mk(rect.left() + 1.0);
+        mk(rect.right() - 1.0);
 
-        // Bottom markers row.
+        // Bottom row: real duration on the left, layer/take identity right.
         p.text(
             rect.left_bottom() + egui::vec2(8.0, -8.0),
             egui::Align2::LEFT_BOTTOM,
-            "00:00.000",
+            info.duration_text().unwrap_or_else(|| "—".to_string()),
             egui::FontId::monospace(9.5),
             theme::TEXT_4,
         );
         p.text(
             rect.right_bottom() + egui::vec2(-8.0, -8.0),
             egui::Align2::RIGHT_BOTTOM,
-            "—",
+            info.layer_text(),
             egui::FontId::monospace(9.5),
             theme::TEXT_4,
         );
