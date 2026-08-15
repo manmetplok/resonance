@@ -156,7 +156,10 @@ impl ResonanceMcp {
 
     #[tool(
         description = "List a bus's effects and every parameter each one exposes — id, name, \
-                       current value, min, max and default. Omit plugin_id for all of them. \
+                       current value, min, max, default, and what the value MEANS: text (the \
+                       plugin's own rendering), unit, module, stepped, choices and hidden, \
+                       exactly as track_plugin_params reports them. Omit plugin_id for all of \
+                       them. \
                        The entries are the same shape track_plugin_params returns, including \
                        slot (0-based chain position, which IS processing order) and occurrence \
                        (which copy of a repeated effect). Every entry is kind: \"effect\" — a \
@@ -181,8 +184,10 @@ impl ResonanceMcp {
                        the bus's first, which is unambiguous only on a one-effect chain. A \
                        value outside the parameter's min..=max is rejected with the range \
                        rather than clamped, but a value that rounds onto an f32-declared bound \
-                       (0.1 against a reported 0.10000000149011612) is accepted. Repeated sets \
-                       of the same parameter collapse into one undo entry.",
+                       (0.1 against a reported 0.10000000149011612) is accepted. value also \
+                       takes a choice label as a string (\"Low-pass\") for any parameter \
+                       bus_plugin_params reports choices for. Repeated sets of the same \
+                       parameter collapse into one undo entry.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn bus_set_plugin_param(

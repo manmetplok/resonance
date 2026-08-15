@@ -160,6 +160,7 @@ fn the_engine_echo_fills_the_placeholder_instead_of_duplicating_it() {
             max_value: 24.0,
             default_value: 0.0,
             current_value: 0.0,
+            ..Default::default()
         }],
         has_gui: false,
         has_sidechain_input: false,
@@ -261,6 +262,7 @@ fn the_initializing_window_is_distinguishable_from_the_other_two_failures() {
             max_value: 24.0,
             default_value: 0.0,
             current_value: 0.0,
+            ..Default::default()
         }],
         has_gui: false,
         has_sidechain_input: false,

@@ -77,6 +77,7 @@ fn params_at_defaults() -> Vec<ParamInfo> {
             max_value: 20_000.0,
             default_value: 8000.0,
             current_value: 8000.0,
+            ..Default::default()
         },
         ParamInfo {
             id: DISTORTION_ID,
@@ -85,6 +86,7 @@ fn params_at_defaults() -> Vec<ParamInfo> {
             max_value: 1.0,
             default_value: 0.0,
             current_value: 0.0,
+            ..Default::default()
         },
         ParamInfo {
             id: RESONANCE_ID,
@@ -93,6 +95,7 @@ fn params_at_defaults() -> Vec<ParamInfo> {
             max_value: 1.0,
             default_value: 0.5,
             current_value: 0.5,
+            ..Default::default()
         },
     ]
 }
@@ -121,7 +124,7 @@ fn set_param(app: &mut Resonance, param: &str, value: f64) {
             plugin_id: Some(PLUGIN_ID.to_owned()),
             occurrence: None,
             param: param.to_owned(),
-            value,
+            value: track_proto::ParamValue::Number(value),
         },
     );
     assert!(

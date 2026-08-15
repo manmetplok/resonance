@@ -59,6 +59,7 @@ fn app() -> Resonance {
                 max_value: 200.0f32 as f64,
                 default_value: 10.0,
                 current_value: 10.0,
+                ..Default::default()
             },
             ParamInfo {
                 id: 2,
@@ -67,6 +68,7 @@ fn app() -> Resonance {
                 max_value: F32_MAX_NINE_TENTHS,
                 default_value: 0.5,
                 current_value: 0.5,
+                ..Default::default()
             },
             ParamInfo {
                 id: 3,
@@ -75,6 +77,7 @@ fn app() -> Resonance {
                 max_value: 20000.0,
                 default_value: 1000.0,
                 current_value: 1000.0,
+                ..Default::default()
             },
         ],
         has_gui: false,
@@ -263,6 +266,7 @@ fn a_nan_bound_is_treated_as_a_malformed_range_rather_than_panicking() {
                 max_value: 1.0,
                 default_value: 0.5,
                 current_value: 0.5,
+                ..Default::default()
             },
             ParamInfo {
                 id: 11,
@@ -271,6 +275,7 @@ fn a_nan_bound_is_treated_as_a_malformed_range_rather_than_panicking() {
                 max_value: f64::NAN,
                 default_value: 0.5,
                 current_value: 0.5,
+                ..Default::default()
             },
         ],
         has_gui: false,

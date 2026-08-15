@@ -125,8 +125,11 @@ impl ResonanceMcp {
 
     #[tool(
         description = "List the master chain's effects and every parameter each one exposes — \
-                       id, name, current value, min, max and default. Omit plugin_id for all of \
-                       them. The entries are the same shape track_plugin_params and \
+                       id, name, current value, min, max, default, and what the value MEANS: \
+                       text (the plugin's own rendering, so a stage reads \"-1.0 dB\" rather \
+                       than a bare number), unit, module — which stage of the mastering chain a \
+                       parameter belongs to — plus stepped, choices and hidden. Omit plugin_id \
+                       for all of them. The entries are the same shape track_plugin_params and \
                        bus_plugin_params return, including slot (0-based chain position, which \
                        IS processing order) and occurrence (which copy of a repeated effect). \
                        Every entry is kind: \"effect\" — the master has no instrument. \
@@ -155,8 +158,10 @@ impl ResonanceMcp {
                        one-effect chain. A value outside the parameter's min..=max is rejected \
                        with the range rather than clamped, but a value that rounds onto an \
                        f32-declared bound (0.1 against a reported 0.10000000149011612) is \
-                       accepted. Repeated sets of the same parameter collapse into one undo \
-                       entry, and a set applies even while the transport is stopped. \
+                       accepted. value also takes a choice label as a string for any parameter \
+                       master_plugin_params reports choices for. Repeated sets of the same \
+                       parameter collapse into one undo entry, and a set applies even while the \
+                       transport is stopped. \
                        \
                        \"com.resonance.mastering\" is a chain of stages that each default to \
                        OFF, so at its defaults it passes the mix through untouched — a plugin \

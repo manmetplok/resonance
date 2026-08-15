@@ -239,3 +239,47 @@ fn freeze_sustains_signal() {
         "freeze signal decayed too much: {ratio_db:.1} dB"
     );
 }
+
+/// The note divisions are declared ON the parameter, not just in the
+/// editor's combo box (ba todos #1289/#1290).
+///
+/// This is what the CLAP `value_to_text` bridge reads, and therefore
+/// what reaches a host's automation lane, `track.plugin_params` and its
+/// MCP tool. Before it, a division read as a bare `7` everywhere outside
+/// this crate — which is why #1273 needed a local workaround: the wire
+/// had nowhere to put "1/8".
+#[test]
+fn the_division_parameter_names_its_note_values() {
+    let plugin = ResonanceDelay::new();
+    let division = &plugin.params.division;
+    assert_eq!(
+        division.choices(),
+        Some(resonance_delay::sync::DIVISION_LABELS)
+    );
+    assert_eq!(division.display(7.0), "1/8");
+    assert_eq!(division.display(8.0), "1/8D");
+    // ...and the inverse, so a label typed by a user or sent over the
+    // control API lands on the right step — case-insensitively, like
+    // every other choice parameter.
+    assert_eq!(division.parse("1/8D"), Some(8.0));
+    assert_eq!(division.parse("1/16t"), Some(11.0));
+    // A raw index still parses, and an unknown label is not silently
+    // taken for one.
+    assert_eq!(division.parse("4"), Some(4.0));
+    assert_eq!(division.parse("1/3"), None);
+
+    // The gate reads its period off the same table, and nothing else
+    // asserts that those labels reach the wire.
+    let gate_rate = &plugin.params.gate_rate;
+    assert_eq!(
+        gate_rate.choices(),
+        Some(resonance_delay::sync::DIVISION_LABELS)
+    );
+    assert_eq!(gate_rate.display(7.0), "1/8");
+    assert_eq!(gate_rate.parse("1/16"), Some(10.0));
+
+    // Both ranges are the table's, so a label can never index past it.
+    let last = resonance_delay::sync::DIVISION_LABELS.len() as f64 - 1.0;
+    assert_eq!(division.max_plain(), last);
+    assert_eq!(gate_rate.max_plain(), last);
+}

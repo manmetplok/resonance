@@ -272,11 +272,38 @@ impl ClapInstance {
                     .to_string_lossy()
                     .to_string()
             };
+            let module = unsafe {
+                CStr::from_ptr(info.module.as_ptr())
+                    .to_string_lossy()
+                    .to_string()
+            };
 
-            // Skip hidden params
-            if info.flags & clap_sys::ext::params::CLAP_PARAM_IS_HIDDEN != 0 {
-                continue;
-            }
+            // A hidden parameter is still automatable and still saved —
+            // CLAP only asks that it not be *shown* — so it stays in the
+            // list, flagged, and the readers that draw a parameter list
+            // skip it (ba todo #1290). Dropping it here instead cost the
+            // app its value on save and put it out of automation's
+            // reach.
+            let hidden = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_HIDDEN != 0;
+            let stepped = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_STEPPED != 0;
+
+            // What the plugin calls this value, and the unit taken off
+            // it. `value_to_text` is the only place a unit exists in
+            // CLAP — there is no separate field.
+            let text = self.param_text(info.id, current).unwrap_or_default();
+            let unit = super::param_meta::unit_from_text(&text).to_string();
+
+            // A stepped parameter that names its steps is an
+            // enumeration: ask the plugin for each label once, here,
+            // rather than leaving every reader to probe for them.
+            let choices = if stepped {
+                super::param_meta::choice_labels(info.min_value, info.max_value, |v| {
+                    self.param_text(info.id, v)
+                })
+                .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
 
             result.push(ParamInfo {
                 id: info.id,
@@ -285,10 +312,90 @@ impl ClapInstance {
                 max_value: info.max_value,
                 default_value: info.default_value,
                 current_value: current,
+                text,
+                unit,
+                stepped,
+                choices,
+                module,
+                hidden,
             });
         }
 
         result
+    }
+
+    /// One parameter's `min..=max`, without touching its formatting
+    /// (ba todo #1290).
+    ///
+    /// [`query_params`](Self::query_params) answers this too, but it now
+    /// carries a parameter's whole meaning — a `value_to_text` call per
+    /// parameter plus a choice-label walk per stepped one — and a caller
+    /// that only wants a range would pay all of it and discard it. The
+    /// automation snapshot resolves a lane's range while holding the
+    /// instance lock that the audio thread abandons a block rather than
+    /// wait for, and a breakpoint drag re-resolves per event, so on an
+    /// 87-parameter plugin that is a stutter mechanism.
+    ///
+    /// This walks `get_info` only, allocates nothing, and stops at the
+    /// id. Engine/main thread, like the rest of the params extension.
+    pub fn param_range(&self, param_id: u32) -> Option<(f64, f64)> {
+        let params = self.params_ext?;
+        let count_fn = unsafe { (*params).count }?;
+        let get_info = unsafe { (*params).get_info }?;
+        let count = unsafe { count_fn(self.plugin) };
+
+        for i in 0..count {
+            let mut info =
+                std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+            let ok = unsafe { get_info(self.plugin, i, info.as_mut_ptr()) };
+            if !ok {
+                continue;
+            }
+            let info = unsafe { info.assume_init() };
+            if info.id == param_id {
+                return Some((info.min_value, info.max_value));
+            }
+        }
+        None
+    }
+
+    /// The plugin's own rendering of `value` for one parameter — `"40 %"`,
+    /// `"-6.0 dB"`, `"Low-pass"` — or `None` when it offers no
+    /// conversion (ba todo #1290).
+    ///
+    /// This is CLAP `value_to_text`, and it is the *only* way to learn
+    /// what a number means to the plugin: 100+ `with_value_to_string`
+    /// call sites across our own fleet were reachable from third-party
+    /// hosts and from nothing in Resonance until this call existed.
+    ///
+    /// Takes any value, not just the current one, so a caller can ask
+    /// "what would this read as" — which is how choice labels are
+    /// collected and how the engine echoes fresh text after a write.
+    /// Main/engine thread only, like the rest of the params extension.
+    pub fn param_text(&self, param_id: u32, value: f64) -> Option<String> {
+        let params = self.params_ext?;
+        let value_to_text = unsafe { (*params).value_to_text }?;
+
+        // CLAP writes a NUL-terminated string into a caller-owned
+        // buffer; 256 bytes is what hosts conventionally offer and far
+        // more than a formatted parameter needs.
+        let mut buf = [0u8; 256];
+        let ok = unsafe {
+            value_to_text(
+                self.plugin,
+                param_id,
+                value,
+                buf.as_mut_ptr() as *mut std::ffi::c_char,
+                buf.len() as u32,
+            )
+        };
+        if !ok {
+            return None;
+        }
+        // Defend against a plugin that fills the buffer without
+        // terminating it: bound the scan at the buffer, don't run off it.
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        Some(String::from_utf8_lossy(&buf[..end]).into_owned())
     }
 
     /// Queue a parameter change to be sent during the next process() call.

@@ -247,7 +247,14 @@ impl ResonanceMcp {
 
     #[tool(
         description = "List a track's plugins and every parameter each one exposes — id, name, \
-                       current value, min, max and default. Omit plugin_id for all of them. \
+                       current value, min, max, default, and what the value MEANS: text (the \
+                       plugin's own rendering, \"40 %\", \"-6.0 dB\", \"Low-pass\"), unit, \
+                       module (the group it sits in), stepped, and choices (the names of a \
+                       stepped parameter's values, which track_set_plugin_param accepts \
+                       directly). Read text before trusting a number: value 2.0 on a 0..=4 \
+                       range is meaningless on its own. hidden marks a parameter the plugin \
+                       asks not be shown — still readable and writable, but leave it out of a \
+                       listing. Omit plugin_id for all of them. \
                        Plugins are named by the CLAP id song_tracks already shows (its \
                        instrument field or an entry of its effects array); occurrence \
                        disambiguates a track carrying the same plugin twice. Each entry also \
@@ -274,6 +281,12 @@ impl ResonanceMcp {
                        outside the parameter's min..=max is rejected with the range rather than \
                        clamped. Repeated sets of the same parameter collapse into one undo \
                        entry. \
+                       \
+                       value takes a number, or — for a parameter track_plugin_params reports \
+                       with choices — one of those labels as a string, matched \
+                       case-insensitively: send \"Low-pass\" instead of working out that it is \
+                       3. A label that matches none of them is rejected with the ones that \
+                       would have worked. \
                        \
                        The min/max track_plugin_params reports are f64 renderings of f32 plugin \
                        declarations, so a bound often reads with a long tail of digits (a \
