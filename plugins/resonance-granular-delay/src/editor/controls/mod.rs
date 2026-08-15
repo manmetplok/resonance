@@ -46,7 +46,7 @@ use super::widgets::{
 mod division_stepper;
 mod freeze_latch;
 
-pub use division_stepper::division_stepper;
+pub use division_stepper::{division_stepper, DivisionReadout};
 pub use freeze_latch::freeze_latch;
 
 /// One titled group of parameter controls.
@@ -64,9 +64,10 @@ pub const GROUPS: &[ParamGroup] = &[
     },
     ParamGroup {
         name: "Grains",
-        // grain_size, density, density_sync, scheduler + the TEXTURE
-        // sub-row: texture, spray, size_jitter, level_jitter, reverse
-        params: &[7, 8, 9, 10, 14, 15, 16, 17, 18],
+        // grain_size, density, density_sync, density_division, align,
+        // scheduler + the TEXTURE sub-row: texture, spray, size_jitter,
+        // level_jitter, reverse
+        params: &[7, 8, 9, 30, 29, 10, 14, 15, 16, 17, 18],
     },
     ParamGroup {
         name: "Pitch",
@@ -138,8 +139,10 @@ pub const SCALE_LABELS: &[&str] = &[
 /// `GranularDelayParams::param_at` for the index table).
 pub fn control_kind(index: usize) -> ControlKind {
     match index {
-        0 | 6 | 9 | 19 => ControlKind::Toggle, // sync, fb_pitch, density_sync, freeze
-        1 => ControlKind::Choice(DIVISION_LABELS),
+        // sync, fb_pitch, density_sync, freeze, align
+        0 | 6 | 9 | 19 | 29 => ControlKind::Toggle,
+        // division (delay tap) and density_division (grain rate)
+        1 | 30 => ControlKind::Choice(DIVISION_LABELS),
         3 => ControlKind::Choice(TIME_MODE_LABELS),
         5 => ControlKind::Choice(FB_ROUTE_LABELS),
         10 => ControlKind::Choice(SCHEDULER_LABELS),
@@ -169,7 +172,7 @@ pub fn draw(ui: &mut Ui, params: &GranularDelayParams, viz: &GranularViz) {
         ui.spacing_mut().item_spacing = egui::vec2(GROUP_GAP, 4.0);
         ui.add_space(4.0);
         group_frame(ui, GROUP_W[0], "TIME", |ui| draw_time(ui, params, bpm), true, params);
-        group_frame(ui, GROUP_W[1], "GRAINS", |ui| draw_grains(ui, params), false, params);
+        group_frame(ui, GROUP_W[1], "GRAINS", |ui| draw_grains(ui, params, bpm), false, params);
         group_frame(ui, GROUP_W[2], "PITCH", |ui| draw_pitch(ui, params), false, params);
         group_frame(ui, GROUP_W[3], "FEEDBACK", |ui| draw_feedback(ui, params), false, params);
         group_frame(ui, GROUP_W[4], "SPACE", |ui| draw_space(ui, params), false, params);
@@ -243,7 +246,7 @@ fn caption(ui: &mut Ui, text: &str) {
 fn draw_time(ui: &mut Ui, params: &GranularDelayParams, bpm: f32) {
     ui.vertical_centered(|ui| {
         if params.sync.value() {
-            division_stepper(ui, params, 1, bpm);
+            division_stepper(ui, params, 1, bpm, DivisionReadout::DelayMs);
         } else {
             macro_knob(ui, params, 2);
         }
@@ -255,16 +258,31 @@ fn draw_time(ui: &mut Ui, params: &GranularDelayParams, bpm: f32) {
     });
 }
 
-/// GRAINS: Size + Density macro knobs (PER-BEAT chip under Density),
-/// the vertical scheduler segmented, and the bordered TEXTURE sub-row.
-fn draw_grains(ui: &mut Ui, params: &GranularDelayParams) {
+/// GRAINS: Size + Density macro knobs (the PER-BEAT and ALIGN chips
+/// under Density), the vertical scheduler segmented, and the bordered
+/// TEXTURE sub-row.
+///
+/// PER-BEAT is the same conditional disclosure as SYNC in the TIME
+/// group (req-4, ba todo #1322): with it on, the Density knob swaps
+/// in-place for the density-division stepper — same cell, no layout
+/// jump — and the readout shows the resulting grains per second at the
+/// host tempo.
+fn draw_grains(ui: &mut Ui, params: &GranularDelayParams, bpm: f32) {
     ui.horizontal(|ui| {
         macro_knob(ui, params, 7);
         ui.vertical(|ui| {
-            macro_knob(ui, params, 8);
+            if params.density_sync.value() {
+                division_stepper(ui, params, 30, bpm, DivisionReadout::GrainsPerSecond);
+            } else {
+                macro_knob(ui, params, 8);
+            }
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
                 param_chip(ui, params, 9, "PER-BEAT", true);
+                // WSOLA onset alignment (ba todo #1320): a plain bool
+                // param, so the same switch is reachable over
+                // set_plugin_param.
+                param_chip(ui, params, 29, "ALIGN", true);
             });
         });
         ui.add_space(6.0);
@@ -349,8 +367,7 @@ fn draw_feedback(ui: &mut Ui, params: &GranularDelayParams) {
     });
 }
 
-/// SPACE: Pan Spread, Width, Diffuse texture knobs (Diffuse is
-/// designed-but-inert until its DSP lands — still wired to its param).
+/// SPACE: Pan Spread, Width, Diffuse texture knobs.
 fn draw_space(ui: &mut Ui, params: &GranularDelayParams) {
     ui.horizontal(|ui| {
         texture_knob_labeled(ui, params, 23, "Pan Spr");

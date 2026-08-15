@@ -17,7 +17,13 @@ editor = ["dep:wayland-plugin-gui", "dep:egui", "resonance-plugin/editor-widgets
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
-serde_json.workspace = true
 
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
 egui = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Only the factory-preset test parses JSON directly; the plugin itself
+# loads presets through `resonance_plugin::presets`, which carries its
+# own serde_json. This was a normal dependency that nothing used at all
+# (ba todo #1330, finding C4).
+serde_json.workspace = true

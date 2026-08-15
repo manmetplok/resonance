@@ -111,6 +111,7 @@ impl Default for MasteringParams {
                     max: -6.0,
                 },
             )
+            .with_unit(" LUFS")
             .with_value_to_string(format_lufs()),
             input_trim_db: FloatParam::new(
                 "input_trim_db",
