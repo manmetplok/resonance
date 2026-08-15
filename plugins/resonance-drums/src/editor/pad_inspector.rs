@@ -94,20 +94,27 @@ fn draw_pad_head(
             let enabled = !pad.mute.value();
             draw_enabled_chip(ui, pad, enabled);
             ui.add_space(8.0);
-            let resp = ui.add(
+            // Audition needs an editor -> audio-thread trigger channel,
+            // which does not exist yet (ba todo #1328 builds it). Until
+            // then the control is drawn disabled with the reason on hover
+            // rather than as a live button that swallows the click.
+            ui.add_enabled(
+                false,
                 egui::Button::new(
                     egui::RichText::new("▶ Audition")
-                        .color(theme::TEXT_2)
+                        .color(theme::TEXT_4)
                         .size(11.0),
                 )
                 .fill(egui::Color32::TRANSPARENT)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .stroke(egui::Stroke::new(1.0, theme::LINE_2))
                 .corner_radius(6.0)
                 .min_size(egui::vec2(0.0, 24.0)),
+            )
+            .on_disabled_hover_text(
+                "Auditioning from the editor is not wired up yet — the plugin \
+                 has no editor-to-audio trigger. Play the pad's MIDI note to \
+                 hear it.",
             );
-            // Audition: there is no audition pipeline yet — this is a
-            // visual control reserved for a future trigger.
-            let _ = resp;
         });
     });
     ui.add_space(2.0);
@@ -385,6 +392,19 @@ fn draw_articulations(
                 reload_kit(bridge);
             }
         });
+        ui.add_space(2.0);
+        // The chips work (they reload the kit through the bridge); the
+        // host-facing param does not. Say so, rather than let someone draw
+        // an automation lane that silently does nothing. ba todo #1325
+        // makes the param the source of truth and retires this note.
+        ui.label(
+            egui::RichText::new(
+                "Saved with the kit. The host's \"Pad Articulation\" parameter is a \
+                 display mirror — automating it does not switch samples.",
+            )
+            .color(theme::TEXT_4)
+            .size(10.0),
+        );
     });
 }
 
