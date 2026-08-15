@@ -19,6 +19,10 @@ pub(crate) struct ParamMeta {
     pub clap_id: u32,
     pub str_id: String,
     pub name: String,
+    /// The param's group, as CLAP's `/`-separated module path. Captured
+    /// once here because `get_info` runs on every host reload and must
+    /// hand out a borrow, not build a string (ba todo #1289).
+    pub module: String,
     pub min: f64,
     pub max: f64,
     pub default: f64,

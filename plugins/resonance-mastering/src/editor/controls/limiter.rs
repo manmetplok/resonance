@@ -26,17 +26,8 @@ pub fn draw(ui: &mut egui::Ui, params: &LimiterParams) {
             widgets::bool_checkbox(ui, &params.on, "On");
             ui.add_space(8.0);
 
-            let v = params.ceiling.value();
-            widgets::float_knob(
-                ui, &params.ceiling, -6.0..=0.0, -0.3,
-                "Ceiling", "dBTP", &format!("{:.1} dB", v), false,
-            );
-
-            let v = params.release.value();
-            widgets::float_knob(
-                ui, &params.release, 5.0..=500.0, 50.0,
-                "Release", "", &format!("{:.0} ms", v), true,
-            );
+            widgets::float_knob(ui, &params.ceiling, "Ceiling", "dBTP");
+            widgets::float_knob(ui, &params.release, "Release", "");
         });
 
         ui.add_space(8.0);

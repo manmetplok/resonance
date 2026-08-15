@@ -1,14 +1,14 @@
 use resonance_plugin::*;
 
-use crate::sync::DivisionParam;
+use crate::sync::DIVISION_LABELS;
 
 pub const PARAM_COUNT: usize = 22;
 
 pub struct DelayParams {
     pub sync: BoolParam,
     /// Delay time as a musical division; reads as "1/8D", never as "8"
-    /// (see [`DivisionParam`]).
-    pub division: DivisionParam,
+    /// ([`DIVISION_LABELS`] via [`IntParam::with_choices`]).
+    pub division: IntParam,
     pub time_ms: FloatParam,
     pub feedback: FloatParam,
     pub mix: FloatParam,
@@ -28,7 +28,7 @@ pub struct DelayParams {
     pub gate_on: BoolParam,
     /// Gate period as a musical division, labelled from the same table
     /// as [`DelayParams::division`].
-    pub gate_rate: DivisionParam,
+    pub gate_rate: IntParam,
     pub gate_width: FloatParam,
     pub gate_shape: FloatParam,
     pub gate_depth: FloatParam,
@@ -72,7 +72,19 @@ impl Default for DelayParams {
         Self {
             sync: BoolParam::new("sync", "Sync", true),
 
-            division: DivisionParam::new("division", "Division", 4),
+            // The label lives on the parameter, not in the editor, so the
+            // host's automation lane reads "1/4" too. The range is derived
+            // from the table it indexes, never hand-typed.
+            division: IntParam::new(
+                "division",
+                "Division",
+                4,
+                IntRange::Linear {
+                    min: 0,
+                    max: DIVISION_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(DIVISION_LABELS),
 
             time_ms: FloatParam::new(
                 "time_ms",
@@ -197,7 +209,16 @@ impl Default for DelayParams {
 
             // Same division table as the delay time, so "1/8 delay,
             // 1/16 gate" reads the way it sounds.
-            gate_rate: DivisionParam::new("gate_rate", "Gate Rate", 7),
+            gate_rate: IntParam::new(
+                "gate_rate",
+                "Gate Rate",
+                7,
+                IntRange::Linear {
+                    min: 0,
+                    max: DIVISION_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(DIVISION_LABELS),
 
             // Duty cycle: how much of each period the wet is open for.
             gate_width: FloatParam::new(

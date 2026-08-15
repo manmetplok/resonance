@@ -53,6 +53,21 @@ pub trait Param: Send + Sync {
     fn display(&self, value: f64) -> String;
     /// Parse a display string back to a value.
     fn parse(&self, text: &str) -> Option<f64>;
+    /// The parameter's group, as a `/`-separated path (ba todo #1289,
+    /// finding X7).
+    ///
+    /// This is CLAP's `clap_param_info.module`: hosts use it to build the
+    /// tree in their automation-lane picker, so `"Multiband/Low"` shows
+    /// up nested where `""` lands in one flat list. Mastering declares
+    /// ~60 params across 8 stages and wavetable 87; without a module they
+    /// arrive in a host as a single undifferentiated column, even though
+    /// the plugins' own editors tab them.
+    ///
+    /// Empty means "no group", which is what CLAP expects for a
+    /// top-level parameter — that stays the default.
+    fn module(&self) -> &str {
+        ""
+    }
     /// Whether this parameter is hidden from the host.
     fn is_hidden(&self) -> bool {
         false
@@ -80,6 +95,7 @@ pub struct FloatParam {
     value: AtomicU32,
     pub smoother: Smoother,
     unit: &'static str,
+    module: &'static str,
     value_to_string: Option<Arc<dyn Fn(f32) -> String + Send + Sync>>,
     string_to_value: Option<Arc<dyn Fn(&str) -> Option<f32> + Send + Sync>>,
     hidden: bool,
@@ -95,6 +111,7 @@ impl FloatParam {
             value: AtomicU32::new(default.to_bits()),
             smoother: Smoother::new(SmoothingStyle::None),
             unit: "",
+            module: "",
             value_to_string: None,
             string_to_value: None,
             hidden: false,
@@ -108,6 +125,13 @@ impl FloatParam {
 
     pub fn with_unit(mut self, unit: &'static str) -> Self {
         self.unit = unit;
+        self
+    }
+
+    /// Put this parameter in a host-visible group — see [`Param::module`].
+    /// `/`-separated for nesting: `"Multiband/Low"`.
+    pub fn with_module(mut self, module: &'static str) -> Self {
+        self.module = module;
         self
     }
 
@@ -144,6 +168,55 @@ impl FloatParam {
 
     pub fn range(&self) -> &FloatRange {
         &self.range
+    }
+
+    /// The declared default, as a plain value.
+    pub fn default_value(&self) -> f32 {
+        self.default
+    }
+
+    /// The declared unit suffix (`""` when the param declares none).
+    pub fn unit(&self) -> &'static str {
+        self.unit
+    }
+
+    // -- normalized (0..1) view -------------------------------------------
+    //
+    // Every editor control moves in 0..1 travel — a knob arc, a slider
+    // groove — while the parameter itself is a plain value on a possibly
+    // skewed range. These three map between the two through the param's
+    // *own* `FloatRange`, so a control can never follow a curve or reach
+    // an endpoint the parameter does not declare. They are the contract
+    // `editor_widgets::float_knob` / `float_slider` are built on, and are
+    // testable without a GUI.
+
+    /// Where the current value sits on the control's 0..1 travel.
+    pub fn normalized_value(&self) -> f32 {
+        self.range.normalize(self.value())
+    }
+
+    /// Where the default sits on the control's 0..1 travel (the position
+    /// a double-click-to-reset returns to).
+    pub fn default_normalized(&self) -> f32 {
+        self.range.normalize(self.default)
+    }
+
+    /// The plain value a 0..1 control position maps to.
+    pub fn plain_at_normalized(&self, normalized: f32) -> f32 {
+        self.range.denormalize(normalized)
+    }
+
+    /// Move the parameter to a 0..1 control position.
+    ///
+    /// Landing exactly on [`FloatParam::default_normalized`] writes the
+    /// declared default verbatim: a reset gesture has to produce `2.0 s`,
+    /// not the `1.9999998` the curve's round trip would otherwise leave.
+    pub fn set_normalized(&self, normalized: f32) {
+        if normalized == self.default_normalized() {
+            self.set_value(self.default);
+        } else {
+            self.set_value(self.plain_at_normalized(normalized));
+        }
     }
 }
 
@@ -199,6 +272,9 @@ impl Param for FloatParam {
             text.parse::<f64>().ok()
         }
     }
+    fn module(&self) -> &str {
+        self.module
+    }
     fn is_hidden(&self) -> bool {
         self.hidden
     }
@@ -214,6 +290,15 @@ pub struct IntParam {
     default: i32,
     range: IntRange,
     value: AtomicI32,
+    module: &'static str,
+    /// Choice labels, when the param is an enumeration — see
+    /// [`IntParam::with_choices`]. Kept alongside the formatter closures
+    /// so a caller that needs the *table* (a host's enum list, the
+    /// control API's `choices[]`, an editor's combo box) can read it
+    /// instead of probing `display` value by value.
+    choices: Option<&'static [&'static str]>,
+    value_to_string: Option<Arc<dyn Fn(i32) -> String + Send + Sync>>,
+    string_to_value: Option<Arc<dyn Fn(&str) -> Option<i32> + Send + Sync>>,
     hidden: bool,
 }
 
@@ -225,6 +310,10 @@ impl IntParam {
             default,
             range,
             value: AtomicI32::new(default),
+            module: "",
+            choices: None,
+            value_to_string: None,
+            string_to_value: None,
             hidden: false,
         }
     }
@@ -232,6 +321,82 @@ impl IntParam {
     pub fn hidden(mut self) -> Self {
         self.hidden = true;
         self
+    }
+
+    /// Put this parameter in a host-visible group — see [`Param::module`].
+    pub fn with_module(mut self, module: &'static str) -> Self {
+        self.module = module;
+        self
+    }
+
+    /// Format this parameter's value for display (ba todo #1289,
+    /// finding X9).
+    ///
+    /// Without one, an int param renders as a bare integer everywhere
+    /// outside its own editor: a host automation lane for the IR plugin's
+    /// cab index reads `37` instead of a cabinet name. The label tables
+    /// existed already — they just lived inside the editors, where the
+    /// host and the control API cannot see them.
+    pub fn with_value_to_string(mut self, f: Arc<dyn Fn(i32) -> String + Send + Sync>) -> Self {
+        self.value_to_string = Some(f);
+        self
+    }
+
+    /// Parse a display string back to a value (the inverse of
+    /// [`IntParam::with_value_to_string`]), so a host's or a user's typed
+    /// entry reaches the parameter.
+    pub fn with_string_to_value(
+        mut self,
+        f: Arc<dyn Fn(&str) -> Option<i32> + Send + Sync>,
+    ) -> Self {
+        self.string_to_value = Some(f);
+        self
+    }
+
+    /// Declare this parameter as an enumeration over `labels`, indexed
+    /// from the range's minimum.
+    ///
+    /// One call gives the whole fleet what it needs from a choice param:
+    /// the editor's combo box, the host's display, and a parse that
+    /// accepts either the label or the raw index. `labels` must be
+    /// `'static` (the editors need a stable slice to render per frame
+    /// without rebuilding it) and cover the declared range.
+    pub fn with_choices(mut self, labels: &'static [&'static str]) -> Self {
+        self.choices = Some(labels);
+        let min = self.range.min();
+        self.value_to_string = Some(Arc::new(move |v: i32| {
+            match usize::try_from(v - min).ok().and_then(|i| labels.get(i)) {
+                Some(label) => (*label).to_string(),
+                // Out of table: show the number rather than a wrong
+                // label, so a range/table mismatch is visible instead of
+                // silently reading as the last choice.
+                None => v.to_string(),
+            }
+        }));
+        self.string_to_value = Some(Arc::new(move |text: &str| {
+            let trimmed = text.trim();
+            labels
+                .iter()
+                .position(|label| label.eq_ignore_ascii_case(trimmed))
+                .and_then(|i| i32::try_from(i).ok())
+                .map(|i| i + min)
+                .or_else(|| trimmed.parse::<i32>().ok())
+        }));
+        self
+    }
+
+    /// The declared choice labels, if this parameter is an enumeration.
+    pub fn choices(&self) -> Option<&'static [&'static str]> {
+        self.choices
+    }
+
+    pub fn range(&self) -> &IntRange {
+        &self.range
+    }
+
+    /// The declared default.
+    pub fn default_value(&self) -> i32 {
+        self.default
     }
 
     pub fn value(&self) -> i32 {
@@ -274,10 +439,20 @@ impl Param for IntParam {
         self.range.max() as f64
     }
     fn display(&self, value: f64) -> String {
-        format!("{}", value.round() as i32)
+        let v = value.round() as i32;
+        match &self.value_to_string {
+            Some(f) => f(v),
+            None => format!("{}", v),
+        }
     }
     fn parse(&self, text: &str) -> Option<f64> {
-        text.trim().parse::<i32>().ok().map(|v| v as f64)
+        match &self.string_to_value {
+            Some(f) => f(text).map(|v| v as f64),
+            None => text.trim().parse::<i32>().ok().map(|v| v as f64),
+        }
+    }
+    fn module(&self) -> &str {
+        self.module
     }
     fn is_hidden(&self) -> bool {
         self.hidden
@@ -296,6 +471,7 @@ pub struct BoolParam {
     name: &'static str,
     default: bool,
     value: AtomicBool,
+    module: &'static str,
 }
 
 impl BoolParam {
@@ -305,7 +481,19 @@ impl BoolParam {
             name,
             default,
             value: AtomicBool::new(default),
+            module: "",
         }
+    }
+
+    /// Put this parameter in a host-visible group — see [`Param::module`].
+    pub fn with_module(mut self, module: &'static str) -> Self {
+        self.module = module;
+        self
+    }
+
+    /// The declared default.
+    pub fn default_value(&self) -> bool {
+        self.default
     }
 
     pub fn value(&self) -> bool {
@@ -360,6 +548,9 @@ impl Param for BoolParam {
             "off" | "false" | "0" | "no" => Some(0.0),
             _ => None,
         }
+    }
+    fn module(&self) -> &str {
+        self.module
     }
     fn is_stepped(&self) -> bool {
         true
