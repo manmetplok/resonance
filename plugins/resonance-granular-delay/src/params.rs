@@ -15,7 +15,14 @@
 
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 29;
+pub const PARAM_COUNT: usize = 31;
+
+/// Declared range of the free-running grain density, grains per second.
+/// The tempo-locked rate (`density_sync`, ba todo #1322) is clamped to
+/// the same range, so a very slow or very fast host tempo can never
+/// drive the cloud outside what the knob can ask for.
+pub const DENSITY_MIN_HZ: f32 = 0.5;
+pub const DENSITY_MAX_HZ: f32 = 100.0;
 
 pub struct GranularDelayParams {
     // --- Time -----------------------------------------------------------
@@ -52,8 +59,20 @@ pub struct GranularDelayParams {
     // --- Grains ---------------------------------------------------------
     pub grain_size_ms: FloatParam,
     pub density_hz: FloatParam,
-    /// Tempo-synced density (grains per beat division). TODO(epic-196).
+    /// Tempo-synced density (ba todo #1322): on, one grain is spawned
+    /// per [`Self::density_division`] of the host tempo instead of at
+    /// the free-running [`Self::density_hz`] rate, and the cloud
+    /// re-locks on every tempo change (the rate is resolved per block).
+    /// Falls back to `density_hz` when the host reports no tempo. The
+    /// resolved rate is clamped to [`DENSITY_MIN_HZ`]..=[`DENSITY_MAX_HZ`].
     pub density_sync: BoolParam,
+    /// Note value one grain is spawned per while [`Self::density_sync`]
+    /// is on; indexes the same table as [`Self::division`] (see
+    /// `crate::sync`). Deliberately its *own* division rather than the
+    /// delay's: the grain rate is a texture, and locking it to the tap
+    /// division would leave "1/4 delay, 1/16 grains" unreachable
+    /// (ba todo #1322).
+    pub density_division: IntParam,
     /// 0 = Sync, 1 = Async, 2 = Pitch-Sync (ba todo #1082, doc #252
     /// §4): PSOLA-style Voice/Mono mode — the real-time tracker runs on
     /// the written input; while voiced, grain onsets snap to pitch
@@ -61,6 +80,16 @@ pub struct GranularDelayParams {
     /// formants preserved); unvoiced spans fall back to Async
     /// transparently.
     pub scheduler: IntParam,
+    /// WSOLA-style correlation-aligned grain onsets (ba todo #1320,
+    /// doc #252 §4-5): before a grain spawns, the engine searches a few
+    /// milliseconds around its nominal read position for the lag that
+    /// maximizes cross-correlation with the natural continuation of the
+    /// previous grain, and snaps the onset there. Splices become
+    /// phase-coherent with the sounding material — most of the
+    /// pitch-synchronous quality benefit with no pitch tracker, and it
+    /// works on polyphonic material. Off is bit-identical to the
+    /// unaligned engine and costs nothing.
+    pub align: BoolParam,
 
     // --- Pitch ----------------------------------------------------------
     pub pitch: FloatParam,
@@ -97,8 +126,13 @@ pub struct GranularDelayParams {
     /// Damping filter cutoff in the feedback loop (smoothed; the
     /// coefficient updates at block rate).
     pub filter_hz: FloatParam,
-    /// Allpass smear of the wet path. TODO(epic-196): follow-up; not in
-    /// #1074's feedback DoD.
+    /// Allpass smear of the wet path, 0–100 % (ba todo #1321): four
+    /// cascaded Schroeder allpasses per channel, crossfaded in by this
+    /// knob, sitting after the feedback tap so the smear is heard on
+    /// every repeat without accumulating inside the loop. See
+    /// `crate::dsp::diffusion` for the design and why the amount is a
+    /// crossfade rather than the allpass coefficient. 0 skips the stage
+    /// outright, so it is exactly the pre-#1321 wet path.
     pub diffusion: FloatParam,
     pub pan_spread: FloatParam,
     /// M/S width on the wet sum, 0–150 % (smoothed; ba todo #1077).
@@ -147,6 +181,9 @@ impl GranularDelayParams {
             // stays stable (ba todo #1078).
             27 => &self.root,
             28 => &self.scale,
+            // Appended for the same reason (ba todos #1320, #1322).
+            29 => &self.align,
+            30 => &self.density_division,
             _ => &self.sync,
         }
     }
@@ -223,8 +260,8 @@ impl Default for GranularDelayParams {
                 "Density",
                 22.0,
                 FloatRange::Skewed {
-                    min: 0.5,
-                    max: 100.0,
+                    min: DENSITY_MIN_HZ,
+                    max: DENSITY_MAX_HZ,
                     factor: FloatRange::skew_factor(-1.0),
                 },
             )
@@ -233,12 +270,24 @@ impl Default for GranularDelayParams {
 
             density_sync: BoolParam::new("density_sync", "Density Sync", false),
 
+            density_division: IntParam::new(
+                "density_division",
+                "Density Div",
+                10, // 1/16 — a grain per sixteenth is a usable default
+                IntRange::Linear { min: 0, max: 11 },
+            ),
+
             scheduler: IntParam::new(
                 "scheduler",
                 "Scheduler",
                 1, // Async (doc #252 §9 default)
                 IntRange::Linear { min: 0, max: 2 },
             ),
+
+            // Off by default: the aligned and unaligned paths are two
+            // different (both valid) grain characters, and off keeps
+            // every existing project and preset bit-identical.
+            align: BoolParam::new("align", "Align", false),
 
             pitch: FloatParam::new(
                 "pitch",
@@ -427,6 +476,9 @@ pub struct GranularSmoothers {
     pub filter_hz: Smoother,
     /// M/S width on the wet sum (per-sample application).
     pub width: Smoother,
+    /// Allpass-smear amount (ba todo #1321; per-sample crossfade
+    /// between the dry and diffused wet path).
+    pub diffusion: Smoother,
     /// Equal-power crossfade position between the lock-stepped right
     /// engine (0) and the decorrelated one (1); the target is the
     /// binary gate `pan_spread > 0`, smoothed so toggling the spread
@@ -447,6 +499,7 @@ impl GranularSmoothers {
             feedback: Smoother::new(SmoothingStyle::Linear(50.0)),
             filter_hz: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             width: Smoother::new(SmoothingStyle::Linear(50.0)),
+            diffusion: Smoother::new(SmoothingStyle::Linear(50.0)),
             decor: Smoother::new(SmoothingStyle::Linear(crate::dsp::DECOR_FADE_MS)),
         }
     }
@@ -470,6 +523,8 @@ impl GranularSmoothers {
         self.filter_hz.reset(params.filter_hz.value());
         self.width.set_sample_rate(sample_rate);
         self.width.reset(params.width.value());
+        self.diffusion.set_sample_rate(sample_rate);
+        self.diffusion.reset(params.diffusion.value());
         self.decor.set_sample_rate(sample_rate);
         self.decor.reset(Self::decor_gate(params));
     }
@@ -479,6 +534,7 @@ impl GranularSmoothers {
         self.feedback.set_target(params.feedback.value());
         self.filter_hz.set_target(params.filter_hz.value());
         self.width.set_target(params.width.value());
+        self.diffusion.set_target(params.diffusion.value());
         self.decor.set_target(Self::decor_gate(params));
     }
 }

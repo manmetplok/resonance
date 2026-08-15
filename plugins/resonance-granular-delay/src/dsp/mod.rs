@@ -28,9 +28,11 @@
 //! | [`grains`]     | the three engine pairs and their wet buses              |
 //! | [`quant`]      | the plugin-side quantized-transpose draw                |
 //! | [`feedback`]   | conditioning chains, wet bus, recirc rings and clock    |
+//! | [`diffusion`]  | allpass smear of the wet path, after the tap (#1321)    |
 //! | [`mix`]        | M/S width and the equal-power dry/wet mix               |
 //! | [`viz_publish`]| editor presentation only — never read by the DSP        |
 
+mod diffusion;
 mod feedback;
 mod grains;
 mod mix;
@@ -48,6 +50,7 @@ use crate::params::GranularSmoothers;
 use crate::quantize::PitchQuantize;
 use crate::viz::GranularViz;
 
+use diffusion::DiffusionStage;
 use feedback::FeedbackStage;
 use grains::GrainBank;
 use quant::QuantDraw;
@@ -55,7 +58,7 @@ use source::SourceRing;
 use time::TimeMachine;
 use voice::VoiceStage;
 
-pub use grains::DECOR_FADE_MS;
+pub use grains::{ALIGN_WINDOW_SECONDS, DECOR_FADE_MS};
 pub use modes::{DampingFilter, FbRoute, QualityTier, Scheduler, TimeMode, LOFI_MAX_GRAINS};
 pub use source::{FREEZE_RAMP_SECONDS, MAX_DELAY_SECONDS};
 pub use time::{FADE_LEG_SECONDS, REPITCH_TAU_SECONDS};
@@ -78,6 +81,11 @@ pub struct BlockParams {
     pub grain_seconds: f32,
     pub density_hz: f32,
     pub scheduler: SchedulerMode,
+    /// WSOLA-style correlation-aligned grain onsets (ba todo #1320):
+    /// every grain engine snaps each onset to the lag within
+    /// [`ALIGN_WINDOW_SECONDS`] that best continues the previously
+    /// spawned grain. Off is the unaligned engine, bit for bit.
+    pub align: bool,
     pub pitch_semitones: f32,
     pub detune_spread_cents: f32,
     pub texture: f32,
@@ -104,6 +112,9 @@ pub struct BlockParams {
     /// feedback tap re-granulates without transpose (constant-pitch
     /// repeats).
     pub fb_pitch: bool,
+    /// Allpass smear of the wet path, 0..=1 (ba todo #1321): 0 skips
+    /// the stage outright, so the wet buses keep their exact bits.
+    pub diffusion: f32,
     /// Per-grain transpose quantization at spawn (ba todo #1078).
     pub quantize: PitchQuantize,
     /// Root/mode for [`PitchQuantize::Scale`].
@@ -126,6 +137,8 @@ pub struct GranularDsp {
     quant: QuantDraw,
     /// Feedback topology (ba todo #1074/#1075).
     feedback: FeedbackStage,
+    /// Allpass smear of the wet path (ba todo #1321).
+    diffusion: DiffusionStage,
 }
 
 impl GranularDsp {
@@ -140,6 +153,7 @@ impl GranularDsp {
             grains: GrainBank::new(sample_rate, max_block),
             quant: QuantDraw::new(),
             feedback: FeedbackStage::new(ring_len, max_block),
+            diffusion: DiffusionStage::new(sample_rate),
         }
     }
 
@@ -158,6 +172,29 @@ impl GranularDsp {
     /// Currently sounding grains (metering aid).
     pub fn active_grains(&self) -> usize {
         self.grains.engine_l.active_grains()
+    }
+
+    /// Grain onsets the WSOLA aligner has moved off their nominal
+    /// position since construction (ba todo #1320; audible-path
+    /// metering aid, left *internal* — it drives tests and any future
+    /// diagnostic readout, and the editor deliberately draws no lag
+    /// meter: the alignment decision is audible, a per-spawn lag count
+    /// is not something a user acts on).
+    pub fn aligned_spawns(&self) -> u64 {
+        self.grains.engine_l.aligned_spawns()
+    }
+
+    /// Largest onset-alignment lag magnitude applied so far, in samples
+    /// (metering aid; bounded by [`ALIGN_WINDOW_SECONDS`]).
+    pub fn max_align_lag_samples(&self) -> f64 {
+        self.grains.engine_l.max_abs_align_lag_samples()
+    }
+
+    /// Whether the diffusion stage touched the wet buses on the last
+    /// block (ba todo #1321; test/metering aid — false is the proof
+    /// that Diffusion 0 cannot have altered a sample).
+    pub fn diffusion_engaged(&self) -> bool {
+        self.diffusion.engaged()
     }
 
     /// Playback rates of the currently sounding audible grains (left
@@ -188,6 +225,7 @@ impl GranularDsp {
         self.grains.clear();
         self.quant.clear();
         self.feedback.clear();
+        self.diffusion.clear();
         self.voice.clear();
         self.time.clear(self.sample_rate);
     }
@@ -363,6 +401,18 @@ impl GranularDsp {
             params,
             gates.unity_tap,
             &plan,
+            smoothers,
+        );
+        // Diffusion (ba todo #1321) sits *after* the feedback tap and
+        // before the width/mix stage, so the loop recirculates the
+        // undiffused wet: the smear is heard on every repeat but never
+        // accumulates inside the loop. At 0 the stage is skipped
+        // outright, leaving the wet buses bit-identical.
+        self.diffusion.run(
+            &mut self.grains.wet_l,
+            &mut self.grains.wet_r,
+            frames,
+            params.diffusion,
             smoothers,
         );
         mix::mix_output(&self.grains, left, right, frames, smoothers);

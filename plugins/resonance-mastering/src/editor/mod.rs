@@ -16,6 +16,7 @@ use crate::viz::MasteringViz;
 
 mod controls;
 mod correlation;
+pub mod header;
 mod lufs_history;
 mod lufs_meter;
 mod readouts;
@@ -161,7 +162,7 @@ impl EditorApp for MasteringEditorApp {
 
         egui::Panel::top("mastering_header")
             .exact_size(40.0)
-            .show_inside(ui, |ui| draw_header(ui, self));
+            .show_inside(ui, |ui| header::draw(ui, &self.params, &self.viz));
 
         egui::Panel::top("mastering_tabs")
             .exact_size(32.0)
@@ -197,50 +198,6 @@ impl EditorApp for MasteringEditorApp {
     }
 }
 
-fn draw_header(ui: &mut egui::Ui, app: &mut MasteringEditorApp) {
-    ui.horizontal_centered(|ui| {
-        ui.add_space(12.0);
-        ui.label(
-            egui::RichText::new("RESONANCE MASTERING")
-                .strong()
-                .color(theme::ACCENT),
-        );
-        ui.add_space(16.0);
-        ui.separator();
-        ui.add_space(8.0);
-
-        let snap = app.viz.load_snapshot();
-        let target = app.params.target_lufs.value();
-        ui.label(egui::RichText::new(format!("Ref line: {target:.1} LUFS")).color(theme::TEXT_DIM));
-        ui.separator();
-        let int_text = if snap.integrated_lufs.is_finite() {
-            format!("Integrated: {:>5.1} LUFS", snap.integrated_lufs)
-        } else {
-            "Integrated: —".to_string()
-        };
-        ui.label(egui::RichText::new(int_text).color(theme::TEXT));
-
-        ui.separator();
-        let glue_gr = app.viz.glue_gr_db();
-        ui.label(
-            egui::RichText::new(format!("Glue GR: {glue_gr:>4.1} dB")).color(if glue_gr > 0.5 {
-                theme::ACCENT
-            } else {
-                theme::TEXT_DIM
-            }),
-        );
-        ui.separator();
-        let lim_gr = app.viz.limiter_gr_db();
-        ui.label(
-            egui::RichText::new(format!("Lim GR: {lim_gr:>4.1} dB")).color(if lim_gr > 0.5 {
-                theme::WARN
-            } else {
-                theme::TEXT_DIM
-            }),
-        );
-    });
-}
-
 fn draw_spectrum(ui: &mut egui::Ui, app: &mut MasteringEditorApp) {
     let avail = ui.available_rect_before_wrap();
     let painter = ui.painter_at(avail);
@@ -253,7 +210,7 @@ fn draw_right_panel(ui: &mut egui::Ui, app: &mut MasteringEditorApp) {
     let painter = ui.painter_at(avail);
 
     let snap = app.viz.load_snapshot();
-    let target = app.params.target_lufs.value();
+    let target = header::reference_line_lufs(&app.params);
 
     // Top strip: LUFS meter (left) and TP meter (right).
     let top_h = avail.height() * 0.60;
@@ -312,7 +269,7 @@ fn draw_right_panel(ui: &mut egui::Ui, app: &mut MasteringEditorApp) {
 fn draw_histories(ui: &mut egui::Ui, app: &mut MasteringEditorApp) {
     let avail = ui.available_rect_before_wrap();
     let painter = ui.painter_at(avail);
-    let target = app.params.target_lufs.value();
+    let target = header::reference_line_lufs(&app.params);
 
     // Split 60/40 between LUFS and TP traces.
     let gap = 8.0;

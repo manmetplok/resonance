@@ -10,6 +10,8 @@
     "grain_size_ms": 60.0,
     "density_hz": 22.0,
     "density_sync": 0,
+    "density_division": 10,
+    "align": 0,
     "scheduler": 2,
     "pitch": -5.0,
     "pitch_quantize": 1,
@@ -28,6 +30,6 @@
     "pan_spread": 0.3,
     "width": 1.0,
     "mix": 0.35,
-    "quality": 1
+    "quality": 2
   }
 }

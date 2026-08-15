@@ -58,9 +58,32 @@ impl OutputGroup {
 
 /// Total number of stereo output ports the drum plugin declares.
 /// Ports 0..5 correspond to `OutputGroup` variants; port 6 is Overhead.
-#[allow(dead_code)] // consulted by external tooling / tests
 pub const NUM_OUTPUT_PORTS: usize = 7;
 pub const OVERHEAD_PORT_INDEX: usize = 6;
+
+/// Names of the stereo output ports, in port order. Index 0..=5 match the
+/// `OutputGroup` discriminants; index 6 is the shared Overhead bus.
+///
+/// Single source of truth: `ResonanceDrums::output_layout` builds the CLAP
+/// port list from this array and the editor's KIT card reads it back, so the
+/// UI can never claim a routing mode the plugin does not declare.
+pub const OUTPUT_PORT_NAMES: [&str; NUM_OUTPUT_PORTS] = [
+    "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
+];
+
+/// Truthful one-line summary of the plugin's output routing.
+///
+/// The plugin declares every port in [`OUTPUT_PORT_NAMES`] unconditionally —
+/// there is no stereo-only mode and no parameter that switches one — so the
+/// editor renders this as a static readout rather than a toggle.
+pub fn routing_summary() -> String {
+    format!("Multi-out · {NUM_OUTPUT_PORTS} ports")
+}
+
+/// The port list as a single comma-separated line, for the KIT card readout.
+pub fn routing_port_list() -> String {
+    OUTPUT_PORT_NAMES.join(" · ")
+}
 
 /// A loaded pad with one or more mic banks. Kick and snare each get two
 /// close banks (in/out and top/btm); toms and hats get one; cymbals get

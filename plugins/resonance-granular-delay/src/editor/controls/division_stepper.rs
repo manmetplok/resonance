@@ -1,9 +1,11 @@
-//! The division stepper of the TIME group (design doc #264 req-4).
+//! The division stepper used by the TIME and GRAINS groups (design doc
+//! #264 req-4).
 //!
 //! A granular-specific composite, not a generic widget: it borrows the
-//! macro-knob cell so the SYNC disclosure can swap it in for the Time
-//! knob with no layout jump, and it reads the host tempo to show what
-//! the selected division actually costs in milliseconds.
+//! macro-knob cell so a sync disclosure can swap it in for the knob it
+//! replaces with no layout jump, and it shows a live readout of what
+//! the selected division costs at the host tempo — milliseconds of
+//! delay for TIME, grains per second for GRAINS (ba todo #1322).
 
 use egui::Ui;
 use wayland_plugin_gui::egui;
@@ -14,11 +16,53 @@ use crate::sync::{self, DIVISION_LABELS};
 use super::super::theme;
 use super::super::widgets::MACRO_KNOB_STYLE;
 
-/// Division stepper `‹ 1/4T ›` bound to the division param, with a
-/// live `= 333.3 ms` readout computed from the viz BPM. Occupies the
-/// same cell as the Time macro knob so the sync disclosure swaps them
-/// in-place with no layout jump (design doc #264 req-4).
-pub fn division_stepper(ui: &mut Ui, params: &GranularDelayParams, index: usize, bpm: f32) {
+/// What the stepper's readout line under the division means.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DivisionReadout {
+    /// Delay length of the division, clamped the way the delay line
+    /// clamps it (the TIME group).
+    DelayMs,
+    /// Grain rate of one grain per division, clamped the way the DSP
+    /// clamps it (the GRAINS group, ba todo #1322).
+    GrainsPerSecond,
+}
+
+impl DivisionReadout {
+    /// The readout text at `bpm`, or an em-dash placeholder when the
+    /// host reports no tempo.
+    fn text(self, bpm: f32, division: usize) -> String {
+        if bpm <= 0.0 {
+            return match self {
+                Self::DelayMs => "= — ms".to_string(),
+                Self::GrainsPerSecond => "= — /s".to_string(),
+            };
+        }
+        match self {
+            Self::DelayMs => {
+                let seconds = sync::clamp_delay_seconds(
+                    sync::division_seconds(bpm, division),
+                    crate::dsp::MAX_DELAY_SECONDS,
+                );
+                format!("= {:.1} ms", seconds * 1000.0)
+            }
+            Self::GrainsPerSecond => {
+                format!("= {:.1} /s", sync::density_hz(bpm, division))
+            }
+        }
+    }
+}
+
+/// Division stepper `‹ 1/4T ›` bound to a division param, with a live
+/// readout computed from the viz BPM. Occupies the same cell as a macro
+/// knob so a sync disclosure swaps them in-place with no layout jump
+/// (design doc #264 req-4).
+pub fn division_stepper(
+    ui: &mut Ui,
+    params: &GranularDelayParams,
+    index: usize,
+    bpm: f32,
+    readout: DivisionReadout,
+) {
     let p = params.param_at(index);
     let max = DIVISION_LABELS.len() as i64 - 1;
     let current = (p.get_plain().round() as i64).clamp(0, max);
@@ -85,18 +129,9 @@ pub fn division_stepper(ui: &mut Ui, params: &GranularDelayParams, index: usize,
         theme::ACCENT_SOFT,
     );
 
-    // Live effective-time readout from the host tempo (— without one),
-    // clamped the way the delay line clamps it so the number is what
-    // the DSP will actually play.
-    let readout = if bpm > 0.0 {
-        let seconds = sync::clamp_delay_seconds(
-            sync::division_seconds(bpm, current as usize),
-            crate::dsp::MAX_DELAY_SECONDS,
-        );
-        format!("= {:.1} ms", seconds * 1000.0)
-    } else {
-        "= — ms".to_string()
-    };
+    // Live readout from the host tempo (— without one), clamped the
+    // way the DSP clamps it so the number is what will actually play.
+    let readout = readout.text(bpm, current as usize);
     painter.text(
         egui::pos2(rect.center().x, rect.top() + MACRO_KNOB_STYLE.diameter + 4.0),
         egui::Align2::CENTER_TOP,

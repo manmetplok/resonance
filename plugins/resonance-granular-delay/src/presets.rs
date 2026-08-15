@@ -19,30 +19,60 @@ pub struct PresetEntry {
     pub json: &'static str,
 }
 
+/// The factory set, in browsing order. Between them the eight presets
+/// use every shipped mode of every mode parameter at least once, and
+/// switch every capability toggle on somewhere — the audit's LOW
+/// finding was that five modes were reachable but never demonstrated
+/// (ba todo #1339, guarded by `tests/presets.rs`). Each name says what
+/// its preset is there to show.
 pub const PRESETS: &[PresetEntry] = &[
+    // Per-Grain time, Wet→Buffer, Async, no quantize, LP, Normal — the
+    // neutral starting point every other preset departs from.
     PresetEntry {
         name: "Init — Per-Grain Cloud",
         json: include_str!("../presets/init_per_grain_cloud.json"),
     },
+    // Fade time mode, Sync scheduler, and the tempo-locked grain rate
+    // (ba todo #1322): a 1/8T tap granulated in eighth triplets.
     PresetEntry {
-        name: "Eighth-Triplet Echo",
+        name: "Eighth-Triplet Echo — Tempo-Locked Grains",
         json: include_str!("../presets/eighth_triplet_echo.json"),
     },
+    // Scale-quantized per-grain transpose + shimmer feedback, smeared
+    // by the diffusion stage (ba todo #1321).
     PresetEntry {
-        name: "D-Minor Shimmer Cloud",
+        name: "D-Minor Shimmer — Scale Quantize + Diffusion",
         json: include_str!("../presets/d_minor_shimmer_cloud.json"),
     },
+    // Pitch-Sync (PSOLA) scheduler, semitone quantize, and the HQ
+    // quality tier (B-spline reads + anti-alias).
     PresetEntry {
-        name: "Vocal Doubler (PSOLA)",
+        name: "Vocal Doubler — PSOLA + HQ",
         json: include_str!("../presets/vocal_doubler_psola.json"),
     },
+    // Ping-pong feedback and reversed grains, with highpass damping in
+    // the loop so the repeats thin out instead of darkening.
     PresetEntry {
-        name: "Reverse Haze",
+        name: "Reverse Haze — Ping-Pong + HP Damp",
         json: include_str!("../presets/reverse_haze.json"),
     },
+    // Freeze held on the Lo-fi tier (µ-law reads, reduced grain pool).
     PresetEntry {
-        name: "Frozen Drone",
+        name: "Frozen Drone — Lo-Fi Freeze",
         json: include_str!("../presets/frozen_drone.json"),
+    },
+    // Repitch time mode (the tape-style swoop) on the Output-only
+    // route, where repeats stay clean instead of re-granulating.
+    PresetEntry {
+        name: "Tape Warble — Repitch + Clean Repeats",
+        json: include_str!("../presets/tape_warble_repitch.json"),
+    },
+    // WSOLA onset alignment (ba todo #1320) on a spray-heavy cloud —
+    // the case it exists for: sprayed onsets snapped back into phase
+    // with the sounding material.
+    PresetEntry {
+        name: "Aligned Cloud — WSOLA Onsets",
+        json: include_str!("../presets/aligned_cloud_wsola.json"),
     },
 ];
 

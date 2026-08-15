@@ -33,6 +33,16 @@ const DECOR_SEED: u64 = 0xD3C0_44E1;
 /// (equal-power, applied per sample off a smoother).
 pub const DECOR_FADE_MS: f32 = 50.0;
 
+/// Half-width of the WSOLA onset-alignment search window, seconds
+/// (ba todo #1320). The engine's own hard cap is 10 ms; 5 ms is its
+/// default and covers one period of everything above ~200 Hz, which is
+/// where splice roughness is audible. It is fixed rather than exposed:
+/// the audible decision is "aligned or not", and a second control would
+/// cost a knob in the GRAINS group for a difference only very low
+/// material can hear. Widen it to a parameter if that ever proves
+/// wrong — `GrainParams::align_window_seconds` is already per block.
+pub const ALIGN_WINDOW_SECONDS: f32 = 0.005;
+
 /// Shared seed for the lock-stepped feedback-tap engine pair (ba todo
 /// #1078): with FB Pitch off, these render the *un-transposed*
 /// re-granulation that recirculates, so repeats keep a constant pitch
@@ -404,6 +414,15 @@ pub(super) fn base_grain_params(
         pitch_semitones: params.pitch_semitones,
         detune_spread_cents: params.detune_spread_cents,
         reverse_probability: params.reverse_probability,
+        // WSOLA onset alignment (ba todo #1320). Every engine inherits
+        // it, so the whole cloud shares one splice character. Each
+        // engine correlates over the buffer it reads, so on strongly
+        // decorrelated stereo input the lock-stepped pair may snap L
+        // and R to lags up to ±[`ALIGN_WINDOW_SECONDS`] apart — a mild
+        // extra widening; on mono or correlated material the two agree
+        // and the pair stays in exact lockstep.
+        align: params.align,
+        align_window_seconds: ALIGN_WINDOW_SECONDS,
         anti_alias,
         interp,
         lofi_quantize,
