@@ -168,6 +168,10 @@ impl ResonancePlugin for ResonanceDrums {
             2 => &pad.mute,
             3 => &pad.oh_blend,
             4 => &pad.balance,
+            // Still enumerated for the host so its string id and any
+            // existing automation lane survive, but nothing reads it —
+            // its display name says "(editor only)" until ba todo #1325
+            // makes it the source of truth. See `params::PadParams`.
             5 => &pad.articulation,
             _ => &pad.volume,
         }
