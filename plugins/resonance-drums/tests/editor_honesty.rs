@@ -69,6 +69,22 @@ fn no_card_is_labelled_preview() {
     );
 }
 
+/// Audition is a live button again (ba todo #1328): it hands the pad's
+/// note to the audio thread. The disabled placeholder and its "not
+/// wired up yet" apology must both be gone — a control that works and
+/// still apologises is as misleading as one that does not.
+#[test]
+fn audition_is_live_and_no_longer_apologises() {
+    assert!(
+        PAD_INSPECTOR.contains("bridge.audition(mapping.note)"),
+        "the Audition button must trigger the pad"
+    );
+    assert!(
+        !PAD_INSPECTOR.contains("not wired up yet"),
+        "Audition still tells the user it does nothing"
+    );
+}
+
 /// A user who wants mic selection must be told where it lives, since the
 /// tab that used to (falsely) promise it is gone.
 #[test]
