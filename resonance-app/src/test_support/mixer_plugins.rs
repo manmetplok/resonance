@@ -2,8 +2,64 @@
 //! sends, MIDI map, plugin params, freeze lifecycle, and the device
 //! definition registry.
 
+use crate::message::Message;
 use crate::state;
 use crate::Resonance;
+
+/// What the mixer inspector's SENDS block renders for one aux send, and
+/// the messages its controls raise (ba todo #1310).
+///
+/// Every field is read straight off the view builders in
+/// `view::mixer::inspector::sends`, so a test that asserts on this is
+/// asserting on the rendered panel, and one that feeds
+/// [`Self::reroute_to`] / [`Self::set_level`] / [`Self::toggle_tap`] /
+/// [`Self::toggle_enabled`] / [`Self::remove`] into `update` is pressing
+/// the real affordances rather than a second copy of the wiring.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct SendSlotAffordances {
+    pub send_id: u64,
+    /// The bus the destination picker shows as selected.
+    pub dest_bus: u64,
+    /// That entry's label, exactly as the picker draws it.
+    pub dest_label: String,
+    /// Every `(bus_id, label)` the destination picker offers, in order.
+    pub dest_options: Vec<(u64, String)>,
+    /// The dB readout beside the level slider (e.g. `"-6.0 dB"`).
+    pub level_readout: String,
+    /// The tap toggle's label: `"PRE"` or `"POST"`.
+    pub tap_label: String,
+    pub pre_fader: bool,
+    /// Whether the ON toggle reads as lit.
+    pub enabled: bool,
+}
+
+impl SendSlotAffordances {
+    /// Picking `bus_id` out of the destination picker.
+    pub fn reroute_to(&self, bus_id: u64) -> Message {
+        crate::view::mixer::inspector::sends::dest_message(self.send_id, bus_id)
+    }
+
+    /// Dragging the level slider to `level_db`.
+    pub fn set_level(&self, level_db: f32) -> Message {
+        crate::view::mixer::inspector::sends::level_message(self.send_id, level_db)
+    }
+
+    /// Clicking the PRE/POST toggle.
+    pub fn toggle_tap(&self) -> Message {
+        crate::view::mixer::inspector::sends::tap_message(self.send_id)
+    }
+
+    /// Clicking the ON toggle.
+    pub fn toggle_enabled(&self) -> Message {
+        crate::view::mixer::inspector::sends::enable_message(self.send_id)
+    }
+
+    /// Clicking the trash affordance.
+    pub fn remove(&self) -> Message {
+        crate::view::mixer::inspector::sends::remove_message(self.send_id)
+    }
+}
 
 impl Resonance {
     /// Test-only: read the mirrored aux-send graph. Driven from
@@ -27,6 +83,55 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_aux_last_rejection(&self) -> Option<&state::AuxSendRejection> {
         self.aux.last_rejection.as_ref()
+    }
+
+    /// Test-only: the send slots the mixer inspector's ROUTING group
+    /// renders for `track_id`, in the order it draws them, each carrying
+    /// the messages its controls raise (ba todo #1310).
+    ///
+    /// Empty when the track has no sends — which is also what a track
+    /// that does not exist reports, since neither draws a slot.
+    #[doc(hidden)]
+    pub fn test_send_affordances(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<SendSlotAffordances> {
+        use crate::view::mixer::inspector::sends;
+        sends::sends_for_track(self, track_id)
+            .map(|send| {
+                let (options, selected) = sends::dest_options(self, send);
+                SendSlotAffordances {
+                    send_id: send.id,
+                    dest_bus: send.dest,
+                    dest_label: selected.map(|c| c.label).unwrap_or_default(),
+                    dest_options: options
+                        .into_iter()
+                        .map(|c| (c.bus_id, c.label))
+                        .collect(),
+                    level_readout: sends::level_readout(send),
+                    tap_label: sends::tap_label(send).to_string(),
+                    pre_fader: send.pre_fader,
+                    enabled: send.enabled,
+                }
+            })
+            .collect()
+    }
+
+    /// Test-only: the "+ Add send" picker's options for `track_id` as
+    /// `(label, message)` pairs — the label the dropdown shows and the
+    /// message picking it raises. Always ends with the "New FX return…"
+    /// entry, so the picker is never dead.
+    #[doc(hidden)]
+    pub fn test_add_send_options(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<(String, Message)> {
+        use crate::view::mixer::inspector::sends;
+        let source = resonance_audio::types::SendSource::Track(track_id);
+        sends::add_options(self, track_id)
+            .into_iter()
+            .map(|choice| (choice.to_string(), sends::add_message(source, &choice)))
+            .collect()
     }
 
     /// Test-only: drive the freeze-cache rehydrate path a disk load runs

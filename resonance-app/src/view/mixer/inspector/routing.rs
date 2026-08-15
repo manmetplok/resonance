@@ -1,5 +1,5 @@
 //! Generic ROUTING group for the mixer inspector — input device / MIDI
-//! in / MIDI out / output pickers, plus read-only Send placeholders.
+//! in / MIDI out / output pickers, plus the aux-send slots.
 //! External-instrument tracks delegate to `external_instrument` instead.
 
 use iced::widget::{button, column, text, Space};
@@ -69,9 +69,13 @@ pub(super) fn routing_group(
         output_block,
         Space::new().height(8),
         midi_out_block,
-        Space::new().height(4),
-        routing_row("Send A", "(none)", true),
-        routing_row("Send B", "(none)", true),
+        Space::new().height(8),
+        // The real aux-send slots (ba todo #1310). These replaced two
+        // hardcoded read-only `Send A -> (none)` / `Send B -> (none)`
+        // rows that named a feature the GUI could not reach: the whole
+        // send graph shipped engine-first and was only ever driven over
+        // the control API.
+        super::sends::sends_block(r, track),
         external_enable,
     ]
     .spacing(0)
@@ -113,14 +117,4 @@ fn enable_external_row(track_id: resonance_audio::types::TrackId) -> Element<'st
         }
     })
     .into()
-}
-
-/// Read-only routing row used for Send A/B placeholders. Shares its
-/// shape with the bus inspector's routing facts.
-fn routing_row(
-    label: &'static str,
-    value: &'static str,
-    muted: bool,
-) -> Element<'static, Message> {
-    super::widgets::info_row(label, value.to_string(), muted)
 }
