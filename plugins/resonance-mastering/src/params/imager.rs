@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use resonance_plugin::formatters::v2s_f32_hz;
+use resonance_plugin::formatters::{s2v_f32_percentage, v2s_f32_hz};
 use resonance_plugin::*;
 
 use crate::stages::imager::ImagerConfig;
@@ -37,14 +37,19 @@ impl ImagerParams {
     }
 }
 
+/// Width reads as a percentage of the source image (100 % = untouched);
+/// the two landmark settings are named alongside it. The percentage is
+/// always printed — the param declares `%` as its unit, and a value
+/// string without it would read "Mono%" in the host.
 fn format_width() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     Arc::new(|v: f32| {
+        let pct = format!("{:.0}%", v * 100.0);
         if v < 0.05 {
-            "Mono".to_string()
+            format!("{pct} (Mono)")
         } else if (v - 1.0).abs() < 0.02 {
-            "Stereo".to_string()
+            format!("{pct} (Stereo)")
         } else {
-            format!("{:.0}%", v * 100.0)
+            pct
         }
     })
 }
@@ -59,6 +64,8 @@ impl Default for ImagerParams {
                 1.0,
                 FloatRange::Linear { min: 0.0, max: 2.0 },
             )
+            .with_unit("%")
+            .with_string_to_value(s2v_f32_percentage())
             .with_value_to_string(format_width()),
             side_hpf_on: BoolParam::new("img_side_hpf_on", "Side HPF On", false),
             side_hpf_freq: FloatParam::new(
