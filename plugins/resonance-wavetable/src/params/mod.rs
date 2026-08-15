@@ -1,4 +1,9 @@
-//! All parameters for the wavetable synthesizer (87 total).
+//! All parameters for the wavetable synthesizer — [`PARAM_COUNT`] of them.
+//!
+//! The count lives in exactly one place on purpose: a caller that spells
+//! it out as a literal silently truncates when a parameter is added, and
+//! `param_at`'s own round-trip test cannot see that (ba todo #1324
+//! review).
 //!
 //! The aggregate [`WavetableParams`] struct is intentionally flat — each
 //! section (oscillator, envelope, LFO, filter, unison, modulation matrix,
