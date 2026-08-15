@@ -35,6 +35,7 @@ pub mod state;
 mod test_support;
 #[doc(hidden)]
 pub use test_support::TestChain;
+pub use test_support::SendSlotAffordances;
 pub mod theme;
 pub mod undo;
 pub mod update;

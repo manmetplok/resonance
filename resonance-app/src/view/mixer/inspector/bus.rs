@@ -17,7 +17,7 @@ use iced::widget::{column, container, pick_list, row, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::{ScannedPlugin, SendSource, TrackOutput};
 
-use crate::message::{BusMessage, Message};
+use crate::message::{BusMessage, Message, MixerMessage};
 use crate::state::{BusState, MixerInspectorGroup};
 use crate::theme;
 use crate::util::format_pan;
@@ -273,6 +273,19 @@ fn routing_group(
         // master. Shown so the signal path reads end-to-end rather than
         // stopping at the strip.
         super::widgets::info_row("Output", "Master".to_string(), false),
+        Space::new().height(10),
+        // The return-role flag was mirrored and badged but never
+        // settable from the GUI (ba todo #1310) — so an existing bus
+        // could not be promoted into a send destination, and the SENDS
+        // block's picker would never list it. `CreateReturnFromSend`
+        // raises the same command for a brand-new bus.
+        super::widgets::toggle_button(
+            "AUX RETURN",
+            bus.is_return,
+            theme::WARM,
+            theme::WARM_DIM,
+            Message::Mixer(MixerMessage::SetBusReturnRole(bus.id, !bus.is_return)),
+        ),
     ]
     .spacing(0)
     .into()
