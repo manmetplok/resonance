@@ -121,7 +121,6 @@ impl Default for MasteringParams {
                     max: 24.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(20.0))
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
             corrective_eq: EqStageParams::new("corr", CORRECTIVE_DEFAULTS),
