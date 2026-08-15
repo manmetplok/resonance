@@ -200,7 +200,7 @@ fn density_sync_off_is_unchanged() {
 fn the_eighth_triplet_preset_produces_eighth_triplets() {
     let entry = PRESETS
         .iter()
-        .find(|e| e.name == "Eighth-Triplet Echo")
+        .find(|e| e.name.starts_with("Eighth-Triplet Echo"))
         .expect("the eighth-triplet preset is missing");
 
     let mut p = ResonanceGranularDelay::new();

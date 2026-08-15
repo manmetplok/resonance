@@ -11,6 +11,7 @@ use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::Connection;
 
 use crate::input::InputState;
+use crate::size::SharedSize;
 
 // ---------------------------------------------------------------------------
 // State: holds everything SCTK dispatch handlers mutate.
@@ -25,6 +26,10 @@ pub(super) struct State {
     pub(super) keyboard: Option<WlKeyboard>,
     pub(super) pointer: Option<WlPointer>,
     pub(super) size: (u32, u32),
+    /// The same size, published to the public [`crate::Editor`] handle
+    /// every time it changes, so a compositor-driven resize is what the
+    /// plugin (and through it the host) reports (ba todo #1337).
+    pub(super) shared_size: SharedSize,
     pub(super) pending_size: Option<(u32, u32)>,
     pub(super) scale: f32,
     pub(super) visible: bool,

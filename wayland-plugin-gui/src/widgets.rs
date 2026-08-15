@@ -1,11 +1,29 @@
-//! Reusable egui widgets for plugin editors.
+//! Reusable egui widgets for plugin editors — the shared kit.
 //!
-//! Provides two rotary-knob families so plugin UIs share a consistent
-//! look and compact layout: a range-mapped [`knob`] (classic palette)
-//! and the theme-driven [`knob_themed`] family (lavender palette), of
-//! which [`knob_unipolar`] / [`knob_bipolar`] are the default-styled
-//! shorthands. Everything here is pure egui — helpers that bind these
-//! widgets to plugin parameter types live downstream in
+//! **Every plugin editor draws its controls from here.** A plugin that
+//! needs a different size, palette or geometry configures the widget's
+//! style struct; it does not copy the widget into its own
+//! `editor/widgets/`. Each fork the fleet grew that way has ended up
+//! diverging (ba doc #275): the granular delay's knob answered the same
+//! drag differently (fixed by ba todo #1266), and the drums and
+//! wavetable sliders drifted apart on their bipolar fill colour (fixed
+//! by ba todo #1334).
+//!
+//! The kit provides:
+//!
+//! - two rotary-knob families — a range-mapped [`knob`] (classic
+//!   palette) and the theme-driven [`knob_themed`] family (lavender
+//!   palette), of which [`knob_unipolar`] / [`knob_bipolar`] are the
+//!   default-styled shorthands;
+//! - [`chip_button`] / [`chip_styled`] — the pill-shaped discrete
+//!   toggle, styled by [`ChipStyle`];
+//! - [`segmented`] / [`segmented_styled`] — a one-of-N strip of chips,
+//!   styled by [`SegmentedStyle`];
+//! - [`slider_unipolar`] / [`slider_bipolar`] / [`slider_bipolar_warm`]
+//!   and the configurable [`slider`], styled by [`SliderStyle`].
+//!
+//! Everything here is pure egui — helpers that bind these widgets to
+//! plugin parameter types live downstream in
 //! `resonance_plugin::editor_widgets`, keeping this crate free of
 //! plugin-framework dependencies.
 //!
@@ -24,6 +42,16 @@
 
 use egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
 use std::f32::consts::PI;
+
+pub mod chip;
+pub mod segmented;
+pub mod slider;
+
+pub use chip::{chip_button, chip_styled, Chip, ChipColors, ChipPalette, ChipStyle};
+pub use segmented::{segmented, segmented_styled, SegmentedStyle};
+pub use slider::{
+    slider, slider_bipolar, slider_bipolar_warm, slider_unipolar, HSlider, SliderStyle, SliderTone,
+};
 
 // ---------------------------------------------------------------------------
 // Rotary knob

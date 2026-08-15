@@ -21,6 +21,7 @@ use crate::editor::EditorOptions;
 use crate::egl_context::EglContext;
 use crate::error::EditorError;
 use crate::input::InputState;
+use crate::size::SharedSize;
 
 use super::paint::{apply_pending_resize, paint_frame};
 use super::state::State;
@@ -41,8 +42,9 @@ impl EditorThread {
         options: EditorOptions,
         cmd_channel: calloop_channel::Channel<Command>,
         ready_tx: SyncSender<Result<(), EditorError>>,
+        shared_size: SharedSize,
     ) {
-        let result = Self::run_inner(app, options, cmd_channel, ready_tx.clone());
+        let result = Self::run_inner(app, options, cmd_channel, ready_tx.clone(), shared_size);
         if let Err(err) = result {
             eprintln!("wpg: editor thread exited with error: {}", err);
             // Try to send the error; the main thread may have given up already.
@@ -55,6 +57,7 @@ impl EditorThread {
         options: EditorOptions,
         cmd_channel: calloop_channel::Channel<Command>,
         ready_tx: SyncSender<Result<(), EditorError>>,
+        shared_size: SharedSize,
     ) -> Result<(), EditorError> {
         // -------- Wayland connection + globals --------
         let conn =
@@ -151,6 +154,7 @@ impl EditorThread {
             keyboard: None,
             pointer: None,
             size: options.initial_size,
+            shared_size,
             pending_size: None,
             scale: 1.0,
             visible: false,
