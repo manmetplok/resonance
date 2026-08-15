@@ -18,7 +18,8 @@
 
 use indexmap::IndexMap;
 
-use crate::clap_host::SyncClapInstance;
+use crate::bypass::{run_faded, FadeStage, FxDryScratch};
+use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::common::{
@@ -163,8 +164,10 @@ fn process_monitor_track(
     input_channels: usize,
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
-    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    plugins_guard: &PluginMap,
+    fx_dry: &mut FxDryScratch,
     transport_snap: Option<TransportSnap>,
+    sample_rate: u32,
 ) -> usize {
     let is_mono = track.mono();
     let mix_frames = max_frames.min(monitor_frames);
@@ -189,22 +192,50 @@ fn process_monitor_track(
         track_buf_r[f] = monitor_temp[base + right_port];
     }
 
-    // Process through plugin chain (skipped when FX are bypassed).
-    if !track.fx_bypassed() {
-        let plugins = track.plugins();
-        for &plugin_id in plugins.iter() {
-            if let Some(si) = plugins_guard.get(&plugin_id) {
-                if let Some(mut inst) = si.try_lock() {
-                    latch_transport(&mut inst, transport_snap);
-                    inst.0.process(
-                        &mut track_buf_l[..mix_frames],
-                        &mut track_buf_r[..mix_frames],
-                        mix_frames,
-                    );
+    // Process through plugin chain. Chain- and slot-level bypass go
+    // through the same click-free crossfade as the arrangement render
+    // (`crate::bypass`), so toggling a bypass while monitoring — which is
+    // exactly when a guitarist A/Bs an amp sim — cannot click either.
+    let chain_stage = track.fx_bypass().stage(sample_rate, mix_frames, true);
+    let (chain_dry, slot_dry) = fx_dry.split();
+    run_faded(
+        chain_stage,
+        mix_frames,
+        (
+            &mut track_buf_l[..mix_frames],
+            &mut track_buf_r[..mix_frames],
+        ),
+        chain_dry,
+        |buf_l, buf_r| {
+            let mut ran = false;
+            let plugins = track.plugins();
+            for &plugin_id in plugins.iter() {
+                let Some(slot) = plugins_guard.get(&plugin_id) else {
+                    continue;
+                };
+                let slot_stage = slot.stage(sample_rate, mix_frames, true);
+                if slot_stage == FadeStage::Dry {
+                    continue;
                 }
+                let Some(mut inst) = slot.try_lock() else {
+                    continue;
+                };
+                latch_transport(&mut inst, transport_snap);
+                slot.sync_own_bypass(&mut inst.0);
+                ran |= run_faded(
+                    slot_stage,
+                    mix_frames,
+                    (&mut *buf_l, &mut *buf_r),
+                    (&mut *slot_dry.0, &mut *slot_dry.1),
+                    |l, r| {
+                        inst.0.process(l, r, mix_frames);
+                        true
+                    },
+                );
             }
-        }
-    }
+            ran
+        },
+    );
 
     mix_frames
 }
@@ -218,13 +249,15 @@ pub(super) fn mix_monitor_passthrough(
     data: &mut [f32],
     channels: usize,
     tracks_guard: &IndexMap<TrackId, Track>,
-    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    plugins_guard: &PluginMap,
     monitor_temp: &[f32],
     monitor_frames: usize,
     input_channels: usize,
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
+    fx_dry: &mut FxDryScratch,
     transport_snap: Option<TransportSnap>,
+    sample_rate: u32,
 ) -> bool {
     let any_solo = any_top_level_solo(tracks_guard.values());
     let is_audible =
@@ -241,7 +274,9 @@ pub(super) fn mix_monitor_passthrough(
             track_buf_l,
             track_buf_r,
             plugins_guard,
+            fx_dry,
             transport_snap,
+            sample_rate,
         );
         let (target_l, target_r) = track_stereo_gains(track);
         let (last_l, last_r) = track.last_gains();

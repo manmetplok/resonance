@@ -5,9 +5,9 @@
 
 use std::sync::atomic::Ordering;
 
-use indexmap::IndexMap;
 
-use crate::clap_host::{StereoBufMut, SyncClapInstance};
+use crate::bypass::{run_faded, BypassFade, FadeStage, FxDryScratch};
+use crate::clap_host::{PluginMap, StereoBufMut};
 use crate::engine::SharedState;
 use crate::types::*;
 
@@ -19,27 +19,43 @@ use super::common::{latch_transport, TransportSnap};
 /// processes each plugin in order, then re-interleaves back into `data`.
 /// Silently no-ops when the chain is empty, the read lock is contended,
 /// or a plugin's instance is momentarily locked by the control thread.
+///
+/// `chain` is the master's own bypass and each slot carries its own, both
+/// crossfaded exactly as in the per-track chains (`crate::bypass`) — so
+/// A/B-ing a mastering chain mid-playback fades rather than switches. The
+/// whole pass, de-interleave included, is skipped once the master bypass
+/// has settled.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_master_fx_chain(
     data: &mut [f32],
     channels: usize,
     master: &parking_lot::RwLock<MasterBus>,
-    plugins_guard: &IndexMap<PluginInstanceId, parking_lot::Mutex<SyncClapInstance>>,
+    plugins_guard: &PluginMap,
     scratch_l: &mut [f32],
     scratch_r: &mut [f32],
+    fx_dry: &mut FxDryScratch,
     transport_snap: Option<TransportSnap>,
     sidechain_routes: &[SidechainRoute],
     sidechain: &SidechainTaps,
+    chain: &BypassFade,
+    sample_rate: u32,
 ) {
+    let output_frames = data.len() / channels;
+    let frames = output_frames.min(scratch_l.len()).min(scratch_r.len());
+    if frames == 0 {
+        return;
+    }
+    // The master pass only ever runs live; an offline export drives its
+    // own copy of this chain in `bounce::render`.
+    let chain_stage = chain.stage(sample_rate, frames, true);
+    if chain_stage == FadeStage::Dry {
+        return;
+    }
     let Some(master_guard) = master.try_read() else {
         return;
     };
     if master_guard.plugin_ids.is_empty() {
-        return;
-    }
-    let output_frames = data.len() / channels;
-    let frames = output_frames.min(scratch_l.len()).min(scratch_r.len());
-    if frames == 0 {
         return;
     }
     // De-interleave into scratch pair. Mono output shares L across R so
@@ -57,22 +73,49 @@ pub(super) fn apply_master_fx_chain(
             scratch_r[f] = s;
         }
     }
-    for &plugin_id in &master_guard.plugin_ids {
-        if let Some(mutex) = plugins_guard.get(&plugin_id) {
-            if let Some(mut inst) = mutex.try_lock() {
+    let (chain_dry, slot_dry) = fx_dry.split();
+    run_faded(
+        chain_stage,
+        frames,
+        (&mut *scratch_l, &mut *scratch_r),
+        chain_dry,
+        |buf_l, buf_r| {
+            let mut ran = false;
+            for &plugin_id in &master_guard.plugin_ids {
+                let Some(slot) = plugins_guard.get(&plugin_id) else {
+                    continue;
+                };
+                let slot_stage = slot.stage(sample_rate, frames, true);
+                if slot_stage == FadeStage::Dry {
+                    continue;
+                }
+                let Some(mut inst) = slot.try_lock() else {
+                    continue;
+                };
                 latch_transport(&mut inst, transport_snap);
+                slot.sync_own_bypass(&mut inst.0);
                 // A master-bus ducker keyed off the kick is the classic
                 // "pumping mix" move, so the master chain honours key
                 // routes like every other chain (ba doc #275 P0).
                 let key = sidechain.key_for(sidechain_routes, plugin_id);
-                let mut outs = [StereoBufMut {
-                    left: &mut scratch_l[..frames],
-                    right: &mut scratch_r[..frames],
-                }];
-                inst.0.process_multi_with_key(&mut outs, key, frames);
+                ran |= run_faded(
+                    slot_stage,
+                    frames,
+                    (&mut *buf_l, &mut *buf_r),
+                    (&mut *slot_dry.0, &mut *slot_dry.1),
+                    |l, r| {
+                        let mut outs = [StereoBufMut {
+                            left: &mut l[..frames],
+                            right: &mut r[..frames],
+                        }];
+                        inst.0.process_multi_with_key(&mut outs, key, frames);
+                        true
+                    },
+                );
             }
-        }
-    }
+            ran
+        },
+    );
     // Interleave back into data.
     if channels >= 2 {
         for f in 0..frames {

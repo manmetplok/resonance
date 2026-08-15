@@ -921,6 +921,10 @@ pub enum AudioCommand {
     },
     /// Bypass every effect plugin on a track. Instrument plugins
     /// (slot 0 on instrument tracks) keep running.
+    ///
+    /// The change is not instantaneous: the mixer crossfades the chain
+    /// out (or back in) over a few milliseconds, so bypassing a reverb
+    /// mid-playback fades its tail instead of truncating it.
     SetTrackFxBypass {
         track_id: TrackId,
         bypassed: bool,
@@ -930,6 +934,27 @@ pub enum AudioCommand {
         bypassed: bool,
     },
     SetMasterFxBypass {
+        bypassed: bool,
+    },
+    /// Bypass **one** slot of a chain, wherever it lives — a track, a
+    /// sub-track, a bus or the master (ba doc #275 finding X3). The slot
+    /// is named by its plugin instance id, which is unique across every
+    /// chain, so no chain-kind discriminant is needed.
+    ///
+    /// Like the whole-chain bypasses, the transition is crossfaded rather
+    /// than switched. Two behaviours follow from what the plugin declares:
+    ///
+    /// - it declares a `CLAP_PARAM_IS_BYPASS` parameter → the host drives
+    ///   that parameter and keeps calling the plugin, so its latency (and
+    ///   with it the whole compensation table) is unaffected;
+    /// - it does not → the mixer stops calling it once the fade lands, and
+    ///   its latency leaves the chain, exactly as a whole bypassed chain's
+    ///   already does.
+    ///
+    /// Confirmed with [`AudioEvent::PluginBypassChanged`](super::AudioEvent::PluginBypassChanged).
+    /// An unknown `instance_id` is a no-op and reports `AudioEvent::Error`.
+    SetPluginBypass {
+        instance_id: PluginInstanceId,
         bypassed: bool,
     },
 

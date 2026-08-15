@@ -16,12 +16,9 @@
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{
-    ensure_tuning_caches, pitch_ratio_curve, render_stem, SharedState, StemSource,
-    SyncClapInstance,
-};
+use resonance_audio::__test_support::{PluginMap, SharedState, StemSource, ensure_tuning_caches, pitch_ratio_curve, render_stem};
 use resonance_audio::analyze_pitch;
 use resonance_audio::types::*;
 
@@ -81,7 +78,7 @@ struct Engine {
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 

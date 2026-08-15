@@ -646,6 +646,22 @@ pub enum AudioEvent {
     MasterFxBypassChanged {
         bypassed: bool,
     },
+    /// Echo of [`AudioCommand::SetPluginBypass`](super::AudioCommand::SetPluginBypass):
+    /// one chain slot's bypass changed (ba doc #275 finding X3). Emitted
+    /// only when the instance exists, so an app mirror never records a
+    /// bypass for a slot the engine doesn't have.
+    ///
+    /// `own_bypass_param` reports *how* the engine bypasses it: `true`
+    /// means the plugin declares its own `CLAP_PARAM_IS_BYPASS` parameter
+    /// and keeps running (its reported latency, and therefore the delay
+    /// compensation, is unchanged); `false` means the host skips the slot
+    /// once the crossfade lands, and its latency leaves the chain. Purely
+    /// informational — the GUI toggle behaves the same either way.
+    PluginBypassChanged {
+        instance_id: PluginInstanceId,
+        bypassed: bool,
+        own_bypass_param: bool,
+    },
 
     // -- Hardware MIDI I/O --
     /// Result of `AudioCommand::ListMidiInputDevices`.
