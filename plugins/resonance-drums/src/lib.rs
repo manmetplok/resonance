@@ -26,6 +26,7 @@ pub mod params;
 pub mod reload;
 pub mod rr_display;
 pub mod sample_info;
+pub mod velocity;
 pub mod voice;
 
 use articulation::ArticulationWatcher;
@@ -34,7 +35,7 @@ use download::WorkerHandle;
 use kit::LoadedPad;
 use kit_loader::{KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
 use mic_catalog::ManifestMicCatalog;
-use params::{DrumParams, PARAMS_PER_PAD};
+use params::{DrumParams, GLOBAL_PARAMS, PARAMS_PER_PAD};
 use resonance_plugin::plugin::ExtraStateSaver;
 use dsp::DrumSampler;
 
@@ -195,16 +196,21 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn param_count(&self) -> usize {
-        // master_volume + (volume, pan, mute, oh_blend, balance, articulation) per pad
-        1 + drum_map::NUM_PADS * PARAMS_PER_PAD
+        // master_volume + polyphony + velocity_curve + round_robin_mode,
+        // then (volume, pan, mute, oh_blend, balance, articulation) per pad
+        GLOBAL_PARAMS + drum_map::NUM_PADS * PARAMS_PER_PAD
     }
 
     fn param(&self, index: usize) -> &dyn Param {
-        if index == 0 {
-            return &self.params.master_volume;
+        match index {
+            0 => return &self.params.master_volume,
+            1 => return &self.params.polyphony,
+            2 => return &self.params.velocity_curve,
+            3 => return &self.params.round_robin_mode,
+            _ => {}
         }
-        let pad_idx = (index - 1) / PARAMS_PER_PAD;
-        let field = (index - 1) % PARAMS_PER_PAD;
+        let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
+        let field = (index - GLOBAL_PARAMS) % PARAMS_PER_PAD;
         let pad = &self.params.pads[pad_idx];
         match field {
             0 => &pad.volume,
@@ -283,6 +289,12 @@ impl ResonancePlugin for ResonanceDrums {
 
         // Swap in a freshly loaded kit if one is waiting.
         self.sampler.try_swap_kit();
+
+        // Snapshot the global trigger settings once per block, before any
+        // note lands. Block-rate is the right granularity: they only
+        // affect how a hit is *started*, and it keeps `note_on` off the
+        // param objects.
+        self.sampler.update_global_settings(&self.params);
 
         // Drain every pending MIDI event *before* rendering the block.
         // The new multi-output sampler renders whole blocks per voice

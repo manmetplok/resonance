@@ -9,7 +9,7 @@
 //! it, not to relabel it.
 
 use resonance_drums::drum_map::NUM_PADS;
-use resonance_drums::params::{DrumParams, PARAMS_PER_PAD};
+use resonance_drums::params::{DrumParams, GLOBAL_PARAMS, PARAMS_PER_PAD};
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::param::Param;
 use resonance_plugin::ResonancePlugin;
@@ -43,18 +43,38 @@ fn articulation_param_ids_are_unchanged() {
     }
 }
 
-/// The parameter list still has the same shape, so the flat host index
-/// of every other param is untouched.
+/// The pad block still runs in the same order behind the globals, so
+/// `param(index)` and `PARAMS_PER_PAD` stay in step. (The flat index is
+/// enumeration order only — hosts key on the string id, which the CLAP
+/// bridge hashes to a stable numeric id.)
 #[test]
-fn param_layout_is_unchanged() {
+fn param_layout_is_consistent() {
     let plugin = ResonanceDrums::new();
-    assert_eq!(plugin.param_count(), 1 + NUM_PADS * PARAMS_PER_PAD);
+    assert_eq!(
+        plugin.param_count(),
+        GLOBAL_PARAMS + NUM_PADS * PARAMS_PER_PAD
+    );
     for pad in 0..NUM_PADS {
-        let base = 1 + pad * PARAMS_PER_PAD;
+        let base = GLOBAL_PARAMS + pad * PARAMS_PER_PAD;
         assert_eq!(plugin.param(base).id(), format!("pad_{pad}_volume"));
         assert_eq!(
             plugin.param(base + 5).id(),
             format!("pad_{pad}_articulation")
         );
     }
+}
+
+/// Every parameter has a unique id — the CLAP bridge refuses to load a
+/// plugin whose ids collide, and the globals added by ba todo #1326 sit
+/// in the same namespace as the pad params.
+#[test]
+fn every_param_id_is_unique() {
+    let plugin = ResonanceDrums::new();
+    let mut ids: Vec<&str> = (0..plugin.param_count())
+        .map(|i| plugin.param(i).id())
+        .collect();
+    let total = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), total, "duplicate parameter id");
 }
