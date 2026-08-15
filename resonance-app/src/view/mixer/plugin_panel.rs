@@ -24,9 +24,14 @@ impl crate::Resonance {
             .chain(self.master_plugins.iter())
             .find(|p| p.instance_id == selected_id)?;
 
+        // `hidden` params are dropped rather than drawn: CLAP's
+        // IS_HIDDEN is the plugin asking that a parameter not be
+        // presented as a control (it stays in the app's mirror because
+        // it is still automatable and still saved — ba todo #1290).
         let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin
             .params
             .iter()
+            .filter(|p| !p.hidden)
             .map(|p| resonance_plugin::ui::UiParam {
                 id: p.id,
                 name: p.name.clone(),
@@ -34,6 +39,11 @@ impl crate::Resonance {
                 max_value: p.max_value,
                 default_value: p.default_value,
                 current_value: p.current_value,
+                // The plugin's own formatting, when it has one. Where
+                // this panel printed "0.40" it now prints the "40 %"
+                // the plugin's editor shows.
+                text: p.text.clone(),
+                stepped: p.stepped,
             })
             .collect();
 

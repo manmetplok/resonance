@@ -24,7 +24,6 @@ impl UnisonParams {
                     max: 100.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" ct")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             spread: FloatParam::new(
@@ -33,7 +32,6 @@ impl UnisonParams {
                 0.5,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
         }
     }

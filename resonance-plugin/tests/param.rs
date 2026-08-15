@@ -140,6 +140,20 @@ fn float_param_custom_formatter_wins_and_the_unit_is_not_doubled() {
 }
 
 #[test]
+fn a_scaled_unit_in_the_formatter_is_not_doubled_either() {
+    // `v2s_f32_hz` switches to kHz above a kilohertz while the param
+    // declares `" Hz"`. The doubling check compares the unit's word, not
+    // the spaced string, or every host reads "20.00 kHz Hz" — which is
+    // also unparseable on the way back (ba todo #1287).
+    let p = FloatParam::new("f", "F", 0.0, linear(20.0, 20_000.0))
+        .with_unit(" Hz")
+        .with_value_to_string(resonance_plugin::formatters::v2s_f32_hz());
+
+    assert_eq!(p.display(440.0), "440 Hz");
+    assert_eq!(p.display(20_000.0), "20.00 kHz");
+}
+
+#[test]
 fn float_param_default_parse_strips_the_unit() {
     let p = FloatParam::new("f", "F", 0.0, linear(0.0, 20_000.0)).with_unit(" Hz");
 

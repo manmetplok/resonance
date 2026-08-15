@@ -26,6 +26,7 @@ use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
 use resonance_control::{Request, Response, RpcError};
 
 use super::reply::{ack, not_found_bus, reject};
+use super::view_model;
 
 /// Handle a `bus.*` request, or `None` when `method` belongs to another
 /// namespace.
@@ -196,18 +197,7 @@ fn bus_plugin_entries(bus: &BusState) -> Vec<track::PluginParamsEntry> {
                 slot: i as u32,
                 occurrence: *occurrence,
                 kind: track::PluginKind::Effect,
-                params: p
-                    .params
-                    .iter()
-                    .map(|param| track::PluginParamView {
-                        id: param.id,
-                        name: param.name.clone(),
-                        value: param.current_value,
-                        min: param.min_value,
-                        max: param.max_value,
-                        default: param.default_value,
-                    })
-                    .collect(),
+                params: p.params.iter().map(view_model::param_view).collect(),
             }
         })
         .collect()
@@ -513,12 +503,6 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if !params.value.is_finite() {
-        return reject(
-            request,
-            RpcError::invalid_params(format!("value must be finite (got {})", params.value)),
-        );
-    }
     let Some(b) = find_bus(app, params.bus_id.0) else {
         return not_found_bus(request, params.bus_id.0);
     };
@@ -589,17 +573,11 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     };
 
     // Shared with `track.set_plugin_param` so the f32-declared-bounds
-    // tolerance (todo #1235) behaves identically on both surfaces.
-    let Some(value) =
-        super::track::clamp_within_tolerance(params.value, param.min, param.max)
-    else {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "{} must be within {}..={} (got {})",
-                param.name, param.min, param.max, params.value
-            )),
-        );
+    // tolerance (todo #1235) and choice-label resolution (todo #1290)
+    // behave identically on all three chains.
+    let value = match super::track::resolve_param_value(param, &params.value) {
+        Ok(value) => value,
+        Err(e) => return reject(request, e),
     };
 
     let Some(instance_id) = b

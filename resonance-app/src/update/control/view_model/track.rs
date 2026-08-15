@@ -171,6 +171,31 @@ pub(in crate::update::control) fn track_detail(app: &Resonance, t: &TrackState) 
     }
 }
 
+/// One parameter as the control API reports it: the number, and
+/// everything that says what the number means (ba todo #1290).
+///
+/// Shared by the track, bus and master chains — they publish the same
+/// [`track::PluginParamView`], and three hand-written copies of this
+/// mapping is how one of them would quietly stop reporting a field.
+pub(in crate::update::control) fn param_view(
+    param: &resonance_audio::types::ParamInfo,
+) -> track::PluginParamView {
+    track::PluginParamView {
+        id: param.id,
+        name: param.name.clone(),
+        value: param.current_value,
+        min: param.min_value,
+        max: param.max_value,
+        default: param.default_value,
+        text: param.text.clone(),
+        unit: param.unit.clone(),
+        module: param.module.clone(),
+        stepped: param.stepped,
+        choices: param.choices.clone(),
+        hidden: param.hidden,
+    }
+}
+
 /// The track's plugins as wire entries, in chain order, each tagged with
 /// its role and its occurrence index among same-id siblings.
 pub(in crate::update::control) fn plugin_entries(
@@ -199,18 +224,7 @@ pub(in crate::update::control) fn plugin_entries(
                 } else {
                     PluginKind::Effect
                 },
-                params: p
-                    .params
-                    .iter()
-                    .map(|param| track::PluginParamView {
-                        id: param.id,
-                        name: param.name.clone(),
-                        value: param.current_value,
-                        min: param.min_value,
-                        max: param.max_value,
-                        default: param.default_value,
-                    })
-                    .collect(),
+                params: p.params.iter().map(param_view).collect(),
             }
         })
         .collect()

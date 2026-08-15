@@ -2,8 +2,10 @@
 ///
 /// Replaces nih-plug with a thin abstraction over clack-plugin.
 pub mod clap_bridge;
+pub mod features;
 pub mod formatters;
 pub mod gui;
+pub mod host;
 pub mod loader;
 pub mod param;
 pub mod plugin;
@@ -21,11 +23,12 @@ pub mod ui;
 // Re-export core types for convenient use
 pub use clap_bridge::ClapBridge;
 pub use formatters::*;
+pub use host::HostHandle;
 pub use loader::{rescan_directory, Mailbox};
 pub use param::{BoolParam, FloatParam, IntParam, Param};
 pub use plugin::{
-    EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer, OutputPortSpec,
-    ResonancePlugin, TempoInfo,
+    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer,
+    OutputPortSpec, PluginEvent, ResonancePlugin, TempoInfo,
 };
 pub use range::{FloatRange, IntRange};
 pub use smoother::{Smoother, SmoothingStyle};

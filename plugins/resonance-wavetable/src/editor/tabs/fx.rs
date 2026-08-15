@@ -49,9 +49,9 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-                    float_knob(ui, "Rate", &app.params.chorus.rate, Some("Hz"));
-                    float_knob(ui, "Depth", &app.params.chorus.depth, None);
-                    float_knob(ui, "Mix", &app.params.chorus.mix, None);
+                    float_knob(ui, "Rate", &app.params.chorus.rate);
+                    float_knob(ui, "Depth", &app.params.chorus.depth);
+                    float_knob(ui, "Mix", &app.params.chorus.mix);
                 });
             },
         );
@@ -65,10 +65,10 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-                    float_knob(ui, "Time L", &app.params.delay.time_l, Some("ms"));
-                    float_knob(ui, "Time R", &app.params.delay.time_r, Some("ms"));
-                    float_knob(ui, "Fb", &app.params.delay.feedback, None);
-                    float_knob(ui, "Mix", &app.params.delay.mix, None);
+                    float_knob(ui, "Time L", &app.params.delay.time_l);
+                    float_knob(ui, "Time R", &app.params.delay.time_r);
+                    float_knob(ui, "Fb", &app.params.delay.feedback);
+                    float_knob(ui, "Mix", &app.params.delay.mix);
                 });
             },
         );
@@ -82,8 +82,8 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-                    float_knob(ui, "Drive", &app.params.distortion.drive, None);
-                    float_knob(ui, "Mix", &app.params.distortion.mix, None);
+                    float_knob(ui, "Drive", &app.params.distortion.drive);
+                    float_knob(ui, "Mix", &app.params.distortion.mix);
                 });
             },
         );

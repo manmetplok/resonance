@@ -4,10 +4,11 @@
 use wayland_plugin_gui::egui;
 
 use crate::editor::theme;
-use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
 use resonance_plugin::param::Param;
+
+use super::{float_slider, readout};
 
 // Label tables live next to the enum discriminants in `dsp::modulation` so
 // the picker cannot drift from what the DSP actually matches on. Which of
@@ -173,15 +174,13 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
 
                     ui.add_space(10.0);
 
-                    // Amount slider (compact, bipolar).
+                    // Amount slider (compact; bipolar comes off the range).
                     let slider_w =
                         (ui.available_width() - 48.0).clamp(80.0, 200.0);
-                    if let Some(v) = widgets::slider_bipolar(ui, slider_w, slot.amount.value()) {
-                        slot.amount.set_value(v);
-                    }
+                    float_slider(ui, slider_w, &slot.amount);
                     ui.add_space(6.0);
                     ui.label(
-                        egui::RichText::new(format!("{:+.2}", slot.amount.value()))
+                        egui::RichText::new(readout(&slot.amount))
                             .monospace()
                             .size(10.5)
                             .color(if slot.amount.value() < 0.0 {

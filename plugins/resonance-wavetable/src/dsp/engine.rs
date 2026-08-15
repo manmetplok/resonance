@@ -121,9 +121,12 @@ impl SynthEngine {
             rng: SimpleRng::new(42),
             last_note: None,
             scope_collector: ScopeCollector::new(),
-            // Matches the SmoothingStyle declared on the master_volume
-            // FloatParam; the param is already linear gain, so the ramp
-            // runs in linear-gain space directly.
+            // 5 ms, the master volume's de-zipper time; the param is
+            // already linear gain, so the ramp runs in linear-gain space
+            // directly. (This used to say it matched a SmoothingStyle
+            // declared on the FloatParam — that declaration could never
+            // advance and was deleted in ba todo #1288; the ramp here is
+            // and always was the real one.)
             master_vol_smoother: Smoother::new(SmoothingStyle::Linear(5.0)),
             fx_smoothers: FxSmoothers::new(),
         }

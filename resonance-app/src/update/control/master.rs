@@ -25,6 +25,7 @@ use resonance_control::methods::track;
 use resonance_control::{Request, Response, RpcError};
 
 use super::reply::{ack, reject};
+use super::view_model;
 
 /// Handle a `master.*` request, or `None` when `method` belongs to
 /// another namespace.
@@ -168,18 +169,7 @@ fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
                 slot: i as u32,
                 occurrence: *occurrence,
                 kind: track::PluginKind::Effect,
-                params: p
-                    .params
-                    .iter()
-                    .map(|param| track::PluginParamView {
-                        id: param.id,
-                        name: param.name.clone(),
-                        value: param.current_value,
-                        min: param.min_value,
-                        max: param.max_value,
-                        default: param.default_value,
-                    })
-                    .collect(),
+                params: p.params.iter().map(view_model::param_view).collect(),
             }
         })
         .collect()
@@ -444,12 +434,6 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if !params.value.is_finite() {
-        return reject(
-            request,
-            RpcError::invalid_params(format!("value must be finite (got {})", params.value)),
-        );
-    }
     let entries = master_plugin_entries(app);
     let occurrence = params.occurrence.unwrap_or(0);
     let entry = match &params.plugin_id {
@@ -515,16 +499,11 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     };
 
     // Shared with `track.set_plugin_param` so the f32-declared-bounds
-    // tolerance (todo #1235) behaves identically on all three surfaces.
-    let Some(value) = super::track::clamp_within_tolerance(params.value, param.min, param.max)
-    else {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "{} must be within {}..={} (got {})",
-                param.name, param.min, param.max, params.value
-            )),
-        );
+    // tolerance (todo #1235) and choice-label resolution (todo #1290)
+    // behave identically on all three chains.
+    let value = match super::track::resolve_param_value(param, &params.value) {
+        Ok(value) => value,
+        Err(e) => return reject(request, e),
     };
 
     let Some(instance_id) = app

@@ -34,7 +34,8 @@ impl ResonancePlugin for ResonanceReverb {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str = "Algorithmic reverb with diffusion network and FDN";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "stereo", "reverb"];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[features::AUDIO_EFFECT, features::REVERB, features::STEREO];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

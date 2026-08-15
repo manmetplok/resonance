@@ -84,12 +84,14 @@ impl AutomationSnapshot {
                     // Engine thread: a brief blocking lock (spin +
                     // back-off) is fine and matches the bounce path.
                     let inst = crate::engine::try_lock_with_backoff(mutex);
-                    let range = inst
-                        .0
-                        .query_params()
-                        .into_iter()
-                        .find(|p| p.id == param_id)
-                        .map(|p| (p.min_value, p.max_value));
+                    // `param_range`, not `query_params`: this runs per
+                    // lane on every SetAutomationLane — which is what a
+                    // breakpoint drag emits — while holding the lock the
+                    // audio thread drops a block rather than wait for.
+                    // `query_params` carries every parameter's text,
+                    // unit and choice labels (ba todo #1290), and this
+                    // call site wants two numbers (ba todo #1290 review).
+                    let range = inst.0.param_range(param_id);
                     drop(inst);
                     let Some((min, max)) = range else {
                         continue;

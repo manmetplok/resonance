@@ -45,7 +45,7 @@ pub(in crate::update::control) use lane::{
 pub(in crate::update::control) use position::{song_end_sample, song_position, transport_state};
 pub(in crate::update::control) use section::{definitions_in_placement_order, placement_views};
 pub(in crate::update::control) use track::{
-    plugin_entries, track_detail, track_summaries, unknown_plugin_on_track,
+    param_view, plugin_entries, track_detail, track_summaries, unknown_plugin_on_track,
 };
 
 /// Ticks per quarter note — the app's MIDI clock resolution, and the
