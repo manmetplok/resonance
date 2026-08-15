@@ -25,10 +25,8 @@ use clap_sys::ext::params::{
 use clap_sys::plugin::clap_plugin;
 
 use indexmap::IndexMap;
-use parking_lot::Mutex;
 use resonance_audio::__test_support::{
-    choice_labels, AutomationSnapshot, ClapInstance, SyncClapInstance,
-    __instance_from_raw_for_test,
+    choice_labels, AutomationSnapshot, ClapInstance, PluginSlot, __instance_from_raw_for_test,
 };
 use resonance_audio::unit_from_text;
 use resonance_audio::AutomationLanes;
@@ -424,8 +422,10 @@ fn snapshot_for_one_lane(
     let state = unsafe { &mut *state };
     state.text_calls = 0;
 
-    let mut plugins: IndexMap<u64, Mutex<SyncClapInstance>> = IndexMap::new();
-    plugins.insert(7, Mutex::new(SyncClapInstance(instance)));
+    // #1304 replaced the bare `Mutex<SyncClapInstance>` in the plugin map with
+    // `PluginSlot` (which derefs to that mutex, so every call site reads the same).
+    let mut plugins: IndexMap<u64, PluginSlot> = IndexMap::new();
+    plugins.insert(7, PluginSlot::new(instance));
 
     let mut lanes: AutomationLanes = AutomationLanes::new();
     let target = AutomationTarget::PluginParam {
