@@ -117,14 +117,51 @@ impl KeyHighPass {
 }
 
 /// Whether the gate is letting signal through, and why.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GateState {
+///
+/// Public because it is the state the editor reports: "open", "holding"
+/// and "closed" are three different answers to *why is this signal
+/// getting through*, and collapsing them to a bit throws away the one
+/// the hold timer explains (ba todo #1314).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum GateState {
     /// Signal is above the open threshold.
     Open,
     /// Signal has fallen away but the hold timer is still running.
     Holding,
     /// Fully closed (attenuating by up to `range_db`).
+    #[default]
     Closed,
+}
+
+impl GateState {
+    /// Short label for the editor's status chip.
+    pub fn label(self) -> &'static str {
+        match self {
+            GateState::Open => "OPEN",
+            GateState::Holding => "HOLD",
+            GateState::Closed => "CLOSED",
+        }
+    }
+
+    /// Stable wire code, so the state can live in an atomic cell shared
+    /// with the editor.
+    pub fn code(self) -> u8 {
+        match self {
+            GateState::Closed => 0,
+            GateState::Holding => 1,
+            GateState::Open => 2,
+        }
+    }
+
+    /// Inverse of [`GateState::code`]; anything unrecognised reads as
+    /// closed rather than panicking on the UI thread.
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            1 => GateState::Holding,
+            2 => GateState::Open,
+            _ => GateState::Closed,
+        }
+    }
 }
 
 pub struct GateDsp {
@@ -148,6 +185,13 @@ pub struct GateDsp {
     pub last_gr_db: f32,
     /// Whether the gate was open at the end of the last block.
     pub last_open: bool,
+    /// State the gate was in at the end of the last block.
+    pub last_state: GateState,
+    /// Peak detector level across the last block, in dBFS. This is what
+    /// the threshold is actually compared against — after the key
+    /// substitution and the key high-pass — so it is the only honest
+    /// number to show next to the threshold control.
+    pub last_detector_db: f32,
 }
 
 impl GateDsp {
@@ -168,6 +212,8 @@ impl GateDsp {
             det_release_coef: (-1.0 / (DETECTOR_RELEASE_MS * 0.001 * sample_rate)).exp(),
             last_gr_db: 0.0,
             last_open: false,
+            last_state: GateState::Closed,
+            last_detector_db: f32::NEG_INFINITY,
         }
     }
 
@@ -180,6 +226,8 @@ impl GateDsp {
         self.det_env = 0.0;
         self.last_gr_db = 0.0;
         self.last_open = false;
+        self.last_state = GateState::Closed;
+        self.last_detector_db = f32::NEG_INFINITY;
     }
 
     /// Refresh the coefficients that depend on time/frequency controls.
@@ -220,6 +268,7 @@ impl GateDsp {
         let hold_samples = (s.hold_ms * 0.001 * self.sample_rate).max(0.0) as u32;
         let close_threshold = s.threshold_db - s.hysteresis_db.max(0.0);
         let mut peak_gr = 0.0f32;
+        let mut peak_det_db = f32::NEG_INFINITY;
 
         for i in 0..frames {
             // Detector source: the external key when connected, else the
@@ -240,6 +289,7 @@ impl GateDsp {
             // what the threshold actually compares against.
             self.det_env = rectified.max(self.det_env * self.det_release_coef);
             let det_db = 20.0 * self.det_env.max(1e-9).log10();
+            peak_det_db = peak_det_db.max(det_db);
 
             // Hysteresis + hold decide which threshold applies this
             // sample, so the static curve below sees a stable decision.
@@ -284,5 +334,7 @@ impl GateDsp {
 
         self.last_gr_db = peak_gr;
         self.last_open = self.state != GateState::Closed;
+        self.last_state = self.state;
+        self.last_detector_db = peak_det_db;
     }
 }

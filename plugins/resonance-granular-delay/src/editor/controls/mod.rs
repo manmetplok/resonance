@@ -134,6 +134,37 @@ pub const SCALE_LABELS: &[&str] = &[
     "Melodic Minor",
 ];
 
+/// Controls that are declared, drawn and saved but whose DSP does not
+/// exist yet (ba todo #1277, audit findings G2/G3 in ba doc #275).
+///
+/// Anything listed here renders *unavailable*: inert, dimmed, and
+/// explaining itself on hover, so a user can tell the difference
+/// between "subtle" and "absent". Each entry names the epic #203 todo
+/// that implements the missing stage — deleting the entry is the last
+/// step of that todo, and the matching param doc comment in
+/// `crate::params` points here.
+pub const PENDING_DSP: &[(usize, &str)] = &[
+    (
+        9,
+        "Density Sync is not implemented yet: the grain rate does not \
+         follow the host tempo. Coming in ba todo #1322.",
+    ),
+    (
+        22,
+        "Diffusion is not implemented yet: no allpass smear is applied \
+         to the wet path. Coming in ba todo #1321.",
+    ),
+];
+
+/// The "not implemented yet" reason for a parameter index, if it has
+/// one (see [`PENDING_DSP`]).
+pub fn pending_dsp(index: usize) -> Option<&'static str> {
+    PENDING_DSP
+        .iter()
+        .find(|(i, _)| *i == index)
+        .map(|(_, reason)| *reason)
+}
+
 /// Widget mapping for every declared parameter index (see
 /// `GranularDelayParams::param_at` for the index table).
 pub fn control_kind(index: usize) -> ControlKind {
@@ -227,6 +258,23 @@ fn group_frame(
     });
 }
 
+/// Render a [`PENDING_DSP`] control as unavailable (ba todo #1277):
+/// the body is drawn inside a disabled `Ui`, so no click or drag can
+/// reach the parameter; a scrim dims the cell so the state reads at a
+/// glance; and hovering it states the reason and the todo that will
+/// make it work.
+fn pending_dsp_cell(ui: &mut Ui, reason: &'static str, body: impl FnOnce(&mut Ui)) {
+    let response = ui.add_enabled_ui(false, body).response;
+    ui.painter().rect_filled(
+        response.rect,
+        theme::RADIUS_CHIP,
+        theme::BG_0.gamma_multiply(0.5),
+    );
+    response
+        .on_hover_text(reason)
+        .on_disabled_hover_text(reason);
+}
+
 /// Small caption under a segmented control.
 fn caption(ui: &mut Ui, text: &str) {
     ui.label(
@@ -264,7 +312,14 @@ fn draw_grains(ui: &mut Ui, params: &GranularDelayParams) {
             macro_knob(ui, params, 8);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                param_chip(ui, params, 9, "PER-BEAT", true);
+                // PER-BEAT is inert until its DSP lands (ba todo
+                // #1277 stopgap, removed by #1322).
+                match pending_dsp(9) {
+                    Some(reason) => pending_dsp_cell(ui, reason, |ui| {
+                        param_chip(ui, params, 9, "PER-BEAT", false)
+                    }),
+                    None => param_chip(ui, params, 9, "PER-BEAT", true),
+                }
             });
         });
         ui.add_space(6.0);
@@ -349,13 +404,20 @@ fn draw_feedback(ui: &mut Ui, params: &GranularDelayParams) {
     });
 }
 
-/// SPACE: Pan Spread, Width, Diffuse texture knobs (Diffuse is
-/// designed-but-inert until its DSP lands — still wired to its param).
+/// SPACE: Pan Spread, Width, Diffuse texture knobs. Diffuse is
+/// designed-but-inert until its DSP lands, so it renders unavailable
+/// rather than pretending to work (ba todo #1277 stopgap, removed by
+/// #1321).
 fn draw_space(ui: &mut Ui, params: &GranularDelayParams) {
     ui.horizontal(|ui| {
         texture_knob_labeled(ui, params, 23, "Pan Spr");
         texture_knob_labeled(ui, params, 24, "Width");
-        texture_knob_labeled(ui, params, 22, "Diffuse");
+        match pending_dsp(22) {
+            Some(reason) => pending_dsp_cell(ui, reason, |ui| {
+                texture_knob_labeled(ui, params, 22, "Diffuse")
+            }),
+            None => texture_knob_labeled(ui, params, 22, "Diffuse"),
+        }
     });
 }
 
