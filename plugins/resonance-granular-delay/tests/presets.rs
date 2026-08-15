@@ -5,7 +5,7 @@
 use resonance_granular_delay::params::{GranularDelayParams, PARAM_COUNT};
 use resonance_granular_delay::presets::{load_preset, PRESETS};
 use resonance_granular_delay::ResonanceGranularDelay;
-use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin, TempoInfo};
+use resonance_plugin::{EventIterator, OutputBuffer, Param, ResonancePlugin, TempoInfo};
 
 #[test]
 fn factory_preset_list_is_populated() {
@@ -31,18 +31,41 @@ fn factory_preset_list_is_populated() {
 // presets would not know they exist. These two tests keep the factory
 // set a tour of the plugin rather than six variations on one patch.
 
-/// Every mode parameter's declared values, and how many each has.
-const MODE_PARAMS: &[(&str, usize)] = &[
-    ("time_mode", 3),      // Fade / Repitch / Per-Grain
-    ("fb_route", 3),       // Wet->Buffer / Output-only / Ping-pong
-    ("scheduler", 3),      // Sync / Async / Pitch-Sync
-    ("pitch_quantize", 3), // Off / Semitones / Scale
-    ("filter_type", 2),    // LP / HP
-    ("quality", 3),        // Lo-fi / Normal / HQ
+/// Which parameters are modes is a judgement call — `src/params.rs`'s
+/// module doc draws the line ("Choice parameters (...)"), so the list is
+/// hand-written and follows it. How many values each one *has* is not a
+/// judgement call, so it is read from the declaration below rather than
+/// written here: widening a range (a band-pass `filter_type`, a fourth
+/// `quality` tier) then has to come with a preset that demonstrates it,
+/// instead of leaving this test asserting the old, narrower range and
+/// passing green.
+const MODE_PARAMS: &[&str] = &[
+    "time_mode",      // Fade / Repitch / Per-Grain
+    "fb_route",       // Wet->Buffer / Output-only / Ping-pong
+    "scheduler",      // Sync / Async / Pitch-Sync
+    "pitch_quantize", // Off / Semitones / Scale
+    "filter_type",    // LP / HP
+    "quality",        // Lo-fi / Normal / HQ
 ];
 
 /// Capability switches that must be demonstrated both on and off.
 const TOGGLES: &[&str] = &["sync", "fb_pitch", "density_sync", "freeze", "align"];
+
+/// Stepped parameters that are musical settings rather than
+/// capabilities — note values and key. A preset per root note would be
+/// absurd, so these are knowingly excused from coverage; they are listed
+/// so that a *new* stepped parameter has to be classified rather than
+/// slipping past uncovered.
+const MUSICAL_STEPPED: &[&str] = &["division", "density_division", "root", "scale"];
+
+/// The declared parameter with this id, or a loud failure — which also
+/// makes a rename of a mode parameter fail here, by name.
+fn declared<'a>(fresh: &'a GranularDelayParams, id: &str) -> &'a dyn Param {
+    (0..PARAM_COUNT)
+        .map(|i| fresh.param_at(i))
+        .find(|p| p.id() == id)
+        .unwrap_or_else(|| panic!("no parameter '{id}' is declared"))
+}
 
 fn preset_values(id: &str) -> Vec<f64> {
     PRESETS
@@ -61,16 +84,20 @@ fn preset_values(id: &str) -> Vec<f64> {
 
 #[test]
 fn the_preset_set_demonstrates_every_shipped_mode() {
-    for &(id, variants) in MODE_PARAMS {
+    let fresh = GranularDelayParams::default();
+    for &id in MODE_PARAMS {
+        let p = declared(&fresh, id);
+        let (lo, hi) = (p.min_plain().round() as i64, p.max_plain().round() as i64);
         let used: std::collections::HashSet<i64> = preset_values(id)
             .into_iter()
             .map(|v| v.round() as i64)
             .collect();
-        for index in 0..variants as i64 {
+        for index in lo..=hi {
             assert!(
                 used.contains(&index),
-                "no factory preset selects {id} = {index}; the mode ships but is \
-                 never demonstrated (used: {used:?})"
+                "no factory preset selects {id} = {index}; the parameter declares \
+                 {lo}..={hi}, so the mode ships but is never demonstrated \
+                 (used: {used:?})"
             );
         }
     }
@@ -90,6 +117,28 @@ fn the_preset_set_demonstrates_every_shipped_mode() {
         preset_values("diffusion").iter().any(|&v| v > 0.05),
         "no factory preset engages the diffusion stage"
     );
+}
+
+/// A new stepped parameter must be classified — demonstrated as a mode,
+/// demonstrated on and off as a toggle, or knowingly excused as a
+/// musical setting. Without this, adding one is an omission the coverage
+/// test above cannot see.
+#[test]
+fn every_stepped_parameter_is_classified() {
+    let fresh = GranularDelayParams::default();
+    for i in 0..PARAM_COUNT {
+        let p = fresh.param_at(i);
+        if !p.is_stepped() {
+            continue;
+        }
+        let id = p.id();
+        assert!(
+            MODE_PARAMS.contains(&id) || TOGGLES.contains(&id) || MUSICAL_STEPPED.contains(&id),
+            "stepped parameter '{id}' is neither a listed mode, toggle, nor musical \
+             setting; add it to MODE_PARAMS/TOGGLES so the factory set must demonstrate \
+             it, or to MUSICAL_STEPPED to excuse it on purpose"
+        );
+    }
 }
 
 /// A showcase that misbehaves is worse than no showcase: every factory
