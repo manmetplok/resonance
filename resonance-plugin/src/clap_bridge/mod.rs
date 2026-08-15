@@ -76,30 +76,37 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
     }
 }
 
+impl<P: ResonancePlugin> ClapBridge<P> {
+    /// A plugin has to tell the host what kind of thing it is.
+    ///
+    /// Evaluated for every exported plugin by `get_descriptor` below, so
+    /// a `FEATURES` list with no main category is a build failure rather
+    /// than a plugin that turns up nowhere useful in a browser
+    /// (ba todo #1298).
+    const HAS_CATEGORY: () = assert!(
+        crate::features::has_category(P::FEATURES),
+        "FEATURES must declare at least one CLAP main category \
+         (features::AUDIO_EFFECT, INSTRUMENT, NOTE_EFFECT, NOTE_DETECTOR or ANALYZER)"
+    );
+}
+
 impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
     fn get_descriptor() -> PluginDescriptor {
+        // Forces the const assertion above for this concrete plugin.
+        let () = Self::HAS_CATEGORY;
+
         let mut desc = PluginDescriptor::new(P::CLAP_ID, P::NAME)
             .with_vendor(P::VENDOR)
             .with_version(P::VERSION)
             .with_description(P::DESCRIPTION);
 
-        let features: Vec<&'static std::ffi::CStr> = P::FEATURES
-            .iter()
-            .filter_map(|f| match *f {
-                "audio-effect" => Some(c"audio-effect"),
-                "instrument" => Some(c"instrument"),
-                "stereo" => Some(c"stereo"),
-                "mono" => Some(c"mono"),
-                "reverb" => Some(c"reverb"),
-                "sampler" => Some(c"sampler"),
-                "drum" | "drum-machine" => Some(c"drum-machine"),
-                "synthesizer" | "synth" => Some(c"synthesizer"),
-                "cabinet-simulator" => Some(c"cabinet-simulator"),
-                _ => None,
-            })
-            .collect();
-        if !features.is_empty() {
-            desc = desc.with_features(features);
+        // Verbatim: the features a plugin declares are already CLAP's own
+        // `&CStr` constants. The bridge used to map them through a
+        // hand-written whitelist and `filter_map` away everything else,
+        // which is how six standard categories and one typo went missing
+        // (finding X6).
+        if !P::FEATURES.is_empty() {
+            desc = desc.with_features(P::FEATURES.iter().copied());
         }
 
         desc

@@ -50,7 +50,13 @@ impl ResonancePlugin for ResonanceCompressor {
     const DESCRIPTION: &'static str =
         "Stereo feed-forward compressor with soft knee, external sidechain key, \
          sidechain HPF, and parallel mix";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "compressor", "stereo", "dynamics"];
+    // `compressor` is standard CLAP and never reached a host before
+    // (ba todo #1298); `dynamics` was not a CLAP feature at all.
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::AUDIO_EFFECT,
+        features::COMPRESSOR,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
     const SIDECHAIN_INPUT: Option<u32> = Some(2);

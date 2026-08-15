@@ -149,8 +149,13 @@ pub trait ResonancePlugin: Send + 'static {
     const VERSION: &'static str;
     /// Short description.
     const DESCRIPTION: &'static str;
-    /// CLAP feature strings (e.g. "audio-effect", "stereo", "reverb").
-    const FEATURES: &'static [&'static str];
+    /// CLAP feature strings, declared from [`crate::features`] — e.g.
+    /// `&[features::AUDIO_EFFECT, features::REVERB, features::STEREO]`.
+    ///
+    /// They reach the host exactly as written; there is no translation
+    /// step to fall out of. At least one main category is required, and
+    /// the bridge checks that at compile time (ba todo #1298).
+    const FEATURES: &'static [&'static std::ffi::CStr];
 
     /// Number of input channels. None = instrument (no audio input).
     const INPUT_CHANNELS: Option<u32>;
