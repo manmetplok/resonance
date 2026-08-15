@@ -21,6 +21,7 @@ pub mod kit;
 pub mod kit_loader;
 mod mic_catalog;
 pub mod params;
+pub mod sample_info;
 pub mod voice;
 
 #[cfg(feature = "editor")]
@@ -69,6 +70,22 @@ pub struct KitBridge {
     /// after each `note_on`, read by the editor for per-pad RR indicators.
     /// Packed as `rr_index | (n_rrs << 16)`; zero means "never triggered".
     pub last_rr: Arc<[AtomicU32; NUM_PADS]>,
+    /// Frames in the last block the host asked us to render. Written by
+    /// `process` on the audio thread, read by the editor's status bar.
+    /// Sentinel `0` means "no block has been processed yet".
+    pub block_frames: Arc<AtomicU32>,
+    /// Block peak of the plugin's output, across every port, as
+    /// `f32::to_bits`: `[left, right]`. Written by the sampler at the end
+    /// of every render, read (and decayed) by the editor's OUT meter.
+    pub out_peak: Arc<[AtomicU32; 2]>,
+    /// Bytes of decoded sample data currently held in memory. Published by
+    /// whoever built the live kit — the loader thread on a successful load,
+    /// `initialize` for the embedded fallback. Sentinel `0` = nothing loaded.
+    pub kit_bytes: Arc<AtomicU64>,
+    /// Per-pad identity of the sample a full-velocity hit plays, measured
+    /// from the decoded takes. Published alongside every kit build; read by
+    /// the inspector's SAMPLE stage. Empty until the first kit is built.
+    pub pad_samples: Arc<Mutex<Vec<Option<sample_info::PadSampleInfo>>>>,
 }
 
 pub struct ResonanceDrums {
@@ -116,9 +133,14 @@ impl ResonancePlugin for ResonanceDrums {
             overhead_setup_key: Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string())),
             articulations: Arc::new(Mutex::new([false; drum_map::NUM_PADS])),
             last_rr: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+            block_frames: Arc::new(AtomicU32::new(0)),
+            out_peak: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+            kit_bytes: Arc::new(AtomicU64::new(0)),
+            pad_samples: Arc::new(Mutex::new(Vec::new())),
         };
         let mut sampler = DrumSampler::new(kit_receiver);
         sampler.set_last_rr(bridge.last_rr.clone());
+        sampler.set_out_peak(bridge.out_peak.clone());
         Self {
             params: Arc::new(DrumParams::default()),
             sampler,
@@ -171,6 +193,10 @@ impl ResonancePlugin for ResonanceDrums {
             .sample_rate
             .store(sample_rate.to_bits(), Ordering::Release);
         self.sampler.load_defaults(sample_rate);
+        // Publish what the fallback kit actually costs and what it holds,
+        // so the status bar and the inspector's SAMPLE stage describe the
+        // kit that is really loaded rather than a placeholder.
+        self.publish_kit_facts(sample_rate);
 
         // If a kit path was set (either by a prior session via load_state or
         // by the editor) re-kick the loader at the current sample rate so the
@@ -205,6 +231,11 @@ impl ResonancePlugin for ResonanceDrums {
         _tempo: Option<TempoInfo>,
     ) {
         resonance_common::flush_denormals();
+
+        // Real block size for the editor's status bar.
+        self.bridge
+            .block_frames
+            .store(frames as u32, Ordering::Relaxed);
 
         // Swap in a freshly loaded kit if one is waiting.
         self.sampler.try_swap_kit();
@@ -270,6 +301,24 @@ impl ResonancePlugin for ResonanceDrums {
             self.bridge.clone(),
             self.download_worker.clone(),
         )))
+    }
+}
+
+impl ResonanceDrums {
+    /// Measure the kit the sampler currently holds and publish the two
+    /// facts the editor displays about it: how much decoded audio is in
+    /// memory, and what sample each pad plays at full velocity.
+    ///
+    /// Called from `initialize` for the embedded fallback kit; the loader
+    /// thread publishes the same two facts for kits it loads from disk
+    /// (see `kit_loader::spawn_loader`). Both callers are off the audio
+    /// thread — nothing here runs in `process`.
+    fn publish_kit_facts(&self, sample_rate: f32) {
+        self.bridge
+            .kit_bytes
+            .store(self.sampler.total_sample_bytes() as u64, Ordering::Relaxed);
+        *self.bridge.pad_samples.lock() =
+            sample_info::infos_for_pads(&self.sampler.pads, sample_rate);
     }
 }
 
