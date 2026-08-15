@@ -9,10 +9,16 @@ const HEIGHT: f32 = 18.0;
 const TRACK_HEIGHT: f32 = 3.0;
 const THUMB_RADIUS: f32 = 5.5;
 
-/// Bipolar slider: `value_unit` -1..1. Returns the new bipolar value if dragged.
-pub fn slider_bipolar(ui: &mut egui::Ui, width: f32, value_signed: f32) -> Option<f32> {
-    let unit = (value_signed + 1.0) * 0.5;
-    draw(ui, width, unit, true).map(|u| u * 2.0 - 1.0)
+/// Slider in unit (`0..1`) travel; `bipolar` fills outward from the
+/// centre line instead of from the left. Returns the new travel when the
+/// groove was clicked or dragged.
+///
+/// The parameter binding lives in [`crate::editor::tabs::float_slider`] —
+/// this widget never sees a plain value, so it cannot assume a range
+/// (the old `slider_bipolar` took a `-1..1` value and silently only
+/// worked for parameters declared symmetric around zero).
+pub fn slider_unit(ui: &mut egui::Ui, width: f32, value_unit: f32, bipolar: bool) -> Option<f32> {
+    draw(ui, width, value_unit, bipolar)
 }
 
 fn draw(ui: &mut egui::Ui, width: f32, value_unit: f32, bipolar: bool) -> Option<f32> {

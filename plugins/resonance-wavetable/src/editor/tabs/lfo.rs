@@ -134,8 +134,8 @@ fn draw_lfo_card(
                 int_knob_fmt(ui, "Shape", &lfo.shape, |v| {
                     LfoShape::from_int(v).label().to_string()
                 });
-                float_knob(ui, "Rate", &lfo.rate, Some("Hz"));
-                float_knob(ui, "Depth", &lfo.depth, None);
+                float_knob(ui, "Rate", &lfo.rate);
+                float_knob(ui, "Depth", &lfo.depth);
             });
         });
 

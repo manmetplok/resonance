@@ -9,7 +9,7 @@ use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
-use super::{float_knob, float_knob_bipolar, float_knob_fmt};
+use super::float_knob;
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -83,11 +83,11 @@ fn draw_env_stack(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             // Stage knobs.
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-                float_knob(ui, "Attack", &env.attack, Some("s"));
-                float_knob(ui, "Decay", &env.decay, Some("s"));
-                float_knob(ui, "Sustain", &env.sustain, None);
-                float_knob(ui, "Release", &env.release, Some("s"));
-                float_knob_bipolar(ui, "Curve", &env.curve, None);
+                float_knob(ui, "Attack", &env.attack);
+                float_knob(ui, "Decay", &env.decay);
+                float_knob(ui, "Sustain", &env.sustain);
+                float_knob(ui, "Release", &env.release);
+                float_knob(ui, "Curve", &env.curve);
             });
         });
     }
@@ -180,15 +180,11 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         // Filter knob row.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-            float_knob(ui, "Cutoff", &app.params.filter.cutoff, Some("Hz"));
-            float_knob(ui, "Reso", &app.params.filter.resonance, None);
-            float_knob_bipolar(ui, "Env", &app.params.filter.env_depth, None);
-            // `filter_keytrack` is unipolar 0..1 — a bipolar knob put its
-            // centre detent at 50 % tracking and drew 0 % hard left.
-            float_knob_fmt(ui, "Key", &app.params.filter.keytrack, |v| {
-                format!("{:.0}%", v * 100.0)
-            });
-            float_knob(ui, "Drive", &app.params.filter.drive, None);
+            float_knob(ui, "Cutoff", &app.params.filter.cutoff);
+            float_knob(ui, "Reso", &app.params.filter.resonance);
+            float_knob(ui, "Env", &app.params.filter.env_depth);
+            float_knob(ui, "Key", &app.params.filter.keytrack);
+            float_knob(ui, "Drive", &app.params.filter.drive);
         });
     });
 }
