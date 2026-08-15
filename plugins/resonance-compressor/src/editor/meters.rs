@@ -1,24 +1,33 @@
-//! Three vertical bar meters: input peak, gain reduction, output peak.
+//! Vertical bar meters: input peak, the sidechain key, gain reduction,
+//! output peak.
 //!
 //! The meters read atomic scalar values from `CompressorViz`, which are
 //! updated once per audio block. Values are in dB:
-//! - Input / output use a −60…0 dBFS scale, rising from the bottom.
-//! - Gain reduction uses a 0…18 dB scale, hanging from the top.
+//! - Input / key / output use a −60…+6 dBFS scale, rising from the bottom.
+//! - Gain reduction uses a 0…24 dB scale, hanging from the top.
+//!
+//! The key meter exists only while a key is connected, and it is the one
+//! bar whose level is a *detector* level rather than a raw peak: it is
+//! the number the threshold is compared against. Whichever meter is
+//! feeding the detector also carries the threshold marker, so the user
+//! can see how far over the line the detector's signal is sitting.
 
 use wayland_plugin_gui::egui;
 
 use crate::editor::theme;
-use crate::viz::DetectorSource;
+use crate::viz::{DetectorSource, KEY_METER_LABEL};
 
 /// The input meter always shows the plugin's own input. Its *label*
 /// depends on the detector source: without a key the input is also what
 /// the detector hears, and with a key it is not, so the label says which
-/// of the two the bar means.
+/// of the two the bar means. `threshold_db` is `Some` only on the meter
+/// the detector is actually reading.
 pub fn draw_input_meter(
     painter: &egui::Painter,
     rect: egui::Rect,
     db: f32,
     detector: DetectorSource,
+    threshold_db: Option<f32>,
 ) {
     draw_level_meter(
         painter,
@@ -27,6 +36,23 @@ pub fn draw_input_meter(
         LevelMode::FromBottom,
         theme::ACCENT,
         detector.input_meter_label(),
+        threshold_db,
+    );
+}
+
+/// The external sidechain key's detector level. Drawn only when a key is
+/// connected — see [`crate::viz::CompressorViz::read_key_db`] — and
+/// always with the threshold marker, because with a key connected this
+/// bar and the threshold are what produce the gain reduction next door.
+pub fn draw_key_meter(painter: &egui::Painter, rect: egui::Rect, db: f32, threshold_db: f32) {
+    draw_level_meter(
+        painter,
+        rect,
+        db,
+        LevelMode::FromBottom,
+        theme::KEY,
+        KEY_METER_LABEL,
+        Some(threshold_db),
     );
 }
 
@@ -38,11 +64,20 @@ pub fn draw_output_meter(painter: &egui::Painter, rect: egui::Rect, db: f32) {
         LevelMode::FromBottom,
         theme::ACCENT,
         "OUT",
+        None,
     );
 }
 
 pub fn draw_gr_meter(painter: &egui::Painter, rect: egui::Rect, db: f32) {
-    draw_level_meter(painter, rect, db, LevelMode::HangingGr, theme::GR, "GR");
+    draw_level_meter(
+        painter,
+        rect,
+        db,
+        LevelMode::HangingGr,
+        theme::GR,
+        "GR",
+        None,
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +97,7 @@ fn draw_level_meter(
     mode: LevelMode,
     fill: egui::Color32,
     label: &str,
+    threshold_db: Option<f32>,
 ) {
     painter.rect_filled(rect, 2.0, theme::PANEL);
     painter.rect_stroke(
@@ -105,6 +141,18 @@ fn draw_level_meter(
     };
     if bar.height() > 0.0 {
         painter.rect_filled(bar, 1.0, fill);
+    }
+
+    // Threshold marker, on top of the bar so it stays readable when the
+    // signal is over the line — which is precisely when it is being
+    // read. Drawn in the GR colour: crossing this line is what moves the
+    // GR meter.
+    if let Some(threshold_db) = threshold_db {
+        let y = value_to_y(threshold_db, mode, inner);
+        painter.line_segment(
+            [egui::pos2(inner.left(), y), egui::pos2(inner.right(), y)],
+            egui::Stroke::new(1.2, theme::GR),
+        );
     }
 
     // Label at top.

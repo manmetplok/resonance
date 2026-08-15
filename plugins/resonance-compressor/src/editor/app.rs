@@ -118,20 +118,39 @@ fn draw_detector_pill(ui: &mut egui::Ui, detector: DetectorSource) {
     };
     ui.label(text).on_hover_text(if detector.key_connected() {
         "An external sidechain key is connected: gain reduction follows the key, \
-         not this track. The IN meter still shows this track's input."
+         not this track. The IN meter still shows this track's input; the KEY \
+         meter shows the level the detector is working from, against the threshold."
     } else {
         "No sidechain key is connected: the compressor keys off its own input, \
          which is what the IN/DET meter shows."
     });
 }
 
+/// Width of one vertical meter, and the gap between two of them. Three
+/// meters at these numbers is exactly the 150 px block the layout used
+/// before the key meter existed, so connecting a key widens the block
+/// instead of squeezing the bars that were already there.
+const METER_W: f32 = 46.0;
+const METER_GAP: f32 = 6.0;
+
+fn meter_block_width(count: usize) -> f32 {
+    count as f32 * METER_W + (count as f32 - 1.0) * METER_GAP
+}
+
 fn draw_center(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
     let avail = ui.available_rect_before_wrap();
-    let meter_block_width = 150.0f32;
     let gap = 8.0f32;
 
+    let detector = app.viz.detector_source();
+    let threshold = app.params.threshold.value();
+    // `None` unless the host has a key connected, which is also what
+    // decides whether the key meter exists at all — so the row cannot
+    // show a key bar for a key that is not there.
+    let key_db = app.viz.read_key_db();
+    let meter_block_width = meter_block_width(if key_db.is_some() { 4 } else { 3 });
+
     // Split the center row horizontally: transfer curve (~40%),
-    // GR history (~flex), and three meters on the right.
+    // GR history (~flex), and the meters on the right.
     let curve_width = avail.width() * 0.36;
     let curve_rect = egui::Rect::from_min_max(
         avail.min,
@@ -155,7 +174,7 @@ fn draw_center(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
             // The plot window comes off the threshold parameter itself,
             // so the threshold indicator can never leave the plot.
             axis: curve::DbAxis::from_threshold(&app.params.threshold),
-            threshold: app.params.threshold.value(),
+            threshold,
             ratio: app.params.ratio.value(),
             knee: app.params.knee.value(),
             makeup: app.params.makeup.value(),
@@ -166,28 +185,34 @@ fn draw_center(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
 
     history::draw(&painter, history_rect, &app.viz);
 
-    // Three meters side by side in meters_rect.
-    let meter_gap = 6.0f32;
-    let meter_w = (meters_rect.width() - 2.0 * meter_gap) / 3.0;
-    let in_rect = egui::Rect::from_min_max(
-        meters_rect.min,
-        egui::pos2(meters_rect.min.x + meter_w, meters_rect.max.y),
-    );
-    let gr_rect = egui::Rect::from_min_max(
-        egui::pos2(in_rect.max.x + meter_gap, meters_rect.min.y),
-        egui::pos2(in_rect.max.x + meter_gap + meter_w, meters_rect.max.y),
-    );
-    let out_rect = egui::Rect::from_min_max(
-        egui::pos2(gr_rect.max.x + meter_gap, meters_rect.min.y),
-        egui::pos2(gr_rect.max.x + meter_gap + meter_w, meters_rect.max.y),
-    );
+    // Meters side by side in meters_rect, in signal order: what comes
+    // in, what the detector hears if that is something else, what the
+    // compressor did about it, what came out.
+    let mut left = meters_rect.min.x;
+    let mut next_meter = || {
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(left, meters_rect.min.y),
+            egui::pos2(left + METER_W, meters_rect.max.y),
+        );
+        left += METER_W + METER_GAP;
+        rect
+    };
+
+    // The threshold is compared against the detector's source and
+    // nothing else, so its marker belongs on that meter: the input's bar
+    // when the compressor keys off itself, the key's when a key is
+    // connected.
     meters::draw_input_meter(
         &painter,
-        in_rect,
+        next_meter(),
         app.viz.read_input_db(),
-        app.viz.detector_source(),
+        detector,
+        (!detector.key_connected()).then_some(threshold),
     );
-    meters::draw_gr_meter(&painter, gr_rect, app.viz.read_gr_db());
-    meters::draw_output_meter(&painter, out_rect, app.viz.read_output_db());
+    if let Some(key_db) = key_db {
+        meters::draw_key_meter(&painter, next_meter(), key_db, threshold);
+    }
+    meters::draw_gr_meter(&painter, next_meter(), app.viz.read_gr_db());
+    meters::draw_output_meter(&painter, next_meter(), app.viz.read_output_db());
 }
 

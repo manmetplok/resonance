@@ -2,7 +2,8 @@
 //!
 //! Layout (top-down):
 //! - Header: plugin name, preset dropdown, detector-source status.
-//! - Middle: transfer curve + GR history + 3 meters (In / GR / Out) in a row.
+//! - Middle: transfer curve + GR history + the meter row (In / GR / Out,
+//!   plus Key while a sidechain key is connected).
 //! - Bottom: control strip with the 11 parameters.
 
 mod app;

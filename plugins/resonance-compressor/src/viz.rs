@@ -25,8 +25,10 @@ pub const HISTORY_STEP_SAMPLES: u32 = 256;
 ///
 /// This is the one thing about a sidechain compressor a user cannot infer
 /// from the meters: with a key connected the GR meter is driven by a
-/// signal that is nowhere on screen, so an idle IN meter next to a moving
-/// GR meter looks like a bug rather than like ducking working correctly.
+/// signal the input meter knows nothing about, so an idle IN meter next
+/// to a moving GR meter looks like a bug rather than like ducking working
+/// correctly. Naming the source answers "why"; the key meter fed by
+/// [`CompressorViz::read_key_db`] answers "by how much".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectorSource {
     /// No key connected — the compressor keys off its own input.
@@ -36,6 +38,13 @@ pub enum DetectorSource {
     /// the gain reduction.
     ExternalKey,
 }
+
+/// Label for the key meter, which the editor draws only while a key is
+/// connected. The `/DET` suffix is the editor's mark for "this bar is
+/// what the detector hears": exactly one meter carries it at a time, and
+/// with a key connected it moves off the input and onto this one — see
+/// [`DetectorSource::input_meter_label`].
+pub const KEY_METER_LABEL: &str = "KEY/DET";
 
 impl DetectorSource {
     /// True when the host has an external key wired into the plugin's
@@ -75,6 +84,15 @@ pub struct CompressorViz {
     /// Published by the DSP, where the detector source is actually chosen,
     /// so the flag can never disagree with what the detector did.
     pub key_connected: AtomicBool,
+    /// Peak detector level across the last block in dBFS — the key,
+    /// after the sidechain HPF and the peak/RMS blend, which is the
+    /// exact quantity the threshold is compared against and therefore
+    /// the one that explains the gain reduction.
+    ///
+    /// `-inf` when no key is connected. The DSP republishes it every
+    /// block, so a disconnected key reads as absent rather than as the
+    /// last level it happened to have (ba todo #1342).
+    pub key_db: AtomicU32,
     /// Rolling history of GR samples, newest at `write_pos`.
     pub history: GrHistory,
 }
@@ -118,6 +136,7 @@ impl CompressorViz {
             output_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             gr_db: AtomicU32::new(0.0f32.to_bits()),
             key_connected: AtomicBool::new(false),
+            key_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             history: GrHistory::new(),
         })
     }
@@ -128,10 +147,14 @@ impl CompressorViz {
         self.key_connected.store(connected, Ordering::Relaxed);
     }
 
-    pub fn store_levels(&self, input_db: f32, output_db: f32, gr_db: f32) {
+    /// Publish the block's meter levels. `key_db` is `-inf` when no key
+    /// is connected; it travels with the others so the key level can
+    /// never lag a block behind the input it is being compared to.
+    pub fn store_levels(&self, input_db: f32, output_db: f32, gr_db: f32, key_db: f32) {
         self.input_db.store(input_db.to_bits(), Ordering::Relaxed);
         self.output_db.store(output_db.to_bits(), Ordering::Relaxed);
         self.gr_db.store(gr_db.to_bits(), Ordering::Relaxed);
+        self.key_db.store(key_db.to_bits(), Ordering::Relaxed);
     }
 
     pub fn push_gr(&self, gr_db: f32) {
@@ -148,6 +171,18 @@ impl CompressorViz {
 
     pub fn read_gr_db(&self) -> f32 {
         f32::from_bits(self.gr_db.load(Ordering::Relaxed))
+    }
+
+    /// The key's level on the last processed block, or `None` when no
+    /// key is connected.
+    ///
+    /// One accessor rather than a bare float so the editor cannot draw a
+    /// key meter for a key that is not there: absence is the DSP's
+    /// `-inf`, published every block from the same place as the presence
+    /// bit, not a value the reader has to remember to ignore.
+    pub fn read_key_db(&self) -> Option<f32> {
+        let db = f32::from_bits(self.key_db.load(Ordering::Relaxed));
+        db.is_finite().then_some(db)
     }
 
     /// What the detector was listening to on the last processed block.

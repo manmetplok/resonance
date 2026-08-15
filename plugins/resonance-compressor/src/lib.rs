@@ -12,7 +12,8 @@
 //! of internal filtering can do it.
 //!
 //! Whether a key is actually connected is published into the shared viz
-//! object each block, so the editor can name the detector's source
+//! object each block, together with the level the key reaches at the
+//! detector, so the editor can name the detector's source and meter it
 //! instead of leaving the user to guess why the GR meter moves while the
 //! input meter is idle.
 

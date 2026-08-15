@@ -131,6 +131,11 @@ impl CompressorDsp {
     ///
     /// With `key: None` this is bit-identical to the pre-sidechain path,
     /// so existing projects are unaffected.
+    ///
+    /// Two facts about the key go into the viz object for the editor:
+    /// whether one is connected at all, and — while it is — the peak
+    /// detector level it reached this block, which is the level the
+    /// threshold is compared against.
     pub fn process_stereo(
         &mut self,
         left: &mut [f32],
@@ -190,6 +195,14 @@ impl CompressorDsp {
         // Per-sample loop.
         let mut in_peak_block: f32 = self.in_peak;
         let mut out_peak_block: f32 = self.out_peak;
+        // Peak detector level reached by the KEY this block, for the
+        // editor's key meter. Started at `-inf` every block: with no key
+        // it stays there and the editor draws no meter, so a key that is
+        // unrouted mid-session cannot leave a level frozen on screen.
+        // Tracking it costs one compare per sample and only while a key
+        // is actually connected (ba todo #1342).
+        let key_present = key.is_some();
+        let mut key_peak_db: f32 = f32::NEG_INFINITY;
 
         for i in 0..frames {
             let l = left[i];
@@ -230,6 +243,14 @@ impl CompressorDsp {
             let rms_db = linear_to_db(self.rms_env.sqrt());
             let detector_db = peak_db * (1.0 - detector_mix) + rms_db * detector_mix;
 
+            // The key meter shows this number, not the raw key samples:
+            // it is what the threshold is compared against one line
+            // below, so it is the only level that explains the gain
+            // reduction the user is looking at.
+            if key_present {
+                key_peak_db = key_peak_db.max(detector_db);
+            }
+
             // Static knee/ratio nonlinearity.
             let target_gr_db =
                 soft_knee_gain_reduction_db(detector_db, threshold, knee, half_knee, slope);
@@ -257,8 +278,9 @@ impl CompressorDsp {
             // Meter envelopes (slow decay, instant attack). The input
             // meter shows the INPUT, so an external key — which can be
             // far louder than the signal being compressed — must not be
-            // folded into it. Without a key the detector is derived from
-            // the input anyway, and including it is the pre-existing
+            // folded into it; it gets its own meter from `key_peak_db`
+            // above. Without a key the detector is derived from the
+            // input anyway, and including it is the pre-existing
             // behaviour, kept so the meter reads identically.
             let abs_in = match key {
                 Some(_) => l.abs().max(r.abs()),
@@ -293,6 +315,7 @@ impl CompressorDsp {
             linear_to_db(in_peak_block),
             linear_to_db(out_peak_block),
             self.gr_db,
+            key_peak_db,
         );
     }
 }
