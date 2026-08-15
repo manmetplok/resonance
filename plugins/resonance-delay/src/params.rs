@@ -1,9 +1,13 @@
 use resonance_plugin::*;
 
+use crate::sync::DIVISION_LABELS;
+
 pub const PARAM_COUNT: usize = 22;
 
 pub struct DelayParams {
     pub sync: BoolParam,
+    /// Delay time as a musical division; reads as "1/8D", never as "8"
+    /// ([`DIVISION_LABELS`] via [`IntParam::with_choices`]).
     pub division: IntParam,
     pub time_ms: FloatParam,
     pub feedback: FloatParam,
@@ -22,6 +26,8 @@ pub struct DelayParams {
     // Both shape the wet path only, after the tap and before the mix, so
     // the feedback loop never re-records a chopped or ducked signal.
     pub gate_on: BoolParam,
+    /// Gate period as a musical division, labelled from the same table
+    /// as [`DelayParams::division`].
     pub gate_rate: IntParam,
     pub gate_width: FloatParam,
     pub gate_shape: FloatParam,
@@ -66,12 +72,19 @@ impl Default for DelayParams {
         Self {
             sync: BoolParam::new("sync", "Sync", true),
 
+            // The label lives on the parameter, not in the editor, so the
+            // host's automation lane reads "1/4" too. The range is derived
+            // from the table it indexes, never hand-typed.
             division: IntParam::new(
                 "division",
                 "Division",
                 4,
-                IntRange::Linear { min: 0, max: 11 },
-            ),
+                IntRange::Linear {
+                    min: 0,
+                    max: DIVISION_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(DIVISION_LABELS),
 
             time_ms: FloatParam::new(
                 "time_ms",
@@ -200,8 +213,12 @@ impl Default for DelayParams {
                 "gate_rate",
                 "Gate Rate",
                 7,
-                IntRange::Linear { min: 0, max: 11 },
-            ),
+                IntRange::Linear {
+                    min: 0,
+                    max: DIVISION_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(DIVISION_LABELS),
 
             // Duty cycle: how much of each period the wet is open for.
             gate_width: FloatParam::new(
