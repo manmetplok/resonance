@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use resonance_drums::articulation::{ARTICULATION_ALT, ARTICULATION_PRIMARY};
 use resonance_drums::kit_loader::{PadMicChoices, DEFAULT_OVERHEAD_SETUP};
+use resonance_drums::params::DrumParams;
 use resonance_drums::{drum_map, DrumsExtraState, ResonanceDrums};
 use resonance_plugin::plugin::ExtraStateSaver;
 use resonance_plugin::ResonancePlugin;
@@ -41,7 +43,7 @@ type SaverBundle = (
     Arc<Mutex<Option<PathBuf>>>,
     Arc<Mutex<String>>,
     Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
-    Arc<Mutex<[bool; drum_map::NUM_PADS]>>,
+    Arc<DrumParams>,
     DrumsExtraState,
 );
 
@@ -52,20 +54,16 @@ fn make_saver_bundle(initial_path: Option<PathBuf>) -> SaverBundle {
     let pad_choices = Arc::new(Mutex::new(std::array::from_fn(|_| {
         PadMicChoices::default()
     })));
-    let articulations = Arc::new(Mutex::new([false; drum_map::NUM_PADS]));
+    // Articulations live in the params now (ba todo #1325), so the saver
+    // reads them from there rather than from a mirror of its own.
+    let params = Arc::new(DrumParams::default());
     let saver = DrumsExtraState {
         kit_path: kit_path.clone(),
         overhead_setup_key: overhead_setup_key.clone(),
         pad_choices: pad_choices.clone(),
-        articulations: articulations.clone(),
+        params: params.clone(),
     };
-    (
-        kit_path,
-        overhead_setup_key,
-        pad_choices,
-        articulations,
-        saver,
-    )
+    (kit_path, overhead_setup_key, pad_choices, params, saver)
 }
 
 /// Round-trip through the `ExtraStateSaver` interface directly. This
@@ -155,25 +153,59 @@ fn extra_saver_roundtrips_mic_choices() {
     );
 }
 
-/// Articulation toggles round-trip through the ExtraStateSaver JSON.
+/// The legacy `articulations` array is still written, so a build from
+/// before ba todo #1325 can still read a project this one saves.
 #[test]
-fn extra_saver_roundtrips_articulations() {
-    let (_, _, _, art_arc, saver) = make_saver_bundle(None);
-    {
-        let mut guard = art_arc.lock();
-        guard[0] = true; // Kick -> ohne Teppich
-        guard[9] = true; // Tom High -> ohne Teppich
-    }
+fn extra_saver_still_writes_the_legacy_articulation_array() {
+    let (_, _, _, params, saver) = make_saver_bundle(None);
+    params.pads[0].articulation.set_value(ARTICULATION_ALT); // Kick -> ohne Teppich
+    params.pads[9].articulation.set_value(ARTICULATION_ALT); // Tom High -> ohne Teppich
 
-    let mut json = serde_json::json!({ "params": {} });
-    for (k, v) in saver.save() {
-        json.as_object_mut().unwrap().insert(k, v);
-    }
+    let saved = saver.save();
+    let arr = saved
+        .get("articulations")
+        .and_then(|v| v.as_array())
+        .expect("legacy articulation array");
+    assert_eq!(arr.len(), drum_map::NUM_PADS);
+    assert_eq!(arr[0], serde_json::Value::Bool(true));
+    assert_eq!(arr[9], serde_json::Value::Bool(true));
+    assert_eq!(arr[1], serde_json::Value::Bool(false));
+}
 
-    let (_, _, _, art2, restored) = make_saver_bundle(None);
-    restored.load(&json);
-    let guard = art2.lock();
-    assert!(guard[0], "kick articulation should be true");
-    assert!(guard[9], "tom high articulation should be true");
-    assert!(!guard[1], "snare articulation should be false (default)");
+/// A project old enough to predate the `pad_N_articulation` parameter
+/// still opens with its articulations: the legacy array is adopted for
+/// pads the file has no parameter for.
+#[test]
+fn extra_saver_migrates_a_legacy_articulation_array() {
+    let (_, _, _, params, saver) = make_saver_bundle(None);
+    let mut legacy = vec![serde_json::Value::Bool(false); drum_map::NUM_PADS];
+    legacy[1] = serde_json::Value::Bool(true);
+    let state = serde_json::json!({ "params": {}, "articulations": legacy });
+
+    saver.load(&state);
+    assert_eq!(params.pads[1].articulation.value(), ARTICULATION_ALT);
+    assert_eq!(params.pads[0].articulation.value(), ARTICULATION_PRIMARY);
+}
+
+/// When the file carries the parameter, the parameter wins — the params
+/// are the source of truth and `load_params_from_json` has already
+/// applied them by the time the saver runs.
+#[test]
+fn the_param_wins_over_the_legacy_articulation_array() {
+    let (_, _, _, params, saver) = make_saver_bundle(None);
+    // What `load_params_from_json` would have done first.
+    params.pads[0].articulation.set_value(ARTICULATION_PRIMARY);
+    let mut legacy = vec![serde_json::Value::Bool(false); drum_map::NUM_PADS];
+    legacy[0] = serde_json::Value::Bool(true);
+    let state = serde_json::json!({
+        "params": { "pad_0_articulation": 0.0 },
+        "articulations": legacy,
+    });
+
+    saver.load(&state);
+    assert_eq!(
+        params.pads[0].articulation.value(),
+        ARTICULATION_PRIMARY,
+        "the legacy array must not override a parameter the file carries"
+    );
 }

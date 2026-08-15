@@ -212,6 +212,10 @@ pub fn spawn_loader(
 ) {
     let bridge = bridge.clone();
     let stamp = bridge.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    // Record what this load is being built from, in call order, so the
+    // articulation watcher compares the params against the kit that is
+    // actually (being) decoded rather than re-triggering every poll.
+    *bridge.loaded_articulations.lock() = articulations;
 
     std::thread::Builder::new()
         .name("resonance-drums-loader".to_string())

@@ -65,7 +65,7 @@ pub fn draw(
         draw_knob_grid(ui, pad, mapping);
 
         if mapping.has_articulation {
-            draw_articulations(ui, bridge, pad, selected_pad);
+            draw_articulations(ui, bridge, pad);
         }
 
         draw_mic_and_oh_row(ui, bridge, catalog, pad, mapping, selected_pad);
@@ -394,12 +394,12 @@ fn draw_placeholder_knob(ui: &mut egui::Ui, label: &str) {
     );
 }
 
-fn draw_articulations(
-    ui: &mut egui::Ui,
-    bridge: &KitBridge,
-    pad: &crate::params::PadParams,
-    pad_idx: usize,
-) {
+/// Articulation chips. The chips are a view of the pad's articulation
+/// *parameter* — they read it and write it, and the reload happens
+/// because the parameter moved, not because a chip was clicked. That is
+/// the same path host automation and `set_plugin_param` take (ba todo
+/// #1325), so the three cannot drift apart.
+fn draw_articulations(ui: &mut egui::Ui, bridge: &KitBridge, pad: &crate::params::PadParams) {
     let frame = inline_group_frame();
     frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width() - 28.0);
@@ -410,9 +410,10 @@ fn draw_articulations(
                     .size(10.5)
                     .strong(),
             );
+            let options = pad.articulation.labels().len();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new("2 options")
+                    egui::RichText::new(format!("{options} options"))
                         .color(theme::TEXT_3)
                         .size(10.5)
                         .monospace(),
@@ -420,28 +421,24 @@ fn draw_articulations(
             });
         });
         ui.add_space(2.0);
-        let current = bridge.articulations.lock()[pad_idx];
+        let current = pad.articulation.value();
         ui.horizontal(|ui| {
-            if widgets::chip_button(ui, "mit Teppich", !current) && current {
-                bridge.articulations.lock()[pad_idx] = false;
-                pad.articulation.set_plain(0.0);
-                reload_kit(bridge);
-            }
-            if widgets::chip_button(ui, "ohne Teppich", current) && !current {
-                bridge.articulations.lock()[pad_idx] = true;
-                pad.articulation.set_plain(1.0);
-                reload_kit(bridge);
+            for (index, label) in pad.articulation.labels().iter().enumerate() {
+                let index = index as i32;
+                if widgets::chip_button(ui, label, index == current) && index != current {
+                    pad.articulation.set_value(index);
+                    // The parameter is the source of truth; the reload is
+                    // the watcher's job. Ping it so the click lands now
+                    // instead of at its next poll.
+                    bridge.wake_articulation_watcher();
+                }
             }
         });
         ui.add_space(2.0);
-        // The chips work (they reload the kit through the bridge); the
-        // host-facing param does not. Say so, rather than let someone draw
-        // an automation lane that silently does nothing. ba todo #1325
-        // makes the param the source of truth and retires this note.
         ui.label(
             egui::RichText::new(
-                "Saved with the kit. The host's \"Pad Articulation\" parameter is a \
-                 display mirror — automating it does not switch samples.",
+                "Reloads the pad's samples. Automatable — the host's \
+                 \"Pad Articulation\" parameter is this control.",
             )
             .color(theme::TEXT_4)
             .size(10.0),
