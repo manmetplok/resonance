@@ -22,10 +22,17 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::PlayheadMoved(pos) => r.transport.playhead = pos,
         E::SampleRateDetected { sample_rate } => r.sample_rate = sample_rate,
         E::Stopped => transport::stopped(r),
-        // The engine echoes a key route change back; the app already
-        // dispatched it, so nothing to mirror. Consumed for
-        // exhaustiveness (and so a GUI-side route view can hang off it).
-        E::SidechainRouteChanged { .. } => {}
+        // The engine echoes a key route change back. It is the authority
+        // on what is actually keyed, so reconcile the GUI mirror to the
+        // echo rather than trusting the optimistic write the dispatching
+        // handler made — and so a route the engine dropped on its own
+        // (plugin or source removed) leaves the mirror too, instead of
+        // surviving into the next save (ba todo #1311).
+        E::SidechainRouteChanged {
+            plugin,
+            source,
+            enabled,
+        } => plugins::sidechain_route_changed(r, plugin, source, enabled),
         E::Error(e) => transport::error(r, e),
         E::InputDevicesListed { devices, default_name } => {
             transport::input_devices_listed(r, devices, default_name)

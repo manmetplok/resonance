@@ -189,6 +189,44 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         sends
     };
 
+    // External sidechain (key) routes (ba doc #157/#159, todo #1311).
+    // Same edge discipline as the sends above, with one extra end to
+    // check: a route names a *plugin instance* as well as a source, and
+    // the plugin can be anywhere — a track chain, a bus chain, or master.
+    // `plugin_index` is precisely the "every live plugin instance,
+    // wherever it lives" view, so it is the membership test.
+    //
+    // Writing a dangling route out is durable damage for the same reason
+    // a dangling send is: the loader refuses it on reopen, but the entry
+    // stays in the file and every later save rewrites it.
+    let sidechain_routes = {
+        let live_source = |source: SendSource| match source {
+            SendSource::Track(id) => r.registry.tracks.iter().any(|t| t.id == id),
+            SendSource::Bus(id) => r.registry.busses.iter().any(|b| b.id == id),
+        };
+        let mut routes: Vec<crate::project::ProjectSidechainRoute> = r
+            .sidechain
+            .routes
+            .iter()
+            .filter(|route| {
+                r.plugin_index.contains_key(&route.plugin) && live_source(route.source)
+            })
+            .map(|route| {
+                let (source_kind, source_id) = send_source_tag(route.source);
+                crate::project::ProjectSidechainRoute {
+                    plugin_instance_id: route.plugin,
+                    source_kind: source_kind.to_string(),
+                    source_id,
+                    enabled: route.enabled,
+                }
+            })
+            .collect();
+        // Stable on-disk order that doesn't depend on the order the
+        // engine's echoes happened to arrive in.
+        routes.sort_by_key(|route| route.plugin_instance_id);
+        routes
+    };
+
     let clips = r
         .clips
         .iter()
@@ -326,6 +364,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         midi_clips,
         busses,
         sends,
+        sidechain_routes,
         section_definitions: r.compose.to_project_definitions(),
         section_placements: r.compose.to_project_placements(),
         tempo_events: r.tempo_events.clone(),

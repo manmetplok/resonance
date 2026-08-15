@@ -222,6 +222,11 @@ pub(super) fn track_removed(
     }
     r.plugin_state_cache.remove(&instance_id);
     r.remove_plugin_index(instance_id);
+    // The engine's `RemovePlugin` arm already dropped this instance's key
+    // route, so only the mirror needs pruning here — but prune it we must,
+    // or the route is written to the next save and reloads onto whatever
+    // plugin later occupies this instance id (ba todo #1311).
+    r.sidechain.clear_plugin(instance_id);
 }
 
 /// Mirror an engine-side chain reorder (`AudioEvent::MovePlugin` ->
@@ -385,6 +390,7 @@ pub(super) fn bus_removed(
     }
     r.plugin_state_cache.remove(&instance_id);
     r.remove_plugin_index(instance_id);
+    drop_route_onto_removed_chain_plugin(r, instance_id);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -464,6 +470,52 @@ pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     }
     r.plugin_state_cache.remove(&instance_id);
     r.remove_plugin_index(instance_id);
+    drop_route_onto_removed_chain_plugin(r, instance_id);
+}
+
+/// Drop the key route onto a plugin that has just come off a **bus** or
+/// the **master** chain, and tell the engine to drop it as well.
+///
+/// The extra command is what separates this from the track case. The
+/// engine's dispatcher drops a route on `RemovePlugin` but *not* on
+/// `RemovePluginFromBus` / `RemovePluginFromMaster`, so pruning only the
+/// mirror would leave the engine still keying an instance id that the
+/// next `bus.add_effect` can be handed — the recycled-id misroute the
+/// engine's own `drop_plugin_route` exists to prevent. `ClearSidechainRoute`
+/// is idempotent (the engine echoes only when a route was present), so
+/// sending it unconditionally costs nothing when there was no route.
+fn drop_route_onto_removed_chain_plugin(r: &mut Resonance, instance_id: PluginInstanceId) {
+    if r.sidechain.clear_plugin(instance_id) {
+        let _ = r.engine.send(AudioCommand::ClearSidechainRoute {
+            plugin: instance_id,
+        });
+    }
+}
+
+/// Reconcile the GUI key-route mirror to the engine's echo (ba todo
+/// #1311). `source: None` means the route was cleared.
+///
+/// The engine is the authority: it stores the route, decides whether it
+/// survives a plugin or source removal, and only ever echoes resolved
+/// state. Mirroring the echo — rather than leaving the optimistic write
+/// from `PluginMessage::SetPluginSidechain` as the last word — is what
+/// keeps a route the engine silently dropped out of the next save.
+pub(super) fn sidechain_route_changed(
+    r: &mut Resonance,
+    plugin: PluginInstanceId,
+    source: Option<SendSource>,
+    enabled: bool,
+) {
+    match source {
+        Some(source) => r.sidechain.upsert(SidechainRoute {
+            plugin,
+            source,
+            enabled,
+        }),
+        None => {
+            r.sidechain.clear_plugin(plugin);
+        }
+    }
 }
 
 pub(super) fn master_fx_bypass_changed(r: &mut Resonance, bypassed: bool) {

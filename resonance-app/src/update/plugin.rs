@@ -115,16 +115,33 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             source,
             enabled,
         } => {
-            let _ = match source {
-                Some(source) => r.engine.send(AudioCommand::SetSidechainRoute {
-                    plugin: instance_id,
-                    source,
-                    enabled,
-                }),
-                None => r.engine.send(AudioCommand::ClearSidechainRoute {
-                    plugin: instance_id,
-                }),
-            };
+            // Mirror optimistically, then command. The engine echoes
+            // `SidechainRouteChanged` and the mirror is reconciled to
+            // that echo, so the two can only disagree for the length of
+            // one event-pump tick — but the mirror has to hold the route
+            // *now*, because a save taken before the echo lands would
+            // otherwise write a project file with no key in it (ba todo
+            // #1311).
+            match source {
+                Some(source) => {
+                    r.sidechain.upsert(resonance_audio::types::SidechainRoute {
+                        plugin: instance_id,
+                        source,
+                        enabled,
+                    });
+                    let _ = r.engine.send(AudioCommand::SetSidechainRoute {
+                        plugin: instance_id,
+                        source,
+                        enabled,
+                    });
+                }
+                None => {
+                    r.sidechain.clear_plugin(instance_id);
+                    let _ = r.engine.send(AudioCommand::ClearSidechainRoute {
+                        plugin: instance_id,
+                    });
+                }
+            }
         }
         PluginMessage::OpenPluginEditor(instance_id) => {
             let _ = r.engine
