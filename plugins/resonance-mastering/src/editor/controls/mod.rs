@@ -20,7 +20,7 @@ mod eq;
 mod glue;
 mod imager;
 mod limiter;
-mod multiband;
+pub mod multiband;
 mod saturator;
 mod widgets;
 
@@ -52,6 +52,20 @@ const TABS: &[(StageTab, &str)] = &[
     (StageTab::Dither, "Dither"),
 ];
 
+/// Height of the stage-controls panel for a tab.
+///
+/// Most stages fit one row of knobs under a title row. The Assistant is
+/// a whole workflow, and the Multiband is four band columns of two knob
+/// lines each — both need more room, and giving it to them here is what
+/// keeps the other seven tabs compact.
+pub fn stage_panel_height(tab: StageTab) -> f32 {
+    match tab {
+        StageTab::Assistant => 380.0,
+        StageTab::Multiband => 300.0,
+        _ => 260.0,
+    }
+}
+
 pub fn draw_tab_bar(ui: &mut egui::Ui, current: &mut StageTab) {
     ui.add_space(4.0);
     ui.horizontal_centered(|ui| {
@@ -73,7 +87,7 @@ pub fn draw_tab_bar(ui: &mut egui::Ui, current: &mut StageTab) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn draw_stage_panel(
+pub(crate) fn draw_stage_panel(
     ui: &mut egui::Ui,
     stage: StageTab,
     params: &MasteringParams,

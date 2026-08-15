@@ -125,7 +125,7 @@ fn compressing_a_band_attenuates_only_that_band() {
         enabled: true,
         threshold_db: -30.0,
         ratio: 8.0,
-        gain_db: 0.0,
+        ..BandConfig::default()
     };
 
     let (mut l, mut r) = sine_stereo(sr, 50.0, 0.5, n);
@@ -176,6 +176,7 @@ fn oversized_block_matches_chunked_processing_bitwise() {
         threshold_db: -30.0,
         ratio: 4.0,
         gain_db: 1.5,
+        ..BandConfig::default()
     };
 
     let (input_l, input_r) = sine_stereo(sr, 80.0, 0.5, n);
