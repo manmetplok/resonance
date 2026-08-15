@@ -6,18 +6,27 @@ use wayland_plugin_gui::egui;
 use crate::editor::theme;
 use crate::editor::viz::lfo_shape;
 use crate::editor::widgets;
+use crate::dsp::lfo::LfoShape;
+use crate::dsp::modulation::{routing_summary, ModDest, ModSlot, ModSource};
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
-use super::{float_knob, int_knob};
+use super::{float_knob, int_knob_fmt};
+
+const LFO_TITLES: [&str; 3] = ["LFO 1", "LFO 2", "LFO 3"];
+const LFO_SOURCES: [ModSource; 3] = [ModSource::Lfo1, ModSource::Lfo2, ModSource::Lfo3];
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
 
-    let lfos: [(&str, &str); 3] = [
-        ("LFO 1", "→ Wavetable Pos · Cutoff"),
-        ("LFO 2", "→ Pan · Drive"),
-        ("LFO 3", "→ Macro 4"),
+    // Each card's subtitle is derived from the live mod matrix, so it says
+    // what this LFO is actually wired to. The previous fixed strings named
+    // targets ("Wavetable Pos", "Macro 4") that no routing produced.
+    let slots = current_mod_slots(app);
+    let targets: [String; 3] = [
+        routing_summary(&slots, LFO_SOURCES[0]),
+        routing_summary(&slots, LFO_SOURCES[1]),
+        routing_summary(&slots, LFO_SOURCES[2]),
     ];
 
     let mut clicked: Option<usize> = None;
@@ -25,18 +34,37 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     // First row: LFO 1 and 2 side-by-side; LFO 3 on a row of its own.
     ui.columns(2, |cols| {
         for (col_idx, lfo_idx) in [0usize, 1usize].iter().enumerate() {
-            let (title, target) = lfos[*lfo_idx];
-            if draw_lfo_card(&mut cols[col_idx], app, *lfo_idx, title, target) {
+            if draw_lfo_card(
+                &mut cols[col_idx],
+                app,
+                *lfo_idx,
+                LFO_TITLES[*lfo_idx],
+                &targets[*lfo_idx],
+            ) {
                 clicked = Some(*lfo_idx);
             }
         }
     });
-    if draw_lfo_card(ui, app, 2, lfos[2].0, lfos[2].1) {
+    if draw_lfo_card(ui, app, 2, LFO_TITLES[2], &targets[2]) {
         clicked = Some(2);
     }
     if let Some(idx) = clicked {
         app.selected_lfo = idx;
     }
+}
+
+/// Snapshot the mod-matrix params as DSP slots so the display logic in
+/// [`routing_summary`] is shared with (and testable alongside) the DSP.
+fn current_mod_slots(app: &WavetableEditorApp) -> Vec<ModSlot> {
+    app.params
+        .mod_slots
+        .iter()
+        .map(|slot| ModSlot {
+            source: ModSource::from_int(slot.source.value()),
+            dest: ModDest::from_int(slot.destination.value()),
+            amount: slot.amount.value(),
+        })
+        .collect()
 }
 
 fn panel_frame() -> egui::Frame {
@@ -96,15 +124,14 @@ fn draw_lfo_card(
                 );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let labels = ["Free", "Sync", "Env"];
-                    // Treat `retrigger` bool as a proxy mode: false=free, true=sync.
-                    let mode = if lfo.retrigger.value() { 1 } else { 0 };
+                    // Exactly the two states `lfoN_retrigger` has. The third
+                    // segment used to be "Env", which no parameter backed, so
+                    // clicking it snapped straight back; "Sync" named tempo
+                    // sync, which this bool has never been.
+                    let labels = ["Free", "Retrig"];
+                    let mode = usize::from(lfo.retrigger.value());
                     if let Some(i) = widgets::segmented(ui, &labels, mode, false) {
-                        if i == 1 {
-                            lfo.retrigger.set_plain(1.0);
-                        } else {
-                            lfo.retrigger.set_plain(0.0);
-                        }
+                        lfo.retrigger.set_plain(i as f64);
                     }
                 });
             });
@@ -117,7 +144,9 @@ fn draw_lfo_card(
             // Controls.
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-                int_knob(ui, "Shape", &lfo.shape);
+                int_knob_fmt(ui, "Shape", &lfo.shape, |v| {
+                    LfoShape::from_int(v).label().to_string()
+                });
                 float_knob(ui, "Rate", &lfo.rate, Some("Hz"));
                 float_knob(ui, "Depth", &lfo.depth, None);
             });

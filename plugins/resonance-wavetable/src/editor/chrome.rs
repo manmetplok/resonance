@@ -182,8 +182,23 @@ pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             ui.add_space(14.0);
         };
 
-        mono(ui, "SR", "48000 Hz");
-        mono(ui, "BUF", "256");
+        // SR / BUF come from the host via `initialize`; both read "—" until
+        // the plugin has been activated (e.g. the standalone editor harness),
+        // rather than printing a plausible-looking literal.
+        let sr = app.snapshot.sample_rate;
+        let sr_text = if sr > 0.0 {
+            format!("{} Hz", sr.round() as u32)
+        } else {
+            "—".to_string()
+        };
+        mono(ui, "SR", &sr_text);
+        let buf = app.snapshot.max_block_frames;
+        let buf_text = if buf > 0 {
+            format!("{}", buf)
+        } else {
+            "—".to_string()
+        };
+        mono(ui, "BUF", &buf_text);
         let voices = app.snapshot.active_voice_count;
         mono(ui, "VOICES", &format!("{}", voices));
 

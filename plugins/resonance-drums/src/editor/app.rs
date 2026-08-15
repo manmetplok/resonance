@@ -6,12 +6,14 @@
 //! renders the canonical two-column layout (pad list + per-pad detail)
 //! plus a bottom row of KIT and GLOBAL cards.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use resonance_common::registry::InstalledItem;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::download::WorkerHandle;
+use crate::kit;
 use crate::params::DrumParams;
 use crate::KitBridge;
 
@@ -39,6 +41,10 @@ pub(crate) struct DrumsEditorApp {
     /// Cached list of installed drum kits from the shared registry.
     pub(crate) installed_kits: Vec<InstalledItem>,
     installed_kits_refresh: u32,
+    /// Displayed OUT meter level per channel. Rises instantly to the peak
+    /// the audio thread published and falls back with a fixed decay, so
+    /// the bar tracks real output instead of sitting dead.
+    out_meter: [f32; 2],
 }
 
 impl DrumsEditorApp {
@@ -65,7 +71,35 @@ impl DrumsEditorApp {
             download_panel: download_panel::DownloadPanelState::default(),
             installed_kits,
             installed_kits_refresh: 0,
+            out_meter: [0.0; 2],
         }
+    }
+
+    /// Fold the audio thread's latest block peak into the displayed OUT
+    /// meter and return the level to draw. The editor repaints at ~10 Hz
+    /// while the audio thread publishes every block, so the peak is taken
+    /// as an instant rise and a 0.75×-per-frame fall — a real reading with
+    /// readable ballistics, never a value we made up.
+    pub(crate) fn tick_out_meter(&mut self) -> [f32; 2] {
+        const DECAY: f32 = 0.75;
+        for (channel, level) in self.out_meter.iter_mut().enumerate() {
+            let published =
+                f32::from_bits(self.bridge.out_peak[channel].load(Ordering::Relaxed));
+            let published = if published.is_finite() && published > 0.0 {
+                published
+            } else {
+                0.0
+            };
+            *level = if published >= *level {
+                published
+            } else {
+                (*level * DECAY).max(published)
+            };
+            if *level < 1.0e-5 {
+                *level = 0.0;
+            }
+        }
+        self.out_meter
     }
 
     fn maybe_refresh_installed_kits(&mut self) {
@@ -311,7 +345,10 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 let _ = widgets::slider_bipolar(ui, col, 0.0);
             });
             ui.add_space(18.0);
-            // Routing (preview only).
+            // Routing — a readout, not a control. The plugin declares all
+            // `kit::NUM_OUTPUT_PORTS` ports unconditionally (see
+            // `ResonanceDrums::output_layout`); there is no stereo-only mode
+            // to switch to, so nothing here is clickable.
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
@@ -325,15 +362,24 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
                             ui.label(
-                                egui::RichText::new("stereo")
-                                    .color(theme::TEXT_3)
+                                egui::RichText::new(kit::routing_summary())
+                                    .color(theme::TEXT_1)
                                     .size(11.0)
                                     .monospace(),
                             );
                         },
                     );
                 });
-                let _ = widgets::segmented(ui, &["Stereo", "Multi-out"], 0, false);
+                ui.label(
+                    egui::RichText::new(kit::routing_port_list())
+                        .color(theme::TEXT_3)
+                        .size(9.5)
+                        .monospace(),
+                )
+                .on_hover_text(
+                    "Every drum group has its own stereo output port. Route them \
+                     in the host's mixer — the plugin always declares all of them.",
+                );
             });
         });
     });
