@@ -254,7 +254,16 @@ impl ResonancePlugin for ResonanceGranularDelay {
             time_mode: dsp::TimeMode::from_index(self.params.time_mode.value()),
             pitch_sync: scheduler.pitch_sync(),
             grain_seconds: self.params.grain_size_ms.value() * 0.001,
-            density_hz: self.params.density_hz.value(),
+            // Tempo-locked grain rate (ba todo #1322): with PER-BEAT on
+            // and a host tempo, one grain per selected division instead
+            // of the free-running knob. Resolved per block, so a tempo
+            // change re-locks the cloud immediately.
+            density_hz: sync::grain_density_hz(
+                self.params.density_sync.value(),
+                self.params.density_division.value() as usize,
+                self.params.density_hz.value(),
+                tempo,
+            ),
             scheduler: scheduler.engine_mode(),
             // WSOLA onset alignment (ba todo #1320): a plain bool
             // parameter, so it is reachable from the editor chip and

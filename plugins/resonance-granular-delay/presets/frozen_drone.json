@@ -10,6 +10,7 @@
     "grain_size_ms": 220.0,
     "density_hz": 28.0,
     "density_sync": 0,
+    "density_division": 10,
     "align": 0,
     "scheduler": 1,
     "pitch": 12.0,

@@ -96,7 +96,10 @@ fn align_is_a_declared_boolean_parameter_defaulting_off() {
     assert_eq!((param.min_plain(), param.max_plain()), (0.0, 1.0));
     assert_eq!(param.default_plain(), 0.0);
     assert!(!p.params.align.value());
-    assert_eq!(PARAM_COUNT, 30, "align must be part of the param surface");
+    assert!(
+        (0..PARAM_COUNT).any(|i| p.params.param_at(i).id() == "align"),
+        "align must be part of the declared param surface"
+    );
 }
 
 /// The whole point of the todo: turning the parameter on reaches
