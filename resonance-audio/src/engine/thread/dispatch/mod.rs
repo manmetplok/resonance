@@ -114,6 +114,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::RemovePlugin { .. }
         | AudioCommand::MovePlugin { .. }
         | AudioCommand::ScanPlugins
+        | AudioCommand::RescanPlugins
         | AudioCommand::SetPluginParam { .. }
         | AudioCommand::SetPluginBypass { .. }
         | AudioCommand::OpenPluginEditor { .. }

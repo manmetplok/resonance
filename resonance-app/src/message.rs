@@ -1029,6 +1029,19 @@ pub enum PluginMessage {
         source: Option<SendSource>,
         enabled: bool,
     },
+    /// Look for plugins installed since the app started (ba todo #1307,
+    /// finding X10; control method `plugins.rescan`).
+    ///
+    /// The scan itself is the engine's, and it is additive: bundles
+    /// already loaded stay loaded, so a rescan mid-session cannot
+    /// disturb a plugin that is processing audio or holding an open
+    /// editor. The refreshed catalog arrives as `PluginsScanned` and
+    /// re-populates the add-plugin menus; bundles that refused to load
+    /// arrive as `PluginScanFailed` and are shown rather than swallowed.
+    ///
+    /// Not undoable — the plugin catalog is a fact about the machine,
+    /// not part of the project.
+    RescanPlugins,
 }
 
 /// Edits to parameter-automation lanes (architecture doc #162 §3, epic

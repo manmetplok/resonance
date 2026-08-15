@@ -373,7 +373,24 @@ fn plugin_catalog(app: &Resonance, request: &Request) -> Response {
             },
         })
         .collect();
-    super::success(request, &PluginCatalog { plugins })
+    // The last scan's failures ride along: a bundle that would not load
+    // is simply absent from `plugins`, which reads as "not installed"
+    // until something says otherwise (ba todo #1307).
+    let scan_failures = app
+        .plugin_scan_failures
+        .iter()
+        .map(|f| resonance_control::methods::plugins::PluginScanFailure {
+            path: f.path.clone(),
+            reason: f.reason.clone(),
+        })
+        .collect();
+    super::success(
+        request,
+        &PluginCatalog {
+            plugins,
+            scan_failures,
+        },
+    )
 }
 
 /// `track.plugin_params` — the plugins on one track and their

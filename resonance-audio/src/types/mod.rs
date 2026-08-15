@@ -103,7 +103,7 @@ pub use export::{
 pub use tempo::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bar_len_quarters, bar_len_ticks, beat_len_ticks,
     bpm_at_bar, sample_frac_to_tick_frac, tick_frac_to_sample_frac, ticks_to_quarters,
-    InputDeviceInfo, ParamInfo, PluginDescInfo, ScannedPlugin, SignaturePoint, TempoMap,
-    TempoPoint, TICKS_PER_QUARTER_NOTE, TICKS_PER_WHOLE_NOTE,
+    InputDeviceInfo, ParamInfo, PluginDescInfo, PluginScanFailure, ScannedPlugin, SignaturePoint,
+    TempoMap, TempoPoint, TICKS_PER_QUARTER_NOTE, TICKS_PER_WHOLE_NOTE,
 };
 pub use track::{any_top_level_solo, Bus, MasterBus, Track};

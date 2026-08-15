@@ -178,6 +178,15 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             r.with_plugin_mut(instance_id, |p| p.editor_open = false);
             let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
         }
+        PluginMessage::RescanPlugins => {
+            // Clear the previous run's failures up front: leaving them
+            // on screen after a rescan that fixed them would report a
+            // problem that no longer exists. The engine refills them
+            // (with `PluginScanFailed`) only if this scan hits any.
+            r.plugin_scan_failures.clear();
+            r.plugin_scan_in_progress = true;
+            let _ = r.engine.send(AudioCommand::RescanPlugins);
+        }
     }
     Task::none()
 }

@@ -1,15 +1,33 @@
 //! Plugin bundle scanning. Iterates a fixed set of directories
 //! (`~/.clap`, `/usr/lib/clap/`, `target/bundled/`) and loads every
-//! `.clap` file or directory it finds. Each scan first drops every
-//! currently instantiated plugin (their factories belong to bundles this
-//! scan is about to replace) and clears `track.plugin_ids`, then rebuilds
-//! the `bundles` list from scratch. The collected descriptors are sent
-//! back to the app via `AudioEvent::PluginsScanned`.
+//! `.clap` file or directory it finds. The collected descriptors are
+//! sent back to the app via `AudioEvent::PluginsScanned`.
+//!
+//! Two entry points, and the difference between them matters (ba todo
+//! #1307, finding X10):
+//!
+//! - [`scan_plugins`] is the **startup** scan. It drops every
+//!   instantiated plugin and reloads every bundle from scratch —
+//!   correct exactly once, before anything is instantiated, because
+//!   unloading a shared library out from under a live instance is a
+//!   use-after-free.
+//! - [`rescan_plugins`] is the **live** scan behind `plugins.rescan` and
+//!   the Settings button. It is purely additive: bundles already loaded
+//!   stay loaded (instances, editors and audio untouched) and only files
+//!   that are NOT yet loaded are opened. Installing a plugin therefore
+//!   no longer costs an app restart, and rescanning mid-session costs
+//!   nothing audible.
+//!
+//! What a live rescan cannot do is *remove* a bundle: dropping a library
+//! that a running instance came from would crash the audio thread, so an
+//! uninstalled plugin stays in the catalog until the next start. That is
+//! reported as the truth rather than papered over.
 //!
 //! Dropping a [`ClapBundle`] does not unload its shared library — see
-//! [`ClapBundle`]'s `Drop` impl — so a re-scan re-`dlopen`s a binary that
-//! is already resident rather than mapping it in afresh.
+//! [`ClapBundle`]'s `Drop` impl — so a startup re-scan re-`dlopen`s a
+//! binary that is already resident rather than mapping it in afresh.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -19,15 +37,13 @@ use parking_lot::RwLock;
 use crate::clap_host::{ClapBundle, PluginMap};
 use crate::types::*;
 
+/// The startup scan: drop everything, reload everything.
 pub(crate) fn scan_plugins(
     plugins: &Arc<RwLock<PluginMap>>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     bundles: &mut Vec<ClapBundle>,
     event_tx: &Sender<AudioEvent>,
 ) {
-    let mut scanned = Vec::new();
-    let mut scan_dirs: Vec<std::path::PathBuf> = Vec::new();
-
     // Drop all existing plugin instances before clearing bundles: an
     // instance is created by, and calls back into, its bundle's factory.
     {
@@ -46,16 +62,40 @@ pub(crate) fn scan_plugins(
     // Clear previous scan results to avoid duplicates.
     bundles.clear();
 
+    let dirs = scan_dirs();
+    let (scanned, failures) = load_bundles(&dirs, bundles);
+    report(&dirs, scanned, failures, event_tx);
+}
+
+/// The live rescan: pick up newly installed plugins WITHOUT disturbing
+/// anything already running (ba todo #1307).
+///
+/// Nothing is dropped and nothing is unloaded, so a plugin that is
+/// currently processing audio, holding an open editor or sitting in an
+/// undo snapshot is not touched at all — the only effect is that bundles
+/// which appeared on disk since the last scan are now loadable. The
+/// catalog it reports is the whole set (old bundles included), because
+/// that is what the app mirrors wholesale.
+pub fn rescan_plugins(bundles: &mut Vec<ClapBundle>, event_tx: &Sender<AudioEvent>) {
+    let dirs = scan_dirs();
+    let (scanned, failures) = load_bundles(&dirs, bundles);
+    report(&dirs, scanned, failures, event_tx);
+}
+
+/// The directories a scan looks in, in priority order.
+fn scan_dirs() -> Vec<PathBuf> {
+    let mut scan_dirs: Vec<PathBuf> = Vec::new();
+
     // ~/.clap/
     if let Some(home) = std::env::var_os("HOME") {
-        let clap_dir = std::path::PathBuf::from(home).join(".clap");
+        let clap_dir = PathBuf::from(home).join(".clap");
         if clap_dir.is_dir() {
             scan_dirs.push(clap_dir);
         }
     }
 
     // /usr/lib/clap/
-    let sys_dir = std::path::PathBuf::from("/usr/lib/clap");
+    let sys_dir = PathBuf::from("/usr/lib/clap");
     if sys_dir.is_dir() {
         scan_dirs.push(sys_dir);
     }
@@ -77,7 +117,7 @@ pub(crate) fn scan_plugins(
     }
 
     // Also check workspace root target/bundled/
-    let workspace_bundled = std::path::PathBuf::from("target/bundled");
+    let workspace_bundled = PathBuf::from("target/bundled");
     if workspace_bundled.is_dir() {
         if let Ok(canonical) = workspace_bundled.canonicalize() {
             if !scan_dirs
@@ -91,62 +131,106 @@ pub(crate) fn scan_plugins(
         }
     }
 
-    for dir in &scan_dirs {
+    scan_dirs
+}
+
+/// Whether a directory entry names a CLAP bundle.
+///
+/// Both a `.clap` file and a `.clap` *directory* count, and so does a
+/// symlink whose name ends in `.clap` (how a dev checkout usually points
+/// at `target/bundled`).
+fn is_clap_bundle(path: &Path) -> bool {
+    path.extension().map(|e| e == "clap").unwrap_or(false)
+        || path.to_str().map(|s| s.ends_with(".clap")).unwrap_or(false)
+}
+
+/// Load every bundle under `dirs` that `bundles` does not already hold,
+/// appending the new ones. Returns the catalog for ALL loaded bundles
+/// (already-present ones included) and the failures this pass hit.
+///
+/// Skipping by path is what makes a rescan safe: a bundle stays loaded
+/// exactly once, at the address its live instances were created from.
+fn load_bundles(
+    dirs: &[PathBuf],
+    bundles: &mut Vec<ClapBundle>,
+) -> (Vec<ScannedPlugin>, Vec<PluginScanFailure>) {
+    let mut failures = Vec::new();
+
+    for dir in dirs {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => continue,
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            // Handle both .clap files and .clap directories (bundles).
-            let is_clap = path.extension().map(|e| e == "clap").unwrap_or(false);
-            // Also follow symlinks to .so files named *.clap.
-            let is_clap = is_clap || path.to_str().map(|s| s.ends_with(".clap")).unwrap_or(false);
-
-            if !is_clap {
+            if !is_clap_bundle(&path) {
+                continue;
+            }
+            // Resolve symlinks for loading — and for identity: two
+            // directories can point at one bundle, and loading it twice
+            // would double every entry in the catalog.
+            let real_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let real_path_str = real_path.to_string_lossy().to_string();
+            if bundles.iter().any(|b| b.path() == real_path_str) {
                 continue;
             }
 
-            // Resolve symlinks for loading.
-            let real_path = match std::fs::canonicalize(&path) {
-                Ok(p) => p,
-                Err(_) => path.clone(),
-            };
-
             match ClapBundle::load(&real_path) {
-                Ok(bundle) => {
-                    for desc in bundle.descriptors() {
-                        scanned.push(ScannedPlugin {
-                            clap_file_path: real_path.to_string_lossy().to_string(),
-                            clap_plugin_id: desc.id.clone(),
-                            name: desc.name.clone(),
-                            vendor: desc.vendor.clone(),
-                            is_instrument: desc.is_instrument,
-                            // Our bundles ship one plugin each, so the
-                            // bundle's bank is this descriptor's bank.
-                            factory_presets: bundle.factory_presets().to_vec(),
-                        });
-                    }
-                    // Keep bundle alive for later instantiation.
-                    bundles.push(bundle);
-                }
+                // Keep the bundle alive for later instantiation.
+                Ok(bundle) => bundles.push(bundle),
                 Err(e) => {
+                    // Not swallowed: a bundle that fails to load is the
+                    // difference between "this plugin does not exist" and
+                    // "this plugin is broken", and only one of those is
+                    // the user's to fix (ba todo #1307).
                     eprintln!("Failed to scan {}: {}", path.display(), e);
+                    failures.push(PluginScanFailure {
+                        path: real_path_str,
+                        reason: e,
+                    });
                 }
             }
         }
     }
 
+    (catalog(bundles), failures)
+}
+
+/// Every plugin in every loaded bundle, as the app's catalog entries.
+fn catalog(bundles: &[ClapBundle]) -> Vec<ScannedPlugin> {
+    let mut scanned = Vec::new();
+    for bundle in bundles {
+        for desc in bundle.descriptors() {
+            scanned.push(ScannedPlugin {
+                clap_file_path: bundle.path().to_string(),
+                clap_plugin_id: desc.id.clone(),
+                name: desc.name.clone(),
+                vendor: desc.vendor.clone(),
+                is_instrument: desc.is_instrument,
+                // Our bundles ship one plugin each, so the bundle's
+                // bank is this descriptor's bank.
+                factory_presets: bundle.factory_presets().to_vec(),
+            });
+        }
+    }
+    scanned
+}
+
+/// Publish a completed scan: the catalog always, the failures only when
+/// there are any.
+fn report(
+    dirs: &[PathBuf],
+    scanned: Vec<ScannedPlugin>,
+    failures: Vec<PluginScanFailure>,
+    event_tx: &Sender<AudioEvent>,
+) {
     // A checkout whose plugins were never bundled scans clean and finds
     // nothing first-party, leaving an instrument-less DAW with no hint
     // that a build step was missed — the catalog just looks empty, which
     // reads as "this app ships no instruments" (ba doc #270 §1). Say so
     // once per scan, naming the fix and where we looked.
     if !scanned.iter().any(|p| p.is_instrument) {
-        let dirs: Vec<String> = scan_dirs
-            .iter()
-            .map(|d| d.display().to_string())
-            .collect();
+        let dirs: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
         eprintln!(
             "plugins: no instruments found ({} plugin(s) scanned in [{}]). \
              The first-party plugins under plugins/ are CLAP bundles that must be \
@@ -158,5 +242,8 @@ pub(crate) fn scan_plugins(
         );
     }
 
+    if !failures.is_empty() {
+        let _ = event_tx.send(AudioEvent::PluginScanFailed { failures });
+    }
     let _ = event_tx.send(AudioEvent::PluginsScanned { plugins: scanned });
 }

@@ -88,6 +88,19 @@ pub struct ParamInfo {
     pub hidden: bool,
 }
 
+/// A `.clap` bundle a scan found but could not load (ba todo #1307).
+///
+/// Reported rather than logged, because "this plugin is broken" and
+/// "this plugin is not installed" look identical from the catalog — and
+/// only the first one is something a user can act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginScanFailure {
+    /// The bundle's path, as the scanner resolved it.
+    pub path: String,
+    /// Why it would not load, in the loader's own words.
+    pub reason: String,
+}
+
 /// A scanned plugin available for use, with its file path.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScannedPlugin {

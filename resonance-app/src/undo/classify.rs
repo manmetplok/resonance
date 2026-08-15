@@ -311,6 +311,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             }
             PluginMessage::TogglePluginPanel(_)
             | PluginMessage::OpenPluginEditor(_)
+            // A rescan changes what the machine offers, not what the
+            // project contains — there is nothing to undo (todo #1307).
+            | PluginMessage::RescanPlugins
             | PluginMessage::ClosePluginEditor(_) => UndoAction::Skip,
         },
 

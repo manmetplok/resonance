@@ -324,6 +324,27 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Look for plugins installed since the app started, without restarting it. \
+                       The catalog is filled by one scan at launch, so a plugin installed while \
+                       Resonance is open is invisible to plugins_catalog and to \
+                       track_add_instrument / track_add_effect until this runs. Takes no \
+                       arguments. \
+                       \
+                       Safe to call at any time, including mid-playback: the scan is additive, \
+                       so plugins already loaded keep running untouched — nothing is unloaded \
+                       and no audio is interrupted. The flip side is that a plugin REMOVED from \
+                       disk stays in the catalog until the app restarts. \
+                       \
+                       The refreshed catalog does not come back in this reply (the scan runs on \
+                       the audio engine): read plugins_catalog afterwards, which is also where \
+                       a bundle that failed to load is reported, under scan_failures.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn plugins_rescan(&self) -> Result<CallToolResult, McpError> {
+        self.invoke(plugins::RESCAN, &()).await
+    }
+
+    #[tool(
         description = "Set a track's fader gain. volume is linear: 1.0 = unity, 0.0 = silence. \
                        For balance work use mixer_set_volume_db instead — the same fader in \
                        decibels, the unit loudness differences are measured in.",

@@ -87,6 +87,49 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     .text_size(12)
     .width(Length::Fill);
 
+    // Plugins: what the last scan found, and a way to look again
+    // without restarting the app (ba todo #1307, finding X10). A plugin
+    // installed while Resonance is open was invisible until now, because
+    // the only scan ran at startup.
+    let instrument_count = r
+        .available_plugins
+        .iter()
+        .filter(|p| p.is_instrument)
+        .count();
+    let plugin_summary = text(format!(
+        "{} plugin(s) available — {} instrument(s), {} effect(s)",
+        r.available_plugins.len(),
+        instrument_count,
+        r.available_plugins.len() - instrument_count
+    ))
+    .size(11)
+    .color(theme::TEXT_3);
+    let rescan_btn = wide_button(
+        fa::ARROW_ROTATE_LEFT,
+        if r.plugin_scan_in_progress {
+            "Scanning..."
+        } else {
+            "Rescan Plugins"
+        },
+        Message::Plugin(PluginMessage::RescanPlugins),
+    );
+    // Failures are shown, not swallowed: a `.clap` that refuses to load
+    // is otherwise indistinguishable from one that was never installed.
+    let mut plugins_section = column![
+        section("Plugins"),
+        Space::new().height(6),
+        plugin_summary,
+        rescan_btn,
+    ]
+    .spacing(6);
+    for failure in &r.plugin_scan_failures {
+        plugins_section = plugins_section.push(
+            text(format!("Failed: {} — {}", failure.path, failure.reason))
+                .size(10)
+                .color(theme::BAD),
+        );
+    }
+
     let dialog_content = column![
         title,
         Space::new().height(16),
@@ -95,6 +138,8 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         open_btn,
         save_btn,
         save_as_btn,
+        Space::new().height(20),
+        plugins_section,
         Space::new().height(20),
         section("MIDI Clock"),
         Space::new().height(6),

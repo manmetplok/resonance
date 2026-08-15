@@ -58,6 +58,10 @@ pub use types::*;
 #[doc(hidden)]
 pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, ClapInstance, PluginMap, PluginSlot, SyncClapInstance};
+    /// The live, additive plugin rescan (ba todo #1307) — exposed so
+    /// `tests/plugin_rescan.rs` can assert it never loads a bundle it
+    /// already holds, which is what keeps running instances safe.
+    pub use crate::engine::scan::rescan_plugins;
     /// Build a `ClapInstance` around a hand-rolled raw `clap_plugin` —
     /// see `tests/clap_latency_tracking.rs` (doc #260 finding #10).
     pub use crate::clap_host::__instance_from_raw_for_test;

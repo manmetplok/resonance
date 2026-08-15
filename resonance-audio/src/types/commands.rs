@@ -312,6 +312,18 @@ pub enum AudioCommand {
         to_index: usize,
     },
     ScanPlugins,
+    /// Look for newly installed plugins WITHOUT disturbing anything that
+    /// is already running (ba todo #1307, finding X10).
+    ///
+    /// [`ScanPlugins`](Self::ScanPlugins) drops every instantiated plugin
+    /// and reloads every bundle, which is only safe before anything has
+    /// been instantiated — so before this existed, installing a plugin
+    /// meant restarting the app. This one is purely additive: loaded
+    /// bundles stay loaded at the address their live instances came from,
+    /// and only files not yet loaded are opened. Answers with
+    /// `AudioEvent::PluginsScanned` (the whole catalog) plus
+    /// `AudioEvent::PluginScanFailed` when a bundle refused to load.
+    RescanPlugins,
     SetPluginParam {
         instance_id: PluginInstanceId,
         param_id: u32,

@@ -9,8 +9,8 @@ use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
     ABSource, AssetId, BusId, ClipId, F0Frame, FadeCurve, InputDeviceInfo, MidiNote, MixMeasurement,
-    NoteBlob, ParamInfo, PluginInstanceId, ReferenceAnalysisStage, ReferenceId, SamplePos,
-    ScannedPlugin, SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
+    NoteBlob, ParamInfo, PluginInstanceId, PluginScanFailure, ReferenceAnalysisStage, ReferenceId,
+    SamplePos, ScannedPlugin, SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
 };
 use crate::quantize::GrooveTemplate;
 use resonance_common::FreezeCacheRef;
@@ -305,6 +305,17 @@ pub enum AudioEvent {
     },
     PluginsScanned {
         plugins: Vec<ScannedPlugin>,
+    },
+    /// Bundles a scan found but could not load (ba todo #1307).
+    ///
+    /// A `.clap` that fails to load used to reach a `eprintln!` and
+    /// nothing else, so an incompatible or half-installed plugin was
+    /// indistinguishable from one that was never there — and the user
+    /// only saw an empty spot in the catalog. Sent before
+    /// [`PluginsScanned`](Self::PluginsScanned), and only when something
+    /// actually failed.
+    PluginScanFailed {
+        failures: Vec<PluginScanFailure>,
     },
     /// How the plugin renders a parameter it was just given, so the
     /// app's mirror can say `"Low-pass"` or `"40 %"` about the value it

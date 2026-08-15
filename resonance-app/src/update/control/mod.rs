@@ -47,6 +47,9 @@ mod master;
 mod meter;
 mod notes;
 mod plugin_presets;
+/// `plugins.rescan` — the installed-plugin catalog's one mutation
+/// (todo #1307). `plugins.catalog` is read-only and lives in `song`.
+mod plugins;
 mod project;
 mod render;
 /// The reply vocabulary every namespace answers with (todo #1258).
@@ -218,6 +221,14 @@ pub fn execute(
     // Mutating track/mixer namespace (todo #1152): add/rename/delete
     // tracks, volume/pan/mute/solo, add built-in instrument/FX.
     if let Some(result) = track::try_handle(app, request) {
+        return result;
+    }
+
+    // `plugins.rescan` (todo #1307): refresh the installed-plugin
+    // catalog without restarting. Mutating (it drives an engine
+    // command), but project-independent — it ran above the gate for the
+    // same reason `plugins.catalog` does.
+    if let Some(result) = plugins::try_handle(app, request) {
         return result;
     }
 

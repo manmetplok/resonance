@@ -39,6 +39,9 @@ pub(super) fn dispatch_plugins(
         AudioCommand::ScanPlugins => {
             scan::scan_plugins(ctx.plugins, ctx.tracks, &mut state.bundles, ctx.event_tx)
         }
+        // Additive by construction: it never touches `ctx.plugins`, which
+        // is what lets it run with instances live (ba todo #1307).
+        AudioCommand::RescanPlugins => scan::rescan_plugins(&mut state.bundles, ctx.event_tx),
         AudioCommand::SetPluginParam {
             instance_id,
             param_id,

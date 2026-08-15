@@ -95,7 +95,7 @@ mod midi_map;
 pub(crate) mod plugins;
 pub(crate) mod reference;
 pub(crate) mod sidechain;
-mod scan;
+pub(crate) mod scan;
 mod thread;
 mod tracks;
 mod transport;

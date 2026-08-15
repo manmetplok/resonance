@@ -44,7 +44,12 @@ pub struct ClapBundle {
     /// `resonance_factory_presets` symbol. Empty for any plugin that does
     /// not export it, which is every third-party one (ba todo #1333).
     factory_presets: Vec<(String, String)>,
-    _path: CString,
+    /// The `.clap` this bundle was loaded from. Held as a `CString`
+    /// because the entry point's `init` borrows it, and read back by the
+    /// scanner: a rescan has to know which files are ALREADY loaded so it
+    /// can skip them rather than reload a library with live instances in
+    /// it (ba todo #1307).
+    path: CString,
 }
 
 impl ClapBundle {
@@ -144,8 +149,15 @@ impl ClapBundle {
             factory,
             descriptors,
             factory_presets,
-            _path: path_cstring,
+            path: path_cstring,
         })
+    }
+
+    /// The path this bundle was loaded from, as the scanner canonicalized
+    /// it. Empty only if the path was not valid UTF-8, which `load`
+    /// already rejects.
+    pub fn path(&self) -> &str {
+        self.path.to_str().unwrap_or("")
     }
 
     pub fn descriptors(&self) -> &[PluginDescInfo] {

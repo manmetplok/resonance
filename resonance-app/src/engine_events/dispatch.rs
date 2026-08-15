@@ -395,6 +395,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             value,
             text,
         } => plugins::param_text(r, instance_id, param_id, value, text),
+        E::PluginScanFailed { failures } => plugins::scan_failed(r, failures),
         E::PluginStateSaved { instance_id, data } => {
             plugins::state_saved(r, instance_id, data)
         }

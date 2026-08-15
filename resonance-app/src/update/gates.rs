@@ -326,6 +326,9 @@ fn plugin_edit_target(
             Some(*track_id)
         }
         TogglePluginPanel(_) | OpenPluginEditor(_) | ClosePluginEditor(_) => None,
+        // Refreshing the catalog edits no track's signal, so it is never
+        // gated — a frozen track stays frozen through a rescan.
+        RescanPlugins => None,
     }
 }
 

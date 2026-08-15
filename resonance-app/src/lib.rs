@@ -78,6 +78,17 @@ pub struct Resonance {
     /// Hardware MIDI input port carrying the master clock.
     pub(crate) midi_clock_recv_device: Option<String>,
     pub(crate) available_plugins: Vec<ScannedPlugin>,
+    /// Bundles the last scan found but could not load (ba todo #1307).
+    ///
+    /// Kept because a broken `.clap` is invisible otherwise: it simply
+    /// does not appear in the catalog, which reads as "not installed".
+    /// Shown in Settings next to the rescan button and reported by
+    /// `plugins.catalog`.
+    pub(crate) plugin_scan_failures: Vec<resonance_audio::types::PluginScanFailure>,
+    /// A rescan has been asked for and its result has not arrived yet.
+    /// Only the button's label depends on it; a scan is fast enough that
+    /// nothing is blocked while it runs.
+    pub(crate) plugin_scan_in_progress: bool,
     /// Cached pick-list option lists for the view layer. Rebuilt only
     /// when source data changes (devices, busses, plugin scan) so a
     /// continuous resize doesn't reallocate option vecs every frame.
@@ -730,6 +741,8 @@ impl Resonance {
             midi_clock_recv_enabled: false,
             midi_clock_recv_device: None,
             available_plugins: Vec::new(),
+            plugin_scan_failures: Vec::new(),
+            plugin_scan_in_progress: false,
             view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
             error_message: None,
