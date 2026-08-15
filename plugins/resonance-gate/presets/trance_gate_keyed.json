@@ -1,0 +1,12 @@
+{
+  "params": {
+    "threshold": -35.0,
+    "ratio": 20.0,
+    "attack": 3.0,
+    "hold": 0.0,
+    "release": 5.0,
+    "range": 80.0,
+    "hysteresis": 3.0,
+    "key_hpf": 0.0
+  }
+}
