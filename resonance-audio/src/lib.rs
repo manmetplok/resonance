@@ -41,6 +41,12 @@ pub use engine::read_freeze_cache;
 // app consumers of the event surface don't need a direct dependency on
 // `resonance_common` just to match on it.
 pub use resonance_common::AudioFormat;
+/// The unit behind a plugin's formatted parameter value — `"dB"` out of
+/// `"-6.0 dB"` (ba todo #1290). CLAP has no unit field, so the only
+/// place one exists is the plugin's own `value_to_text` output; the app
+/// re-derives it when the engine echoes fresh text for a value it just
+/// wrote (`AudioEvent::PluginParamText`).
+pub use clap_host::unit_from_text;
 pub use limits::DEFAULT_HISTORY_CAPACITY;
 pub use midi_hardware::MidiDeviceInfo;
 pub use types::*;
@@ -54,6 +60,10 @@ pub mod __test_support {
     /// Build a `ClapInstance` around a hand-rolled raw `clap_plugin` —
     /// see `tests/clap_latency_tracking.rs` (doc #260 finding #10).
     pub use crate::clap_host::__instance_from_raw_for_test;
+    /// The stepped-parameter choice-label walk behind `ParamInfo.choices`
+    /// (ba todo #1290) — pure over a formatter closure, so
+    /// `tests/clap_param_meta.rs` can drive it without a plugin.
+    pub use crate::clap_host::{choice_labels, MAX_CHOICE_STEPS};
     pub use crate::engine::{
         chunk_span, encode_buffer_for_test, freeze_terminal_event, midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,

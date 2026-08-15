@@ -408,6 +408,22 @@ pub(crate) fn handle_set_plugin_param(
             // every `process()` call site takes — across the call, which
             // is what guarantees that. See `clap_host::params`.
             inst.0.flush_pending_params();
+
+            // Tell the app what the plugin CALLS this value (ba todo
+            // #1290). The app's parameter cache is filled once, at
+            // instantiation, so it holds the load-time formatting
+            // forever; only the plugin can produce the new one. Sent
+            // while we still hold the instance lock, for the same reason
+            // `flush` is: `value_to_text` is a main-thread call that must
+            // not race `process()`.
+            if let Some(text) = inst.0.param_text(param_id, value) {
+                let _ = ctx.event_tx.send(AudioEvent::PluginParamText {
+                    instance_id,
+                    param_id,
+                    value,
+                    text,
+                });
+            }
         } else {
             // Audio thread is mid-process(): re-enqueue so the param
             // change lands on the next iteration rather than blocking

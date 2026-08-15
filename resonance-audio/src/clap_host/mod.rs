@@ -8,6 +8,8 @@
 //!   pass per-port output slices into the audio thread.
 //! - [`process`]: the audio-thread fast path ([`ClapInstance::process`]
 //!   single-output wrapper and [`ClapInstance::process_multi`]).
+//! - [`param_meta`]: what a parameter *means* — its unit, its choice
+//!   labels — read back out of the plugin's own formatter.
 //! - [`params`]: `clap_plugin_params.flush` — delivers queued parameter
 //!   changes when no `process()` call is coming (transport stopped).
 //! - [`state`]: CLAP state extension (save / load / reload / reset).
@@ -22,12 +24,14 @@
 mod bundle;
 mod gui;
 mod instance;
+mod param_meta;
 mod params;
 mod process;
 mod state;
 
 pub use bundle::ClapBundle;
 pub use instance::{ClapInstance, StereoBufMut};
+pub use param_meta::{choice_labels, unit_from_text, MAX_CHOICE_STEPS};
 
 use std::ffi::{c_char, c_void, CStr};
 use std::pin::Pin;

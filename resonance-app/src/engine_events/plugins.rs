@@ -278,6 +278,45 @@ pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.view_caches.rebuild_plugins(&r.available_plugins);
 }
 
+/// Adopt the plugin's own formatting of a parameter it was just given
+/// (ba todo #1290, finding X8).
+///
+/// The app mirrors a parameter's *number* the moment it sends the change
+/// — that is what keeps a knob under the cursor — but only the plugin
+/// can turn that number into `"Low-pass"` or `"40 %"`, and the mirror's
+/// text was captured once, at instantiation. This is the echo that keeps
+/// the two in step, for the generic panel and for
+/// `track/bus/master.plugin_params` alike.
+///
+/// A stale echo is dropped rather than applied: a knob drag issues one
+/// set per frame, so an echo for a value the parameter has already left
+/// would paint text that disagrees with the number beside it. Matching
+/// on the value the change was made with is exact — the app stored that
+/// same f64 — so no tolerance is needed.
+pub(super) fn param_text(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    param_id: u32,
+    value: f64,
+    text: String,
+) {
+    r.with_plugin_mut(instance_id, |slot| {
+        if let Some(param) = slot.params.iter_mut().find(|p| p.id == param_id) {
+            if param.current_value == value {
+                // A unit belongs to the parameter, not to the value, so
+                // adopt one the plugin reveals here (a fader that read
+                // "-inf dB" when it loaded had none to take) but never
+                // forget one it has already given.
+                let unit = resonance_audio::unit_from_text(&text);
+                if !unit.is_empty() {
+                    param.unit = unit.to_string();
+                }
+                param.text = text;
+            }
+        }
+    });
+}
+
 pub(super) fn state_saved(
     r: &mut Resonance,
     instance_id: PluginInstanceId,

@@ -230,9 +230,11 @@ pub struct SetPluginParamParams {
     /// The parameter, by name (case-insensitive) or by its numeric id as
     /// a string. Names come from [`PLUGIN_PARAMS`].
     pub param: String,
-    /// New value. Same bounds handling as
+    /// New value — a number, or a choice label from
+    /// `master.plugin_params`. Same handling as
     /// [`crate::methods::track::SetPluginParamParams::value`]: a value
     /// that rounds onto an f32-declared bound is accepted and clamped,
-    /// anything past that tolerance is rejected with the range.
-    pub value: f64,
+    /// anything past that tolerance is rejected with the range, and a
+    /// label resolves to the step it names.
+    pub value: crate::methods::track::ParamValue,
 }

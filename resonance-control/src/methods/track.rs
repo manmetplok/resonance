@@ -423,7 +423,17 @@ pub struct MoveEffectParams {
     pub to_slot: u32,
 }
 
-/// One plugin parameter.
+/// One plugin parameter — its number, and what that number means.
+///
+/// [`value`](Self::value) alone is rarely enough to work with: `2.0` on
+/// a `0..=4` range is a filter type, a waveform or an oversampling
+/// factor and nothing in the number says which. So every parameter also
+/// reports the plugin's own rendering of it ([`text`](Self::text)), the
+/// [`unit`](Self::unit) that rendering carries, the
+/// [`module`](Self::module) it is grouped under, whether it is
+/// [`stepped`](Self::stepped) and, when it names its values, the
+/// [`choices`](Self::choices) `set_plugin_param` will accept by name
+/// (ba todo #1290, finding X8).
 ///
 /// `min`/`max`/`default`/`value` are f64 on the wire, but plugins
 /// declare their ranges in **f32**, so a bound with no exact binary
@@ -448,6 +458,137 @@ pub struct PluginParamView {
     /// [`min`](Self::min).
     pub max: f64,
     pub default: f64,
+    /// What the plugin CALLS the current value: `"40 %"`, `"-6.0 dB"`,
+    /// `"Low-pass"` (ba todo #1290).
+    ///
+    /// This is the parameter as its own editor shows it, and it is the
+    /// field to read before deciding whether a number means anything.
+    /// `value: 2.0` on a `0..=4` range says nothing; `text: "Band-pass"`
+    /// says what the plugin is doing. Empty when the plugin declares no
+    /// formatting, in which case the number is all there is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    /// The unit alone — `"dB"`, `"%"`, `"Hz"`, `"ms"` — for a reader
+    /// that wants to label the number rather than reprint the plugin's
+    /// whole rendering. Empty for a unitless parameter and for one whose
+    /// display is a name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unit: String,
+    /// The parameter's group inside the plugin, `/`-separated
+    /// (`"Multiband/Low"`); empty when it is ungrouped. On a plugin with
+    /// dozens of parameters this is which stage a parameter belongs to —
+    /// the difference between "the low band's threshold" and one of six
+    /// parameters called Threshold.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub module: String,
+    /// True when the parameter moves in whole numbers — a choice, a
+    /// count, a switch. Send `3`, never `2.7`: a fractional value on a
+    /// stepped parameter rounds, so it is a request the plugin cannot
+    /// honour as written.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stepped: bool,
+    /// The names of a stepped parameter's values, in order from
+    /// [`min`](Self::min) — so `choices[0]` is the value at the minimum
+    /// and `choices[n]` the value at `min + n`.
+    ///
+    /// `set_plugin_param` accepts any of these as `value` directly
+    /// (case-insensitive), which is how a caller sends `"Low-pass"`
+    /// without having to work out that it is `3`. Empty for a continuous
+    /// parameter, and for a stepped one whose steps are plain numbers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+    /// True when the plugin asks that this parameter not be shown to a
+    /// user. It is still readable, writable and saved — it is reported
+    /// so a client can leave it out of a listing the way the app's own
+    /// panels do, rather than present it as an ordinary control.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+/// The new value for `set_plugin_param`: a number, or the NAME of a
+/// stepped parameter's choice (ba todo #1290).
+///
+/// A choice parameter's number is an implementation detail of the
+/// plugin's enum. `"Low-pass"` is what the parameter means, it is what
+/// [`PluginParamView::text`] reports back, and requiring a caller to
+/// translate it into `3` — then silently doing the wrong thing when the
+/// plugin's order differs from the guess — is exactly the round trip
+/// this API exists to remove.
+///
+/// Labels match case-insensitively and come from
+/// [`PluginParamView::choices`]. A label sent to a parameter that has no
+/// choices, or one that matches none of them, is rejected with the
+/// accepted labels rather than parsed as a number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum ParamValue {
+    /// A plain value on the parameter's `min..=max`.
+    Number(f64),
+    /// A choice label from [`PluginParamView::choices`].
+    Label(String),
+}
+
+impl ParamValue {
+    /// The number this value denotes for `param`, or an explanation of
+    /// why it denotes none.
+    ///
+    /// The whole resolution lives here so `track`, `bus` and `master`
+    /// answer a label — and refuse a wrong one — identically; three
+    /// copies of a lookup is how they would stop agreeing.
+    pub fn resolve(&self, param: &PluginParamView) -> Result<f64, ParamValueError> {
+        let text = match self {
+            ParamValue::Number(v) => return Ok(*v),
+            ParamValue::Label(text) => text.trim(),
+        };
+        // A number that arrived as a string is still a number: clients
+        // that stringify everything should not be told their value is
+        // an unknown choice.
+        if let Ok(v) = text.parse::<f64>() {
+            return Ok(v);
+        }
+        if let Some(index) = param
+            .choices
+            .iter()
+            .position(|label| label.eq_ignore_ascii_case(text))
+        {
+            return Ok(param.min + index as f64);
+        }
+        Err(ParamValueError {
+            wanted: text.to_string(),
+            choices: param.choices.clone(),
+        })
+    }
+}
+
+/// A `value` that named a choice the parameter does not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamValueError {
+    /// What the caller asked for.
+    pub wanted: String,
+    /// The labels the parameter does accept — empty when it is not a
+    /// choice parameter at all.
+    pub choices: Vec<String>,
+}
+
+impl std::fmt::Display for ParamValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.choices.is_empty() {
+            write!(
+                f,
+                "{:?} is not a number, and this parameter names no choices — send a value \
+                 within its min..=max",
+                self.wanted
+            )
+        } else {
+            write!(
+                f,
+                "{:?} is not one of this parameter's choices: [{}]",
+                self.wanted,
+                self.choices.join(", ")
+            )
+        }
+    }
 }
 
 /// Params for `track.set_plugin_param`.
@@ -464,7 +605,13 @@ pub struct SetPluginParamParams {
     /// The parameter, by name (case-insensitive) or by its numeric id
     /// as a string. Names come from `track.plugin_params`.
     pub param: String,
-    /// New value. Must lie within the parameter's `min..=max`, which an
+    /// New value: a number, or — for a stepped parameter that names its
+    /// values — one of the labels `track.plugin_params` reports in
+    /// `choices`, matched case-insensitively. `"Low-pass"` and `3` are
+    /// the same request; the label is the one that survives the plugin
+    /// reordering its enum.
+    ///
+    /// A number must lie within the parameter's `min..=max`, which an
     /// out-of-range request reports back.
     ///
     /// Those bounds are f64 renderings of **f32** plugin declarations
@@ -475,5 +622,5 @@ pub struct SetPluginParamParams {
     /// rather than clamped, so a genuinely wrong number (`-60` on a
     /// `0..1` parameter) comes back as an error instead of silently
     /// becoming something else.
-    pub value: f64,
+    pub value: ParamValue,
 }

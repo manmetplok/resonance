@@ -66,12 +66,18 @@ impl Default for DelayParams {
         Self {
             sync: BoolParam::new("sync", "Sync", true),
 
+            // The note values live on the PARAMETER, not just in the
+            // editor's combo box: `with_choices` is what puts "1/8D" in
+            // a host's automation lane, in `track.plugin_params` and in
+            // `set_plugin_param`, where a bare `8` meant nothing to
+            // anything outside this crate (ba todos #1289/#1290).
             division: IntParam::new(
                 "division",
                 "Division",
                 4,
                 IntRange::Linear { min: 0, max: 11 },
-            ),
+            )
+            .with_choices(crate::sync::DIVISION_LABELS),
 
             time_ms: FloatParam::new(
                 "time_ms",

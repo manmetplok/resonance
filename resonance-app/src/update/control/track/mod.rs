@@ -57,8 +57,8 @@ mod sends;
 mod sidechain;
 
 /// Shared with `bus.*` / `master.*`, which address plugin parameters the
-/// same way and must apply the same f32-bound tolerance.
-pub(crate) use params::clamp_within_tolerance;
+/// same way: same f32-bound tolerance, same choice-label resolution.
+pub(crate) use params::resolve_param_value;
 
 /// Handle a `track.*` / `mixer.*` request, or `None` when `method`
 /// belongs to another namespace.

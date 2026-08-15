@@ -120,6 +120,13 @@ fn choices_for(
     let mut out: Vec<AutoChoice> = base.to_vec();
     for slot in plugins {
         for param in &slot.params {
+            // CLAP's IS_HIDDEN: the plugin asks that this parameter not
+            // be presented as a control. It stays in the app's mirror
+            // because it is still automatable and still saved (ba todo
+            // #1290) — it just doesn't belong in a human's picker.
+            if param.hidden {
+                continue;
+            }
             out.push(AutoChoice {
                 kind: AutoKind::Param {
                     instance: slot.instance_id,
