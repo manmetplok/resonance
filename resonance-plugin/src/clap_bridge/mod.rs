@@ -196,12 +196,18 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         host: HostMainThreadHandle<'a>,
         shared: &'a ClapShared<'a>,
     ) -> Result<ClapMainThread<'a, P>, PluginError> {
-        let plugin = P::new();
+        let mut plugin = P::new();
         for i in 0..plugin.param_count() {
             if i < shared.param_values.len() {
                 shared.set_value(i, plugin.param(i).get_plain());
             }
         }
+
+        // Hand the plugin its handle to the host, before it can be activated
+        // and before anything else may query it. Plugins that never talk back
+        // to the host use the default `set_host`, which drops it.
+        let host_handle = crate::host::HostHandle::new(shared.host, plugin.latency_samples());
+        plugin.set_host(host_handle.clone());
 
         // Harvest the editor factory and any extra-state saver before the
         // plugin may be moved to the audio processor. Both are None for
@@ -213,7 +219,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             host,
             shared,
             plugin: Some(plugin),
-            last_latency: 0,
+            host_handle,
             editor_factory,
             editor: None,
             extra_state_saver,
@@ -234,14 +240,17 @@ impl<'a, P: ResonancePlugin> PluginLatencyImpl for ClapMainThread<'a, P> {
             // `initialize()`; the CLAP spec only defines this query while
             // the plugin is active.
             let lat = plugin.latency_samples();
-            self.last_latency = lat;
+            self.host_handle.store_latency(lat);
             lat
         } else {
             // Active: the plugin object moved into the audio processor.
-            // Serve the value captured post-`initialize()` during
-            // `activate` — this is the path the host's activation-time
-            // query takes.
-            self.last_latency
+            // Serve the cached value — captured post-`initialize()` during
+            // `activate`, or pushed by the plugin itself through
+            // `HostHandle::set_latency_samples` when its latency changed at
+            // runtime. This is the path both the host's activation-time
+            // query and its re-query after `clap_host_latency.changed()`
+            // take.
+            self.host_handle.latency_samples()
         }
     }
 }

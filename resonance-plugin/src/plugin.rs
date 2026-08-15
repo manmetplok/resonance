@@ -287,8 +287,30 @@ pub trait ResonancePlugin: Send + 'static {
     }
 
     /// Report latency in samples. Default: 0.
+    ///
+    /// The bridge reads this at every activation, and on any host query made
+    /// while the plugin is inactive. A plugin whose latency can change while
+    /// it is active must *also* push the new figure through
+    /// [`HostHandle::set_latency_samples`](crate::host::HostHandle::set_latency_samples)
+    /// — the host cannot poll for it (CLAP only defines the query while
+    /// active, and by then this object lives in the audio processor).
     fn latency_samples(&self) -> u32 {
         0
+    }
+
+    /// Receive the handle to the host that owns this instance.
+    ///
+    /// Called once by the CLAP bridge, on the main thread, right after
+    /// `new()` and before the plugin can be activated. Plugins that need to
+    /// talk back to the host — report a latency change, ask for a restart —
+    /// store the handle; the default implementation drops it, which is what
+    /// every plugin that only reads its inputs wants.
+    ///
+    /// The handle is `Send + Sync` and safe to call from the audio thread or
+    /// an editor thread, so the usual shape is to keep it in an
+    /// `Arc<Mutex<..>>`-free field or hand a clone to the editor.
+    fn set_host(&mut self, host: Arc<crate::host::HostHandle>) {
+        let _ = host;
     }
 
     /// Return an editor factory if this plugin has a GUI.
