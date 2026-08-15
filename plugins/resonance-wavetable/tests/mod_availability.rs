@@ -8,7 +8,7 @@
 use resonance_wavetable::dsp::modulation::{
     evaluate_mod_matrix, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS,
 };
-use resonance_wavetable::params::WavetableParams;
+use resonance_wavetable::params::{WavetableParams, PARAM_COUNT};
 use resonance_wavetable::presets::PRESETS;
 
 fn slot(source: ModSource, dest: ModDest, amount: f32) -> ModSlot {
@@ -136,7 +136,11 @@ fn factory_presets_reference_only_the_known_inert_routings() {
     let mut found: Vec<(String, usize, String)> = Vec::new();
 
     for entry in PRESETS {
-        resonance_plugin::presets::load(entry.json, 87, |i| params.param_at(i));
+        // PARAM_COUNT, never a literal: `presets::load` iterates `0..count`,
+        // so a stale number leaves the tail of the param list at its
+        // constructor default and the preset is applied incomplete without
+        // anything failing.
+        resonance_plugin::presets::load(entry.json, PARAM_COUNT, |i| params.param_at(i));
         for i in 0..NUM_MOD_SLOTS {
             let s = &params.mod_slots[i];
             let source = ModSource::from_int(s.source.value());
