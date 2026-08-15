@@ -40,7 +40,9 @@ pub mod ui;
 pub mod viewport;
 pub mod vocal_tuning;
 
-pub(crate) use project_io::{build_project_file, replay_loaded_project, try_diff_replay};
+pub(crate) use project_io::{
+    build_project_file, plugin_states_for_save, replay_loaded_project, try_diff_replay,
+};
 
 impl crate::Resonance {
     /// Public entry point invoked by Iced on every message. Wraps the

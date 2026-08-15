@@ -62,7 +62,12 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
     report_clips_without_audio(r, &save);
     let project_file = crate::update::build_project_file(r);
     let path = save.path.clone();
-    let plugin_states = save.plugin_states;
+    // The engine reports blobs only for instances it actually created, so
+    // this fills in the app-side copy for any slot it couldn't — a plugin
+    // whose `.clap` is missing on this machine. Without it, Save As (and
+    // autosave, which shares this path) wrote an empty `plugins/` entry
+    // for that slot and the user's settings were gone (ba doc #275, P5).
+    let plugin_states = crate::update::plugin_states_for_save(r, save.plugin_states);
     let autosave = save.autosave;
     // Snapshot a versioned backup after each successful *manual* save. The
     // retention count comes from the persisted autosave settings (#462).
