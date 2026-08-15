@@ -52,7 +52,14 @@ pub struct GranularDelayParams {
     // --- Grains ---------------------------------------------------------
     pub grain_size_ms: FloatParam,
     pub density_hz: FloatParam,
-    /// Tempo-synced density (grains per beat division). TODO(epic-196).
+    /// Tempo-synced density (grains per beat division).
+    ///
+    /// NOT IMPLEMENTED: the DSP never reads this, so the grain rate
+    /// does not follow the host tempo. Implemented by **ba todo #1322**
+    /// (epic #203); until then the editor renders the PER-BEAT chip
+    /// unavailable and no factory preset sets it — see
+    /// `crate::editor::controls::PENDING_DSP` (ba todo #1277). Remove
+    /// this note, and its `PENDING_DSP` entry, when #1322 lands.
     pub density_sync: BoolParam,
     /// 0 = Sync, 1 = Async, 2 = Pitch-Sync (ba todo #1082, doc #252
     /// §4): PSOLA-style Voice/Mono mode — the real-time tracker runs on
@@ -97,8 +104,14 @@ pub struct GranularDelayParams {
     /// Damping filter cutoff in the feedback loop (smoothed; the
     /// coefficient updates at block rate).
     pub filter_hz: FloatParam,
-    /// Allpass smear of the wet path. TODO(epic-196): follow-up; not in
-    /// #1074's feedback DoD.
+    /// Allpass smear of the wet path.
+    ///
+    /// NOT IMPLEMENTED: this is not a field of `BlockParams` and no
+    /// stage in `crate::dsp` reads it. Implemented by **ba todo #1321**
+    /// (epic #203); until then the editor renders the Diffuse knob
+    /// unavailable and every factory preset leaves it at 0 — see
+    /// `crate::editor::controls::PENDING_DSP` (ba todo #1277). Remove
+    /// this note, and its `PENDING_DSP` entry, when #1321 lands.
     pub diffusion: FloatParam,
     pub pan_spread: FloatParam,
     /// M/S width on the wet sum, 0–150 % (smoothed; ba todo #1077).
