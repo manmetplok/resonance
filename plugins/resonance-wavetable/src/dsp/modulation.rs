@@ -17,6 +17,21 @@ pub enum ModSource {
 }
 
 impl ModSource {
+    /// Display names, indexed by the parameter's integer value. The editor's
+    /// source picker reads this array so the labels can never drift from the
+    /// discriminants the DSP matches on.
+    pub const LABELS: [&'static str; 9] = [
+        "None",
+        "LFO 1",
+        "LFO 2",
+        "LFO 3",
+        "Mod Env",
+        "Velocity",
+        "Key Track",
+        "Mod Wheel",
+        "Aftertouch",
+    ];
+
     pub fn from_int(v: i32) -> Self {
         match v {
             1 => Self::Lfo1,
@@ -29,6 +44,10 @@ impl ModSource {
             8 => Self::Aftertouch,
             _ => Self::None,
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        Self::LABELS[self as usize]
     }
 }
 
@@ -50,6 +69,23 @@ pub enum ModDest {
 }
 
 impl ModDest {
+    /// Display names, indexed by the parameter's integer value. See
+    /// [`ModSource::LABELS`] for why these live next to the discriminants.
+    pub const LABELS: [&'static str; 12] = [
+        "None",
+        "Osc1 Position",
+        "Osc2 Position",
+        "Osc1 Pitch",
+        "Osc2 Pitch",
+        "Filter Cutoff",
+        "Filter Reso",
+        "Osc Balance",
+        "Amp Level",
+        "Unison Detune",
+        "Osc1 Pan",
+        "Osc2 Pan",
+    ];
+
     pub fn from_int(v: i32) -> Self {
         match v {
             1 => Self::Osc1Position,
@@ -65,6 +101,38 @@ impl ModDest {
             11 => Self::Osc2Pan,
             _ => Self::None,
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        Self::LABELS[self as usize]
+    }
+}
+
+/// Summarise what a modulation source is actually routed to, for display
+/// next to that source's controls.
+///
+/// Built from the live matrix rather than a hardcoded string: the LFO cards
+/// used to print fixed targets ("→ Wavetable Pos · Cutoff", "→ Macro 4")
+/// that described a macro system this synth does not have.
+///
+/// Slots whose destination is `None` are skipped, as are slots whose amount
+/// is zero — a routing that contributes nothing is not a routing the user
+/// can hear.
+pub fn routing_summary(slots: &[ModSlot], source: ModSource) -> String {
+    let mut names: Vec<&'static str> = Vec::new();
+    for slot in slots {
+        if slot.source != source || slot.dest == ModDest::None || slot.amount == 0.0 {
+            continue;
+        }
+        let name = slot.dest.label();
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if names.is_empty() {
+        "not routed".to_string()
+    } else {
+        format!("→ {}", names.join(" · "))
     }
 }
 
