@@ -7,10 +7,11 @@ use crate::editor::theme;
 use crate::editor::viz::lfo_shape;
 use crate::editor::widgets;
 use crate::dsp::lfo::LfoShape;
-use crate::dsp::modulation::{routing_summary, ModDest, ModSlot, ModSource};
+use crate::dsp::modulation::{routing_summary, ModSource};
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
+use super::mod_matrix::slots_of;
 use super::{float_knob, int_knob_fmt};
 
 const LFO_TITLES: [&str; 3] = ["LFO 1", "LFO 2", "LFO 3"];
@@ -22,7 +23,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     // Each card's subtitle is derived from the live mod matrix, so it says
     // what this LFO is actually wired to. The previous fixed strings named
     // targets ("Wavetable Pos", "Macro 4") that no routing produced.
-    let slots = current_mod_slots(app);
+    let slots = slots_of(app);
     let targets: [String; 3] = [
         routing_summary(&slots, LFO_SOURCES[0]),
         routing_summary(&slots, LFO_SOURCES[1]),
@@ -51,20 +52,6 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     if let Some(idx) = clicked {
         app.selected_lfo = idx;
     }
-}
-
-/// Snapshot the mod-matrix params as DSP slots so the display logic in
-/// [`routing_summary`] is shared with (and testable alongside) the DSP.
-fn current_mod_slots(app: &WavetableEditorApp) -> Vec<ModSlot> {
-    app.params
-        .mod_slots
-        .iter()
-        .map(|slot| ModSlot {
-            source: ModSource::from_int(slot.source.value()),
-            dest: ModDest::from_int(slot.destination.value()),
-            amount: slot.amount.value(),
-        })
-        .collect()
 }
 
 fn panel_frame() -> egui::Frame {
