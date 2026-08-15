@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_percent};
+use resonance_plugin::formatters::{s2v_f32_percentage, v2s_f32_db, v2s_f32_percent};
 use resonance_plugin::*;
 
 use crate::stages::saturator::{SaturatorConfig, Shaper};
@@ -40,14 +40,19 @@ impl SaturatorParams {
     }
 }
 
+/// Character is a blend, so the readout is the blend percentage; at the
+/// two extremes it names the model the blend has landed on. The
+/// percentage is always printed — the param declares `%` as its unit,
+/// and a value string that dropped it would read "Tube%" in the host.
 fn format_character() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     Arc::new(|v: f32| {
+        let pct = format!("{:.0}%", v * 100.0);
         if v < 0.15 {
-            "Tube".to_string()
+            format!("{pct} (Tube)")
         } else if v > 0.85 {
-            "Tape".to_string()
+            format!("{pct} (Tape)")
         } else {
-            format!("{:.0}%", v * 100.0)
+            pct
         }
     })
 }
@@ -73,6 +78,8 @@ impl Default for SaturatorParams {
                 0.3,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
+            .with_unit("%")
+            .with_string_to_value(s2v_f32_percentage())
             .with_value_to_string(format_character()),
             mix: FloatParam::new(
                 "sat_mix",
@@ -80,6 +87,10 @@ impl Default for SaturatorParams {
                 1.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
+            .with_unit("%")
+            // 0..1 param displayed as 0..100 %, so parsing needs the
+            // matching /100 or "50%" would come back as 50.0.
+            .with_string_to_value(s2v_f32_percentage())
             .with_value_to_string(v2s_f32_percent(0)),
             shaper: IntParam::new(
                 "sat_shaper",

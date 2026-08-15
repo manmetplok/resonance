@@ -53,6 +53,7 @@ impl Default for LimiterParams {
                     max: 0.0,
                 },
             )
+            .with_unit(" dBTP")
             .with_value_to_string(format_dbtp(1)),
             release: FloatParam::new(
                 "lim_release",
