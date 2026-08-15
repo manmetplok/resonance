@@ -14,7 +14,7 @@ use crate::assistant::Genre;
 use crate::params::MasteringParams;
 use crate::viz::MasteringViz;
 
-mod controls;
+pub mod controls;
 mod correlation;
 pub mod header;
 mod lufs_history;
@@ -27,8 +27,8 @@ mod tp_meter;
 
 use controls::StageTab;
 
-const WINDOW_W: u32 = 1200;
-const WINDOW_H: u32 = 820;
+pub const WINDOW_W: u32 = 1200;
+pub const WINDOW_H: u32 = 820;
 
 pub struct MasteringEditorFactory {
     params: Arc<MasteringParams>,
@@ -164,10 +164,7 @@ impl EditorApp for MasteringEditorApp {
             .exact_size(150.0)
             .show_inside(ui, |ui| draw_histories(ui, self));
 
-        let controls_h = match self.current_stage {
-            StageTab::Assistant => 380.0,
-            _ => 260.0,
-        };
+        let controls_h = controls::stage_panel_height(self.current_stage);
         egui::Panel::bottom("mastering_controls")
             .exact_size(controls_h)
             .show_inside(ui, |ui| {
