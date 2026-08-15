@@ -152,17 +152,18 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn output_layout(&self) -> Vec<resonance_plugin::OutputPortSpec> {
-        // 7 stereo output ports: Main + 5 drum groups + Overhead. See the
-        // pad mapping in `drum_map.rs` for which pad feeds which port.
-        [
-            "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
-        ]
-        .iter()
-        .map(|name| resonance_plugin::OutputPortSpec {
-            name: std::borrow::Cow::Borrowed(name),
-            channel_count: 2,
-        })
-        .collect()
+        // 7 stereo output ports: Main + 5 drum groups + Overhead, declared
+        // unconditionally — the plugin has no stereo-only mode. See the pad
+        // mapping in `drum_map.rs` for which pad feeds which port, and
+        // `kit::OUTPUT_PORT_NAMES` for the shared name list the editor's KIT
+        // card reads back.
+        kit::OUTPUT_PORT_NAMES
+            .iter()
+            .map(|name| resonance_plugin::OutputPortSpec {
+                name: std::borrow::Cow::Borrowed(name),
+                channel_count: 2,
+            })
+            .collect()
     }
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
