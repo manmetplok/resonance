@@ -1,17 +1,25 @@
 //! The actual egui app: state and update/view orchestration for the drums editor.
 //!
 //! `DrumsEditorApp` is the `EditorApp` the runtime drives each frame. It
-//! paints the chrome (brand + tab bar + status bar) on the outside, and
-//! dispatches the central body to whichever tab is selected. The Pads tab
-//! renders the canonical two-column layout (pad list + per-pad detail)
-//! plus a bottom row of KIT and GLOBAL cards.
+//! paints the chrome (brand + tab bar + status bar) on the outside and the
+//! Pads body in the middle: the canonical two-column layout (pad list +
+//! per-pad detail) plus a bottom row of KIT and GLOBAL cards.
+//!
+//! Pads is the only view. The editor used to offer four more tabs, each
+//! rendering a placeholder that said the feature was not built yet —
+//! including Mics and Articulations, whose pickers already ship inside the
+//! pad inspector, so those two tabs denied features the plugin has. They
+//! were removed rather than left lying (ba todo #1327);
+//! `chrome::draw_tab_bar` points at where the pickers live.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use resonance_common::registry::InstalledItem;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::download::WorkerHandle;
+use crate::kit;
 use crate::params::DrumParams;
 use crate::KitBridge;
 
@@ -19,26 +27,20 @@ use super::{
     chrome, download_panel, kit_browser, pad_grid, pad_inspector, theme, widgets,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DrumsTab {
-    Pads,
-    Mics,
-    Articulations,
-    Mod,
-    Fx,
-}
-
 pub(crate) struct DrumsEditorApp {
     pub(crate) params: Arc<DrumParams>,
     pub(crate) bridge: KitBridge,
     pub(crate) selected_pad: usize,
-    pub(crate) selected_tab: DrumsTab,
     pub(crate) pad_filter: String,
     pub(crate) download_worker: Arc<WorkerHandle>,
     pub(crate) download_panel: download_panel::DownloadPanelState,
     /// Cached list of installed drum kits from the shared registry.
     pub(crate) installed_kits: Vec<InstalledItem>,
     installed_kits_refresh: u32,
+    /// Displayed OUT meter level per channel. Rises instantly to the peak
+    /// the audio thread published and falls back with a fixed decay, so
+    /// the bar tracks real output instead of sitting dead.
+    out_meter: [f32; 2],
 }
 
 impl DrumsEditorApp {
@@ -48,24 +50,44 @@ impl DrumsEditorApp {
         download_worker: Arc<WorkerHandle>,
     ) -> Self {
         let installed_kits = kit_browser::refresh_installed_kits();
-        let selected_tab = match std::env::var("DRUMS_TAB").as_deref() {
-            Ok("mics") => DrumsTab::Mics,
-            Ok("articulations") => DrumsTab::Articulations,
-            Ok("mod") => DrumsTab::Mod,
-            Ok("fx") => DrumsTab::Fx,
-            _ => DrumsTab::Pads,
-        };
         Self {
             params,
             bridge,
             selected_pad: 0,
-            selected_tab,
             pad_filter: String::new(),
             download_worker,
             download_panel: download_panel::DownloadPanelState::default(),
             installed_kits,
             installed_kits_refresh: 0,
+            out_meter: [0.0; 2],
         }
+    }
+
+    /// Fold the audio thread's latest block peak into the displayed OUT
+    /// meter and return the level to draw. The editor repaints at ~10 Hz
+    /// while the audio thread publishes every block, so the peak is taken
+    /// as an instant rise and a 0.75×-per-frame fall — a real reading with
+    /// readable ballistics, never a value we made up.
+    pub(crate) fn tick_out_meter(&mut self) -> [f32; 2] {
+        const DECAY: f32 = 0.75;
+        for (channel, level) in self.out_meter.iter_mut().enumerate() {
+            let published =
+                f32::from_bits(self.bridge.out_peak[channel].load(Ordering::Relaxed));
+            let published = if published.is_finite() && published > 0.0 {
+                published
+            } else {
+                0.0
+            };
+            *level = if published >= *level {
+                published
+            } else {
+                (*level * DECAY).max(published)
+            };
+            if *level < 1.0e-5 {
+                *level = 0.0;
+            }
+        }
+        self.out_meter
     }
 
     fn maybe_refresh_installed_kits(&mut self) {
@@ -125,13 +147,7 @@ impl EditorApp for DrumsEditorApp {
                     .fill(theme::BG_0)
                     .inner_margin(egui::Margin::same(12)),
             )
-            .show_inside(ui, |ui| match self.selected_tab {
-                DrumsTab::Pads => draw_pads_body(ui, self),
-                DrumsTab::Mics => draw_placeholder_tab(ui, "Mics"),
-                DrumsTab::Articulations => draw_placeholder_tab(ui, "Articulations"),
-                DrumsTab::Mod => draw_placeholder_tab(ui, "Mod"),
-                DrumsTab::Fx => draw_placeholder_tab(ui, "FX"),
-            });
+            .show_inside(ui, |ui| draw_pads_body(ui, self));
 
         if self.download_panel.open {
             download_panel::draw(ui, &mut self.download_panel, &self.download_worker);
@@ -197,31 +213,6 @@ fn draw_pads_body(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         });
         ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
             draw_global_row_card(ui);
-        });
-    });
-}
-
-fn draw_placeholder_tab(ui: &mut egui::Ui, name: &str) {
-    let frame = egui::Frame::default()
-        .fill(theme::BG_2)
-        .stroke(egui::Stroke::new(1.0, theme::LINE_2))
-        .corner_radius(theme::RADIUS_PANEL)
-        .inner_margin(egui::Margin::same(32));
-    frame.show(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(20.0);
-            ui.label(
-                egui::RichText::new(name)
-                    .italics()
-                    .color(theme::TEXT_2)
-                    .size(20.0),
-            );
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Coming soon — open the Pads tab to edit kit and pads.")
-                    .color(theme::TEXT_3)
-                    .size(11.0),
-            );
         });
     });
 }
@@ -311,7 +302,10 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 let _ = widgets::slider_bipolar(ui, col, 0.0);
             });
             ui.add_space(18.0);
-            // Routing (preview only).
+            // Routing — a readout, not a control. The plugin declares all
+            // `kit::NUM_OUTPUT_PORTS` ports unconditionally (see
+            // `ResonanceDrums::output_layout`); there is no stereo-only mode
+            // to switch to, so nothing here is clickable.
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
@@ -325,15 +319,24 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
                             ui.label(
-                                egui::RichText::new("stereo")
-                                    .color(theme::TEXT_3)
+                                egui::RichText::new(kit::routing_summary())
+                                    .color(theme::TEXT_1)
                                     .size(11.0)
                                     .monospace(),
                             );
                         },
                     );
                 });
-                let _ = widgets::segmented(ui, &["Stereo", "Multi-out"], 0, false);
+                ui.label(
+                    egui::RichText::new(kit::routing_port_list())
+                        .color(theme::TEXT_3)
+                        .size(9.5)
+                        .monospace(),
+                )
+                .on_hover_text(
+                    "Every drum group has its own stereo output port. Route them \
+                     in the host's mixer — the plugin always declares all of them.",
+                );
             });
         });
     });

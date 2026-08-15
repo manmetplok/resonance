@@ -9,7 +9,7 @@ use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
-use super::{float_knob, float_knob_bipolar};
+use super::{float_knob, float_knob_bipolar, float_knob_fmt};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -183,7 +183,11 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             float_knob(ui, "Cutoff", &app.params.filter.cutoff, Some("Hz"));
             float_knob(ui, "Reso", &app.params.filter.resonance, None);
             float_knob_bipolar(ui, "Env", &app.params.filter.env_depth, None);
-            float_knob_bipolar(ui, "Key", &app.params.filter.keytrack, None);
+            // `filter_keytrack` is unipolar 0..1 — a bipolar knob put its
+            // centre detent at 50 % tracking and drew 0 % hard left.
+            float_knob_fmt(ui, "Key", &app.params.filter.keytrack, |v| {
+                format!("{:.0}%", v * 100.0)
+            });
             float_knob(ui, "Drive", &app.params.filter.drive, None);
         });
     });

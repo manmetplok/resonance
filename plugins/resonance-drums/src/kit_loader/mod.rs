@@ -247,9 +247,16 @@ pub fn spawn_loader(
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "kit".to_string());
                     *bridge.catalog.lock() = kit.catalog;
+                    // Measure the kit before handing it over: the status
+                    // bar's memory readout and the inspector's SAMPLE stage
+                    // both describe the takes this load actually decoded.
+                    let bytes = crate::sample_info::total_sample_bytes(&kit.pads) as u64;
+                    let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
                     // Best-effort send; if the channel is full, coalesce
                     // by dropping this load (the newer one wins anyway).
                     let _ = bridge.kit_sender.try_send(kit.pads);
+                    bridge.kit_bytes.store(bytes, Ordering::Relaxed);
+                    *bridge.pad_samples.lock() = infos;
                     *bridge.kit_path.lock() = Some(manifest_path);
                     *bridge.kit_status.lock() = KitStatus::Loaded { name, num_pads };
                 }

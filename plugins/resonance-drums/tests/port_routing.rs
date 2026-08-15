@@ -1,7 +1,12 @@
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
-use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer};
+use resonance_drums::kit::{
+    self, LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS,
+    OUTPUT_PORT_NAMES,
+};
 use resonance_drums::params::DrumParams;
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
+use resonance_drums::ResonanceDrums;
+use resonance_plugin::ResonancePlugin;
 
 const NUM_PORTS: usize = 7;
 const TOMS_PORT: usize = 3;
@@ -132,5 +137,43 @@ fn tom_mid_and_floor_also_route_to_toms_port() {
             "Toms port silent for note {note}, sum={toms_sum}"
         );
         assert!(oh_sum > 0.0, "OH port silent for note {note}, sum={oh_sum}");
+    }
+}
+
+/// The KIT card's ROUTING readout must describe what the plugin actually
+/// declares. The plugin is always multi-out: every port in
+/// `OUTPUT_PORT_NAMES` is declared unconditionally, with no parameter or
+/// state that could switch it to a stereo-only layout.
+#[test]
+fn plugin_declares_every_output_port_unconditionally() {
+    let plugin = ResonanceDrums::new();
+    let layout = plugin.output_layout();
+
+    assert_eq!(
+        layout.len(),
+        NUM_OUTPUT_PORTS,
+        "expected {NUM_OUTPUT_PORTS} declared output ports, got {}",
+        layout.len()
+    );
+    for (spec, expected) in layout.iter().zip(OUTPUT_PORT_NAMES.iter()) {
+        assert_eq!(&*spec.name, *expected, "port name mismatch");
+        assert_eq!(spec.channel_count, 2, "every drums port is stereo");
+    }
+}
+
+/// The readout strings the editor paints are derived from the same port
+/// list, so the card can never claim a mode the DSP does not implement.
+#[test]
+fn routing_readout_reports_multi_out() {
+    let summary = kit::routing_summary();
+    assert_eq!(summary, format!("Multi-out · {NUM_OUTPUT_PORTS} ports"));
+    assert!(
+        !summary.to_lowercase().contains("stereo"),
+        "the routing readout must not describe a stereo-only mode: {summary}"
+    );
+
+    let ports = kit::routing_port_list();
+    for name in OUTPUT_PORT_NAMES {
+        assert!(ports.contains(name), "port list is missing {name}: {ports}");
     }
 }

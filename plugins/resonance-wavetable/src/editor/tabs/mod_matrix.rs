@@ -6,35 +6,13 @@ use wayland_plugin_gui::egui;
 use crate::editor::theme;
 use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
-use crate::dsp::modulation::NUM_MOD_SLOTS;
+use crate::dsp::modulation::{ModDest, ModSource, NUM_MOD_SLOTS};
 use resonance_plugin::param::Param;
 
-const SOURCE_NAMES: [&str; 9] = [
-    "None",
-    "LFO 1",
-    "LFO 2",
-    "LFO 3",
-    "Mod Env",
-    "Velocity",
-    "Key Track",
-    "Mod Wheel",
-    "Aftertouch",
-];
-
-const DEST_NAMES: [&str; 12] = [
-    "None",
-    "Osc1 Position",
-    "Osc2 Position",
-    "Osc1 Pitch",
-    "Osc2 Pitch",
-    "Filter Cutoff",
-    "Filter Reso",
-    "Osc Balance",
-    "Amp Level",
-    "Unison Detune",
-    "Osc1 Pan",
-    "Osc2 Pan",
-];
+// Label tables live next to the enum discriminants in `dsp::modulation` so
+// the picker cannot drift from what the DSP actually matches on.
+const SOURCE_NAMES: [&str; 9] = ModSource::LABELS;
+const DEST_NAMES: [&str; 12] = ModDest::LABELS;
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 10.0);
