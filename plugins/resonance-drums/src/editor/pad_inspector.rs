@@ -11,6 +11,8 @@
 //! For pads without two close mics, the balance knob renders as a dim
 //! placeholder so the knob grid stays a consistent 4-cell row.
 
+use std::sync::atomic::Ordering;
+
 use wayland_plugin_gui::egui;
 
 use resonance_plugin::param::Param;
@@ -18,6 +20,7 @@ use resonance_plugin::param::Param;
 use crate::drum_map::PAD_MAPPINGS;
 use crate::mic_catalog::ManifestMicCatalog;
 use crate::params::DrumParams;
+use crate::rr_display;
 use crate::sample_info::PadSampleInfo;
 use crate::KitBridge;
 
@@ -53,7 +56,11 @@ pub fn draw(
             .cloned()
             .flatten();
 
-        draw_pad_head(ui, mapping, pad);
+        // Which round-robin take last fired for this pad, published by the
+        // audio thread on every note-on.
+        let rr = rr_display::unpack(bridge.last_rr[selected_pad].load(Ordering::Relaxed));
+
+        draw_pad_head(ui, mapping, pad, rr);
         draw_sample_stage(ui, sample_info.as_ref());
         draw_knob_grid(ui, pad, mapping);
 
@@ -69,6 +76,7 @@ fn draw_pad_head(
     ui: &mut egui::Ui,
     mapping: &crate::drum_map::PadMapping,
     pad: &crate::params::PadParams,
+    rr: Option<rr_display::RoundRobin>,
 ) {
     ui.horizontal(|ui| {
         ui.label(
@@ -88,6 +96,39 @@ fn draw_pad_head(
             .size(11.0)
             .monospace(),
         );
+        ui.add_space(10.0);
+        // Round robin: which take of how many the last hit used. Updates
+        // as takes cycle — the editor repaints ~10× a second (ba #1329).
+        match rr {
+            Some(rr) => {
+                ui.label(
+                    egui::RichText::new(rr.label())
+                        .color(if rr.cycles() {
+                            theme::ACCENT_SOFT
+                        } else {
+                            theme::TEXT_3
+                        })
+                        .size(11.0)
+                        .monospace(),
+                )
+                .on_hover_text(if rr.cycles() {
+                    "Round robin: the take that fired on the last hit, and how \
+                     many this velocity layer holds."
+                } else {
+                    "This velocity layer has a single take, so every hit plays \
+                     the same sample."
+                });
+            }
+            None => {
+                ui.label(
+                    egui::RichText::new("take — of —")
+                        .color(theme::TEXT_4)
+                        .size(11.0)
+                        .monospace(),
+                )
+                .on_hover_text("Round robin: play this pad to see which take fires.");
+            }
+        }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Enabled chip — driven by the negated mute param.
