@@ -74,6 +74,9 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.io.pending_load = Some(loaded);
     r.undo.clear();
     r.plugin_state_cache.clear();
+    // Re-seeded from the template's own file by `replay_plugins`; see the
+    // matching clear on the project-open path.
+    r.pending_plugin_param_overrides.clear();
     r.dirty = false;
     let _ = r.engine.send(AudioCommand::ClearAll);
     r.io.has_active_project = true;

@@ -54,11 +54,14 @@ impl crate::Resonance {
 
         // Plugin chain (all effects — no instrument slot on busses).
         let mut plugin_section = column![].spacing(4).width(Length::Fill);
-        for plugin in &bus.plugins {
+        let chain_len = bus.plugins.len();
+        for (index, plugin) in bus.plugins.iter().enumerate() {
             plugin_section = plugin_section.push(self.view_plugin_slot_row(
                 PluginOwner::Bus(bus_id),
                 plugin,
                 false,
+                index,
+                chain_len,
             ));
         }
 

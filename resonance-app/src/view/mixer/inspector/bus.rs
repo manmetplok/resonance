@@ -21,6 +21,8 @@ use crate::message::{BusMessage, Message};
 use crate::state::{BusState, MixerInspectorGroup};
 use crate::theme;
 use crate::util::format_pan;
+use crate::view::mixer::picks::PluginOwner;
+use crate::view::mixer::reorder;
 
 /// The inspector body for `bus`. Mirrors the track path's split: the
 /// live SIGNAL tiles render every frame, ROUTING + CHAIN sit inside a
@@ -299,9 +301,18 @@ fn chain_group(
     if bus.plugins.is_empty() {
         col = col.push(super::chain::empty_chain_row());
     } else {
-        for plugin in &bus.plugins {
-            // Every entry is an effect: a bus has no instrument slot.
-            col = col.push(super::chain::chain_row(&plugin.plugin_name, false));
+        let chain_len = bus.plugins.len();
+        for (index, plugin) in bus.plugins.iter().enumerate() {
+            // Every entry is an effect: a bus has no instrument slot, so
+            // the only limits on the reorder carets are the two ends.
+            let moves = reorder::chain_moves(
+                r,
+                PluginOwner::Bus(bus.id),
+                plugin.instance_id,
+                index,
+                chain_len,
+            );
+            col = col.push(super::chain::chain_row(&plugin.plugin_name, false, &moves));
         }
     }
 

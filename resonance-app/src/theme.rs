@@ -149,8 +149,12 @@ pub mod fa {
     pub const TRASH: char = '\u{f1f8}';
     /// Caret pointing right — collapsed indicator.
     pub const CARET_RIGHT: char = '\u{f0da}';
-    /// Caret pointing down — expanded indicator.
+    /// Caret pointing down — expanded indicator, and "move this plugin
+    /// one slot later" on the mixer's chain-reorder control.
     pub const CARET_DOWN: char = '\u{f0d7}';
+    /// Caret pointing up — "move this plugin one slot earlier" on the
+    /// mixer's chain-reorder control (ba todo #1302).
+    pub const CARET_UP: char = '\u{f0d8}';
     /// Arrow pointing right — used for output routing labels.
     pub const ARROW_RIGHT: char = '\u{f061}';
     /// Filled circle with an "i" — hover-tooltip info marker.
