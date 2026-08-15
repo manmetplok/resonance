@@ -57,7 +57,8 @@ impl ResonancePlugin for MidiProbe {
     const VENDOR: &'static str = "test";
     const VERSION: &'static str = "0.0.0";
     const DESCRIPTION: &'static str = "";
-    const FEATURES: &'static [&'static str] = &["instrument"];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::INSTRUMENT];
     const INPUT_CHANNELS: Option<u32> = None;
     const MIDI_INPUT: bool = true;
 
@@ -104,7 +105,8 @@ impl ResonancePlugin for NotesOnlyProbe {
     const VENDOR: &'static str = "test";
     const VERSION: &'static str = "0.0.0";
     const DESCRIPTION: &'static str = "";
-    const FEATURES: &'static [&'static str] = &["instrument"];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::INSTRUMENT];
     const INPUT_CHANNELS: Option<u32> = None;
     const MIDI_INPUT: bool = true;
 
