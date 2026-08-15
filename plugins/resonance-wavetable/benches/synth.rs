@@ -41,19 +41,19 @@ fn prime(params: &WavetableParams, notes: &[u8]) -> SynthEngine {
     let mut left = vec![0.0f32; QUANTUM];
     let mut right = vec![0.0f32; QUANTUM];
     let mut iter = EventIterator::new(&events);
-    engine.render_block(&mut left, &mut right, QUANTUM, params, &mut iter);
+    engine.render_block(&mut left, &mut right, QUANTUM, params, &mut iter, None);
 
     // Warm up past the attack stage (~20 ms).
     for _ in 0..8 {
         let mut iter = EventIterator::new(&[]);
-        engine.render_block(&mut left, &mut right, QUANTUM, params, &mut iter);
+        engine.render_block(&mut left, &mut right, QUANTUM, params, &mut iter, None);
     }
     engine
 }
 
 fn render_once(engine: &mut SynthEngine, params: &WavetableParams, l: &mut [f32], r: &mut [f32]) {
     let mut iter = EventIterator::new(&[]);
-    engine.render_block(l, r, QUANTUM, params, &mut iter);
+    engine.render_block(l, r, QUANTUM, params, &mut iter, None);
 }
 
 /// A chord spanning a realistic register.

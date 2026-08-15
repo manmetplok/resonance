@@ -15,6 +15,7 @@
 
 use resonance_dsp::{constant_power_pan, SimpleRng};
 
+use crate::dsp::lfo::LfoMode;
 use crate::dsp::modulation::{self, ModState};
 use crate::dsp::oscillator::{self, midi_to_freq};
 use crate::dsp::render::plan::BlockPlan;
@@ -129,20 +130,23 @@ fn advance_voice_lfos(
         "mod matrix would consume stale LFO values"
     );
 
+    // Only `Retrig` has a per-voice phase. `Sync` deliberately does not: its
+    // whole point is one phase locked to the timeline, which a per-note reset
+    // would break.
     let [mut lfo1_val, mut lfo2_val, mut lfo3_val] = ctx.global_lfo;
-    if snap.lfo1_retrigger {
+    if snap.lfo1_mode == LfoMode::Retrig {
         if ctx.lfo_vals_needed {
             lfo1_val = voice.lfo1.value(snap.lfo1_shape) * snap.lfo1_depth;
         }
         voice.lfo1.advance(snap.lfo1_shape, rng);
     }
-    if snap.lfo2_retrigger {
+    if snap.lfo2_mode == LfoMode::Retrig {
         if ctx.lfo_vals_needed {
             lfo2_val = voice.lfo2.value(snap.lfo2_shape) * snap.lfo2_depth;
         }
         voice.lfo2.advance(snap.lfo2_shape, rng);
     }
-    if snap.lfo3_retrigger {
+    if snap.lfo3_mode == LfoMode::Retrig {
         if ctx.lfo_vals_needed {
             lfo3_val = voice.lfo3.value(snap.lfo3_shape) * snap.lfo3_depth;
         }
