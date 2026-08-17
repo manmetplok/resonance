@@ -15,7 +15,7 @@ use serde_json::json;
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    Resonance::new().0
+    Resonance::new_for_test().0
 }
 
 fn roundtrip(app: &mut Resonance, req: Request) -> Response {

@@ -102,7 +102,7 @@ fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
 /// A capturing app anchored at `<tmp>/project.rproj`, so the sibling
 /// freeze-cache dir resolves to `<tmp>/project.freeze/`.
 fn capturing_app(tmp: &Path) -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     app.test_set_project_path(tmp.join("project.rproj"));
     (app, rx)

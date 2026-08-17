@@ -59,7 +59,7 @@ fn sim_settings() -> iced::Settings {
 /// unconfigured vocal track appended after the demo's configured one.
 fn build_app_with_unconfigured_vocal() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Compose);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     let mut backing = TrackState::new_vocal(BACKING_VOCAL_ID, 6);
@@ -153,7 +153,7 @@ fn compose_vocal_placeholder_wires_up_via_picker() {
 #[test]
 fn compose_vocal_all_unconfigured() {
     let _ = STARTUP_TAB.set(ViewMode::Compose);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     app.test_remove_lane_generator(LEAD_VOCAL_ID);
     snapshot_to(

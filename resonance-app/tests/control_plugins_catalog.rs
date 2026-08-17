@@ -27,7 +27,7 @@ const ALIAS: &str = resonance_control::methods::plugins::PLUGINS_DEPRECATED_ALIA
 /// An app with a scanned catalog but NO active project.
 fn app_without_project() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_apply_engine_event(AudioEvent::PluginsScanned {
         plugins: vec![
             ScannedPlugin {

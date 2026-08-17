@@ -62,7 +62,7 @@ fn bus_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str, keyab
 /// slot 0" is actually load-bearing), and a compressor on the master.
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-sidechain.rproj"));
     app.test_add_track(KICK, TrackType::Instrument);

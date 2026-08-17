@@ -200,6 +200,30 @@ impl Resonance {
         &self.settings
     }
 
+    /// Test-only: borrow the recent-projects list. Lets
+    /// `tests/hermetic_construction.rs` prove the hermetic constructor read
+    /// nothing out of the user's config (ba doc #285).
+    #[doc(hidden)]
+    pub fn test_recent_projects(&self) -> &[crate::recent::RecentEntry] {
+        &self.io.recent_projects
+    }
+
+    /// Test-only: borrow the user's saved track presets. Same purpose as
+    /// [`Self::test_recent_projects`] — the built-in presets live in
+    /// `default_presets` and are unaffected.
+    #[doc(hidden)]
+    pub fn test_user_presets(&self) -> &[crate::presets::TrackPreset] {
+        &self.user_presets
+    }
+
+    /// Test-only: list the device definitions the registry resolved. Used to
+    /// show that the *compiled-in* bundled definitions survive hermetic
+    /// construction even though the user-authored directory is not read.
+    #[doc(hidden)]
+    pub fn test_device_definitions(&self) -> Vec<&resonance_common::DeviceDefinition> {
+        self.device_registry.list()
+    }
+
     /// Test-only: capture the current undo snapshot's runtime extras (the
     /// part of an undo entry that the `ProjectFile` shape doesn't carry,
     /// including external-instrument config). Lets a reducer test prove the

@@ -21,7 +21,7 @@ fn flat_lane(id: u64, target: &AutomationTarget, enabled: bool) -> AutomationLan
 
 #[test]
 fn live_value_present_only_when_enabled_lane_is_driven() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = AutomationTarget::TrackGain(1);
 
     // A Read-enabled lane with a throttled value → tint shows that value.
@@ -37,7 +37,7 @@ fn live_value_present_only_when_enabled_lane_is_driven() {
 
 #[test]
 fn live_value_none_without_a_throttled_value() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = AutomationTarget::BusPan(2);
 
     // Lane exists and is enabled but no AutomatedValue has arrived yet
@@ -50,7 +50,7 @@ fn live_value_none_without_a_throttled_value() {
 
 #[test]
 fn live_value_none_when_read_disabled() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = AutomationTarget::MasterGain;
 
     // A Read-disabled lane keeps its points but uses the static value, so
@@ -67,7 +67,7 @@ fn live_value_none_when_read_disabled() {
 
 #[test]
 fn live_value_none_for_untargeted_channel() {
-    let app = Resonance::new().0;
+    let app = Resonance::new_for_test().0;
     // No lanes at all — every channel reads None.
     assert_eq!(
         app.test_automation()

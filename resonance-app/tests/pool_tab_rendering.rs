@@ -43,7 +43,7 @@ fn sim_settings() -> iced::Settings {
 /// and three demo assets seeded (used / unused / missing).
 fn build_pool_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     // Seed pool assets: used (×1) / unused / missing
     demo::seed_pool_assets(&mut app);

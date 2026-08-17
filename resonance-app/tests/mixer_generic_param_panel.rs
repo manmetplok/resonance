@@ -38,7 +38,7 @@ const PARAM: &str = "Low Gain";
 
 fn app_with_plugin(has_gui: bool) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_add_track(TRACK, TrackType::Audio);
     app.test_push_track_plugin(

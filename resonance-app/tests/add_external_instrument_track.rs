@@ -26,7 +26,7 @@ use resonance_audio::types::{AudioCommand, AudioEvent, TrackId};
 /// App with an active, saved project so undo/redo can record + replay
 /// snapshots (`can_record_undo` needs a project path).
 fn app_with_project() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/proj/song.rproj"));
     app

@@ -85,7 +85,7 @@ fn add_master_plugin(app: &mut Resonance, instance_id: u64) {
 /// A kick, a bass track with a compressor, a bus with a compressor, and
 /// a compressor on the master — every place a key can land.
 fn app_with_chains() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_add_track(KICK, TrackType::Instrument);
     app.test_add_track(BASS, TrackType::Instrument);
@@ -114,7 +114,7 @@ fn save_and_reload(file: &ProjectFile) -> (Resonance, Vec<AudioCommand>) {
     save_project(dir.path(), file, &[], &[]).expect("save project");
     let loaded = load_project(dir.path()).expect("load project");
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     app.test_replay_loaded_project(loaded.file);
     let cmds = drain(&rx);

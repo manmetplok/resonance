@@ -16,7 +16,7 @@ use resonance_app::{demo, Resonance, STARTUP_TAB};
 
 fn build_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Compose);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     app
 }

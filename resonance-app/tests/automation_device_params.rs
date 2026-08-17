@@ -25,14 +25,14 @@ use resonance_audio::types::TrackId;
 use resonance_common::AutomationTarget;
 
 const TRACK: TrackId = 1;
-/// The bundled Moog Muse preset ships in the registry, so `Resonance::new()`
+/// The bundled Moog Muse preset ships in the registry, so `Resonance::new_for_test()`
 /// always resolves it.
 const MUSE: &str = "moog-muse";
 
 /// App with an active project and a single external-instrument track. The
 /// device preset is left unselected; individual tests select it.
 fn external_app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     app.test_dispatch(Message::ExternalInstrument(Eim::Enable(TRACK)));

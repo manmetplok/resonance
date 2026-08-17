@@ -45,7 +45,7 @@ fn simulator(app: &Resonance) -> Simulator<'_, Message> {
 /// selected (not yet external).
 fn app_with_instrument_track() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // Undo snapshots key off the project path — set one so Enable/Disable
     // are recorded and reversible (mirrors the device-preset undo test).
@@ -185,7 +185,7 @@ fn enable_disable_undo_redo_round_trip() {
 fn audio_and_vocal_tracks_have_no_toggle() {
     for track in [TrackState::new_audio(TRACK, 0), TrackState::new_vocal(TRACK, 0)] {
         let _ = STARTUP_TAB.set(ViewMode::Mixer);
-        let (mut app, _task) = Resonance::new();
+        let (mut app, _task) = Resonance::new_for_test();
         app.test_set_active_project(true);
         app.test_push_track(track);
         let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));

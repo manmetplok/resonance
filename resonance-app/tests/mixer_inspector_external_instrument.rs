@@ -42,7 +42,7 @@ fn sim_settings() -> iced::Settings {
 /// Instrument inspector group.
 fn app_with_external_track() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     // Belt-and-braces in case another test in this binary set the tab

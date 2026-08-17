@@ -9,7 +9,7 @@ use resonance_audio::types::{
 };
 
 fn app() -> Resonance {
-    Resonance::new().0
+    Resonance::new_for_test().0
 }
 
 fn fold(app: &mut Resonance, e: AudioEvent) {

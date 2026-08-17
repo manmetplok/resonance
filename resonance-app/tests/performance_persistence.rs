@@ -22,7 +22,7 @@ fn bass5_index() -> usize {
 
 #[test]
 fn build_project_file_captures_tuning_and_capo() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     {
         let p = app.test_performance_mut();
@@ -39,7 +39,7 @@ fn build_project_file_captures_tuning_and_capo() {
 #[test]
 fn tuning_and_capo_round_trip_identically() {
     // -- Author a project with a non-default tuning + capo -----------
-    let (mut authored, _t1) = Resonance::new();
+    let (mut authored, _t1) = Resonance::new_for_test();
     {
         let p = authored.test_performance_mut();
         p.set_tuning_index(bass5_index());
@@ -53,7 +53,7 @@ fn tuning_and_capo_round_trip_identically() {
     let reloaded: ProjectFile = serde_json::from_str(&json).expect("deserialize project");
 
     // -- Restore into a fresh app via the production restore path -----
-    let (mut restored, _t2) = Resonance::new();
+    let (mut restored, _t2) = Resonance::new_for_test();
     restored.test_restore_performance(&reloaded);
 
     let p = restored.test_performance();
@@ -77,7 +77,7 @@ fn unknown_tuning_name_falls_back_to_default() {
     saved.performance.tuning = "Sitar (19-string)".to_string();
     saved.performance.capo = 2;
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_restore_performance(&saved);
 
     let p = app.test_performance();
@@ -102,7 +102,7 @@ fn legacy_project_without_performance_loads_clean() {
     assert_eq!(file.performance.capo, 0);
 
     // Restoring the default legacy block leaves a fresh app on Guitar 6.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_restore_performance(&file);
     assert_eq!(app.test_performance().tuning().name, GUITAR_6.name);
     assert_eq!(app.test_performance().tuning_index, 0);

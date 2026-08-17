@@ -51,6 +51,12 @@ const SR: u32 = 48_000;
 
 /// A fresh app on the Arrange tab, sample rate + tempo map primed so
 /// musical<->sample conversions in the control handlers are correct.
+///
+/// Deliberately the real [`Resonance::new`] rather than the hermetic
+/// `new_for_test` every other test uses (ba doc #285): this one drives an
+/// offline bounce to completion and asserts the engine actually wrote the WAV,
+/// which needs a live engine thread. It is the end-to-end test; paying for a
+/// real engine is the point of it.
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
     let (mut app, _task) = Resonance::new();

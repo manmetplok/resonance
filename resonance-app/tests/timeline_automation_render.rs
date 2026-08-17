@@ -199,7 +199,7 @@ fn send(app: &mut Resonance, m: AutomationMessage) {
 
 #[test]
 fn arrange_view_renders_with_a_seeded_automation_lane() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Arrange);
 

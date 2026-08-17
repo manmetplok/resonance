@@ -32,7 +32,7 @@ fn clip(id: u64, track_id: u64) -> ClipState {
 
 #[test]
 fn fade_changed_mirrors_lengths_and_curves() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
 
     app.test_apply_engine_event(AudioEvent::ClipFadeChanged {
@@ -56,7 +56,7 @@ fn fade_changed_mirrors_lengths_and_curves() {
 
 #[test]
 fn gain_changed_mirrors_db() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
 
     app.test_apply_engine_event(AudioEvent::ClipGainChanged {
@@ -73,7 +73,7 @@ fn gain_changed_mirrors_db() {
 
 #[test]
 fn events_only_touch_the_matching_clip() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
     app.test_push_clip(clip(8, 1));
 
@@ -102,7 +102,7 @@ fn events_only_touch_the_matching_clip() {
 
 #[test]
 fn unknown_clip_id_is_a_no_op() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
 
     // No clip with id 99 — must not panic or mutate the existing clip.

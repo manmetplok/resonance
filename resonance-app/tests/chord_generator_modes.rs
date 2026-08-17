@@ -47,7 +47,7 @@ fn sim_settings() -> iced::Settings {
 /// selected; returns the app plus the first section's definition id.
 fn build_app() -> (Resonance, u64) {
     let _ = STARTUP_TAB.set(ViewMode::Compose);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Compose(ComposeMessage::SelectLane(
         SelectedLane::Chords,

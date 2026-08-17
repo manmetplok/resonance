@@ -34,7 +34,7 @@ fn create_clip(app: &mut Resonance, clip_id: u64, notes: Vec<MidiNote>) {
 
 #[test]
 fn notes_edited_replaces_the_clip_note_vector_wholesale() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     create_clip(&mut app, 7, vec![note(60, 5, 0.5), note(64, 245, 0.9)]);
 
     // Quantize result: same two notes snapped to the grid, velocities humanized.
@@ -58,7 +58,7 @@ fn notes_edited_replaces_the_clip_note_vector_wholesale() {
 
 #[test]
 fn notes_edited_for_unknown_clip_is_a_noop() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     create_clip(&mut app, 1, vec![note(60, 0, 0.7)]);
 
     // No clip 99 — must not panic and must not invent a clip.
@@ -77,7 +77,7 @@ fn notes_edited_for_unknown_clip_is_a_noop() {
 
 #[test]
 fn notes_edited_can_grow_and_shrink_the_note_count() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     create_clip(&mut app, 3, vec![note(60, 0, 0.7)]);
 
     // Grow to three notes.
@@ -99,7 +99,7 @@ fn notes_edited_can_grow_and_shrink_the_note_count() {
 
 #[test]
 fn groove_extracted_appends_to_the_groove_library() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     assert!(app.test_groove_library().is_empty());
 
     let template = GrooveTemplate {

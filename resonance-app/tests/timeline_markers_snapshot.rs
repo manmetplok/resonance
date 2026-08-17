@@ -40,7 +40,7 @@ fn sim_settings() -> iced::Settings {
 /// arrangement so both fall inside the default viewport.
 fn build_arrange_app_with_markers() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     // Point marker — a red flag a little way into the arrangement.

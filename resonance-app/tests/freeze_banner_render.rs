@@ -153,7 +153,7 @@ fn banner_only_for_stale_and_failed() {
 /// editing (`Idle`).
 #[test]
 fn unfreeze_stale_returns_to_idle() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     let dir = tempfile::tempdir().expect("temp project dir");
     app.test_set_project_path(dir.path().join("project.rproj"));
@@ -176,7 +176,7 @@ fn unfreeze_stale_returns_to_idle() {
 /// `UnfreezeTrack`.
 #[test]
 fn dismiss_failed_clears_status() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_add_track(TRACK, TrackType::Instrument);
     app.test_set_freeze_status(
         TRACK,
@@ -194,7 +194,7 @@ fn dismiss_failed_clears_status() {
 /// track to `Freezing`.
 #[test]
 fn refreeze_stale_starts_render() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let _rx = app.test_capture_engine();
     let dir = tempfile::tempdir().expect("temp project dir");
     app.test_set_project_path(dir.path().join("project.rproj"));

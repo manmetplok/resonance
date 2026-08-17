@@ -51,7 +51,7 @@ fn mixer_inspector_renders_without_busses() {
     // which builds the inspector for the selected track.
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_minimal_drum_track_no_busses(&mut app);
 
     // Belt-and-braces: explicitly request Mixer in case another test

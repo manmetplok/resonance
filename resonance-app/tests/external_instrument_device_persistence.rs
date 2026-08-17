@@ -53,7 +53,7 @@ fn device_param_lane(id: u64, param_id: &str) -> AutomationLane {
 /// Fresh app with an active project + one instrument track, ready to be wired
 /// as an external instrument.
 fn app_with_track() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/tmp/resonance-test-727"));
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
@@ -69,7 +69,7 @@ fn only_track(file: &ProjectFile) -> &ProjectTrack {
 /// Replay `file` into a fresh app with a capturing engine, returning the app
 /// and the commands the replay dispatched.
 fn replay_into_fresh(file: ProjectFile) -> (Resonance, Vec<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     let loaded = LoadedProject {
         file,

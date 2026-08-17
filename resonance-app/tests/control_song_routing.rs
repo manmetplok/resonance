@@ -22,7 +22,7 @@ const PLAIN: u64 = 4;
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_add_track(PARENT, TrackType::Instrument);
     app.test_add_track(PLAIN, TrackType::Audio);

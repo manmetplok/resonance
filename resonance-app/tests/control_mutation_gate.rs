@@ -25,9 +25,9 @@ use resonance_control::{ErrorKind, Request, Response};
 /// A fresh app with NO active project (boot state: the startup modal).
 fn app_no_project() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    // `Resonance::new()` boots onto the startup project-picker modal, so
+    // `Resonance::new_for_test()` boots onto the startup project-picker modal, so
     // `has_active_project` is false — exactly the gated state under test.
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     app
 }
 

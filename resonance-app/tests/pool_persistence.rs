@@ -18,7 +18,7 @@ use resonance_audio::types::{AssetId, ClipId, FadeCurve, TrackId, TrackType};
 /// pool restore path can resolve project-relative asset paths and the
 /// undo gate (which needs a saved path) is satisfied.
 fn app_at(project_dir: &Path) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(project_dir.to_path_buf());
     app

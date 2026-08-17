@@ -37,7 +37,7 @@ const DRUMS: u64 = 60;
 
 fn app_with_project() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-generate-load.rprj"));
     // A fresh test app has no bar table until something rebuilds it, and

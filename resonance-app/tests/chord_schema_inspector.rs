@@ -11,7 +11,7 @@ use resonance_music_theory::{Degree, GeneratorSpec, SchemaKind};
 
 /// Build the demo app and return it with the first section's id.
 fn build_app() -> (Resonance, u64) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let def_id = app.compose_state().definitions[0].id;
     (app, def_id)

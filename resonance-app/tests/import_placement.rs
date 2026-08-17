@@ -20,7 +20,7 @@ use std::path::PathBuf;
 /// the undo gate — which needs `has_active_project` + a `project_path` —
 /// is satisfied) and a command-capturing engine.
 fn app() -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/proj/song.rproj"));
     let rx = app.test_capture_engine();
@@ -277,7 +277,7 @@ fn import_failure_drops_placement_and_reports() {
 #[test]
 fn import_without_project_is_refused() {
     // Active project but no saved path — importing has nowhere to copy to.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     let rx = app.test_capture_engine();
 

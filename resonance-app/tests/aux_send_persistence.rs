@@ -26,7 +26,7 @@ const SEND: u64 = 3;
 /// An app with one audio track, one FX return bus, and a send from the
 /// track into the bus at `level_db` / `pre_fader`.
 fn app_with_send(level_db: f32, pre_fader: bool) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_audio(TRACK, 0));
     app.test_apply_engine_event(AudioEvent::BusAdded {
@@ -63,7 +63,7 @@ fn save_and_reload(file: &ProjectFile) -> (Resonance, Vec<AudioCommand>) {
     let json = serde_json::to_string_pretty(file).expect("serialize project");
     let back: ProjectFile = serde_json::from_str(&json).expect("deserialize project");
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     app.test_replay_loaded_project(back);
     let cmds = drain(&rx);
@@ -114,7 +114,7 @@ fn build_project_file_captures_the_send_graph() {
 
 #[test]
 fn a_project_without_sends_serializes_an_empty_list() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_audio(TRACK, 0));
 
@@ -347,7 +347,7 @@ fn diff_replay_restores_a_send_level_on_undo() {
 
 #[test]
 fn diff_replay_drops_a_send_added_after_the_snapshot() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_audio(TRACK, 0));
     app.test_apply_engine_event(AudioEvent::BusAdded {

@@ -71,7 +71,7 @@ fn snapshot_to(app: &Resonance, group: &TrackGroup, member_count: usize, path: &
 /// Expanded Drums group: unity level, macros off, 4 members.
 #[test]
 fn group_header_expanded() {
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     let group = TrackGroup::new(1, "Drums", GroupIdentityColor::Drum);
     snapshot_to(&app, &group, 4, "tests/snapshots/group_header_expanded.png");
 }
@@ -80,7 +80,7 @@ fn group_header_expanded() {
 /// 3 members.
 #[test]
 fn group_header_collapsed_macros() {
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     let mut group = TrackGroup::new(2, "Vocals", GroupIdentityColor::Vocal);
     group.is_collapsed = true;
     group.macro_mute = true;

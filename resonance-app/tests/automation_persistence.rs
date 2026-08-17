@@ -11,7 +11,7 @@ use resonance_common::{AutomationTarget, CurveKind};
 
 /// One audio track plus a known volume so lane seeding has something to read.
 fn app_with_track(id: u64, volume_db: f32) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     let mut track = TrackState::new_audio(id, 0);
     track.volume = volume_db;

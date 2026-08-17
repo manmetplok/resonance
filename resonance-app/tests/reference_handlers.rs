@@ -15,7 +15,7 @@ use resonance_audio::types::{ABSource, ReferenceId};
 /// drops it unless a project is active. Build an app with an active
 /// project anchored at a path so handlers run and undo can record.
 fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/tmp/reference-test.rsn"));
     app

@@ -39,7 +39,7 @@ fn sim_settings() -> iced::Settings {
 /// in through the normal `Connected` events (mirrors the socket bridge).
 fn build_app(connected: u64) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Arrange)));
     for conn in 0..connected {

@@ -40,7 +40,7 @@ const TICKS_PER_BAR: u64 = 4 * TICKS_PER_QUARTER_NOTE;
 /// gives a wrong right-edge sample.
 fn build_app_with_tempo_ramp_clip(duration_ticks: u64) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_sample_rate(SR);
     app.test_set_arrange_zoom(ZOOM);
@@ -260,7 +260,7 @@ fn left_edge_trim_uses_tempo_map_for_projection() {
 #[test]
 fn flat_tempo_right_edge_trim_matches_scalar_projection() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_sample_rate(SR);
     app.test_set_arrange_zoom(ZOOM);

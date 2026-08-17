@@ -62,7 +62,7 @@ fn frame(frame: u64, f0_hz: f32) -> F0Frame {
 
 #[test]
 fn pitch_detected_populates_vocal_tuning() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
 
     app.test_apply_engine_event(AudioEvent::ClipPitchDetected {
@@ -84,7 +84,7 @@ fn pitch_detected_populates_vocal_tuning() {
 
 #[test]
 fn empty_detection_still_initialises_the_mirror() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
 
     // A clip with no voiced material yields empty vectors — the mirror is
@@ -106,7 +106,7 @@ fn empty_detection_still_initialises_the_mirror() {
 
 #[test]
 fn re_analysis_replaces_geometry_but_preserves_global_params() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let mut c = clip(7, 1);
     // A prior analysis plus user-set global key/scale/correction.
     c.vocal_tuning = Some(VocalTuning {
@@ -139,7 +139,7 @@ fn re_analysis_replaces_geometry_but_preserves_global_params() {
 
 #[test]
 fn pitch_detected_only_touches_the_matching_clip() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
     app.test_push_clip(clip(8, 1));
 
@@ -158,7 +158,7 @@ fn pitch_detected_only_touches_the_matching_clip() {
 
 #[test]
 fn pitch_detected_for_unknown_clip_is_a_no_op() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_push_clip(clip(7, 1));
 
     // No clip 99 — must not panic or mutate the existing clip.
@@ -175,7 +175,7 @@ fn pitch_detected_for_unknown_clip_is_a_no_op() {
 
 #[test]
 fn opening_editor_on_vocal_clip_records_it() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_vocal(1, 0));
     app.test_push_clip(clip(7, 1));
@@ -187,7 +187,7 @@ fn opening_editor_on_vocal_clip_records_it() {
 
 #[test]
 fn opening_editor_on_non_vocal_clip_is_a_no_op() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_audio(1, 0));
     app.test_push_clip(clip(7, 1));
@@ -203,7 +203,7 @@ fn opening_editor_on_non_vocal_clip_is_a_no_op() {
 
 #[test]
 fn opening_editor_on_unknown_clip_is_a_no_op() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_vocal(1, 0));
 
@@ -215,7 +215,7 @@ fn opening_editor_on_unknown_clip_is_a_no_op() {
 
 #[test]
 fn closing_editor_clears_the_open_clip() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_vocal(1, 0));
     app.test_push_clip(clip(7, 1));

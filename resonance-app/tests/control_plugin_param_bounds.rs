@@ -29,7 +29,7 @@ const F32_MAX_NINE_TENTHS: f64 = 0.9f32 as f64;
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-param-bounds.rprj"));
     app.test_add_track(TRACK, TrackType::Instrument);

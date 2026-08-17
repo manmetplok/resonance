@@ -70,7 +70,7 @@ fn socket_hello_and_stub_method_round_trip() {
 
     // The test is the update loop: pump each bridge event through the
     // real `update()` path, exactly like the subscription does.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let connected = next_event(&mut rx);
     assert!(matches!(connected, ControlMessage::Connected { .. }));
     let _ = app.update(Message::Control(connected));

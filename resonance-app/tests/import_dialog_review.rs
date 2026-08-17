@@ -119,7 +119,7 @@ fn parsed() -> ParsedImport {
 /// representative content dimmed behind the overlay.
 fn build_app_with_import_review() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Compose);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     // Seeds tracks/clips and flips `has_active_project` so the import
     // overlay isn't gated by the startup modal.
     demo::seed_demo_content(&mut app);

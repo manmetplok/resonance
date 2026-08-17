@@ -49,7 +49,7 @@ fn clip(id: u64) -> ClipState {
 /// App + capturing engine, sample rate / zoom fixed for deterministic
 /// pixel→frame conversions, with `clip(7)` already present.
 fn app_with_clip() -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     app.test_set_sample_rate(SR);
     app.test_set_arrange_zoom(ZOOM);

@@ -34,7 +34,7 @@ fn note(start_tick: u64) -> MidiNote {
 }
 
 fn app_with_open_clip(count: usize) -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     app.test_push_midi_clip(MidiClipState {
         id: CLIP,

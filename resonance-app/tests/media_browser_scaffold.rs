@@ -43,7 +43,7 @@ fn sim_settings() -> iced::Settings {
 /// Build the demo app on the Arrange tab, where the media browser lives.
 fn build_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     // Belt-and-braces in case another test in this binary set STARTUP_TAB
     // to something else first (OnceLock makes our set a no-op then).

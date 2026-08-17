@@ -134,7 +134,7 @@ fn dispatch(app: &mut Resonance, m: ProjectIoMessage) {
 #[test]
 fn autosave_completion_keeps_dirty_and_records_autosave_time() {
     isolate_user_config();
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Mark the session as an active project so interactive edits aren't
     // gated, then make one edit to dirty it. (`ProjectSaved` is never
@@ -174,7 +174,7 @@ fn autosave_completion_keeps_dirty_and_records_autosave_time() {
 #[test]
 fn manual_save_completion_clears_dirty_and_records_save_time() {
     isolate_user_config();
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     assert!(!app.is_dirty());
 
     dispatch(&mut app, ProjectIoMessage::ProjectSaved(Ok(()), false));
@@ -191,7 +191,7 @@ fn manual_save_completion_clears_dirty_and_records_save_time() {
 #[test]
 fn manual_save_with_path_adds_to_recents() {
     isolate_user_config();
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let dir = TempDir::new("recents");
     let project = dir.path().join("MyProject");
     let recents_before = app.recent_project_count();
@@ -225,7 +225,7 @@ fn manual_save_with_path_adds_to_recents() {
 #[test]
 fn autosave_of_never_saved_project_targets_a_scratch_dir() {
     isolate_user_config();
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     assert!(app.last_autosave_at().is_none());
 
     // No project path set → the autosave snapshots into a per-session

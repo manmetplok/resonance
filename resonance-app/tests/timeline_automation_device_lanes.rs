@@ -224,7 +224,7 @@ fn sim_settings() -> iced::Settings {
 /// only automation is a DeviceParam lane on the filter cutoff.
 fn build_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Arrange);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));

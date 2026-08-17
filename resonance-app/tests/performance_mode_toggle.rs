@@ -35,7 +35,7 @@ fn switch(app: &mut Resonance, mode: ViewMode) {
 
 #[test]
 fn f_toggles_into_and_back_out_of_performance() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Compose);
 
@@ -49,7 +49,7 @@ fn f_toggles_into_and_back_out_of_performance() {
 
 #[test]
 fn esc_exits_performance_restoring_previous_view() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Mixer);
 
@@ -62,7 +62,7 @@ fn esc_exits_performance_restoring_previous_view() {
 
 #[test]
 fn esc_is_a_noop_outside_performance() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Arrange);
 
@@ -76,7 +76,7 @@ fn esc_is_a_noop_outside_performance() {
 
 #[test]
 fn switching_tabs_while_in_performance_clears_the_return_view() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Compose);
 
@@ -98,7 +98,7 @@ fn switching_tabs_while_in_performance_clears_the_return_view() {
 
 #[test]
 fn entering_via_tab_button_then_esc_returns_to_source() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Arrange);
 
@@ -112,7 +112,7 @@ fn entering_via_tab_button_then_esc_returns_to_source() {
 
 #[test]
 fn entering_and_leaving_preserves_transport_playing() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Arrange);
     app.test_set_transport_playing(true);
@@ -138,7 +138,7 @@ fn typing_f_while_a_text_field_is_focused_does_not_toggle() {
     // even while a text input is focused, so pressing `f` while editing a
     // track name / BPM / lyrics field must NOT flip Performance mode. The
     // focus probe resolves `editing = true`; the toggle is suppressed.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Compose);
 
@@ -164,7 +164,7 @@ fn typing_f_while_a_text_field_is_focused_does_not_toggle() {
 fn pressing_f_with_no_text_field_focused_toggles() {
     // The complement of the regression test: when nothing is being edited
     // the focus probe resolves `editing = false` and `F` toggles as normal.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Mixer);
 
@@ -181,7 +181,7 @@ fn pressing_f_with_no_text_field_focused_toggles() {
 
 #[test]
 fn arming_a_track_never_auto_opens_performance() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     app.test_set_view_mode(ViewMode::Arrange);
 

@@ -272,7 +272,7 @@ fn sim_settings() -> iced::Settings {
 /// demo tracks 2 (Synth Bass) and 3 (Synth Pad) into group 9000.
 fn build_app_with_group() -> (Resonance, TrackId) {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(

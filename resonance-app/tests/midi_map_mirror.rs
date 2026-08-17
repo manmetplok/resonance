@@ -27,7 +27,7 @@ fn cc_binding(id: u64, cc: u8, target: MidiTarget) -> MidiBinding {
 
 #[test]
 fn binding_changed_upserts_and_indexes_source() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let b = cc_binding(1, 7, MidiTarget::TrackVolume(42));
 
     app.test_apply_engine_event(AudioEvent::MidiBindingChanged { binding: b });
@@ -41,7 +41,7 @@ fn binding_changed_upserts_and_indexes_source() {
 
 #[test]
 fn binding_changed_replaces_in_place_and_remaps_source() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_apply_engine_event(AudioEvent::MidiBindingChanged {
         binding: cc_binding(1, 7, MidiTarget::TrackVolume(42)),
     });
@@ -65,7 +65,7 @@ fn binding_changed_replaces_in_place_and_remaps_source() {
 
 #[test]
 fn binding_cleared_removes_binding_and_source_entry() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let b = cc_binding(1, 7, MidiTarget::TrackVolume(42));
     app.test_apply_engine_event(AudioEvent::MidiBindingChanged { binding: b });
 
@@ -78,7 +78,7 @@ fn binding_cleared_removes_binding_and_source_entry() {
 
 #[test]
 fn clearing_an_unknown_binding_is_a_no_op() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_apply_engine_event(AudioEvent::MidiBindingChanged {
         binding: cc_binding(1, 7, MidiTarget::TrackVolume(42)),
     });
@@ -91,7 +91,7 @@ fn clearing_an_unknown_binding_is_a_no_op() {
 
 #[test]
 fn controller_map_replay_rebuilds_the_whole_set() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     // A SetControllerMap / project-load replay arrives as a stream of
     // per-binding MidiBindingChanged events.
     for (id, cc, target) in [
@@ -111,7 +111,7 @@ fn controller_map_replay_rebuilds_the_whole_set() {
 
 #[test]
 fn learn_captured_records_binding_and_clears_learn_mode() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = MidiTarget::TrackSolo(5);
     app.test_arm_midi_learn(target);
     assert_eq!(app.test_midi_map().learn_target, Some(target));
@@ -140,7 +140,7 @@ fn learn_captured_records_binding_and_clears_learn_mode() {
 
 #[test]
 fn learn_captured_allocates_ids_clear_of_existing_bindings() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     // A project-loaded binding already occupies a high id.
     app.test_apply_engine_event(AudioEvent::MidiBindingChanged {
         binding: cc_binding(100, 7, MidiTarget::TrackVolume(1)),
@@ -165,7 +165,7 @@ fn learn_captured_allocates_ids_clear_of_existing_bindings() {
 
 #[test]
 fn control_surface_param_changed_stashes_live_value() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = MidiTarget::TrackVolume(3);
 
     app.test_apply_engine_event(AudioEvent::ControlSurfaceParamChanged {
@@ -178,7 +178,7 @@ fn control_surface_param_changed_stashes_live_value() {
 
 #[test]
 fn control_surface_devices_changed_refreshes_inputs() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
 
     app.test_apply_engine_event(AudioEvent::ControlSurfaceDevicesChanged {
         inputs: vec!["Launch Control".to_string(), "nanoKONTROL".to_string()],

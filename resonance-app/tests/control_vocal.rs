@@ -22,7 +22,7 @@ use resonance_control::{ErrorKind, KeyScale, MutationAck, Request, Response};
 
 fn app_with_project() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-vocal-test.rprj"));
     app
@@ -542,7 +542,7 @@ fn render_with_empty_draft_fails_the_job() {
 #[test]
 fn vocal_without_project_is_busy() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let response = call(
         &mut app,
         "vocal.set_lyrics",

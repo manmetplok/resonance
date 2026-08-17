@@ -41,7 +41,7 @@ fn sim_settings() -> iced::Settings {
 /// tab. `seed` populates the Files-tab folder state.
 fn build_files_app(seed: impl FnOnce(&mut Resonance)) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Ui(
         resonance_app::message::UiMessage::SwitchView(ViewMode::Arrange),

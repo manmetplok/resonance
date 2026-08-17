@@ -15,7 +15,7 @@ use resonance_common::{
 
 /// One audio track at a known volume so seeding has something to read.
 fn app_with_track(id: u64, volume_db: f32) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     let mut track = TrackState::new_audio(id, 0);
     track.volume = volume_db;
@@ -276,7 +276,7 @@ fn undo_redo_round_trips_an_added_lane() {
 
 #[test]
 fn edits_are_gated_without_an_active_project() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     // No active project: the startup-modal gate must swallow automation
     // edits just like every other project-mutating message.
     send(&mut app, AutomationMessage::AddLane(AutomationTarget::MasterGain));

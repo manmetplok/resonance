@@ -19,7 +19,7 @@ const SAMPLE_RATE: u32 = 48_000;
 /// swallowed by the startup-modal gate) on a deterministic 120 BPM / 4-4
 /// grid, matching the marker-reducer test fixture.
 fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_sample_rate(SAMPLE_RATE);
     let _ = app.update(Message::Transport(TransportMessage::SetBpmText("120".into())));

@@ -38,7 +38,7 @@ fn sim_settings() -> iced::Settings {
 /// markers, with the markers overview popover toggled open.
 fn build_app_with_overview_open() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     app.test_add_marker(ArrangementMarker::new_point(

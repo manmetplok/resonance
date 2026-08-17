@@ -19,7 +19,7 @@ const SAMPLE_RATE: u32 = 48_000;
 /// A fresh app with an active project (so marker / UI messages aren't
 /// swallowed by the startup-modal gate) at a deterministic 120 BPM grid.
 fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_sample_rate(SAMPLE_RATE);
     let _ = app.update(Message::Transport(TransportMessage::SetBpmText("120".into())));

@@ -16,7 +16,7 @@ use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 /// command-side freeze handlers (used to set up `Freezing` state) can
 /// derive a cache path. Returns the app and the temp dir (kept alive).
 fn app() -> (Resonance, tempfile::TempDir) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let _rx = app.test_capture_engine();
     let dir = tempfile::tempdir().expect("temp project dir");
     app.test_set_project_path(dir.path().to_path_buf());

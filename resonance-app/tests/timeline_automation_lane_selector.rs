@@ -185,7 +185,7 @@ fn chip_rect_covers_the_drawn_label() {
 /// App with an active project, one instrument track, and three lanes on it
 /// (gain, pan, one device param), seeded through the normal edit path.
 fn app_with_three_lanes() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     for target in [
@@ -241,7 +241,7 @@ fn cycle_message_advances_and_wraps_and_selection_survives_redraws() {
 
 #[test]
 fn cycle_message_on_a_laneless_track_is_a_no_op() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     app.test_dispatch(Message::Automation(AutomationMessage::CycleTrackLane(
@@ -294,7 +294,7 @@ fn sim_settings() -> iced::Settings {
 fn build_demo_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(

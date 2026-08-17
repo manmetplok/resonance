@@ -50,7 +50,7 @@ fn clip(
 }
 
 fn app_with_clip(c: ClipState) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let _rx = app.test_capture_engine();
     app.test_set_sample_rate(SR);
     app.test_push_clip(c);

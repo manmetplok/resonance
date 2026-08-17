@@ -46,7 +46,7 @@ fn snapshot_dir(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 #[test]
 fn builtin_lands_a_fresh_untitled_project() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
 
     instantiate_builtin(&mut app, BuiltinTemplateId::Beatmaking);
     // The engine confirms the clear; that's what triggers the replay.
@@ -67,7 +67,7 @@ fn builtin_lands_a_fresh_untitled_project() {
 
 #[test]
 fn instantiating_over_an_open_project_clears_the_path() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     // Stand in for a project the user had open and saved.
     app.test_set_project_path(PathBuf::from("/tmp/some/existing.rproj"));
     app.test_set_active_project(true);
@@ -109,7 +109,7 @@ fn user_template_replays_and_leaves_the_source_untouched() {
 
     // Instantiate: load the template off disk and replay it.
     let loaded = load_project(&folder).expect("load_project");
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     begin_instantiate(&mut app, Box::new(loaded));
     app.test_apply_engine_event(AudioEvent::AllCleared);
 
@@ -144,7 +144,7 @@ fn template_loaded_message_routes_to_a_fresh_untitled_project() {
     .expect("write_template");
     let loaded = load_project(&folder).expect("load_project");
 
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     // Drive the real handler: the async load task maps its result to this
     // message. `ProjectIo` messages pass the startup-modal gate.
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::TemplateLoaded(Ok(

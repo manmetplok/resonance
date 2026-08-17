@@ -16,7 +16,7 @@ use resonance_control::{ErrorKind, KeyScale, Request, Response};
 
 fn app_with_project() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-generate-test.rprj"));
     app
@@ -876,7 +876,7 @@ fn drums_named_pattern_is_pinned() {
 #[test]
 fn generate_without_project_is_busy() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let params = proto::PartParams {
         section_id: SectionDefinitionId(1),
         track_id: ProtoTrackId(1),

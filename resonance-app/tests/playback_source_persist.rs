@@ -16,7 +16,7 @@ use resonance_common::PlaybackSource;
 const TRACK: TrackId = 1;
 
 fn app_with_track() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     app

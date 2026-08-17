@@ -50,7 +50,7 @@ fn sim_settings() -> iced::Settings {
 /// Build a demo app with the arrange view active.
 fn demo_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     app
 }

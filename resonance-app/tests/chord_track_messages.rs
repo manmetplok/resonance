@@ -19,7 +19,7 @@ use resonance_music_theory::{parse_chord, Chord, ChordQuality, Mode, PitchClass,
 /// gated) and snapping disabled (zoom 0 → identity snap).
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // A saved path is required for undo recording (`can_record_undo`).
     app.test_set_project_path(std::path::PathBuf::from("/tmp/chord-test.rprj"));

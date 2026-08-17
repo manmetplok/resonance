@@ -19,7 +19,7 @@ use resonance_app::Resonance;
 use resonance_audio::types::{ABSource, ReferenceId};
 
 fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/tmp/reference-persist-test.rsn"));
     app

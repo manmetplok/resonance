@@ -18,14 +18,14 @@ use resonance_audio::types::{AudioCommand, AudioEvent, TrackId};
 
 const TRACK: TrackId = 1;
 /// The bundled Moog Muse preset ships in the registry (`resonance-common`
-/// bundled definitions), so `Resonance::new()` always has it available.
+/// bundled definitions), so `Resonance::new_for_test()` always has it available.
 const MUSE: &str = "moog-muse";
 
 /// App with an active project and a single instrument track already marked as
 /// an external instrument, plus a command-capturing engine. The `Enable`
 /// dispatch's own commands are drained by the caller before asserting.
 fn external_capturing_app() -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     let rx = app.test_capture_engine();
@@ -128,7 +128,7 @@ fn unknown_device_id_dispatches_empty_params() {
 
 #[test]
 fn select_device_ignored_for_non_external_track() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     let rx = app.test_capture_engine();
@@ -151,7 +151,7 @@ fn select_device_ignored_for_non_external_track() {
 
 #[test]
 fn applied_params_event_mirrors_into_state() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     app.test_dispatch(Message::ExternalInstrument(Eim::Enable(TRACK)));
@@ -177,7 +177,7 @@ fn applied_params_event_mirrors_into_state() {
 
 #[test]
 fn undo_redo_round_trips_device_selection() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/resonance-test-724"));
     app.test_push_track(TrackState::new_instrument(TRACK, 0));

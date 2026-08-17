@@ -21,7 +21,7 @@ use resonance_audio::types::AudioCommand;
 /// App with an active, saved project so the startup-modal gate lets Pool
 /// messages through and `import()` has a `project_path` to write into.
 fn app_with_project() -> (Resonance, resonance_audio::__test_support::Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/proj/song.rproj"));
     let rx = app.test_capture_engine();
@@ -156,7 +156,7 @@ fn window_audio_drop_multiple_files_queues_each_separately() {
 #[test]
 fn window_audio_drop_gated_without_active_project() {
     let (mut app, rx) = {
-        let (mut a, _task) = Resonance::new();
+        let (mut a, _task) = Resonance::new_for_test();
         // No test_set_active_project — startup modal owns the screen.
         let rx = a.test_capture_engine();
         (a, rx)
@@ -180,7 +180,7 @@ fn pick_files_gated_without_active_project() {
     // PickFiles opens the OS dialog via a Task — no state changes at dispatch
     // time. The gate should swallow it before the task is even scheduled.
     let (mut app, rx) = {
-        let (mut a, _task) = Resonance::new();
+        let (mut a, _task) = Resonance::new_for_test();
         let rx = a.test_capture_engine();
         (a, rx)
     };
@@ -234,7 +234,7 @@ fn window_audio_drop_sets_error_when_project_is_unsaved() {
     // AND no engine commands (AddTrack / ImportAudioToPool) must be emitted.
     // Previously resolve_target was called before the project-path guard,
     // leaking an orphan AddTrack on every drop onto an unsaved project.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // No project_path set — io.project_path is None.
     let rx = app.test_capture_engine();

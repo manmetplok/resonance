@@ -41,7 +41,7 @@ fn asset_imported(asset_id: u64) -> AudioEvent {
 
 #[test]
 fn import_progress_queued_stage_is_tracked() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportProgress {
         asset_id: 1,
@@ -61,7 +61,7 @@ fn import_progress_queued_stage_is_tracked() {
 
 #[test]
 fn import_progress_working_stage_updates_entry_in_place() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportProgress {
         asset_id: 2,
@@ -85,7 +85,7 @@ fn import_progress_working_stage_updates_entry_in_place() {
 
 #[test]
 fn import_progress_done_stage_marks_entry_done() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportProgress {
         asset_id: 3,
@@ -114,7 +114,7 @@ fn import_progress_done_stage_marks_entry_done() {
 
 #[test]
 fn multiple_files_get_independent_entries() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportProgress {
         asset_id: 10,
@@ -138,7 +138,7 @@ fn multiple_files_get_independent_entries() {
 
 #[test]
 fn batch_is_complete_when_all_entries_are_terminal() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportProgress {
         asset_id: 20,
@@ -160,7 +160,7 @@ fn batch_is_complete_when_all_entries_are_terminal() {
 
 #[test]
 fn import_failed_records_failed_entry_in_tracker() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportFailed {
         asset_id: 5,
@@ -184,7 +184,7 @@ fn import_failed_records_failed_entry_in_tracker() {
 fn import_failed_updates_existing_tracker_entry_in_place() {
     // If ImportProgress Queued arrived first, ImportFailed should
     // transition the same row to Failed (no duplicate entry).
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportProgress {
         asset_id: 6,
@@ -207,7 +207,7 @@ fn import_failed_updates_existing_tracker_entry_in_place() {
 
 #[test]
 fn import_failed_sets_error_message() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::ImportFailed {
         asset_id: 7,
@@ -228,7 +228,7 @@ fn import_failed_sets_error_message() {
 
 #[test]
 fn asset_imported_adds_asset_to_pool() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(asset_imported(42));
 
@@ -238,7 +238,7 @@ fn asset_imported_adds_asset_to_pool() {
 
 #[test]
 fn asset_imported_idempotent_on_duplicate_event() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(asset_imported(43));
     app.test_apply_engine_event(asset_imported(43));
@@ -254,7 +254,7 @@ fn asset_imported_idempotent_on_duplicate_event() {
 
 #[test]
 fn audition_position_updates_playhead_frame() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::AuditionPosition { frame: 12_345 });
 
@@ -263,7 +263,7 @@ fn audition_position_updates_playhead_frame() {
 
 #[test]
 fn audition_position_is_updated_on_each_event() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     app.test_apply_engine_event(AudioEvent::AuditionPosition { frame: 100 });
     app.test_apply_engine_event(AudioEvent::AuditionPosition { frame: 200 });
@@ -278,7 +278,7 @@ fn audition_position_is_updated_on_each_event() {
 
 #[test]
 fn audition_stopped_clears_playing_row_and_resets_position() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Simulate a playing state by going through the browser update path.
     // The simplest way without the browser handler is to note that the
@@ -301,7 +301,7 @@ fn audition_stopped_clears_playing_row_and_resets_position() {
 
 #[test]
 fn audition_stopped_when_nothing_playing_is_a_noop() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Nothing playing — must not panic or corrupt state.
     app.test_apply_engine_event(AudioEvent::AuditionStopped);

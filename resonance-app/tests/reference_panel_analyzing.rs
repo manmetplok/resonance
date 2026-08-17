@@ -43,7 +43,7 @@ fn reference_panel_analyzing() {
     // where the reference rail and its chrome toggle live.
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_minimal_drum_track_no_busses(&mut app);
 
     // Belt-and-braces in case another test in this binary already set the

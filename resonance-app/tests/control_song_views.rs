@@ -73,7 +73,7 @@ fn section_definition(id: u64, name: &str, length_bars: u32) -> SectionDefinitio
 /// project dictionary entry.
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_sample_rate(SR);
     app.test_rebuild_tempo_map();
     app.test_set_active_project(true);

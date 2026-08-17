@@ -28,7 +28,7 @@ const SECTION_TICKS: u64 = SECTION_BARS as u64 * 4 * 480;
 
 fn app_with_project() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/drum-coverage.rprj"));
     app

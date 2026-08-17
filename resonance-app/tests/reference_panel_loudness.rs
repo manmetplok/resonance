@@ -85,7 +85,7 @@ fn reference_meter() -> MeterSnapshot {
 /// the comparative loudness readout renders live values.
 fn app_with_metered_reference() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_minimal_drum_track_no_busses(&mut app);
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
     let _ = app.update(Message::Ui(UiMessage::ToggleReferencePanel));

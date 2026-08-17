@@ -63,7 +63,7 @@ fn sim_settings() -> iced::Settings {
 /// helper seeds them expanded by default).
 fn build_app(expanded: bool) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_with_drum_subtracks(&mut app);
     // Two of the seeded instruments declare a GUI, so these goldens
     // pixel-check the plugin slot in the configuration all eleven
@@ -151,7 +151,7 @@ fn mixer_sub_tracks_collapsed() {
 /// assert the resulting sequence has the cluster shape we want.
 #[test]
 fn mixer_sub_track_render_order_groups_with_parent() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     demo::seed_demo_with_drum_subtracks(&mut app);
 
     let registry = app.test_registry();

@@ -23,7 +23,7 @@ const TRACK: TrackId = 1;
 
 /// Fresh app with an active project and a single instrument track.
 fn app_with_track() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     app

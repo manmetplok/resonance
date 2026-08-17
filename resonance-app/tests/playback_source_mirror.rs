@@ -13,7 +13,7 @@ use resonance_common::PlaybackSource;
 const TRACK: TrackId = 1;
 
 fn app_with_track() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // Undo bookkeeping only arms once a project path exists (the same
     // setup `reference_undo.rs` uses).

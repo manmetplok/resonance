@@ -51,7 +51,7 @@ fn audio_track(id: u64, order: usize, name: &str) -> TrackState {
 /// with a 44.1 → 48 kHz conversion note.
 fn build_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_sample_rate(SR);
     app.test_set_arrange_zoom(ZOOM);

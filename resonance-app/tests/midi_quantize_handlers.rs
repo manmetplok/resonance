@@ -34,7 +34,7 @@ fn note(start_tick: u64) -> MidiNote {
 /// notes (note `i` starts a little off the grid). Returns the app + the
 /// command receiver.
 fn app_with_open_clip(count: usize) -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     app.test_push_midi_clip(MidiClipState {
         id: CLIP,
@@ -132,7 +132,7 @@ fn quantize_with_selection_targets_only_selected_in_range() {
 
 #[test]
 fn bulk_op_with_no_open_editor_is_a_noop() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     // No clip pushed, no editor opened.
     app.test_dispatch(Message::MidiEditor(MidiEditorMessage::Quantize {

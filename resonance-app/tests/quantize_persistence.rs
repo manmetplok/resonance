@@ -38,7 +38,7 @@ fn custom_settings() -> QuantizeSettings {
 
 #[test]
 fn build_project_file_captures_grooves_and_settings() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     let q = app.test_quantize_mut();
     q.groove_library.push(UserGroove {
@@ -68,7 +68,7 @@ fn build_project_file_captures_grooves_and_settings() {
 #[test]
 fn grooves_and_settings_round_trip_identically() {
     // -- Author a project with a groove library + custom settings ----
-    let (mut authored, _t1) = Resonance::new();
+    let (mut authored, _t1) = Resonance::new_for_test();
     {
         let q = authored.test_quantize_mut();
         q.groove_library.push(UserGroove {
@@ -91,7 +91,7 @@ fn grooves_and_settings_round_trip_identically() {
     let reloaded: ProjectFile = serde_json::from_str(&json).expect("deserialize project");
 
     // -- Restore into a fresh app via the production restore path -----
-    let (mut restored, _t2) = Resonance::new();
+    let (mut restored, _t2) = Resonance::new_for_test();
     restored.test_restore_quantize(&reloaded);
 
     let q = restored.test_quantize();
@@ -127,7 +127,7 @@ fn legacy_project_without_quantize_loads_clean() {
     assert_eq!(file.quantize_settings, QuantizeSettings::default());
 
     // Restoring the empty legacy block is a clean no-op on a fresh app.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_restore_quantize(&file);
     assert!(app.test_quantize().groove_library.is_empty());
     assert_eq!(app.test_quantize().settings, QuantizeSettings::default());

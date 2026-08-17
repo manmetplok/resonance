@@ -147,7 +147,7 @@ fn remove_key_change_drops_it() {
 #[test]
 fn chord_track_survives_undo_snapshot_round_trip() {
     let _ = STARTUP_TAB.set(resonance_app::state::ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Stage an initial progression + key.
     {

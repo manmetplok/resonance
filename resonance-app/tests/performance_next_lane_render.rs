@@ -58,7 +58,7 @@ fn maj(root: PitchClass) -> Chord {
 /// bar 0 — so the default playhead (sample 0) lands on the first chord and the
 /// lane previews the next three.
 fn perform_with_progression() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
 
     let chords = vec![
@@ -82,7 +82,7 @@ fn renders_lane_with_upcoming_chords() {
 
 #[test]
 fn renders_lane_with_a_slash_chord_upcoming() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     let chords = vec![
         chord_state(20, 0, 4, maj(PitchClass::C)),
@@ -97,7 +97,7 @@ fn renders_lane_with_a_slash_chord_upcoming() {
 
 #[test]
 fn renders_empty_lane_with_no_progression() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Performance);
     // No placed sections: the lane shows the "no upcoming chords" empty state.

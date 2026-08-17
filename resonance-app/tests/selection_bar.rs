@@ -63,7 +63,7 @@ fn snapshot_to(app: &Resonance, count: usize, path: &str) {
 /// Pill should read "2 tracks selected · … — Group ⌘G".
 #[test]
 fn selection_bar_two_tracks() {
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     snapshot_to(&app, 2, "tests/snapshots/selection_bar_two_tracks.png");
 }
 
@@ -71,6 +71,6 @@ fn selection_bar_two_tracks() {
 /// Pill should read "5 tracks selected · … — Group ⌘G".
 #[test]
 fn selection_bar_many_tracks() {
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     snapshot_to(&app, 5, "tests/snapshots/selection_bar_many_tracks.png");
 }

@@ -29,7 +29,7 @@ use resonance_control::{ErrorKind, MutationAck, Request, Response};
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-master-params.rprj"));
     app.test_apply_engine_event(AudioEvent::PluginsScanned {
@@ -260,7 +260,7 @@ fn occurrence_picks_the_right_copy_of_a_repeated_effect() {
 #[test]
 fn the_new_methods_need_an_open_project() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(false);
 
     for (method, params) in [

@@ -55,7 +55,7 @@ fn sim_settings() -> iced::Settings {
 /// expanded state.
 fn build_app(expand_shelf: bool) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     if expand_shelf {
         let _ = app.update(Message::Ui(UiMessage::ToggleGlobalTracks));

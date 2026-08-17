@@ -66,7 +66,7 @@ fn snapshot_track_header(app: &Resonance, path: &str) {
 /// on the left edge matching the Drums identity colour.
 #[test]
 fn group_identity_rail_single_member() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     
     // Create a group
     let group_id = 1000;
@@ -102,7 +102,7 @@ fn group_identity_rail_single_member() {
 /// Drums (outermost, depth 0) then Vocals (nested, depth 1).
 #[test]
 fn group_identity_rail_nested_member() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     
     // Create parent group (Drums, depth 0)
     let parent_id = 1000;

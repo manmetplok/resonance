@@ -45,7 +45,7 @@ fn sim_settings() -> iced::Settings {
 /// ROUTING / CHAIN stack rather than the empty placeholder.
 fn build_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     // Belt-and-braces in case another test in this binary set
     // STARTUP_TAB to something else first (OnceLock makes our set a

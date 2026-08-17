@@ -65,7 +65,7 @@ fn clip(id: u64, track_id: u64) -> ClipState {
 
 /// A live arrange-view app with a single audio clip, optionally selected.
 fn app_with_clip(clip: ClipState, select: bool) -> Resonance {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Arrange);
     app.test_set_sample_rate(SAMPLE_RATE);
@@ -131,7 +131,7 @@ fn source_less_clip_degrades_to_banner() {
 #[test]
 fn frozen_clip_degrades_to_banner() {
     let app = {
-        let mut app = Resonance::new().0;
+        let mut app = Resonance::new_for_test().0;
         app.test_set_active_project(true);
         app.test_set_view_mode(ViewMode::Arrange);
         app.test_set_sample_rate(SAMPLE_RATE);

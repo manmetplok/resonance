@@ -416,6 +416,22 @@ pub fn parse_startup_tab() -> Option<ViewMode> {
     None
 }
 
+/// How much of the host machine a [`Resonance`] may read while assembling
+/// itself (ba doc #285).
+///
+/// This is the *only* difference between [`Resonance::new`] and
+/// [`Resonance::new_for_test`]; both build the same struct the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Host {
+    /// The real app: read the user's recents, settings, saved track presets
+    /// and user-authored device definitions from disk.
+    Machine,
+    /// Tests: touch nothing outside the process. Every one of those starts
+    /// empty, so a test's result cannot depend on what is in `~/.config` —
+    /// and cannot be changed by a test that writes there.
+    None,
+}
+
 impl Resonance {
     /// Read-only view onto the Compose tab's runtime state. Surfaced
     /// so integration tests (`tests/*.rs`) can interrogate section /
@@ -535,6 +551,10 @@ impl Resonance {
     /// builder. Spins up the real audio engine, requests initial device /
     /// plugin lists, and seeds an empty project. On engine init failure
     /// shows a native error dialog and exits — there is no headless path.
+    ///
+    /// Tests should call [`Resonance::new_for_test`] instead: this opens a real
+    /// output stream, probes the machine's audio devices and loads whatever
+    /// plugins are installed on it (ba doc #285).
     pub fn new() -> (Self, iced::Task<Message>) {
         let engine = match AudioEngine::new() {
             Ok(engine) => engine,
@@ -565,8 +585,64 @@ impl Resonance {
         let _ = engine.send(AudioCommand::ListMidiOutputDevices);
         let _ = engine.send(AudioCommand::ScanPlugins);
 
-        let recent_projects = recent::load();
-        let settings = settings::load();
+        (Self::assemble(engine, Host::Machine), iced::Task::none())
+    }
+
+    /// Construct the application state with nothing of the host machine
+    /// attached: a command-capturing engine (no output stream, no engine
+    /// thread, no device enumeration, no `pw-metadata`/`pactl` subprocesses),
+    /// no plugin scan, and no reads of the user's config — recents, settings
+    /// and user presets all start empty.
+    ///
+    /// This is what integration tests want. Calling [`Resonance::new`] from a
+    /// test makes the result depend on the machine it runs on: which audio
+    /// device is free, which `.clap` files are installed, what is in
+    /// `~/.config`. That is not hypothetical — a third-party plugin's broken
+    /// teardown was aborting test processes at random until 60d13fb3, purely
+    /// because tests loaded it (ba doc #285).
+    ///
+    /// Commands the app sends are accepted and thrown away. They have to be
+    /// *accepted*: `AudioEngine::send` fails once its receiver is gone, and the
+    /// app has real error paths behind that failure (`meter.measure` reports a
+    /// dead engine rather than going pending, for one), so a hermetic engine
+    /// that refused commands would quietly put tests on branches the live app
+    /// never takes. A drain thread holds the receiving end and exits by itself
+    /// when the engine is dropped.
+    ///
+    /// A test that wants to *assert* on the commands should use
+    /// [`Resonance::new_for_test_with_capture`], or install a fresh channel
+    /// mid-test with [`Resonance::test_capture_engine`].
+    #[doc(hidden)]
+    pub fn new_for_test() -> (Self, iced::Task<Message>) {
+        let (app, task, cmd_rx) = Self::new_for_test_with_capture();
+        std::thread::spawn(move || while cmd_rx.recv().is_ok() {});
+        (app, task)
+    }
+
+    /// [`Resonance::new_for_test`], handing back the receiver its engine's
+    /// commands queue onto so a test can assert on them from construction
+    /// onwards — including asserting that construction emitted nothing.
+    #[doc(hidden)]
+    pub fn new_for_test_with_capture() -> (
+        Self,
+        iced::Task<Message>,
+        resonance_audio::__test_support::Receiver<AudioCommand>,
+    ) {
+        let (engine, cmd_rx) = AudioEngine::for_test_capture();
+        (Self::assemble(engine, Host::None), iced::Task::none(), cmd_rx)
+    }
+
+    /// Build the application state around an already-constructed `engine`.
+    ///
+    /// Split out of [`Resonance::new`] so [`Resonance::new_for_test`] can share
+    /// every bit of assembly while reading none of the machine state. `host`
+    /// decides only what gets read from outside the process; the resulting
+    /// struct is put together identically either way.
+    fn assemble(engine: AudioEngine, host: Host) -> Self {
+        let (recent_projects, settings) = match host {
+            Host::Machine => (recent::load(), settings::load()),
+            Host::None => (Vec::new(), settings::AppSettings::default()),
+        };
         // Per-process session id: pid + startup nanos. Cheap, dependency
         // free, and unique enough to namespace the autosave scratch dir.
         let session_id = {
@@ -581,10 +657,15 @@ impl Resonance {
         // any user-authored definitions (last-wins by id). Built once here so
         // the External-Instrument inspector's device picker and the
         // `SetTrackDeviceParams` resolution read a stable list.
+        // `scan_bundled` reads definitions embedded at compile time, so it is
+        // hermetic and always runs; only the user-authored directory is a read
+        // of machine state.
         let mut device_registry = resonance_common::DeviceDefinitionRegistry::default();
         device_registry.scan_bundled();
-        if let Some(dir) = resonance_common::user_definitions_dir() {
-            device_registry.scan_dir(&dir);
+        if matches!(host, Host::Machine) {
+            if let Some(dir) = resonance_common::user_definitions_dir() {
+                device_registry.scan_dir(&dir);
+            }
         }
         // Seed the cached device-preset pick-list options from the registry so
         // the inspector clones a refcounted slice instead of rebuilding the
@@ -686,7 +767,10 @@ impl Resonance {
             settings,
             session_id,
             default_presets: presets::default_presets(),
-            user_presets: presets::load_user_presets(),
+            user_presets: match host {
+                Host::Machine => presets::load_user_presets(),
+                Host::None => Vec::new(),
+            },
             pending_track_preset: None,
             pending_preset_save: None,
             pending_preset_plugin_states: None,
@@ -697,7 +781,7 @@ impl Resonance {
         // frame (rendered before the first `Tick`) shows real values.
         app.refresh_transport_labels();
 
-        (app, iced::Task::none())
+        app
     }
 
     /// [`Resonance::new`] plus the unix-socket control endpoint (ba doc

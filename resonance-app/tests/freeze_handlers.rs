@@ -22,7 +22,7 @@ use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 /// the freeze handlers can derive a cache path. Returns the app, the
 /// command receiver, and the temp dir (kept alive for the test's lifetime).
 fn capturing_app() -> (Resonance, Receiver<AudioCommand>, tempfile::TempDir) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     let dir = tempfile::tempdir().expect("temp project dir");
     // Anchor the project at a `.rproj` bundle inside the temp dir so the
@@ -115,7 +115,7 @@ fn freeze_audio_track_rejected() {
 
 #[test]
 fn freeze_without_saved_project_fails() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     // No project path set — there's nowhere to write the cache.
     app.test_add_track(1, TrackType::Instrument);

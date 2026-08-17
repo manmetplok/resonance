@@ -42,7 +42,7 @@ fn sim_settings() -> iced::Settings {
 /// inspector renders the named-patch Patch card.
 fn build_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));

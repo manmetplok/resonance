@@ -59,7 +59,7 @@ fn sim_settings() -> iced::Settings {
 fn build_app_with_group() -> (Resonance, TrackId) {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     // Report a realistic viewport so virtualization + scroll clamping
@@ -121,7 +121,7 @@ fn timeline_group_lane_collapsed() {
 fn timeline_group_lane_collapsed_nested_overview() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,

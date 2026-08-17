@@ -67,7 +67,7 @@ fn snapshot_track_header(app: &Resonance, path: &str) {
 /// so the small amber "S·grp" pill appears to the left of the button row.
 #[test]
 fn group_member_track_header_via_group_solo() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     
     // Create a group with macro_solo enabled
     let group_id = 1000;
@@ -108,7 +108,7 @@ fn group_member_track_header_via_group_solo() {
 /// appears to the left of the button row (left of the solo chip's slot).
 #[test]
 fn group_member_track_header_via_group_mute() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Create a group with macro_mute enabled.
     let group_id = 1000;

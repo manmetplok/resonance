@@ -26,14 +26,14 @@ use resonance_audio::types::{AudioCommand, TrackId};
 
 const TRACK: TrackId = 1;
 /// The bundled Moog Muse preset ships in the registry (`resonance-common`
-/// bundled definitions), so `Resonance::new()` always has it available. Its
+/// bundled definitions), so `Resonance::new_for_test()` always has it available. Its
 /// 256 factory patches are grouped by bank/category — Bank 1 · Patch 1 is
 /// bank_msb 0 / bank_lsb 0 / program 0, so it resolves to bank `0`, program
 /// `0`. Bank 2 · Patch 1 is bank_lsb 1 → combined bank `1`, program `0`.
 const MUSE: &str = "moog-muse";
 
 fn external_capturing_app() -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     let rx = app.test_capture_engine();
@@ -162,7 +162,7 @@ fn sim_settings() -> iced::Settings {
 
 fn app_with_external_track() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_push_track(TrackState::new_instrument(TRACK, 0));
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));

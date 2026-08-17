@@ -28,7 +28,7 @@ fn changed(send_id: u64, source: SendSource, dest: u64, level_db: f32) -> AudioE
 
 #[test]
 fn bus_role_changed_toggles_only_the_target_bus() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     add_bus(&mut app, 10);
     add_bus(&mut app, 11);
 
@@ -57,7 +57,7 @@ fn bus_role_changed_toggles_only_the_target_bus() {
 
 #[test]
 fn bus_role_changed_for_unknown_bus_is_a_noop() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     // No bus added — must not panic and must not invent a bus.
     app.test_apply_engine_event(AudioEvent::BusRoleChanged {
         bus_id: 99,
@@ -68,7 +68,7 @@ fn bus_role_changed_for_unknown_bus_is_a_noop() {
 
 #[test]
 fn send_changed_inserts_then_updates_in_place() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     add_bus(&mut app, 10);
 
     app.test_apply_engine_event(changed(1, SendSource::Track(5), 10, -6.0));
@@ -98,7 +98,7 @@ fn send_changed_inserts_then_updates_in_place() {
 
 #[test]
 fn multiple_sends_keep_insertion_order() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     add_bus(&mut app, 10);
     add_bus(&mut app, 20);
 
@@ -111,7 +111,7 @@ fn multiple_sends_keep_insertion_order() {
 
 #[test]
 fn send_removed_drops_only_that_send() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     add_bus(&mut app, 10);
     app.test_apply_engine_event(changed(1, SendSource::Track(5), 10, -3.0));
     app.test_apply_engine_event(changed(2, SendSource::Track(6), 10, -3.0));
@@ -128,7 +128,7 @@ fn send_removed_drops_only_that_send() {
 
 #[test]
 fn rejected_send_is_forwarded_to_ui_then_cleared_by_success() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     add_bus(&mut app, 10);
 
     app.test_apply_engine_event(AudioEvent::AuxSendRejected {

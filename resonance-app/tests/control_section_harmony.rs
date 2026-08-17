@@ -14,7 +14,7 @@ use resonance_control::{ErrorKind, KeyScale, MutationAck, Request, Response};
 
 fn app_with_project() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-section-harmony-test.rprj"));
     app
@@ -252,7 +252,7 @@ fn create_validates_params() {
 #[test]
 fn mutations_without_project_are_busy() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let response = call(
         &mut app,
         "section.create",

@@ -65,7 +65,7 @@ fn grid_choice_maps_to_expected_division_and_ticks() {
 
 #[test]
 fn default_panel_state_is_sensible() {
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     let s = app.test_quantize_panel();
     assert_eq!(s.grid, GridChoice::Sixteenth);
     assert_eq!(s.strength, 1.0);
@@ -80,7 +80,7 @@ fn default_panel_state_is_sensible() {
 
 #[test]
 fn setters_update_each_bound_field() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     dispatch(&mut app, MidiEditorMessage::SetQuantizeGrid(GridChoice::EighthTriplet));
     dispatch(&mut app, MidiEditorMessage::SetQuantizeStrength(0.5));
@@ -107,7 +107,7 @@ fn setters_update_each_bound_field() {
 
 #[test]
 fn strength_and_swing_are_clamped_to_unit_range() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     dispatch(&mut app, MidiEditorMessage::SetQuantizeStrength(5.0));
     dispatch(&mut app, MidiEditorMessage::SetQuantizeSwing(-2.0));
@@ -118,7 +118,7 @@ fn strength_and_swing_are_clamped_to_unit_range() {
 
 #[test]
 fn humanize_amounts_are_clamped_to_their_ranges() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Timing caps at the panel's max; velocity stays within the unit range.
     dispatch(

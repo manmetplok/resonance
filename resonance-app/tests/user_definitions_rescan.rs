@@ -81,7 +81,7 @@ fn reveal_user_definitions_folder_is_skipped_for_undo() {
 
 #[test]
 fn rescan_picks_up_newly_added_user_definition() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // The bundled Moog Muse definition is always present.
     let initial_ids = app.test_device_registry_ids();
@@ -113,7 +113,7 @@ fn rescan_picks_up_newly_added_user_definition() {
 
 #[test]
 fn rescan_rebuilds_device_picker_cache() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Before re-scan: test synth not offered in the pick-list.
     assert!(
@@ -140,7 +140,7 @@ fn rescan_rebuilds_device_picker_cache() {
 
 #[test]
 fn rescan_with_empty_dir_preserves_bundled_definitions() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Rescan against an empty temp dir — bundled defs must survive.
     let dir = TempDir::new().expect("temp dir");
@@ -155,7 +155,7 @@ fn rescan_with_empty_dir_preserves_bundled_definitions() {
 
 #[test]
 fn rescan_user_definition_shadows_bundled_with_same_id() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
 
     // Write a user definition with the same id as the bundled Moog Muse.
     let override_json = r#"{

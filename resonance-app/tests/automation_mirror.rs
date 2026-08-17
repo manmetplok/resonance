@@ -23,7 +23,7 @@ fn lane(id: u64, target: AutomationTarget) -> AutomationLane {
 
 #[test]
 fn lane_changed_inserts_keyed_by_target() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = AutomationTarget::TrackGain(1);
 
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
@@ -38,7 +38,7 @@ fn lane_changed_inserts_keyed_by_target() {
 
 #[test]
 fn lane_changed_replaces_whole_lane_for_same_target() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = AutomationTarget::TrackPan(2);
 
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
@@ -59,7 +59,7 @@ fn lane_changed_replaces_whole_lane_for_same_target() {
 
 #[test]
 fn distinct_targets_coexist() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let gain = AutomationTarget::TrackGain(1);
     let pan = AutomationTarget::TrackPan(1);
 
@@ -73,7 +73,7 @@ fn distinct_targets_coexist() {
 
 #[test]
 fn lane_cleared_removes_lane_and_live_value() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = AutomationTarget::MasterGain;
 
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, target.clone()) });
@@ -93,7 +93,7 @@ fn lane_cleared_removes_lane_and_live_value() {
 
 #[test]
 fn automated_value_tracks_latest_per_target() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let target = AutomationTarget::PluginParam {
         instance: 5,
         param_id: 3,
@@ -115,7 +115,7 @@ fn automated_value_tracks_latest_per_target() {
 
 #[test]
 fn clearing_unknown_target_is_a_no_op() {
-    let mut app = Resonance::new().0;
+    let mut app = Resonance::new_for_test().0;
     let present = AutomationTarget::TrackGain(1);
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane: lane(10, present.clone()) });
 

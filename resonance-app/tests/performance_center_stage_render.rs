@@ -52,7 +52,7 @@ fn def(id: u64, length_bars: u32, chords: Vec<ChordState>) -> SectionDefinitionS
 /// Enter Performance mode with a single 4-bar section placed at bar 0 whose
 /// first chord is `first` — so the default playhead (sample 0) lands on it.
 fn perform_with_first_chord(first: Chord) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
 
     let chords = vec![

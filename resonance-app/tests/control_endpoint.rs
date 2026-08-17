@@ -17,7 +17,7 @@ use resonance_control::{ErrorKind, Request, Response, PROTOCOL_VERSION};
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     app
 }
 

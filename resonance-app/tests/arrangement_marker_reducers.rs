@@ -26,7 +26,7 @@ const SAMPLES_PER_BEAT: u64 = 24_000;
 /// aren't swallowed by the startup-modal gate) and a deterministic
 /// 120 BPM grid for the snap-sensitive reducers.
 fn marker_app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_sample_rate(SAMPLE_RATE);
     app.test_set_arrange_zoom(ZOOM);

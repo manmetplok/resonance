@@ -46,7 +46,7 @@ fn sim_settings() -> iced::Settings {
 /// frozen-render lane clip are on screen.
 fn build_frozen_arrange_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     app.test_set_freeze_status(
         1,

@@ -67,7 +67,7 @@ fn build_app_scrolled(scroll_y: f32) -> Resonance {
     // share the same value (which is what we want).
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     // Inform the reducer of the on-screen viewport so `ScrollToY`'s
@@ -138,7 +138,7 @@ fn track_header_alignment_scroll_140() {
 #[test]
 fn timeline_lane_clip_globals_expanded_scrolled() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
@@ -174,7 +174,7 @@ fn timeline_lane_clip_globals_expanded_scrolled() {
 #[test]
 fn track_header_no_bleed_into_chrome_expanded() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
@@ -207,7 +207,7 @@ fn track_header_no_bleed_into_chrome_expanded() {
 #[test]
 fn track_header_virtualizes_100_tracks_scroll_0() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_many_synth_tracks(&mut app, 100);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
@@ -239,7 +239,7 @@ fn track_header_virtualizes_100_tracks_scroll_0() {
 #[test]
 fn track_header_virtualization_drops_offscreen_tracks() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_many_synth_tracks(&mut app, 100);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
@@ -282,7 +282,7 @@ fn track_header_virtualization_drops_offscreen_tracks() {
 /// ready to view at scroll 0.
 fn build_app_with_group() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     // Fold the two synth tracks into a named group. A high id keeps the
@@ -338,7 +338,7 @@ fn track_header_group_row_renders_inline() {
 #[test]
 fn track_header_virtualization_window_follows_scroll() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_many_synth_tracks(&mut app, 100);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,

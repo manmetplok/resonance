@@ -26,7 +26,7 @@ fn compose_rows_count(app: &Resonance) -> usize {
 
 #[test]
 fn demo_seed_refreshes_cached_track_count() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
 
     let expected = compose_rows_count(&app);
@@ -41,7 +41,7 @@ fn demo_seed_refreshes_cached_track_count() {
 
 #[test]
 fn sub_tracks_are_excluded_from_cached_track_count() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_with_drum_subtracks(&mut app);
 
     let expected = compose_rows_count(&app);
@@ -54,7 +54,7 @@ fn sub_tracks_are_excluded_from_cached_track_count() {
 
 #[test]
 fn many_synth_tracks_seed_refreshes_cached_track_count() {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_many_synth_tracks(&mut app, 7);
 
     // All 7 are plain synth-instrument tracks — all appear in the canvas.
@@ -82,7 +82,7 @@ fn many_synth_tracks_seed_refreshes_cached_track_count() {
 fn melodic_preset_tracks_appear_in_compose_rows() {
     use resonance_app::state::TrackState;
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
 
     // Guitar preset result: track_type:"instrument" -> new_instrument() ->
@@ -136,7 +136,7 @@ fn melodic_preset_tracks_appear_in_compose_rows() {
 fn track_count_excludes_drums_and_vocals() {
     use resonance_app::state::TrackState;
 
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
 
     // 3 melodic instrument tracks (e.g. from guitar presets).

@@ -33,7 +33,7 @@ const AUDIO_CLIP: u64 = 200;
 /// starts at bar 3 and ends the song.
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_sample_rate(SR);
     app.test_rebuild_tempo_map();
     app.test_set_active_project(true);

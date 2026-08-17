@@ -54,7 +54,7 @@ fn frozen_cache_ref() -> FreezeCacheRef {
 /// Demo app pinned to the Arrange tab.
 fn build_arrange_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     app
 }

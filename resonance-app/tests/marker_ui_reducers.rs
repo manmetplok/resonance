@@ -13,7 +13,7 @@ use resonance_app::Resonance;
 const SAMPLE_RATE: u32 = 48_000;
 
 fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // A saved path is required before the undo history records anything
     // (see `can_record_undo`), so the rename-undo round trip can restore.

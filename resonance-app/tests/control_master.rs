@@ -18,7 +18,7 @@ use resonance_control::{ErrorKind, MutationAck, Request, Response};
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // Undo history only records once the project has a path.
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-master-test.rprj"));
@@ -172,7 +172,7 @@ fn the_master_fader_move_is_undoable() {
 #[test]
 fn master_methods_need_an_open_project() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(false);
 
     for (method, params) in [

@@ -61,7 +61,7 @@ fn frozen_cache_ref() -> FreezeCacheRef {
 /// ("Pattern A") is marked frozen so its header takes the frost treatment.
 fn build_arrange_app(freeze_first: bool) -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     if freeze_first {
         app.test_set_freeze_status(

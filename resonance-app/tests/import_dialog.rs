@@ -17,7 +17,7 @@ use resonance_app::Resonance;
 /// swallow `Import` messages (the import modal is gated like other
 /// auxiliary overlays until a project is open).
 fn app_with_project() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app
 }
@@ -287,7 +287,7 @@ fn tempo_placement_and_alignment_setters_stick() {
 fn import_messages_are_gated_until_a_project_is_open() {
     // No active project → the startup modal owns the screen and the
     // import overlay must not open (parity with Open Settings / Add Track).
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     // A fresh `Resonance` has no active project (the startup modal is up).
     send(&mut app, ImportMessage::Open);
     assert!(

@@ -15,7 +15,7 @@ use resonance_audio::types::{AudioCommand, AuxSend, SendSource};
 /// Build an app with a capturing engine; return the app and the receiver
 /// the handlers' commands queue onto.
 fn capturing_app() -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     (app, rx)
 }

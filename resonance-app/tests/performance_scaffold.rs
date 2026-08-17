@@ -29,7 +29,7 @@ use resonance_app::{demo, theme, Resonance};
 /// Build the app, enter Performance mode, and render once. Returns the app
 /// so callers can mutate state and render again.
 fn enter_performance() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_view_mode(ViewMode::Performance);
     app

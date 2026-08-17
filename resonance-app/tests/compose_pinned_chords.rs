@@ -201,7 +201,7 @@ fn placed_section(app: &mut Resonance, chords: Vec<ChordState>, scale: Option<Sc
 
 fn new_app() -> Resonance {
     let _ = STARTUP_TAB.set(resonance_app::state::ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_sample_rate(SAMPLE_RATE);
     app
 }

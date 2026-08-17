@@ -39,7 +39,7 @@ fn isolate_config() {
 
 fn app() -> Resonance {
     isolate_config();
-    let (app, _task) = Resonance::new();
+    let (app, _task) = Resonance::new_for_test();
     app
 }
 
@@ -48,7 +48,7 @@ fn app() -> Resonance {
 /// gates, so no active project is needed.
 fn app_capturing() -> (Resonance, Receiver<AudioCommand>) {
     isolate_config();
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     (app, rx)
 }

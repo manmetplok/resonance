@@ -41,7 +41,7 @@ const KEYS: u64 = 2;
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/inspector-sends-test.rprj"));
     app.test_add_track(GUITAR, TrackType::Instrument);
@@ -533,7 +533,7 @@ fn a_panel_made_send_survives_save_and_reload() {
     let back: resonance_app::project::ProjectFile =
         serde_json::from_str(&json).expect("deserialize");
 
-    let (mut reloaded, _task) = Resonance::new();
+    let (mut reloaded, _task) = Resonance::new_for_test();
     reloaded.test_replay_loaded_project(back);
 
     let after = panel_sends(&reloaded, GUITAR);

@@ -128,7 +128,7 @@ fn dragged_asset_no_conversion_when_rates_match() {
 // --------------------------------------------------------------------
 
 fn app() -> (Resonance, Receiver<AudioCommand>) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_sample_rate(SR);
     app.test_set_project_path(PathBuf::from("/proj/song.rproj"));

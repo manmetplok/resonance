@@ -19,7 +19,7 @@ use resonance_app::Resonance;
 /// App with an active project so the startup-modal gate doesn't swallow
 /// `Import` messages (parity with `tests/import_dialog.rs`).
 fn app_with_project() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app
 }
@@ -139,7 +139,7 @@ fn hover_left_keeps_a_dialog_that_already_took_a_drop() {
 fn entry_points_are_gated_until_a_project_is_open() {
     // No active project → the startup modal owns the screen; neither entry
     // point may open the import overlay.
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     send(&mut app, ImportMessage::HoverFile);
     assert!(app.test_import_dialog().is_none(), "hover gated");
 

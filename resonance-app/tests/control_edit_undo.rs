@@ -21,7 +21,7 @@ const TRACK: u64 = 1;
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // The history only records once the project has a path on disk.
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-edit-undo.rprj"));
@@ -184,7 +184,7 @@ fn a_new_edit_clears_the_redo_stack() {
 #[test]
 fn edit_methods_need_an_open_project() {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(false);
 
     for method in ["edit.status", "edit.undo", "edit.redo"] {

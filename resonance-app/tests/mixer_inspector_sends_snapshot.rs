@@ -49,7 +49,7 @@ fn sim_settings() -> iced::Settings {
 
 fn build_app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
     let _ = app.update(Message::Ui(UiMessage::SelectTrack(Some(BASS))));

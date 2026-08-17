@@ -24,7 +24,7 @@ const OTHER_BUS: u64 = 2;
 
 fn app() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_add_track(KICK, TrackType::Instrument);
     app.test_add_bus(BUS, "Drum Bus");

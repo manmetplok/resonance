@@ -23,7 +23,7 @@ use resonance_common::group_identity::GroupIdentityColor;
 /// Fresh app in Mixer view seeded with `n` instrument tracks, ids `1..=n`,
 /// in `.order` 0..n (so `sorted_tracks` yields them in id order).
 fn app_with_tracks(n: u64) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     for id in 1..=n {
         app.test_push_track(TrackState::new_instrument(id, (id - 1) as usize));

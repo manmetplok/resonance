@@ -25,7 +25,7 @@ fn slot(instance_id: u64) -> PluginSlotState {
 
 /// Seed one track carrying `ids` as its insert chain.
 fn app_with_chain(ids: &[u64]) -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let mut track = TrackState::new_audio(1, 0);
     track.plugins = ids.iter().copied().map(slot).collect();
     app.test_push_track(track);

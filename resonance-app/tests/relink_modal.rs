@@ -67,7 +67,7 @@ fn missing_asset(id: AssetId, original_path: &str) -> PoolAsset {
 /// snapshot has representative content dimmed behind the overlay.
 fn build_app_with_relink_open() -> Resonance {
     let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     demo::seed_demo_content(&mut app);
     app.test_add_pool_asset(missing_asset(1, "/Users/max/Samples/Guitars/Old Guitar Loop.wav"));
     app.test_add_pool_asset(missing_asset(2, "/Users/max/Downloads/Crowd Ambience.mp3"));

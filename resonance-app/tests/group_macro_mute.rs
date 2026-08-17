@@ -57,7 +57,7 @@ fn macro_mute_cascades_through_one_level_of_nesting() {
 // ---- Reducer path through Resonance::update -----------------------------
 
 fn active_app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app
 }

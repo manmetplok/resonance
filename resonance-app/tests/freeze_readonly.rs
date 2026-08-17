@@ -32,7 +32,7 @@ const PARAM: u32 = 7;
 /// the modal — exactly the state the app is in once a project is open and
 /// a track can actually be frozen.
 fn capturing_app() -> (Resonance, Receiver<AudioCommand>, tempfile::TempDir) {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     let rx = app.test_capture_engine();
     let dir = tempfile::tempdir().expect("temp project dir");
     app.test_set_project_path(dir.path().to_path_buf());

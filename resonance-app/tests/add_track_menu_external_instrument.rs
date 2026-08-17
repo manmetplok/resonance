@@ -67,7 +67,7 @@ fn allocated_id_from_add(cmds: &[AudioCommand]) -> TrackId {
 #[test]
 fn ext_instrument_menu_entry_renders_onboarding_card() {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     // Belt-and-braces in case another test in this binary set the tab first
     // (the OnceLock `set` above becomes a no-op then).
@@ -108,7 +108,7 @@ fn ext_instrument_menu_entry_renders_onboarding_card() {
 #[test]
 fn add_track_menu_lists_ext_instrument_entry() {
     let _ = STARTUP_TAB.set(ViewMode::Mixer);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
 

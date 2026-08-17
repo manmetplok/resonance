@@ -16,7 +16,7 @@ use resonance_app::Resonance;
 use resonance_common::automation::TrackId;
 
 fn active_app() -> Resonance {
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app
 }
