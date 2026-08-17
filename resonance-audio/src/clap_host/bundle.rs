@@ -1,6 +1,8 @@
 //! `ClapBundle` loads one `.clap` shared library and exposes its
-//! plugin factory. Each bundle owns the `libloading::Library` handle
-//! and runs `clap_entry.deinit()` in its `Drop` impl.
+//! plugin factory. Each bundle owns the `libloading::Library` handle and
+//! keeps it resident for the lifetime of the process: dropping a bundle
+//! neither calls `clap_entry.deinit()` nor unloads the binary. The `Drop`
+//! impl explains why.
 //!
 //! Bundles are immutable after construction; everything that mutates
 //! per-instance state lives on the [`super::ClapInstance`] returned by
@@ -29,7 +31,10 @@ use super::instance::ClapInstance;
 use super::{create_host_data, HostData};
 
 pub struct ClapBundle {
-    _library: libloading::Library,
+    /// The `dlopen` handle, wrapped so it is never closed — see the
+    /// `Drop` impl for why the binary stays resident for the process
+    /// lifetime.
+    _library: std::mem::ManuallyDrop<libloading::Library>,
     entry: *const clap_plugin_entry,
     factory: *const clap_plugin_factory,
     descriptors: Vec<PluginDescInfo>,
@@ -122,7 +127,7 @@ impl ClapBundle {
         }
 
         Ok(ClapBundle {
-            _library: library,
+            _library: std::mem::ManuallyDrop::new(library),
             entry,
             factory,
             descriptors,
@@ -344,8 +349,34 @@ pub(super) fn build_instance(
 
 impl Drop for ClapBundle {
     fn drop(&mut self) {
-        if let Some(deinit) = unsafe { (*self.entry).deinit } {
-            unsafe { deinit() };
-        }
+        // Deliberately does NOT call `clap_entry.deinit()` and does NOT
+        // `dlclose` the library: a loaded plugin binary stays resident for
+        // the lifetime of the process.
+        //
+        // We used to do both, and it aborted the process. Two independent
+        // core dumps (`relink_modal`, `timeline_automation_lane_rows`,
+        // 2026-08-17) show the same stack: engine thread shuts down ->
+        // `drop_in_place::<Vec<ClapBundle>>` -> `deinit()` inside
+        // `master_me.clap` -> glibc "corrupted size vs. prev_size" ->
+        // `abort()`. That plugin (DPF-based, in `/usr/lib/clap`) frees
+        // state its own teardown has already released, and we cannot fix
+        // third-party binaries. It presented as a rare "flaky SIGABRT" in
+        // UI tests only because every test process scans and loads the
+        // machine's real plugin directories.
+        //
+        // Leaking is what hosts do here, and not only to dodge one broken
+        // plugin: unloading a plugin binary mid-process is unsound in
+        // general. A `.clap` may have registered `atexit` handlers, TLS
+        // destructors, or background threads whose code lives in the very
+        // pages `dlclose` unmaps, and any of those turns into a jump into
+        // freed memory later. The cost is bounded and small — one resident
+        // library per distinct `.clap` file, reclaimed by the OS at exit.
+        //
+        // Re-scanning re-`dlopen`s an already-resident library, which just
+        // bumps its refcount and re-runs `init()`. The CLAP entry contract
+        // makes `init`/`deinit` refcounted and explicitly allows repeated
+        // `init()`, so an extra `init()` with no matching `deinit()` leaves
+        // the bundle initialised — exactly the state we want it in.
+        let _ = self.entry;
     }
 }

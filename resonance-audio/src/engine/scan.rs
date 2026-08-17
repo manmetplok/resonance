@@ -1,10 +1,14 @@
 //! Plugin bundle scanning. Iterates a fixed set of directories
 //! (`~/.clap`, `/usr/lib/clap/`, `target/bundled/`) and loads every
 //! `.clap` file or directory it finds. Each scan first drops every
-//! currently instantiated plugin (to avoid use-after-free when unloading
-//! shared libraries) and clears `track.plugin_ids`, then rebuilds the
-//! `bundles` list from scratch. The collected descriptors are sent back
-//! to the app via `AudioEvent::PluginsScanned`.
+//! currently instantiated plugin (their factories belong to bundles this
+//! scan is about to replace) and clears `track.plugin_ids`, then rebuilds
+//! the `bundles` list from scratch. The collected descriptors are sent
+//! back to the app via `AudioEvent::PluginsScanned`.
+//!
+//! Dropping a [`ClapBundle`] does not unload its shared library — see
+//! [`ClapBundle`]'s `Drop` impl — so a re-scan re-`dlopen`s a binary that
+//! is already resident rather than mapping it in afresh.
 
 use std::sync::Arc;
 
@@ -24,8 +28,8 @@ pub(crate) fn scan_plugins(
     let mut scanned = Vec::new();
     let mut scan_dirs: Vec<std::path::PathBuf> = Vec::new();
 
-    // Drop all existing plugin instances before clearing bundles, to
-    // prevent use-after-free from accessing unloaded shared libraries.
+    // Drop all existing plugin instances before clearing bundles: an
+    // instance is created by, and calls back into, its bundle's factory.
     {
         let mut plugins_guard = plugins.write();
         let removed: Vec<_> = plugins_guard.drain(..).collect();
