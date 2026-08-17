@@ -33,11 +33,20 @@ pub const WINDOW_H: u32 = 820;
 pub struct MasteringEditorFactory {
     params: Arc<MasteringParams>,
     viz: Arc<MasteringViz>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl MasteringEditorFactory {
-    pub fn new(params: Arc<MasteringParams>, viz: Arc<MasteringViz>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<MasteringParams>,
+        viz: Arc<MasteringViz>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            presets,
+        }
     }
 }
 
@@ -55,7 +64,11 @@ impl EditorFactory for MasteringEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = MasteringEditorApp::new(self.params.clone(), self.viz.clone());
+        let app = MasteringEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {
@@ -135,6 +148,15 @@ pub(crate) enum TargetSource {
 pub(crate) struct MasteringEditorApp {
     params: Arc<MasteringParams>,
     viz: Arc<MasteringViz>,
+    /// This plugin ships no factory presets, so the bank is the user's
+    /// own directory alone — which is the whole point of ba todo #1332
+    /// for the four plugins that had no preset surface at all.
+    bank: resonance_plugin::presets::PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists.
+    presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    preset_editor: resonance_plugin::presets::PresetEditor,
     current_stage: StageTab,
     selected_genre: Genre,
     target_source: TargetSource,
@@ -142,10 +164,20 @@ pub(crate) struct MasteringEditorApp {
 }
 
 impl MasteringEditorApp {
-    pub fn new(params: Arc<MasteringParams>, viz: Arc<MasteringViz>) -> Self {
+    pub fn new(
+        params: Arc<MasteringParams>,
+        viz: Arc<MasteringViz>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
         Self {
             params,
             viz,
+            bank: resonance_plugin::presets::PresetBank::new(
+                <crate::ResonanceMastering as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                &[],
+            ),
+            presets,
+            preset_editor: resonance_plugin::presets::PresetEditor::default(),
             current_stage: StageTab::default(),
             selected_genre: Genre::default(),
             target_source: TargetSource::Genre,
@@ -162,7 +194,16 @@ impl EditorApp for MasteringEditorApp {
 
         egui::Panel::top("mastering_header")
             .exact_size(40.0)
-            .show_inside(ui, |ui| header::draw(ui, &self.params, &self.viz));
+                        .show_inside(ui, |ui| {
+                header::draw(
+                    ui,
+                    &self.params,
+                    &self.viz,
+                    &mut self.preset_editor,
+                    &self.bank,
+                    &self.presets,
+                )
+            });
 
         egui::Panel::top("mastering_tabs")
             .exact_size(32.0)

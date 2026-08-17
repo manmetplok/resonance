@@ -30,6 +30,11 @@ pub use params::PARAM_COUNT;
 pub struct ResonanceMastering {
     params: Arc<MasteringParams>,
     viz: Arc<MasteringViz>,
+    /// Which preset is loaded and whether it has been edited since.
+    /// Shared with the editor thread and handed to the bridge as this
+    /// plugin's extra state, so the identity survives closing the window
+    /// (ba todo #1358).
+    presets: Arc<resonance_plugin::presets::PresetSession>,
     chain: Option<Chain>,
 }
 
@@ -67,6 +72,7 @@ impl ResonancePlugin for ResonanceMastering {
     fn new() -> Self {
         Self {
             params: Arc::new(MasteringParams::default()),
+            presets: resonance_plugin::presets::PresetSession::new(),
             viz: MasteringViz::new(),
             chain: None,
         }
@@ -123,11 +129,19 @@ impl ResonancePlugin for ResonanceMastering {
         }
     }
 
+    /// The loaded-preset identity rides along with the parameter values,
+    /// on both bridge paths, so reopening a saved project shows the preset
+    /// the sound came from instead of a blank picker.
+    fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::ExtraStateSaver>> {
+        Some(self.presets.clone())
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::MasteringEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
+            self.presets.clone(),
         )))
     }
 }

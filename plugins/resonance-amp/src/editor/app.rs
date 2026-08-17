@@ -24,6 +24,14 @@ pub(crate) struct AmpEditorApp {
     pub(crate) viz: Arc<AmpViz>,
     pub(crate) tone3000: Arc<WorkerHandle>,
     pub(crate) tone3000_panel: Tone3000PanelState,
+    /// This plugin ships no factory presets, so the bank is the user's
+    /// own directory alone (ba todo #1358).
+    pub(crate) bank: resonance_plugin::presets::PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists.
+    pub(crate) presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
 }
 
 impl EditorApp for AmpEditorApp {

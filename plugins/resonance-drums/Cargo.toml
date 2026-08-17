@@ -18,6 +18,8 @@ editor = [
     "dep:ureq",
     "dep:zip",
     "dep:dirs",
+    # the shared preset bar (ba todo #1358) lives behind this feature
+    "resonance-plugin/editor-widgets",
 ]
 
 [dependencies]

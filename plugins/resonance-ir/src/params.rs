@@ -96,6 +96,28 @@ pub struct IrParams {
     pub latency_mode: IntParam,
 }
 
+/// How many parameters this plugin exposes.
+///
+/// Declared next to the list it counts, so the two cannot drift.
+pub const PARAM_COUNT: usize = 4;
+
+impl IrParams {
+    /// The exposed parameters in host order.
+    ///
+    /// One ordered list, read by both `ResonancePlugin::param` and the
+    /// editor's preset bar, rather than a `match` restated per call site
+    /// (ba todo #1358).
+    pub fn param_at(&self, index: usize) -> &dyn Param {
+        match index {
+            1 => &self.dry_wet,
+            2 => &self.output_gain,
+            3 => &self.latency_mode,
+            // Index 0, and anything out of range, is the file selector.
+            _ => &self.file_select,
+        }
+    }
+}
+
 impl Default for IrParams {
     fn default() -> Self {
         Self {

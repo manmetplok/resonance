@@ -28,6 +28,7 @@ pub struct DrumsEditorFactory {
     params: Arc<DrumParams>,
     bridge: KitBridge,
     download_worker: Arc<WorkerHandle>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl DrumsEditorFactory {
@@ -35,11 +36,13 @@ impl DrumsEditorFactory {
         params: Arc<DrumParams>,
         bridge: KitBridge,
         download_worker: Arc<WorkerHandle>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
         Self {
             params,
             bridge,
             download_worker,
+            presets,
         }
     }
 }
@@ -65,6 +68,7 @@ impl EditorFactory for DrumsEditorFactory {
             self.params.clone(),
             self.bridge.clone(),
             self.download_worker.clone(),
+            self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(
             app,

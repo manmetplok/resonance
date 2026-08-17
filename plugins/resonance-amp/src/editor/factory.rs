@@ -33,6 +33,7 @@ pub struct AmpEditorFactory {
     load_request: Arc<AtomicI32>,
     viz: Arc<AmpViz>,
     tone3000: Arc<WorkerHandle>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl AmpEditorFactory {
@@ -42,6 +43,7 @@ impl AmpEditorFactory {
         load_request: Arc<AtomicI32>,
         viz: Arc<AmpViz>,
         tone3000: Arc<WorkerHandle>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
         Self {
             params,
@@ -49,6 +51,7 @@ impl AmpEditorFactory {
             load_request,
             viz,
             tone3000,
+            presets,
         }
     }
 }
@@ -77,6 +80,12 @@ impl EditorFactory for AmpEditorFactory {
             viz: self.viz.clone(),
             tone3000: self.tone3000.clone(),
             tone3000_panel: Tone3000PanelState::default(),
+            bank: resonance_plugin::presets::PresetBank::new(
+                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                &[],
+            ),
+            presets: self.presets.clone(),
+            preset_editor: resonance_plugin::presets::PresetEditor::default(),
         };
         let runtime = RuntimeEditor::new(
             app,

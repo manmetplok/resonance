@@ -24,6 +24,10 @@ pub const GLOBAL_PARAMS: usize = 4;
 /// Labels for the round-robin mode choice, indexed by parameter value.
 pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
 
+/// How many parameters this plugin exposes: the globals, then one block
+/// of [`PARAMS_PER_PAD`] per pad.
+pub const PARAM_COUNT: usize = GLOBAL_PARAMS + crate::drum_map::NUM_PADS * PARAMS_PER_PAD;
+
 pub struct DrumParams {
     pub master_volume: FloatParam,
     /// Ceiling on simultaneously sounding voices. A hit uses one voice
@@ -200,5 +204,35 @@ impl PadParams {
 impl Default for PadParams {
     fn default() -> Self {
         Self::new(0)
+    }
+}
+
+impl DrumParams {
+    /// The exposed parameters in host order: the four globals, then each
+    /// pad's block of [`PARAMS_PER_PAD`].
+    ///
+    /// One ordered list, read by both `ResonancePlugin::param` and the
+    /// editor's preset bar, rather than the same indexing arithmetic
+    /// restated per call site (ba todo #1358).
+    pub fn param_at(&self, index: usize) -> &dyn Param {
+        match index {
+            0 => return &self.master_volume,
+            1 => return &self.polyphony,
+            2 => return &self.velocity_curve,
+            3 => return &self.round_robin_mode,
+            _ => {}
+        }
+        let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
+        let field = (index - GLOBAL_PARAMS) % PARAMS_PER_PAD;
+        let pad = &self.pads[pad_idx];
+        match field {
+            0 => &pad.volume,
+            1 => &pad.pan,
+            2 => &pad.mute,
+            3 => &pad.oh_blend,
+            4 => &pad.balance,
+            5 => &pad.articulation,
+            _ => &pad.volume,
+        }
     }
 }

@@ -28,6 +28,10 @@ pub struct ResonanceIr {
     /// fields use atomic storage internally, so `&IrParams` is safe to use
     /// concurrently from audio + UI.
     pub params: Arc<IrParams>,
+    /// Which preset is loaded and whether it has been edited since,
+    /// chained in front of this plugin's own `IrExtraState` so both ride
+    /// along in `save_state` (ba todo #1358).
+    presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Audio-thread-only smoothers. Lives outside the shared `Arc<IrParams>`
     /// so the audio thread can mutate smoother state through `&mut self`.
     smoothers: IrSmoothers,
@@ -105,8 +109,20 @@ impl ResonancePlugin for ResonanceIr {
 
     fn new() -> Self {
         let block_size = dsp::block_size_for(44100.0, LatencyMode::default());
+        let params = Arc::new(IrParams::default());
+        let load_request = Arc::new(AtomicI32::new(-1));
+        // The preset identity wraps the IR-path saver rather than
+        // replacing it: chaining is why `with_extra` exists.
+        let presets = resonance_plugin::presets::PresetSession::with_extra(Arc::new(
+            IrExtraState {
+                ir_path: params.ir_path.clone(),
+                file_list: params.file_list.clone(),
+                load_request: load_request.clone(),
+            },
+        ));
         Self {
-            params: Arc::new(IrParams::default()),
+            params,
+            presets,
             smoothers: IrSmoothers::new(),
             viz: IrViz::new(),
             engine: IrEngine::new(block_size),
@@ -115,24 +131,18 @@ impl ResonancePlugin for ResonanceIr {
             ir_info: Arc::new(Mutex::new(String::new())),
             last_file_index: -1,
             sample_rate: 44100.0,
-            load_request: Arc::new(AtomicI32::new(-1)),
+            load_request,
             loader_handle: None,
             host: None,
         }
     }
 
     fn param_count(&self) -> usize {
-        4
+        params::PARAM_COUNT
     }
 
     fn param(&self, index: usize) -> &dyn Param {
-        match index {
-            0 => &self.params.file_select,
-            1 => &self.params.dry_wet,
-            2 => &self.params.output_gain,
-            3 => &self.params.latency_mode,
-            _ => &self.params.file_select,
-        }
+        self.params.param_at(index)
     }
 
     fn set_host(&mut self, host: Arc<HostHandle>) {
@@ -247,11 +257,7 @@ impl ResonancePlugin for ResonanceIr {
     }
 
     fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::plugin::ExtraStateSaver>> {
-        Some(Arc::new(IrExtraState {
-            ir_path: self.params.ir_path.clone(),
-            file_list: self.params.file_list.clone(),
-            load_request: self.load_request.clone(),
-        }))
+        Some(self.presets.clone())
     }
 
     /// The convolution block size, which is exactly this plugin's
@@ -282,6 +288,7 @@ impl ResonancePlugin for ResonanceIr {
             self.ir_info.clone(),
             self.load_request.clone(),
             self.viz.clone(),
+            self.presets.clone(),
         )))
     }
 }

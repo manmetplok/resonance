@@ -171,6 +171,10 @@ pub struct ResonanceDrums {
     /// fields use atomic storage internally, so `&DrumParams` is safe to use
     /// concurrently from audio + UI.
     params: Arc<DrumParams>,
+    /// Which preset is loaded and whether it has been edited since,
+    /// chained in front of this plugin's own `DrumsExtraState` so the kit
+    /// path and the preset identity both ride along (ba todo #1358).
+    presets: Arc<resonance_plugin::presets::PresetSession>,
     sampler: DrumSampler,
     #[doc(hidden)]
     pub bridge: KitBridge,
@@ -242,8 +246,19 @@ impl ResonancePlugin for ResonanceDrums {
         sampler.set_last_rr(bridge.last_rr.clone());
         sampler.set_out_peak(bridge.out_peak.clone());
         let watcher = articulation::spawn_watcher(&bridge, articulation_wake_rx);
+        // The preset identity wraps the kit saver rather than replacing
+        // it: chaining is why `with_extra` exists.
+        let presets = resonance_plugin::presets::PresetSession::with_extra(Arc::new(
+            DrumsExtraState {
+                kit_path: bridge.kit_path.clone(),
+                overhead_setup_key: bridge.overhead_setup_key.clone(),
+                pad_choices: bridge.pad_choices.clone(),
+                params: params.clone(),
+            },
+        ));
         Self {
             params,
+            presets,
             sampler,
             bridge,
             _articulation_watcher: watcher,
@@ -260,25 +275,7 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn param(&self, index: usize) -> &dyn Param {
-        match index {
-            0 => return &self.params.master_volume,
-            1 => return &self.params.polyphony,
-            2 => return &self.params.velocity_curve,
-            3 => return &self.params.round_robin_mode,
-            _ => {}
-        }
-        let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
-        let field = (index - GLOBAL_PARAMS) % PARAMS_PER_PAD;
-        let pad = &self.params.pads[pad_idx];
-        match field {
-            0 => &pad.volume,
-            1 => &pad.pan,
-            2 => &pad.mute,
-            3 => &pad.oh_blend,
-            4 => &pad.balance,
-            5 => &pad.articulation,
-            _ => &pad.volume,
-        }
+        self.params.param_at(index)
     }
 
     fn output_layout(&self) -> Vec<resonance_plugin::OutputPortSpec> {
@@ -412,12 +409,7 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
-        Some(Arc::new(DrumsExtraState {
-            kit_path: self.bridge.kit_path.clone(),
-            overhead_setup_key: self.bridge.overhead_setup_key.clone(),
-            pad_choices: self.bridge.pad_choices.clone(),
-            params: self.params.clone(),
-        }))
+        Some(self.presets.clone())
     }
 
     #[cfg(feature = "editor")]
@@ -426,6 +418,7 @@ impl ResonancePlugin for ResonanceDrums {
             self.params.clone(),
             self.bridge.clone(),
             self.download_worker.clone(),
+            self.presets.clone(),
         )))
     }
 }

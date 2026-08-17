@@ -31,6 +31,26 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
+        // Presets. The IR loader ships no factory bank, so until ba todo
+        // #1332 a cab setup a user had dialled in could not be kept at all
+        // outside the one project it lived in.
+        let refs: Vec<&dyn resonance_plugin::Param> = (0..crate::params::PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        resonance_plugin::preset_ui::preset_bar(
+            ui,
+            "ir_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &refs,
+            "— preset —",
+        );
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         let list_len = app.params.file_list.lock().len();
         let enabled = list_len > 1;
         ui.add_enabled_ui(enabled, |ui| {

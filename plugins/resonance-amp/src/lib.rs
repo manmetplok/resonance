@@ -34,6 +34,10 @@ pub struct ResonanceAmp {
     /// fields use atomic storage internally, so `&AmpParams` is safe to use
     /// concurrently from audio + UI.
     params: Arc<AmpParams>,
+    /// Which preset is loaded and whether it has been edited since,
+    /// chained in front of this plugin's own `AmpExtraState` so both ride
+    /// along in `save_state` (ba todo #1358).
+    presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Tone3000 API browser worker, lazily created on first editor open.
     /// Held as `Option` because it depends on `Arc<AmpParams>` and is only
     /// useful with the editor feature enabled.
@@ -115,6 +119,13 @@ impl ResonancePlugin for ResonanceAmp {
     fn new() -> Self {
         let params = Arc::new(AmpParams::default());
         let load_request = Arc::new(AtomicI32::new(-1));
+        // The preset identity wraps the model-path saver rather than
+        // replacing it: chaining is why `with_extra` exists.
+        let presets = resonance_plugin::presets::PresetSession::with_extra(Arc::new(
+            AmpExtraState {
+                model_path: params.model_path.clone(),
+            },
+        ));
 
         #[cfg(feature = "editor")]
         let tone3000 = {
@@ -132,6 +143,7 @@ impl ResonancePlugin for ResonanceAmp {
 
         Self {
             params,
+            presets,
             #[cfg(feature = "editor")]
             tone3000,
             viz: AmpViz::new(),
@@ -147,16 +159,11 @@ impl ResonancePlugin for ResonanceAmp {
     }
 
     fn param_count(&self) -> usize {
-        3
+        params::PARAM_COUNT
     }
 
     fn param(&self, index: usize) -> &dyn Param {
-        match index {
-            0 => &self.params.file_select,
-            1 => &self.params.input_gain,
-            2 => &self.params.output_gain,
-            _ => &self.params.file_select,
-        }
+        self.params.param_at(index)
     }
 
     fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
@@ -272,9 +279,7 @@ impl ResonancePlugin for ResonanceAmp {
     }
 
     fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::plugin::ExtraStateSaver>> {
-        Some(Arc::new(AmpExtraState {
-            model_path: self.params.model_path.clone(),
-        }))
+        Some(self.presets.clone())
     }
 
     #[cfg(feature = "editor")]
@@ -286,6 +291,7 @@ impl ResonancePlugin for ResonanceAmp {
             self.load_request.clone(),
             self.viz.clone(),
             tone3000,
+            self.presets.clone(),
         )))
     }
 }

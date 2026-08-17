@@ -14,7 +14,7 @@ use crate::sample_info;
 use super::app::DrumsEditorApp;
 use super::{kit_browser, theme, widgets};
 
-pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut DrumsEditorApp) {
+pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.horizontal_centered(|ui| {
         let dot = |ui: &mut egui::Ui, color: egui::Color32| {
             let (rect, _) =
@@ -38,6 +38,24 @@ pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut DrumsEditorApp) {
                 .color(theme::TEXT_1)
                 .size(15.0),
         );
+        ui.add_space(14.0);
+
+        // Presets. The drum kit ships no factory bank, so until ba todo
+        // #1332 a kit a user had balanced pad by pad could not be kept at
+        // all outside the one project it lived in.
+        let refs: Vec<&dyn resonance_plugin::Param> = (0..crate::params::PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        resonance_plugin::preset_ui::preset_bar(
+            ui,
+            "drums_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &refs,
+            "— preset —",
+        );
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new("⚙").color(theme::TEXT_3).size(13.0));
             ui.add_space(10.0);

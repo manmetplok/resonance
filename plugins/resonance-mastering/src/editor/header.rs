@@ -119,7 +119,14 @@ impl HeaderModel {
 
 // --- drawing ------------------------------------------------------------
 
-pub(crate) fn draw(ui: &mut egui::Ui, params: &MasteringParams, viz: &MasteringViz) {
+pub(crate) fn draw(
+    ui: &mut egui::Ui,
+    params: &MasteringParams,
+    viz: &MasteringViz,
+    preset_editor: &mut resonance_plugin::presets::PresetEditor,
+    bank: &resonance_plugin::presets::PresetBank,
+    session: &resonance_plugin::presets::PresetSession,
+) {
     let model = HeaderModel::new(params, viz);
 
     ui.horizontal_centered(|ui| {
@@ -152,6 +159,26 @@ pub(crate) fn draw(ui: &mut egui::Ui, params: &MasteringParams, viz: &MasteringV
         {
             toggle_bypass(params);
         }
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        // Presets. This plugin ships no factory bank, so until ba todo
+        // #1332 a mastering chain a user had dialled in could not be kept
+        // at all outside the one project it lived in.
+        let refs: Vec<&dyn resonance_plugin::Param> = (0..crate::params::PARAM_COUNT)
+            .map(|i| params.param_at(i))
+            .collect();
+        resonance_plugin::preset_ui::preset_bar(
+            ui,
+            "mastering_preset",
+            preset_editor,
+            bank,
+            session,
+            &refs,
+            "— preset —",
+        );
 
         ui.add_space(8.0);
         ui.separator();

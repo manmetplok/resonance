@@ -23,6 +23,28 @@ pub struct AmpParams {
     pub output_gain: FloatParam,
 }
 
+/// How many parameters this plugin exposes.
+///
+/// Declared next to the list it counts, so the two cannot drift.
+pub const PARAM_COUNT: usize = 3;
+
+impl AmpParams {
+    /// The exposed parameters in host order.
+    ///
+    /// One ordered list, read by both `ResonancePlugin::param` and the
+    /// editor's preset bar. The plugin used to spell the order out in a
+    /// `match` of its own, which is the "call site restates what params.rs
+    /// declares" shape this audit is removing (ba todo #1358).
+    pub fn param_at(&self, index: usize) -> &dyn Param {
+        match index {
+            1 => &self.input_gain,
+            2 => &self.output_gain,
+            // Index 0, and anything out of range, is the model selector.
+            _ => &self.file_select,
+        }
+    }
+}
+
 impl Default for AmpParams {
     fn default() -> Self {
         Self {

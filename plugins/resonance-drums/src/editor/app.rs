@@ -43,6 +43,14 @@ pub(crate) struct DrumsEditorApp {
     /// the audio thread published and falls back with a fixed decay, so
     /// the bar tracks real output instead of sitting dead.
     out_meter: [f32; 2],
+    /// This plugin ships no factory presets, so the bank is the user's
+    /// own directory alone (ba todo #1358).
+    pub(crate) bank: resonance_plugin::presets::PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists.
+    pub(crate) presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
 }
 
 impl DrumsEditorApp {
@@ -50,6 +58,7 @@ impl DrumsEditorApp {
         params: Arc<DrumParams>,
         bridge: KitBridge,
         download_worker: Arc<WorkerHandle>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
         let installed_kits = kit_browser::refresh_installed_kits();
         Self {
@@ -62,6 +71,12 @@ impl DrumsEditorApp {
             installed_kits,
             installed_kits_refresh: 0,
             out_meter: [0.0; 2],
+            bank: resonance_plugin::presets::PresetBank::new(
+                <crate::ResonanceDrums as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                &[],
+            ),
+            presets,
+            preset_editor: resonance_plugin::presets::PresetEditor::default(),
         }
     }
 
