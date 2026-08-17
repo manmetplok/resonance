@@ -287,7 +287,7 @@ impl PresetBank {
                 .find(|e| e.name == preset.name)
                 .map(|e| e.json.to_string()),
             PresetSource::User => {
-                let path = self.user_path(&preset.name)?;
+                let path = self.existing_user_path(&preset.name)?;
                 std::fs::read_to_string(path).ok()
             }
         }
@@ -322,7 +322,16 @@ impl PresetBank {
         }
         let text = serde_json::to_string_pretty(&value)
             .map_err(|e| format!("Serialize preset: {e}"))?;
-        let path = dir.join(format!("{}.json", sanitize_filename(&name)));
+        // Overwrite only the file that already carries this exact display
+        // name; anything else gets a fresh one. Deriving the path from the
+        // name instead would let "Big+Room" silently destroy "Big Room",
+        // since both sanitise to `Big_Room`.
+        let path = match self.existing_user_path(&name) {
+            Some(path) => path,
+            None => self
+                .free_user_path(&name)
+                .ok_or_else(|| format!("No free file name for preset '{name}'"))?,
+        };
         std::fs::write(&path, text).map_err(|e| format!("Write preset: {e}"))?;
         Ok(PresetRef::user(name))
     }
@@ -337,8 +346,8 @@ impl PresetBank {
             return Ok(preset.clone());
         }
         let from = self
-            .user_path(&preset.name)
-            .ok_or_else(|| "No user data directory available".to_string())?;
+            .existing_user_path(&preset.name)
+            .ok_or_else(|| format!("No preset named '{}'", preset.name))?;
         let text = std::fs::read_to_string(&from)
             .map_err(|e| format!("Read preset '{}': {e}", preset.name))?;
         let mut value: serde_json::Value =
@@ -349,12 +358,15 @@ impl PresetBank {
                 serde_json::Value::String(new_name.clone()),
             );
         }
-        let to = self
-            .user_path(&new_name)
-            .ok_or_else(|| "No user data directory available".to_string())?;
-        if to != from && to.exists() {
+        // Refuse on the display name, not on the file name: two names that
+        // sanitise alike are still two different presets, and renaming onto
+        // one of them must not clobber it.
+        if self.existing_user_path(&new_name).is_some() {
             return Err(format!("A preset named '{new_name}' already exists"));
         }
+        let to = self
+            .free_user_path(&new_name)
+            .ok_or_else(|| format!("No free file name for preset '{new_name}'"))?;
         let text =
             serde_json::to_string_pretty(&value).map_err(|e| format!("Serialize preset: {e}"))?;
         std::fs::write(&to, text).map_err(|e| format!("Write preset: {e}"))?;
@@ -369,18 +381,69 @@ impl PresetBank {
         if preset.source != PresetSource::User {
             return Err("Factory presets cannot be deleted".to_string());
         }
-        let path = self
-            .user_path(&preset.name)
-            .ok_or_else(|| "No user data directory available".to_string())?;
-        if path.exists() {
+        if let Some(path) = self.existing_user_path(&preset.name) {
             std::fs::remove_file(&path).map_err(|e| format!("Delete preset: {e}"))?;
         }
         Ok(())
     }
 
-    fn user_path(&self, name: &str) -> Option<PathBuf> {
-        self.user_dir()
-            .map(|dir| dir.join(format!("{}.json", sanitize_filename(name))))
+    /// The file currently holding the user preset called `name`, found by
+    /// the display name stored *inside* each file rather than by
+    /// recomputing a path from the name.
+    ///
+    /// Sanitising is lossy — "Big Room" and "Big+Room" both reduce to
+    /// `Big_Room` — so a name cannot be turned back into the one file
+    /// that holds it. Only the stored name identifies a preset, which is
+    /// also what [`list_user`](Self::list_user) reports.
+    fn existing_user_path(&self, name: &str) -> Option<PathBuf> {
+        let dir = self.user_dir()?;
+        let entries = std::fs::read_dir(&dir).ok()?;
+        let mut fallback = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e != "json").unwrap_or(true) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            match serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| {
+                    v.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                }) {
+                Some(stored) if stored == name => return Some(path),
+                // A file dropped in by hand carries no "name"; it is
+                // listed under its stem, so match that way too — but only
+                // after every stored name has had its chance.
+                None if path.file_stem().map(|s| s == name).unwrap_or(false) => {
+                    fallback = Some(path)
+                }
+                _ => {}
+            }
+        }
+        fallback
+    }
+
+    /// A path no preset occupies yet, for a preset being created.
+    ///
+    /// Starts from the sanitised name and suffixes `-2`, `-3`, … until it
+    /// finds a free one, so saving "Big+Room" next to an existing
+    /// "Big Room" adds a second file instead of overwriting the first.
+    fn free_user_path(&self, name: &str) -> Option<PathBuf> {
+        let dir = self.user_dir()?;
+        let stem = sanitize_filename(name);
+        let first = dir.join(format!("{stem}.json"));
+        if !first.exists() {
+            return Some(first);
+        }
+        // Bounded so a corrupt directory cannot spin here; 999 distinct
+        // presets colliding on one stem is far past a real library.
+        (2..1000)
+            .map(|n| dir.join(format!("{stem}-{n}.json")))
+            .find(|p| !p.exists())
     }
 }
 

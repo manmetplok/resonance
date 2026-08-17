@@ -5508,6 +5508,7 @@ dependencies = [
  "iced",
  "parking_lot",
  "resonance-common",
+ "resonance-plugin",
  "serde",
  "serde_json",
  "wayland-plugin-gui",

@@ -274,6 +274,79 @@ fn renaming_onto_an_existing_name_is_refused_and_keeps_both() {
     assert_eq!(bank.list_user().len(), 2);
 }
 
+/// Sanitising is lossy: "Big Room" and "Big+Room" both reduce to the file
+/// stem `Big_Room`. They are still two different presets, and saving the
+/// second must not silently destroy the first.
+#[test]
+fn two_names_that_sanitise_alike_are_two_presets() {
+    let root = TempRoot::new("sanitise-collide");
+    let bank = root.bank();
+    let params = TestParams::new();
+
+    params.mix.set_plain(0.25);
+    bank.save("Big Room", &params.refs()).unwrap();
+    params.mix.set_plain(0.75);
+    bank.save("Big+Room", &params.refs()).unwrap();
+
+    let names: Vec<String> = bank.list_user().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, vec!["Big Room".to_string(), "Big+Room".to_string()]);
+
+    // ...and each still recalls its own sound, so they are genuinely two
+    // files and not one entry listed twice.
+    params.mix.set_plain(0.0);
+    assert!(bank.apply(&PresetRef::user("Big Room"), &params.refs()));
+    assert_eq!(params.mix.get_plain(), 0.25);
+    assert!(bank.apply(&PresetRef::user("Big+Room"), &params.refs()));
+    assert_eq!(params.mix.get_plain(), 0.75);
+}
+
+/// Re-saving under a name that already exists still overwrites that one
+/// preset — the collision handling above must not turn every save into a
+/// new file.
+#[test]
+fn re_saving_a_colliding_name_overwrites_only_its_own_file() {
+    let root = TempRoot::new("sanitise-overwrite");
+    let bank = root.bank();
+    let params = TestParams::new();
+
+    params.mix.set_plain(0.25);
+    bank.save("Big Room", &params.refs()).unwrap();
+    params.mix.set_plain(0.75);
+    bank.save("Big+Room", &params.refs()).unwrap();
+
+    params.mix.set_plain(0.5);
+    bank.save("Big Room", &params.refs()).unwrap();
+
+    assert_eq!(bank.list_user().len(), 2, "no third preset should appear");
+    params.mix.set_plain(0.0);
+    assert!(bank.apply(&PresetRef::user("Big Room"), &params.refs()));
+    assert_eq!(params.mix.get_plain(), 0.5, "the re-save should have landed");
+    assert!(bank.apply(&PresetRef::user("Big+Room"), &params.refs()));
+    assert_eq!(params.mix.get_plain(), 0.75, "the neighbour is untouched");
+}
+
+/// Deleting one of two colliding presets must remove the one named, not
+/// whichever file the name happens to sanitise to.
+#[test]
+fn deleting_one_colliding_preset_leaves_the_other() {
+    let root = TempRoot::new("sanitise-delete");
+    let bank = root.bank();
+    let params = TestParams::new();
+
+    params.mix.set_plain(0.25);
+    bank.save("Big Room", &params.refs()).unwrap();
+    params.mix.set_plain(0.75);
+    bank.save("Big+Room", &params.refs()).unwrap();
+
+    bank.delete(&PresetRef::user("Big Room")).unwrap();
+
+    let names: Vec<String> = bank.list_user().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, vec!["Big+Room".to_string()]);
+    params.mix.set_plain(0.0);
+    assert!(bank.apply(&PresetRef::user("Big+Room"), &params.refs()));
+    assert_eq!(params.mix.get_plain(), 0.75);
+}
+
 #[test]
 fn factory_presets_cannot_be_renamed_or_deleted() {
     let root = TempRoot::new("readonly");
