@@ -14,6 +14,8 @@ editor-widgets = ["dep:wayland-plugin-gui"]
 clack-plugin = { workspace = true }
 clack-extensions = { workspace = true }
 resonance-common = { path = "../resonance-common" }
+# User-preset directory resolution ($XDG_DATA_HOME/resonance/plugin-presets).
+dirs.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,3 +26,14 @@ wayland-plugin-gui = { path = "../wayland-plugin-gui", optional = true }
 # Drive the CLAP bridge from the host side in tests (activate + latency query).
 clack-host = { workspace = true }
 clack-extensions = { workspace = true, features = ["clack-host"] }
+
+# Depending on ourselves as a dev-dependency turns `editor-widgets` on for the
+# test build only, leaving `default = []` alone so DSP-only consumers stay lean.
+#
+# Without this, `tests/preset_bar_render.rs` is `#![cfg(feature =
+# "editor-widgets")]` around its whole body, so a plain `cargo test -p
+# resonance-plugin` compiles it to an empty binary and reports "0 passed" —
+# a test that passes by not existing. `cargo check --workspace --all-targets`
+# does enable the feature through unification, so it type-checked and looked
+# covered while never once executing (ba doc #285).
+resonance-plugin = { path = ".", features = ["editor-widgets"] }

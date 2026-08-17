@@ -436,12 +436,28 @@ pub trait ResonancePlugin: Send + 'static {
         serde_json::to_vec(&json).unwrap_or_default()
     }
 
+    /// Parameter ids this plugin has renamed, and the state version each
+    /// rename landed in.
+    ///
+    /// Parameters are matched by string id, so without this a rename
+    /// silently restores that parameter to its default in every project
+    /// and preset already on disk — the state format carries
+    /// [`crate::state::STATE_VERSION`] precisely so the older shape can be
+    /// recognised and translated. Declare the rename here in the same
+    /// commit that changes the id. Default: none.
+    fn param_renames(&self) -> &'static [crate::state::ParamRename] {
+        &[]
+    }
+
     /// Load plugin state from bytes. Default: JSON deserialization of
-    /// params plus any `extra_state_saver()` contribution.
+    /// params plus any `extra_state_saver()` contribution, after bringing
+    /// an older state version up to date (see
+    /// [`param_renames`](ResonancePlugin::param_renames)).
     fn load_state(&mut self, data: &[u8]) -> bool {
-        let Ok(state) = serde_json::from_slice::<serde_json::Value>(data) else {
+        let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(data) else {
             return false;
         };
+        crate::state::migrate(&mut state, self.param_renames());
         let ok = crate::state::load_params_from_json(&self.params(), &state);
         if let Some(saver) = self.extra_state_saver() {
             saver.load(&state);
@@ -454,6 +470,12 @@ pub trait ResonancePlugin: Send + 'static {
     /// by the CLAP bridge and cached for the plugin's lifetime, so the
     /// bridge can save/load extra state even while the plugin is in the
     /// audio processor. Default: `None`.
+    ///
+    /// This is also how the loaded-preset identity is persisted: return
+    /// the plugin's [`crate::presets::PresetSession`] here (it implements
+    /// this trait, and [`PresetSession::with_extra`](crate::presets::PresetSession::with_extra)
+    /// chains a saver the plugin already had), and the preset the user
+    /// picked survives closing the editor and reopening the project.
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
         None
     }
