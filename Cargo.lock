@@ -5504,6 +5504,7 @@ dependencies = [
  "clack-extensions",
  "clack-host",
  "clack-plugin",
+ "dirs",
  "iced",
  "parking_lot",
  "resonance-common",

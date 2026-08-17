@@ -17,6 +17,10 @@ pub mod state;
 #[cfg(feature = "editor-widgets")]
 pub mod editor_widgets;
 
+/// Shared preset bar (picker + Save/Rename/Delete) for plugin editors.
+#[cfg(feature = "editor-widgets")]
+pub mod preset_ui;
+
 #[cfg(feature = "ui")]
 pub mod ui;
 
@@ -26,6 +30,10 @@ pub use formatters::*;
 pub use host::HostHandle;
 pub use loader::{rescan_directory, Mailbox};
 pub use param::{BoolParam, FloatParam, IntParam, Param};
+pub use presets::{
+    FactoryPreset, PresetBank, PresetEditor, PresetEvent, PresetRef, PresetSession, PresetSource,
+};
+pub use state::{ParamRename, STATE_VERSION};
 pub use plugin::{
     ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer,
     OutputPortSpec, PluginEvent, ResonancePlugin, TempoInfo,
