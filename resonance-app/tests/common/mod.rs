@@ -62,6 +62,13 @@ pub fn should_skip_goldens() -> bool {
 ///
 /// `path` is the golden location relative to the crate root, e.g.
 /// `"tests/snapshots/my_test.png"`.
+///
+/// To re-bless goldens after an intended visual change, set `RESONANCE_BLESS=1`
+/// and run the tests that own them:
+///
+/// ```text
+/// RESONANCE_BLESS=1 cargo test -p resonance-app --test mixer
+/// ```
 #[track_caller]
 pub fn assert_golden(snapshot: &Snapshot, path: &str) {
     if should_skip_goldens() {
@@ -88,6 +95,31 @@ pub fn assert_golden(snapshot: &Snapshot, path: &str) {
     // Ok(true) — the exact silent pass this check exists to close.
     let stem = path.strip_suffix(".png").unwrap_or(path);
     let backend_variants = [format!("{stem}-wgpu.png"), format!("{stem}-tiny-skia.png")];
+
+    // `RESONANCE_BLESS=1` re-renders the golden in place.
+    //
+    // Without it, re-blessing means fighting the two mechanisms below: the
+    // absent-file guard refuses to run when the PNG is missing, and
+    // `matches_image` only writes a golden when there isn't one. So the manual
+    // dance was to rename `foo-wgpu.png` to `foo-tiny-skia.png` (satisfying the
+    // guard with a decoy), run the test so the real file gets recreated, then
+    // delete the decoy. That is not a procedure anyone should have to
+    // rediscover (ba doc #285 §4-T7).
+    //
+    // The guard still applies to every normal run, which is the case it exists
+    // for: a golden lost to a bad merge or a `git clean` must fail loudly
+    // rather than regenerate itself and pass forever after.
+    if std::env::var("RESONANCE_BLESS").as_deref() == Ok("1") {
+        for stale in &backend_variants {
+            let _ = std::fs::remove_file(stale);
+        }
+        snapshot
+            .matches_image(path)
+            .unwrap_or_else(|err| panic!("blessing {path}: {err}"));
+        eprintln!("RESONANCE_BLESS=1: re-rendered golden {path}");
+        return;
+    }
+
     assert!(
         backend_variants
             .iter()
