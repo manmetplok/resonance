@@ -22,11 +22,20 @@ const WINDOW_H: u32 = 600;
 pub struct DelayEditorFactory {
     params: Arc<DelayParams>,
     viz: Arc<DelayViz>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl DelayEditorFactory {
-    pub fn new(params: Arc<DelayParams>, viz: Arc<DelayViz>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<DelayParams>,
+        viz: Arc<DelayViz>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            presets,
+        }
     }
 }
 
@@ -44,7 +53,11 @@ impl EditorFactory for DelayEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = DelayEditorApp::new(self.params.clone(), self.viz.clone());
+        let app = DelayEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {

@@ -20,6 +20,11 @@ pub struct ResonanceReverb {
     /// storage is atomic internally so `&ReverbParams` is safe from both
     /// audio and UI threads.
     pub params: Arc<ReverbParams>,
+    /// Which preset is loaded and whether it has been edited since.
+    /// Shared with the editor thread and handed to the bridge as this
+    /// plugin's extra state, so the identity survives closing the
+    /// window (ba todo #1358).
+    presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Audio-thread-only smoothers. Kept outside `params` so the audio
     /// thread can mutate smoother state through `&mut self`.
     smoothers: ReverbSmoothers,
@@ -42,6 +47,7 @@ impl ResonancePlugin for ResonanceReverb {
     fn new() -> Self {
         Self {
             params: Arc::new(ReverbParams::default()),
+            presets: resonance_plugin::presets::PresetSession::new(),
             smoothers: ReverbSmoothers::new(),
             viz: ReverbViz::new(),
             reverb: None,
@@ -155,11 +161,19 @@ impl ResonancePlugin for ResonanceReverb {
         self.viz.push_tail_rms(reverb.take_wet_rms());
     }
 
+    /// The loaded-preset identity rides along with the parameter values,
+    /// on both bridge paths, so reopening a saved project shows the preset
+    /// the sound came from instead of a blank picker.
+    fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::ExtraStateSaver>> {
+        Some(self.presets.clone())
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::ReverbEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
+            self.presets.clone(),
         )))
     }
 }

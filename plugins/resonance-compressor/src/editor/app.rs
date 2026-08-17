@@ -3,6 +3,9 @@
 
 use std::sync::Arc;
 
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
+use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::CompressorParams;
@@ -18,11 +21,31 @@ use super::{control_strip, curve, history, meters, theme};
 pub(crate) struct CompressorEditorApp {
     pub(crate) params: Arc<CompressorParams>,
     pub(crate) viz: Arc<CompressorViz>,
+    /// Factory bank + this plugin's user preset directory.
+    pub(crate) bank: PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists.
+    pub(crate) presets: Arc<PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: PresetEditor,
 }
 
 impl CompressorEditorApp {
-    pub fn new(params: Arc<CompressorParams>, viz: Arc<CompressorViz>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<CompressorParams>,
+        viz: Arc<CompressorViz>,
+        presets: Arc<PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            bank: PresetBank::new(
+                <crate::ResonanceCompressor as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                PRESETS,
+            ),
+            presets,
+            preset_editor: PresetEditor::default(),
+        }
     }
 }
 
@@ -57,16 +80,18 @@ fn draw_header(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
         ui.add_space(8.0);
 
         ui.label(egui::RichText::new("Preset").color(theme::TEXT_DIM));
-        egui::ComboBox::from_id_salt("comp_preset_combo")
-            .width(200.0)
-            .selected_text("— select —")
-            .show_ui(ui, |ui| {
-                for entry in PRESETS {
-                    if ui.selectable_label(false, entry.name).clicked() {
-                        load_preset(&app.params, entry.json);
-                    }
-                }
-            });
+        let params: Vec<&dyn Param> = (0..crate::params::PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        preset_bar(
+            ui,
+            "comp_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &params,
+            "— select —",
+        );
 
         ui.add_space(16.0);
         ui.separator();
@@ -164,6 +189,3 @@ fn draw_center(ui: &mut egui::Ui, app: &mut CompressorEditorApp) {
     meters::draw_output_meter(&painter, out_rect, app.viz.read_output_db());
 }
 
-fn load_preset(params: &CompressorParams, json: &str) {
-    resonance_plugin::presets::load(json, crate::params::PARAM_COUNT, |i| params.param_at(i));
-}

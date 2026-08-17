@@ -9,6 +9,9 @@
 use std::sync::Arc;
 
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
+use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, Editor as RuntimeEditor, EditorApp, EditorOptions};
 
 use crate::params::{ReverbParams, PARAM_COUNT};
@@ -31,11 +34,16 @@ const WINDOW_H: u32 = 660;
 pub struct ReverbEditorFactory {
     params: Arc<ReverbParams>,
     viz: Arc<ReverbViz>,
+    presets: Arc<PresetSession>,
 }
 
 impl ReverbEditorFactory {
-    pub fn new(params: Arc<ReverbParams>, viz: Arc<ReverbViz>) -> Self {
-        Self { params, viz }
+    pub fn new(params: Arc<ReverbParams>, viz: Arc<ReverbViz>, presets: Arc<PresetSession>) -> Self {
+        Self {
+            params,
+            viz,
+            presets,
+        }
     }
 }
 
@@ -53,7 +61,11 @@ impl EditorFactory for ReverbEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = ReverbEditorApp::new(self.params.clone(), self.viz.clone());
+        let app = ReverbEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {
@@ -131,11 +143,27 @@ impl Drop for RuntimeEditorHandle {
 pub(crate) struct ReverbEditorApp {
     pub(crate) params: Arc<ReverbParams>,
     pub(crate) viz: Arc<ReverbViz>,
+    /// Factory bank + this plugin's user preset directory.
+    pub(crate) bank: PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists.
+    pub(crate) presets: Arc<PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: PresetEditor,
 }
 
 impl ReverbEditorApp {
-    pub fn new(params: Arc<ReverbParams>, viz: Arc<ReverbViz>) -> Self {
-        Self { params, viz }
+    pub fn new(params: Arc<ReverbParams>, viz: Arc<ReverbViz>, presets: Arc<PresetSession>) -> Self {
+        Self {
+            params,
+            viz,
+            bank: PresetBank::new(
+                <crate::ResonanceReverb as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                PRESETS,
+            ),
+            presets,
+            preset_editor: PresetEditor::default(),
+        }
     }
 }
 
@@ -170,16 +198,18 @@ fn draw_header(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
         ui.add_space(8.0);
 
         ui.label(egui::RichText::new("Preset").color(theme::TEXT_DIM));
-        egui::ComboBox::from_id_salt("reverb_preset_combo")
-            .width(180.0)
-            .selected_text("— select —")
-            .show_ui(ui, |ui| {
-                for entry in PRESETS {
-                    if ui.selectable_label(false, entry.name).clicked() {
-                        load_preset(&app.params, entry.json);
-                    }
-                }
-            });
+        let params: Vec<&dyn Param> = (0..PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        preset_bar(
+            ui,
+            "reverb_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &params,
+            "— select —",
+        );
 
         ui.add_space(16.0);
         ui.separator();
@@ -248,9 +278,3 @@ fn draw_center(ui: &mut egui::Ui, app: &mut ReverbEditorApp) {
     meters::draw(&painter, meter_rect, &app.viz);
 }
 
-/// Apply a factory preset: walk every param and call `set_plain` for any
-/// id that matches a key in the preset's `params` object. Missing keys
-/// are ignored so older presets still load after a param is added.
-fn load_preset(params: &ReverbParams, json: &str) {
-    resonance_plugin::presets::load(json, PARAM_COUNT, |i| params.param_at(i));
-}

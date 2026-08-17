@@ -6,10 +6,13 @@
 
 use std::sync::Arc;
 
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
+use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::DelayParams;
-use crate::presets::{load_preset, PRESETS};
+use crate::presets::PRESETS;
 use crate::sync::division_label;
 use crate::viz::DelayViz;
 
@@ -18,11 +21,31 @@ use super::{controls, echo_view, theme};
 pub(crate) struct DelayEditorApp {
     pub(crate) params: Arc<DelayParams>,
     pub(crate) viz: Arc<DelayViz>,
+    /// Factory bank + this plugin's user preset directory.
+    pub(crate) bank: PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists.
+    pub(crate) presets: Arc<PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: PresetEditor,
 }
 
 impl DelayEditorApp {
-    pub fn new(params: Arc<DelayParams>, viz: Arc<DelayViz>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<DelayParams>,
+        viz: Arc<DelayViz>,
+        presets: Arc<PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            bank: PresetBank::new(
+                <crate::ResonanceDelay as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                PRESETS,
+            ),
+            presets,
+            preset_editor: PresetEditor::default(),
+        }
     }
 }
 
@@ -57,19 +80,18 @@ fn draw_header(ui: &mut egui::Ui, app: &mut DelayEditorApp) {
         ui.add_space(8.0);
 
         ui.label(egui::RichText::new("Preset").color(theme::TEXT_DIM));
-        egui::ComboBox::from_id_salt("delay_preset_combo")
-            .width(180.0)
-            .selected_text("— select —")
-            .show_ui(ui, |ui| {
-                for entry in PRESETS {
-                    if ui.selectable_label(false, entry.name).clicked() {
-                        // Full snapshots (see `presets.rs`), so this is a
-                        // complete recall — nothing survives from the
-                        // previously loaded patch.
-                        load_preset(&app.params, entry.json);
-                    }
-                }
-            });
+        let params: Vec<&dyn Param> = (0..crate::params::PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        preset_bar(
+            ui,
+            "delay_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &params,
+            "— select —",
+        );
 
         ui.add_space(16.0);
         ui.separator();

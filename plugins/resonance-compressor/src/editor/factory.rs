@@ -17,11 +17,20 @@ use super::app::CompressorEditorApp;
 pub struct CompressorEditorFactory {
     params: Arc<CompressorParams>,
     viz: Arc<CompressorViz>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl CompressorEditorFactory {
-    pub fn new(params: Arc<CompressorParams>, viz: Arc<CompressorViz>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<CompressorParams>,
+        viz: Arc<CompressorViz>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            presets,
+        }
     }
 }
 
@@ -39,7 +48,11 @@ impl EditorFactory for CompressorEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = CompressorEditorApp::new(self.params.clone(), self.viz.clone());
+        let app = CompressorEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {

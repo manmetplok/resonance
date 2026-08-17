@@ -24,10 +24,13 @@ pub use factory::GateEditorFactory;
 
 use std::sync::Arc;
 
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
+use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::{GateParams, PARAM_COUNT};
-use crate::presets::{load_preset, PRESETS};
+use crate::presets::PRESETS;
 use crate::viz::GateViz;
 
 use status::DetectorSummary;
@@ -74,20 +77,31 @@ pub(crate) struct GateEditorApp {
     pub(crate) params: Arc<GateParams>,
     /// Detector status published by the audio thread (ba todo #1314).
     pub(crate) viz: Arc<GateViz>,
-    /// Index into [`crate::presets::PRESETS`] of the preset last loaded
-    /// from the header combo. Display only — the combo shows what was
-    /// loaded rather than a permanent placeholder (ba todo #1280);
-    /// editing a knob afterwards does not clear it, because the plugin
-    /// has no way to tell a user edit from a host automation write.
-    selected_preset: Option<usize>,
+    /// Factory bank + this plugin's user preset directory.
+    pub(crate) bank: PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists. Replaces the local `selected_preset` index
+    /// this editor used to keep: that was display-only and could not
+    /// survive the window closing, and it deliberately never cleared on
+    /// edit because the plugin could not tell a user edit from a host
+    /// automation write. `PresetSession` is told by the bar itself,
+    /// which is the only caller that knows.
+    pub(crate) presets: Arc<PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: PresetEditor,
 }
 
 impl GateEditorApp {
-    pub fn new(params: Arc<GateParams>, viz: Arc<GateViz>) -> Self {
+    pub fn new(params: Arc<GateParams>, viz: Arc<GateViz>, presets: Arc<PresetSession>) -> Self {
         Self {
             params,
             viz,
-            selected_preset: None,
+            bank: PresetBank::new(
+                <crate::ResonanceGate as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                PRESETS,
+            ),
+            presets,
+            preset_editor: PresetEditor::default(),
         }
     }
 }
@@ -125,23 +139,18 @@ fn draw_header(ui: &mut egui::Ui, app: &mut GateEditorApp) {
         ui.add_space(8.0);
 
         ui.label(egui::RichText::new("Preset").color(theme::TEXT_3));
-        let selected_text = app
-            .selected_preset
-            .and_then(|i| PRESETS.get(i))
-            .map_or("— preset —", |e| e.name);
-        egui::ComboBox::from_id_salt("gate_preset_combo")
-            .width(200.0)
-            .selected_text(selected_text)
-            .show_ui(ui, |ui| {
-                for (i, entry) in PRESETS.iter().enumerate() {
-                    let selected = app.selected_preset == Some(i);
-                    if ui.selectable_label(selected, entry.name).clicked()
-                        && load_preset(&app.params, entry.json)
-                    {
-                        app.selected_preset = Some(i);
-                    }
-                }
-            });
+        let params: Vec<&dyn Param> = (0..PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        preset_bar(
+            ui,
+            "gate_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &params,
+            "— preset —",
+        );
 
         // Right-aligned: which detector is running and what it is doing.
         status::draw(ui, &DetectorSummary::from_viz(&app.viz));

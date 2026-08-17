@@ -22,11 +22,20 @@ const WINDOW_H: u32 = 320;
 pub struct GateEditorFactory {
     params: Arc<GateParams>,
     viz: Arc<GateViz>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl GateEditorFactory {
-    pub fn new(params: Arc<GateParams>, viz: Arc<GateViz>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<GateParams>,
+        viz: Arc<GateViz>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            presets,
+        }
     }
 }
 
@@ -44,7 +53,11 @@ impl EditorFactory for GateEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = GateEditorApp::new(self.params.clone(), self.viz.clone());
+        let app = GateEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {

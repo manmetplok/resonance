@@ -38,6 +38,11 @@ pub struct ResonanceGate {
     /// Params shared with the editor via `Arc`; all storage is atomic
     /// internally so `&GateParams` is safe from audio and UI threads.
     pub params: Arc<GateParams>,
+    /// Which preset is loaded and whether it has been edited since.
+    /// Shared with the editor thread and handed to the bridge as this
+    /// plugin's extra state, so the identity survives closing the
+    /// window (ba todo #1358).
+    presets: Arc<resonance_plugin::presets::PresetSession>,
     dsp: Option<GateDsp>,
     /// Detector status shared with the editor: which detector is
     /// running, and what it is doing (ba todo #1314).
@@ -89,6 +94,7 @@ impl ResonancePlugin for ResonanceGate {
     fn new() -> Self {
         Self {
             params: Arc::new(GateParams::default()),
+            presets: resonance_plugin::presets::PresetSession::new(),
             dsp: None,
             viz: GateViz::new(),
         }
@@ -160,11 +166,19 @@ impl ResonancePlugin for ResonanceGate {
             .store_block(dsp.last_state, dsp.last_gr_db, dsp.last_detector_db);
     }
 
+    /// The loaded-preset identity rides along with the parameter values,
+    /// on both bridge paths, so reopening a saved project shows the preset
+    /// the sound came from instead of a blank picker.
+    fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::ExtraStateSaver>> {
+        Some(self.presets.clone())
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::GateEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
+            self.presets.clone(),
         )))
     }
 }

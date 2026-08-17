@@ -10,10 +10,10 @@
 
 use crate::params::{DelayParams, PARAM_COUNT};
 
-pub struct PresetEntry {
-    pub name: &'static str,
-    pub json: &'static str,
-}
+/// The factory-preset entry type is the shared one, so this crate's
+/// `PRESETS` can be handed straight to `presets::PresetBank` (ba todo
+/// #1358). The alias keeps the crate-local name every call site uses.
+pub use resonance_plugin::presets::FactoryPreset as PresetEntry;
 
 /// Apply a preset JSON blob to `params`. Returns `false` when the blob
 /// is not a `{"params": {...}}` object.

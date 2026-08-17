@@ -3,10 +3,10 @@
 //! natively, so loading a preset just walks the param list and calls
 //! `set_plain`.
 
-pub struct PresetEntry {
-    pub name: &'static str,
-    pub json: &'static str,
-}
+/// The factory-preset entry type is the shared one, so this crate's
+/// `PRESETS` can be handed straight to `presets::PresetBank` (ba todo
+/// #1358). The alias keeps the crate-local name every call site uses.
+pub use resonance_plugin::presets::FactoryPreset as PresetEntry;
 
 pub const PRESETS: &[PresetEntry] = &[
     PresetEntry {
