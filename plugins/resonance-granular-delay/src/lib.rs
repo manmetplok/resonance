@@ -43,6 +43,11 @@ use viz::GranularViz;
 
 pub struct ResonanceGranularDelay {
     pub params: Arc<GranularDelayParams>,
+    /// Which preset is loaded and whether it has been edited since.
+    /// Shared with the editor thread and handed to the bridge as this
+    /// plugin's extra state, so the identity survives closing the
+    /// window (ba todo #1358).
+    presets: Arc<resonance_plugin::presets::PresetSession>,
     smoothers: GranularSmoothers,
     viz: Arc<GranularViz>,
     dsp: Option<GranularDsp>,
@@ -189,6 +194,7 @@ impl ResonancePlugin for ResonanceGranularDelay {
     fn new() -> Self {
         Self {
             params: Arc::new(GranularDelayParams::default()),
+            presets: resonance_plugin::presets::PresetSession::new(),
             smoothers: GranularSmoothers::new(),
             viz: GranularViz::new(),
             dsp: None,
@@ -335,11 +341,19 @@ impl ResonancePlugin for ResonanceGranularDelay {
         dsp.publish_viz(&self.viz, &block, self.smoothers.feedback.current());
     }
 
+    /// The loaded-preset identity rides along with the parameter values,
+    /// on both bridge paths, so reopening a saved project shows the preset
+    /// the sound came from instead of a blank picker.
+    fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::ExtraStateSaver>> {
+        Some(self.presets.clone())
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::GranularEditorFactory::new(
             self.params.clone(),
             self.viz.clone(),
+            self.presets.clone(),
         )))
     }
 }

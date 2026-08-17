@@ -25,11 +25,20 @@ const WINDOW_H: u32 = 700;
 pub struct GranularEditorFactory {
     params: Arc<GranularDelayParams>,
     viz: Arc<GranularViz>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl GranularEditorFactory {
-    pub fn new(params: Arc<GranularDelayParams>, viz: Arc<GranularViz>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<GranularDelayParams>,
+        viz: Arc<GranularViz>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            presets,
+        }
     }
 }
 
@@ -47,7 +56,11 @@ impl EditorFactory for GranularEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = GranularEditorApp::new(self.params.clone(), self.viz.clone());
+        let app = GranularEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {

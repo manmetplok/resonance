@@ -23,11 +23,20 @@ use super::app::WavetableEditorApp;
 pub struct WavetableEditorFactory {
     params: Arc<WavetableParams>,
     viz: Arc<WavetableVizState>,
+    presets: Arc<resonance_plugin::presets::PresetSession>,
 }
 
 impl WavetableEditorFactory {
-    pub fn new(params: Arc<WavetableParams>, viz: Arc<WavetableVizState>) -> Self {
-        Self { params, viz }
+    pub fn new(
+        params: Arc<WavetableParams>,
+        viz: Arc<WavetableVizState>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            viz,
+            presets,
+        }
     }
 }
 
@@ -48,7 +57,11 @@ impl EditorFactory for WavetableEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = WavetableEditorApp::new(self.params.clone(), self.viz.clone());
+        let app = WavetableEditorApp::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {

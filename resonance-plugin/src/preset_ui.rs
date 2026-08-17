@@ -49,7 +49,38 @@ pub fn preset_bar(
         }
 
         let current = session.current();
-        event = picker(ui, id_salt, editor, bank, session, params, placeholder);
+
+        // Step through the list without opening the combo — the fastest
+        // way to audition a bank. Wavetable had these as a private fork
+        // around its own combo; ba todo #1280 folds them in here so the
+        // whole fleet gets them. Disabled at the ends, since stepping
+        // clamps rather than wraps.
+        let all = bank.list();
+        let at = current
+            .as_ref()
+            .and_then(|c| all.iter().position(|p| p == c));
+        let can_prev = !all.is_empty() && at.map(|i| i > 0).unwrap_or(true);
+        let can_next = !all.is_empty() && at.map(|i| i + 1 < all.len()).unwrap_or(true);
+        if ui
+            .add_enabled(can_prev, egui::Button::new("◀").small().frame(false))
+            .on_hover_text("Previous preset")
+            .clicked()
+        {
+            event = editor.step(bank, session, -1, params);
+        }
+
+        let picked = picker(ui, id_salt, editor, bank, session, params, placeholder);
+        if !matches!(picked, PresetEvent::None) {
+            event = picked;
+        }
+
+        if ui
+            .add_enabled(can_next, egui::Button::new("▶").small().frame(false))
+            .on_hover_text("Next preset")
+            .clicked()
+        {
+            event = editor.step(bank, session, 1, params);
+        }
 
         // Save is always available: it is how a user preset comes into
         // existence. Rename and Delete apply to user presets only —

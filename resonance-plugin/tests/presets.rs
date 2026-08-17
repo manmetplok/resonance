@@ -542,6 +542,73 @@ fn picking_a_preset_loads_it_and_reports_that_every_param_may_have_moved() {
     assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
 }
 
+/// Stepping walks the merged list, so a user preset is reachable from the
+/// factory bank without opening the combo (ba todo #1280).
+#[test]
+fn stepping_walks_factory_then_user_presets() {
+    let root = TempRoot::new("bar-step");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let mut editor = PresetEditor::default();
+    let params = TestParams::new();
+    bank.save("Mine", &params.refs()).unwrap();
+
+    // Nothing loaded: forwards enters at the top of the list.
+    editor.step(&bank, &session, 1, &params.refs());
+    assert_eq!(session.current(), Some(PresetRef::factory("Init")));
+
+    editor.step(&bank, &session, 1, &params.refs());
+    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+
+    // ...and on into the user half of the same list.
+    editor.step(&bank, &session, 1, &params.refs());
+    assert_eq!(session.current(), Some(PresetRef::user("Mine")));
+
+    editor.step(&bank, &session, -1, &params.refs());
+    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+}
+
+/// Stepping clamps rather than wrapping: running off the end and silently
+/// reappearing at the other one is disorienting when you are listening
+/// rather than looking.
+#[test]
+fn stepping_stops_at_both_ends() {
+    let root = TempRoot::new("bar-step-ends");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let mut editor = PresetEditor::default();
+    let params = TestParams::new();
+
+    // Backwards from nothing enters at the bottom.
+    editor.step(&bank, &session, -1, &params.refs());
+    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+
+    let event = editor.step(&bank, &session, 1, &params.refs());
+    assert_eq!(event, PresetEvent::None, "no wrap past the last preset");
+    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+
+    editor.step(&bank, &session, -1, &params.refs());
+    assert_eq!(session.current(), Some(PresetRef::factory("Init")));
+    let event = editor.step(&bank, &session, -1, &params.refs());
+    assert_eq!(event, PresetEvent::None, "no wrap before the first preset");
+    assert_eq!(session.current(), Some(PresetRef::factory("Init")));
+}
+
+/// Stepping actually loads the sound, not just the label.
+#[test]
+fn stepping_recalls_the_preset_it_lands_on() {
+    let root = TempRoot::new("bar-step-sound");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let mut editor = PresetEditor::default();
+    let params = TestParams::new();
+
+    editor.pick(&bank, &session, &PresetRef::factory("Init"), &params.refs());
+    assert_eq!(params.taps.get_plain(), 3.0);
+    editor.step(&bank, &session, 1, &params.refs());
+    assert_eq!(params.taps.get_plain(), 7.0, "Wide's value should be live");
+}
+
 // ---------------------------------------------------------------------------
 // Identity through save_state / load_state — the half that regressed
 // every time the window closed

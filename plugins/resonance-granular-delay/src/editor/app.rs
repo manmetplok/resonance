@@ -11,6 +11,9 @@
 
 use std::sync::Arc;
 
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
+use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::GranularDelayParams;
@@ -26,19 +29,34 @@ const STRIP_H: f32 = 246.0;
 pub(crate) struct GranularEditorApp {
     pub(crate) params: Arc<GranularDelayParams>,
     pub(crate) viz: Arc<GranularViz>,
-    /// Index into [`crate::presets::PRESETS`] of the preset last loaded
-    /// through the header combo (display only — edits do not clear it).
-    selected_preset: Option<usize>,
+    /// Factory bank + this plugin's user preset directory.
+    pub(crate) bank: PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists. Replaces the local `selected_preset`
+    /// index, which was display-only and did not survive the window
+    /// closing.
+    pub(crate) presets: Arc<PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: PresetEditor,
     /// Hero canvas gesture in flight (ba todo #1144).
     hero_drag: Option<hero::HeroDrag>,
 }
 
 impl GranularEditorApp {
-    pub fn new(params: Arc<GranularDelayParams>, viz: Arc<GranularViz>) -> Self {
+    pub fn new(
+        params: Arc<GranularDelayParams>,
+        viz: Arc<GranularViz>,
+        presets: Arc<PresetSession>,
+    ) -> Self {
         Self {
             params,
             viz,
-            selected_preset: None,
+            bank: PresetBank::new(
+                <crate::ResonanceGranularDelay as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                crate::presets::PRESETS,
+            ),
+            presets,
+            preset_editor: PresetEditor::default(),
             hero_drag: None,
         }
     }
@@ -147,25 +165,18 @@ fn draw_header(ui: &mut egui::Ui, app: &mut GranularEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        // Preset combo (parity with the compressor editor): loads the
-        // factory snapshot through the shared loader on select.
-        let selected_text = app
-            .selected_preset
-            .and_then(|i| crate::presets::PRESETS.get(i))
-            .map_or("— preset —", |e| e.name);
-        egui::ComboBox::from_id_salt("granular_preset_combo")
-            .width(190.0)
-            .selected_text(selected_text)
-            .show_ui(ui, |ui| {
-                for (i, entry) in crate::presets::PRESETS.iter().enumerate() {
-                    let selected = app.selected_preset == Some(i);
-                    if ui.selectable_label(selected, entry.name).clicked()
-                        && crate::presets::load_preset(&app.params, entry.json)
-                    {
-                        app.selected_preset = Some(i);
-                    }
-                }
-            });
+        let params: Vec<&dyn Param> = (0..crate::params::PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        preset_bar(
+            ui,
+            "granular_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &params,
+            "— preset —",
+        );
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(8.0);

@@ -779,6 +779,51 @@ impl PresetEditor {
         }
     }
 
+    /// Move `delta` places through the merged factory+user list and load
+    /// what lands, for the bar's ◀ / ▶ buttons.
+    ///
+    /// Wavetable grew private prev/next steppers around its own combo
+    /// because auditioning presets one click at a time is genuinely
+    /// useful; ba todo #1280 asks for that to live in the shared widget
+    /// rather than as a fork, so every plugin gets it.
+    ///
+    /// Stepping is clamped, not wrapping: running off the end of a list
+    /// and silently reappearing at the other end is disorienting when
+    /// you are listening rather than looking. With nothing loaded, a
+    /// step forwards starts at the first preset and a step backwards at
+    /// the last, so either button gets a user into the list.
+    pub fn step(
+        &mut self,
+        bank: &PresetBank,
+        session: &PresetSession,
+        delta: i32,
+        params: &[&dyn Param],
+    ) -> PresetEvent {
+        let all = bank.list();
+        if all.is_empty() {
+            return PresetEvent::None;
+        }
+        let target = match session.current() {
+            Some(current) => match all.iter().position(|p| *p == current) {
+                // Clamp at both ends.
+                Some(index) => {
+                    let next = index as i32 + delta;
+                    if next < 0 || next >= all.len() as i32 {
+                        return PresetEvent::None;
+                    }
+                    next as usize
+                }
+                // Loaded preset is not in the list any more (deleted
+                // outside the app): treat the step as an entry point.
+                None => 0,
+            },
+            None if delta >= 0 => 0,
+            None => all.len() - 1,
+        };
+        let preset = all[target].clone();
+        self.pick(bank, session, &preset, params)
+    }
+
     /// Delete the loaded user preset.
     pub fn delete(
         &mut self,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use wayland_plugin_gui::{egui, EditorApp};
 
-use crate::params::{WavetableParams, PARAM_COUNT};
+use crate::params::WavetableParams;
 use crate::viz::{VizSnapshot, WavetableVizState};
 
 use super::{chrome, tabs, theme};
@@ -30,13 +30,25 @@ pub(crate) struct WavetableEditorApp {
     pub(crate) selected_lfo: usize,
     #[allow(dead_code)] // reserved for future "highlight selected mod slot" feature
     pub(crate) selected_mod_slot: usize,
-    pub(crate) preset_idx: usize,
+    /// Factory bank + this plugin's user preset directory.
+    pub(crate) bank: resonance_plugin::presets::PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists. Replaces the local `preset_idx`, which
+    /// tracked a position in the factory list and could not represent a
+    /// user preset at all.
+    pub(crate) presets: std::sync::Arc<resonance_plugin::presets::PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
     /// Most recent audio→UI viz snapshot, refreshed each frame.
     pub(crate) snapshot: VizSnapshot,
 }
 
 impl WavetableEditorApp {
-    pub fn new(params: Arc<WavetableParams>, viz: Arc<WavetableVizState>) -> Self {
+    pub fn new(
+        params: Arc<WavetableParams>,
+        viz: Arc<WavetableVizState>,
+        presets: std::sync::Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
         let snapshot = viz.read_snapshot();
         // Standalone editor harness can pick an initial tab via env var so
         // each tab can be screenshotted without manual clicking.
@@ -54,7 +66,12 @@ impl WavetableEditorApp {
             selected_osc: 0,
             selected_lfo: 0,
             selected_mod_slot: 0,
-            preset_idx: 0,
+            bank: resonance_plugin::presets::PresetBank::new(
+                <crate::ResonanceWavetable as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                crate::presets::PRESETS,
+            ),
+            presets,
+            preset_editor: resonance_plugin::presets::PresetEditor::default(),
             snapshot,
         }
     }
@@ -120,12 +137,6 @@ impl EditorApp for WavetableEditorApp {
     }
 }
 
-/// Apply a factory preset: walk every param and call `set_plain` for any
-/// id that matches a key in the preset's `params` object. Missing keys
-/// are ignored so older presets still load after a param is added.
-pub(super) fn load_preset(params: &WavetableParams, json: &str) {
-    resonance_plugin::presets::load(json, PARAM_COUNT, |i| params.param_at(i));
-}
 
 pub(super) fn peak_of(scope: &[f32]) -> f32 {
     let mut p = 0.0f32;

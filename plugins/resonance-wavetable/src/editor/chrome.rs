@@ -3,11 +3,12 @@
 //! These functions are called from [`super::app::WavetableEditorApp::ui`]
 //! and paint the non-tab UI furniture surrounding the central tab body.
 
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::Param;
 use wayland_plugin_gui::egui;
 
-use crate::presets::PRESETS;
 
-use super::app::{load_preset, peak_of, WavetableEditorApp, WtTab};
+use super::app::{peak_of, WavetableEditorApp, WtTab};
 use super::{theme, widgets};
 
 pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut WavetableEditorApp) {
@@ -83,72 +84,26 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
 
             ui.add_space(8.0);
 
-            // Preset pill — explicit left-to-right inner layout so arrows
-            // stay in the natural order (◀ name ▶).
+            // Preset pill. The ◀ name ▶ arrangement this editor invented
+            // now comes from the shared bar itself (ba todo #1280), so the
+            // steppers survive but stop being a private fork.
             let pill = egui::Frame::default()
                 .fill(theme::BG_2)
                 .stroke(egui::Stroke::new(1.0, theme::LINE))
                 .corner_radius(7.0)
                 .inner_margin(egui::Margin::symmetric(10, 4));
             pill.show(ui, |ui| {
-                ui.with_layout(
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("◀")
-                                        .color(theme::TEXT_3)
-                                        .size(9.0),
-                                )
-                                .frame(false),
-                            )
-                            .clicked()
-                        {
-                            app.preset_idx = app.preset_idx.saturating_sub(1);
-                            if let Some(entry) = PRESETS.get(app.preset_idx) {
-                                load_preset(&app.params, entry.json);
-                            }
-                        }
-                        let preset_name = PRESETS
-                            .get(app.preset_idx)
-                            .map(|p| p.name)
-                            .unwrap_or("— select —");
-                        egui::ComboBox::from_id_salt("wt_preset_combo")
-                            .width(170.0)
-                            .selected_text(
-                                egui::RichText::new(preset_name)
-                                    .color(theme::TEXT_1)
-                                    .size(12.0),
-                            )
-                            .show_ui(ui, |ui| {
-                                for (i, entry) in PRESETS.iter().enumerate() {
-                                    if ui.selectable_label(false, entry.name).clicked() {
-                                        app.preset_idx = i;
-                                        load_preset(&app.params, entry.json);
-                                    }
-                                }
-                            });
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("▶")
-                                        .color(theme::TEXT_3)
-                                        .size(9.0),
-                                )
-                                .frame(false),
-                            )
-                            .clicked()
-                        {
-                            let next = app.preset_idx + 1;
-                            if next < PRESETS.len() {
-                                app.preset_idx = next;
-                                if let Some(entry) = PRESETS.get(app.preset_idx) {
-                                    load_preset(&app.params, entry.json);
-                                }
-                            }
-                        }
-                    },
+                let params: Vec<&dyn Param> = (0..crate::params::PARAM_COUNT)
+                    .map(|i| app.params.param_at(i))
+                    .collect();
+                preset_bar(
+                    ui,
+                    "wt_preset",
+                    &mut app.preset_editor,
+                    &app.bank,
+                    &app.presets,
+                    &params,
+                    "— select —",
                 );
             });
 

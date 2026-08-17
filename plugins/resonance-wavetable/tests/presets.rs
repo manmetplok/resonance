@@ -12,13 +12,15 @@ use resonance_wavetable::presets::PRESETS;
 /// Every place in this crate that calls the shared preset loader.
 /// Compiled in, so the guard below can never drift from the sources that
 /// actually run.
-const LOADER_CALL_SITES: [(&str, &str); 2] = [
-    ("src/editor/app.rs", include_str!("../src/editor/app.rs")),
-    (
-        "tests/mod_availability.rs",
-        include_str!("mod_availability.rs"),
-    ),
-];
+///
+/// The editor used to be on this list. It now loads through
+/// `presets::PresetBank` (ba todo #1358), which takes the parameter slice
+/// and derives the count from its length, so the editor cannot get the
+/// count wrong any more — there is nothing left for it to spell out.
+const LOADER_CALL_SITES: [(&str, &str); 1] = [(
+    "tests/mod_availability.rs",
+    include_str!("mod_availability.rs"),
+)];
 
 /// The count `presets::load` is given must be the constant, never a
 /// literal.
@@ -58,9 +60,9 @@ fn no_caller_spells_the_parameter_count_out_by_hand() {
         }
     }
     assert_eq!(
-        checked, 2,
-        "expected the editor's loader and the mod-matrix test to be the only \
-         two call sites; add any new one to LOADER_CALL_SITES"
+        checked, 1,
+        "expected the mod-matrix test to be the only remaining direct call \
+         site; add any new one to LOADER_CALL_SITES"
     );
 }
 
