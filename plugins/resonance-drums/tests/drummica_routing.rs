@@ -23,12 +23,8 @@ use resonance_drums::kit_loader::{
 };
 use resonance_drums::params::DrumParams;
 
-fn drummica_manifest() -> PathBuf {
-    std::env::var("RESONANCE_DRUMMICA_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from("/home/jorrit/Documents/Guitar/drummica/drum_samples.json")
-        })
+fn drummica_manifest() -> Option<PathBuf> {
+    std::env::var("RESONANCE_DRUMMICA_PATH").ok().map(PathBuf::from)
 }
 
 fn default_choices() -> [PadMicChoices; NUM_PADS] {
@@ -68,14 +64,17 @@ fn port_energy(port: &(Vec<f32>, Vec<f32>)) -> f32 {
 }
 
 fn load_drummica_pads() -> Option<Vec<LoadedPad>> {
-    let manifest = drummica_manifest();
-    if !manifest.exists() {
+    let Some(manifest) = drummica_manifest() else {
         eprintln!(
-            "drummica manifest not present at {}; skipping",
-            manifest.display()
+            "RESONANCE_DRUMMICA_PATH not set; skipping the real-library test"
         );
         return None;
-    }
+    };
+    assert!(
+        manifest.exists(),
+        "RESONANCE_DRUMMICA_PATH points at {}, which does not exist",
+        manifest.display()
+    );
     let kit = load_kit_from_manifest(
         &manifest,
         48000.0,

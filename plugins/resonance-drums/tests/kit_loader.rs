@@ -6,15 +6,21 @@ use resonance_drums::kit_loader::{
     DEFAULT_OVERHEAD_SETUP,
 };
 
-/// Resolve the drummica manifest path for the smoke test. Honours the
-/// `RESONANCE_DRUMMICA_PATH` env var so other developers and CI can
-/// point at their own copy; falls back to the author's local path.
-fn drummica_manifest() -> PathBuf {
-    std::env::var("RESONANCE_DRUMMICA_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from("/home/jorrit/Documents/Guitar/drummica/drum_samples.json")
-        })
+/// Resolve the drummica manifest, or `None` when this run is not opted in.
+///
+/// These tests load a real 8.5 GB, 12k-file sample library, which costs ~28s
+/// and was over half the wall clock of the entire workspace suite. They used to
+/// fall back to a hardcoded path inside one developer's `~/Documents`, so they
+/// ran only on that one machine and silently no-opped everywhere else — a test
+/// that "passes" by doing nothing (ba doc #285, todo #1372).
+///
+/// Now they are opt-in and honest about it: set `RESONANCE_DRUMMICA_PATH` to a
+/// `drum_samples.json` to run them.
+///
+///     RESONANCE_DRUMMICA_PATH=~/Documents/Guitar/drummica/drum_samples.json \
+///         cargo test -p resonance-drums
+fn drummica_manifest() -> Option<PathBuf> {
+    std::env::var("RESONANCE_DRUMMICA_PATH").ok().map(PathBuf::from)
 }
 
 fn default_choices() -> [PadMicChoices; NUM_PADS] {
@@ -31,14 +37,17 @@ fn default_articulations() -> [bool; NUM_PADS] {
 /// CI without the samples still passes.
 #[test]
 fn drummica_smoke() {
-    let manifest = drummica_manifest();
-    if !manifest.exists() {
+    let Some(manifest) = drummica_manifest() else {
         eprintln!(
-            "drummica manifest not present at {}; skipping",
-            manifest.display()
+            "RESONANCE_DRUMMICA_PATH not set; skipping the real-library test"
         );
         return;
-    }
+    };
+    assert!(
+        manifest.exists(),
+        "RESONANCE_DRUMMICA_PATH points at {}, which does not exist",
+        manifest.display()
+    );
     let kit = load_kit_from_manifest(
         &manifest,
         48000.0,
@@ -141,14 +150,17 @@ fn drummica_smoke() {
 /// Smoke test for articulation: load with "ohne Teppich" for kick.
 #[test]
 fn drummica_articulation_smoke() {
-    let manifest = drummica_manifest();
-    if !manifest.exists() {
+    let Some(manifest) = drummica_manifest() else {
         eprintln!(
-            "drummica manifest not present at {}; skipping",
-            manifest.display()
+            "RESONANCE_DRUMMICA_PATH not set; skipping the real-library test"
         );
         return;
-    }
+    };
+    assert!(
+        manifest.exists(),
+        "RESONANCE_DRUMMICA_PATH points at {}, which does not exist",
+        manifest.display()
+    );
     let mut arts = default_articulations();
     arts[0] = true; // Kick -> ohne Teppich
     let kit = load_kit_from_manifest(

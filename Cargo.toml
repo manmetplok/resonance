@@ -46,3 +46,10 @@ codegen-units = 1
 # the default -O0 so build times and step debugging are unaffected.
 [profile.dev.package.resonance-dsp]
 opt-level = 2
+
+# Sample decoding lives here (`decode_wav_stereo`), and the drum-kit tests
+# decode the whole multi-mic Drummica library. Unoptimized that is 38s per
+# test and over half the wall clock of the entire workspace suite
+# (ba doc #285 §3).
+[profile.dev.package.resonance-common]
+opt-level = 2
