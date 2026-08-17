@@ -177,7 +177,12 @@ impl ResonancePlugin for ResonanceGranularDelay {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str =
         "Granular delay with per-grain pitch, texture and jitter";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "stereo", "delay", "granular"];
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::AUDIO_EFFECT,
+        features::DELAY,
+        features::GRANULAR,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

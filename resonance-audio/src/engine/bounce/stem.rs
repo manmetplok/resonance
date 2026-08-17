@@ -40,9 +40,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::SharedState;
@@ -501,7 +501,7 @@ pub fn render_stem(
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
-    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
 ) -> Result<Vec<f32>, String> {

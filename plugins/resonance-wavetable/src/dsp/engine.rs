@@ -121,9 +121,12 @@ impl SynthEngine {
             rng: SimpleRng::new(42),
             last_note: None,
             scope_collector: ScopeCollector::new(),
-            // Matches the SmoothingStyle declared on the master_volume
-            // FloatParam; the param is already linear gain, so the ramp
-            // runs in linear-gain space directly.
+            // 5 ms, the master volume's de-zipper time; the param is
+            // already linear gain, so the ramp runs in linear-gain space
+            // directly. (This used to say it matched a SmoothingStyle
+            // declared on the FloatParam — that declaration could never
+            // advance and was deleted in ba todo #1288; the ramp here is
+            // and always was the real one.)
             master_vol_smoother: Smoother::new(SmoothingStyle::Linear(5.0)),
             fx_smoothers: FxSmoothers::new(),
         }
@@ -189,7 +192,9 @@ impl SynthEngine {
         self.voice_counter += 1;
         let glide = params.glide_enabled.value() && self.last_note.is_some();
         let unison_count = params.unison.voices.value().max(1) as usize;
-        let detune = params.unison.detune.value();
+        // Detune width is *not* read here: it comes from the block snapshot
+        // at control rate so `ModDest::UnisonDetune` can move it on a
+        // sounding voice (ba todo #1323).
         let spread = params.unison.spread.value();
 
         let voice = &mut self.voices[voice_idx];
@@ -198,12 +203,13 @@ impl SynthEngine {
             velocity,
             self.voice_counter,
             unison_count,
-            detune,
             spread,
             glide,
-            params.lfo1.retrigger.value(),
-            params.lfo2.retrigger.value(),
-            params.lfo3.retrigger.value(),
+            // A synced LFO is anchored to the timeline, so a note-on must not
+            // reset its phase even if `retrigger` happens to be set.
+            params.lfo1.retrigger.value() && !params.lfo1.sync.value(),
+            params.lfo2.retrigger.value() && !params.lfo2.sync.value(),
+            params.lfo3.retrigger.value() && !params.lfo3.sync.value(),
         );
 
         self.last_note = Some(note);

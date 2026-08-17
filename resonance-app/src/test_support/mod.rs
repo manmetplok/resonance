@@ -18,7 +18,13 @@
 //! callers — tests keep calling `app.test_*()` methods unchanged.
 
 mod mixer_plugins;
+pub use mixer_plugins::SendSlotAffordances;
 mod pool_media;
+// The one test-support *type* (rather than accessor): naming a plugin
+// chain for `test_chain_move_affordances`. Re-exported from `lib.rs` so
+// tests can reach it without the module going public.
+pub use mixer_plugins::TestChain;
+
 mod project;
 mod timeline;
 mod tracks;

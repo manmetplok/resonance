@@ -37,16 +37,29 @@ struct BridgePlugin {
     mix: FloatParam,
     taps: IntParam,
     bypass: BoolParam,
+    /// A choice param: it carries a label table and a module, so the
+    /// bridge's `module` and `value_to_text` paths are exercised with
+    /// something other than a bare number (ba todo #1289).
+    shape: IntParam,
     internal: FloatParam,
 }
 
 const MIX_DEFAULT: f64 = 0.5;
 const TAPS_DEFAULT: f64 = 3.0;
+const SHAPE_DEFAULT: f64 = 1.0;
 const INTERNAL_DEFAULT: f64 = -6.0;
 
+const SHAPE_LABELS: &[&str] = &["Sine", "Triangle", "Square"];
+
 impl BridgePlugin {
-    fn params(&self) -> [&dyn Param; 4] {
-        [&self.mix, &self.taps, &self.bypass, &self.internal]
+    fn params(&self) -> [&dyn Param; 5] {
+        [
+            &self.mix,
+            &self.taps,
+            &self.bypass,
+            &self.shape,
+            &self.internal,
+        ]
     }
 }
 
@@ -56,7 +69,8 @@ impl ResonancePlugin for BridgePlugin {
     const VENDOR: &'static str = "test";
     const VERSION: &'static str = "0.0.0";
     const DESCRIPTION: &'static str = "";
-    const FEATURES: &'static [&'static str] = &[];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
@@ -67,7 +81,8 @@ impl ResonancePlugin for BridgePlugin {
                 MIX_DEFAULT as f32,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_unit("%"),
+            .with_unit("%")
+            .with_module("Output"),
             taps: IntParam::new(
                 "taps",
                 "Taps",
@@ -75,6 +90,14 @@ impl ResonancePlugin for BridgePlugin {
                 IntRange::Linear { min: 1, max: 8 },
             ),
             bypass: BoolParam::new("bypass", "Bypass", false),
+            shape: IntParam::new(
+                "shape",
+                "Shape",
+                SHAPE_DEFAULT as i32,
+                IntRange::Linear { min: 0, max: 2 },
+            )
+            .with_choices(SHAPE_LABELS)
+            .with_module("Osc/Wave"),
             internal: FloatParam::new(
                 "internal",
                 "Internal",
@@ -88,7 +111,7 @@ impl ResonancePlugin for BridgePlugin {
         }
     }
     fn param_count(&self) -> usize {
-        4
+        5
     }
     fn param(&self, index: usize) -> &dyn Param {
         self.params()[index]
@@ -154,7 +177,8 @@ impl ResonancePlugin for ExtraStatePlugin {
     const VENDOR: &'static str = "test";
     const VERSION: &'static str = "0.0.0";
     const DESCRIPTION: &'static str = "";
-    const FEATURES: &'static [&'static str] = &[];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
@@ -308,12 +332,12 @@ fn hidden_params_are_not_exposed_to_the_host() {
 
     assert_eq!(
         ext.count(&mut instance.plugin_handle()),
-        3,
+        4,
         "the hidden param must not be enumerated"
     );
 
     let mut buffer = ParamInfoBuffer::new();
-    let names: Vec<String> = (0..3)
+    let names: Vec<String> = (0..4)
         .map(|i| {
             let info = ext
                 .get_info(&mut instance.plugin_handle(), i, &mut buffer)
@@ -321,7 +345,7 @@ fn hidden_params_are_not_exposed_to_the_host() {
             String::from_utf8(info.name.to_vec()).unwrap()
         })
         .collect();
-    assert_eq!(names, ["Mix", "Taps", "Bypass"]);
+    assert_eq!(names, ["Mix", "Taps", "Bypass", "Shape"]);
 
     // …but it is still reachable by id, so saved state keeps working.
     assert_eq!(get_value(&mut instance, "internal"), INTERNAL_DEFAULT);
@@ -363,13 +387,72 @@ fn param_info_carries_the_declared_range_and_flags() {
 }
 
 #[test]
+fn param_info_carries_the_declared_module() {
+    // Finding X7: the bridge used to hardcode an empty module, so a
+    // plugin with 60 params across 8 stages reached the host as one flat
+    // list no matter how its editor grouped them (ba todo #1289).
+    let mut instance = bridge_instance();
+    let ext = params_ext(&instance);
+    let mut buffer = ParamInfoBuffer::new();
+
+    let modules: Vec<String> = (0..4)
+        .map(|i| {
+            let info = ext
+                .get_info(&mut instance.plugin_handle(), i, &mut buffer)
+                .unwrap();
+            String::from_utf8(info.module.to_vec()).unwrap()
+        })
+        .collect();
+
+    assert_eq!(
+        modules,
+        ["Output", "", "", "Osc/Wave"],
+        "each param must report its own module, and an ungrouped one an empty path"
+    );
+}
+
+#[test]
+fn a_choice_params_labels_reach_the_host() {
+    // Finding X9: with no `with_value_to_string` on IntParam, every
+    // enum param in the fleet displayed as a bare integer in a host's
+    // automation lane.
+    let mut instance = bridge_instance();
+    let ext = params_ext(&instance);
+    let mut buffer = [0u8; 128];
+
+    for (value, label) in [(0.0, "Sine"), (1.0, "Triangle"), (2.0, "Square")] {
+        let text = ext
+            .value_to_text(
+                &mut instance.plugin_handle(),
+                clap_id("shape"),
+                value,
+                &mut buffer,
+            )
+            .expect("value_to_text");
+        assert_eq!(std::str::from_utf8(text).unwrap(), label);
+    }
+
+    // And the label comes back the other way, so a host that round-trips
+    // its own display lands on the same value.
+    assert_eq!(
+        ext.text_to_value(&mut instance.plugin_handle(), clap_id("shape"), c"Square"),
+        Some(2.0)
+    );
+    assert_eq!(
+        ext.text_to_value(&mut instance.plugin_handle(), clap_id("shape"), c"1"),
+        Some(1.0),
+        "the raw index still parses"
+    );
+}
+
+#[test]
 fn an_out_of_bounds_param_index_is_refused() {
     let mut instance = bridge_instance();
     let ext = params_ext(&instance);
     let mut buffer = ParamInfoBuffer::new();
 
     assert!(ext
-        .get_info(&mut instance.plugin_handle(), 3, &mut buffer)
+        .get_info(&mut instance.plugin_handle(), 4, &mut buffer)
         .is_none());
     assert!(ext
         .get_info(&mut instance.plugin_handle(), 9999, &mut buffer)
@@ -513,10 +596,11 @@ fn saved_state_has_the_documented_shape_and_covers_hidden_params() {
     let params = state["params"]
         .as_object()
         .expect("state must carry a `params` object");
-    assert_eq!(params.len(), 4, "hidden params are persisted too");
+    assert_eq!(params.len(), 5, "hidden params are persisted too");
     assert_eq!(params["mix"], json!(MIX_DEFAULT));
     assert_eq!(params["taps"], json!(TAPS_DEFAULT));
     assert_eq!(params["bypass"], json!(0.0));
+    assert_eq!(params["shape"], json!(SHAPE_DEFAULT));
     assert_eq!(params["internal"], json!(INTERNAL_DEFAULT));
 }
 

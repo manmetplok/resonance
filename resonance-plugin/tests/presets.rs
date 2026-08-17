@@ -485,7 +485,8 @@ impl ResonancePlugin for PresetPlugin {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = "0.1.0";
     const DESCRIPTION: &'static str = "preset state fixture";
-    const FEATURES: &'static [&'static str] = &["audio-effect"];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {

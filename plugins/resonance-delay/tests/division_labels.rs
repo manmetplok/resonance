@@ -63,13 +63,27 @@ fn labels_round_trip_through_parse() {
     assert_eq!(p.parse("not a division"), None);
 }
 
+/// The one behaviour the #1344 collapse did not preserve: the local
+/// `DivisionParam` clamped an out-of-band value into the table and showed
+/// the nearest label ("1/16T" for 999); `IntParam::with_choices` shows the
+/// raw number instead, deliberately (ba todo #1289), so that a param whose
+/// range overruns its label table is visible rather than silently reading
+/// as the last choice.
+///
+/// Neither surface can be reached from inside the plugin — `set_plain`
+/// clamps, so the stored value is always in the table — and no numeric
+/// value moves either way. It only shows if a host renders a value from
+/// outside the declared range. ba todo #1348 proposes clamping to the
+/// range inside `IntParam::display`, which restores the old text without
+/// giving up #1289's mismatch signal; flip this test back when it lands.
 #[test]
-fn out_of_range_display_clamps_to_a_label() {
+fn out_of_range_display_shows_the_number_not_a_wrong_label() {
     let params = DelayParams::default();
     let p = params.param_at(1);
     let last = *DIVISION_LABELS.last().unwrap();
-    assert_eq!(p.display(999.0), last);
-    assert_eq!(p.display(-4.0), DIVISION_LABELS[0]);
+    assert_ne!(p.display(999.0), last, "999 must not read as {last}");
+    assert_eq!(p.display(999.0), "999");
+    assert_eq!(p.display(-4.0), "-4");
 }
 
 #[test]

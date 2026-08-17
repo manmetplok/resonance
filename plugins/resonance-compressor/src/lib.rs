@@ -10,6 +10,11 @@
 //! external signal — another track or bus — that replaces the detector's
 //! source entirely. Ducking a pad from a kick needs the key; no amount
 //! of internal filtering can do it.
+//!
+//! Whether a key is actually connected is published into the shared viz
+//! object each block, so the editor can name the detector's source
+//! instead of leaving the user to guess why the GR meter moves while the
+//! input meter is idle.
 
 use std::sync::Arc;
 
@@ -45,7 +50,13 @@ impl ResonancePlugin for ResonanceCompressor {
     const DESCRIPTION: &'static str =
         "Stereo feed-forward compressor with soft knee, external sidechain key, \
          sidechain HPF, and parallel mix";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "compressor", "stereo", "dynamics"];
+    // `compressor` is standard CLAP and never reached a host before
+    // (ba todo #1298); `dynamics` was not a CLAP feature at all.
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::AUDIO_EFFECT,
+        features::COMPRESSOR,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
     const SIDECHAIN_INPUT: Option<u32> = Some(2);
@@ -117,6 +128,9 @@ impl ResonancePlugin for ResonanceCompressor {
             return;
         };
 
+        // The `Option` carries two things: the key samples, and the fact
+        // that a key exists at all. Both go to the DSP, which publishes
+        // the presence bit into the viz object for the editor.
         dsp.process_stereo(
             left,
             right,

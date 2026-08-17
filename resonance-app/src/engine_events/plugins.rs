@@ -118,10 +118,10 @@ fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceI
     let applied = r
         .with_plugin_mut(instance_id, |slot| {
             let mut applied = Vec::new();
-            for (param_id, value) in &overrides {
-                if let Some(param) = slot.params.iter_mut().find(|p| p.id == *param_id) {
-                    param.current_value = *value;
-                    applied.push((*param_id, *value));
+            for saved in &overrides {
+                if let Some(param) = slot.params.iter_mut().find(|p| p.id == saved.id) {
+                    param.current_value = saved.value;
+                    applied.push((saved.id, saved.value));
                 }
             }
             applied
@@ -221,7 +221,16 @@ pub(super) fn track_removed(
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
     r.plugin_state_cache.remove(&instance_id);
+    // Drop the load-time copies too, so a removed slot can neither
+    // resurrect a `plugin_*.bin` nothing references nor lend its parked
+    // parameter list to a later instance that reuses the id.
+    r.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
+    // The engine's `RemovePlugin` arm already dropped this instance's key
+    // route, so only the mirror needs pruning here — but prune it we must,
+    // or the route is written to the next save and reloads onto whatever
+    // plugin later occupies this instance id (ba todo #1311).
+    r.sidechain.clear_plugin(instance_id);
 }
 
 /// Mirror an engine-side chain reorder (`AudioEvent::MovePlugin` ->
@@ -276,6 +285,45 @@ pub(crate) fn mirror_track_plugin_move(
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.available_plugins = plugins;
     r.view_caches.rebuild_plugins(&r.available_plugins);
+}
+
+/// Adopt the plugin's own formatting of a parameter it was just given
+/// (ba todo #1290, finding X8).
+///
+/// The app mirrors a parameter's *number* the moment it sends the change
+/// — that is what keeps a knob under the cursor — but only the plugin
+/// can turn that number into `"Low-pass"` or `"40 %"`, and the mirror's
+/// text was captured once, at instantiation. This is the echo that keeps
+/// the two in step, for the generic panel and for
+/// `track/bus/master.plugin_params` alike.
+///
+/// A stale echo is dropped rather than applied: a knob drag issues one
+/// set per frame, so an echo for a value the parameter has already left
+/// would paint text that disagrees with the number beside it. Matching
+/// on the value the change was made with is exact — the app stored that
+/// same f64 — so no tolerance is needed.
+pub(super) fn param_text(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    param_id: u32,
+    value: f64,
+    text: String,
+) {
+    r.with_plugin_mut(instance_id, |slot| {
+        if let Some(param) = slot.params.iter_mut().find(|p| p.id == param_id) {
+            if param.current_value == value {
+                // A unit belongs to the parameter, not to the value, so
+                // adopt one the plugin reveals here (a fader that read
+                // "-inf dB" when it loaded had none to take) but never
+                // forget one it has already given.
+                let unit = resonance_audio::unit_from_text(&text);
+                if !unit.is_empty() {
+                    param.unit = unit.to_string();
+                }
+                param.text = text;
+            }
+        }
+    });
 }
 
 pub(super) fn state_saved(
@@ -384,7 +432,12 @@ pub(super) fn bus_removed(
         r.mixer.selected_plugin = None;
     }
     r.plugin_state_cache.remove(&instance_id);
+    // Drop the load-time copies too, so a removed slot can neither
+    // resurrect a `plugin_*.bin` nothing references nor lend its parked
+    // parameter list to a later instance that reuses the id.
+    r.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
+    drop_route_onto_removed_chain_plugin(r, instance_id);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -463,7 +516,57 @@ pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
         r.mixer.selected_plugin = None;
     }
     r.plugin_state_cache.remove(&instance_id);
+    // Drop the load-time copies too, so a removed slot can neither
+    // resurrect a `plugin_*.bin` nothing references nor lend its parked
+    // parameter list to a later instance that reuses the id.
+    r.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
+    drop_route_onto_removed_chain_plugin(r, instance_id);
+}
+
+/// Drop the key route onto a plugin that has just come off a **bus** or
+/// the **master** chain, and tell the engine to drop it as well.
+///
+/// The extra command is what separates this from the track case. The
+/// engine's dispatcher drops a route on `RemovePlugin` but *not* on
+/// `RemovePluginFromBus` / `RemovePluginFromMaster`, so pruning only the
+/// mirror would leave the engine still keying an instance id that the
+/// next `bus.add_effect` can be handed — the recycled-id misroute the
+/// engine's own `drop_plugin_route` exists to prevent. `ClearSidechainRoute`
+/// is idempotent (the engine echoes only when a route was present), so
+/// sending it unconditionally costs nothing when there was no route.
+fn drop_route_onto_removed_chain_plugin(r: &mut Resonance, instance_id: PluginInstanceId) {
+    if r.sidechain.clear_plugin(instance_id) {
+        let _ = r.engine.send(AudioCommand::ClearSidechainRoute {
+            plugin: instance_id,
+        });
+    }
+}
+
+/// Reconcile the GUI key-route mirror to the engine's echo (ba todo
+/// #1311). `source: None` means the route was cleared.
+///
+/// The engine is the authority: it stores the route, decides whether it
+/// survives a plugin or source removal, and only ever echoes resolved
+/// state. Mirroring the echo — rather than leaving the optimistic write
+/// from `PluginMessage::SetPluginSidechain` as the last word — is what
+/// keeps a route the engine silently dropped out of the next save.
+pub(super) fn sidechain_route_changed(
+    r: &mut Resonance,
+    plugin: PluginInstanceId,
+    source: Option<SendSource>,
+    enabled: bool,
+) {
+    match source {
+        Some(source) => r.sidechain.upsert(SidechainRoute {
+            plugin,
+            source,
+            enabled,
+        }),
+        None => {
+            r.sidechain.clear_plugin(plugin);
+        }
+    }
 }
 
 pub(super) fn master_fx_bypass_changed(r: &mut Resonance, bypassed: bool) {

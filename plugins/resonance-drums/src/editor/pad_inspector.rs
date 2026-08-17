@@ -11,6 +11,8 @@
 //! For pads without two close mics, the balance knob renders as a dim
 //! placeholder so the knob grid stays a consistent 4-cell row.
 
+use std::sync::atomic::Ordering;
+
 use wayland_plugin_gui::egui;
 
 use resonance_plugin::param::Param;
@@ -18,6 +20,7 @@ use resonance_plugin::param::Param;
 use crate::drum_map::PAD_MAPPINGS;
 use crate::mic_catalog::ManifestMicCatalog;
 use crate::params::DrumParams;
+use crate::rr_display;
 use crate::sample_info::PadSampleInfo;
 use crate::KitBridge;
 
@@ -53,12 +56,16 @@ pub fn draw(
             .cloned()
             .flatten();
 
-        draw_pad_head(ui, mapping, pad);
+        // Which round-robin take last fired for this pad, published by the
+        // audio thread on every note-on.
+        let rr = rr_display::unpack(bridge.last_rr[selected_pad].load(Ordering::Relaxed));
+
+        draw_pad_head(ui, bridge, mapping, pad, rr);
         draw_sample_stage(ui, sample_info.as_ref());
         draw_knob_grid(ui, pad, mapping);
 
         if mapping.has_articulation {
-            draw_articulations(ui, bridge, pad, selected_pad);
+            draw_articulations(ui, bridge, pad);
         }
 
         draw_mic_and_oh_row(ui, bridge, catalog, pad, mapping, selected_pad);
@@ -67,8 +74,10 @@ pub fn draw(
 
 fn draw_pad_head(
     ui: &mut egui::Ui,
+    bridge: &KitBridge,
     mapping: &crate::drum_map::PadMapping,
     pad: &crate::params::PadParams,
+    rr: Option<rr_display::RoundRobin>,
 ) {
     ui.horizontal(|ui| {
         ui.label(
@@ -88,33 +97,67 @@ fn draw_pad_head(
             .size(11.0)
             .monospace(),
         );
+        ui.add_space(10.0);
+        // Round robin: which take of how many the last hit used. Updates
+        // as takes cycle — the editor repaints ~10× a second (ba #1329).
+        match rr {
+            Some(rr) => {
+                ui.label(
+                    egui::RichText::new(rr.label())
+                        .color(if rr.cycles() {
+                            theme::ACCENT_SOFT
+                        } else {
+                            theme::TEXT_3
+                        })
+                        .size(11.0)
+                        .monospace(),
+                )
+                .on_hover_text(if rr.cycles() {
+                    "Round robin: the take that fired on the last hit, and how \
+                     many this velocity layer holds."
+                } else {
+                    "This velocity layer has a single take, so every hit plays \
+                     the same sample."
+                });
+            }
+            None => {
+                ui.label(
+                    egui::RichText::new("take — of —")
+                        .color(theme::TEXT_4)
+                        .size(11.0)
+                        .monospace(),
+                )
+                .on_hover_text("Round robin: play this pad to see which take fires.");
+            }
+        }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Enabled chip — driven by the negated mute param.
             let enabled = !pad.mute.value();
             draw_enabled_chip(ui, pad, enabled);
             ui.add_space(8.0);
-            // Audition needs an editor -> audio-thread trigger channel,
-            // which does not exist yet (ba todo #1328 builds it). Until
-            // then the control is drawn disabled with the reason on hover
-            // rather than as a live button that swallows the click.
-            ui.add_enabled(
-                false,
-                egui::Button::new(
-                    egui::RichText::new("▶ Audition")
-                        .color(theme::TEXT_4)
-                        .size(11.0),
+            // Audition: hand the pad's note to the audio thread through
+            // the bridge's trigger queue (ba todo #1328). The audio side
+            // feeds it to the same `note_on` a MIDI hit takes, so this
+            // sounds like playing the pad — and it works with the
+            // transport stopped, because the plugin renders regardless.
+            let clicked = ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("▶ Audition")
+                            .color(theme::TEXT_2)
+                            .size(11.0),
+                    )
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0, theme::LINE_2))
+                    .corner_radius(6.0)
+                    .min_size(egui::vec2(0.0, 24.0)),
                 )
-                .fill(egui::Color32::TRANSPARENT)
-                .stroke(egui::Stroke::new(1.0, theme::LINE_2))
-                .corner_radius(6.0)
-                .min_size(egui::vec2(0.0, 24.0)),
-            )
-            .on_disabled_hover_text(
-                "Auditioning from the editor is not wired up yet — the plugin \
-                 has no editor-to-audio trigger. Play the pad's MIDI note to \
-                 hear it.",
-            );
+                .on_hover_text("Play this pad once, at a firm velocity.")
+                .clicked();
+            if clicked {
+                bridge.audition(mapping.note);
+            }
         });
     });
     ui.add_space(2.0);
@@ -353,12 +396,12 @@ fn draw_placeholder_knob(ui: &mut egui::Ui, label: &str) {
     );
 }
 
-fn draw_articulations(
-    ui: &mut egui::Ui,
-    bridge: &KitBridge,
-    pad: &crate::params::PadParams,
-    pad_idx: usize,
-) {
+/// Articulation chips. The chips are a view of the pad's articulation
+/// *parameter* — they read it and write it, and the reload happens
+/// because the parameter moved, not because a chip was clicked. That is
+/// the same path host automation and `set_plugin_param` take (ba todo
+/// #1325), so the three cannot drift apart.
+fn draw_articulations(ui: &mut egui::Ui, bridge: &KitBridge, pad: &crate::params::PadParams) {
     let frame = inline_group_frame();
     frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width() - 28.0);
@@ -369,9 +412,10 @@ fn draw_articulations(
                     .size(10.5)
                     .strong(),
             );
+            let options = pad.articulation.labels().len();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new("2 options")
+                    egui::RichText::new(format!("{options} options"))
                         .color(theme::TEXT_3)
                         .size(10.5)
                         .monospace(),
@@ -379,28 +423,24 @@ fn draw_articulations(
             });
         });
         ui.add_space(2.0);
-        let current = bridge.articulations.lock()[pad_idx];
+        let current = pad.articulation.value();
         ui.horizontal(|ui| {
-            if widgets::chip_button(ui, "mit Teppich", !current) && current {
-                bridge.articulations.lock()[pad_idx] = false;
-                pad.articulation.set_plain(0.0);
-                reload_kit(bridge);
-            }
-            if widgets::chip_button(ui, "ohne Teppich", current) && !current {
-                bridge.articulations.lock()[pad_idx] = true;
-                pad.articulation.set_plain(1.0);
-                reload_kit(bridge);
+            for (index, label) in pad.articulation.labels().iter().enumerate() {
+                let index = index as i32;
+                if widgets::chip_button(ui, label, index == current) && index != current {
+                    pad.articulation.set_value(index);
+                    // The parameter is the source of truth; the reload is
+                    // the watcher's job. Ping it so the click lands now
+                    // instead of at its next poll.
+                    bridge.wake_articulation_watcher();
+                }
             }
         });
         ui.add_space(2.0);
-        // The chips work (they reload the kit through the bridge); the
-        // host-facing param does not. Say so, rather than let someone draw
-        // an automation lane that silently does nothing. ba todo #1325
-        // makes the param the source of truth and retires this note.
         ui.label(
             egui::RichText::new(
-                "Saved with the kit. The host's \"Pad Articulation\" parameter is a \
-                 display mirror — automating it does not switch samples.",
+                "Reloads the pad's samples. Automatable — the host's \
+                 \"Pad Articulation\" parameter is this control.",
             )
             .color(theme::TEXT_4)
             .size(10.0),

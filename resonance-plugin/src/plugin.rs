@@ -28,7 +28,7 @@ pub trait ExtraStateSaver: Send + Sync {
 }
 
 /// A note event for sample-accurate MIDI processing.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NoteEvent {
     NoteOn {
         note: u8,
@@ -52,6 +52,130 @@ impl NoteEvent {
             NoteEvent::NoteOff { timing, .. } => *timing,
             NoteEvent::Choke { timing, .. } => *timing,
         }
+    }
+}
+
+/// A sample-accurate MIDI controller event — everything a keyboard sends
+/// that is not a note (ba todo #1295).
+///
+/// These live in their own type rather than as new [`NoteEvent`] variants so
+/// that plugins which exhaustively match the three note variants keep
+/// compiling; see [`EventIterator::next_any`] for how the two are delivered
+/// in one ordered stream.
+///
+/// All values are normalised, because that is what a modulation matrix wants:
+/// `0.0..=1.0` for continuous controllers and pressure, `-1.0..=1.0` for the
+/// bipolar pitch bend. The raw 7-/14-bit numbers are not preserved.
+///
+/// `#[non_exhaustive]`: this is exactly the enum whose closed-ness caused
+/// finding F3 in the first place. Match with a `_ =>` arm.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum ControlEvent {
+    /// MIDI control change. `controller` is the CC number (0..=127, e.g. 1
+    /// for the mod wheel, 64 for sustain), `value` is `0.0..=1.0`.
+    ControlChange {
+        channel: u8,
+        controller: u8,
+        value: f32,
+        timing: u32,
+    },
+    /// Channel pressure (channel aftertouch): one pressure value for the
+    /// whole channel. `pressure` is `0.0..=1.0`.
+    ChannelPressure {
+        channel: u8,
+        pressure: f32,
+        timing: u32,
+    },
+    /// Polyphonic key pressure (poly aftertouch): pressure for one held key.
+    /// `pressure` is `0.0..=1.0`.
+    ///
+    /// Arrives either as MIDI poly key pressure or, from a CLAP-dialect host,
+    /// as a `CLAP_NOTE_EXPRESSION_PRESSURE` note expression — the bridge
+    /// normalises both to this.
+    PolyPressure {
+        channel: u8,
+        note: u8,
+        pressure: f32,
+        timing: u32,
+    },
+    /// Pitch bend, `-1.0..=1.0` with `0.0` at centre. How many semitones
+    /// that spans is the plugin's own bend-range setting.
+    PitchBend {
+        channel: u8,
+        value: f32,
+        timing: u32,
+    },
+}
+
+impl ControlEvent {
+    /// Offset of this event from the start of the process block, in samples.
+    pub fn timing(&self) -> u32 {
+        match self {
+            ControlEvent::ControlChange { timing, .. } => *timing,
+            ControlEvent::ChannelPressure { timing, .. } => *timing,
+            ControlEvent::PolyPressure { timing, .. } => *timing,
+            ControlEvent::PitchBend { timing, .. } => *timing,
+        }
+    }
+
+    /// The MIDI channel (0..=15) this event arrived on.
+    pub fn channel(&self) -> u8 {
+        match self {
+            ControlEvent::ControlChange { channel, .. } => *channel,
+            ControlEvent::ChannelPressure { channel, .. } => *channel,
+            ControlEvent::PolyPressure { channel, .. } => *channel,
+            ControlEvent::PitchBend { channel, .. } => *channel,
+        }
+    }
+}
+
+/// One entry of the input event stream a plugin receives, in host order.
+///
+/// Obtained from [`EventIterator::next_any`]. Plugins that only care about
+/// notes keep using [`EventIterator::next_event`] and never see this type.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum PluginEvent {
+    Note(NoteEvent),
+    Control(ControlEvent),
+}
+
+impl PluginEvent {
+    /// Offset of this event from the start of the process block, in samples.
+    pub fn timing(&self) -> u32 {
+        match self {
+            PluginEvent::Note(e) => e.timing(),
+            PluginEvent::Control(e) => e.timing(),
+        }
+    }
+
+    /// The note event, if this is one.
+    pub fn as_note(&self) -> Option<NoteEvent> {
+        match self {
+            PluginEvent::Note(e) => Some(*e),
+            _ => None,
+        }
+    }
+
+    /// The controller event, if this is one.
+    pub fn as_control(&self) -> Option<ControlEvent> {
+        match self {
+            PluginEvent::Control(e) => Some(*e),
+            _ => None,
+        }
+    }
+}
+
+impl From<NoteEvent> for PluginEvent {
+    fn from(event: NoteEvent) -> Self {
+        PluginEvent::Note(event)
+    }
+}
+
+impl From<ControlEvent> for PluginEvent {
+    fn from(event: ControlEvent) -> Self {
+        PluginEvent::Control(event)
     }
 }
 
@@ -91,35 +215,78 @@ pub struct KeyBuffer<'a> {
     pub right: &'a [f32],
 }
 
-/// Iterator over note events within a process block.
+/// Where an [`EventIterator`] reads from.
+///
+/// Two shapes rather than one so a caller holding a plain `&[NoteEvent]` —
+/// every plugin test and benchmark in the workspace — needs no conversion and
+/// no allocation, while the CLAP bridge can deliver notes and controllers
+/// interleaved in exactly the order the host sent them.
+enum EventSource<'a> {
+    Notes(&'a [NoteEvent]),
+    Mixed(&'a [PluginEvent]),
+}
+
+/// Iterator over the input events within a process block.
 /// Borrows from a pre-allocated buffer to avoid audio-thread allocations.
+///
+/// Two ways to drain it, and a plugin should pick one:
+/// - [`next_event`](Self::next_event) yields note events only, skipping
+///   controllers. This is the original contract, unchanged.
+/// - [`next_any`](Self::next_any) yields everything — notes *and* MIDI CC,
+///   aftertouch and pitch bend — in host order.
 pub struct EventIterator<'a> {
-    events: &'a [NoteEvent],
+    source: EventSource<'a>,
     pos: usize,
 }
 
 impl<'a> EventIterator<'a> {
+    /// Iterate a slice of note events.
     pub fn new(events: &'a [NoteEvent]) -> Self {
-        Self { events, pos: 0 }
-    }
-
-    pub fn empty() -> Self {
         Self {
-            events: &[],
+            source: EventSource::Notes(events),
             pos: 0,
         }
     }
 
-
-    /// Consume and return the next event.
-    pub fn next_event(&mut self) -> Option<NoteEvent> {
-        if self.pos < self.events.len() {
-            let event = self.events[self.pos];
-            self.pos += 1;
-            Some(event)
-        } else {
-            None
+    /// Iterate a slice carrying both notes and controller events, in the
+    /// order the host delivered them. This is what the CLAP bridge builds.
+    pub fn mixed(events: &'a [PluginEvent]) -> Self {
+        Self {
+            source: EventSource::Mixed(events),
+            pos: 0,
         }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            source: EventSource::Notes(&[]),
+            pos: 0,
+        }
+    }
+
+    /// Consume and return the next **note** event, skipping any controller
+    /// events in between.
+    ///
+    /// A plugin that wants the controllers too must use
+    /// [`next_any`](Self::next_any) instead — mixing the two drains one
+    /// shared cursor and would drop events.
+    pub fn next_event(&mut self) -> Option<NoteEvent> {
+        loop {
+            match self.next_any()? {
+                PluginEvent::Note(event) => return Some(event),
+                _ => continue,
+            }
+        }
+    }
+
+    /// Consume and return the next event of any kind, in host order.
+    pub fn next_any(&mut self) -> Option<PluginEvent> {
+        let event = match self.source {
+            EventSource::Notes(events) => PluginEvent::Note(*events.get(self.pos)?),
+            EventSource::Mixed(events) => *events.get(self.pos)?,
+        };
+        self.pos += 1;
+        Some(event)
     }
 }
 
@@ -149,8 +316,13 @@ pub trait ResonancePlugin: Send + 'static {
     const VERSION: &'static str;
     /// Short description.
     const DESCRIPTION: &'static str;
-    /// CLAP feature strings (e.g. "audio-effect", "stereo", "reverb").
-    const FEATURES: &'static [&'static str];
+    /// CLAP feature strings, declared from [`crate::features`] — e.g.
+    /// `&[features::AUDIO_EFFECT, features::REVERB, features::STEREO]`.
+    ///
+    /// They reach the host exactly as written; there is no translation
+    /// step to fall out of. At least one main category is required, and
+    /// the bridge checks that at compile time (ba todo #1298).
+    const FEATURES: &'static [&'static std::ffi::CStr];
 
     /// Number of input channels. None = instrument (no audio input).
     const INPUT_CHANNELS: Option<u32>;
@@ -309,8 +481,30 @@ pub trait ResonancePlugin: Send + 'static {
     }
 
     /// Report latency in samples. Default: 0.
+    ///
+    /// The bridge reads this at every activation, and on any host query made
+    /// while the plugin is inactive. A plugin whose latency can change while
+    /// it is active must *also* push the new figure through
+    /// [`HostHandle::set_latency_samples`](crate::host::HostHandle::set_latency_samples)
+    /// — the host cannot poll for it (CLAP only defines the query while
+    /// active, and by then this object lives in the audio processor).
     fn latency_samples(&self) -> u32 {
         0
+    }
+
+    /// Receive the handle to the host that owns this instance.
+    ///
+    /// Called once by the CLAP bridge, on the main thread, right after
+    /// `new()` and before the plugin can be activated. Plugins that need to
+    /// talk back to the host — report a latency change, ask for a restart —
+    /// store the handle; the default implementation drops it, which is what
+    /// every plugin that only reads its inputs wants.
+    ///
+    /// The handle is `Send + Sync` and safe to call from the audio thread or
+    /// an editor thread, so the usual shape is to keep it in an
+    /// `Arc<Mutex<..>>`-free field or hand a clone to the editor.
+    fn set_host(&mut self, host: Arc<crate::host::HostHandle>) {
+        let _ = host;
     }
 
     /// Return an editor factory if this plugin has a GUI.

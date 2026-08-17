@@ -10,7 +10,7 @@ use resonance_audio::types::*;
 /// can emit the right remove message regardless of whether it's rendering
 /// a track's plugin or a bus's plugin.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum PluginOwner {
+pub(crate) enum PluginOwner {
     Track(TrackId),
     Bus(BusId),
     Master,
@@ -310,5 +310,103 @@ pub(crate) fn output_choices_for(
             output: TrackOutput::Bus(bus.id),
         });
     }
+    choices
+}
+
+/// Destination entry for an *existing* aux send's re-route picker
+/// (`MixerMessage::SetSendDest`). Carries the bus id plus a display
+/// label so the picker never has to look a name back up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SendDestChoice {
+    pub label: String,
+    pub bus_id: BusId,
+}
+
+impl std::fmt::Display for SendDestChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Destination options for an existing send: every **return** bus, plus
+/// the send's `current` destination if that isn't one.
+///
+/// Only return busses are offered because that is what an aux send is
+/// for (doc #172) — a plain bus is a summing destination reached through
+/// the OUTPUT picker instead. `current` is folded in regardless so a
+/// send pointed at a plain bus (which `track.set_send` over the control
+/// API will happily do) still shows its real routing rather than an
+/// empty picker, mirroring the OUTPUT picker's stale-entry fallback.
+pub(crate) fn send_dest_choices(
+    busses: &[crate::state::BusState],
+    current: BusId,
+) -> Vec<SendDestChoice> {
+    use crate::theme::fa;
+    let mut choices: Vec<SendDestChoice> = busses
+        .iter()
+        .filter(|b| b.is_return || b.id == current)
+        .map(|b| SendDestChoice {
+            label: format!("{} {}", fa::ARROW_RIGHT, b.name),
+            bus_id: b.id,
+        })
+        .collect();
+    // The destination bus went away (or hasn't been mirrored yet) —
+    // synthesize an entry so `pick_list` still has a selected option.
+    if !choices.iter().any(|c| c.bus_id == current) {
+        choices.insert(
+            0,
+            SendDestChoice {
+                label: format!("{} Bus {}", fa::ARROW_RIGHT, current),
+                bus_id: current,
+            },
+        );
+    }
+    choices
+}
+
+/// An entry in the "+ Add send" picker at the foot of the SENDS block.
+/// Adding a send is one gesture with two shapes — route into a return
+/// bus that already exists, or conjure a new FX return and route into
+/// that — so both live in one picker rather than a picker plus a button
+/// that does nothing until a return bus exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AddSendChoice {
+    /// Route into this existing return bus (`MixerMessage::AddSend`).
+    Bus { label: String, bus_id: BusId },
+    /// Create a new FX return bus and route into it in one gesture
+    /// (`MixerMessage::CreateReturnFromSend`).
+    NewReturn,
+}
+
+impl std::fmt::Display for AddSendChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bus { label, .. } => f.write_str(label),
+            Self::NewReturn => f.write_str("New FX return\u{2026}"),
+        }
+    }
+}
+
+/// "+ Add send" options: every return bus this source isn't already
+/// sending into, then the always-present "New FX return…" entry.
+///
+/// `already` lists the destinations the source already feeds. A second
+/// send into the same return bus is not a useful gesture (the engine
+/// upserts by send id, so it would just stack two faders on one path),
+/// and hiding those keeps the picker honest about what adding will do.
+pub(crate) fn add_send_choices(
+    busses: &[crate::state::BusState],
+    already: &[BusId],
+) -> Vec<AddSendChoice> {
+    use crate::theme::fa;
+    let mut choices: Vec<AddSendChoice> = busses
+        .iter()
+        .filter(|b| b.is_return && !already.contains(&b.id))
+        .map(|b| AddSendChoice::Bus {
+            label: format!("{} {}", fa::ARROW_RIGHT, b.name),
+            bus_id: b.id,
+        })
+        .collect();
+    choices.push(AddSendChoice::NewReturn);
     choices
 }

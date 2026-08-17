@@ -1,21 +1,44 @@
-/// Plugin parameters: master volume + per-pad volume, pan, mute, OH blend,
-/// balance, and articulation toggle.
+/// Plugin parameters: master volume, the global voice/velocity/round-robin
+/// controls, and per-pad volume, pan, mute, OH blend, balance and
+/// articulation choice.
+use std::sync::Arc;
+
 use resonance_plugin::*;
 
-use crate::drum_map::NUM_PADS;
+use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
+use crate::choice::ChoiceParam;
+use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
+use crate::velocity;
+use crate::voice::MAX_VOICES;
 
 /// Number of param fields per pad, used for param indexing.
 pub const PARAMS_PER_PAD: usize = 6;
 
-/// Appended to the display name of every parameter the plugin exposes to
-/// the host but does not act on, so a user reading the host's parameter
-/// list (or an agent reading `plugin_params` over MCP) can see that
-/// automating it does nothing. Today that is only the per-pad
-/// articulation toggle — see [`PadParams::articulation`].
-pub const EDITOR_ONLY_SUFFIX: &str = " (editor only)";
+/// Number of global params ahead of the per-pad block, used for param
+/// indexing. The flat index is an enumeration order, not an identity:
+/// hosts and the control API address a param by its string id (which the
+/// CLAP bridge hashes into a stable numeric id), so adding a global
+/// param moves the pad block along without disturbing anything saved.
+pub const GLOBAL_PARAMS: usize = 4;
+
+/// Labels for the round-robin mode choice, indexed by parameter value.
+pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
 
 pub struct DrumParams {
     pub master_volume: FloatParam,
+    /// Ceiling on simultaneously sounding voices. A hit uses one voice
+    /// per loaded mic bank (a kick with in/out mics plus overheads uses
+    /// three), matching how the sampler counts them. Defaults to
+    /// [`MAX_VOICES`], the hard cap the plugin has always had, so the
+    /// parameter changes nothing until it is turned down.
+    pub polyphony: IntParam,
+    /// Global velocity curve, -1 (hard) … 0 (linear) … +1 (soft). See
+    /// [`crate::velocity`]; 0 is an exact identity.
+    pub velocity_curve: FloatParam,
+    /// How the sampler walks a layer's recorded takes — see
+    /// [`crate::dsp::voice_pick::RoundRobinMode`]. Defaults to Cycle,
+    /// which is what the sampler always did.
+    pub round_robin_mode: ChoiceParam,
     pub pads: [PadParams; NUM_PADS],
 }
 
@@ -29,8 +52,46 @@ impl Default for DrumParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            polyphony: IntParam::new(
+                "polyphony",
+                "Polyphony",
+                MAX_VOICES as i32,
+                IntRange::Linear {
+                    min: 1,
+                    max: MAX_VOICES as i32,
+                },
+            ),
+            velocity_curve: FloatParam::new(
+                "velocity_curve",
+                "Velocity Curve",
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            )
+            .with_value_to_string(Arc::new(velocity::curve_label))
+            .with_string_to_value(Arc::new(velocity::curve_from_label)),
+            round_robin_mode: ChoiceParam::new(
+                "round_robin_mode",
+                "Round Robin",
+                0,
+                ROUND_ROBIN_LABELS,
+            ),
             pads: std::array::from_fn(PadParams::new),
         }
+    }
+}
+
+impl DrumParams {
+    /// The articulation of every pad, in the shape the kit loader takes:
+    /// false = primary piece, true = the alternate one.
+    ///
+    /// Derived — the parameters are the source of truth. Anything that
+    /// needs the articulation set (the loader, the editor, the watcher)
+    /// reads it from here rather than keeping its own copy.
+    pub fn articulations(&self) -> [bool; NUM_PADS] {
+        std::array::from_fn(|i| self.pads[i].articulation.value() != ARTICULATION_PRIMARY)
     }
 }
 
@@ -55,23 +116,21 @@ pub struct PadParams {
     /// snare Top), 1.0 favours the "right" side (kick Out or snare
     /// Btm). Ignored for pads with fewer than two close-mic banks.
     pub balance: FloatParam,
-    /// Articulation toggle: when true, use the alternate sample set
-    /// (e.g. "ohne Teppich" instead of "mit Teppich"). Only
-    /// meaningful for pads whose `PadMapping::has_articulation` is true.
+    /// Articulation choice: which recorded variant of the piece this pad
+    /// plays, labelled by [`ARTICULATION_LABELS`] (0 = "mit Teppich",
+    /// 1 = "ohne Teppich").
     ///
-    /// **Editor mirror only — nothing reads this param.** The kit loader
-    /// and the DSP read `KitBridge::articulations`, which is what the
-    /// inspector's articulation chips write (they set this param too, so
-    /// the host sees the value move, but the write is one-way). A host
-    /// automation lane or an MCP `set_plugin_param` call therefore changes
-    /// nothing audible, which is why the param's display name carries the
-    /// [`EDITOR_ONLY_SUFFIX`] marker.
+    /// **This parameter is the source of truth.** The kit loader builds
+    /// the pad from the piece it selects, so writing it — from the
+    /// inspector's chips, a host automation lane, or `set_plugin_param`
+    /// over the control API — reloads the pad's samples through the same
+    /// path (see [`crate::articulation`]).
     ///
-    /// ba todo #1325 makes the param and the bridge one source of truth;
-    /// when it lands, drop the marker from the name here. The string id
-    /// (`pad_N_articulation`) is deliberately left untouched so saved
-    /// projects and automation lanes survive that change.
-    pub articulation: BoolParam,
+    /// Hidden for pads the kit has no alternate recording of: they would
+    /// be a control that cannot move anything, so the host is not offered
+    /// one. The id still exists and still persists, so nothing that was
+    /// saved against it breaks.
+    pub articulation: ChoiceParam,
 }
 
 impl PadParams {
@@ -89,11 +148,8 @@ impl PadParams {
         let bal_name: &'static str = Box::leak(format!("Pad {} Balance", index).into_boxed_str());
         let art_id: &'static str =
             Box::leak(format!("pad_{}_articulation", index).into_boxed_str());
-        // The marker suffix is part of the *name*, never the id: ba todo
-        // #1325 removes it once the param actually drives the loader.
-        let art_name: &'static str = Box::leak(
-            format!("Pad {} Articulation{}", index, EDITOR_ONLY_SUFFIX).into_boxed_str(),
-        );
+        let art_name: &'static str =
+            Box::leak(format!("Pad {} Articulation", index).into_boxed_str());
 
         Self {
             volume: FloatParam::new(
@@ -128,7 +184,15 @@ impl PadParams {
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            articulation: BoolParam::new(art_id, art_name, false),
+            articulation: {
+                let param =
+                    ChoiceParam::new(art_id, art_name, ARTICULATION_PRIMARY, ARTICULATION_LABELS);
+                if PAD_MAPPINGS[index].has_articulation {
+                    param
+                } else {
+                    param.hidden()
+                }
+            },
         }
     }
 }

@@ -35,10 +35,10 @@ use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 use resonance_audio::__test_support::{
-    __instance_from_raw_for_test, render_stem, SharedState, StemSource, SyncClapInstance,
+    render_stem, PluginMap, PluginSlot, SharedState, StemSource, __instance_from_raw_for_test,
 };
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
@@ -191,7 +191,7 @@ unsafe extern "C" fn fake_get_extension(
 
 /// Build the fake instrument and run it through the host's real
 /// create/init/activate/start sequence.
-pub fn multi_out_instrument(levels: [f32; PORTS]) -> SyncClapInstance {
+pub fn multi_out_instrument(levels: [f32; PORTS]) -> PluginSlot {
     let inst = __instance_from_raw_for_test(
         move |_host| {
             let state = Box::into_raw(Box::new(FakeState {
@@ -222,7 +222,7 @@ pub fn multi_out_instrument(levels: [f32; PORTS]) -> SyncClapInstance {
         PORTS,
         "the host must see all three declared output ports"
     );
-    SyncClapInstance(inst)
+    PluginSlot::new(inst)
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ pub struct EngineState {
     pub master: Arc<RwLock<MasterBus>>,
     pub clips: Arc<RwLock<Vec<AudioClip>>>,
     pub midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    pub plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    pub plugins: Arc<RwLock<PluginMap>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -265,7 +265,7 @@ impl EngineState {
         state
             .plugins
             .write()
-            .insert(INSTRUMENT_ID, Mutex::new(multi_out_instrument(levels)));
+            .insert(INSTRUMENT_ID, multi_out_instrument(levels));
 
         let parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
         parent.set_output(TrackOutput::Master);
@@ -322,7 +322,7 @@ impl EngineState {
         let id = INSTRUMENT_ID + parent;
         self.plugins
             .write()
-            .insert(id, Mutex::new(multi_out_instrument(PORT_LEVELS)));
+            .insert(id, multi_out_instrument(PORT_LEVELS));
         let track = Track::with_type(parent, "Other Kit".into(), TrackType::Instrument);
         track.set_output(TrackOutput::Master);
         track.push_plugin(id);

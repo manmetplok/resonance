@@ -60,6 +60,18 @@ pub struct ProjectFile {
     /// existed), which load with no sends exactly as they did before.
     #[serde(default)]
     pub sends: Vec<ProjectSend>,
+    /// External sidechain (key) routes (ba doc #157/#159, todo #1311):
+    /// which plugin's detector is keyed from which track or bus. Stored
+    /// at project scope beside the sends for the same reason they are —
+    /// a route is an edge, and its two ends live in different places
+    /// (the target plugin may be on a track, a bus, or master).
+    ///
+    /// Empty on legacy projects, which is exactly how every project
+    /// written before this field existed behaved: a duck dialled in over
+    /// the control API was gone the next time the project opened, because
+    /// the route only ever existed inside the engine thread.
+    #[serde(default)]
+    pub sidechain_routes: Vec<ProjectSidechainRoute>,
     #[serde(default)]
     pub section_definitions: Vec<crate::project::sections::ProjectSectionDefinition>,
     #[serde(default)]
@@ -181,6 +193,7 @@ impl Default for ProjectFile {
             midi_clips: Vec::new(),
             busses: Vec::new(),
             sends: Vec::new(),
+            sidechain_routes: Vec::new(),
             section_definitions: Vec::new(),
             section_placements: Vec::new(),
             tempo_events: Vec::new(),
@@ -509,6 +522,43 @@ pub struct ProjectSend {
 /// case and the only one the mixer UI can create today.
 fn default_send_source_kind() -> String {
     "track".to_string()
+}
+
+/// One persisted external sidechain (key) route (ba doc #157/#159, todo
+/// #1311): the plugin whose detector is driven from somewhere else, and
+/// the track or bus that drives it.
+///
+/// A route is stored **once, at project scope**, not on the plugin slot
+/// that hosts the target — for the same reason [`ProjectSend`] lives
+/// beside the busses rather than on the source track. A key route is an
+/// edge between two entities and belongs to neither: the target plugin
+/// can sit on a track, a bus, or the master chain, and the source can be
+/// a track or a bus. Hanging it off one end would need the same struct in
+/// three places and still could not say what the other end was.
+///
+/// `plugin_instance_id` survives a reload because every plugin is
+/// re-instantiated with its saved instance id as an `id_hint` (see
+/// `replay_plugins`) — the same guarantee automation lanes and plugin
+/// state blobs already rely on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectSidechainRoute {
+    /// The keyed plugin instance. At most one entry per instance: a
+    /// detector has exactly one input.
+    pub plugin_instance_id: u64,
+    /// What feeds the key: `"track"` or `"bus"`, per [`send_source_tag`].
+    /// An unknown tag drops the route rather than guessing — see
+    /// [`send_source_from_tag`] for why re-pointing it would be worse
+    /// than losing it.
+    #[serde(default = "default_send_source_kind")]
+    pub source_kind: String,
+    /// Id of the source track or bus, per [`Self::source_kind`].
+    pub source_id: u64,
+    /// A disabled route keeps its source but delivers no key, so the
+    /// plugin falls back to keying off its own input. Defaults to `true`
+    /// so a hand-written entry that omits the field is a live route,
+    /// which is what writing one down means.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 /// Split a [`SendSource`] into the `(kind, id)` pair stored on

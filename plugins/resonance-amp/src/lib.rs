@@ -101,7 +101,14 @@ impl ResonancePlugin for ResonanceAmp {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str = "Guitar amp simulator using Neural Amp Modeler profiles";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "mono", "stereo"];
+    // `distortion` is CLAP's category for an amp/drive modeller; without
+    // a sub-category a host files this under nothing (ba todo #1298).
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::AUDIO_EFFECT,
+        features::DISTORTION,
+        features::MONO,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

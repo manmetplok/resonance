@@ -26,6 +26,7 @@ use clack_plugin::prelude::*;
 use crate::plugin::ResonancePlugin;
 
 mod gui;
+mod midi;
 mod params;
 mod ports;
 mod process;
@@ -39,6 +40,9 @@ pub use shared::{ClapAudioProcessor, ClapMainThread, ClapShared};
 // Sidechain (key) input-port policy — also consumed by the host mixer that
 // delivers the external key to the target plugin's sidechain port.
 pub use ports::{input_port_count, sidechain_port_index, SIDECHAIN_PORT_ID};
+
+// Raw MIDI decoding, exposed for the bridge's own tests.
+pub use midi::decode_midi;
 
 // Param metadata is `pub(crate)` and accessed through `clap_bridge::shared`.
 pub(crate) use shared::ParamMeta;
@@ -76,30 +80,37 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
     }
 }
 
+impl<P: ResonancePlugin> ClapBridge<P> {
+    /// A plugin has to tell the host what kind of thing it is.
+    ///
+    /// Evaluated for every exported plugin by `get_descriptor` below, so
+    /// a `FEATURES` list with no main category is a build failure rather
+    /// than a plugin that turns up nowhere useful in a browser
+    /// (ba todo #1298).
+    const HAS_CATEGORY: () = assert!(
+        crate::features::has_category(P::FEATURES),
+        "FEATURES must declare at least one CLAP main category \
+         (features::AUDIO_EFFECT, INSTRUMENT, NOTE_EFFECT, NOTE_DETECTOR or ANALYZER)"
+    );
+}
+
 impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
     fn get_descriptor() -> PluginDescriptor {
+        // Forces the const assertion above for this concrete plugin.
+        let () = Self::HAS_CATEGORY;
+
         let mut desc = PluginDescriptor::new(P::CLAP_ID, P::NAME)
             .with_vendor(P::VENDOR)
             .with_version(P::VERSION)
             .with_description(P::DESCRIPTION);
 
-        let features: Vec<&'static std::ffi::CStr> = P::FEATURES
-            .iter()
-            .filter_map(|f| match *f {
-                "audio-effect" => Some(c"audio-effect"),
-                "instrument" => Some(c"instrument"),
-                "stereo" => Some(c"stereo"),
-                "mono" => Some(c"mono"),
-                "reverb" => Some(c"reverb"),
-                "sampler" => Some(c"sampler"),
-                "drum" | "drum-machine" => Some(c"drum-machine"),
-                "synthesizer" | "synth" => Some(c"synthesizer"),
-                "cabinet-simulator" => Some(c"cabinet-simulator"),
-                _ => None,
-            })
-            .collect();
-        if !features.is_empty() {
-            desc = desc.with_features(features);
+        // Verbatim: the features a plugin declares are already CLAP's own
+        // `&CStr` constants. The bridge used to map them through a
+        // hand-written whitelist and `filter_map` away everything else,
+        // which is how six standard categories and one typo went missing
+        // (finding X6).
+        if !P::FEATURES.is_empty() {
+            desc = desc.with_features(P::FEATURES.iter().copied());
         }
 
         desc
@@ -158,6 +169,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 clap_id,
                 str_id: p.id().to_string(),
                 name: p.name().to_string(),
+                module: p.module().to_string(),
                 min: p.min_plain(),
                 max: p.max_plain(),
                 default: p.default_plain(),
@@ -195,12 +207,18 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         host: HostMainThreadHandle<'a>,
         shared: &'a ClapShared<'a>,
     ) -> Result<ClapMainThread<'a, P>, PluginError> {
-        let plugin = P::new();
+        let mut plugin = P::new();
         for i in 0..plugin.param_count() {
             if i < shared.param_values.len() {
                 shared.set_value(i, plugin.param(i).get_plain());
             }
         }
+
+        // Hand the plugin its handle to the host, before it can be activated
+        // and before anything else may query it. Plugins that never talk back
+        // to the host use the default `set_host`, which drops it.
+        let host_handle = crate::host::HostHandle::new(shared.host, plugin.latency_samples());
+        plugin.set_host(host_handle.clone());
 
         // Harvest the editor factory and any extra-state saver before the
         // plugin may be moved to the audio processor. Both are None for
@@ -212,7 +230,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             host,
             shared,
             plugin: Some(plugin),
-            last_latency: 0,
+            host_handle,
             editor_factory,
             editor: None,
             extra_state_saver,
@@ -233,14 +251,17 @@ impl<'a, P: ResonancePlugin> PluginLatencyImpl for ClapMainThread<'a, P> {
             // `initialize()`; the CLAP spec only defines this query while
             // the plugin is active.
             let lat = plugin.latency_samples();
-            self.last_latency = lat;
+            self.host_handle.store_latency(lat);
             lat
         } else {
             // Active: the plugin object moved into the audio processor.
-            // Serve the value captured post-`initialize()` during
-            // `activate` — this is the path the host's activation-time
-            // query takes.
-            self.last_latency
+            // Serve the cached value — captured post-`initialize()` during
+            // `activate`, or pushed by the plugin itself through
+            // `HostHandle::set_latency_samples` when its latency changed at
+            // runtime. This is the path both the host's activation-time
+            // query and its re-query after `clap_host_latency.changed()`
+            // take.
+            self.host_handle.latency_samples()
         }
     }
 }

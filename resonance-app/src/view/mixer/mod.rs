@@ -11,6 +11,7 @@ mod master_strip;
 pub(crate) mod picks;
 mod plugin_panel;
 mod reference_panel;
+pub(crate) mod reorder;
 mod track_strip;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
@@ -217,36 +218,47 @@ impl crate::Resonance {
             .into()
     }
 
-    /// Render a single plugin slot row (name button + remove button).
-    /// If `is_instrument_slot` is true, the name is tinted to distinguish it.
+    /// Render a single plugin slot row (name button + ▲/▼ reorder pair +
+    /// remove button). If `is_instrument_slot` is true, the name is
+    /// tinted to distinguish it.
+    ///
+    /// `index` is the slot's position in `owner`'s chain and `len` the
+    /// chain's length — the two the reorder controls need to know which
+    /// direction is still available (ba todo #1302). They are the
+    /// position in the FULL chain, not in the section being drawn: the
+    /// track strip renders the instrument and the effects as two
+    /// sections, and the instrument-floor rule is stated in chain
+    /// indices.
     fn view_plugin_slot_row(
         &self,
         owner: PluginOwner,
         plugin: &PluginSlotState,
         is_instrument_slot: bool,
+        index: usize,
+        len: usize,
     ) -> Element<'_, Message> {
         // ASCII ".." suffix (not '…') — this pill's width was tuned
         // around the narrower two-dot tail.
         let pname = crate::util::short_with(&plugin.plugin_name, 14, "..");
         let pid = plugin.instance_id;
-        // Plugins that expose a floating editor (has_gui) are driven
-        // entirely from that window — clicking the name in the strip
-        // toggles the editor open/closed rather than showing the
-        // generic params in the bottom panel. Plugins without a
-        // floating editor still fall back to the bottom panel path.
-        let (click_msg, is_selected) = if plugin.has_gui {
-            let msg = if plugin.editor_open {
-                Message::Plugin(PluginMessage::ClosePluginEditor(pid))
-            } else {
-                Message::Plugin(PluginMessage::OpenPluginEditor(pid))
-            };
-            (msg, plugin.editor_open)
-        } else {
-            (
-                Message::Plugin(PluginMessage::TogglePluginPanel(pid)),
-                self.mixer.selected_plugin == Some(pid),
-            )
-        };
+        // The name opens the generic parameter panel — for every plugin,
+        // GUI or not (ba todo #1306, audit finding X4).
+        //
+        // This used to route to the panel only when `has_gui == false`,
+        // and since all eleven bundled plugins declare a GUI, that made
+        // the generic panel unreachable for the entire fleet: the one
+        // surface that shows a plugin's parameters as plain numbers, and
+        // the only thing left to fall back on when a floating editor
+        // fails to open. The control API never had the restriction, so
+        // an agent could read and set those parameters while a human
+        // could not see them at all.
+        //
+        // The floating editor is not lost — it moves to its own control
+        // below, because "show me the parameters" and "open the plugin's
+        // own window" are two different requests and one button cannot
+        // be both.
+        let click_msg = Message::Plugin(PluginMessage::TogglePluginPanel(pid));
+        let is_selected = self.mixer.selected_plugin == Some(pid);
 
         // Instrument slots get the design's lavender pill: ◆ glyph
         // followed by the plugin name on a tinted ACCENT_DIM background
@@ -332,16 +344,119 @@ impl crate::Resonance {
             PluginOwner::Bus(bus_id) => Message::Bus(BusMessage::RemovePluginFromBus(bus_id, pid)),
             PluginOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(pid)),
         };
-        let plugin_del = button(text("\u{00d7}").size(9).color(theme::TEXT_DIM))
+        let plugin_del = button(text("\u{00d7}").size(SLOT_ICON_SIZE).color(theme::TEXT_DIM))
             .on_press(remove_msg)
             .style(|_theme, status| theme::small_button_style(status))
-            .padding(1);
+            .padding([1, SLOT_ICON_PAD_X]);
 
-        // Button takes Length::Fill so it stretches to the strip width;
-        // the delete button hugs the right edge.
-        row![name_btn, plugin_del]
-            .spacing(2)
+        // Chain reorder (ba todo #1302). The strip is 140 px wide, so
+        // the carets share the slot-row icon metrics with the editor
+        // toggle and the delete glyph, and sit between the two: order
+        // first, then removal.
+        let moves = reorder::chain_moves(self, owner, pid, index, len);
+
+        // The icon cluster is one group so the gap *inside* it can be
+        // tighter than the gap that separates it from the name.
+        let mut icons = row![].spacing(SLOT_ICON_GAP);
+        if let Some(editor) = editor_toggle(plugin) {
+            icons = icons.push(editor);
+        }
+        let icons = icons
+            .push(reorder::move_buttons(
+                &moves,
+                SLOT_ICON_SIZE,
+                SLOT_ICON_PAD_X,
+            ))
+            .push(plugin_del)
+            .align_y(alignment::Vertical::Center);
+
+        // The name takes Length::Fill so it stretches to the strip
+        // width; the icon cluster hugs the right edge.
+        row![name_btn, icons]
+            .spacing(SLOT_ICON_GAP + 1.0)
             .align_y(alignment::Vertical::Center)
             .into()
     }
+}
+
+/// Glyph size for the plugin slot row's icon controls.
+const SLOT_ICON_SIZE: f32 = 9.0;
+
+/// Horizontal padding around each of those glyphs.
+///
+/// One pixel, not the three a roomier surface would use, because the
+/// slot row has to fit **four** icon controls — the editor toggle (ba
+/// todo #1306), the ▲/▼ reorder pair (#1302) and the delete × — beside
+/// the plugin's name inside a 140 px strip.
+///
+/// The budget is genuinely that tight: measured off
+/// `mixer_sub_tracks_expanded`, an icon at the old 3 px padding cost 17
+/// px of row, and the instrument pill had **half a pixel** of slack
+/// left over at three icons. Adding a fourth without tightening the
+/// cluster pushed the pill 17 px narrower than its own text, so the
+/// name overflowed its border and ran under the new glyph. Trimming the
+/// padding and the gaps hands those 17 px back to the name, which is
+/// why the pill in that golden is the same width as it was before the
+/// toggle existed.
+///
+/// The inspector's CHAIN rows are not on this budget and keep 3 px.
+const SLOT_ICON_PAD_X: u16 = 1;
+
+/// Gap between the slot row's icon controls.
+const SLOT_ICON_GAP: f32 = 1.0;
+
+/// The strip slot's floating-editor toggle — the sliders glyph, tinted
+/// while the editor is open (ba todo #1306).
+///
+/// `None` for a plugin that declares no GUI: there is no window to open,
+/// and the generic parameter panel behind the name button is the whole
+/// surface such a plugin has.
+///
+/// It is a control of its own rather than a second meaning for the name
+/// button. Before, the name meant "toggle the editor" on GUI plugins and
+/// "toggle the parameter panel" on the rest, so which surface a click
+/// reached depended on a property of the plugin the user cannot see —
+/// and the parameter panel had no route at all on the eleven bundled
+/// plugins, every one of which declares a GUI.
+fn editor_toggle(plugin: &PluginSlotState) -> Option<Element<'static, Message>> {
+    let (message, color) = editor_toggle_spec(plugin)?;
+    Some(
+        button(
+            theme::icon(theme::fa::SLIDERS)
+                .size(SLOT_ICON_SIZE)
+                .color(color),
+        )
+        .on_press(message)
+        .style(|_theme, status| theme::small_button_style(status))
+        .padding([1, SLOT_ICON_PAD_X])
+        .into(),
+    )
+}
+
+/// What the strip's editor toggle carries and how it is tinted: the
+/// message a press raises, and the glyph colour.
+///
+/// `None` is the "draw no control at all" answer, for a plugin that
+/// declares no GUI.
+///
+/// Split out from [`editor_toggle`] so the decision has exactly one
+/// home and a test can read it back (`test_strip_editor_toggle`). The
+/// tint is not observable through the widget tree — `iced_test` sees a
+/// text candidate's content, never its colour — and "the glyph lights
+/// up while the window is open" is the only feedback the user gets that
+/// the press did anything, since the engine reports neither success nor
+/// failure per instance (split out as ba todo #1347).
+pub(crate) fn editor_toggle_spec(plugin: &PluginSlotState) -> Option<(Message, Color)> {
+    if !plugin.has_gui {
+        return None;
+    }
+    let pid = plugin.instance_id;
+    let open = plugin.editor_open;
+    let message = if open {
+        Message::Plugin(PluginMessage::ClosePluginEditor(pid))
+    } else {
+        Message::Plugin(PluginMessage::OpenPluginEditor(pid))
+    };
+    let color = if open { theme::ACCENT } else { theme::TEXT_DIM };
+    Some((message, color))
 }

@@ -1,11 +1,12 @@
 //! Gate plugin editor: an egui UI hosted in `wayland-plugin-gui`.
 //!
 //! Deliberately plain — a title band with the factory-preset combo and
-//! three captioned clusters of parameter knobs. The gate has no
-//! visualisation worth the frame
-//! budget: its interesting state is a single open/closed bit and a
-//! gain-reduction number, both of which the host's own meters already
-//! show on the channel it sits on.
+//! the detector readout, then three captioned clusters of parameter
+//! knobs. The gate has no *signal* visualisation worth the frame
+//! budget; the host's own meters already show the level on the channel
+//! it sits on. What the host cannot show is the detector — which
+//! signal it is reading, and what it is doing with it — which is the
+//! whole plugin (see [`status`], ba todo #1314).
 //!
 //! Plain is not the same as unstyled, though. Until ba todo #1275 this
 //! editor installed no `egui::Visuals` at all and opened in stock egui
@@ -15,6 +16,7 @@
 //! neighbours (compressor, granular delay).
 
 mod factory;
+pub mod status;
 pub mod theme;
 mod widgets;
 
@@ -26,7 +28,9 @@ use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::{GateParams, PARAM_COUNT};
 use crate::presets::{load_preset, PRESETS};
+use crate::viz::GateViz;
 
+use status::DetectorSummary;
 use widgets::param_knob;
 
 /// Height of the title band, in points. The fleet's header bands run
@@ -68,6 +72,8 @@ pub const GROUPS: &[KnobGroup] = &[
 
 pub(crate) struct GateEditorApp {
     pub(crate) params: Arc<GateParams>,
+    /// Detector status published by the audio thread (ba todo #1314).
+    pub(crate) viz: Arc<GateViz>,
     /// Index into [`crate::presets::PRESETS`] of the preset last loaded
     /// from the header combo. Display only — the combo shows what was
     /// loaded rather than a permanent placeholder (ba todo #1280);
@@ -77,9 +83,10 @@ pub(crate) struct GateEditorApp {
 }
 
 impl GateEditorApp {
-    pub fn new(params: Arc<GateParams>) -> Self {
+    pub fn new(params: Arc<GateParams>, viz: Arc<GateViz>) -> Self {
         Self {
             params,
+            viz,
             selected_preset: None,
         }
     }
@@ -101,9 +108,10 @@ impl EditorApp for GateEditorApp {
     }
 }
 
-/// The title band: product name in the brand accent, then the factory
-/// preset combo — the same affordance, in the same place, as the
-/// compressor's and the granular delay's.
+/// The title band: product name in the brand accent, the factory preset
+/// combo — the same affordance, in the same place, as the compressor's
+/// and the granular delay's — and, right-aligned, the live detector
+/// readout.
 fn draw_header(ui: &mut egui::Ui, app: &mut GateEditorApp) {
     ui.horizontal_centered(|ui| {
         ui.add_space(12.0);
@@ -134,6 +142,9 @@ fn draw_header(ui: &mut egui::Ui, app: &mut GateEditorApp) {
                     }
                 }
             });
+
+        // Right-aligned: which detector is running and what it is doing.
+        status::draw(ui, &DetectorSummary::from_viz(&app.viz));
     });
 }
 

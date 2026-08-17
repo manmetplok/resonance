@@ -33,6 +33,9 @@ pub mod reference;
 pub mod settings;
 pub mod state;
 mod test_support;
+#[doc(hidden)]
+pub use test_support::TestChain;
+pub use test_support::SendSlotAffordances;
 pub mod theme;
 pub mod undo;
 pub mod update;
@@ -221,6 +224,12 @@ pub struct Resonance {
     /// purely from `AuxSendChanged` / `AuxSendRemoved` / `AuxSendRejected`
     /// events. Bus return-role rides on `BusState::is_return`.
     pub(crate) aux: state::AuxSendState,
+    /// GUI-side mirror of the engine's sidechain (key) routing table, one
+    /// entry per keyed plugin instance (ba todo #1311). Seeded by the
+    /// project-load replay and reconciled from `SidechainRouteChanged`.
+    /// This is what makes a key route persistable: the save path
+    /// serializes app state, and until this existed no app state held it.
+    pub(crate) sidechain: state::SidechainState,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
     /// External-instrument tracks: per-track bank/program/latency config plus
@@ -287,6 +296,17 @@ pub struct Resonance {
     /// plugin internal state via `LoadPluginState`. Stale between
     /// refreshes — parameter values in snapshots always come from live
     /// GUI state instead.
+    ///
+    /// Also **seeded from the project file at load time** (see
+    /// `update::project_io::replay::entity::replay_plugins`), which is
+    /// what keeps a slot whose `.clap` is missing from losing its opaque
+    /// state: the engine can never report a blob for an instance it
+    /// failed to create, so without the seed the first Save As wrote
+    /// nothing for it and the settings were gone (ba doc #275, P5).
+    /// Every writer of project state reads this map — the save collector
+    /// via [`crate::update::project_io::plugin_states_for_save`], template
+    /// capture, "save track as preset", and the undo snapshot — so the
+    /// blob survives all of them.
     pub(crate) plugin_state_cache:
         std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<u8>>,
 
@@ -347,8 +367,20 @@ pub struct Resonance {
     /// here and `engine_events::plugins::apply_pending_param_overrides`
     /// applies them (to the app-side mirror and to the engine) the moment
     /// the event arrives. Entries are consumed on use.
-    pub(crate) pending_plugin_param_overrides:
-        std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<(u32, f64)>>,
+    ///
+    /// An entry that is *never* consumed is the signature of a plugin the
+    /// host could not instantiate — a missing `.clap`. Its slot's
+    /// `params` mirror stays empty forever, so serialization reads the
+    /// parked list back out instead (see
+    /// `update::project_io::serialize::project_plugin`) rather than
+    /// writing an empty `params` array and destroying the user's settings
+    /// on the first Save As (ba doc #275, P5). That is why the values are
+    /// held in their on-disk [`crate::project::ProjectPluginParam`] shape,
+    /// names included: what comes off disk is written back verbatim.
+    pub(crate) pending_plugin_param_overrides: std::collections::HashMap<
+        resonance_audio::types::PluginInstanceId,
+        Vec<crate::project::ProjectPluginParam>,
+    >,
 }
 
 /// Startup tab requested via `--tab arrange|mixer|compose|performance`. Read
@@ -633,6 +665,7 @@ impl Resonance {
             },
             track_groups: state::TrackGroupRegistry::new(),
             aux: state::AuxSendState::default(),
+            sidechain: state::SidechainState::default(),
             undo: UndoHistory::new(),
             external_instruments: std::collections::HashMap::new(),
             device_registry,

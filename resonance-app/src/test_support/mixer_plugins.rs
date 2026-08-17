@@ -2,8 +2,75 @@
 //! sends, MIDI map, plugin params, freeze lifecycle, and the device
 //! definition registry.
 
+use crate::message::Message;
 use crate::state;
 use crate::Resonance;
+
+/// Which plugin chain a [`Resonance::test_chain_move_affordances`] query
+/// is about. Mirrors the view's private `PluginOwner` so a test can name
+/// a chain without the whole mixer view module going public.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub enum TestChain {
+    Track(resonance_audio::types::TrackId),
+    Bus(resonance_audio::types::BusId),
+    Master,
+}
+
+/// What the mixer inspector's SENDS block renders for one aux send, and
+/// the messages its controls raise (ba todo #1310).
+///
+/// Every field is read straight off the view builders in
+/// `view::mixer::inspector::sends`, so a test that asserts on this is
+/// asserting on the rendered panel, and one that feeds
+/// [`Self::reroute_to`] / [`Self::set_level`] / [`Self::toggle_tap`] /
+/// [`Self::toggle_enabled`] / [`Self::remove`] into `update` is pressing
+/// the real affordances rather than a second copy of the wiring.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct SendSlotAffordances {
+    pub send_id: u64,
+    /// The bus the destination picker shows as selected.
+    pub dest_bus: u64,
+    /// That entry's label, exactly as the picker draws it.
+    pub dest_label: String,
+    /// Every `(bus_id, label)` the destination picker offers, in order.
+    pub dest_options: Vec<(u64, String)>,
+    /// The dB readout beside the level slider (e.g. `"-6.0 dB"`).
+    pub level_readout: String,
+    /// The tap toggle's label: `"PRE"` or `"POST"`.
+    pub tap_label: String,
+    pub pre_fader: bool,
+    /// Whether the ON toggle reads as lit.
+    pub enabled: bool,
+}
+
+impl SendSlotAffordances {
+    /// Picking `bus_id` out of the destination picker.
+    pub fn reroute_to(&self, bus_id: u64) -> Message {
+        crate::view::mixer::inspector::sends::dest_message(self.send_id, bus_id)
+    }
+
+    /// Dragging the level slider to `level_db`.
+    pub fn set_level(&self, level_db: f32) -> Message {
+        crate::view::mixer::inspector::sends::level_message(self.send_id, level_db)
+    }
+
+    /// Clicking the PRE/POST toggle.
+    pub fn toggle_tap(&self) -> Message {
+        crate::view::mixer::inspector::sends::tap_message(self.send_id)
+    }
+
+    /// Clicking the ON toggle.
+    pub fn toggle_enabled(&self) -> Message {
+        crate::view::mixer::inspector::sends::enable_message(self.send_id)
+    }
+
+    /// Clicking the trash affordance.
+    pub fn remove(&self) -> Message {
+        crate::view::mixer::inspector::sends::remove_message(self.send_id)
+    }
+}
 
 impl Resonance {
     /// Test-only: read the mirrored aux-send graph. Driven from
@@ -22,11 +89,68 @@ impl Resonance {
         self.aux.upsert(send);
     }
 
+    /// Test-only: read the mirrored sidechain (key) routes, one per keyed
+    /// plugin instance. Drives `tests/sidechain_persistence.rs`, which
+    /// asserts routes survive a real save + reload (ba todo #1311).
+    #[doc(hidden)]
+    pub fn test_sidechain_routes(&self) -> &[resonance_audio::types::SidechainRoute] {
+        &self.sidechain.routes
+    }
+
     /// Test-only: read the most recent aux-send rejection forwarded to
     /// the UI (`None` once a later send succeeds).
     #[doc(hidden)]
     pub fn test_aux_last_rejection(&self) -> Option<&state::AuxSendRejection> {
         self.aux.last_rejection.as_ref()
+    }
+
+    /// Test-only: the send slots the mixer inspector's ROUTING group
+    /// renders for `track_id`, in the order it draws them, each carrying
+    /// the messages its controls raise (ba todo #1310).
+    ///
+    /// Empty when the track has no sends — which is also what a track
+    /// that does not exist reports, since neither draws a slot.
+    #[doc(hidden)]
+    pub fn test_send_affordances(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<SendSlotAffordances> {
+        use crate::view::mixer::inspector::sends;
+        sends::sends_for_track(self, track_id)
+            .map(|send| {
+                let (options, selected) = sends::dest_options(self, send);
+                SendSlotAffordances {
+                    send_id: send.id,
+                    dest_bus: send.dest,
+                    dest_label: selected.map(|c| c.label).unwrap_or_default(),
+                    dest_options: options
+                        .into_iter()
+                        .map(|c| (c.bus_id, c.label))
+                        .collect(),
+                    level_readout: sends::level_readout(send),
+                    tap_label: sends::tap_label(send).to_string(),
+                    pre_fader: send.pre_fader,
+                    enabled: send.enabled,
+                }
+            })
+            .collect()
+    }
+
+    /// Test-only: the "+ Add send" picker's options for `track_id` as
+    /// `(label, message)` pairs — the label the dropdown shows and the
+    /// message picking it raises. Always ends with the "New FX return…"
+    /// entry, so the picker is never dead.
+    #[doc(hidden)]
+    pub fn test_add_send_options(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Vec<(String, Message)> {
+        use crate::view::mixer::inspector::sends;
+        let source = resonance_audio::types::SendSource::Track(track_id);
+        sends::add_options(self, track_id)
+            .into_iter()
+            .map(|choice| (choice.to_string(), sends::add_message(source, &choice)))
+            .collect()
     }
 
     /// Test-only: drive the freeze-cache rehydrate path a disk load runs
@@ -91,6 +215,105 @@ impl Resonance {
             .find(|t| t.id == track_id)
             .map(|t| t.plugins.iter().map(|p| p.instance_id).collect())
             .unwrap_or_default()
+    }
+
+    /// Test-only: the chain-reorder affordances the mixer draws for one
+    /// chain, slot by slot — the exact `(▲, ▼)` messages the inspector
+    /// row and the strip slot attach to their carets, with `None` where
+    /// the caret renders disabled (ba todo #1302).
+    ///
+    /// Returned as messages rather than booleans so a test can both
+    /// assert what the GUI offers AND feed it straight back through
+    /// `update`, which is the only way to prove the button a human
+    /// presses lands the same reorder the control API does.
+    #[doc(hidden)]
+    pub fn test_chain_move_affordances(
+        &self,
+        chain: TestChain,
+    ) -> Vec<(Option<crate::message::Message>, Option<crate::message::Message>)> {
+        use crate::view::mixer::picks::PluginOwner;
+        let (owner, slots): (PluginOwner, Vec<_>) = match chain {
+            TestChain::Track(track_id) => {
+                let Some(t) = self.registry.tracks.iter().find(|t| t.id == track_id) else {
+                    return Vec::new();
+                };
+                (
+                    PluginOwner::Track(track_id),
+                    t.plugins.iter().map(|p| p.instance_id).collect(),
+                )
+            }
+            TestChain::Bus(bus_id) => {
+                let Some(b) = self.registry.busses.iter().find(|b| b.id == bus_id) else {
+                    return Vec::new();
+                };
+                (
+                    PluginOwner::Bus(bus_id),
+                    b.plugins.iter().map(|p| p.instance_id).collect(),
+                )
+            }
+            TestChain::Master => (
+                PluginOwner::Master,
+                self.master_plugins.iter().map(|p| p.instance_id).collect(),
+            ),
+        };
+        let len = slots.len();
+        slots
+            .into_iter()
+            .enumerate()
+            .map(|(index, instance_id)| {
+                let m = crate::view::mixer::reorder::chain_moves(
+                    self,
+                    owner,
+                    instance_id,
+                    index,
+                    len,
+                );
+                (m.up, m.down)
+            })
+            .collect()
+    }
+
+    /// Test-only: the channel-strip slot's floating-editor toggle for
+    /// `instance_id`, as the mixer would draw it — the message the glyph
+    /// carries and the colour it is tinted (ba todo #1306).
+    ///
+    /// `None` means the strip draws no editor control for that slot.
+    ///
+    /// The click routing is covered end-to-end by pressing the real
+    /// button in `tests/mixer_generic_param_panel.rs`; this hook exists
+    /// for the tint, which the widget tree does not expose — `iced_test`
+    /// can read a text candidate's content but never its colour.
+    #[doc(hidden)]
+    pub fn test_strip_editor_toggle(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<(crate::message::Message, iced::Color)> {
+        let plugin = self
+            .registry
+            .tracks
+            .iter()
+            .flat_map(|t| t.plugins.iter())
+            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
+            .chain(self.master_plugins.iter())
+            .find(|p| p.instance_id == instance_id)?;
+        crate::view::mixer::editor_toggle_spec(plugin)
+    }
+
+    /// Test-only: declare that a seeded plugin has a GUI, as a real
+    /// scan result would (ba todo #1306).
+    ///
+    /// Every plugin the test seeds defaults to `has_gui: false`, which
+    /// is the configuration NONE of the eleven bundled plugins actually
+    /// ship in — so without this the strip's editor toggle never
+    /// reaches a golden and the 140 px row is only ever pixel-checked
+    /// one control short.
+    #[doc(hidden)]
+    pub fn test_set_plugin_has_gui(
+        &mut self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+        has_gui: bool,
+    ) {
+        self.with_plugin_mut(instance_id, |p| p.has_gui = has_gui);
     }
 
     /// Test-only: set a plugin param's current value directly (no engine

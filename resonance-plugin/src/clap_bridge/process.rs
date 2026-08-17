@@ -2,11 +2,15 @@
 
 use std::sync::atomic::Ordering;
 
+use clack_plugin::events::event_types::NoteExpressionType;
 use clack_plugin::prelude::*;
 
 use super::ports::sidechain_port_index;
 use super::shared::{ClapAudioProcessor, ClapMainThread, ClapShared};
-use crate::plugin::{EventIterator, KeyBuffer, NoteEvent, OutputBuffer, ResonancePlugin, TempoInfo};
+use crate::plugin::{
+    ControlEvent, EventIterator, KeyBuffer, NoteEvent, OutputBuffer, PluginEvent, ResonancePlugin,
+    TempoInfo,
+};
 
 impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainThread<'a, P>>
     for ClapAudioProcessor<'a, P>
@@ -41,7 +45,17 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // main-thread latency extension can no longer reach it; the host's
         // single post-activation `latency.get()` is served from this cached
         // value instead (CLAP only defines the query while active).
-        main_thread.last_latency = plugin.latency_samples();
+        //
+        // This is also the point where a runtime latency change becomes
+        // official: a plugin that pushed a new figure through
+        // `HostHandle::set_latency_samples` asked for a restart, and the
+        // re-activation that follows lands here and re-reads it.
+        main_thread
+            .host_handle
+            .store_latency(plugin.latency_samples());
+        // From here on the plugin is active, so a further latency change
+        // needs a restart request rather than a bare notification.
+        main_thread.host_handle.set_active(true);
 
         let max_frames = audio_config.max_frames_count as usize;
         let port_count = shared.output_ports.len();
@@ -63,7 +77,14 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             key_left: vec![0.0; key_len],
             key_right: vec![0.0; key_len],
             output_scratch,
-            note_events: Vec::with_capacity(256),
+            // Sized for the worst realistic block: notes plus a dense
+            // controller stream (a fader sweep is ~1 CC per ms). The buffer
+            // is cleared, never shrunk, so the capacity is reached at most
+            // once per instance. A `push` past it would allocate on the
+            // audio thread — deliberately preferred over silently dropping
+            // events, because a dropped NoteOff is a note stuck forever
+            // while one reallocation is a single glitch that never repeats.
+            input_events: Vec::with_capacity(1024),
         })
     }
 
@@ -78,8 +99,8 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             return Ok(ProcessStatus::ContinueIfNotQuiet);
         }
 
-        // Handle input events: param changes and note events
-        self.note_events.clear();
+        // Handle input events: param changes, note events, MIDI controllers.
+        self.input_events.clear();
         for event in events.input {
             if let Some(core_event) = event.as_core_event() {
                 use clack_plugin::events::spaces::CoreEventSpace;
@@ -104,27 +125,62 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     }
                     CoreEventSpace::NoteOn(e) => {
                         if let crate::Match::Specific(key) = e.key() {
-                            self.note_events.push(NoteEvent::NoteOn {
+                            self.input_events.push(PluginEvent::Note(NoteEvent::NoteOn {
                                 note: key as u8,
                                 velocity: e.velocity() as f32,
                                 timing: e.header().time(),
-                            });
+                            }));
                         }
                     }
                     CoreEventSpace::NoteOff(e) => {
                         if let crate::Match::Specific(key) = e.key() {
-                            self.note_events.push(NoteEvent::NoteOff {
+                            self.input_events.push(PluginEvent::Note(NoteEvent::NoteOff {
                                 note: key as u8,
                                 timing: e.header().time(),
-                            });
+                            }));
                         }
                     }
                     CoreEventSpace::NoteChoke(e) => {
                         if let crate::Match::Specific(key) = e.key() {
-                            self.note_events.push(NoteEvent::Choke {
+                            self.input_events.push(PluginEvent::Note(NoteEvent::Choke {
                                 note: key as u8,
                                 timing: e.header().time(),
-                            });
+                            }));
+                        }
+                    }
+                    // Raw MIDI 1.0: control change, aftertouch and pitch
+                    // bend. The CLAP note dialect cannot express a control
+                    // change at all, so the bridge declares the MIDI dialect
+                    // alongside it (see `ports.rs`) and decodes the
+                    // channel-voice messages here. Note on/off are
+                    // deliberately *not* decoded from raw MIDI: the port
+                    // prefers the CLAP dialect, and accepting notes from both
+                    // would double-trigger against a host that sends both.
+                    CoreEventSpace::Midi(e) => {
+                        if let Some(control) = super::midi::decode_midi(e.data(), e.header().time())
+                        {
+                            self.input_events.push(PluginEvent::Control(control));
+                        }
+                    }
+                    // Poly aftertouch the CLAP-native way. A CLAP-dialect
+                    // host expresses per-note pressure as a note expression
+                    // rather than as MIDI, so both routes have to land on the
+                    // same plugin-facing event.
+                    CoreEventSpace::NoteExpression(e) => {
+                        if e.expression_type() == Some(NoteExpressionType::Pressure) {
+                            if let crate::Match::Specific(key) = e.key() {
+                                self.input_events.push(PluginEvent::Control(
+                                    ControlEvent::PolyPressure {
+                                        channel: match e.channel() {
+                                            crate::Match::Specific(c) => c as u8,
+                                            _ => 0,
+                                        },
+                                        note: key as u8,
+                                        pressure: e.value() as f32,
+                                        timing: e.header().time(),
+                                    },
+                                ));
+                            }
                         }
                     }
                     _ => {}
@@ -196,7 +252,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             })
         });
 
-        let mut event_iter = EventIterator::new(&self.note_events);
+        let mut event_iter = EventIterator::mixed(&self.input_events);
 
         // Effect path: read the input (port 0 of the input audio buffers)
         // into scratch. The plugin sees the input pre-loaded in its
@@ -356,6 +412,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
     }
 
     fn deactivate(self, main_thread: &mut ClapMainThread<'a, P>) {
+        main_thread.host_handle.set_active(false);
         main_thread.plugin = Some(self.plugin);
     }
 

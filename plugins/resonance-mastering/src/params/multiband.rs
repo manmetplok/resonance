@@ -1,21 +1,34 @@
 //! Plugin-facing params for the multiband compressor stage.
 
-use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_hz, v2s_f32_ratio};
+use resonance_plugin::formatters::{
+    s2v_f32_percentage, v2s_f32_db, v2s_f32_hz, v2s_f32_ms, v2s_f32_percent, v2s_f32_ratio,
+};
 use resonance_plugin::*;
 
 use crate::stages::multiband::{BandConfig, MultibandConfig, NUM_BANDS};
 
-/// Params per band (on, threshold, ratio, gain).
-pub const PARAMS_PER_BAND: usize = 4;
+/// Params per band: the same seven controls the single-band glue stage
+/// exposes (on, threshold, ratio, attack, release, knee, mix) plus the
+/// band output gain.
+pub const PARAMS_PER_BAND: usize = 8;
 /// Global params: on + 3 crossovers.
 pub const GLOBAL_PARAMS: usize = 1 + 3;
 /// Total param count for this stage.
 pub const PARAM_COUNT: usize = GLOBAL_PARAMS + NUM_BANDS * PARAMS_PER_BAND;
 
+/// One band's controls. Names and ranges deliberately mirror
+/// [`crate::params::GlueCompressorParams`] — a band *is* a glue
+/// compressor, so "Attack" means the same thing and covers the same
+/// range in both places, and the only extra control is the band's
+/// output gain.
 pub struct MultibandBandParams {
     pub on: BoolParam,
     pub threshold: FloatParam,
     pub ratio: FloatParam,
+    pub attack: FloatParam,
+    pub release: FloatParam,
+    pub knee: FloatParam,
+    pub mix: FloatParam,
     pub gain: FloatParam,
 }
 
@@ -47,6 +60,50 @@ impl MultibandBandParams {
             )
             .with_unit(":1")
             .with_value_to_string(v2s_f32_ratio()),
+            attack: FloatParam::new(
+                leak(format!("{prefix}_b{index}_attack")),
+                leak(format!("MB B{} Attack", index + 1)),
+                30.0,
+                FloatRange::Skewed {
+                    min: 1.0,
+                    max: 200.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(v2s_f32_ms(1)),
+            release: FloatParam::new(
+                leak(format!("{prefix}_b{index}_release")),
+                leak(format!("MB B{} Release", index + 1)),
+                150.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 1000.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(v2s_f32_ms(0)),
+            knee: FloatParam::new(
+                leak(format!("{prefix}_b{index}_knee")),
+                leak(format!("MB B{} Knee", index + 1)),
+                6.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: 12.0,
+                },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(v2s_f32_db(1)),
+            mix: FloatParam::new(
+                leak(format!("{prefix}_b{index}_mix")),
+                leak(format!("MB B{} Mix", index + 1)),
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_string_to_value(s2v_f32_percentage())
+            .with_value_to_string(v2s_f32_percent(0)),
             gain: FloatParam::new(
                 leak(format!("{prefix}_b{index}_gain")),
                 leak(format!("MB B{} Gain", index + 1)),
@@ -66,7 +123,11 @@ impl MultibandBandParams {
             0 => &self.on,
             1 => &self.threshold,
             2 => &self.ratio,
-            3 => &self.gain,
+            3 => &self.attack,
+            4 => &self.release,
+            5 => &self.knee,
+            6 => &self.mix,
+            7 => &self.gain,
             _ => &self.on,
         }
     }
@@ -76,6 +137,10 @@ impl MultibandBandParams {
             enabled: self.on.value(),
             threshold_db: self.threshold.value(),
             ratio: self.ratio.value(),
+            attack_ms: self.attack.value(),
+            release_ms: self.release.value(),
+            knee_db: self.knee.value(),
+            mix: self.mix.value(),
             gain_db: self.gain.value(),
         }
     }

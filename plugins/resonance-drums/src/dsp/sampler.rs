@@ -13,7 +13,35 @@ use crate::params::DrumParams;
 use crate::voice::{BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_SAMPLES};
 
 use super::janitor;
-use super::voice_pick::{pick_rr, pick_velocity_layer, MAX_LAYERS};
+use super::voice_pick::{
+    pick_rr, pick_rr_random, pick_velocity_layer, RoundRobinMode, MAX_LAYERS, NO_LAST_TAKE,
+};
+
+/// The global settings a hit is started with, snapshotted once per
+/// block from the params (see
+/// [`DrumSampler::update_global_settings`]). Held on the sampler so
+/// `note_on` stays a two-argument audio-thread call and so a headless
+/// caller that never sets them gets exactly the plugin's historical
+/// behaviour.
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalSettings {
+    /// Ceiling on simultaneously active voices.
+    pub max_voices: usize,
+    /// Velocity curve, -1 (hard) … 0 (linear) … +1 (soft).
+    pub velocity_curve: f32,
+    /// How a layer's takes are walked.
+    pub round_robin: RoundRobinMode,
+}
+
+impl Default for GlobalSettings {
+    fn default() -> Self {
+        Self {
+            max_voices: MAX_VOICES,
+            velocity_curve: 0.0,
+            round_robin: RoundRobinMode::Cycle,
+        }
+    }
+}
 
 /// One stereo output buffer pair for a single plugin output port. Callers
 /// build a slice of these (one per port) and hand it to `render_frame`.
@@ -29,6 +57,16 @@ pub struct DrumSampler {
     /// Monotonic round-robin counter per (pad, layer). Advanced on each
     /// note_on; indexed modulo the layer's RR count to pick the next take.
     rr_counters: [[u32; MAX_LAYERS]; NUM_PADS],
+    /// The take that last fired per (pad, layer), or [`NO_LAST_TAKE`].
+    /// Recorded in both round-robin modes so switching to Random never
+    /// repeats whatever Cycle just played.
+    rr_last: [[u16; MAX_LAYERS]; NUM_PADS],
+    /// Xorshift state for the Random round-robin mode. Seeded to a fixed
+    /// constant so a render is reproducible: bouncing the same project
+    /// twice gives the same takes.
+    rr_rng: u32,
+    /// Global trigger settings, refreshed once per block from the params.
+    globals: GlobalSettings,
     /// Shared display state for the editor: packed `rr_index | (n_rrs << 16)`.
     /// Written after each `note_on`; `None` when running headless / in tests.
     last_rr: Option<Arc<[AtomicU32; NUM_PADS]>>,
@@ -77,6 +115,9 @@ impl DrumSampler {
             voices: (0..MAX_VOICES).map(|_| Voice::new()).collect(),
             voice_counter: 0,
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
+            rr_last: [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS],
+            rr_rng: 0x9E37_79B9,
+            globals: GlobalSettings::default(),
             last_rr: None,
             out_peak: None,
             kit_receiver,
@@ -89,6 +130,22 @@ impl DrumSampler {
             prev_pad_balance: [0.5; NUM_PADS],
             pad_prev_valid: false,
         }
+    }
+
+    /// Refresh the global trigger settings from the params. Called once
+    /// per block from `process()`, before any event is drained, so every
+    /// hit in the block is started under the same settings.
+    pub fn update_global_settings(&mut self, params: &DrumParams) {
+        self.globals = GlobalSettings {
+            max_voices: (params.polyphony.value().max(1) as usize).min(MAX_VOICES),
+            velocity_curve: params.velocity_curve.value(),
+            round_robin: RoundRobinMode::from_param(params.round_robin_mode.value()),
+        };
+    }
+
+    /// The settings hits are currently started with.
+    pub fn global_settings(&self) -> GlobalSettings {
+        self.globals
     }
 
     /// Attach the shared last-RR display array so the editor can show
@@ -180,6 +237,7 @@ impl DrumSampler {
                 }
             }
             self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
+            self.rr_last = [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS];
             let old_pads = std::mem::replace(&mut self.pads, new_pads);
             if any_fading {
                 self.retired_pads = Some(old_pads);
@@ -206,7 +264,13 @@ impl DrumSampler {
     /// the pad's whole sound, so it is summed into the pad's own group
     /// port (Cymbals) rather than the shared Overhead port — otherwise the
     /// Cymbals port never carries a sample.
+    ///
+    /// The incoming velocity is shaped by the global velocity curve
+    /// first, so the curve moves both which layer fires and how hard it
+    /// is struck — the two things velocity means here. At the default
+    /// (linear) the shaping is an exact identity.
     pub fn note_on(&mut self, note: u8, velocity: f32) {
+        let velocity = crate::velocity::shape(velocity, self.globals.velocity_curve);
         let pad_index = match drum_map::pad_index_for_note(note) {
             Some(i) => i,
             None => return,
@@ -239,12 +303,26 @@ impl DrumSampler {
         }
         let counter_slot = layer_index.min(MAX_LAYERS - 1);
         let n_rrs = layer.round_robins.len();
-        let rr_index = pick_rr(&mut self.rr_counters[pad_index][counter_slot], n_rrs);
+        let rr_index = match self.globals.round_robin {
+            RoundRobinMode::Cycle => {
+                pick_rr(&mut self.rr_counters[pad_index][counter_slot], n_rrs)
+            }
+            RoundRobinMode::Random => pick_rr_random(
+                &mut self.rr_rng,
+                self.rr_last[pad_index][counter_slot],
+                n_rrs,
+            ),
+        };
+        // Recorded in both modes: Random must not repeat whatever fired
+        // last, however it was chosen.
+        self.rr_last[pad_index][counter_slot] = rr_index.min(NO_LAST_TAKE as usize) as u16;
 
-        // Publish the last-played RR for the editor display.
+        // Publish the last-played RR for the editor display: both which
+        // take fired and how many the layer holds, so the pad can show
+        // "take 2 of 3" rather than just "something played".
         if let Some(ref last_rr) = self.last_rr {
             last_rr[pad_index].store(
-                (rr_index as u32) | ((n_rrs as u32) << 16),
+                crate::rr_display::pack(rr_index, n_rrs),
                 Ordering::Relaxed,
             );
         }
@@ -312,7 +390,8 @@ impl DrumSampler {
                 continue;
             };
             let dest = *dest;
-            let voice_idx = janitor::find_free_voice(&self.voices, pad_index);
+            let voice_idx =
+                janitor::find_free_voice(&self.voices, pad_index, self.globals.max_voices);
             let voice = &mut self.voices[voice_idx];
             voice.active = true;
             voice.pad_index = pad_index;

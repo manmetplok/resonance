@@ -50,7 +50,6 @@ impl OscParams {
                 0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             coarse: IntParam::new(
                 coarse_id,
@@ -67,7 +66,6 @@ impl OscParams {
                     max: 100.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_unit(" ct")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
             level: FloatParam::new(
@@ -76,7 +74,6 @@ impl OscParams {
                 default_level,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             pan: FloatParam::new(
                 pan_id,
@@ -87,7 +84,6 @@ impl OscParams {
                     max: 1.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
             enabled: BoolParam::new(en_id, en_name, default_enabled),
         }

@@ -10,7 +10,7 @@ use iced::{Element, Font, Length};
 // -- Data types ---------------------------------------------------------------
 
 /// Parameter data passed from the host to plugin views.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct UiParam {
     pub id: u32,
     pub name: String,
@@ -18,6 +18,19 @@ pub struct UiParam {
     pub max_value: f64,
     pub default_value: f64,
     pub current_value: f64,
+    /// The plugin's own rendering of `current_value` — `"40 %"`,
+    /// `"-6.0 dB"`, `"Low-pass"` (ba todo #1290, finding X8).
+    ///
+    /// The panel prints this instead of the raw number whenever it is
+    /// non-empty. The plugins declare it — 100+ `with_value_to_string`
+    /// call sites across the fleet — and until this field existed the
+    /// generic panel threw all of it away and showed `{:.2}`, so a
+    /// filter type read `2.00` and a mix read `0.40`.
+    pub text: String,
+    /// True when the parameter moves in whole numbers, so the slider
+    /// steps by one instead of sliding through values the plugin will
+    /// only round away.
+    pub stepped: bool,
 }
 
 /// Events emitted by plugin UIs, mapped to host messages by the app.
@@ -58,6 +71,21 @@ pub fn small_button_style(status: button::Status) -> button::Style {
     }
 }
 
+/// What the generic panel prints beside a parameter's slider.
+///
+/// The plugin's own rendering when it has one — `"40 %"`, `"1/8D"`,
+/// `"Low-pass"` — and the bare number only when it does not (ba todo
+/// #1290, finding X8). Pure, so `tests/generic_panel.rs` can hold the
+/// rule without a GUI: this is the whole of the panel's decision, and
+/// the rest is layout.
+pub fn param_display(param: &UiParam) -> String {
+    if param.text.trim().is_empty() {
+        format!("{:.2}", param.current_value)
+    } else {
+        param.text.clone()
+    }
+}
+
 // -- Shared widgets -----------------------------------------------------------
 
 /// Render a generic param slider view for any plugin.
@@ -70,10 +98,16 @@ pub fn view_generic_params<'a>(params: &[UiParam]) -> Element<'a, PluginUiEvent>
             PluginUiEvent::SetParam(param_id, v)
         })
         .width(Length::Fill)
-        .step(0.001);
+        // A stepped parameter has no values between its steps: sliding
+        // through 2.37 of a filter type only sends the plugin numbers it
+        // rounds away.
+        .step(if param.stepped { 1.0 } else { 0.001 });
 
         let param_label = text(param.name.clone()).size(8).color(TEXT_DIM);
-        let param_value_text = text(format!("{:.2}", param.current_value))
+        // What the PLUGIN calls this value, falling back to the bare
+        // number only when it declares no formatting: "Low-pass" is what
+        // the parameter means, "2.00" is the enum index behind it.
+        let param_value_text = text(param_display(param))
             .size(8)
             .font(Font::MONOSPACE)
             .color(TEXT_DIM);

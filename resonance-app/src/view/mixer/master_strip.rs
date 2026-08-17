@@ -41,9 +41,15 @@ impl crate::Resonance {
 
         // Plugin chain — every plugin is an effect.
         let mut plugin_section = column![].spacing(4).width(Length::Fill);
-        for plugin in &self.master_plugins {
-            plugin_section =
-                plugin_section.push(self.view_plugin_slot_row(PluginOwner::Master, plugin, false));
+        let chain_len = self.master_plugins.len();
+        for (index, plugin) in self.master_plugins.iter().enumerate() {
+            plugin_section = plugin_section.push(self.view_plugin_slot_row(
+                PluginOwner::Master,
+                plugin,
+                false,
+                index,
+                chain_len,
+            ));
         }
 
         // `+ FX` picker (filtered to effects). Only rendered when we

@@ -5428,6 +5428,9 @@ dependencies = [
 name = "resonance-ir"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "egui",
  "parking_lot",

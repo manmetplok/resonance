@@ -78,6 +78,13 @@ pub fn try_diff_replay(
     // busses so a send restored alongside its return bus lands second.
     apply_sends(r, &current, target_file);
 
+    // -- Sidechain key routes ------------------------------------------
+    // A key route is another plain routing edge — `SetSidechainRoute`
+    // upserts one and `ClearSidechainRoute` drops one, both surgical — so
+    // keying and unkeying a plugin never forces the slow path either
+    // (ba todo #1311).
+    apply_sidechain_routes(r, &current, target_file);
+
     // -- Master FX -----------------------------------------------------
     apply_master(r, &current, target_file);
 
@@ -684,6 +691,58 @@ fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
 
 }
 
+/// Reconcile the sidechain key routes (ba doc #157/#159, todo #1311) to
+/// the target snapshot: clear every route the target no longer has, then
+/// upsert every route that is new or changed, mirroring both onto
+/// [`crate::state::SidechainState`].
+///
+/// Removals drain first for the same order-independence reason
+/// [`apply_sends`] gives, though the stakes are lower here: a route is
+/// keyed by target plugin and simply replaces whatever that plugin had,
+/// so there is no cycle check to fool. Routes whose fields already match
+/// are left alone, so the common undo emits no key traffic at all.
+fn apply_sidechain_routes(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
+    let target_plugins: std::collections::HashSet<u64> = b
+        .sidechain_routes
+        .iter()
+        .map(|route| route.plugin_instance_id)
+        .collect();
+    for ra in &a.sidechain_routes {
+        if !target_plugins.contains(&ra.plugin_instance_id) {
+            let _ = r.engine.send(AudioCommand::ClearSidechainRoute {
+                plugin: ra.plugin_instance_id,
+            });
+            r.sidechain.clear_plugin(ra.plugin_instance_id);
+        }
+    }
+
+    let a_by_plugin: HashMap<u64, &crate::project::ProjectSidechainRoute> = a
+        .sidechain_routes
+        .iter()
+        .map(|route| (route.plugin_instance_id, route))
+        .collect();
+    for rb in &b.sidechain_routes {
+        if a_by_plugin.get(&rb.plugin_instance_id).copied() == Some(rb) {
+            continue;
+        }
+        // Unknown source kind: drop rather than guess (see
+        // `send_source_from_tag`).
+        let Some(source) = send_source_from_tag(&rb.source_kind, rb.source_id) else {
+            continue;
+        };
+        let _ = r.engine.send(AudioCommand::SetSidechainRoute {
+            plugin: rb.plugin_instance_id,
+            source,
+            enabled: rb.enabled,
+        });
+        r.sidechain.upsert(resonance_audio::types::SidechainRoute {
+            plugin: rb.plugin_instance_id,
+            source,
+            enabled: rb.enabled,
+        });
+    }
+}
+
 fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     if a.master_fx_bypassed != b.master_fx_bypassed {
         r.master_fx_bypassed = b.master_fx_bypassed;
@@ -715,6 +774,11 @@ fn push_plugin_states(r: &mut Resonance, target: &LoadedProject, plugins: &[Proj
                 instance_id: pp.instance_id,
                 data: blob.clone(),
             });
+            // Track what was just pushed, so the cache matches the state
+            // the engine now holds. For an instance that isn't live (a
+            // missing `.clap`) this is the only copy that exists, and it
+            // has to survive undo/redo as well as save (ba doc #275, P5).
+            r.plugin_state_cache.insert(pp.instance_id, blob.clone());
         }
     }
 }

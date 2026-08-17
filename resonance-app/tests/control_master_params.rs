@@ -132,6 +132,7 @@ fn add_and_echo(app: &mut Resonance, plugin_id: &str) -> u64 {
                 max_value: 1.0,
                 default_value: 0.0,
                 current_value: 0.0,
+                ..Default::default()
             },
             ParamInfo {
                 id: 2,
@@ -140,6 +141,7 @@ fn add_and_echo(app: &mut Resonance, plugin_id: &str) -> u64 {
                 max_value: 0.0,
                 default_value: -0.3,
                 current_value: -0.3,
+                ..Default::default()
             },
             ParamInfo {
                 id: 3,
@@ -148,6 +150,7 @@ fn add_and_echo(app: &mut Resonance, plugin_id: &str) -> u64 {
                 max_value: 24.0,
                 default_value: 0.0,
                 current_value: 0.0,
+                ..Default::default()
             },
             ParamInfo {
                 id: 4,
@@ -157,6 +160,7 @@ fn add_and_echo(app: &mut Resonance, plugin_id: &str) -> u64 {
                 max_value: 500.0,
                 default_value: 50.0,
                 current_value: 50.0,
+                ..Default::default()
             },
         ],
         has_gui: false,
@@ -635,6 +639,7 @@ fn the_whole_limiter_sequence_runs_over_the_control_api_alone() {
                 max_value: 1.0,
                 default_value: 0.0,
                 current_value: 0.0,
+                ..Default::default()
             },
             ParamInfo {
                 id: 2,
@@ -643,6 +648,7 @@ fn the_whole_limiter_sequence_runs_over_the_control_api_alone() {
                 max_value: 0.0,
                 default_value: -0.3,
                 current_value: -0.3,
+                ..Default::default()
             },
             ParamInfo {
                 id: 3,
@@ -651,6 +657,7 @@ fn the_whole_limiter_sequence_runs_over_the_control_api_alone() {
                 max_value: 24.0,
                 default_value: 0.0,
                 current_value: 0.0,
+                ..Default::default()
             },
         ],
         has_gui: false,

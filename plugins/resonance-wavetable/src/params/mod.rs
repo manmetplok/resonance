@@ -1,4 +1,9 @@
-//! All parameters for the wavetable synthesizer (87 total).
+//! All parameters for the wavetable synthesizer — [`PARAM_COUNT`] of them.
+//!
+//! The count lives in exactly one place on purpose: a caller that spells
+//! it out as a literal silently truncates when a parameter is added, and
+//! `param_at`'s own round-trip test cannot see that (ba todo #1324
+//! review).
 //!
 //! The aggregate [`WavetableParams`] struct is intentionally flat — each
 //! section (oscillator, envelope, LFO, filter, unison, modulation matrix,
@@ -52,7 +57,13 @@ pub struct WavetableParams {
 }
 
 /// Total number of parameters.
-pub const PARAM_COUNT: usize = 87;
+///
+/// 87 until ba todo #1324 added `lfoN_sync` + `lfoN_division` to each of the
+/// three LFOs. Parameters are addressed by string id everywhere that
+/// persists (presets, saved state, CLAP param ids are hashed from the id),
+/// so inserting into the middle of [`WavetableParams::param_at`] only
+/// changes the order a host lists them in.
+pub const PARAM_COUNT: usize = 93;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -64,7 +75,6 @@ impl WavetableParams {
                 0.8,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(5.0))
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1)),
 
             glide_time: FloatParam::new(
@@ -98,7 +108,6 @@ impl WavetableParams {
                     max: 1.0,
                 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
 
             // Oscillators
@@ -179,24 +188,30 @@ impl WavetableParams {
             36 => &self.filter.keytrack,
             37 => &self.filter.enabled,
             38 => &self.filter.drive,
-            // LFO1 (39..43)
+            // LFO1 (39..45)
             39 => &self.lfo1.shape,
             40 => &self.lfo1.rate,
             41 => &self.lfo1.depth,
             42 => &self.lfo1.retrigger,
-            // LFO2 (43..47)
-            43 => &self.lfo2.shape,
-            44 => &self.lfo2.rate,
-            45 => &self.lfo2.depth,
-            46 => &self.lfo2.retrigger,
-            // LFO3 (47..51)
-            47 => &self.lfo3.shape,
-            48 => &self.lfo3.rate,
-            49 => &self.lfo3.depth,
-            50 => &self.lfo3.retrigger,
-            // Mod Matrix (51..75) -- 8 slots x 3
-            51..=74 => {
-                let slot_offset = index - 51;
+            43 => &self.lfo1.sync,
+            44 => &self.lfo1.division,
+            // LFO2 (45..51)
+            45 => &self.lfo2.shape,
+            46 => &self.lfo2.rate,
+            47 => &self.lfo2.depth,
+            48 => &self.lfo2.retrigger,
+            49 => &self.lfo2.sync,
+            50 => &self.lfo2.division,
+            // LFO3 (51..57)
+            51 => &self.lfo3.shape,
+            52 => &self.lfo3.rate,
+            53 => &self.lfo3.depth,
+            54 => &self.lfo3.retrigger,
+            55 => &self.lfo3.sync,
+            56 => &self.lfo3.division,
+            // Mod Matrix (57..81) -- 8 slots x 3
+            57..=80 => {
+                let slot_offset = index - 57;
                 let slot_idx = slot_offset / 3;
                 let field = slot_offset % 3;
                 match field {
@@ -205,21 +220,21 @@ impl WavetableParams {
                     _ => &self.mod_slots[slot_idx].amount,
                 }
             }
-            // Chorus (75..79)
-            75 => &self.chorus.enabled,
-            76 => &self.chorus.rate,
-            77 => &self.chorus.depth,
-            78 => &self.chorus.mix,
-            // Delay (79..84)
-            79 => &self.delay.enabled,
-            80 => &self.delay.time_l,
-            81 => &self.delay.time_r,
-            82 => &self.delay.feedback,
-            83 => &self.delay.mix,
-            // Distortion (84..87)
-            84 => &self.distortion.enabled,
-            85 => &self.distortion.drive,
-            86 => &self.distortion.mix,
+            // Chorus (81..85)
+            81 => &self.chorus.enabled,
+            82 => &self.chorus.rate,
+            83 => &self.chorus.depth,
+            84 => &self.chorus.mix,
+            // Delay (85..90)
+            85 => &self.delay.enabled,
+            86 => &self.delay.time_l,
+            87 => &self.delay.time_r,
+            88 => &self.delay.feedback,
+            89 => &self.delay.mix,
+            // Distortion (90..93)
+            90 => &self.distortion.enabled,
+            91 => &self.distortion.drive,
+            92 => &self.distortion.mix,
             _ => &self.master_volume, // fallback
         }
     }

@@ -26,14 +26,21 @@ use crate::Resonance;
 /// Only non-defaults are written — an untouched chain adds nothing to
 /// `project.json`, and a plugin that grows new parameters in a later
 /// version picks up its own new defaults for them.
-fn project_plugin(p: &crate::state::PluginSlotState) -> ProjectPlugin {
-    ProjectPlugin {
-        instance_id: p.instance_id,
-        plugin_name: p.plugin_name.clone(),
-        clap_plugin_id: p.clap_plugin_id.clone(),
-        clap_file_path: p.clap_file_path.clone(),
-        state_file: format!("plugins/plugin_{}.bin", p.instance_id),
-        params: p
+///
+/// **A slot with no live instance** (the `.clap` is missing on this
+/// machine, so `PluginAdded` never arrived) has an empty `params` mirror
+/// — there is no parameter list to diff against defaults, because the
+/// host never learned one. Deriving from the mirror would then write
+/// `params: []` and silently destroy the user's settings on the first
+/// Save As. The values the load parked in
+/// [`Resonance::pending_plugin_param_overrides`] are still the file's own,
+/// so they are written straight back out, names and all (ba doc #275, P5).
+fn project_plugin(r: &Resonance, p: &crate::state::PluginSlotState) -> ProjectPlugin {
+    // Present only while an instance is still unaccounted for; consumed
+    // by `PluginAdded`, after which the live mirror is authoritative.
+    let params = match r.pending_plugin_param_overrides.get(&p.instance_id) {
+        Some(parked) => parked.clone(),
+        None => p
             .params
             .iter()
             .filter(|param| param.current_value != param.default_value)
@@ -43,7 +50,65 @@ fn project_plugin(p: &crate::state::PluginSlotState) -> ProjectPlugin {
                 value: param.current_value,
             })
             .collect(),
+    };
+    ProjectPlugin {
+        instance_id: p.instance_id,
+        plugin_name: p.plugin_name.clone(),
+        clap_plugin_id: p.clap_plugin_id.clone(),
+        clap_file_path: p.clap_file_path.clone(),
+        state_file: format!("plugins/plugin_{}.bin", p.instance_id),
+        params,
     }
+}
+
+/// The plugin-state blobs a save must write: every blob the engine just
+/// reported for a live instance, plus the app-side copy for every slot
+/// the engine said nothing about.
+///
+/// The engine can only report instances it actually created, so a slot
+/// whose `.clap` is missing is absent from `engine_states` — and used to
+/// be absent from the written bundle too, which is what destroyed its
+/// opaque state on the first Save As (ba doc #275, P5). The fallback
+/// comes from [`Resonance::plugin_state_cache`], seeded from the project
+/// file at load time, so what gets written back is byte-for-byte what was
+/// read.
+///
+/// Only blobs for slots that are still in a chain are written: a plugin
+/// the user removed has already been dropped from the cache, and this
+/// second filter keeps a stale entry from resurrecting a `plugin_*.bin`
+/// nothing references.
+///
+/// Shared by every path that writes project state — the async save
+/// collector (Save, Save As, autosave) and template capture — so none of
+/// them can regress independently.
+pub fn plugin_states_for_save(
+    r: &Resonance,
+    engine_states: Vec<(PluginInstanceId, Vec<u8>)>,
+) -> Vec<(PluginInstanceId, Vec<u8>)> {
+    let reported: std::collections::HashSet<PluginInstanceId> =
+        engine_states.iter().map(|(id, _)| *id).collect();
+    let mut out = engine_states;
+
+    let preserve = |slots: &[crate::state::PluginSlotState],
+                    out: &mut Vec<(PluginInstanceId, Vec<u8>)>| {
+        for slot in slots {
+            if reported.contains(&slot.instance_id) {
+                continue;
+            }
+            if let Some(blob) = r.plugin_state_cache.get(&slot.instance_id) {
+                out.push((slot.instance_id, blob.clone()));
+            }
+        }
+    };
+    for track in &r.registry.tracks {
+        preserve(&track.plugins, &mut out);
+    }
+    for bus in &r.registry.busses {
+        preserve(&bus.plugins, &mut out);
+    }
+    preserve(&r.master_plugins, &mut out);
+
+    out
 }
 
 /// Serialize current GUI state to the on-disk `ProjectFile` shape.
@@ -76,11 +141,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             playback_source: t.playback_source,
             mono: t.mono,
             input_device_name: t.input_device_name.clone(),
-            plugins: t
-                .plugins
-                .iter()
-                .map(project_plugin)
-                .collect(),
+            plugins: t.plugins.iter().map(|p| project_plugin(r, p)).collect(),
             track_type: match t.track_type {
                 TrackType::Audio => "audio".to_string(),
                 TrackType::Instrument => "instrument".to_string(),
@@ -142,11 +203,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             pan: b.pan,
             muted: b.muted,
             fx_bypassed: b.fx_bypassed,
-            plugins: b
-                .plugins
-                .iter()
-                .map(project_plugin)
-                .collect(),
+            plugins: b.plugins.iter().map(|p| project_plugin(r, p)).collect(),
             is_return: b.is_return,
         })
         .collect();
@@ -187,6 +244,44 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             .collect();
         sends.sort_by_key(|s| s.id);
         sends
+    };
+
+    // External sidechain (key) routes (ba doc #157/#159, todo #1311).
+    // Same edge discipline as the sends above, with one extra end to
+    // check: a route names a *plugin instance* as well as a source, and
+    // the plugin can be anywhere — a track chain, a bus chain, or master.
+    // `plugin_index` is precisely the "every live plugin instance,
+    // wherever it lives" view, so it is the membership test.
+    //
+    // Writing a dangling route out is durable damage for the same reason
+    // a dangling send is: the loader refuses it on reopen, but the entry
+    // stays in the file and every later save rewrites it.
+    let sidechain_routes = {
+        let live_source = |source: SendSource| match source {
+            SendSource::Track(id) => r.registry.tracks.iter().any(|t| t.id == id),
+            SendSource::Bus(id) => r.registry.busses.iter().any(|b| b.id == id),
+        };
+        let mut routes: Vec<crate::project::ProjectSidechainRoute> = r
+            .sidechain
+            .routes
+            .iter()
+            .filter(|route| {
+                r.plugin_index.contains_key(&route.plugin) && live_source(route.source)
+            })
+            .map(|route| {
+                let (source_kind, source_id) = send_source_tag(route.source);
+                crate::project::ProjectSidechainRoute {
+                    plugin_instance_id: route.plugin,
+                    source_kind: source_kind.to_string(),
+                    source_id,
+                    enabled: route.enabled,
+                }
+            })
+            .collect();
+        // Stable on-disk order that doesn't depend on the order the
+        // engine's echoes happened to arrive in.
+        routes.sort_by_key(|route| route.plugin_instance_id);
+        routes
     };
 
     let clips = r
@@ -250,7 +345,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
     let master_plugins = r
         .master_plugins
         .iter()
-        .map(project_plugin)
+        .map(|p| project_plugin(r, p))
         .collect();
 
     // Reference A/B block. Persist only the durable facts (path, name,
@@ -326,6 +421,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         midi_clips,
         busses,
         sends,
+        sidechain_routes,
         section_definitions: r.compose.to_project_definitions(),
         section_placements: r.compose.to_project_placements(),
         tempo_events: r.tempo_events.clone(),

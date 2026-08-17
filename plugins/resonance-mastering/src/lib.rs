@@ -53,7 +53,14 @@ impl ResonancePlugin for ResonanceMastering {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str =
         "Automatic mastering plugin — analyzer + linear-phase mastering chain";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "mastering", "analyzer", "stereo"];
+    // `mastering` and `analyzer` are both standard CLAP and neither
+    // reached a host before (ba todo #1298).
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::AUDIO_EFFECT,
+        features::MASTERING,
+        features::ANALYZER,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

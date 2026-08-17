@@ -84,6 +84,12 @@ pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
     for send_id in r.aux.drop_sends_touching_track(track_id) {
         let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id });
     }
+    // Key routes sourced from this track die with it too (ba todo #1311).
+    // No engine command here, unlike the sends above: the engine's
+    // `RemoveTrack` arm calls `drop_source_routes` itself, so this only
+    // has to keep the mirror — and therefore the next save — honest.
+    r.sidechain
+        .drop_routes_from_source(resonance_audio::types::SendSource::Track(track_id));
     if let Some(sel_clip_id) = r.interaction.selected_clip {
         if r.clips
             .iter()
@@ -118,6 +124,10 @@ pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
         .collect();
     for id in removed_plugin_ids {
         r.plugin_index.remove(&id);
+        // …and any key route pointing AT one of them: a track deletion
+        // takes its whole chain without a per-plugin `PluginRemoved`
+        // echo (ba todo #1311).
+        r.sidechain.clear_plugin(id);
     }
     r.registry.tracks.retain(|t| t.id != track_id);
     r.clips.retain(|c| c.track_id != track_id);
@@ -272,6 +282,9 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
     for send_id in r.aux.drop_sends_touching_bus(bus_id) {
         let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id });
     }
+    // Same for key routes keyed off this bus — see `removed` above.
+    r.sidechain
+        .drop_routes_from_source(resonance_audio::types::SendSource::Bus(bus_id));
     if let Some(sel) = r.mixer.selected_plugin {
         if r.registry
             .busses
@@ -291,6 +304,11 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
         .unwrap_or_default();
     for id in removed_plugin_ids {
         r.plugin_index.remove(&id);
+        // A bus deletion takes the bus's whole insert chain with it
+        // without a per-plugin `BusPluginRemoved` echo, so a key route
+        // *onto* one of those plugins has to be pruned here as well as
+        // one keyed *off* the bus (ba todo #1311).
+        r.sidechain.clear_plugin(id);
     }
     r.registry.busses.retain(|b| b.id != bus_id);
     // Don't leave the inspector pointed at a bus that no longer exists.

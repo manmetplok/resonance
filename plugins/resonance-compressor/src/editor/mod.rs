@@ -1,7 +1,7 @@
 //! Compressor editor — egui UI hosted by wayland-plugin-gui.
 //!
 //! Layout (top-down):
-//! - Header: plugin name, preset dropdown.
+//! - Header: plugin name, preset dropdown, detector-source status.
 //! - Middle: transfer curve + GR history + 3 meters (In / GR / Out) in a row.
 //! - Bottom: control strip with the 11 parameters.
 

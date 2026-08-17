@@ -49,7 +49,11 @@ impl ResonancePlugin for ResonanceEq {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str =
         "An 8-band parametric EQ with bell, shelf, and steep cut modes";
-    const FEATURES: &'static [&'static str] = &["audio-effect", "equalizer", "stereo"];
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::AUDIO_EFFECT,
+        features::EQUALIZER,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
 

@@ -4,11 +4,11 @@
 //! describes, so a control cannot silently start misreporting again (ba todo
 //! #1271: dead LFO segment, "Sync" mislabel, wrong-unit/shape labels).
 
-use resonance_wavetable::dsp::lfo::LfoShape;
+use resonance_wavetable::dsp::lfo::{LfoMode, LfoShape};
 use resonance_wavetable::dsp::modulation::{
     routing_summary, ModDest, ModSlot, ModSource, NUM_MOD_SLOTS,
 };
-use resonance_wavetable::params::WavetableParams;
+use resonance_wavetable::params::{WavetableParams, PARAM_COUNT};
 use resonance_wavetable::viz::WavetableVizState;
 use resonance_plugin::param::Param;
 
@@ -91,6 +91,20 @@ fn routing_summary_lists_the_destinations_actually_wired() {
 }
 
 #[test]
+fn osc_balance_and_unison_detune_are_ordinary_targets() {
+    // They were marked "(inert)" by the ba todo #1278 stopgap; ba todo #1323
+    // implemented both, so the marker must be gone.
+    let slots = vec![
+        slot(ModSource::Lfo3, ModDest::OscBalance, 0.2),
+        slot(ModSource::Lfo3, ModDest::UnisonDetune, 0.4),
+    ];
+    assert_eq!(
+        routing_summary(&slots, ModSource::Lfo3),
+        "→ Osc Balance · Unison Detune"
+    );
+}
+
+#[test]
 fn routing_summary_ignores_slots_that_cannot_be_heard() {
     // Destination None, or a zero amount, is not a routing.
     let slots = vec![
@@ -154,15 +168,39 @@ fn filter_keytrack_is_unipolar() {
 }
 
 #[test]
-fn lfo_mode_has_exactly_two_states() {
-    // The segmented control offered three; `lfoN_retrigger` is a bool, so
-    // the third segment could never stick.
+fn every_lfo_mode_segment_is_backed_by_parameters() {
+    // The control originally offered three segments over one bool, so the
+    // third could never stick (ba todo #1271). It is three again — but each
+    // now round-trips through the two params that back it (ba todo #1324).
     let params = WavetableParams::new();
     for lfo in [&params.lfo1, &params.lfo2, &params.lfo3] {
-        assert_eq!(lfo.retrigger.min_plain(), 0.0);
-        assert_eq!(lfo.retrigger.max_plain(), 1.0);
         assert!(lfo.retrigger.is_stepped());
+        assert!(lfo.sync.is_stepped());
+        for mode in [LfoMode::Free, LfoMode::Retrig, LfoMode::Sync] {
+            let (sync, retrigger) = mode.to_params();
+            lfo.sync.set_value(sync);
+            lfo.retrigger.set_value(retrigger);
+            assert_eq!(
+                LfoMode::from_params(lfo.sync.value(), lfo.retrigger.value()),
+                mode,
+                "{} did not round-trip through its parameters",
+                mode.label()
+            );
+        }
     }
+}
+
+#[test]
+fn param_at_exposes_every_parameter_exactly_once() {
+    // `param_at` is a hand-written index table and ba todo #1324 inserted six
+    // parameters into the middle of it. A duplicate or a gap would silently
+    // hide a parameter from presets, the host and MCP alike.
+    let params = WavetableParams::new();
+    let mut ids: Vec<&str> = (0..PARAM_COUNT).map(|i| params.param_at(i).id()).collect();
+    let total = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), total, "param_at returned a duplicate id");
 }
 
 // ---------------------------------------------------------------------------

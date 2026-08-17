@@ -7,6 +7,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use rmcp::{tool, tool_router};
 use resonance_control::methods::{bus, track};
+use resonance_control::MutationAck;
 
 #[tool_router(router = router_bus, vis = "pub(crate)")]
 impl ResonanceMcp {
@@ -156,7 +157,10 @@ impl ResonanceMcp {
 
     #[tool(
         description = "List a bus's effects and every parameter each one exposes — id, name, \
-                       current value, min, max and default. Omit plugin_id for all of them. \
+                       current value, min, max, default, and what the value MEANS: text (the \
+                       plugin's own rendering), unit, module, stepped, choices and hidden, \
+                       exactly as track_plugin_params reports them. Omit plugin_id for all of \
+                       them. \
                        The entries are the same shape track_plugin_params returns, including \
                        slot (0-based chain position, which IS processing order) and occurrence \
                        (which copy of a repeated effect). Every entry is kind: \"effect\" — a \
@@ -181,8 +185,10 @@ impl ResonanceMcp {
                        the bus's first, which is unambiguous only on a one-effect chain. A \
                        value outside the parameter's min..=max is rejected with the range \
                        rather than clamped, but a value that rounds onto an f32-declared bound \
-                       (0.1 against a reported 0.10000000149011612) is accepted. Repeated sets \
-                       of the same parameter collapse into one undo entry.",
+                       (0.1 against a reported 0.10000000149011612) is accepted. value also \
+                       takes a choice label as a string (\"Low-pass\") for any parameter \
+                       bus_plugin_params reports choices for. Repeated sets of the same \
+                       parameter collapse into one undo entry.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn bus_set_plugin_param(
@@ -190,5 +196,53 @@ impl ResonanceMcp {
         Parameters(params): Parameters<bus::SetPluginParamParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke(bus::SET_PLUGIN_PARAM, &params).await
+    }
+
+    #[tool(
+        description = "Route another track's or bus's audio into the external SIDECHAIN KEY of \
+                       a plugin ON A BUS — the detector input. This is the tool for the classic \
+                       move: a compressor on the bass bus keyed from the kick, so the whole \
+                       group ducks on every hit. track_set_sidechain cannot express it (it is \
+                       keyed on track_id), and it is the bus, not any single track, that the \
+                       group actually exists on. \
+                       \
+                       The plugin is addressed like bus_set_plugin_param: bus_id plus an \
+                       optional plugin_id (+ occurrence). Omitting plugin_id targets the first \
+                       plugin on the bus that HAS a key port. Name the key source with EITHER \
+                       source_track_id OR source_bus_id; any track, bus or SUB-TRACK works, and \
+                       a sub-track (one tap of a multi-output drum kit) is usually the only \
+                       address a single kit piece has. Sources are tapped post-FX and PRE-fader, \
+                       so a key source can sit at -inf on the mixer and still key. enabled \
+                       defaults to true; false keeps the routing configured but stops delivering \
+                       the key. \
+                       \
+                       Only the DETECTOR changes: the key never reaches the output. Two plugins \
+                       read a key — resonance-compressor (ducking) and resonance-gate. Routing a \
+                       key into a plugin with no key port is REFUSED, naming the ones on that \
+                       bus that accept it. A bus may legally key a plugin on itself: the key is \
+                       delivered one audio block late by design (~2.7 ms), so it cannot feed \
+                       back. Routes are saved with the project. Undoable with edit_undo.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn bus_set_sidechain(
+        &self,
+        Parameters(params): Parameters<bus::SetSidechainParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(bus::SET_SIDECHAIN, &params).await
+    }
+
+    #[tool(
+        description = "Remove a bus plugin's external sidechain key route, so its detector goes \
+                       back to reading the bus's own signal. Addressed exactly as \
+                       bus_set_sidechain. Clearing a plugin that had no route is not an error.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn bus_clear_sidechain(
+        &self,
+        Parameters(params): Parameters<bus::ClearSidechainParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(bus::CLEAR_SIDECHAIN, &params).await
     }
 }

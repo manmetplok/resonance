@@ -17,6 +17,7 @@ pub mod lowpass;
 use crate::stages::glue_compressor::{GlueCompressor, GlueCompressorConfig};
 use delay::DelayLine;
 use lowpass::LinearPhaseLowpass;
+use resonance_dsp::db_to_linear;
 
 /// Number of frequency bands.
 pub const NUM_BANDS: usize = 4;
@@ -31,21 +32,45 @@ pub struct MultibandConfig {
     pub bands: [BandConfig; NUM_BANDS],
 }
 
-/// Per-band compressor settings as exposed by the plugin.
-#[derive(Debug, Clone, Copy)]
+/// Per-band settings as exposed by the plugin.
+///
+/// Every band runs a full [`GlueCompressor`], so it takes the same seven
+/// controls the single-band glue stage does — the defining multiband
+/// move (fast release on the lows, slow on the highs) is exactly the
+/// per-band `release_ms` here.
+///
+/// `gain_db` is the odd one out: it is a **band output trim**, not the
+/// compressor's makeup, so it applies whether or not that band's
+/// compressor is enabled and the multiband can be used as a static
+/// four-band tone balancer. (With `mix < 1.0` it therefore trims the
+/// blended band, dry part included — which is what a band output level
+/// should do.)
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BandConfig {
     pub enabled: bool,
     pub threshold_db: f32,
     pub ratio: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+    pub knee_db: f32,
+    /// Parallel mix — 1.0 = fully compressed, 0.0 = dry.
+    pub mix: f32,
     pub gain_db: f32,
 }
 
 impl Default for BandConfig {
     fn default() -> Self {
+        // Attack / release / knee / mix match the glue stage's defaults,
+        // which is what the band compressors were hardcoded to before
+        // they became parameters — an untouched project sounds the same.
         Self {
             enabled: false,
             threshold_db: -18.0,
             ratio: 2.0,
+            attack_ms: 30.0,
+            release_ms: 150.0,
+            knee_db: 6.0,
+            mix: 1.0,
             gain_db: 0.0,
         }
     }
@@ -58,6 +83,21 @@ impl Default for MultibandConfig {
             crossover_hz: [120.0, 800.0, 4000.0],
             bands: [BandConfig::default(); NUM_BANDS],
         }
+    }
+}
+
+/// Linear gain for a band trim.
+///
+/// 0 dB returns exactly `1.0f32`, so a band left at the default is
+/// multiplied by a true identity and its contribution to the sum is
+/// bit-for-bit what it was before the trim existed. (`db_to_linear(0.0)`
+/// happens to be exactly 1.0 too; the special case makes that a
+/// guarantee of this function rather than a property of another one.)
+pub fn band_gain(gain_db: f32) -> f32 {
+    if gain_db == 0.0 {
+        1.0
+    } else {
+        db_to_linear(gain_db)
     }
 }
 
@@ -139,6 +179,16 @@ impl Multiband {
         LinearPhaseLowpass::latency()
     }
 
+    /// Current gain reduction of each band's compressor in dB (positive
+    /// = attenuation), low band first.
+    ///
+    /// Free: every band compressor already tracks this for its own
+    /// meter, decayed over ~250 ms so the value is readable rather than
+    /// flickering. Reading it adds nothing to the audio thread.
+    pub fn band_gr_db(&self) -> [f32; NUM_BANDS] {
+        std::array::from_fn(|i| self.band_comps[i].meter_gr_db())
+    }
+
     /// Process a stereo block in place.
     ///
     /// Scratch is sized for `max_buffer` frames, which the plugin's
@@ -207,7 +257,7 @@ impl Multiband {
         self.run_crossover_network(left, right, frames);
         self.build_band_signals(frames);
         self.compress_bands(cfg, frames);
-        self.sum_bands(left, right, frames);
+        self.sum_bands(cfg, left, right, frames);
     }
 
     /// Stage 1: route raw input through the delay line into `xd_*`, and
@@ -265,6 +315,12 @@ impl Multiband {
 
     /// Stage 3: run each band's scratch buffer through its dedicated
     /// glue compressor. Config comes straight from the plugin params.
+    ///
+    /// The band's `gain_db` is deliberately *not* passed as the
+    /// compressor's makeup: makeup only reaches the wet path, and the
+    /// compressor returns early when it is disabled, which used to make
+    /// the band Gain control silent on a band whose compressor was off.
+    /// It is applied to the band output in [`Self::sum_bands`] instead.
     fn compress_bands(&mut self, cfg: &MultibandConfig, frames: usize) {
         let band_lefts: [&mut [f32]; NUM_BANDS] = [
             &mut self.y1_l[..frames],
@@ -286,11 +342,11 @@ impl Multiband {
                 enabled: band.enabled,
                 threshold_db: band.threshold_db,
                 ratio: band.ratio,
-                attack_ms: 30.0,
-                release_ms: 150.0,
-                knee_db: 6.0,
-                makeup_db: band.gain_db,
-                mix: 1.0,
+                attack_ms: band.attack_ms,
+                release_ms: band.release_ms,
+                knee_db: band.knee_db,
+                makeup_db: 0.0,
+                mix: band.mix,
             };
             let l = band_lefts.next().unwrap();
             let r = band_rights.next().unwrap();
@@ -298,12 +354,30 @@ impl Multiband {
         }
     }
 
-    /// Stage 4: add the four band scratch buffers back into the
-    /// caller's stereo buffers.
-    fn sum_bands(&self, left: &mut [f32], right: &mut [f32], frames: usize) {
+    /// Stage 4: trim each band by its output gain and add the four band
+    /// scratch buffers back into the caller's stereo buffers.
+    ///
+    /// The trim lives here rather than inside the band compressor so it
+    /// is a property of the *band*, not of its compressor: it works with
+    /// the compressor off, which is what makes the stage usable as a
+    /// static four-band tone balancer. At the default 0 dB every gain is
+    /// exactly 1.0 and the sum is unchanged.
+    fn sum_bands(&self, cfg: &MultibandConfig, left: &mut [f32], right: &mut [f32], frames: usize) {
+        let g = [
+            band_gain(cfg.bands[0].gain_db),
+            band_gain(cfg.bands[1].gain_db),
+            band_gain(cfg.bands[2].gain_db),
+            band_gain(cfg.bands[3].gain_db),
+        ];
         for i in 0..frames {
-            left[i] = self.y1_l[i] + self.y2_l[i] + self.y3_l[i] + self.xd_l[i];
-            right[i] = self.y1_r[i] + self.y2_r[i] + self.y3_r[i] + self.xd_r[i];
+            left[i] = self.y1_l[i] * g[0]
+                + self.y2_l[i] * g[1]
+                + self.y3_l[i] * g[2]
+                + self.xd_l[i] * g[3];
+            right[i] = self.y1_r[i] * g[0]
+                + self.y2_r[i] * g[1]
+                + self.y3_r[i] * g[2]
+                + self.xd_r[i] * g[3];
         }
     }
 }

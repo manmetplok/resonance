@@ -11,12 +11,14 @@
 //! - Centre: waveform view (left) + frequency-response view (right)
 //!   drawn from the `IrSnapshot` published by the loader thread, plus
 //!   a stereo IN/OUT meter strip along the bottom.
-//! - Bottom: the dry/wet and output-gain control strip.
+//! - Bottom: the dry/wet and output-gain control strip, plus the
+//!   latency-mode picker and its readout (ba todo #1300).
 
 mod app;
 mod controls;
 mod factory;
 mod header;
+mod latency;
 mod meters;
 mod response_view;
 mod theme;

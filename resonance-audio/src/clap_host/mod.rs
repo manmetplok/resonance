@@ -8,6 +8,8 @@
 //!   pass per-port output slices into the audio thread.
 //! - [`process`]: the audio-thread fast path ([`ClapInstance::process`]
 //!   single-output wrapper and [`ClapInstance::process_multi`]).
+//! - [`param_meta`]: what a parameter *means* — its unit, its choice
+//!   labels — read back out of the plugin's own formatter.
 //! - [`params`]: `clap_plugin_params.flush` — delivers queued parameter
 //!   changes when no `process()` call is coming (transport stopped).
 //! - [`state`]: CLAP state extension (save / load / reload / reset).
@@ -22,21 +24,28 @@
 mod bundle;
 mod gui;
 mod instance;
+mod param_meta;
 mod params;
 mod process;
 mod state;
 
 pub use bundle::ClapBundle;
 pub use instance::{ClapInstance, StereoBufMut};
+pub use param_meta::{choice_labels, unit_from_text, MAX_CHOICE_STEPS};
 
 use std::ffi::{c_char, c_void, CStr};
 use std::pin::Pin;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 
 use clap_sys::ext::latency::{clap_host_latency, CLAP_EXT_LATENCY};
 use clap_sys::host::clap_host;
 use clap_sys::version::CLAP_VERSION;
+use indexmap::IndexMap;
+use parking_lot::Mutex;
+
+use crate::bypass::{BypassFade, FadeStage};
+use crate::types::PluginInstanceId;
 
 // ---------------------------------------------------------------------------
 // Host callbacks
@@ -177,3 +186,101 @@ pub struct SyncClapInstance(pub ClapInstance);
 
 unsafe impl Send for SyncClapInstance {}
 unsafe impl Sync for SyncClapInstance {}
+
+// ---------------------------------------------------------------------------
+// PluginSlot — one live instance plus the chain state around it
+// ---------------------------------------------------------------------------
+
+/// One slot of an insert chain: the plugin instance, plus the per-slot
+/// state the mixer needs to reach *without* taking the instance's lock —
+/// its [`BypassFade`] and whether the plugin declares a bypass parameter
+/// of its own (ba doc #275 finding X3).
+///
+/// Derefs to the instance mutex, so every existing `try_lock()` /
+/// `lock_fx(slot)` call site reads exactly as it did when the engine's
+/// plugin map held bare `Mutex<SyncClapInstance>` values.
+pub struct PluginSlot {
+    instance: Mutex<SyncClapInstance>,
+    /// Per-slot bypass, independent of the chain-level one that bypasses
+    /// every slot at once.
+    pub bypass: BypassFade,
+    /// The plugin's own bypass parameter (`CLAP_PARAM_IS_BYPASS`), read
+    /// once at instantiation. When present the host does **not** skip the
+    /// slot: it drives this parameter and lets the plugin bypass itself,
+    /// which is the only way a latency-carrying plugin can be bypassed
+    /// without changing the chain's latency.
+    pub bypass_param: Option<u32>,
+    /// The bypass value last handed to `bypass_param`: `0` = engaged,
+    /// `1` = bypassed, `-1` = never sent. Keeps the render path from
+    /// re-queuing an unchanged parameter every single block.
+    own_bypass_sent: AtomicI8,
+}
+
+impl PluginSlot {
+    /// Wrap a freshly created instance. Reads the plugin's bypass
+    /// parameter id once — an engine-thread query, never on the audio
+    /// thread.
+    pub fn new(instance: ClapInstance) -> Self {
+        let bypass_param = instance.bypass_param_id();
+        Self {
+            instance: Mutex::new(SyncClapInstance(instance)),
+            bypass: BypassFade::new(),
+            bypass_param,
+            own_bypass_sent: AtomicI8::new(-1),
+        }
+    }
+
+    /// True when the mixer skips this slot entirely this pass: bypassed,
+    /// settled, and with no bypass parameter of the plugin's own to drive
+    /// instead. Such a slot is not processed, so it contributes no
+    /// latency — see `latency::slot_latency`.
+    #[inline]
+    pub fn host_bypassed(&self) -> bool {
+        self.bypass_param.is_none() && self.bypass.bypassed()
+    }
+
+    /// This block's [`FadeStage`] for the slot.
+    ///
+    /// Folds in the own-parameter rule: a plugin that bypasses itself
+    /// stays in the chain even when settled-bypassed (its output *is* the
+    /// dry signal by then), so the stage never resolves to
+    /// [`FadeStage::Dry`] for it. The host crossfade still runs over the
+    /// transition, which is what makes a plugin that switches its own
+    /// bypass abruptly click-free anyway.
+    #[inline]
+    pub fn stage(&self, sample_rate: u32, frames: usize, live: bool) -> FadeStage {
+        let stage = self.bypass.stage(sample_rate, frames, live);
+        if self.bypass_param.is_some() && stage == FadeStage::Dry {
+            FadeStage::Wet
+        } else {
+            stage
+        }
+    }
+
+    /// Push the plugin's own bypass parameter when it declares one and
+    /// the target changed. Call right after locking the instance and
+    /// before processing it.
+    pub fn sync_own_bypass(&self, inst: &mut ClapInstance) {
+        let Some(param_id) = self.bypass_param else {
+            return;
+        };
+        let want: i8 = i8::from(self.bypass.bypassed());
+        if self.own_bypass_sent.swap(want, Ordering::Relaxed) == want {
+            return;
+        }
+        inst.set_param(param_id, f64::from(want));
+    }
+}
+
+impl std::ops::Deref for PluginSlot {
+    type Target = Mutex<SyncClapInstance>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.instance
+    }
+}
+
+/// The engine's live plugin instances, keyed by instance id. One entry
+/// per slot across every track, sub-track, bus and master chain.
+pub type PluginMap = IndexMap<PluginInstanceId, PluginSlot>;

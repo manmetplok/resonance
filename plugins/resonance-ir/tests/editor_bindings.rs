@@ -1,0 +1,440 @@
+//! Every control in the IR editor is its parameter (ba todo #1284,
+//! audit finding F4).
+//!
+//! The editor's two knobs are built by `editor_widgets::float_knob`,
+//! which since ba todo #1281 derives range, default, skew, unit and
+//! readout from the `FloatParam` it is handed. This file guards both
+//! halves of that:
+//!
+//! * the *behaviour* half — sweeping a knob from 0 % to 100 % of its
+//!   travel produces exactly what `params.rs` declares, including the
+//!   skew, and a reset lands on the declared default. Those are the
+//!   four calls the widget makes (`normalized_value`,
+//!   `plain_at_normalized`, `set_normalized`, `default_normalized`)
+//!   plus `display`, so they can be tested without standing up a GUI;
+//! * the *source* half — `controls.rs` must not restate any of it.
+//!   Before the migration it passed `0.5` as the mix default against a
+//!   param declaring `1.0`, a hardcoded logarithmic arc over
+//!   `0.1..=10.0` against a declared `FloatRange::Skewed`, and its own
+//!   `format!` readouts. A scan of the call sites is what stops those
+//!   arguments from creeping back in a future edit.
+
+use resonance_ir::dsp::{LatencyMode, LATENCY_MODE_LABELS};
+use resonance_ir::params::IrParams;
+use resonance_plugin::{FloatParam, Param};
+
+const CONTROLS_SRC: &str = include_str!("../src/editor/controls.rs");
+const LATENCY_SRC: &str = include_str!("../src/editor/latency.rs");
+const PARAMS_SRC: &str = include_str!("../src/params.rs");
+
+const EPS: f32 = 1e-4;
+
+fn assert_close(actual: f32, expected: f32, what: &str) {
+    let tolerance = EPS * expected.abs().max(1.0);
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "{what}: expected {expected}, got {actual}"
+    );
+}
+
+/// Sweep a knob across its whole travel and check every position is the
+/// parameter's own answer, not the widget's idea of one.
+fn assert_arc_follows_the_param(param: &FloatParam, what: &str) {
+    let restore = param.value();
+
+    // The ends of the arc are the declared bounds — a control can
+    // neither overshoot them nor stop short of them.
+    param.set_normalized(0.0);
+    assert_close(param.value(), param.range().min(), &format!("{what} at 0%"));
+    param.set_normalized(1.0);
+    assert_close(
+        param.value(),
+        param.range().max(),
+        &format!("{what} at 100%"),
+    );
+
+    // Everything in between is `denormalize`, and the travel is
+    // monotonic — the DoD's "swept from 0% to 100% matches the param's
+    // own denormalize".
+    let mut previous = f32::NEG_INFINITY;
+    for step in 0..=20 {
+        let travel = step as f32 / 20.0;
+        param.set_normalized(travel);
+        assert_close(
+            param.value(),
+            param.range().denormalize(travel),
+            &format!("{what} at {:.0}% of the arc", travel * 100.0),
+        );
+        assert!(
+            param.value() >= previous,
+            "{what}: the arc must rise monotonically, {} followed {previous}",
+            param.value()
+        );
+        previous = param.value();
+
+        // And the knob's readout is the param's own display, unit
+        // included — the hand-rolled `format!("{:.0}%")` /
+        // `format!("{:+.1} dB")` the editor used to build are gone.
+        let readout = param.display(param.value() as f64);
+        assert!(
+            readout.contains(param.unit().trim()),
+            "{what}: readout {readout} must carry the param's declared unit {:?}",
+            param.unit()
+        );
+    }
+
+    param.set_value(restore);
+}
+
+#[test]
+fn the_mix_knob_defaults_to_the_declared_fully_wet_value() {
+    let params = IrParams::default();
+
+    // The drift this todo exists to fix: the knob passed 0.5 as its
+    // default while `params.rs` declares 1.0, so a double-click reset
+    // parked a convolution plugin at 50 % wet and the arc's rest
+    // position lied about the plugin's own default state.
+    assert_close(params.dry_wet.default_value(), 1.0, "declared mix default");
+    assert_close(
+        params.dry_wet.default_normalized(),
+        1.0,
+        "the mix default sits at the top of the arc, not the middle",
+    );
+
+    // A reset writes the declared default verbatim.
+    params.dry_wet.set_normalized(0.25);
+    params
+        .dry_wet
+        .set_normalized(params.dry_wet.default_normalized());
+    assert_eq!(
+        params.dry_wet.value(),
+        1.0,
+        "reset must land exactly on the declared default"
+    );
+}
+
+#[test]
+fn the_mix_arc_and_readout_are_the_mix_param() {
+    let params = IrParams::default();
+    assert_arc_follows_the_param(&params.dry_wet, "dry_wet");
+
+    // Linear 0..1 rendered as whole percent, per the param's unit and
+    // formatter.
+    params.dry_wet.set_normalized(0.0);
+    assert_eq!(params.dry_wet.display(params.dry_wet.value() as f64), "0%");
+    params.dry_wet.set_normalized(1.0);
+    assert_eq!(
+        params.dry_wet.display(params.dry_wet.value() as f64),
+        "100%"
+    );
+}
+
+#[test]
+fn the_output_gain_arc_follows_the_declared_skew() {
+    let params = IrParams::default();
+    assert_arc_follows_the_param(&params.output_gain, "output_gain");
+
+    // The editor used to draw this knob as a logarithmic sweep of
+    // 0.1..=10.0, which threw the declared skew away. Half travel is now
+    // whatever the parameter says it is, and that is emphatically not
+    // the arithmetic midpoint of the range.
+    params.output_gain.set_normalized(0.5);
+    let mid = params.output_gain.value();
+    assert_close(
+        mid,
+        params.output_gain.range().denormalize(0.5),
+        "output gain at 50% of the arc",
+    );
+    let arithmetic_mid =
+        0.5 * (params.output_gain.range().min() + params.output_gain.range().max());
+    assert!(
+        (mid - arithmetic_mid).abs() > 1.0,
+        "a skewed gain range must not behave linearly, got {mid} vs {arithmetic_mid}"
+    );
+}
+
+/// Where unity sits on the dial (ba todo #1345).
+///
+/// The declaration this replaced — `gain_skew_factor(-20, 20)` over the
+/// linear range `0.1..=10.0` — parked unity at ~30 % of the travel and
+/// put +8.2 dB at half travel. A gain trim is expected to rest at its
+/// centre, so the skew is now derived from that requirement. This test
+/// is the guard: it fails if the declaration drifts back to a factor
+/// that was never computed for this range.
+#[test]
+fn unity_gain_sits_at_the_centre_of_the_output_gain_dial() {
+    let params = IrParams::default();
+
+    // The default *is* unity, so the knob's rest position is dial centre
+    // and a double-click reset lands there.
+    assert_close(params.output_gain.default_value(), 1.0, "declared default");
+    assert_close(
+        params.output_gain.default_normalized(),
+        0.5,
+        "unity gain must sit at the centre of the arc",
+    );
+
+    // Read the same fact from the other direction: half travel is 0 dB.
+    assert_close(
+        params.output_gain.plain_at_normalized(0.5),
+        1.0,
+        "half travel is unity gain",
+    );
+    params.output_gain.set_normalized(0.5);
+    assert_eq!(
+        params
+            .output_gain
+            .display(params.output_gain.value() as f64),
+        "0.00 dB",
+        "the readout at half travel is the param's dB formatter"
+    );
+
+    // And the ends stay where the range says: symmetric -20/+20 dB.
+    for (travel, expected_db) in [(0.0_f32, -20.0_f32), (1.0, 20.0)] {
+        params.output_gain.set_normalized(travel);
+        let db = 20.0 * params.output_gain.value().log10();
+        assert!(
+            (db - expected_db).abs() < 0.01,
+            "gain at {travel} of the arc should be {expected_db} dB, got {db}"
+        );
+    }
+
+    // Boost and cut are not mirror images (the mapping is a power law,
+    // not a logarithm) but neither half may collapse: each quarter-turn
+    // away from centre must move the gain by a usable amount.
+    let quarter_db = 20.0 * params.output_gain.plain_at_normalized(0.25).log10();
+    let three_quarter_db = 20.0 * params.output_gain.plain_at_normalized(0.75).log10();
+    assert!(
+        (-19.0..-3.0).contains(&quarter_db),
+        "a quarter turn down should be a moderate cut, got {quarter_db} dB"
+    );
+    assert!(
+        (3.0..19.0).contains(&three_quarter_db),
+        "a quarter turn up should be a moderate boost, got {three_quarter_db} dB"
+    );
+}
+
+/// `controls.rs` with its comments stripped — the prose there *quotes*
+/// the arguments the migration deleted, and a scan for them must look
+/// at the code only.
+fn controls_code() -> String {
+    CONTROLS_SRC
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The `float_knob` call sites, as they appear in the editor source.
+fn knob_call_arguments() -> Vec<Vec<String>> {
+    let code = controls_code();
+    let mut calls = Vec::new();
+    let mut rest = code.as_str();
+    while let Some(at) = rest.find("float_knob(") {
+        let after = &rest[at + "float_knob(".len()..];
+        let mut depth = 1usize;
+        let mut end = after.len();
+        for (i, c) in after.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &after[..end];
+        // Split on the commas that are not nested inside a call.
+        let mut args = Vec::new();
+        let mut depth = 0usize;
+        let mut current = String::new();
+        for c in body.chars() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth -= 1,
+                ',' if depth == 0 => {
+                    args.push(std::mem::take(&mut current));
+                    continue;
+                }
+                _ => {}
+            }
+            current.push(c);
+        }
+        if !current.trim().is_empty() {
+            args.push(current);
+        }
+        calls.push(args.into_iter().map(|a| a.trim().to_string()).collect());
+        rest = &after[end..];
+    }
+    calls
+}
+
+#[test]
+fn no_knob_call_site_restates_a_range_default_unit_or_skew() {
+    let calls = knob_call_arguments();
+    assert!(!calls.is_empty(), "expected knob call sites in controls.rs");
+
+    for args in &calls {
+        assert_eq!(
+            args.len(),
+            4,
+            "float_knob takes (ui, param, label, sub_label); \
+             extra arguments are param facts restated at the call site: {args:?}"
+        );
+        assert_eq!(args[0], "ui");
+        assert!(
+            args[1].starts_with("&params."),
+            "the knob must be handed the parameter itself, got {}",
+            args[1]
+        );
+        // The caption is either the param's own name or a layout
+        // caption; the sub-caption describes the cell. Neither may
+        // smuggle in a number.
+        for arg in &args[2..] {
+            assert!(
+                !arg.chars().any(|c| c.is_ascii_digit()),
+                "caption {arg} looks like a restated parameter fact"
+            );
+        }
+    }
+
+    // Ranges, hand-rolled readouts and dB conversions are what the
+    // deleted arguments were made of.
+    let code = controls_code();
+    for banned in ["..=", "format!", "log10", "powf"] {
+        assert!(
+            !code.contains(banned),
+            "controls.rs still contains `{banned}` — a parameter fact restated in the editor"
+        );
+    }
+}
+
+#[test]
+fn every_float_param_is_reachable_through_a_bound_knob() {
+    // Read the float params straight out of the struct definition, so
+    // adding one without giving it a bound control fails here rather
+    // than shipping an unreachable parameter.
+    let declared: Vec<&str> = PARAMS_SRC
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(": FloatParam,"))
+        .filter_map(|name| name.strip_prefix("pub "))
+        .collect();
+    assert_eq!(
+        declared,
+        vec!["dry_wet", "output_gain"],
+        "IrParams' float parameters changed; update the editor to match"
+    );
+
+    let calls = knob_call_arguments();
+    for name in declared {
+        assert!(
+            calls
+                .iter()
+                .any(|args| args[1] == format!("&params.{name}")),
+            "{name} has no param-bound knob in the editor"
+        );
+    }
+    assert_eq!(
+        calls.len(),
+        2,
+        "one knob per float param, and no knob without one"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The latency-mode picker (ba todo #1300, audit finding I1)
+// ---------------------------------------------------------------------------
+
+/// `src/editor/latency.rs` with its comments stripped — the prose there
+/// names the modes on purpose, and a scan for restated facts must look at
+/// the code only.
+fn latency_code() -> String {
+    LATENCY_SRC
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_latency_picker_reads_its_entries_off_the_parameter() {
+    let code = latency_code();
+
+    // The entries and their text come from the param's own choice table
+    // and formatter, so a mode added in `dsp.rs` shows up in the editor
+    // without anyone editing the editor.
+    for required in [".choices()", ".display(", "params.latency_mode"] {
+        assert!(
+            code.contains(required),
+            "the picker must build itself from the parameter; `{required}` is missing"
+        );
+    }
+
+    // A mode name spelled out here would be a second source of truth for
+    // the same table — exactly the drift ba todo #1284 removed from the
+    // knobs.
+    for label in LATENCY_MODE_LABELS {
+        assert!(
+            !code.contains(&format!("\"{label}\"")),
+            "the mode name {label:?} is restated in the editor; it belongs to the \
+             parameter's choice table"
+        );
+    }
+
+    // Milliseconds are computed in one place (`dsp::latency_ms`, reached
+    // through `latency::readout`), not re-derived next to the label.
+    for banned in ["1000.0", "sample_rate", "latency_ms"] {
+        assert!(
+            !code.contains(banned),
+            "latency.rs still contains `{banned}` — the conversion belongs in dsp.rs"
+        );
+    }
+}
+
+#[test]
+fn every_int_param_is_reachable_through_a_control() {
+    // Same guard as the float params: an int param without a control is
+    // a capability the GUI cannot reach — the audit's whole subject.
+    let declared: Vec<&str> = PARAMS_SRC
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(": IntParam,"))
+        .filter_map(|name| name.strip_prefix("pub "))
+        .collect();
+    assert_eq!(
+        declared,
+        vec!["file_select", "latency_mode"],
+        "IrParams' int parameters changed; update the editor to match"
+    );
+
+    // `file_select` is the header's Prev/Next browser; `latency_mode` is
+    // the picker in the bottom strip.
+    let header = include_str!("../src/editor/header.rs");
+    assert!(header.contains("params.file_select"));
+    assert!(latency_code().contains("params.latency_mode"));
+}
+
+#[test]
+fn the_picker_writes_the_declared_mode_values() {
+    // The picker offers `range().min() + offset` for each choice; check
+    // that ladder is exactly the modes the DSP knows, so no entry can
+    // select a value `LatencyMode::from_index` would reject.
+    let params = IrParams::default();
+    let min = params.latency_mode.range().min();
+    for (offset, label) in LATENCY_MODE_LABELS.iter().enumerate() {
+        let value = min + offset as i32;
+        assert_eq!(
+            &params.latency_mode.display(value as f64),
+            label,
+            "entry {offset} of the picker does not read as its mode"
+        );
+        assert_eq!(
+            LatencyMode::from_index(value).index(),
+            value,
+            "entry {offset} of the picker selects a value the DSP does not recognise"
+        );
+    }
+}

@@ -44,6 +44,10 @@ pub(super) fn dispatch_plugins(
             param_id,
             value,
         } => plugins::handle_set_plugin_param(ctx, instance_id, param_id, value),
+        AudioCommand::SetPluginBypass {
+            instance_id,
+            bypassed,
+        } => plugins::handle_set_plugin_bypass(ctx, instance_id, bypassed),
         AudioCommand::OpenPluginEditor { instance_id } => {
             plugins::handle_open_plugin_editor(ctx, instance_id)
         }

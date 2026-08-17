@@ -14,12 +14,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver};
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{
-    freeze_terminal_event, to_freeze_cache_spawn, SharedState, SyncClapInstance,
-    FREEZE_CANCELLED_MSG,
-};
+use resonance_audio::__test_support::{FREEZE_CANCELLED_MSG, PluginMap, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
@@ -32,7 +29,7 @@ struct EngineState {
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 

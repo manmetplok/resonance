@@ -1,10 +1,20 @@
 use resonance_plugin::*;
 
+use crate::dsp::lfo::SyncDivision;
+
 pub struct LfoParams {
     pub shape: IntParam,
     pub rate: FloatParam,
     pub depth: FloatParam,
+    /// Per-voice phase reset on note-on. Ignored when [`Self::sync`] is on —
+    /// see [`crate::dsp::lfo::LfoMode`].
     pub retrigger: BoolParam,
+    /// Lock the phase to the host transport at [`Self::division`] instead of
+    /// free-running at [`Self::rate`].
+    pub sync: BoolParam,
+    /// Musical division a synced LFO cycles over. Values are
+    /// [`SyncDivision`] discriminants.
+    pub division: IntParam,
 }
 
 impl LfoParams {
@@ -22,6 +32,10 @@ impl LfoParams {
         let dp_name: &'static str = Box::leak(format!("LFO {} Depth", num).into_boxed_str());
         let rtr_id: &'static str = Box::leak(format!("lfo{}_retrigger", num).into_boxed_str());
         let rtr_name: &'static str = Box::leak(format!("LFO {} Retrigger", num).into_boxed_str());
+        let sync_id: &'static str = Box::leak(format!("lfo{}_sync", num).into_boxed_str());
+        let sync_name: &'static str = Box::leak(format!("LFO {} Sync", num).into_boxed_str());
+        let div_id: &'static str = Box::leak(format!("lfo{}_division", num).into_boxed_str());
+        let div_name: &'static str = Box::leak(format!("LFO {} Division", num).into_boxed_str());
 
         Self {
             shape: IntParam::new(sh_id, sh_name, 0, IntRange::Linear { min: 0, max: 4 }),
@@ -43,9 +57,18 @@ impl LfoParams {
                 default_depth,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
-            .with_smoother(SmoothingStyle::Linear(10.0))
             .with_value_to_string(formatters::v2s_f32_percentage(0)),
             retrigger: BoolParam::new(rtr_id, rtr_name, default_retrigger),
+            sync: BoolParam::new(sync_id, sync_name, false),
+            division: IntParam::new(
+                div_id,
+                div_name,
+                SyncDivision::DEFAULT as i32,
+                IntRange::Linear {
+                    min: 0,
+                    max: (SyncDivision::LABELS.len() - 1) as i32,
+                },
+            ),
         }
     }
 }

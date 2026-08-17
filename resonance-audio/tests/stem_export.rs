@@ -22,11 +22,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{
-    export_stems, SharedState, StemBitDepth, StemSource, StemTarget, SyncClapInstance,
-};
+use resonance_audio::__test_support::{PluginMap, SharedState, StemBitDepth, StemSource, StemTarget, export_stems};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -38,7 +36,7 @@ struct EngineState {
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
-    plugins: Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 

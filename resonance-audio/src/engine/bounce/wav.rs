@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
-use crate::clap_host::SyncClapInstance;
+use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::SharedState;
@@ -304,7 +304,7 @@ pub(crate) fn run_export(
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
-    plugins: &Arc<RwLock<IndexMap<PluginInstanceId, Mutex<SyncClapInstance>>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
     sample_rate: u32,

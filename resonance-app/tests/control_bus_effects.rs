@@ -138,6 +138,7 @@ fn echo(app: &mut Resonance, bus_id: u64, instance_id: u64, plugin_id: &str) {
                 max_value: 0.0,
                 default_value: -12.0,
                 current_value: -12.0,
+                ..Default::default()
             },
             ParamInfo {
                 id: 2,
@@ -147,6 +148,7 @@ fn echo(app: &mut Resonance, bus_id: u64, instance_id: u64, plugin_id: &str) {
                 max_value: 200.0,
                 default_value: 10.0,
                 current_value: 10.0,
+                ..Default::default()
             },
         ],
         has_gui: false,

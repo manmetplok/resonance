@@ -8,8 +8,9 @@
 
 use wayland_plugin_gui::egui;
 
-use crate::assistant::{Assistant, Genre};
+use crate::assistant::Genre;
 use crate::params::MasteringParams;
+use crate::viz::MasteringViz;
 
 use super::theme;
 use super::TargetSource;
@@ -18,9 +19,10 @@ mod assistant;
 mod dither;
 mod eq;
 mod glue;
+pub mod gr_meter;
 mod imager;
 mod limiter;
-mod multiband;
+pub mod multiband;
 mod saturator;
 mod widgets;
 
@@ -52,6 +54,20 @@ const TABS: &[(StageTab, &str)] = &[
     (StageTab::Dither, "Dither"),
 ];
 
+/// Height of the stage-controls panel for a tab.
+///
+/// Most stages fit one row of knobs under a title row. The Assistant is
+/// a whole workflow, and the Multiband is four band columns of two knob
+/// lines each — both need more room, and giving it to them here is what
+/// keeps the other seven tabs compact.
+pub fn stage_panel_height(tab: StageTab) -> f32 {
+    match tab {
+        StageTab::Assistant => 380.0,
+        StageTab::Multiband => 300.0,
+        _ => 260.0,
+    }
+}
+
 pub fn draw_tab_bar(ui: &mut egui::Ui, current: &mut StageTab) {
     ui.add_space(4.0);
     ui.horizontal_centered(|ui| {
@@ -73,11 +89,11 @@ pub fn draw_tab_bar(ui: &mut egui::Ui, current: &mut StageTab) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn draw_stage_panel(
+pub(crate) fn draw_stage_panel(
     ui: &mut egui::Ui,
     stage: StageTab,
     params: &MasteringParams,
-    assistant: &Assistant,
+    viz: &MasteringViz,
     selected_genre: &mut Genre,
     target_source: &mut TargetSource,
     reference_path: &mut String,
@@ -96,7 +112,7 @@ pub fn draw_stage_panel(
         StageTab::Assistant => assistant::draw(
             ui,
             params,
-            assistant,
+            &viz.assistant,
             selected_genre,
             target_source,
             reference_path,
@@ -105,7 +121,7 @@ pub fn draw_stage_panel(
         StageTab::Glue => glue::draw(ui, &params.glue_compressor),
         StageTab::Saturator => saturator::draw(ui, &params.saturator),
         StageTab::TonalEq => eq::draw(ui, &params.tonal_eq, "Tonal EQ"),
-        StageTab::Multiband => multiband::draw(ui, &params.multiband),
+        StageTab::Multiband => multiband::draw(ui, &params.multiband, viz.band_gr_db()),
         StageTab::Imager => imager::draw(ui, &params.imager),
         StageTab::Limiter => limiter::draw(ui, &params.limiter),
         StageTab::Dither => dither::draw(ui, &params.dither),

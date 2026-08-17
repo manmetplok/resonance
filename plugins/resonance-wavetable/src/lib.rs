@@ -33,7 +33,11 @@ impl ResonancePlugin for ResonanceWavetable {
     const VENDOR: &'static str = "Resonance";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const DESCRIPTION: &'static str = "A wavetable synthesizer instrument";
-    const FEATURES: &'static [&'static str] = &["instrument", "synthesizer", "stereo"];
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[
+        features::INSTRUMENT,
+        features::SYNTHESIZER,
+        features::STEREO,
+    ];
 
     const INPUT_CHANNELS: Option<u32> = None;
     const MIDI_INPUT: bool = true;
@@ -77,7 +81,7 @@ impl ResonancePlugin for ResonanceWavetable {
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],
         frames: usize,
         events: &mut EventIterator<'_>,
-        _tempo: Option<TempoInfo>,
+        tempo: Option<TempoInfo>,
     ) {
         let Some(main) = outputs.first_mut() else {
             return;
@@ -89,8 +93,9 @@ impl ResonancePlugin for ResonanceWavetable {
         // The engine drains `events` with sample-accurate timing internally
         // and snapshots every atomic parameter once for the whole block --
         // the per-sample kernel reads only from stack locals from there on.
+        // `tempo` drives the tempo-synced LFO modes.
         self.engine
-            .render_block(left, right, frames, &self.params, events);
+            .render_block(left, right, frames, &self.params, events, tempo);
 
         // Publish audio-thread state to the shared viz atomics once per
         // block. The editor thread reads from these at ~60 Hz.

@@ -8,6 +8,8 @@ use resonance_audio::types::{ScannedPlugin, TrackType};
 use crate::message::{Message, PluginMessage};
 use crate::state::TrackState;
 use crate::theme;
+use crate::view::mixer::picks::PluginOwner;
+use crate::view::mixer::reorder::{self, ChainMoves};
 
 pub(super) fn chain_group(
     r: &crate::Resonance,
@@ -45,9 +47,17 @@ pub(super) fn chain_group(
     if track.plugins.is_empty() {
         col = col.push(empty_chain_row());
     } else {
+        let chain_len = track.plugins.len();
         for (i, plugin) in track.plugins.iter().enumerate() {
             let is_instrument_slot = is_instrument && i == 0;
-            col = col.push(chain_row(&plugin.plugin_name, is_instrument_slot));
+            let moves = reorder::chain_moves(
+                r,
+                PluginOwner::Track(track.id),
+                plugin.instance_id,
+                i,
+                chain_len,
+            );
+            col = col.push(chain_row(&plugin.plugin_name, is_instrument_slot, &moves));
         }
     }
 
@@ -106,7 +116,17 @@ pub(super) fn empty_chain_row() -> Element<'static, Message> {
         .into()
 }
 
-pub(super) fn chain_row(name: &str, is_instrument_slot: bool) -> Element<'static, Message> {
+/// One plugin row of a CHAIN group: bullet · name · ▲▼ · BYP.
+///
+/// `moves` carries the two reorder messages for this slot (ba todo
+/// #1302); either side is `None` when the move is unavailable, and the
+/// caret then renders greyed and unclickable rather than raising a move
+/// the chain rule would refuse.
+pub(super) fn chain_row(
+    name: &str,
+    is_instrument_slot: bool,
+    moves: &ChainMoves,
+) -> Element<'static, Message> {
     let bullet_color = if is_instrument_slot {
         theme::ACCENT_SOFT
     } else {
@@ -134,6 +154,8 @@ pub(super) fn chain_row(name: &str, is_instrument_slot: bool) -> Element<'static
             Space::new().width(8),
             text(name.to_string()).size(12).color(label_color),
             Space::new().width(Length::Fill),
+            reorder::move_buttons(moves, 10.0, 3),
+            Space::new().width(8),
             text("BYP")
                 .size(9)
                 .font(theme::UI_FONT_SEMIBOLD)

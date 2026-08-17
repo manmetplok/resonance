@@ -46,7 +46,9 @@ pub(super) fn render_count_in_block(
                 monitor.input_channels,
                 scratch.track_buf_l,
                 scratch.track_buf_r,
+                scratch.fx_dry,
                 timing.transport,
+                inputs.sample_rate,
             );
         }
     }

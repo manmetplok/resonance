@@ -317,7 +317,8 @@ impl ResonancePlugin for StatePlugin {
     const VENDOR: &'static str = "test";
     const VERSION: &'static str = "0.0.0";
     const DESCRIPTION: &'static str = "";
-    const FEATURES: &'static [&'static str] = &[];
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
@@ -451,7 +452,7 @@ impl ResonancePlugin for RenamedPlugin {
     const VENDOR: &'static str = "test";
     const VERSION: &'static str = "0.0.0";
     const DESCRIPTION: &'static str = "";
-    const FEATURES: &'static [&'static str] = &[];
+    const FEATURES: &'static [&'static std::ffi::CStr] = &[];
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
