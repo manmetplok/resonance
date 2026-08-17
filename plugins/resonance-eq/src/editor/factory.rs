@@ -5,6 +5,8 @@ use std::sync::Arc;
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use wayland_plugin_gui::{Editor as RuntimeEditor, EditorOptions};
 
+use resonance_plugin::presets::PresetSession;
+
 use crate::analyzer::AnalyzerState;
 use crate::params::EqParams;
 
@@ -17,11 +19,20 @@ use super::app::EqEditorApp;
 pub struct EqEditorFactory {
     params: Arc<EqParams>,
     analyzer: Arc<AnalyzerState>,
+    presets: Arc<PresetSession>,
 }
 
 impl EqEditorFactory {
-    pub fn new(params: Arc<EqParams>, analyzer: Arc<AnalyzerState>) -> Self {
-        Self { params, analyzer }
+    pub fn new(
+        params: Arc<EqParams>,
+        analyzer: Arc<AnalyzerState>,
+        presets: Arc<PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            analyzer,
+            presets,
+        }
     }
 }
 
@@ -42,7 +53,11 @@ impl EditorFactory for EqEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        let app = EqEditorApp::new(self.params.clone(), self.analyzer.clone());
+        let app = EqEditorApp::new(
+            self.params.clone(),
+            self.analyzer.clone(),
+            self.presets.clone(),
+        );
         let runtime = RuntimeEditor::new(
             app,
             EditorOptions {

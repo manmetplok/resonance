@@ -5,6 +5,10 @@ use std::sync::Arc;
 
 use wayland_plugin_gui::{egui, EditorApp};
 
+use resonance_plugin::preset_ui::preset_bar;
+use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
+use resonance_plugin::Param;
+
 use crate::analyzer::AnalyzerState;
 use crate::params::EqParams;
 use crate::presets::PRESETS;
@@ -26,6 +30,13 @@ pub(crate) enum AnalyzerMode {
 pub(crate) struct EqEditorApp {
     pub(crate) params: Arc<EqParams>,
     pub(crate) analyzer: Arc<AnalyzerState>,
+    /// Factory bank + this plugin's user preset directory.
+    pub(crate) bank: PresetBank,
+    /// Shared with the plugin struct, so what the bar shows is what
+    /// `save_state` persists.
+    pub(crate) presets: Arc<PresetSession>,
+    /// Transient bar state (open combo, in-progress rename), editor-only.
+    pub(crate) preset_editor: PresetEditor,
     pub(crate) analyzer_mode: AnalyzerMode,
     /// Which band is highlighted in the curve/strip. None = no selection.
     pub(crate) selected_band: Option<usize>,
@@ -34,10 +45,17 @@ pub(crate) struct EqEditorApp {
 }
 
 impl EqEditorApp {
-    pub fn new(params: Arc<EqParams>, analyzer: Arc<AnalyzerState>) -> Self {
+    pub fn new(
+        params: Arc<EqParams>,
+        analyzer: Arc<AnalyzerState>,
+        presets: Arc<PresetSession>,
+    ) -> Self {
         Self {
             params,
             analyzer,
+            bank: PresetBank::new(<crate::ResonanceEq as resonance_plugin::ResonancePlugin>::CLAP_ID, PRESETS),
+            presets,
+            preset_editor: PresetEditor::default(),
             analyzer_mode: AnalyzerMode::Post,
             selected_band: None,
             drag_state: None,
@@ -80,16 +98,18 @@ fn draw_header(ui: &mut egui::Ui, app: &mut EqEditorApp) {
         ui.add_space(8.0);
 
         ui.label(egui::RichText::new("Preset").color(theme::TEXT_DIM));
-        egui::ComboBox::from_id_salt("eq_preset_combo")
-            .width(180.0)
-            .selected_text("— select —")
-            .show_ui(ui, |ui| {
-                for entry in PRESETS {
-                    if ui.selectable_label(false, entry.name).clicked() {
-                        load_preset(&app.params, entry.json);
-                    }
-                }
-            });
+        let params: Vec<&dyn Param> = (0..crate::params::PARAM_COUNT)
+            .map(|i| app.params.param_at(i))
+            .collect();
+        preset_bar(
+            ui,
+            "eq_preset",
+            &mut app.preset_editor,
+            &app.bank,
+            &app.presets,
+            &params,
+            "— select —",
+        );
 
         ui.add_space(16.0);
         ui.separator();
@@ -141,8 +161,4 @@ fn analyzer_segment(
     if ui.add(button).clicked() {
         *current = this;
     }
-}
-
-fn load_preset(params: &EqParams, json: &str) {
-    resonance_plugin::presets::load(json, crate::params::PARAM_COUNT, |i| params.param_at(i));
 }

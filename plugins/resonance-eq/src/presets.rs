@@ -4,10 +4,10 @@
 //! plugin writes natively, so the editor can load one by walking the
 //! param list and calling `set_plain` for each matching id.
 
-pub struct PresetEntry {
-    pub name: &'static str,
-    pub json: &'static str,
-}
+/// The factory-preset entry type is the shared one, so this crate's
+/// `PRESETS` can be handed straight to `presets::PresetBank` (ba todo
+/// #1358). The alias keeps the crate-local name every call site uses.
+pub use resonance_plugin::presets::FactoryPreset as PresetEntry;
 
 pub const PRESETS: &[PresetEntry] = &[
     PresetEntry {

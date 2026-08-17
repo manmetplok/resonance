@@ -11,7 +11,12 @@ crate-type = ["cdylib", "lib"]
 # Editor shipped by default so the cdylib bundle has a GUI.
 # Turn it off (`--no-default-features`) for a headless DSP build.
 default = ["editor"]
-editor = ["dep:wayland-plugin-gui", "dep:egui"]
+editor = [
+    "dep:wayland-plugin-gui",
+    "dep:egui",
+    # the shared preset bar (ba todo #1358) lives behind this feature
+    "resonance-plugin/editor-widgets",
+]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
