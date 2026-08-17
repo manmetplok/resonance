@@ -619,6 +619,21 @@ impl Resonance {
         (app, task)
     }
 
+    /// [`Resonance::new_for_test`] starting on `tab`.
+    ///
+    /// The startup tab is a per-app argument here rather than the process-wide
+    /// [`STARTUP_TAB`] the binary's `--tab` flag writes. `STARTUP_TAB` is a
+    /// `OnceLock`, so the first writer in a process wins and every later
+    /// `set()` silently does nothing — which is invisible while each test file
+    /// is its own process, and becomes a silent wrong-tab bug the moment two
+    /// test files that want different tabs share one binary (ba doc #285 §4).
+    #[doc(hidden)]
+    pub fn new_for_test_on(tab: ViewMode) -> (Self, iced::Task<Message>) {
+        let (mut app, task) = Self::new_for_test();
+        app.view_mode = tab;
+        (app, task)
+    }
+
     /// [`Resonance::new_for_test`], handing back the receiver its engine's
     /// commands queue onto so a test can assert on them from construction
     /// onwards — including asserting that construction emitted nothing.
@@ -694,7 +709,17 @@ impl Resonance {
             master_level_r: 0.0,
             master_plugins: Vec::new(),
             master_fx_bypassed: false,
-            view_mode: STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
+            // `STARTUP_TAB` carries the binary's `--tab` flag, so it is a read
+            // of *this process's* invocation and belongs to `Host::Machine`.
+            // A hermetic app always starts on the default tab and takes its
+            // startup tab as an argument instead
+            // ([`Resonance::new_for_test_on`]) — otherwise one test file's
+            // `set()` would decide the tab for every other test sharing the
+            // binary.
+            view_mode: match host {
+                Host::Machine => STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
+                Host::None => ViewMode::Arrange,
+            },
             pre_performance_view: None,
             performance: state::PerformanceState::default(),
             clips: Vec::new(),

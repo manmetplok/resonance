@@ -1,0 +1,87 @@
+//! `timeline` test group.
+//!
+//! One binary per group instead of one per file. Each of these files used
+//! to be its own integration-test target, and every target re-monomorphizes
+//! the whole app + iced generic surface — 240 of them cost 193s to relink
+//! after a one-line change (ba doc #285 §3, todo #1368). They are still
+//! ordinary test files; only the target boundary moved.
+//!
+//! The `#[path]` attributes are load-bearing: `mod foo;` in a crate-root
+//! file resolves against that file's own directory (`tests/`), not against
+//! a `tests/<group>/` subdirectory.
+
+#[path = "common/mod.rs"]
+mod common;
+
+#[path = "timeline/arrange_layout.rs"]
+mod arrange_layout;
+#[path = "timeline/arrangement_marker_reducers.rs"]
+mod arrangement_marker_reducers;
+#[path = "timeline/automation_device_params.rs"]
+mod automation_device_params;
+#[path = "timeline/automation_edits.rs"]
+mod automation_edits;
+#[path = "timeline/automation_live_tint.rs"]
+mod automation_live_tint;
+#[path = "timeline/automation_mirror.rs"]
+mod automation_mirror;
+#[path = "timeline/automation_persistence.rs"]
+mod automation_persistence;
+#[path = "timeline/clip_fade_gain_draw.rs"]
+mod clip_fade_gain_draw;
+#[path = "timeline/clip_fade_gain_handlers.rs"]
+mod clip_fade_gain_handlers;
+#[path = "timeline/clip_fade_gain_hit_test.rs"]
+mod clip_fade_gain_hit_test;
+#[path = "timeline/clip_fade_gain_mirror.rs"]
+mod clip_fade_gain_mirror;
+#[path = "timeline/clip_fade_gain_persistence.rs"]
+mod clip_fade_gain_persistence;
+#[path = "timeline/clip_fade_gain_snapshot.rs"]
+mod clip_fade_gain_snapshot;
+#[path = "timeline/clip_inspector_flyout.rs"]
+mod clip_inspector_flyout;
+#[path = "timeline/drag_placement_handlers.rs"]
+mod drag_placement_handlers;
+#[path = "timeline/drag_placement_visuals.rs"]
+mod drag_placement_visuals;
+#[path = "timeline/marker_hit_test.rs"]
+mod marker_hit_test;
+#[path = "timeline/marker_ui_reducers.rs"]
+mod marker_ui_reducers;
+#[path = "timeline/markers_overview_snapshot.rs"]
+mod markers_overview_snapshot;
+#[path = "timeline/markers_overview_ui.rs"]
+mod markers_overview_ui;
+#[path = "timeline/quantize_persistence.rs"]
+mod quantize_persistence;
+#[path = "timeline/selection_bar.rs"]
+mod selection_bar;
+#[path = "timeline/test_arrangement_markers.rs"]
+mod test_arrangement_markers;
+#[path = "timeline/timeline_automation_device_lanes.rs"]
+mod timeline_automation_device_lanes;
+#[path = "timeline/timeline_automation_group.rs"]
+mod timeline_automation_group;
+#[path = "timeline/timeline_automation_input.rs"]
+mod timeline_automation_input;
+#[path = "timeline/timeline_automation_lane_rows.rs"]
+mod timeline_automation_lane_rows;
+#[path = "timeline/timeline_automation_lane_selector.rs"]
+mod timeline_automation_lane_selector;
+#[path = "timeline/timeline_automation_render.rs"]
+mod timeline_automation_render;
+#[path = "timeline/timeline_group_hit_test.rs"]
+mod timeline_group_hit_test;
+#[path = "timeline/timeline_group_lane.rs"]
+mod timeline_group_lane;
+#[path = "timeline/timeline_markers_snapshot.rs"]
+mod timeline_markers_snapshot;
+#[path = "timeline/track_header_alignment.rs"]
+mod track_header_alignment;
+#[path = "timeline/track_header_automation_lane_rows.rs"]
+mod track_header_automation_lane_rows;
+#[path = "timeline/track_header_freeze_button.rs"]
+mod track_header_freeze_button;
+#[path = "timeline/undo_history.rs"]
+mod undo_history;
