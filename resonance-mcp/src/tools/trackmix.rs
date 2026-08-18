@@ -8,7 +8,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use rmcp::{tool, tool_router};
-use resonance_control::methods::{mixer, plugins, track};
+use resonance_control::methods::{mixer, plugin_preset, plugins, track};
 
 #[tool_router(router = router_trackmix, vis = "pub(crate)")]
 impl ResonanceMcp {
@@ -461,5 +461,76 @@ impl ResonanceMcp {
         Parameters(params): Parameters<track::ClearSidechainParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(track::CLEAR_SIDECHAIN, &params).await
+    }
+    #[tool(
+        description = "List the presets a plugin on a track can recall, factory and user \
+                       together. FACTORY presets are built into the plugin — every install has \
+                       the same ones, they are read-only, and they are the set that exists \
+                       before anyone has saved anything. USER presets are ones saved on this \
+                       machine, by this tool or in the plugin's own window; only those can be \
+                       overwritten or shadow a factory name. Each entry carries which set it is \
+                       from, and track_load_plugin_preset takes the name. \
+                       \
+                       Only Resonance's own plugins publish factory presets to the host; a \
+                       third-party CLAP reports none rather than a guess. Addressed exactly as \
+                       track_plugin_params: omit plugin_id for the track's instrument. \
+                       \
+                       current is the loaded preset when the app knows it, which it does not \
+                       after a knob was turned in the plugin's own window — absent means \
+                       unknown, not none.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<plugin_preset::PluginPresetsView>()
+    )]
+    async fn track_plugin_presets(
+        &self,
+        Parameters(params): Parameters<track::PluginPresetsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::PLUGIN_PRESETS, &params).await
+    }
+
+    #[tool(
+        description = "Recall a preset onto a plugin on a track — the fast way to get a whole \
+                       sound, instead of setting forty parameters one at a time. The name comes \
+                       from track_plugin_presets. \
+                       \
+                       source picks which set to take it from; omit it and a user preset wins \
+                       over a factory one of the same name, which is what someone who saved over \
+                       a factory name meant. The recall is ONE undo entry, is visible in the \
+                       plugin's own window immediately, and moves every parameter the preset \
+                       names — anything it does not name keeps its current value, so a preset \
+                       written for an older build still loads.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn track_load_plugin_preset(
+        &self,
+        Parameters(params): Parameters<track::LoadPluginPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::LOAD_PLUGIN_PRESET, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Save a plugin's current sound as a named user preset, so it can be \
+                       recalled here or picked in the plugin's own window later. \
+                       \
+                       Overwriting an existing USER preset needs overwrite: true; without it the \
+                       call is refused rather than replacing the preset. Factory presets are \
+                       never touched — saving under a factory name creates a user preset that \
+                       shadows it, which is what the plugin's own window does. \
+                       \
+                       This answers as soon as the capture is armed, not when the file lands: \
+                       the plugin hands its state back a beat later. Read track_plugin_presets \
+                       to see the preset appear — the same one-cycle gap track_add_effect has \
+                       for its parameter list.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn track_save_plugin_preset(
+        &self,
+        Parameters(params): Parameters<track::SavePluginPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::SAVE_PLUGIN_PRESET, &params)
+            .await
     }
 }

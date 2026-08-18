@@ -214,21 +214,24 @@ fn seed_plugins(app: &mut Resonance) {
                 name: "Resonance Mastering".to_owned(),
                 vendor: "Resonance".to_owned(),
                 is_instrument: false,
-            },
+            ..Default::default()
+},
             ScannedPlugin {
                 clap_file_path: "/plugins/eq.clap".to_owned(),
                 clap_plugin_id: "com.resonance.eq".to_owned(),
                 name: "Resonance EQ".to_owned(),
                 vendor: "Resonance".to_owned(),
                 is_instrument: false,
-            },
+            ..Default::default()
+},
             ScannedPlugin {
                 clap_file_path: "/plugins/wavetable.clap".to_owned(),
                 clap_plugin_id: "com.resonance.wavetable".to_owned(),
                 name: "Resonance Wavetable".to_owned(),
                 vendor: "Resonance".to_owned(),
                 is_instrument: true,
-            },
+            ..Default::default()
+},
         ],
     });
 }

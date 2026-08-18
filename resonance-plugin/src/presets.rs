@@ -358,6 +358,43 @@ impl PresetBank {
         Ok(PresetRef::user(name))
     }
 
+    /// Write an already-formed state document as a user preset.
+    ///
+    /// [`save`](Self::save) snapshots a live parameter surface, which is
+    /// what a plugin editor has. The host has something different: the
+    /// blob the plugin itself produced through `save_state`, which is the
+    /// only account of the sound that includes edits made in the plugin's
+    /// own window. This is that path (ba todo #1333), and it shares
+    /// `save`'s naming, collision and overwrite rules exactly, so a
+    /// preset written over the control API is indistinguishable from one
+    /// saved in the window.
+    pub fn write_user_preset(
+        &self,
+        name: &str,
+        document: &serde_json::Value,
+    ) -> Result<PresetRef, String> {
+        let name = validate_name(name)?;
+        let dir = self
+            .user_dir()
+            .ok_or_else(|| "No user data directory available".to_string())?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Create preset directory: {e}"))?;
+
+        let mut document = document.clone();
+        if let Some(object) = document.as_object_mut() {
+            object.insert("name".to_string(), serde_json::Value::String(name.clone()));
+        }
+        let text = serde_json::to_string_pretty(&document)
+            .map_err(|e| format!("Serialize preset: {e}"))?;
+        let path = match self.existing_user_path(&name) {
+            Some(path) => path,
+            None => self
+                .free_user_path(&name)
+                .ok_or_else(|| format!("No free file name for preset '{name}'"))?,
+        };
+        std::fs::write(&path, text).map_err(|e| format!("Write preset: {e}"))?;
+        Ok(PresetRef::user(name))
+    }
+
     /// Rename a user preset. Factory presets cannot be renamed.
     pub fn rename(&self, preset: &PresetRef, new_name: &str) -> Result<PresetRef, String> {
         if preset.source != PresetSource::User {

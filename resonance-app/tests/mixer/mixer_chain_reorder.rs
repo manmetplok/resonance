@@ -46,6 +46,7 @@ fn scanned(short: &str, name: &str, is_instrument: bool) -> ScannedPlugin {
         name: name.to_owned(),
         vendor: "Resonance".to_owned(),
         is_instrument,
+        ..Default::default()
     }
 }
 

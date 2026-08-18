@@ -987,6 +987,31 @@ pub enum PluginMessage {
     },
     TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
+    /// Recall a preset onto a plugin: every parameter it names, applied
+    /// as **one** edit (ba todo #1333).
+    ///
+    /// Deliberately not `AudioCommand::LoadPluginState`, even though the
+    /// plugin could parse the preset itself. The app's parameter mirror
+    /// is filled once at instantiation and only updated for changes that
+    /// went through `SetPluginParam` — a plugin-side load moves the sound
+    /// and leaves `track.plugin_params` reporting the values it had
+    /// before (the gap ba todo #1294 closes). Driving the same path
+    /// every other parameter write takes keeps the mirror, the engine and
+    /// the plugin's own window telling the same story.
+    ///
+    /// One message rather than a burst of `SetPluginParam` so a recall is
+    /// one entry in the undo history: it is one gesture to the user, and
+    /// stepping back through forty parameter changes to get before a
+    /// preset load is not undo.
+    LoadPluginPreset {
+        instance_id: PluginInstanceId,
+        /// `(param_id, value)` for every parameter the preset names, in
+        /// the plugin's own declared order.
+        values: Vec<(u32, f64)>,
+        /// What to show as the loaded preset afterwards, for the reply
+        /// and any future GUI readout.
+        preset_name: String,
+    },
     /// Open the plugin's editor window (CLAP_EXT_GUI).
     OpenPluginEditor(PluginInstanceId),
     /// Close the plugin's editor window.

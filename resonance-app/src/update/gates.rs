@@ -315,6 +315,9 @@ fn plugin_edit_target(
     use crate::message::PluginMessage::*;
     match m {
         SetPluginParam(instance_id, ..) => r.track_of_plugin(*instance_id),
+        // A preset recall moves parameters, so it changes the rendered
+        // signal exactly as the individual writes it replaces would.
+        LoadPluginPreset { instance_id, .. } => r.track_of_plugin(*instance_id),
         // Re-keying a detector changes the rendered signal on the
         // plugin's own track, so a frozen track must go stale for it.
         SetPluginSidechain { instance_id, .. } => r.track_of_plugin(*instance_id),

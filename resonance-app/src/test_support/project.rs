@@ -94,6 +94,15 @@ impl Resonance {
         self.io.project_path = Some(path);
     }
 
+    /// Test-only: point plugin presets at a private directory, so a test
+    /// never reads or writes the developer's real
+    /// `~/.local/share/resonance/plugin-presets` (ba todo #1333, and the
+    /// hermeticity rule in ba doc #285).
+    #[doc(hidden)]
+    pub fn test_set_plugin_preset_root(&mut self, root: std::path::PathBuf) {
+        self.plugin_preset_root = Some(root);
+    }
+
     /// Test-only: mark the open project dirty (or clean) so the
     /// control-endpoint destructive-op guards (`needs_confirmation` on
     /// `project.new`/`project.open` with unsaved changes, doc #265) can

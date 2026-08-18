@@ -22,6 +22,7 @@ pub mod master;
 pub mod meter;
 pub mod mixer;
 pub mod notes;
+pub mod plugin_preset;
 pub mod plugins;
 pub mod pool;
 pub mod project;

@@ -334,6 +334,27 @@ pub(super) fn state_saved(
     // Also feeds the undo system's plugin-state cache so snapshots can
     // replay internal CLAP state on restore. The project-save path
     // drains the cache via `SaveAllPluginStates` separately.
+    // A `*.save_plugin_preset` armed this capture: the blob that just
+    // arrived IS the sound, including whatever the plugin keeps outside
+    // its parameters (an amp's model path, an IR's file). Write it before
+    // the cache insert so a failure is reported against the request that
+    // asked for it.
+    if r
+        .pending_plugin_preset_save
+        .as_ref()
+        .is_some_and(|p| p.instance_id == instance_id)
+    {
+        let pending = r.pending_plugin_preset_save.take().expect("just checked");
+        if let Err(e) = crate::update::control::write_plugin_preset(
+            r,
+            &pending.clap_id,
+            &pending.name,
+            &data,
+        ) {
+            r.error_message = Some(format!("Could not save preset {:?}: {e}", pending.name));
+        }
+    }
+
     r.plugin_state_cache.insert(instance_id, data);
 }
 

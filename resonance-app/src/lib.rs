@@ -47,6 +47,16 @@ use state::*;
 use undo::UndoHistory;
 
 /// Application state.
+/// A plugin-preset capture waiting on the engine's state echo.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPluginPresetSave {
+    pub(crate) instance_id: resonance_audio::types::PluginInstanceId,
+    /// CLAP id, which is what names the preset directory.
+    pub(crate) clap_id: String,
+    /// Display name to write.
+    pub(crate) name: String,
+}
+
 pub struct Resonance {
     pub engine: AudioEngine,
     pub sample_rate: u32,
@@ -352,6 +362,25 @@ pub struct Resonance {
     /// When set, the next `AllPluginStatesSaved` event will capture
     /// plugin states for this track and save it as a user preset.
     pub(crate) pending_preset_save: Option<resonance_audio::types::TrackId>,
+    /// A `*.save_plugin_preset` waiting for the plugin to hand back its
+    /// state (ba todo #1333).
+    ///
+    /// The plugin is the only thing that knows its current sound — the
+    /// app's parameter mirror does not see edits made in the plugin's own
+    /// window (ba todo #1294) — so the request is acknowledged when the
+    /// capture is armed and the file is written on the engine's
+    /// `PluginStateSaved` echo, one cycle later. Same shape, and the same
+    /// honest gap, as the track-preset capture above.
+    pub(crate) pending_plugin_preset_save: Option<PendingPluginPresetSave>,
+    /// Root the plugin-preset directories are read from and written to,
+    /// when it is not the user's real data directory.
+    ///
+    /// A test seam, and the only one available: the alternative override
+    /// is `RESONANCE_PLUGIN_PRESET_DIR`, and an env var is process-global
+    /// — which is a race as soon as two tests sharing a binary want
+    /// different roots, and `set_var` is unsafe in a threaded process
+    /// besides (ba doc #285).
+    pub(crate) plugin_preset_root: Option<std::path::PathBuf>,
     /// Plugin state blobs to apply as PluginAdded events arrive for a
     /// preset-created track. Tuple of (target track id, ordered list of
     /// state blobs matching the preset's plugin chain).
@@ -798,6 +827,8 @@ impl Resonance {
             },
             pending_track_preset: None,
             pending_preset_save: None,
+            pending_plugin_preset_save: None,
+            plugin_preset_root: None,
             pending_preset_plugin_states: None,
             pending_plugin_param_overrides: std::collections::HashMap::new(),
         };

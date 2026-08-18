@@ -110,6 +110,30 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 }
             });
         }
+        PluginMessage::LoadPluginPreset {
+            instance_id,
+            values,
+            preset_name: _,
+        } => {
+            // Same two steps as SetPluginParam, once per parameter: tell
+            // the engine, then move the app's mirror so every reader
+            // (generic panel, `track.plugin_params`, its MCP tool) agrees
+            // with the sound.
+            for (param_id, value) in &values {
+                let _ = r.engine.send(AudioCommand::SetPluginParam {
+                    instance_id,
+                    param_id: *param_id,
+                    value: *value,
+                });
+            }
+            r.with_plugin_mut(instance_id, |p| {
+                for (param_id, value) in &values {
+                    if let Some(param) = p.params.iter_mut().find(|pp| pp.id == *param_id) {
+                        param.current_value = *value;
+                    }
+                }
+            });
+        }
         PluginMessage::SetPluginSidechain {
             instance_id,
             source,

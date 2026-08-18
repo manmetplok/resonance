@@ -44,6 +44,7 @@ mod job;
 mod master;
 mod meter;
 mod notes;
+mod plugin_presets;
 mod project;
 mod render;
 /// The reply vocabulary every namespace answers with (todo #1258).
@@ -63,6 +64,7 @@ mod vocal;
 use reply::{failure, success};
 
 pub(crate) use clip::{import_result, place_result};
+pub(crate) use plugin_presets::write_saved_state as write_plugin_preset;
 pub(crate) use meter::{mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;
 

@@ -122,6 +122,9 @@ pub(crate) fn scan_plugins(
                             name: desc.name.clone(),
                             vendor: desc.vendor.clone(),
                             is_instrument: desc.is_instrument,
+                            // Our bundles ship one plugin each, so the
+                            // bundle's bank is this descriptor's bank.
+                            factory_presets: bundle.factory_presets().to_vec(),
                         });
                     }
                     // Keep bundle alive for later instantiation.

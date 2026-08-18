@@ -87,7 +87,7 @@ pub struct ParamInfo {
 }
 
 /// A scanned plugin available for use, with its file path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScannedPlugin {
     pub clap_file_path: String,
     pub clap_plugin_id: String,
@@ -95,6 +95,11 @@ pub struct ScannedPlugin {
     pub vendor: String,
     /// True if the plugin declared the `instrument` feature in its CLAP descriptor.
     pub is_instrument: bool,
+    /// Factory presets baked into the plugin binary, as
+    /// `(name, state json)`, read at scan time from the first-party
+    /// `resonance_factory_presets` symbol. Empty for a plugin that ships
+    /// none and for every plugin that is not one of ours (ba todo #1333).
+    pub factory_presets: Vec<(String, String)>,
 }
 
 mod bars;

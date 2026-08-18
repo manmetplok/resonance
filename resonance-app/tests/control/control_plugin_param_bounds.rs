@@ -39,7 +39,8 @@ fn app() -> Resonance {
             name: "Resonance Compressor".to_owned(),
             vendor: "Resonance".to_owned(),
             is_instrument: false,
-        }],
+        ..Default::default()
+}],
     });
     // A chain whose bounds are exactly what nih-plug's f32 declarations
     // widen to, including one range (20..20000) big enough that a fixed

@@ -39,14 +39,16 @@ fn app() -> Resonance {
                 name: "Resonance Mastering".to_owned(),
                 vendor: "Resonance".to_owned(),
                 is_instrument: false,
-            },
+            ..Default::default()
+},
             ScannedPlugin {
                 clap_file_path: "/plugins/eq.clap".to_owned(),
                 clap_plugin_id: "com.resonance.eq".to_owned(),
                 name: "Resonance EQ".to_owned(),
                 vendor: "Resonance".to_owned(),
                 is_instrument: false,
-            },
+            ..Default::default()
+},
         ],
     });
     app

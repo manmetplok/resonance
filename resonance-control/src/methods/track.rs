@@ -5,6 +5,7 @@
 
 use crate::common::{TrackKind, TrackOutput};
 use crate::ids::{SendId, TrackId};
+use crate::methods::plugin_preset::PluginPresetSource;
 use serde::{Deserialize, Serialize};
 
 /// `track.add` — add a track ([`AddParams`] -> [`AddResult`]).
@@ -50,6 +51,18 @@ pub const SET_PLUGIN_PARAM: &str = "track.set_plugin_param";
 /// `track.set_sidechain` — route another track's or bus's audio into a
 /// plugin's external sidechain key ([`SetSidechainParams`] ->
 /// `MutationAck`).
+/// `track.plugin_presets` — a plugin's factory and user presets, and
+/// which one is loaded ([`PluginPresetsParams`] ->
+/// [`PluginPresetsView`](crate::methods::plugin_preset::PluginPresetsView)).
+/// Read-only.
+pub const PLUGIN_PRESETS: &str = "track.plugin_presets";
+/// `track.load_plugin_preset` — recall a preset onto a plugin
+/// ([`LoadPluginPresetParams`] -> [`MutationAck`](crate::common::MutationAck)).
+pub const LOAD_PLUGIN_PRESET: &str = "track.load_plugin_preset";
+/// `track.save_plugin_preset` — save a plugin's current settings as a
+/// named user preset ([`SavePluginPresetParams`] ->
+/// [`MutationAck`](crate::common::MutationAck)).
+pub const SAVE_PLUGIN_PRESET: &str = "track.save_plugin_preset";
 pub const SET_SIDECHAIN: &str = "track.set_sidechain";
 /// `track.clear_sidechain` — remove a plugin's key route
 /// ([`ClearSidechainParams`] -> `MutationAck`).
@@ -70,6 +83,9 @@ pub const METHODS: &[&str] = &[
     REMOVE_SEND,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    PLUGIN_PRESETS,
+    LOAD_PLUGIN_PRESET,
+    SAVE_PLUGIN_PRESET,
     SET_SIDECHAIN,
     CLEAR_SIDECHAIN,
 ];
@@ -632,4 +648,61 @@ pub struct SetPluginParamParams {
     /// `0..1` parameter) comes back as an error instead of silently
     /// becoming something else.
     pub value: ParamValue,
+}
+
+// ---------------------------------------------------------------------------
+// Plugin presets (ba todo #1333)
+// ---------------------------------------------------------------------------
+
+/// Params for `track.plugin_presets`.
+///
+/// The plugin is addressed exactly as `track.plugin_params` addresses it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PluginPresetsParams {
+    pub track_id: TrackId,
+    /// CLAP id of the plugin on this track; omitted targets the track's
+    /// instrument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance to address when the track carries `plugin_id` more
+    /// than once; 0-based, defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
+
+/// Params for `track.load_plugin_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct LoadPluginPresetParams {
+    pub track_id: TrackId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Preset name, as `track.plugin_presets` reports it.
+    pub preset: String,
+    /// Which set to take it from. Omitted prefers a user preset, then a
+    /// factory one — so a user preset deliberately shadowing a factory
+    /// name wins unless the caller asks for the factory original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PluginPresetSource>,
+}
+
+/// Params for `track.save_plugin_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SavePluginPresetParams {
+    pub track_id: TrackId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Name for the user preset. Saving over an existing user preset
+    /// replaces it and needs `overwrite: true`, per the control API's
+    /// destructive-operation convention; factory presets are never
+    /// touched.
+    pub name: String,
+    #[serde(default)]
+    pub overwrite: bool,
 }

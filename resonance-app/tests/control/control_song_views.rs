@@ -525,14 +525,16 @@ fn plugin_catalog_lists_scanned_plugins() {
                 name: "Resonance Wavetable".to_owned(),
                 vendor: "Resonance".to_owned(),
                 is_instrument: true,
-            },
+            ..Default::default()
+},
             ScannedPlugin {
                 clap_file_path: "/plugins/eq.clap".to_owned(),
                 clap_plugin_id: "com.resonance.eq".to_owned(),
                 name: "Resonance EQ".to_owned(),
                 vendor: "Resonance".to_owned(),
                 is_instrument: false,
-            },
+            ..Default::default()
+},
         ],
     });
 

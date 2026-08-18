@@ -104,7 +104,8 @@ fn app() -> Resonance {
             name: "Resonance Delay".to_owned(),
             vendor: "Resonance".to_owned(),
             is_instrument: false,
-        }],
+        ..Default::default()
+}],
     });
     app.test_apply_engine_event(AudioEvent::PluginAdded {
         track_id: TRACK,

@@ -53,6 +53,7 @@ mod lifecycle;
 mod mixer;
 mod output;
 mod params;
+mod presets;
 mod sends;
 mod sidechain;
 
@@ -79,6 +80,9 @@ pub(super) fn try_handle(
         track_methods::SET_SEND => sends::set_send(app, request),
         track_methods::REMOVE_SEND => sends::remove_send(app, request),
         track_methods::SET_PLUGIN_PARAM => params::set_plugin_param(app, request),
+        track_methods::PLUGIN_PRESETS => presets::plugin_presets(app, request),
+        track_methods::LOAD_PLUGIN_PRESET => presets::load_plugin_preset(app, request),
+        track_methods::SAVE_PLUGIN_PRESET => presets::save_plugin_preset(app, request),
         track_methods::SET_SIDECHAIN => sidechain::set_sidechain(app, request),
         track_methods::CLEAR_SIDECHAIN => sidechain::clear_sidechain(app, request),
         mixer_methods::SET_VOLUME => mixer::set_volume(app, request),

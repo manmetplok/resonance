@@ -62,6 +62,8 @@ mod control_notes_read_your_writes;
 mod control_plugin_param_bounds;
 #[path = "control/control_plugin_param_meta.rs"]
 mod control_plugin_param_meta;
+#[path = "control/control_plugin_presets.rs"]
+mod control_plugin_presets;
 #[path = "control/control_plugin_params_persist.rs"]
 mod control_plugin_params_persist;
 #[path = "control/control_plugins_catalog.rs"]

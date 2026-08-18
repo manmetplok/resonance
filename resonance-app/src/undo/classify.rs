@@ -298,6 +298,11 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Routing a key is a project edit like any other insert
             // change, so it takes an undo entry of its own.
             PluginMessage::SetPluginSidechain { .. } => UndoAction::Record,
+            // A preset recall is one gesture, so it takes one entry —
+            // and it must NOT coalesce with anything: coalescing a recall
+            // into a neighbouring knob edit would make the two undo
+            // together (ba todo #1333).
+            PluginMessage::LoadPluginPreset { .. } => UndoAction::Record,
             PluginMessage::SetPluginParam(instance_id, param_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
                     instance_id: *instance_id,
