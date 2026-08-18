@@ -30,7 +30,6 @@ use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::{GateParams, PARAM_COUNT};
-use crate::presets::PRESETS;
 use crate::viz::GateViz;
 
 use status::DetectorSummary;
@@ -98,7 +97,7 @@ impl GateEditorApp {
             viz,
             bank: PresetBank::new(
                 <crate::ResonanceGate as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                PRESETS,
+                <crate::ResonanceGate as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets,
             preset_editor: PresetEditor::default(),

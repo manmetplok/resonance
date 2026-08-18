@@ -61,11 +61,52 @@ pub fn stable_hash(s: &str) -> u32 {
 /// Export a ResonancePlugin as a CLAP plugin.
 ///
 /// Usage: `resonance_plugin::export_clap!(MyPlugin);`
+///
+/// Alongside the CLAP entry point this exports
+/// [`resonance_factory_presets`](crate::FACTORY_PRESETS_SYMBOL), a
+/// first-party side channel carrying the plugin's factory bank as JSON.
+///
+/// The host needs the names to offer them over the control API, and CLAP
+/// gives it no way to ask: presets are `include_str!`d into the binary,
+/// and a host can only reach them by instantiating the plugin and loading
+/// state it cannot enumerate. The standard answer is the
+/// `clap.preset-discovery` factory, which is a much larger surface aimed
+/// at third-party banks on disk; this is one symbol read out of the
+/// library the host already has open (ba todo #1333).
+///
+/// Third-party plugins simply do not export it, and the host treats its
+/// absence as "no factory presets" rather than an error — which is the
+/// truthful answer for a plugin we know nothing about.
 #[macro_export]
 macro_rules! export_clap {
     ($plugin:ty) => {
         $crate::clack_reexport::clack_export_entry!(
             $crate::clack_reexport::entry::SinglePluginEntry::<$crate::ClapBridge<$plugin>>
         );
+
+        /// The factory bank as a NUL-terminated JSON array of
+        /// `{"name": .., "json": ..}`, or null when this plugin ships none.
+        ///
+        /// # Safety
+        /// The returned pointer is valid for the lifetime of the process
+        /// and must not be freed by the caller: it borrows a `CString`
+        /// built once into a `OnceLock`. The host copies out of it.
+        #[no_mangle]
+        pub extern "C" fn resonance_factory_presets() -> *const ::std::os::raw::c_char {
+            static ENCODED: ::std::sync::OnceLock<Option<::std::ffi::CString>> =
+                ::std::sync::OnceLock::new();
+            let slot = ENCODED.get_or_init(|| {
+                let presets =
+                    <$plugin as $crate::ResonancePlugin>::FACTORY_PRESETS;
+                if presets.is_empty() {
+                    return None;
+                }
+                $crate::presets::encode_factory_bank(presets)
+            });
+            match slot {
+                Some(text) => text.as_ptr(),
+                None => ::std::ptr::null(),
+            }
+        }
     };
 }

@@ -79,7 +79,7 @@ impl EditorFactory for IrEditorFactory {
             viz: self.viz.clone(),
             bank: resonance_plugin::presets::PresetBank::new(
                 <crate::ResonanceIr as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                &[],
+                <crate::ResonanceIr as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets: self.presets.clone(),
             preset_editor: resonance_plugin::presets::PresetEditor::default(),

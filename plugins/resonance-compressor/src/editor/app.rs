@@ -9,7 +9,6 @@ use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::CompressorParams;
-use crate::presets::PRESETS;
 use crate::viz::{CompressorViz, DetectorSource};
 
 use super::{control_strip, curve, history, meters, theme};
@@ -41,7 +40,7 @@ impl CompressorEditorApp {
             viz,
             bank: PresetBank::new(
                 <crate::ResonanceCompressor as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                PRESETS,
+                <crate::ResonanceCompressor as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets,
             preset_editor: PresetEditor::default(),

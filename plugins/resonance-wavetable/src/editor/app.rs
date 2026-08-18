@@ -68,7 +68,7 @@ impl WavetableEditorApp {
             selected_mod_slot: 0,
             bank: resonance_plugin::presets::PresetBank::new(
                 <crate::ResonanceWavetable as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                crate::presets::PRESETS,
+                <crate::ResonanceWavetable as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),

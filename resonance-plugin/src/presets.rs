@@ -168,6 +168,28 @@ pub struct FactoryPreset {
     pub json: &'static str,
 }
 
+/// The symbol [`export_clap!`](crate::export_clap) exports so a host can
+/// read a plugin's factory bank without instantiating it.
+///
+/// The wire contract itself lives in
+/// [`resonance_common::factory_presets`], which both this crate and the
+/// engine depend on — the host has no business depending on the plugin
+/// SDK, and vice versa.
+pub use resonance_common::factory_presets::FACTORY_PRESETS_SYMBOL;
+
+/// Encode a factory bank for the exported symbol. See
+/// [`resonance_common::factory_presets::encode`].
+pub fn encode_factory_bank(presets: &[FactoryPreset]) -> Option<std::ffi::CString> {
+    let pairs: Vec<(&str, &str)> = presets.iter().map(|p| (p.name, p.json)).collect();
+    resonance_common::factory_presets::encode(&pairs)
+}
+
+/// Decode a factory bank. See
+/// [`resonance_common::factory_presets::decode`].
+pub fn decode_factory_bank(text: &str) -> Vec<(String, String)> {
+    resonance_common::factory_presets::decode(text)
+}
+
 // ---------------------------------------------------------------------------
 // The bank: factory + user, one list
 // ---------------------------------------------------------------------------

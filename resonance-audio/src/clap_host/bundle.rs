@@ -38,6 +38,12 @@ pub struct ClapBundle {
     entry: *const clap_plugin_entry,
     factory: *const clap_plugin_factory,
     descriptors: Vec<PluginDescInfo>,
+    /// Factory presets baked into this binary, as `(name, state json)`.
+    ///
+    /// Read once at load time from the first-party
+    /// `resonance_factory_presets` symbol. Empty for any plugin that does
+    /// not export it, which is every third-party one (ba todo #1333).
+    factory_presets: Vec<(String, String)>,
     _path: CString,
 }
 
@@ -126,17 +132,31 @@ impl ClapBundle {
             });
         }
 
+        // First-party side channel. CLAP offers no way to enumerate
+        // presets compiled into a binary, and this is read out of the
+        // library we already have open. Absent is the normal case, not an
+        // error: it just means we know nothing about this plugin's bank.
+        let factory_presets = unsafe { read_factory_presets(&library) };
+
         Ok(ClapBundle {
             _library: std::mem::ManuallyDrop::new(library),
             entry,
             factory,
             descriptors,
+            factory_presets,
             _path: path_cstring,
         })
     }
 
     pub fn descriptors(&self) -> &[PluginDescInfo] {
         &self.descriptors
+    }
+
+    /// Factory presets baked into this plugin, as `(name, state json)`.
+    /// Empty for a plugin that ships none, and for every plugin that is
+    /// not one of ours.
+    pub fn factory_presets(&self) -> &[(String, String)] {
+        &self.factory_presets
     }
 
     /// Create a plugin instance from this bundle.
@@ -378,5 +398,31 @@ impl Drop for ClapBundle {
         // `init()`, so an extra `init()` with no matching `deinit()` leaves
         // the bundle initialised — exactly the state we want it in.
         let _ = self.entry;
+    }
+}
+
+/// Read the first-party factory-preset bank out of a loaded plugin
+/// library, if it exports one.
+///
+/// # Safety
+/// `library` must be a loaded plugin binary. The symbol, when present, is
+/// contracted to return either null or a pointer valid for the lifetime of
+/// the process (see `resonance_plugin::export_clap!`); the string is
+/// copied out here and never freed by us.
+unsafe fn read_factory_presets(library: &libloading::Library) -> Vec<(String, String)> {
+    type Getter = unsafe extern "C" fn() -> *const std::os::raw::c_char;
+    let symbol: libloading::Symbol<Getter> =
+        match library.get(resonance_common::factory_presets::FACTORY_PRESETS_SYMBOL) {
+            Ok(symbol) => symbol,
+            // Not one of ours, or one of ours with no factory bank.
+            Err(_) => return Vec::new(),
+        };
+    let raw = symbol();
+    if raw.is_null() {
+        return Vec::new();
+    }
+    match CStr::from_ptr(raw).to_str() {
+        Ok(text) => resonance_common::factory_presets::decode(text),
+        Err(_) => Vec::new(),
     }
 }

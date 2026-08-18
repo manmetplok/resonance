@@ -45,6 +45,12 @@ impl ResonancePlugin for ResonanceDelay {
     const FEATURES: &'static [&'static std::ffi::CStr] =
         &[features::AUDIO_EFFECT, features::DELAY, features::STEREO];
 
+    /// The factory bank, declared once here and read by the editor's
+    /// PresetBank and by the exported `resonance_factory_presets`
+    /// symbol the host lists over the control API (ba todo #1333).
+    const FACTORY_PRESETS: &'static [resonance_plugin::presets::FactoryPreset] =
+        presets::PRESETS;
+
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {

@@ -174,7 +174,7 @@ impl MasteringEditorApp {
             viz,
             bank: resonance_plugin::presets::PresetBank::new(
                 <crate::ResonanceMastering as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                &[],
+                <crate::ResonanceMastering as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),

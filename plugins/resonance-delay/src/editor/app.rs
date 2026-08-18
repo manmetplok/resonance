@@ -12,7 +12,6 @@ use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::DelayParams;
-use crate::presets::PRESETS;
 use crate::sync::division_label;
 use crate::viz::DelayViz;
 
@@ -41,7 +40,7 @@ impl DelayEditorApp {
             viz,
             bank: PresetBank::new(
                 <crate::ResonanceDelay as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                PRESETS,
+                <crate::ResonanceDelay as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets,
             preset_editor: PresetEditor::default(),

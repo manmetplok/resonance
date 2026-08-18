@@ -82,7 +82,7 @@ impl EditorFactory for AmpEditorFactory {
             tone3000_panel: Tone3000PanelState::default(),
             bank: resonance_plugin::presets::PresetBank::new(
                 <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                &[],
+                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets: self.presets.clone(),
             preset_editor: resonance_plugin::presets::PresetEditor::default(),

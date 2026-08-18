@@ -727,3 +727,50 @@ fn a_session_chains_a_plugins_own_extra_state_saver() {
     }));
     assert_eq!(session.current(), Some(PresetRef::factory("Init")));
 }
+
+// ---------------------------------------------------------------------------
+// The factory bank as the host reads it (ba todo #1333)
+// ---------------------------------------------------------------------------
+
+/// The host has no CLAP way to enumerate presets baked into a binary, so
+/// `export_clap!` exports them as JSON. Encode and decode are a pair and
+/// have to stay one.
+#[test]
+fn a_factory_bank_survives_the_trip_to_the_host() {
+    let encoded = resonance_plugin::presets::encode_factory_bank(FACTORY)
+        .expect("a well-formed bank encodes");
+    let decoded = resonance_plugin::presets::decode_factory_bank(
+        encoded.to_str().expect("valid utf-8"),
+    );
+
+    let names: Vec<&str> = decoded.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["Init", "Wide"]);
+
+    // The bodies must arrive loadable, not as JSON quoted inside JSON.
+    let params = TestParams::new();
+    let wide = &decoded[1].1;
+    assert!(resonance_plugin::presets::apply(wide, &params.refs(), &[]));
+    assert_eq!(params.taps.get_plain(), 7.0);
+}
+
+/// A plugin that ships no factory presets encodes to an empty bank rather
+/// than to something the host has to special-case.
+#[test]
+fn an_empty_factory_bank_decodes_to_nothing() {
+    let encoded =
+        resonance_plugin::presets::encode_factory_bank(&[]).expect("an empty bank encodes");
+    assert!(
+        resonance_plugin::presets::decode_factory_bank(encoded.to_str().unwrap()).is_empty()
+    );
+}
+
+/// Junk from a newer or broken build is skipped entry by entry, not
+/// treated as "this plugin has no presets".
+#[test]
+fn a_malformed_entry_does_not_take_the_bank_with_it() {
+    let decoded = resonance_plugin::presets::decode_factory_bank(
+        r#"[{"name":"Good","json":{"params":{}}},{"unexpected":true},{"name":"Also good","json":{}}]"#,
+    );
+    let names: Vec<&str> = decoded.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["Good", "Also good"]);
+}

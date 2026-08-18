@@ -324,6 +324,19 @@ pub trait ResonancePlugin: Send + 'static {
     /// the bridge checks that at compile time (ba todo #1298).
     const FEATURES: &'static [&'static std::ffi::CStr];
 
+    /// Factory presets shipped inside this plugin's binary. Empty by
+    /// default — four of the eleven plugins ship none.
+    ///
+    /// One declaration, three readers: the editor's
+    /// [`PresetBank`](crate::presets::PresetBank), the exported
+    /// `resonance_factory_presets` symbol that lets the host list them
+    /// without instantiating the plugin (see
+    /// [`export_clap!`](crate::export_clap)), and any test that wants to
+    /// walk the bank. Before this the editor named its crate's `PRESETS`
+    /// directly, which is fine until a second reader needs the same list
+    /// and has no way to ask for it (ba todo #1333).
+    const FACTORY_PRESETS: &'static [crate::presets::FactoryPreset] = &[];
+
     /// Number of input channels. None = instrument (no audio input).
     const INPUT_CHANNELS: Option<u32>;
     /// Whether this plugin accepts MIDI note input.

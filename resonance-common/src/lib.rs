@@ -5,6 +5,7 @@ mod denormal;
 pub mod device_definition;
 pub mod device_registry;
 pub mod external_instrument;
+pub mod factory_presets;
 pub mod drum_map;
 pub mod group_identity;
 pub mod midi_map;

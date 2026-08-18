@@ -15,7 +15,6 @@ use resonance_plugin::Param;
 use wayland_plugin_gui::{egui, Editor as RuntimeEditor, EditorApp, EditorOptions};
 
 use crate::params::{ReverbParams, PARAM_COUNT};
-use crate::presets::PRESETS;
 use crate::viz::ReverbViz;
 
 mod controls;
@@ -159,7 +158,7 @@ impl ReverbEditorApp {
             viz,
             bank: PresetBank::new(
                 <crate::ResonanceReverb as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                PRESETS,
+                <crate::ResonanceReverb as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
             ),
             presets,
             preset_editor: PresetEditor::default(),
