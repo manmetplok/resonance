@@ -139,7 +139,7 @@ fn draw_header(ui: &mut egui::Ui, app: &mut EqEditorApp) {
         let mut gain = app.params.output_gain.value();
         let slider = HSlider::new(OUTPUT_SLIDER_W, gain / OUTPUT_GAIN_DB * 0.5 + 0.5)
             .bipolar(true)
-            .style(SliderStyle::CLASSIC);
+            .style(SliderStyle::LAVENDER);
         if let Some(travel) = slider_widget(ui, &slider) {
             gain = (travel * 2.0 - 1.0) * OUTPUT_GAIN_DB;
             app.params.output_gain.set_value(gain);

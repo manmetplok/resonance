@@ -32,10 +32,15 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
 
         // Accent-coloured rich-text button so the Tone3000 entry point
         // is visually distinct from the plain "Load Model…" button
-        // next to it.
+        // next to it. The label is the darkest surface token rather than
+        // pure black: this is the fleet's only solid-accent fill, and the
+        // canonical accent is a much darker violet than the blue it
+        // replaced (ba todo #1338) — 5.7:1 against it, still past AA, but
+        // the black-on-cyan headroom is gone, so the label has to be the
+        // dark end of the palette and cannot drift lighter.
         let tone3000_btn = egui::Button::new(
             egui::RichText::new("Browse Tone3000…")
-                .color(egui::Color32::BLACK)
+                .color(theme::BG_0)
                 .strong()
                 .size(13.0),
         )

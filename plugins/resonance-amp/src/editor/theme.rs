@@ -1,28 +1,33 @@
-//! Editor palette — the shared classic palette from
+//! Editor palette — the canonical lavender palette from
 //! `wayland_plugin_gui::theme` so every Resonance plugin reads as part of
-//! one product.
+//! one product (ba todo #1338; the amp was on the older blue `classic`
+//! palette, which is gone).
 //!
 //! Amp-specific additions: `SCOPE_IN`/`SCOPE_OUT` for the two oscilloscope
 //! traces, `CURVE_LINE` for the transfer-curve plot, and `TUNE_OK`/`TUNE_OFF`
-//! for the tuner's in-tune/out-of-tune colour zones.
+//! for the tuner's in-tune/out-of-tune colour zones. Each is shaped from a
+//! canonical token rather than picked freehand — they were all tints of the
+//! old blue accent, and a scope trace left electric blue over a lavender
+//! window is exactly what "two themes" looked like.
 
 use wayland_plugin_gui::egui;
 
-pub use wayland_plugin_gui::theme::classic::*;
+pub use wayland_plugin_gui::theme::lavender::*;
 
-/// Oscilloscope: dim trace for the dry input signal.
-pub const SCOPE_IN: egui::Color32 = egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x70);
+/// Oscilloscope: dim trace for the dry input signal — the accent at
+/// alpha 0x70, hand-premultiplied (scale RGB by 112/255).
+pub const SCOPE_IN: egui::Color32 = egui::Color32::from_rgba_premultiplied(61, 48, 112, 0x70);
 /// Oscilloscope: bright trace for the post-model output signal.
-pub const SCOPE_OUT: egui::Color32 = egui::Color32::from_rgb(0xa8, 0xe1, 0xff);
+pub const SCOPE_OUT: egui::Color32 = ACCENT_SOFT;
 
 /// Stroke colour for the static transfer curve.
-pub const CURVE_LINE: egui::Color32 = egui::Color32::from_rgb(0xa8, 0xe1, 0xff);
-pub const CURVE_FILL: egui::Color32 =
-    egui::Color32::from_rgba_premultiplied(0x16, 0x37, 0x45, 0x40);
+pub const CURVE_LINE: egui::Color32 = ACCENT_SOFT;
+/// Fill under the transfer curve — the shared accent glow.
+pub const CURVE_FILL: egui::Color32 = ACCENT_GLOW;
 
-/// Tuner "in tune" green (within a few cents of perfect).
-pub const TUNE_OK: egui::Color32 = egui::Color32::from_rgb(0x7a, 0xdc, 0x8c);
-/// Tuner "close" yellow (within ~15 cents).
-pub const TUNE_NEAR: egui::Color32 = egui::Color32::from_rgb(0xf5, 0xd4, 0x5c);
-/// Tuner "off" dim grey (outside the close zone).
-pub const TUNE_OFF: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x6b, 0x76);
+/// Tuner "in tune" (within a few cents of perfect).
+pub const TUNE_OK: egui::Color32 = GOOD;
+/// Tuner "close" (within ~15 cents).
+pub const TUNE_NEAR: egui::Color32 = WARM;
+/// Tuner "off" — dim, outside the close zone.
+pub const TUNE_OFF: egui::Color32 = TEXT_3;

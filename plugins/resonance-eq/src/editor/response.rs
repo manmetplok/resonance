@@ -212,14 +212,16 @@ fn max_band_db(
 }
 
 fn spectrum_fill() -> egui::Color32 {
-    // Slightly higher alpha now that the grid is drawn on top of the
-    // spectrum instead of bleeding through it.
-    egui::Color32::from_rgba_premultiplied(0x5a, 0xc8, 0xfa, 0x3c)
+    // The canonical accent at alpha 0x3c, hand-premultiplied (scale RGB
+    // by 60/255) — ba todo #1338; this was the old blue accent at the
+    // same alpha. Slightly higher alpha than the original because the
+    // grid is drawn on top of the spectrum instead of bleeding through.
+    egui::Color32::from_rgba_premultiplied(33, 26, 60, 0x3c)
 }
 
 fn spectrum_stroke() -> egui::Color32 {
     // Near-opaque white gives a crisp envelope line above the translucent
-    // cyan fill — matches the Pro-Q 3 look where the spectrum body is
+    // accent fill — matches the Pro-Q 3 look where the spectrum body is
     // colored but its top edge reads as a sharp bright trace.
     egui::Color32::from_rgba_premultiplied(0xff, 0xff, 0xff, 0xe0)
 }

@@ -7,10 +7,10 @@ use wayland_plugin_gui::egui;
 
 pub use wayland_plugin_gui::theme::lavender::*;
 
-// ---------- Backwards-compatible aliases ----------
-// `download_panel` and a few other older modules still reference these names.
-pub const TEXT: egui::Color32 = TEXT_1;
-pub const DANGER: egui::Color32 = BAD;
+// The `TEXT` / `DANGER` aliases `download_panel` and a few other older
+// modules use are the shared palette's own legacy names now (ba todo
+// #1338 promoted them when seven more editors arrived needing the same
+// two), so this module no longer restates them.
 
 // ---------- Typography ----------
 /// Standard body / hint text size used across the editor.

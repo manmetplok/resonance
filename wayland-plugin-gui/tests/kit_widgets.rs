@@ -309,29 +309,32 @@ fn arrow_keys_are_ignored_by_an_unfocused_slider() {
     );
 }
 
-/// The eq is the fleet's only classic-palette editor, so the slider's
-/// colours had to become a parameter for it to adopt the shared widget at
-/// all. The two palettes must actually differ — a `CLASSIC` that resolved
-/// to lavender would drag the wrong accent into a blue editor and the
-/// migration would look done while being wrong.
+/// The slider's colours became a parameter so the EQ — then the only
+/// editor on the retired blue `classic` palette — could adopt the shared
+/// widget at all (ba todo #1335). Ba todo #1338 finished that migration,
+/// so `SliderPalette::CLASSIC` is gone and the default is the one
+/// canonical palette. A second palette constant reappearing here is the
+/// fleet splitting again; `resonance-plugin/tests/fleet_palette.rs`
+/// guards the editors, this guards the widget's own default.
 #[test]
-fn the_classic_slider_palette_is_distinct_from_the_lavender_one() {
-    assert_ne!(SliderPalette::CLASSIC.accent, SliderPalette::LAVENDER.accent);
-    assert_eq!(SliderStyle::CLASSIC.palette, SliderPalette::CLASSIC);
-    assert_eq!(SliderStyle::LAVENDER.palette, SliderPalette::LAVENDER);
+fn the_shared_slider_defaults_to_the_canonical_palette() {
     assert_eq!(SliderStyle::default(), SliderStyle::LAVENDER);
+    assert_eq!(SliderStyle::LAVENDER.palette, SliderPalette::LAVENDER);
 
-    // Geometry is NOT part of the palette: both styles lay out
-    // identically, so ba todo #1338 can swap the eq's constant without
-    // moving a single control.
-    assert_eq!(SliderStyle::CLASSIC.height, SliderStyle::LAVENDER.height);
+    // Every colour is a canonical token, none a freehand value. The
+    // accent in particular: a slider painted with the old `#5ac8fa`
+    // would read as a different product beside its own knobs.
     assert_eq!(
-        SliderStyle::CLASSIC.track_height,
-        SliderStyle::LAVENDER.track_height
+        SliderPalette::LAVENDER.accent,
+        wayland_plugin_gui::theme::lavender::ACCENT
     );
     assert_eq!(
-        SliderStyle::CLASSIC.thumb_radius,
-        SliderStyle::LAVENDER.thumb_radius
+        SliderPalette::LAVENDER.warm,
+        wayland_plugin_gui::theme::lavender::WARM
     );
+
+    // Geometry is not part of the palette, and the EQ's band columns are
+    // laid out around this 18 px row.
+    assert_eq!(SliderStyle::LAVENDER.height, 18.0);
 }
 

@@ -1,9 +1,8 @@
-//! Editor-local theme constants — re-exports the shared classic palette
-//! from `wayland_plugin_gui::theme` so all plugins feel like they belong
-//! to the same product.
+//! Editor-local theme constants — re-exports the canonical lavender
+//! palette from `wayland_plugin_gui::theme` so all plugins feel like they
+//! belong to the same product (ba todo #1338).
+//!
+//! Nothing is added here any more: the EQ's one local colour was a green
+//! `GOOD` of its own, which the shared palette already carries.
 
-use wayland_plugin_gui::egui;
-
-pub use wayland_plugin_gui::theme::classic::*;
-
-pub const GOOD: egui::Color32 = egui::Color32::from_rgb(0x7f, 0xdd, 0x7f);
+pub use wayland_plugin_gui::theme::lavender::*;

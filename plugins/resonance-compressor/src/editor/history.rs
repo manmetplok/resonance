@@ -97,5 +97,7 @@ fn gr_db_to_y(gr_db: f32, height: f32) -> f32 {
 }
 
 fn gr_fill() -> egui::Color32 {
-    egui::Color32::from_rgba_premultiplied(0xff, 0xb6, 0x4a, 0x3c)
+    // `theme::GR` (the shared warm token) at alpha 0x3c, hand-premultiplied
+    // — scale RGB by 60/255.
+    egui::Color32::from_rgba_premultiplied(55, 46, 29, 0x3c)
 }

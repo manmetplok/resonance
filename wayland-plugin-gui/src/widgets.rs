@@ -11,10 +11,14 @@
 //!
 //! The kit provides:
 //!
-//! - two rotary-knob families — a range-mapped [`knob`] (classic
-//!   palette) and the theme-driven [`knob_themed`] family (lavender
-//!   palette), of which [`knob_unipolar`] / [`knob_bipolar`] are the
-//!   default-styled shorthands;
+//! - two rotary-knob families — a range-mapped [`knob`] (64x76 cell,
+//!   caption above the dial, wrapped by
+//!   `resonance_plugin::editor_widgets::float_knob`) and the
+//!   configurable [`knob_themed`] family (unit-space, [`KnobStyle`]
+//!   geometry, bipolar and over-unity arcs), of which [`knob_unipolar`]
+//!   / [`knob_bipolar`] are the default-styled shorthands. Both paint in
+//!   the one canonical palette since ba todo #1338; what still differs is
+//!   geometry and capability, not colour. No editor mixes the two;
 //! - [`chip_button`] / [`chip_styled`] — the pill-shaped discrete
 //!   toggle, styled by [`ChipStyle`];
 //! - [`segmented`] / [`segmented_styled`] — a one-of-N strip of chips,
@@ -40,6 +44,7 @@
 //! win, so we allow the `too_many_arguments` lint module-wide.
 #![allow(clippy::too_many_arguments)]
 
+use crate::theme::lavender as theme;
 use egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
 use std::f32::consts::PI;
 
@@ -104,13 +109,22 @@ pub fn knob_drag_unit(unit: f32, drag_y: f32, fine: bool) -> f32 {
     (unit - drag_y * speed).clamp(0.0, 1.0)
 }
 
-/// Knob colours — intentionally a fixed palette so all plugins look the same.
-const TRACK_COLOR: Color32 = Color32::from_rgb(0x30, 0x30, 0x38);
-const ARC_COLOR: Color32 = Color32::from_rgb(0x4a, 0x9e, 0xcf);
-const DOT_COLOR: Color32 = Color32::WHITE;
-const TEXT_COLOR: Color32 = Color32::from_rgb(0xcc, 0xcc, 0xd0);
-const LABEL_COLOR: Color32 = Color32::from_rgb(0x88, 0x88, 0x90);
-const SUBLABEL_COLOR: Color32 = Color32::from_rgb(0x66, 0x66, 0x70);
+// Knob colours — canonical palette tokens, not freehand colours, so a
+// knob reads the same in every editor (ba todo #1338). This family used
+// to paint a blue `#4a9ecf` arc from a private constant, which no palette
+// swap could reach: the gate is on the lavender palette and still drew
+// blue knobs, and so did the other eight editors that draw from here.
+//
+// The dial keeps one more text tier than the themed family below (a
+// sub-label under the caption), so its caption starts a tier higher —
+// TEXT_2/TEXT_3 rather than TEXT_3/TEXT_4, which at 1.7:1 on BG_2 would
+// not be readable.
+const TRACK_COLOR: Color32 = theme::LINE;
+const ARC_COLOR: Color32 = theme::ACCENT;
+const DOT_COLOR: Color32 = theme::TEXT_1;
+const TEXT_COLOR: Color32 = theme::TEXT_1;
+const LABEL_COLOR: Color32 = theme::TEXT_2;
+const SUBLABEL_COLOR: Color32 = theme::TEXT_3;
 
 /// Draw a rotary knob for a floating-point value.
 ///
@@ -324,8 +338,7 @@ fn draw_arc(
 }
 
 // ---------------------------------------------------------------------------
-// Theme-driven rotary knob (lavender palette) — accent arc, value readout,
-// label.
+// Theme-driven rotary knob — accent arc, value readout, label.
 //
 // Drawn as a circular dial with a sweep from −135° (min) to +135° (max).
 // Bipolar knobs centre at the 12-o'clock position and fill outward from
@@ -334,8 +347,6 @@ fn draw_arc(
 // Vertical drag adjusts the value; Shift slows the drag for fine
 // adjustment; double-click resets to the supplied default.
 // ---------------------------------------------------------------------------
-
-use crate::theme::lavender as theme;
 
 /// One cell: knob + label + readout. Size is `SIZE` x `CELL_H` including the
 /// label/value lines below.
@@ -597,7 +608,7 @@ pub fn knob_themed(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> Option<f32> {
 }
 
 /// Vertical drag / double-click handling of a themed knob, in unit
-/// space. Shares [`knob_drag_unit`] with the classic knob family.
+/// space. Shares [`knob_drag_unit`] with the range-mapped [`knob`].
 fn themed_knob_input(response: &Response, unit: f32, default_unit: f32) -> Option<f32> {
     if response.double_clicked() {
         return Some(default_unit.clamp(0.0, 1.0));

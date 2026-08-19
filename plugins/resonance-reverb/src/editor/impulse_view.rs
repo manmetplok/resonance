@@ -323,8 +323,11 @@ fn draw_live_trace(painter: &egui::Painter, rect: egui::Rect, axis_y: f32, app: 
     }
     pts.push(egui::pos2(rect.right(), axis_y));
 
-    // Dim fill sitting behind the analytic envelope.
-    let fill = egui::Color32::from_rgba_premultiplied(0x0f, 0x22, 0x30, 0x60);
+    // Dim fill sitting behind the analytic envelope: the accent at ~55 %
+    // brightness, alpha 0x60, hand-premultiplied. Dimmer than the
+    // `TAIL_GLOW` polygon in front of it, which is the full accent — the
+    // same two-layer relationship the old blue pair had (ba todo #1338).
+    let fill = egui::Color32::from_rgba_premultiplied(29, 23, 53, 0x60);
     let mut mesh = egui::epaint::Mesh::default();
     for pair in pts.windows(2).skip(1) {
         let p0 = pair[0];

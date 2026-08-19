@@ -24,15 +24,18 @@
 //! while it has keyboard focus, the way `egui::Slider` does.
 //!
 //! The EQ moved onto this slider from a raw `egui::Slider` (ba todo
-//! #1335). It is the only editor on the [`classic`] palette, so the
-//! surface colours are a [`SliderPalette`] rather than hard-coded
-//! lavender tokens — otherwise the shared widget could not have been
-//! adopted there without dragging a lavender accent into a blue editor.
-//! The palette migration itself is ba todo #1338's; when it lands, the
-//! EQ swaps [`SliderStyle::CLASSIC`] for [`SliderStyle::LAVENDER`] and
-//! nothing else changes.
+//! #1335) while it was still on the retired blue `classic` palette, so
+//! the surface colours were split out into a [`SliderPalette`] and a
+//! second `CLASSIC` constant carried the blue. Ba todo #1338 moved the
+//! EQ onto the canonical palette and that constant is gone —
+//! [`SliderPalette`] stays a struct because the geometry and the colours
+//! are still chosen independently, but there is one palette to choose.
+//!
+//! Both of the geometry constants the two editors' forks had are the
+//! same 18 px row, which is also what `egui::Slider` allocated in the EQ
+//! (`spacing.interact_size.y`), so nothing moved when it swapped.
 
-use crate::theme::{classic, lavender as theme};
+use crate::theme::lavender as theme;
 
 /// Surface colours of a slider.
 ///
@@ -59,7 +62,7 @@ pub struct SliderPalette {
 }
 
 impl SliderPalette {
-    /// The canonical lavender palette — what both forks painted with.
+    /// The canonical lavender palette — what every editor paints with.
     pub const LAVENDER: Self = Self {
         track: theme::BG_1,
         track_stroke: theme::LINE_2,
@@ -68,20 +71,6 @@ impl SliderPalette {
         thumb: theme::BG_3,
         thumb_hover: theme::ACCENT_SOFT,
         tick: theme::TEXT_4,
-    };
-
-    /// The older blue-accent palette the effect editors ship with. The
-    /// thumb keeps the same idle-surface / hover-accent relationship
-    /// `LAVENDER` has; `classic` simply has no soft accent to use, so
-    /// the hover state is the accent itself.
-    pub const CLASSIC: Self = Self {
-        track: classic::BG,
-        track_stroke: classic::BORDER,
-        accent: classic::ACCENT,
-        warm: classic::WARN,
-        thumb: classic::PANEL_LIGHT,
-        thumb_hover: classic::ACCENT,
-        tick: classic::TEXT_DIM,
     };
 }
 
@@ -120,22 +109,13 @@ pub struct SliderStyle {
 }
 
 impl SliderStyle {
-    /// The 18 px row both editors' forks used.
+    /// The 18 px row both editors' forks used, and the one the EQ's
+    /// band columns are laid out around.
     pub const LAVENDER: Self = Self {
         height: 18.0,
         track_height: 3.0,
         thumb_radius: 5.5,
         palette: SliderPalette::LAVENDER,
-    };
-
-    /// The same row in the classic palette (the EQ). 18 px is also what
-    /// `egui::Slider` allocated there — `spacing.interact_size.y` — so
-    /// the band columns keep their height.
-    pub const CLASSIC: Self = Self {
-        height: 18.0,
-        track_height: 3.0,
-        thumb_radius: 5.5,
-        palette: SliderPalette::CLASSIC,
     };
 }
 

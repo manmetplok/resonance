@@ -10,10 +10,11 @@
 //! Two things moved out of the widget and into this file as a result:
 //! the logarithmic mapping of Freq and Q (the shared slider works in
 //! unit travel and leaves the curve to the caller, the same contract
-//! `resonance_plugin::editor_widgets` uses) and the palette, which is
-//! [`SliderStyle::CLASSIC`] because this editor is still on the classic
-//! blue palette — ba todo #1338 owns moving it, and when it does this
-//! becomes `LAVENDER` and nothing else here changes.
+//! `resonance_plugin::editor_widgets` uses) and the palette, which was
+//! `SliderStyle::CLASSIC` while this editor was still on the old blue
+//! palette. Ba todo #1338 moved it: [`SliderStyle::LAVENDER`] is the
+//! only palette now, and since the two differed in colour alone, nothing
+//! else here changed.
 
 use wayland_plugin_gui::egui;
 use wayland_plugin_gui::widgets::{slider, HSlider, SliderStyle};
@@ -167,12 +168,12 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
         });
 }
 
-/// One band slider: shared geometry, classic palette. Returns the new
+/// One band slider: the shared geometry and palette. Returns the new
 /// unit travel while it is being positioned.
 fn band_slider(ui: &mut egui::Ui, travel: f32, bipolar: bool) -> Option<f32> {
     let s = HSlider::new(SLIDER_W, travel)
         .bipolar(bipolar)
-        .style(SliderStyle::CLASSIC);
+        .style(SliderStyle::LAVENDER);
     slider(ui, &s)
 }
 
