@@ -5230,6 +5230,9 @@ name = "resonance-amp"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "dirs",
  "egui",
@@ -5347,6 +5350,9 @@ dependencies = [
 name = "resonance-delay"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "egui",
  "resonance-common",
@@ -5402,6 +5408,9 @@ dependencies = [
 name = "resonance-gate"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "egui",
  "resonance-common",
  "resonance-dsp",
@@ -5414,6 +5423,9 @@ dependencies = [
 name = "resonance-granular-delay"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "egui",
  "resonance-common",
@@ -5518,6 +5530,9 @@ dependencies = [
 name = "resonance-reverb"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "egui",
  "resonance-common",
@@ -5550,6 +5565,9 @@ dependencies = [
 name = "resonance-wavetable"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "egui",
  "resonance-common",

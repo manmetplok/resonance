@@ -27,3 +27,10 @@ egui = { workspace = true, optional = true }
 # own serde_json. This was a normal dependency that nothing used at all
 # (ba todo #1330, finding C4).
 serde_json.workspace = true
+# `tests/state.rs` drives this plugin through a real (in-process) CLAP host
+# across the C ABI, which is the only way to reach the state path the bridge
+# takes while the plugin is active and its object lives in the audio processor.
+clack-host = { workspace = true }
+clack-plugin = { workspace = true }
+clack-extensions = { workspace = true, features = ["clack-host"] }
+

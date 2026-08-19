@@ -7,9 +7,23 @@
 //! user made. Each parameter is moved off its default to a value the plugin
 //! itself accepted, so nothing here can pass by accidentally matching a
 //! default.
+//!
+//! Both sides of the active/inactive boundary are covered. The first half of
+//! the file drives the plugin object directly. The second half drives this
+//! plugin through a real in-process CLAP host, because while the plugin is
+//! **active** its object lives inside `ClapAudioProcessor` and the main thread
+//! cannot reach it — the bridge serves save and load from the shared atomics
+//! instead, and that is a separate code path that this plugin's parameters and
+//! preset identity all ride.
 
+use clack_extensions::params::PluginParams;
+use clack_extensions::state::PluginState;
+use clack_host::prelude::*;
+use clack_plugin::entry::SinglePluginEntry;
 use resonance_granular_delay::ResonanceGranularDelay;
-use resonance_plugin::{EventIterator, OutputBuffer, Param, ResonancePlugin};
+use resonance_plugin::{
+    stable_hash, ClapBridge, EventIterator, OutputBuffer, Param, ResonancePlugin,
+};
 use serde_json::{json, Value};
 
 type Plugin = ResonanceGranularDelay;
@@ -170,20 +184,20 @@ fn re_saving_a_loaded_state_reproduces_it_exactly() {
 }
 
 // ---------------------------------------------------------------------------
-// The active / inactive boundary
+// The plugin object, fresh and mid-session
 // ---------------------------------------------------------------------------
 
 /// The host saves and loads state on the main thread whether or not the plugin
 /// is active, and the two go through different code: while active the plugin
 /// object lives in the audio processor, so the bridge serves state from the
-/// shared atomics instead. `resonance-plugin/tests/clap_bridge_params_state.rs`
-/// pins that half against a real CLAP host.
+/// shared atomics instead. That half is driven through a real CLAP host at the
+/// bottom of this file.
 ///
-/// The half this crate can reach is the plugin object itself: a state blob
-/// loaded into an instance that is initialized and several blocks into a
-/// session must restore exactly what it restores into a fresh one. A DSP that
-/// latched a parameter at `initialize` time and never re-read it would report
-/// the loaded value here while playing the old one.
+/// This half is the plugin object itself: a state blob loaded into an instance
+/// that is initialized and several blocks into a session must restore exactly
+/// what it restores into a fresh one. A DSP that latched a parameter at
+/// `initialize` time and never re-read it would report the loaded value here
+/// while playing the old one.
 #[test]
 fn a_state_blob_restores_the_same_values_into_a_running_and_a_fresh_instance() {
     let src = Plugin::new();
@@ -311,4 +325,254 @@ fn state_without_a_preset_key_leaves_no_identity_behind() {
 
     assert!(plugin.load_state(&serde_json::to_vec(&json!({ "params": {} })).unwrap()));
     assert_eq!(state_of(&plugin).get("preset"), None);
+}
+
+// ---------------------------------------------------------------------------
+// The active / inactive boundary, through a real CLAP host
+// ---------------------------------------------------------------------------
+
+// Everything above holds the plugin object in hand. A host does not: once it
+// activates the plugin the object moves into `ClapAudioProcessor`, and
+// `state.save` / `state.load` — still [main-thread], still callable with the
+// transport running — are served from the shared atomics by
+// `resonance-plugin/src/clap_bridge/state.rs` instead. That second path
+// rebuilds this plugin's whole document from a different source, so it is
+// where a parameter or a preset identity goes missing without any of the
+// tests above noticing.
+//
+// The framework pins the mechanism generically; the three tests below pin
+// *this plugin's* state on it — its parameter set, enumerated, and the
+// non-param state it keeps beside them.
+
+struct TestHostShared;
+
+impl SharedHandler<'_> for TestHostShared {
+    fn request_restart(&self) {}
+    fn request_process(&self) {}
+    fn request_callback(&self) {}
+}
+
+struct TestHost;
+
+impl HostHandlers for TestHost {
+    type Shared<'a> = TestHostShared;
+    type MainThread<'a> = ();
+    type AudioProcessor<'a> = ();
+}
+
+/// This plugin behind the real CLAP C ABI, in-process.
+fn hosted() -> PluginInstance<TestHost> {
+    let entry = PluginEntry::load_from_clack::<SinglePluginEntry<ClapBridge<Plugin>>>(
+        c"resonance-granular-delay-state.clap",
+    )
+    .expect("bundle entry init");
+    let host_info = HostInfo::new("test-host", "test", "https://example.com", "0.0.0").unwrap();
+
+    PluginInstance::<TestHost>::new(
+        |_| TestHostShared,
+        |_| (),
+        &entry,
+        c"com.resonance.granular-delay",
+        &host_info,
+    )
+    .expect("plugin instantiation")
+}
+
+/// The activation config the real host uses (`clap_host/bundle.rs`).
+fn audio_config() -> PluginAudioConfiguration {
+    PluginAudioConfiguration {
+        sample_rate: SAMPLE_RATE as f64,
+        min_frames_count: 32,
+        max_frames_count: 8192,
+    }
+}
+
+fn state_ext(instance: &PluginInstance<TestHost>) -> PluginState {
+    instance
+        .plugin_shared_handle()
+        .get_extension::<PluginState>()
+        .expect("the bridge must expose the state extension")
+}
+
+/// What the host would write to the project file right now.
+fn host_state(instance: &mut PluginInstance<TestHost>) -> Value {
+    let ext = state_ext(instance);
+    let mut bytes = Vec::new();
+    ext.save(&mut instance.plugin_handle(), &mut bytes)
+        .expect("state save");
+    serde_json::from_slice(&bytes).expect("the bridge must save valid JSON")
+}
+
+fn host_load(instance: &mut PluginInstance<TestHost>, bytes: &[u8]) -> bool {
+    let ext = state_ext(instance);
+    ext.load(&mut instance.plugin_handle(), &mut &bytes[..])
+        .is_ok()
+}
+
+/// What the host reports for one parameter, addressed by the same id hash the
+/// bridge registered it under.
+fn host_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
+    let ext = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginParams>()
+        .expect("the bridge must expose the params extension");
+    ext.get_value(&mut instance.plugin_handle(), ClapId::new(stable_hash(id)))
+        .unwrap_or_else(|| panic!("param `{id}` is unknown to the bridge"))
+}
+
+/// The non-param half of a saved document: everything this plugin persists
+/// beside `params`, in the shape it rides in. Named once so the tests below
+/// assert on the same keys the ones above do.
+fn non_param_state() -> Vec<(String, Value)> {
+    vec![(
+        "preset".to_string(),
+        json!({ "name": "Session Sound", "source": "user", "modified": true }),
+    )]
+}
+
+/// A complete saved document — every parameter off its default plus the
+/// non-param state — and what each parameter must come back as, in host order.
+fn full_document() -> (Vec<u8>, Vec<(String, f64)>) {
+    let src = Plugin::new();
+    let expected = detune_all(&src);
+    let mut state = state_of(&src);
+    let obj = state.as_object_mut().unwrap();
+    for (key, value) in non_param_state() {
+        obj.insert(key, value);
+    }
+    (serde_json::to_vec(&state).unwrap(), expected)
+}
+
+/// Compare two saved documents key by key — and, inside `params`, parameter by
+/// parameter — so a mismatch names the setting that differs instead of
+/// printing two whole documents at each other.
+fn assert_same_document(active: &Value, inactive: &Value) {
+    fn keys(state: &Value) -> Vec<String> {
+        let mut keys: Vec<String> = state
+            .as_object()
+            .expect("state must be a JSON object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    assert_eq!(
+        keys(active),
+        keys(inactive),
+        "the two save paths wrote different top-level keys"
+    );
+
+    let (active_params, inactive_params) = (params_of(active), params_of(inactive));
+    let mut active_ids: Vec<&String> = active_params.keys().collect();
+    let mut inactive_ids: Vec<&String> = inactive_params.keys().collect();
+    active_ids.sort();
+    inactive_ids.sort();
+    assert_eq!(
+        active_ids, inactive_ids,
+        "the two save paths wrote different parameters"
+    );
+    for id in active_ids {
+        assert_eq!(
+            active_params[id], inactive_params[id],
+            "`{id}` differs between the active and inactive save paths"
+        );
+    }
+
+    for key in keys(active).iter().filter(|k| *k != "params") {
+        assert_eq!(
+            active.get(key),
+            inactive.get(key),
+            "`{key}` differs between the active and inactive save paths"
+        );
+    }
+}
+
+/// Saving with the transport running and saving with it stopped must describe
+/// the same instrument, element for element — the atomics the bridge rebuilds
+/// the document from have to agree with the plugin's own params, and the extra
+/// keys have to be merged in the same shape by both.
+#[test]
+fn a_document_saved_while_active_matches_one_saved_while_inactive() {
+    let (bytes, _) = full_document();
+
+    let mut instance = hosted();
+    assert!(host_load(&mut instance, &bytes));
+    let inactive = host_state(&mut instance);
+
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    // The plugin object is now inside the audio processor, so this save is
+    // served from the shared atomics.
+    let active = host_state(&mut instance);
+    instance.deactivate(processor);
+
+    assert_same_document(&active, &inactive);
+}
+
+/// Loading a project while the plugin is active must land every declared
+/// parameter, enumerated rather than listed — the active load path writes the
+/// atomics directly instead of going through `Param::set_plain`, so it is its
+/// own opportunity to drop or mis-address one.
+#[test]
+fn a_document_loaded_while_active_lands_every_declared_param() {
+    let (bytes, expected) = full_document();
+
+    let mut instance = hosted();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(host_load(&mut instance, &bytes));
+
+    for (id, value) in &expected {
+        assert_eq!(
+            host_value(&mut instance, id),
+            *value,
+            "`{id}` did not land on the active load path"
+        );
+    }
+
+    // …and the host still reports them once the plugin goes idle again.
+    instance.deactivate(processor);
+    for (id, value) in &expected {
+        assert_eq!(
+            host_value(&mut instance, id),
+            *value,
+            "`{id}` was lost when the plugin was deactivated"
+        );
+    }
+}
+
+/// The non-param state is the part the active path handles separately from the
+/// params — the bridge hands the parsed document to the extra-state saver and
+/// merges its keys back on save — so it needs its own crossing of the
+/// boundary. Losing it means a project reopened mid-session comes back with a
+/// blank preset picker over the right sound.
+#[test]
+fn the_non_param_state_survives_the_active_state_path() {
+    let (bytes, _) = full_document();
+
+    let mut instance = hosted();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(host_load(&mut instance, &bytes));
+    let active = host_state(&mut instance);
+    instance.deactivate(processor);
+    let inactive = host_state(&mut instance);
+
+    for (key, value) in non_param_state() {
+        assert_eq!(
+            active.get(&key),
+            Some(&value),
+            "`{key}` did not survive a load and save while active"
+        );
+        assert_eq!(
+            inactive.get(&key),
+            Some(&value),
+            "`{key}` was lost when the plugin was deactivated"
+        );
+    }
 }

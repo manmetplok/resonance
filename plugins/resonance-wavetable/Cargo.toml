@@ -31,6 +31,12 @@ resonance-dsp = { path = "../../resonance-dsp" }
 
 [dev-dependencies]
 criterion.workspace = true
+# `tests/state.rs` drives this plugin through a real (in-process) CLAP host
+# across the C ABI, which is the only way to reach the state path the bridge
+# takes while the plugin is active and its object lives in the audio processor.
+clack-host = { workspace = true }
+clack-plugin = { workspace = true }
+clack-extensions = { workspace = true, features = ["clack-host"] }
 
 # Synth DSP benchmarks. Run headless:
 #   cargo bench -p resonance-wavetable --no-default-features
