@@ -130,36 +130,69 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             //   What that does NOT close: the stores below happen BEFORE
             //   the flag, so a push-back store landing between this load's
             //   store of a given slot and its store of the flag still wins,
-            //   and that value is still lost. Note the extra-state saver
-            //   runs inside that window too, which widens it for plugins
-            //   carrying extra state. Closing it needs the writer to
-            //   publish atomically — a generation counter the push-back
-            //   re-checks around its own stores — which is why the flag
-            //   store is deliberately last: moving it earlier would narrow
-            //   this window only by announcing params while the extra
-            //   state is still arriving, trading one inconsistency for a
-            //   worse one. See `process.rs` for the full argument.
+            //   and that value is still lost. That window is now as narrow
+            //   as this protocol can make it — the extra-state saver used
+            //   to run inside it and no longer does (see the call below) —
+            //   but it is not empty: it spans the remaining value stores
+            //   plus the flag store, a few dozen instructions.
+            //
+            //   Two ways to shrink it further were considered and not
+            //   taken. Storing the flag *before* the values inverts the
+            //   protocol (the audio thread would copy stale values on
+            //   seeing the flag) and is simply wrong. Storing it before
+            //   the extra state loads announces the params while the
+            //   non-param state — the IR the gains were saved for — is
+            //   still arriving, trading a narrow window for a wide
+            //   inconsistency. Closing the remainder needs the writer to
+            //   publish *atomically*: a generation counter bumped before
+            //   and after the value stores, which the push-back re-checks
+            //   around its own stores. That is a change to `ClapShared`
+            //   and to both sides of this protocol, so it is deliberately
+            //   left for its own todo. See `process.rs` for the full
+            //   argument on the reader side.
             let mut state: serde_json::Value = serde_json::from_slice(&data)
                 .map_err(|_| PluginError::Message("Failed to load state"))?;
-            // Same two steps, in the same order, as the inactive path's
-            // `ResonancePlugin::load_state` default: migrate the blob, then
-            // read params out of it, then hand the *migrated* value to the
-            // extra-state saver. Calling `state::migrate` here rather than
-            // re-deriving renames from the param metadata is deliberate —
-            // it is the one place that knows a rename is version-gated and
-            // that chained renames apply oldest-first, and two copies of
-            // those rules is exactly how this path came to ignore renames
-            // in the first place (ba todo #1360).
+            // Migrate first, exactly as the inactive path's
+            // `ResonancePlugin::load_state` default does, so both the
+            // params and the extra-state saver below see the *migrated*
+            // blob. Calling `state::migrate` here rather than re-deriving
+            // renames from the param metadata is deliberate — it is the
+            // one place that knows a rename is version-gated and that
+            // chained renames apply oldest-first, and two copies of those
+            // rules is exactly how this path came to ignore renames in the
+            // first place (ba todo #1360).
             crate::state::migrate(&mut state, self.shared.param_renames);
+
+            // The extra-state saver runs BEFORE the param stores, unlike
+            // the inactive path (which has no reason to care about the
+            // order, since it holds the plugin and publishes nothing).
+            //
+            // `load()` is arbitrary plugin work — reading an IR off disk,
+            // rebuilding a wavetable — so it can easily span many audio
+            // blocks. Running it after the param stores put it squarely
+            // inside the window in which loaded values sit in shared with
+            // no `params_dirty` announcing them, which is precisely where
+            // the audio thread's editor push-back can still overwrite one
+            // and lose it for good. Moving it ahead of the stores takes
+            // that unbounded stretch out of the window without changing
+            // what the plugin observes: the extra state still lands
+            // before the params, same as before (ba todo #1363).
+            //
+            // Side effect, and an improvement: the saver now also runs for
+            // a blob whose `params` object is missing, which is what the
+            // inactive path has always done (`load_state` calls the saver
+            // regardless of the param result). The two paths agreeing is
+            // the whole point of this file.
+            if let Some(saver) = &self.extra_state_saver {
+                saver.load(&state);
+            }
+
             if !crate::state::load_params_from_shared_json(
                 &self.shared.param_metas,
                 &self.shared.param_values,
                 &state,
             ) {
                 return Err(PluginError::Message("Failed to load state"));
-            }
-            if let Some(saver) = &self.extra_state_saver {
-                saver.load(&state);
             }
             self.shared.params_dirty.store(true, Ordering::Release);
         }

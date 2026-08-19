@@ -917,6 +917,41 @@ fn extra_state_is_saved_and_restored_through_both_paths() {
     assert_eq!(*extra().path.lock().unwrap(), "/tmp/third.wav");
     assert!(extra().loaded.lock().unwrap().is_some());
     assert_eq!(get_value(&mut instance, "gain"), 0.75);
+
+    // A blob with no `params` object is a failed load on both paths — but
+    // the saver still sees it. The inactive path has always worked that
+    // way (`load_state` hands the state to the saver regardless of the
+    // param result); the active path only agrees since it started running
+    // the saver *before* the param stores, which is what keeps the
+    // extra-state `load()` — file I/O, potentially many audio blocks long
+    // — out of the window where a concurrent editor push-back can still
+    // clobber a loaded param (ba todo #1363).
+    let paramless = serde_json::to_vec(&json!({ "ir_path": "/tmp/fourth.wav" })).unwrap();
+
+    *extra().loaded.lock().unwrap() = None;
+    assert!(
+        !load_state(&mut instance, &paramless),
+        "a blob with no params is still reported as a failed load"
+    );
+    assert!(
+        extra().loaded.lock().unwrap().is_some(),
+        "the inactive path reaches the saver even when the params are missing"
+    );
+    assert_eq!(*extra().path.lock().unwrap(), "/tmp/fourth.wav");
+
+    *extra().path.lock().unwrap() = "/tmp/third.wav".to_string();
+    *extra().loaded.lock().unwrap() = None;
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(!load_state(&mut instance, &paramless));
+    assert!(
+        extra().loaded.lock().unwrap().is_some(),
+        "so must the active path, or the same file loads differently \
+         depending on whether the transport was running"
+    );
+    assert_eq!(*extra().path.lock().unwrap(), "/tmp/fourth.wav");
+    instance.deactivate(processor);
 }
 
 /// The two load paths must agree for a value f32 cannot represent
