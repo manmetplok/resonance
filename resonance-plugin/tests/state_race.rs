@@ -3,9 +3,10 @@
 //!
 //! CLAP allows `clap_plugin_state.load` ([main-thread]) to run while
 //! `clap_plugin.process` ([audio-thread]) is executing. The bridge handles
-//! that with per-param atomics, a `params_dirty` flag, and a
-//! compare-exchange in the editor push-back loop at the end of
-//! `clap_bridge/process.rs`. Until now none of it had a concurrency test.
+//! that with per-param atomics, a `params_dirty` flag, and — in the editor
+//! push-back loop at the end of `clap_bridge/process.rs` — a `params_dirty`
+//! re-check plus a compare-exchange guarding each store. Until now none of it
+//! had a concurrency test.
 //!
 //! # Why these tests are deterministic and still genuinely concurrent
 //!
@@ -531,25 +532,25 @@ fn a_state_load_landing_after_the_push_back_read_survives() {
     shutdown(instance, audio);
 }
 
-/// **This test pins a defect, not a guarantee.**
+/// The harder half of the race: the load lands *before* the push-back reads
+/// the slot back.
 ///
-/// When the load lands after `process()` has already swapped `params_dirty`
-/// but before the push-back loop reads the slot back, the compare-exchange
-/// does not protect it: the loop reads the *freshly loaded* value as its
-/// `current`, so the exchange **succeeds** and stores the plugin's stale
-/// value over it. `params_dirty` is still set, so the next block copies that
-/// stale value back into the plugin, and the load is lost permanently.
+/// The compare-exchange alone never covered this. The loop reads the *freshly
+/// loaded* value as its `current`, so the exchange **succeeds** and stores the
+/// plugin's stale value over it; `params_dirty` is still set, so the next
+/// block copies that stale value back into the plugin and the load is gone for
+/// good. The CAS only ever protected writes landing between the `get_value`
+/// read and the exchange itself — a window a few instructions wide.
 ///
-/// The comment on the CAS in `clap_bridge/process.rs` claims "a concurrent
-/// main-thread write makes the exchange fail". That only holds for writes
-/// landing between the `get_value` read and the exchange itself — a window a
-/// few instructions wide. The wider window, from the `params_dirty` swap to
-/// that read, is unprotected, and this test reaches it deterministically.
+/// What closes this one is the `params_dirty` re-check the push-back does
+/// immediately before each store (`clap_bridge/process.rs`): once a load has
+/// announced itself, the audio thread abandons the rest of the block's
+/// push-back and lets the next block's re-sync carry the loaded state into the
+/// plugin.
 ///
-/// Filed as ba todo #1363. When that lands, this test flips to asserting
-/// `target` and is renamed to match `..._survives` above.
+/// ba todo #1363.
 #[test]
-fn a_state_load_landing_before_the_push_back_read_is_currently_lost() {
+fn a_state_load_landing_before_the_push_back_read_survives() {
     let params = early_params();
     let (mut instance, processor) = activate::<EarlyPlugin>(c"test.race-early");
     let audio = spawn_audio(processor);
@@ -570,14 +571,15 @@ fn a_state_load_landing_before_the_push_back_read_is_currently_lost() {
 
     assert_eq!(
         get_value(&mut instance, "loaded"),
-        before,
-        "documenting today's behaviour: the push-back clobbers the load. If \
-         this now reads {target}, the defect is fixed — flip the assertion."
+        target,
+        "the loaded value must survive a push-back loop that was already \
+         running when the load landed"
     );
     assert_eq!(
         params.loaded.get_plain(),
-        before,
-        "and the stale value is copied back into the plugin on the next block"
+        target,
+        "and `params_dirty` must carry it into the plugin's own storage on a \
+         later block"
     );
 
     shutdown(instance, audio);

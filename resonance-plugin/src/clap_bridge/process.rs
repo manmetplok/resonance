@@ -216,23 +216,75 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // second; load-then-conditional-store is essentially free on
         // x86 when the value is unchanged.
         //
-        // The store is a compare-exchange against the value we just
-        // read, not a plain store. CLAP allows `state::load`
-        // ([main-thread]) to run concurrently with `process`
-        // ([audio-thread]): load writes the shared atomics and then
-        // sets `params_dirty`. If load lands *after* this block's
-        // dirty-flag check above, a plain store here would overwrite
-        // the freshly loaded value with the plugin's stale one — and
-        // since the next block's dirty re-sync reads back from
-        // `shared`, the loaded state would be lost permanently. With
-        // the CAS, a concurrent main-thread write makes the exchange
-        // fail, the loaded value survives, and the still-set dirty
-        // flag re-syncs the plugin from it next block.
+        // # Racing a concurrent `state::load` (ba todo #1363)
+        //
+        // CLAP allows `state::load` ([main-thread]) to run concurrently
+        // with `process` ([audio-thread]). Load stores every param into
+        // the shared atomics (Relaxed) and then sets `params_dirty`
+        // (Release). A load that lands after this block's dirty swap
+        // above is therefore *not* handled by that swap, and a naive
+        // store here would put the plugin's stale value back over the
+        // freshly loaded one. Because the still-set dirty flag makes the
+        // *next* block copy shared -> plugin, that clobber is permanent:
+        // the load is lost, not merely delayed.
+        //
+        // Two guards, in the order they fire:
+        //
+        // 1. `params_dirty` is re-read immediately before each store. A
+        //    load that has already announced itself makes the audio
+        //    thread abandon the rest of this block's push-back entirely
+        //    (`break`, not `continue`: once a load has landed, *every*
+        //    slot's shared value may be a loaded one, so no later slot
+        //    is safe to write either). The loaded values stay untouched
+        //    and the still-set flag re-syncs the plugin from them next
+        //    block.
+        // 2. The store itself is a compare-exchange against the value we
+        //    just read, so a load landing in the few instructions
+        //    between that read and the exchange makes the exchange fail
+        //    and leaves the loaded value in place.
+        //
+        // What this costs: when a load lands mid-block, this block's
+        // genuine editor edits are dropped — the plugin-side edit is
+        // overwritten by the next block's shared -> plugin re-sync. That
+        // is the right way round. A state load is a deliberate
+        // whole-instrument action (preset recall, project open) whose
+        // whole point is to replace every value; an editor tweak is a
+        // continuous gesture the user will simply still be making on the
+        // next block. The alternative — letting one knob survive a
+        // preset recall — leaves the instrument in a state that matches
+        // neither the preset nor anything the user asked for.
+        //
+        // What this does NOT close, honestly: load stores its values
+        // *before* it stores the flag, so there is a residual window in
+        // which a value is already in shared but no flag has announced
+        // it. A push-back store landing inside that window still wins
+        // and still loses the load. Guard 1 shrinks the exposure from
+        // "the whole span between the dirty swap and the push-back read"
+        // (which is the bulk of a block, including the entire event
+        // decode and the reads of every earlier slot) to "between load's
+        // store of this one slot and load's store of the flag". Note
+        // that `clap_bridge/state.rs` runs the extra-state saver's
+        // `load()` inside that window, which widens it for plugins that
+        // carry extra state. Closing it completely needs the writer side
+        // to publish atomically — a generation counter bumped before and
+        // after the value stores, which the push-back could re-check
+        // around its own stores — and that is a change to `ClapShared`
+        // and the load path, not to this file.
         for i in 0..self.plugin.param_count() {
             if i < self.shared.param_values.len() {
                 let plugin_v = self.plugin.param(i).get_plain();
                 let shared_v = self.shared.get_value(i);
                 if shared_v.to_bits() != plugin_v.to_bits() {
+                    // Checked here rather than once before the loop so it
+                    // covers a load that lands *while* the loop is walking
+                    // the params, and inside the difference test so the
+                    // steady state (nothing changed) pays nothing for it.
+                    // Acquire pairs with the Release store in
+                    // `state::load` and keeps the exchange below from
+                    // being reordered ahead of it.
+                    if self.shared.params_dirty.load(Ordering::Acquire) {
+                        break;
+                    }
                     let _ = self.shared.compare_exchange_value(i, shared_v, plugin_v);
                 }
             }
