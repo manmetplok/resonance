@@ -199,6 +199,10 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             sidechain_channels: P::SIDECHAIN_INPUT,
             output_ports,
             midi_input: P::MIDI_INPUT,
+            // Harvested from the same throwaway instance the param metadata
+            // came from: the state extension needs it while the real plugin
+            // lives in the audio processor (ba todo #1360).
+            param_renames: temp.param_renames(),
             params_dirty: AtomicBool::new(false),
         })
     }

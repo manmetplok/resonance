@@ -169,16 +169,18 @@ pub fn load_params_from_json(params: &[&dyn Param], state: &serde_json::Value) -
 /// Without this, reopening the same project restored different values
 /// depending on whether the plugin happened to be active at the time.
 ///
-/// # Renames are not migrated on this path (yet)
+/// # Renames
 ///
-/// [`migrate`] needs the plugin's [`ParamRename`] table, which reaches
-/// the inactive path through `ResonancePlugin::param_renames`. Here we
-/// only have the bridge's `ParamMeta` list, which carries the *current*
-/// str_id and nothing else, so a blob written before a rename loads the
-/// renamed parameter at its default when the plugin happens to be active
-/// at load time. No plugin declares a rename today, which is why this is
-/// a documented gap rather than a live bug: closing it means giving
-/// `ParamMeta` the legacy ids, which is the clap_bridge lane's change.
+/// This function still matches purely by current id — it is the caller
+/// that runs [`migrate`] first, exactly as the inactive path's
+/// `ResonancePlugin::load_state` default does. The bridge can do that
+/// because `ClapShared` carries the plugin's [`ParamRename`] table
+/// (harvested at construction, since the plugin object itself is off in
+/// the audio processor on this path). Deliberately *not* solved by
+/// teaching this function about legacy ids: a rename is version-gated
+/// and chains oldest-first, so a second implementation of those rules
+/// would drift from [`migrate`] — which is how this path came to drop
+/// renames silently in the first place (ba todo #1360).
 pub(crate) fn load_params_from_shared_json(
     param_metas: &[crate::clap_bridge::ParamMeta],
     param_values: &[std::sync::atomic::AtomicU64],

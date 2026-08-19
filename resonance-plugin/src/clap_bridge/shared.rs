@@ -61,6 +61,22 @@ pub struct ClapShared<'a> {
     /// audio processor all consult this instead of re-calling the plugin hook.
     pub(crate) output_ports: Vec<OutputPortSpec>,
     pub(crate) midi_input: bool,
+    /// The plugin's parameter-id rename table, harvested once at
+    /// construction from `ResonancePlugin::param_renames`.
+    ///
+    /// It lives here because state can be loaded while the plugin object
+    /// is inside `ClapAudioProcessor`, and that path (`clap_bridge::state`)
+    /// has no plugin to ask. Without the table, a blob written before a
+    /// rename restored that parameter at its default whenever the host
+    /// happened to load it while the plugin was active — the *same* file
+    /// loading differently depending on transport state (ba todo #1360).
+    ///
+    /// The whole slice is carried rather than flattening legacy ids into
+    /// each `ParamMeta`, because a rename is more than an alias: it is
+    /// gated on the blob's `since_version` and renames chain oldest-first.
+    /// Keeping the table intact lets both load paths run the one
+    /// [`crate::state::migrate`] instead of two rules that must agree.
+    pub(crate) param_renames: &'static [crate::state::ParamRename],
     /// Flag: shared param values have been updated (e.g. state load while active).
     /// The audio processor should re-sync plugin params from shared atomics.
     pub(crate) params_dirty: AtomicBool,

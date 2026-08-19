@@ -119,12 +119,38 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             //   atomics. Host automation racing a host-initiated load has no
             //   defined winner; either serialization is acceptable.
             // - The audio thread's editor push-back could overwrite a slot
-            //   loaded after this block's dirty-check. That path uses
-            //   `compare_exchange_value` (see `process.rs`), so the
-            //   concurrent main-thread write wins and the still-set dirty
-            //   flag re-syncs the plugin next block.
-            let state: serde_json::Value = serde_json::from_slice(&data)
+            //   loaded after this block's dirty-check. Since ba todo #1363
+            //   that path re-reads `params_dirty` (Acquire) before each
+            //   store and abandons the rest of the push-back once it sees
+            //   it set, so a load that has published the flag survives and
+            //   the still-set flag re-syncs the plugin next block. The
+            //   `compare_exchange_value` is only the inner guard now, for a
+            //   load landing in the few instructions after that check.
+            //
+            //   What that does NOT close: the stores below happen BEFORE
+            //   the flag, so a push-back store landing between this load's
+            //   store of a given slot and its store of the flag still wins,
+            //   and that value is still lost. Note the extra-state saver
+            //   runs inside that window too, which widens it for plugins
+            //   carrying extra state. Closing it needs the writer to
+            //   publish atomically — a generation counter the push-back
+            //   re-checks around its own stores — which is why the flag
+            //   store is deliberately last: moving it earlier would narrow
+            //   this window only by announcing params while the extra
+            //   state is still arriving, trading one inconsistency for a
+            //   worse one. See `process.rs` for the full argument.
+            let mut state: serde_json::Value = serde_json::from_slice(&data)
                 .map_err(|_| PluginError::Message("Failed to load state"))?;
+            // Same two steps, in the same order, as the inactive path's
+            // `ResonancePlugin::load_state` default: migrate the blob, then
+            // read params out of it, then hand the *migrated* value to the
+            // extra-state saver. Calling `state::migrate` here rather than
+            // re-deriving renames from the param metadata is deliberate —
+            // it is the one place that knows a rename is version-gated and
+            // that chained renames apply oldest-first, and two copies of
+            // those rules is exactly how this path came to ignore renames
+            // in the first place (ba todo #1360).
+            crate::state::migrate(&mut state, self.shared.param_renames);
             if !crate::state::load_params_from_shared_json(
                 &self.shared.param_metas,
                 &self.shared.param_values,

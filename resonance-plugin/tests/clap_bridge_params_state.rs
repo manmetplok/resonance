@@ -24,7 +24,7 @@ use clack_plugin::entry::SinglePluginEntry;
 
 use resonance_plugin::{
     stable_hash, BoolParam, ClapBridge, EventIterator, ExtraStateSaver, FloatParam, FloatRange,
-    IntParam, IntRange, OutputBuffer, Param, ResonancePlugin, TempoInfo,
+    IntParam, IntRange, OutputBuffer, Param, ParamRename, ResonancePlugin, TempoInfo,
 };
 use serde_json::{json, Value};
 
@@ -215,6 +215,79 @@ impl ResonancePlugin for ExtraStatePlugin {
 }
 
 // ---------------------------------------------------------------------------
+// Test plugin #3: declares a parameter-id rename, so the bridge's state
+// path can be checked against a blob written before that rename. No
+// shipping plugin declares one yet, so without this fixture the migration
+// on the active path would have nothing to exercise it.
+// ---------------------------------------------------------------------------
+
+/// The parameter the user knows as "Mix" was saved under the id `wet`
+/// before state version 1 — the same rename `tests/state.rs` uses for the
+/// inactive path, so the two tests describe one plugin history.
+const BRIDGE_RENAMES: &[ParamRename] = &[ParamRename {
+    since_version: 1,
+    from: "wet",
+    to: "mix",
+}];
+
+const RENAMED_MIX_DEFAULT: f64 = 0.5;
+const RENAMED_TAPS_DEFAULT: f64 = 3.0;
+
+struct RenamedBridgePlugin {
+    mix: FloatParam,
+    taps: IntParam,
+}
+
+impl ResonancePlugin for RenamedBridgePlugin {
+    const CLAP_ID: &'static str = "test.bridge-renamed";
+    const NAME: &'static str = "BridgeRenamed";
+    const VENDOR: &'static str = "test";
+    const VERSION: &'static str = "0.0.0";
+    const DESCRIPTION: &'static str = "";
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
+    const INPUT_CHANNELS: Option<u32> = Some(2);
+
+    fn new() -> Self {
+        Self {
+            mix: FloatParam::new(
+                "mix",
+                "Mix",
+                RENAMED_MIX_DEFAULT as f32,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ),
+            taps: IntParam::new(
+                "taps",
+                "Taps",
+                RENAMED_TAPS_DEFAULT as i32,
+                IntRange::Linear { min: 1, max: 8 },
+            ),
+        }
+    }
+    fn param_count(&self) -> usize {
+        2
+    }
+    fn param(&self, index: usize) -> &dyn Param {
+        [&self.mix as &dyn Param, &self.taps][index]
+    }
+    fn initialize(&mut self, _sample_rate: f32, _max_buffer_size: u32) -> bool {
+        true
+    }
+    fn reset(&mut self) {}
+    fn process(
+        &mut self,
+        _outputs: &mut [OutputBuffer<'_>],
+        _frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+    }
+    fn param_renames(&self) -> &'static [ParamRename] {
+        BRIDGE_RENAMES
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Minimal clack host
 // ---------------------------------------------------------------------------
 
@@ -245,6 +318,13 @@ fn instantiate<P: ResonancePlugin>(bundle: &CStr, plugin_id: &CStr) -> PluginIns
 
 fn bridge_instance() -> PluginInstance<TestHost> {
     instantiate::<BridgePlugin>(c"resonance-test-bridge-params.clap", c"test.bridge-params")
+}
+
+fn renamed_instance() -> PluginInstance<TestHost> {
+    instantiate::<RenamedBridgePlugin>(
+        c"resonance-test-bridge-renamed.clap",
+        c"test.bridge-renamed",
+    )
 }
 
 fn audio_config() -> PluginAudioConfiguration {
@@ -892,6 +972,127 @@ fn a_flushed_out_of_range_value_is_clamped_in_the_shared_atomics_too() {
         1.0,
         "the atomics must hold the clamped value the param adopted, not the raw 40.0"
     );
+}
+
+// ---------------------------------------------------------------------------
+// state: parameter-id renames on the active path (ba todo #1360)
+// ---------------------------------------------------------------------------
+
+/// The pre-rename blob the finding in ba doc #284 describes: written by a
+/// build that called the parameter `wet`, opened by one that calls it
+/// `mix`, with no `"version"` key because it predates versioning.
+const PRE_RENAME_STATE: &[u8] = br#"{"params":{"wet":0.25,"taps":6.0}}"#;
+
+/// The mirror of `tests/state.rs::a_renamed_param_still_loads_from_pre_rename_state`
+/// for the path that runs while the plugin is **active**.
+///
+/// `state.load` is [main-thread] and a host is free to call it with the
+/// transport running, in which case the plugin object is inside the audio
+/// processor and the bridge writes the shared atomics directly. That path
+/// used to see only the current str_ids, so the very same project file
+/// restored a renamed parameter at its default when it happened to be
+/// loaded while active — a file loading differently depending on transport
+/// state, which is worse than a rename that never migrates at all.
+#[test]
+fn a_renamed_param_still_loads_from_pre_rename_state_while_active() {
+    let mut instance = renamed_instance();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+
+    assert!(load_state(&mut instance, PRE_RENAME_STATE));
+
+    // `get_value` reads the shared atomics while active, so this is the
+    // value the host now reports and would re-save.
+    assert_eq!(
+        get_value(&mut instance, "mix"),
+        0.25,
+        "the declared rename must carry the old id across on the active path too"
+    );
+    assert_eq!(get_value(&mut instance, "taps"), 6.0);
+
+    // …and it survives the trip back into the plugin object.
+    instance.deactivate(processor);
+    assert_eq!(get_value(&mut instance, "mix"), 0.25);
+    assert_eq!(get_value(&mut instance, "taps"), 6.0);
+}
+
+/// Both load paths must migrate identically, since which one runs is the
+/// host's choice, not the user's.
+#[test]
+fn the_active_and_inactive_load_paths_agree_on_pre_rename_state() {
+    let mut inactive = renamed_instance();
+    assert!(load_state(&mut inactive, PRE_RENAME_STATE));
+
+    let mut active = renamed_instance();
+    let processor = active
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(load_state(&mut active, PRE_RENAME_STATE));
+
+    for id in ["mix", "taps"] {
+        assert_eq!(
+            get_value(&mut active, id),
+            get_value(&mut inactive, id),
+            "`{id}` differs between the active and inactive load paths"
+        );
+    }
+
+    active.deactivate(processor);
+}
+
+/// An id that is neither current nor a declared legacy id must not cost
+/// the caller the parameters that *are* recognised — a preset from a
+/// build with an extra param, or a hand-edited file, still loads.
+#[test]
+fn an_unrecognised_id_beside_a_renamed_one_still_loads_what_it_can() {
+    let mixed = br#"{"params":{"wet":0.25,"nova":1.0}}"#;
+
+    let mut inactive = renamed_instance();
+    assert!(
+        load_state(&mut inactive, mixed),
+        "an unknown id must not fail the whole load"
+    );
+
+    let mut active = renamed_instance();
+    let processor = active
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(load_state(&mut active, mixed));
+
+    for id in ["mix", "taps"] {
+        assert_eq!(
+            get_value(&mut active, id),
+            get_value(&mut inactive, id),
+            "`{id}` differs between the active and inactive load paths"
+        );
+    }
+    assert_eq!(get_value(&mut active, "mix"), 0.25);
+    assert_eq!(
+        get_value(&mut active, "taps"),
+        RENAMED_TAPS_DEFAULT,
+        "a param the blob never mentioned keeps its default"
+    );
+
+    active.deactivate(processor);
+}
+
+/// Version 1 means "written with the new id", so a stray legacy key in
+/// such a blob is a leftover and must not win — the same rule
+/// `tests/state.rs::a_stale_id_in_an_already_migrated_blob_is_ignored`
+/// asserts for the inactive path, checked here because it comes from
+/// `state::migrate` being shared rather than reimplemented.
+#[test]
+fn a_stale_id_in_an_already_migrated_blob_is_ignored_while_active() {
+    let mixed = br#"{"version":1,"params":{"wet":0.125,"mix":0.75}}"#;
+
+    let mut instance = renamed_instance();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(load_state(&mut instance, mixed));
+    assert_eq!(get_value(&mut instance, "mix"), 0.75);
+    instance.deactivate(processor);
 }
 
 /// Same for precision: a flushed value the param demotes to f32 must be
