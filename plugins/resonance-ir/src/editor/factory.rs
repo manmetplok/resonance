@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use resonance_plugin::editor_host::RuntimeEditorHandle;
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use wayland_plugin_gui::{Editor as RuntimeEditor, EditorOptions};
 
@@ -95,71 +96,6 @@ impl EditorFactory for IrEditorFactory {
             },
         )
         .ok()?;
-        Some(Box::new(RuntimeEditorHandle {
-            runtime: Some(runtime),
-            size: INITIAL_SIZE,
-        }))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// RuntimeEditorHandle — bridges `PluginEditor` to `wayland_plugin_gui::Editor`.
-// ---------------------------------------------------------------------------
-
-struct RuntimeEditorHandle {
-    runtime: Option<RuntimeEditor>,
-    size: (u32, u32),
-}
-
-impl PluginEditor for RuntimeEditorHandle {
-    fn show(&mut self) {
-        if let Some(r) = &self.runtime {
-            r.show();
-        }
-    }
-
-    fn hide(&mut self) {
-        if let Some(r) = &self.runtime {
-            r.hide();
-        }
-    }
-
-    fn size(&self) -> (u32, u32) {
-        // The compositor owns the window size, so report what the
-        // runtime last applied rather than what was last requested:
-        // that is what lets the host persist and restore the size the
-        // user actually left the window at (ba todo #1337). The cached
-        // field is only a fallback for a handle whose runtime is gone.
-        self.runtime
-            .as_ref()
-            .map(|r| r.get_size())
-            .unwrap_or(self.size)
-    }
-
-    fn set_size(&mut self, width: u32, height: u32) -> bool {
-        if let Some(r) = &mut self.runtime {
-            if r.set_size(width, height).is_ok() {
-                self.size = (width, height);
-                return true;
-            }
-        }
-        false
-    }
-
-    fn can_resize(&self) -> bool {
-        self.runtime
-            .as_ref()
-            .map(|r| r.is_resizable())
-            .unwrap_or(false)
-    }
-
-    fn set_title(&mut self, _title: &str) {}
-}
-
-impl Drop for RuntimeEditorHandle {
-    fn drop(&mut self) {
-        if let Some(r) = self.runtime.take() {
-            r.destroy();
-        }
+        Some(Box::new(RuntimeEditorHandle::new(runtime)))
     }
 }

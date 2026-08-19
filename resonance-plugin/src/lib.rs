@@ -17,6 +17,10 @@ pub mod state;
 #[cfg(feature = "editor-widgets")]
 pub mod editor_widgets;
 
+/// The `wayland-plugin-gui` -> `PluginEditor` adapter every plugin editor needs.
+#[cfg(feature = "editor-widgets")]
+pub mod editor_host;
+
 /// Shared preset bar (picker + Save/Rename/Delete) for plugin editors.
 #[cfg(feature = "editor-widgets")]
 pub mod preset_ui;
