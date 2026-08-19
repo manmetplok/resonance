@@ -24,6 +24,7 @@ use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
 use resonance_control::methods::track;
 use resonance_control::{Request, Response, RpcError};
 
+use super::chain_presets::{self, Chain};
 use super::reply::{ack, reject};
 use super::sidechain;
 use super::view_model;
@@ -43,6 +44,9 @@ pub(super) fn try_handle(
         master::SET_FX_BYPASS => set_fx_bypass(app, request),
         master::PLUGIN_PARAMS => plugin_params(app, request),
         master::SET_PLUGIN_PARAM => set_plugin_param(app, request),
+        master::PLUGIN_PRESETS => plugin_presets(app, request),
+        master::LOAD_PLUGIN_PRESET => load_plugin_preset(app, request),
+        master::SAVE_PLUGIN_PRESET => save_plugin_preset(app, request),
         master::SET_SIDECHAIN => set_sidechain(app, request),
         master::CLEAR_SIDECHAIN => clear_sidechain(app, request),
         _ => return None,
@@ -614,6 +618,66 @@ fn set_fx_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
     }
     let task = super::run_via_update(app, Message::Master(MasterMessage::ToggleMasterFxBypass));
     (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// Plugin presets on the master chain (ba todo #1333)
+// ---------------------------------------------------------------------------
+//
+// Thin parameter-shaped wrappers: the master chain addresses a plugin
+// exactly as a bus does, so the handlers themselves live in
+// [`super::chain_presets`], and the preset machinery under those is
+// [`super::plugin_presets`], shared with the track surface — so a preset
+// saved off the master limiter is the same file the plugin's own window
+// lists, and the same one a track could recall.
+
+fn plugin_presets(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    // Every field is optional — a bare call means "the first plugin on
+    // the chain" — so an absent params object is legal, as it is for
+    // `master.plugin_params`.
+    let params: master::PluginPresetsParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    chain_presets::view(
+        app,
+        request,
+        Chain::Master,
+        &params.plugin_id,
+        params.occurrence,
+    )
+}
+
+fn load_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::LoadPluginPresetParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    chain_presets::load(
+        app,
+        request,
+        Chain::Master,
+        &params.plugin_id,
+        params.occurrence,
+        &params.preset,
+        params.source,
+    )
+}
+
+fn save_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::SavePluginPresetParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    chain_presets::save(
+        app,
+        request,
+        Chain::Master,
+        &params.plugin_id,
+        params.occurrence,
+        &params.name,
+        params.overwrite,
+    )
 }
 
 /// The master chain as `slot:plugin_id` pairs, for error messages that

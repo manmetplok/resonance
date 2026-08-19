@@ -6,7 +6,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use rmcp::{tool, tool_router};
-use resonance_control::methods::{bus, track};
+use resonance_control::methods::{bus, plugin_preset, track};
 use resonance_control::MutationAck;
 
 #[tool_router(router = router_bus, vis = "pub(crate)")]
@@ -244,5 +244,74 @@ impl ResonanceMcp {
         Parameters(params): Parameters<bus::ClearSidechainParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(bus::CLEAR_SIDECHAIN, &params).await
+    }
+
+    #[tool(
+        description = "List the presets a plugin on a bus can recall, factory and user together. \
+                       FACTORY presets are built into the plugin — every install has the same \
+                       ones and they are read-only. USER presets are ones saved on this machine, \
+                       by this tool or in the plugin's own window; only those can be overwritten \
+                       or shadow a factory name. Each entry says which set it is from, and \
+                       bus_load_plugin_preset takes the name. \
+                       \
+                       The bank belongs to the PLUGIN, not to the bus, so a preset saved from a \
+                       track shows up here too. Only Resonance's own plugins publish factory \
+                       presets to the host; a third-party CLAP reports none rather than a guess. \
+                       Addressed exactly as bus_plugin_params, except that omitting plugin_id \
+                       targets the bus's FIRST plugin (a bus has no instrument).",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<plugin_preset::PluginPresetsView>()
+    )]
+    async fn bus_plugin_presets(
+        &self,
+        Parameters(params): Parameters<bus::PluginPresetsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(bus::PLUGIN_PRESETS, &params).await
+    }
+
+    #[tool(
+        description = "Recall a preset onto a plugin on a bus — the fast way to get a whole \
+                       sound, instead of setting forty parameters one at a time. The name comes \
+                       from bus_plugin_presets. \
+                       \
+                       source picks which set to take it from; omit it and a user preset wins \
+                       over a factory one of the same name. The recall is ONE undo entry, shows \
+                       in the plugin's own window immediately, and moves every parameter the \
+                       preset names — anything it does not name keeps its current value, so a \
+                       preset written for an older build still loads.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn bus_load_plugin_preset(
+        &self,
+        Parameters(params): Parameters<bus::LoadPluginPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(bus::LOAD_PLUGIN_PRESET, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Save a bus plugin's current sound as a named user preset — the one worth \
+                       keeping is usually the glue compressor that finally sat right on the \
+                       group. It can be recalled here, on any track carrying the same plugin, or \
+                       picked in the plugin's own window later. \
+                       \
+                       Overwriting an existing USER preset needs overwrite: true; without it the \
+                       call is refused rather than replacing the preset. Factory presets are \
+                       never touched — saving under a factory name creates a user preset that \
+                       shadows it. \
+                       \
+                       This answers as soon as the capture is armed, not when the file lands: \
+                       the plugin hands its state back a beat later. Read bus_plugin_presets to \
+                       see the preset appear.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn bus_save_plugin_preset(
+        &self,
+        Parameters(params): Parameters<bus::SavePluginPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(bus::SAVE_PLUGIN_PRESET, &params)
+            .await
     }
 }

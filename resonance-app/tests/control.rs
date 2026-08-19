@@ -18,6 +18,8 @@ mod control_bus;
 mod control_bus_create_commit;
 #[path = "control/control_bus_effects.rs"]
 mod control_bus_effects;
+#[path = "control/control_chain_presets.rs"]
+mod control_chain_presets;
 #[path = "control/control_clip_place.rs"]
 mod control_clip_place;
 #[path = "control/control_clip_split.rs"]

@@ -36,6 +36,17 @@ pub const PLUGIN_PARAMS: &str = "master.plugin_params";
 /// `master.set_plugin_param` — set one parameter on a master plugin
 /// ([`SetPluginParamParams`] -> `MutationAck`).
 pub const SET_PLUGIN_PARAM: &str = "master.set_plugin_param";
+/// `master.plugin_presets` — a master plugin's factory and user presets
+/// ([`PluginPresetsParams`] ->
+/// [`PluginPresetsView`](crate::methods::plugin_preset::PluginPresetsView)).
+/// Read-only.
+pub const PLUGIN_PRESETS: &str = "master.plugin_presets";
+/// `master.load_plugin_preset` — recall a preset onto a master plugin
+/// ([`LoadPluginPresetParams`] -> `MutationAck`).
+pub const LOAD_PLUGIN_PRESET: &str = "master.load_plugin_preset";
+/// `master.save_plugin_preset` — save a master plugin's current settings
+/// as a named user preset ([`SavePluginPresetParams`] -> `MutationAck`).
+pub const SAVE_PLUGIN_PRESET: &str = "master.save_plugin_preset";
 /// `master.set_sidechain` — key a plugin on the master chain from a
 /// track or bus ([`SetSidechainParams`] -> `MutationAck`).
 pub const SET_SIDECHAIN: &str = "master.set_sidechain";
@@ -53,6 +64,9 @@ pub const METHODS: &[&str] = &[
     SET_FX_BYPASS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    PLUGIN_PRESETS,
+    LOAD_PLUGIN_PRESET,
+    SAVE_PLUGIN_PRESET,
     SET_SIDECHAIN,
     CLEAR_SIDECHAIN,
 ];
@@ -245,6 +259,61 @@ pub struct SetPluginParamParams {
     /// anything past that tolerance is rejected with the range, and a
     /// label resolves to the step it names.
     pub value: crate::methods::track::ParamValue,
+}
+
+// ---------------------------------------------------------------------------
+// Plugin presets on the master chain (ba todo #1333)
+// ---------------------------------------------------------------------------
+//
+// The `bus.*` trio with `bus_id` dropped — master is a singleton. An
+// omitted `plugin_id` targets the FIRST plugin on the chain, as
+// `master.set_plugin_param` does; there is no instrument slot to default
+// to the way `track.plugin_presets` has.
+
+/// Params for `master.plugin_presets`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PluginPresetsParams {
+    /// CLAP id of the plugin on the master. Omitted targets the first
+    /// plugin on the chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance to address when the master carries `plugin_id`
+    /// more than once; 0-based, defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
+
+/// Params for `master.load_plugin_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct LoadPluginPresetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Preset name, as `master.plugin_presets` reports it.
+    pub preset: String,
+    /// Which set to take it from. Omitted prefers a user preset, then a
+    /// factory one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::methods::plugin_preset::PluginPresetSource>,
+}
+
+/// Params for `master.save_plugin_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SavePluginPresetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Name for the user preset. Saving over an existing user preset
+    /// replaces it and needs `overwrite: true`; factory presets are never
+    /// touched.
+    pub name: String,
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@
 //! [`crate::common::MutationAck`].
 
 use crate::ids::TrackId;
+use crate::methods::plugin_preset::PluginPresetSource;
 use crate::methods::track::PluginParamsEntry;
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,17 @@ pub const PLUGIN_PARAMS: &str = "bus.plugin_params";
 /// `bus.set_plugin_param` — set one parameter on a bus plugin
 /// ([`SetPluginParamParams`] -> `MutationAck`).
 pub const SET_PLUGIN_PARAM: &str = "bus.set_plugin_param";
+/// `bus.plugin_presets` — a bus plugin's factory and user presets
+/// ([`PluginPresetsParams`] ->
+/// [`PluginPresetsView`](crate::methods::plugin_preset::PluginPresetsView)).
+/// Read-only.
+pub const PLUGIN_PRESETS: &str = "bus.plugin_presets";
+/// `bus.load_plugin_preset` — recall a preset onto a bus plugin
+/// ([`LoadPluginPresetParams`] -> `MutationAck`).
+pub const LOAD_PLUGIN_PRESET: &str = "bus.load_plugin_preset";
+/// `bus.save_plugin_preset` — save a bus plugin's current settings as a
+/// named user preset ([`SavePluginPresetParams`] -> `MutationAck`).
+pub const SAVE_PLUGIN_PRESET: &str = "bus.save_plugin_preset";
 /// `bus.set_sidechain` — key a plugin on a bus's chain from another
 /// track or bus ([`SetSidechainParams`] -> `MutationAck`).
 pub const SET_SIDECHAIN: &str = "bus.set_sidechain";
@@ -57,6 +69,9 @@ pub const METHODS: &[&str] = &[
     SET_FX_BYPASS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    PLUGIN_PRESETS,
+    LOAD_PLUGIN_PRESET,
+    SAVE_PLUGIN_PRESET,
     SET_SIDECHAIN,
     CLEAR_SIDECHAIN,
 ];
@@ -254,6 +269,66 @@ pub struct SetPluginParamParams {
     /// anything past that tolerance is rejected, and a label resolves to
     /// the step it names.
     pub value: crate::methods::track::ParamValue,
+}
+
+// ---------------------------------------------------------------------------
+// Plugin presets on a bus chain (ba todo #1333)
+// ---------------------------------------------------------------------------
+//
+// The `track.*` trio over bus addressing. What a preset IS does not vary
+// by surface — that lives once in [`crate::methods::plugin_preset`] — but
+// naming the plugin does, and an omitted `plugin_id` means something
+// different here: a bus has no instrument slot, so it targets the FIRST
+// plugin on the chain, exactly as `bus.set_plugin_param` does.
+
+/// Params for `bus.plugin_presets`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct PluginPresetsParams {
+    pub bus_id: TrackId,
+    /// CLAP id of the plugin on this bus. Omitted targets the bus's
+    /// first plugin, which is unambiguous only on a one-effect chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance to address when the bus carries `plugin_id` more
+    /// than once; 0-based, defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+}
+
+/// Params for `bus.load_plugin_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct LoadPluginPresetParams {
+    pub bus_id: TrackId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Preset name, as `bus.plugin_presets` reports it.
+    pub preset: String,
+    /// Which set to take it from. Omitted prefers a user preset, then a
+    /// factory one — so a user preset deliberately shadowing a factory
+    /// name wins unless the caller asks for the factory original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PluginPresetSource>,
+}
+
+/// Params for `bus.save_plugin_preset`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SavePluginPresetParams {
+    pub bus_id: TrackId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// Name for the user preset. Saving over an existing user preset
+    /// replaces it and needs `overwrite: true`; factory presets are never
+    /// touched.
+    pub name: String,
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 // ---------------------------------------------------------------------------

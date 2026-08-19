@@ -7,7 +7,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use rmcp::{tool, tool_router};
-use resonance_control::methods::master;
+use resonance_control::methods::{master, plugin_preset};
 use resonance_control::MutationAck;
 
 #[tool_router(router = router_master, vis = "pub(crate)")]
@@ -240,6 +240,74 @@ impl ResonanceMcp {
         Parameters(params): Parameters<master::ClearSidechainParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(master::CLEAR_SIDECHAIN, &params)
+            .await
+    }
+
+    #[tool(
+        description = "List the presets a plugin on the master chain can recall, factory and \
+                       user together. FACTORY presets are built into the plugin — every install \
+                       has the same ones and they are read-only. USER presets are ones saved on \
+                       this machine, by this tool or in the plugin's own window; only those can \
+                       be overwritten or shadow a factory name. Each entry says which set it is \
+                       from, and master_load_plugin_preset takes the name. \
+                       \
+                       The bank belongs to the PLUGIN, not to the master, so a preset saved from \
+                       a track or bus shows up here too. Only Resonance's own plugins publish \
+                       factory presets to the host; a third-party CLAP reports none rather than \
+                       a guess. Omitting plugin_id targets the FIRST plugin on the chain.",
+        annotations(read_only_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<plugin_preset::PluginPresetsView>()
+    )]
+    async fn master_plugin_presets(
+        &self,
+        Parameters(params): Parameters<master::PluginPresetsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(master::PLUGIN_PRESETS, &params).await
+    }
+
+    #[tool(
+        description = "Recall a preset onto a plugin on the master chain. A mastering chain is \
+                       exactly where a starting point earns its keep — a limiter's factory \
+                       preset gets a sane ceiling and release in one call instead of a dozen. \
+                       The name comes from master_plugin_presets. \
+                       \
+                       source picks which set to take it from; omit it and a user preset wins \
+                       over a factory one of the same name. The recall is ONE undo entry, shows \
+                       in the plugin's own window immediately, and moves every parameter the \
+                       preset names — anything it does not name keeps its current value.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn master_load_plugin_preset(
+        &self,
+        Parameters(params): Parameters<master::LoadPluginPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(master::LOAD_PLUGIN_PRESET, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Save a master plugin's current sound as a named user preset, so the \
+                       mastering settings that worked on this mix can be recalled on the next \
+                       one — here, on any track or bus carrying the same plugin, or in the \
+                       plugin's own window. \
+                       \
+                       Overwriting an existing USER preset needs overwrite: true; without it the \
+                       call is refused rather than replacing the preset. Factory presets are \
+                       never touched — saving under a factory name creates a user preset that \
+                       shadows it. \
+                       \
+                       This answers as soon as the capture is armed, not when the file lands: \
+                       the plugin hands its state back a beat later. Read master_plugin_presets \
+                       to see the preset appear.",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn master_save_plugin_preset(
+        &self,
+        Parameters(params): Parameters<master::SavePluginPresetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(master::SAVE_PLUGIN_PRESET, &params)
             .await
     }
 }

@@ -25,6 +25,7 @@ use resonance_control::methods::track;
 use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
 use resonance_control::{Request, Response, RpcError};
 
+use super::chain_presets::{self, Chain};
 use super::reply::{ack, not_found_bus, reject};
 use super::sidechain;
 use super::view_model;
@@ -45,6 +46,9 @@ pub(super) fn try_handle(
         bus::SET_FX_BYPASS => set_fx_bypass(app, request),
         bus::PLUGIN_PARAMS => plugin_params(app, request),
         bus::SET_PLUGIN_PARAM => set_plugin_param(app, request),
+        bus::PLUGIN_PRESETS => plugin_presets(app, request),
+        bus::LOAD_PLUGIN_PRESET => load_plugin_preset(app, request),
+        bus::SAVE_PLUGIN_PRESET => save_plugin_preset(app, request),
         bus::SET_SIDECHAIN => set_sidechain(app, request),
         bus::CLEAR_SIDECHAIN => clear_sidechain(app, request),
         _ => return None,
@@ -681,4 +685,60 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         )),
     );
     (ack(app, request), task)
+}
+
+// ---------------------------------------------------------------------------
+// Plugin presets on a bus chain (ba todo #1333)
+// ---------------------------------------------------------------------------
+//
+// Thin parameter-shaped wrappers: a bus addresses a plugin exactly as the
+// master chain does, so the handlers themselves live in
+// [`super::chain_presets`], and the preset machinery under those is
+// [`super::plugin_presets`], shared with the track surface — which is why
+// a preset saved here is the same file the plugin's own window lists.
+
+fn plugin_presets(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::PluginPresetsParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    chain_presets::view(
+        app,
+        request,
+        Chain::Bus(params.bus_id.0),
+        &params.plugin_id,
+        params.occurrence,
+    )
+}
+
+fn load_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::LoadPluginPresetParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    chain_presets::load(
+        app,
+        request,
+        Chain::Bus(params.bus_id.0),
+        &params.plugin_id,
+        params.occurrence,
+        &params.preset,
+        params.source,
+    )
+}
+
+fn save_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::SavePluginPresetParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    chain_presets::save(
+        app,
+        request,
+        Chain::Bus(params.bus_id.0),
+        &params.plugin_id,
+        params.occurrence,
+        &params.name,
+        params.overwrite,
+    )
 }

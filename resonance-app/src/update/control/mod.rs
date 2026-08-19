@@ -34,6 +34,7 @@ use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
 mod arrangement;
 mod bus;
+mod chain_presets;
 mod clip;
 mod edit;
 mod external;
