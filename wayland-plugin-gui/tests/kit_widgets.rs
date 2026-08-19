@@ -11,7 +11,10 @@ use wayland_plugin_gui::egui;
 use wayland_plugin_gui::widgets::{
     chip::{chip_styled, Chip, ChipStyle},
     segmented::{segmented, SegmentedStyle},
-    slider::{fill_span, signed_to_unit, slider_bipolar, slider_unipolar, unit_to_signed},
+    slider::{
+        fill_span, signed_to_unit, slider_bipolar, slider_unipolar, unit_to_signed, SliderPalette,
+        SliderStyle,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -205,3 +208,130 @@ fn clicking_a_slider_positions_the_value() {
     });
     assert_eq!(idle, None);
 }
+
+// ---------------------------------------------------------------------------
+// What the eq migration added to the kit (ba todo #1335)
+// ---------------------------------------------------------------------------
+
+/// Drive `frames` through one context, so state that only exists between
+/// frames — keyboard focus, in particular — survives from one to the next.
+///
+/// `click_at` above builds a fresh context per call, which is right for a
+/// click but cannot express "focus it, then press a key".
+fn drive<R>(
+    frames: &[Vec<egui::Event>],
+    mut contents: impl FnMut(&mut egui::Ui) -> R,
+) -> Vec<R> {
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
+    let mut out = Vec::new();
+    for events in frames {
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events: events.clone(),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show_inside(ui, |ui| out.push(contents(ui)));
+        });
+    }
+    out
+}
+
+fn press(key: egui::Key) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::default(),
+    }
+}
+
+/// Frames that Tab focus onto the first widget, then press `key`.
+///
+/// Tab, not a click: neither this slider nor `egui::Slider` requests
+/// focus when clicked — both only ever read `has_focus()` — so the
+/// keyboard is reachable by tabbing to the control and no other way.
+/// That is a real limitation of the affordance rather than a quirk of
+/// the harness, which is why the test states it this way round.
+fn tab_then(key: egui::Key) -> Vec<Vec<egui::Event>> {
+    vec![vec![], vec![press(egui::Key::Tab)], vec![press(key)]]
+}
+
+/// The eq arrived from a raw `egui::Slider`, which nudges on the arrow
+/// keys while focused. The shared slider had no keyboard handling at all,
+/// so migrating the eq onto it would have silently dropped that — hence
+/// this, and hence drums and wavetable gaining it too.
+#[test]
+fn arrow_keys_nudge_a_focused_slider() {
+    let up = drive(&tab_then(egui::Key::ArrowRight), |ui| {
+        slider_unipolar(ui, 100.0, 0.5)
+    });
+    let nudged = up
+        .last()
+        .copied()
+        .flatten()
+        .expect("an arrow press on a focused slider reports a new value");
+    assert!(
+        nudged > 0.5,
+        "ArrowRight must move the value up from 0.5, got {nudged}"
+    );
+
+    // ...and left goes the other way, by the same step.
+    let back = drive(&tab_then(egui::Key::ArrowLeft), |ui| {
+        slider_unipolar(ui, 100.0, 0.5)
+    })
+    .last()
+    .copied()
+    .flatten()
+    .expect("ArrowLeft reports a new value too");
+    assert!(back < 0.5, "ArrowLeft must move the value down, got {back}");
+    assert!(
+        ((nudged - 0.5) - (0.5 - back)).abs() < 1e-6,
+        "the two directions must step by the same amount ({nudged} vs {back})"
+    );
+}
+
+/// Focus is what arms the arrow keys. Without it the same press must do
+/// nothing, or a slider would steal the arrows from whatever the user is
+/// actually driving.
+#[test]
+fn arrow_keys_are_ignored_by_an_unfocused_slider() {
+    let frames = vec![vec![press(egui::Key::ArrowRight)]];
+    let values = drive(&frames, |ui| slider_unipolar(ui, 100.0, 0.5));
+    assert_eq!(
+        values.last().copied().flatten(),
+        None,
+        "an unfocused slider must not consume the arrow keys"
+    );
+}
+
+/// The eq is the fleet's only classic-palette editor, so the slider's
+/// colours had to become a parameter for it to adopt the shared widget at
+/// all. The two palettes must actually differ — a `CLASSIC` that resolved
+/// to lavender would drag the wrong accent into a blue editor and the
+/// migration would look done while being wrong.
+#[test]
+fn the_classic_slider_palette_is_distinct_from_the_lavender_one() {
+    assert_ne!(SliderPalette::CLASSIC.accent, SliderPalette::LAVENDER.accent);
+    assert_eq!(SliderStyle::CLASSIC.palette, SliderPalette::CLASSIC);
+    assert_eq!(SliderStyle::LAVENDER.palette, SliderPalette::LAVENDER);
+    assert_eq!(SliderStyle::default(), SliderStyle::LAVENDER);
+
+    // Geometry is NOT part of the palette: both styles lay out
+    // identically, so ba todo #1338 can swap the eq's constant without
+    // moving a single control.
+    assert_eq!(SliderStyle::CLASSIC.height, SliderStyle::LAVENDER.height);
+    assert_eq!(
+        SliderStyle::CLASSIC.track_height,
+        SliderStyle::LAVENDER.track_height
+    );
+    assert_eq!(
+        SliderStyle::CLASSIC.thumb_radius,
+        SliderStyle::LAVENDER.thumb_radius
+    );
+}
+
