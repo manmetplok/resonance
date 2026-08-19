@@ -1,12 +1,32 @@
 //! Per-band control strip drawn at the bottom of the EQ editor.
+//!
+//! Freq / Gain / Q are the shared kit's slider (ba todo #1335). They
+//! were raw `egui::Slider`s — the only sliders left in the fleet that
+//! were not the widget every other editor draws — so the band strip now
+//! matches the rest of the plugins: a thin track with a filled span and
+//! a circular thumb, and Gain fills centre-out from 0 dB with a centre
+//! tick, which is what a ±24 dB control should look like.
+//!
+//! Two things moved out of the widget and into this file as a result:
+//! the logarithmic mapping of Freq and Q (the shared slider works in
+//! unit travel and leaves the curve to the caller, the same contract
+//! `resonance_plugin::editor_widgets` uses) and the palette, which is
+//! [`SliderStyle::CLASSIC`] because this editor is still on the classic
+//! blue palette — ba todo #1338 owns moving it, and when it does this
+//! becomes `LAVENDER` and nothing else here changes.
 
 use wayland_plugin_gui::egui;
+use wayland_plugin_gui::widgets::{slider, HSlider, SliderStyle};
 
 use crate::band::{BandKind, BandSlope};
 use crate::params::NUM_BANDS;
 
 use super::app::EqEditorApp;
 use super::theme;
+
+/// Width of a band column's sliders, px — the `slider_width` the raw
+/// `egui::Slider`s were laid out with, so the 104 px column is unchanged.
+const SLIDER_W: f32 = 92.0;
 
 pub(crate) fn draw_band_strip(ui: &mut egui::Ui, app: &mut EqEditorApp) {
     ui.add_space(4.0);
@@ -49,7 +69,6 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
             ui.vertical(|ui| {
                 ui.set_min_width(104.0);
                 ui.set_max_width(104.0);
-                ui.spacing_mut().slider_width = 92.0;
 
                 // Header row — index + enable toggle.
                 ui.horizontal(|ui| {
@@ -109,30 +128,23 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                 ui.add_space(4.0);
 
                 // Freq.
+                // The readout follows the value the drag just produced,
+                // not last frame's — `egui::Slider` wrote through a
+                // `&mut`, so it read fresh in the same frame.
                 let mut freq = band.freq.value();
-                if ui
-                    .add(
-                        egui::Slider::new(&mut freq, 20.0..=20_000.0)
-                            .logarithmic(true)
-                            .show_value(false),
-                    )
-                    .changed()
-                {
+                if let Some(travel) = band_slider(ui, log_travel(FREQ_HZ, freq), false) {
+                    freq = log_value(FREQ_HZ, travel);
                     band.freq.set_value(freq);
                 }
                 ui.label(egui::RichText::new(format_hz_short(freq)).color(theme::TEXT_DIM));
 
-                // Gain (only meaningful for bell/shelf).
+                // Gain (only meaningful for bell/shelf). Bipolar: the
+                // fill runs out from 0 dB rather than up from -24.
                 if kind.uses_gain() {
                     let mut gain = band.gain.value();
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut gain, -24.0..=24.0)
-                                .fixed_decimals(1)
-                                .show_value(false),
-                        )
-                        .changed()
+                    if let Some(travel) = band_slider(ui, (gain + GAIN_DB) / (GAIN_DB * 2.0), true)
                     {
+                        gain = travel * GAIN_DB * 2.0 - GAIN_DB;
                         band.gain.set_value(gain);
                     }
                     ui.label(
@@ -146,19 +158,46 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
 
                 // Q.
                 let mut q = band.q.value();
-                if ui
-                    .add(
-                        egui::Slider::new(&mut q, 0.1..=10.0)
-                            .logarithmic(true)
-                            .show_value(false),
-                    )
-                    .changed()
-                {
+                if let Some(travel) = band_slider(ui, log_travel(Q, q), false) {
+                    q = log_value(Q, travel);
                     band.q.set_value(q);
                 }
                 ui.label(egui::RichText::new(format!("Q {:.2}", q)).color(theme::TEXT_DIM));
             });
         });
+}
+
+/// One band slider: shared geometry, classic palette. Returns the new
+/// unit travel while it is being positioned.
+fn band_slider(ui: &mut egui::Ui, travel: f32, bipolar: bool) -> Option<f32> {
+    let s = HSlider::new(SLIDER_W, travel)
+        .bipolar(bipolar)
+        .style(SliderStyle::CLASSIC);
+    slider(ui, &s)
+}
+
+/// Declared range of the Freq slider, Hz.
+const FREQ_HZ: (f32, f32) = (20.0, 20_000.0);
+/// Declared range of the Q slider.
+const Q: (f32, f32) = (0.1, 10.0);
+/// Half-range of the Gain slider, dB (it runs `-GAIN_DB..=GAIN_DB`).
+const GAIN_DB: f32 = 24.0;
+
+/// Slider travel of `value` on a logarithmic `min..max` range.
+///
+/// This is `egui::Slider::logarithmic(true)` for an all-positive range,
+/// which is what Freq and Q were before they moved onto the shared
+/// slider: even travel per decade, so the first third of the Freq
+/// groove is still 20–200 Hz.
+fn log_travel((min, max): (f32, f32), value: f32) -> f32 {
+    let span = max.ln() - min.ln();
+    ((value.clamp(min, max).ln() - min.ln()) / span).clamp(0.0, 1.0)
+}
+
+/// The value a travel maps back to on a logarithmic range.
+fn log_value((min, max): (f32, f32), travel: f32) -> f32 {
+    let span = max.ln() - min.ln();
+    (min.ln() + travel.clamp(0.0, 1.0) * span).exp().clamp(min, max)
 }
 
 fn format_hz_short(freq: f32) -> String {

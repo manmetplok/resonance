@@ -5,11 +5,11 @@
 
 use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::Param;
-use wayland_plugin_gui::egui;
+use wayland_plugin_gui::{egui, widgets};
 
 
 use super::app::{peak_of, WavetableEditorApp, WtTab};
-use super::{theme, widgets};
+use super::theme;
 
 pub(super) fn draw_chrome(ui: &mut egui::Ui, _app: &mut WavetableEditorApp) {
     ui.horizontal_centered(|ui| {
@@ -64,7 +64,7 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             WtTab::Mod => 3,
             WtTab::Fx => 4,
         };
-        if let Some(i) = widgets::segmented(ui, &labels, selected_idx, false) {
+        if let Some(i) = widgets::segmented(ui, &labels, selected_idx) {
             app.selected_tab = match i {
                 0 => WtTab::Osc,
                 1 => WtTab::EnvFilter,

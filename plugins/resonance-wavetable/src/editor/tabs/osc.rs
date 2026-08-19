@@ -1,11 +1,10 @@
 //! OSC tab: wavetable viewer + osc selector + per-osc controls + unison.
 
-use wayland_plugin_gui::egui;
+use wayland_plugin_gui::{egui, widgets};
 
 use crate::editor::display_waves;
 use crate::editor::theme;
 use crate::editor::viz::{frame_strip, waveform};
-use crate::editor::widgets;
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
@@ -64,7 +63,7 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         // Header: Osc1/Osc2 segmented + balance.
         ui.horizontal(|ui| {
             let labels = ["Osc 1", "Osc 2"];
-            if let Some(i) = widgets::segmented(ui, &labels, app.selected_osc, false) {
+            if let Some(i) = widgets::segmented(ui, &labels, app.selected_osc) {
                 app.selected_osc = i;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -1,11 +1,10 @@
 //! LFO tab — render LFO 1, 2, 3 each as a card with shape preview and
 //! controls. The selected card gets a brighter LED.
 
-use wayland_plugin_gui::egui;
+use wayland_plugin_gui::{egui, widgets};
 
 use crate::editor::theme;
 use crate::editor::viz::lfo_shape;
-use crate::editor::widgets;
 use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{routing_summary, ModSource};
 use crate::editor::WavetableEditorApp;
@@ -116,7 +115,7 @@ fn draw_lfo_card(
                     // no combination exists that the control cannot show.
                     let mode = LfoMode::from_params(lfo.sync.value(), lfo.retrigger.value());
                     if let Some(i) =
-                        widgets::segmented(ui, &LfoMode::LABELS, mode as usize, false)
+                        widgets::segmented(ui, &LfoMode::LABELS, mode as usize)
                     {
                         let (sync, retrigger) = match i {
                             1 => LfoMode::Retrig.to_params(),

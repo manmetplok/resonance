@@ -248,7 +248,11 @@ fn no_tab_reaches_past_the_bindings_to_the_raw_widget() {
         for needle in [
             "knob_themed",
             "ThemedKnob",
-            "slider_unit",
+            // `slider_unit` until ba todo #1335 retired the editor's
+            // private slider; the raw widget is the shared kit's
+            // `HSlider` / `widgets::slider` now.
+            "HSlider",
+            "widgets::slider",
             "knob_unipolar",
             "knob_bipolar",
         ] {

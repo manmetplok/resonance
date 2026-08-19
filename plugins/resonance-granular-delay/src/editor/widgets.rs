@@ -6,13 +6,28 @@
 //! legacy toggle/combo bindings the grouped strip still uses until the
 //! signal-flow layout todo lands.
 //!
-//! The knobs themselves are the shared `wayland_plugin_gui::widgets`
-//! themed knob, configured with the two [`KnobStyle`]s below — this
-//! module used to carry a fork of the whole widget (drawing primitives
-//! included) with its own drag sensitivity, so the same mouse gesture
-//! moved a granular knob further than a knob in any other plugin
-//! (ba todo #1266). The granular-specific composites — the division
-//! stepper and the freeze latch — live in [`super::controls`].
+//! Everything here is now a *binding*: it reads a parameter, draws a
+//! `wayland_plugin_gui::widgets` control and writes the value back. The
+//! knobs went that way first (ba todo #1266 — this module used to carry
+//! a fork of the whole widget, drawing primitives included, with its own
+//! drag sensitivity, so the same mouse gesture moved a granular knob
+//! further than a knob in any other plugin); the chips and segments
+//! followed in ba todo #1335 onto [`ChipStyle::COMPACT`], which was
+//! promoted *from* this file.
+//!
+//! One geometry did not survive that: the segment pill used to pad its
+//! label by 6 px a side where the free-standing chip used 7, so a
+//! segment is now 2 px wider. The two are the same 16 px, 8.5 pt,
+//! upper-case pill in the same palette drawn 2 px apart in the same
+//! strip — nothing in design doc #264 distinguishes them, and 1 px of
+//! padding is not an affordance. A fourth `ChipStyle` constant whose
+//! only justification was "granular's segments happened to be tighter"
+//! would have been the drift this migration exists to end. The groups
+//! have the width to spare: the tightest strip (TIME's three time-mode
+//! segments in a 172 px group) gains 6 px against ~40 px of slack.
+//!
+//! The granular-specific composites — the division stepper and the
+//! freeze latch — live in [`super::controls`].
 //!
 //! Every setter goes through `Param::set_plain`, the same GUI→host
 //! path the other editors use (the CLAP bridge picks the new value up
@@ -23,11 +38,12 @@
 
 use egui::Ui;
 use wayland_plugin_gui::egui;
-use wayland_plugin_gui::widgets::{knob_themed, KnobStyle, ThemedKnob};
+use wayland_plugin_gui::widgets::{
+    chip_styled, knob_themed, segmented_styled, Chip, ChipStyle, KnobStyle, SegmentedStyle,
+    ThemedKnob,
+};
 
 use crate::params::GranularDelayParams;
-
-use super::theme;
 
 /// Macro-tier knob diameter (Time, Size, Density, Pitch, Feedback, Mix).
 pub const MACRO_KNOB_SIZE: f32 = 56.0;
@@ -174,56 +190,15 @@ fn segmented(
 ) {
     let p = params.param_at(index);
     let current = (p.get_plain().round() as usize).min(labels.len().saturating_sub(1));
-    let draw_segments = |ui: &mut Ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
-        for (i, label) in labels.iter().enumerate() {
-            if segment_chip(ui, label, i == current) && i != current {
-                p.set_plain(i as f64);
-            }
+    let style = SegmentedStyle::COMPACT.vertical(vertical);
+    // Re-clicking the current segment is not a write: the shared control
+    // reports every click, and a redundant `set_plain` would push a
+    // pointless param event at the host.
+    if let Some(picked) = segmented_styled(ui, labels, current, &style) {
+        if picked != current {
+            p.set_plain(picked as f64);
         }
-    };
-    if vertical {
-        ui.vertical(draw_segments);
-    } else {
-        ui.horizontal(draw_segments);
     }
-}
-
-/// One segment pill; returns true when clicked.
-fn segment_chip(ui: &mut Ui, label: &str, selected: bool) -> bool {
-    let font = egui::FontId::proportional(8.5);
-    let galley = ui.painter().layout_no_wrap(
-        label.to_uppercase(),
-        font.clone(),
-        theme::TEXT_1,
-    );
-    let size = egui::vec2(galley.size().x + 12.0, 16.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter_at(rect);
-        let (fill, text_color, stroke) = if selected {
-            (theme::ACCENT_DIM, theme::ACCENT_SOFT, theme::ACCENT)
-        } else if response.hovered() {
-            (theme::BG_3, theme::TEXT_2, theme::LINE)
-        } else {
-            (theme::BG_1, theme::TEXT_3, theme::LINE_2)
-        };
-        painter.rect_filled(rect, theme::RADIUS_CHIP, fill);
-        painter.rect_stroke(
-            rect,
-            theme::RADIUS_CHIP,
-            egui::Stroke::new(1.0, stroke),
-            egui::StrokeKind::Inside,
-        );
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            label.to_uppercase(),
-            font,
-            text_color,
-        );
-    }
-    response.clicked()
 }
 
 // ---------------------------------------------------------------------------
@@ -242,44 +217,10 @@ pub fn param_chip(
 ) {
     let p = params.param_at(index);
     let on = p.get_plain() >= 0.5;
-    let font = egui::FontId::proportional(8.5);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_uppercase(), font.clone(), theme::TEXT_1);
-    let size = egui::vec2(galley.size().x + 14.0, 16.0);
-    let sense = if enabled {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let (rect, response) = ui.allocate_exact_size(size, sense);
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter_at(rect);
-        let (fill, text_color, stroke) = if !enabled {
-            (theme::BG_1, theme::TEXT_4, theme::LINE_2)
-        } else if on {
-            (theme::ACCENT_DIM, theme::ACCENT_SOFT, theme::ACCENT)
-        } else if response.hovered() {
-            (theme::BG_3, theme::TEXT_2, theme::LINE)
-        } else {
-            (theme::BG_1, theme::TEXT_3, theme::LINE_2)
-        };
-        painter.rect_filled(rect, theme::RADIUS_CHIP, fill);
-        painter.rect_stroke(
-            rect,
-            theme::RADIUS_CHIP,
-            egui::Stroke::new(1.0, stroke),
-            egui::StrokeKind::Inside,
-        );
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            label.to_uppercase(),
-            font,
-            text_color,
-        );
-    }
-    if enabled && response.clicked() {
+    let chip = Chip::new(label, on)
+        .enabled(enabled)
+        .style(ChipStyle::COMPACT);
+    if chip_styled(ui, &chip) {
         p.set_plain(if on { 0.0 } else { 1.0 });
     }
 }

@@ -7,6 +7,13 @@
 //! pad detail surface with the KIT and GLOBAL cards on a bottom row. A
 //! status bar (sample rate, buffer size, OUT meter) sits along the
 //! bottom edge.
+//!
+//! Every control comes from `wayland_plugin_gui::widgets` — the knobs
+//! always did, and ba todo #1335 retired the local `editor/widgets/`
+//! copies of the chip, the segmented control and the slider. That
+//! module's own comment admitted they were "duplicated from
+//! resonance-wavetable so the two editors can evolve independently";
+//! what they actually did was drift (ba doc #275).
 
 mod app;
 mod chrome;
@@ -16,7 +23,6 @@ mod kit_browser;
 mod pad_grid;
 mod pad_inspector;
 mod theme;
-mod widgets;
 
 pub use factory::DrumsEditorFactory;
 

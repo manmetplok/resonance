@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use resonance_common::registry::InstalledItem;
-use wayland_plugin_gui::{egui, EditorApp};
+use wayland_plugin_gui::{egui, widgets, EditorApp};
 
 use crate::download::WorkerHandle;
 use crate::kit;
@@ -25,9 +25,7 @@ use crate::velocity;
 use crate::voice::MAX_VOICES;
 use crate::KitBridge;
 
-use super::{
-    chrome, download_panel, kit_browser, pad_grid, pad_inspector, theme, widgets,
-};
+use super::{chrome, download_panel, kit_browser, pad_grid, pad_inspector, theme};
 
 pub(crate) struct DrumsEditorApp {
     pub(crate) params: Arc<DrumParams>,
@@ -403,7 +401,7 @@ fn draw_global_row_card(ui: &mut egui::Ui, params: &DrumParams) {
                 let mode = params.round_robin_mode.value();
                 global_control_head(ui, "ROUND ROBIN", params.round_robin_mode.label());
                 if let Some(picked) =
-                    widgets::segmented(ui, ROUND_ROBIN_LABELS, mode.max(0) as usize, false)
+                    widgets::segmented(ui, ROUND_ROBIN_LABELS, mode.max(0) as usize)
                 {
                     params.round_robin_mode.set_value(picked as i32);
                 }

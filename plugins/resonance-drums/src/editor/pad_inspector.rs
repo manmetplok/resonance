@@ -13,7 +13,7 @@
 
 use std::sync::atomic::Ordering;
 
-use wayland_plugin_gui::egui;
+use wayland_plugin_gui::{egui, widgets};
 
 use resonance_plugin::param::Param;
 
@@ -24,7 +24,7 @@ use crate::rr_display;
 use crate::sample_info::PadSampleInfo;
 use crate::KitBridge;
 
-use super::{reload_kit, theme, widgets};
+use super::{reload_kit, theme};
 
 const PANEL_RADIUS: f32 = theme::RADIUS_PANEL;
 

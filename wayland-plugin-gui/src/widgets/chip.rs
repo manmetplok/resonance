@@ -27,6 +27,11 @@
 //!   genuinely wants a dead chip sets `hover` equal to `idle`.
 //! - **disabled state.** Only the granular chips had one. It is part of
 //!   every style now; `enabled: true` chips never reach it.
+//! - **accessibility.** The button-based forks got an AccessKit label
+//!   for free from `egui::Button`; the painter-drawn ones never had
+//!   one. [`chip_styled`] reports its own now (ba todo #1335), so the
+//!   consumers that migrated off `egui::Button` kept what they had and
+//!   the granular chips gained it.
 //!
 //! Geometry is painter-driven rather than `egui::Button`-driven so a
 //! chip measures the same in every editor. [`ChipStyle::LAVENDER`]
@@ -261,6 +266,21 @@ pub fn chip_styled(ui: &mut egui::Ui, chip: &Chip<'_>) -> bool {
         egui::Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(style.size_for(galley.size()), sense);
+
+    // The `egui::Button` the drums and wavetable forks were built on
+    // reported itself to AccessKit; a painter-drawn chip has to do that
+    // by hand or the migration would silently take the label away from a
+    // screen reader. Keyboard focus and Space/Enter activation need no
+    // help — `Sense::click()` carries `FOCUSABLE` and egui turns the key
+    // press into a click for any clickable widget.
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            chip.enabled,
+            chip.active,
+            galley.text(),
+        )
+    });
 
     if ui.is_rect_visible(rect) {
         let colors = style.colors(chip.active, chip.enabled, response.hovered());

@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use wayland_plugin_gui::widgets::{slider as slider_widget, HSlider, SliderStyle};
 use wayland_plugin_gui::{egui, EditorApp};
 
 use resonance_plugin::preset_ui::preset_bar;
@@ -127,21 +128,31 @@ fn draw_header(ui: &mut egui::Ui, app: &mut EqEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
+        // Output trim: the shared kit's slider, like the band strip
+        // below it (ba todo #1335). Bipolar, so the fill runs out from
+        // 0 dB. The raw `egui::Slider` this replaces carried an inline
+        // value box you could click and type into; the shared slider has
+        // no such box in any editor, so the number moves to a readout
+        // beside it and exact entry is gone — arrow keys with the slider
+        // focused are the fine adjustment now.
         ui.label(egui::RichText::new("Output").color(theme::TEXT_DIM));
         let mut gain = app.params.output_gain.value();
-        if ui
-            .add(
-                egui::Slider::new(&mut gain, -24.0..=24.0)
-                    .suffix(" dB")
-                    .fixed_decimals(1)
-                    .show_value(true),
-            )
-            .changed()
-        {
+        let slider = HSlider::new(OUTPUT_SLIDER_W, gain / OUTPUT_GAIN_DB * 0.5 + 0.5)
+            .bipolar(true)
+            .style(SliderStyle::CLASSIC);
+        if let Some(travel) = slider_widget(ui, &slider) {
+            gain = (travel * 2.0 - 1.0) * OUTPUT_GAIN_DB;
             app.params.output_gain.set_value(gain);
         }
+        ui.label(egui::RichText::new(format!("{:+.1} dB", gain)).color(theme::TEXT_DIM));
     });
 }
+
+/// Width of the header's Output slider, px — `egui::Slider`'s own
+/// default `slider_width`, which is what it was laid out at.
+const OUTPUT_SLIDER_W: f32 = 100.0;
+/// Half-range of the Output trim, dB (it runs `-24..=24`).
+const OUTPUT_GAIN_DB: f32 = 24.0;
 
 /// One button of the Off/Pre/Post analyzer toggle. Renders as a
 /// borderless text button that highlights when selected.

@@ -5,6 +5,12 @@
 //! visualisations. The [`WavetableEditorFactory`] implements
 //! [`resonance_plugin::gui::EditorFactory`] and is returned from the
 //! plugin's `editor_factory()` hook.
+//!
+//! The controls themselves come from `wayland_plugin_gui::widgets`; the
+//! local `editor/widgets/` copies of the chip, the segmented control and
+//! the slider went away with ba todo #1335. What stays local is the
+//! *binding* layer in [`tabs`], which is the only place allowed to turn
+//! a parameter into a control (ba todo #1285).
 
 mod app;
 mod chrome;
@@ -13,7 +19,6 @@ mod factory;
 mod tabs;
 mod theme;
 mod viz;
-mod widgets;
 
 pub use factory::WavetableEditorFactory;
 

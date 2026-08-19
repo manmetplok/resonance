@@ -50,7 +50,8 @@ pub mod slider;
 pub use chip::{chip_button, chip_styled, Chip, ChipColors, ChipPalette, ChipStyle};
 pub use segmented::{segmented, segmented_styled, SegmentedStyle};
 pub use slider::{
-    slider, slider_bipolar, slider_bipolar_warm, slider_unipolar, HSlider, SliderStyle, SliderTone,
+    slider, slider_bipolar, slider_bipolar_warm, slider_unipolar, HSlider, SliderPalette,
+    SliderStyle, SliderTone,
 };
 
 // ---------------------------------------------------------------------------

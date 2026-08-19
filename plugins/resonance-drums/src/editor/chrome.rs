@@ -5,14 +5,14 @@
 
 use std::sync::atomic::Ordering;
 
-use wayland_plugin_gui::egui;
+use wayland_plugin_gui::{egui, widgets};
 
 use crate::kit_loader::KitStatus;
 use crate::rr_display;
 use crate::sample_info;
 
 use super::app::DrumsEditorApp;
-use super::{kit_browser, theme, widgets};
+use super::{kit_browser, theme};
 
 pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.horizontal_centered(|ui| {
@@ -82,7 +82,7 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         );
         ui.add_space(8.0);
 
-        let _ = widgets::segmented(ui, &["Pads"], 0, false);
+        let _ = widgets::segmented(ui, &["Pads"], 0);
         ui.add_space(10.0);
         ui.label(
             egui::RichText::new("Mic and articulation pickers live in each pad's inspector →")

@@ -34,9 +34,8 @@ pub mod lfo;
 pub mod mod_matrix;
 pub mod osc;
 
-use wayland_plugin_gui::egui;
+use wayland_plugin_gui::{egui, widgets};
 
-use crate::editor::widgets;
 use resonance_plugin::param::{FloatParam, IntParam, Param};
 
 /// A parameter whose range spans zero is drawn centre-out with a centre
@@ -127,7 +126,12 @@ fn int_knob_inner(ui: &mut egui::Ui, label: &str, param: &IntParam, value_text: 
 pub(crate) fn float_slider(ui: &mut egui::Ui, width: f32, param: &FloatParam) {
     let range = param.range();
     let bipolar = is_bipolar(range.min(), range.max());
-    if let Some(travel) = widgets::slider_unit(ui, width, param.normalized_value(), bipolar) {
+    // The editor's own `slider_unit` was the shared `HSlider` with the
+    // `bipolar` flag already curried in (ba todo #1335); this is the same
+    // widget, and the "never sees a plain value" rule the fork's doc
+    // stated is a property of this binding, not of the drawing code.
+    let slider = widgets::HSlider::new(width, param.normalized_value()).bipolar(bipolar);
+    if let Some(travel) = widgets::slider(ui, &slider) {
         param.set_normalized(travel);
     }
 }

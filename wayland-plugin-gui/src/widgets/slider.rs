@@ -20,14 +20,76 @@
 //! Values are in unit (`0..1`) space at the drawing layer; the bipolar
 //! entry points map `-1..1` on and off it. A click or a drag anywhere on
 //! the track positions the value — the widget has no separate "grab the
-//! thumb" mode, and never had one in either fork.
+//! thumb" mode, and never had one in either fork. Arrow keys nudge it
+//! while it has keyboard focus, the way `egui::Slider` does.
+//!
+//! The EQ moved onto this slider from a raw `egui::Slider` (ba todo
+//! #1335). It is the only editor on the [`classic`] palette, so the
+//! surface colours are a [`SliderPalette`] rather than hard-coded
+//! lavender tokens — otherwise the shared widget could not have been
+//! adopted there without dragging a lavender accent into a blue editor.
+//! The palette migration itself is ba todo #1338's; when it lands, the
+//! EQ swaps [`SliderStyle::CLASSIC`] for [`SliderStyle::LAVENDER`] and
+//! nothing else changes.
 
-use crate::theme::lavender as theme;
+use crate::theme::{classic, lavender as theme};
 
-/// Which accent a slider paints its fill and thumb ring with.
+/// Surface colours of a slider.
+///
+/// Split out of the geometry because the two are chosen independently:
+/// every editor in the fleet wants the same 18 px row, and the EQ wants
+/// it in a different palette.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SliderPalette {
+    /// Unfilled track.
+    pub track: egui::Color32,
+    /// Track outline.
+    pub track_stroke: egui::Color32,
+    /// Fill and thumb ring of an [`SliderTone::Accent`] slider.
+    pub accent: egui::Color32,
+    /// Fill of a [`SliderTone::Warm`] slider, and of the negative side
+    /// of any bipolar one.
+    pub warm: egui::Color32,
+    /// Thumb interior at rest.
+    pub thumb: egui::Color32,
+    /// Thumb interior while hovered.
+    pub thumb_hover: egui::Color32,
+    /// The centre tick of a bipolar slider.
+    pub tick: egui::Color32,
+}
+
+impl SliderPalette {
+    /// The canonical lavender palette — what both forks painted with.
+    pub const LAVENDER: Self = Self {
+        track: theme::BG_1,
+        track_stroke: theme::LINE_2,
+        accent: theme::ACCENT,
+        warm: theme::WARM,
+        thumb: theme::BG_3,
+        thumb_hover: theme::ACCENT_SOFT,
+        tick: theme::TEXT_4,
+    };
+
+    /// The older blue-accent palette the effect editors ship with. The
+    /// thumb keeps the same idle-surface / hover-accent relationship
+    /// `LAVENDER` has; `classic` simply has no soft accent to use, so
+    /// the hover state is the accent itself.
+    pub const CLASSIC: Self = Self {
+        track: classic::BG,
+        track_stroke: classic::BORDER,
+        accent: classic::ACCENT,
+        warm: classic::WARN,
+        thumb: classic::PANEL_LIGHT,
+        thumb_hover: classic::ACCENT,
+        tick: classic::TEXT_DIM,
+    };
+}
+
+/// Which of a palette's two accents a slider paints its fill and thumb
+/// ring with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SliderTone {
-    /// The lavender brand accent — the default.
+    /// The brand accent — the default.
     Accent,
     /// The warm token, for parameters that are already polarity- or
     /// temperature-coloured (the drums mic-balance slider).
@@ -35,16 +97,16 @@ pub enum SliderTone {
 }
 
 impl SliderTone {
-    /// The colour this tone paints with.
-    pub fn color(self) -> egui::Color32 {
+    /// The colour this tone paints with, in a given palette.
+    pub fn color(self, palette: &SliderPalette) -> egui::Color32 {
         match self {
-            Self::Accent => theme::ACCENT,
-            Self::Warm => theme::WARM,
+            Self::Accent => palette.accent,
+            Self::Warm => palette.warm,
         }
     }
 }
 
-/// Geometry of a horizontal slider.
+/// Geometry and palette of a horizontal slider.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SliderStyle {
     /// Total height of the allocated row, px.
@@ -53,6 +115,8 @@ pub struct SliderStyle {
     pub track_height: f32,
     /// Thumb radius, px.
     pub thumb_radius: f32,
+    /// Surface colours.
+    pub palette: SliderPalette,
 }
 
 impl SliderStyle {
@@ -61,6 +125,17 @@ impl SliderStyle {
         height: 18.0,
         track_height: 3.0,
         thumb_radius: 5.5,
+        palette: SliderPalette::LAVENDER,
+    };
+
+    /// The same row in the classic palette (the EQ). 18 px is also what
+    /// `egui::Slider` allocated there — `spacing.interact_size.y` — so
+    /// the band columns keep their height.
+    pub const CLASSIC: Self = Self {
+        height: 18.0,
+        track_height: 3.0,
+        thumb_radius: 5.5,
+        palette: SliderPalette::CLASSIC,
     };
 }
 
@@ -181,7 +256,7 @@ pub fn fill_span(value_unit: f32, bipolar: bool) -> (f32, f32, bool) {
 }
 
 /// Draw a configured slider and handle its input. Returns the new unit
-/// value while the pointer is positioning it.
+/// value while the pointer or the keyboard is positioning it.
 pub fn slider(ui: &mut egui::Ui, s: &HSlider) -> Option<f32> {
     let style = s.style;
     let size = egui::vec2(s.width, style.height);
@@ -191,16 +266,68 @@ pub fn slider(ui: &mut egui::Ui, s: &HSlider) -> Option<f32> {
         draw(ui, rect, s, response.hovered());
     }
 
+    let mut new_unit = None;
     if response.dragged() || response.clicked() {
         if let Some(p) = response.interact_pointer_pos() {
-            return Some(((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
+            new_unit = Some(((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
         }
     }
-    None
+    let steps = arrow_key_steps(ui, &response);
+    if steps != 0.0 {
+        // One pixel of travel per press, which is `egui::Slider`'s own
+        // `ui_point_per_step`. What we cannot reproduce is its
+        // "smart aim" — the pass that rounds a drag towards a round
+        // number — because that needs the plain range, and this widget
+        // only ever sees unit travel.
+        let from = new_unit.unwrap_or(s.value_unit);
+        new_unit = Some((from + steps / rect.width().max(1.0)).clamp(0.0, 1.0));
+    }
+
+    // Same reasoning as the chip's: `egui::Slider` reported itself to
+    // AccessKit and the editors that migrated onto this one would
+    // otherwise have lost that. The forks never had it.
+    response.widget_info(|| {
+        egui::WidgetInfo::slider(
+            ui.is_enabled(),
+            f64::from(new_unit.unwrap_or(s.value_unit)),
+            "",
+        )
+    });
+
+    new_unit
+}
+
+/// Net arrow-key presses this frame — right minus left — while the
+/// slider holds keyboard focus, or `0.0` when it does not.
+///
+/// The horizontal arrows are locked to the widget while it is focused
+/// so they adjust the value instead of moving focus to the next
+/// control, exactly as `egui::Slider` does for a horizontal slider.
+fn arrow_key_steps(ui: &egui::Ui, response: &egui::Response) -> f32 {
+    if !response.has_focus() {
+        return 0.0;
+    }
+    ui.memory_mut(|m| {
+        m.set_focus_lock_filter(
+            response.id,
+            egui::EventFilter {
+                horizontal_arrows: true,
+                ..Default::default()
+            },
+        );
+    });
+    let (left, right) = ui.input(|i| {
+        (
+            i.num_presses(egui::Key::ArrowLeft),
+            i.num_presses(egui::Key::ArrowRight),
+        )
+    });
+    right as f32 - left as f32
 }
 
 fn draw(ui: &egui::Ui, rect: egui::Rect, s: &HSlider, hovered: bool) {
     let style = s.style;
+    let palette = style.palette;
     let painter = ui.painter_at(rect);
 
     let track_y = rect.center().y;
@@ -208,20 +335,20 @@ fn draw(ui: &egui::Ui, rect: egui::Rect, s: &HSlider, hovered: bool) {
         egui::pos2(rect.left(), track_y - style.track_height * 0.5),
         egui::vec2(rect.width(), style.track_height),
     );
-    painter.rect_filled(track_rect, 1.5, theme::BG_1);
+    painter.rect_filled(track_rect, 1.5, palette.track);
     painter.rect_stroke(
         track_rect,
         1.5,
-        egui::Stroke::new(1.0, theme::LINE_2),
+        egui::Stroke::new(1.0, palette.track_stroke),
         egui::StrokeKind::Inside,
     );
 
     let v = s.value_unit.clamp(0.0, 1.0);
     let thumb_x = rect.left() + v * rect.width();
-    let primary = s.tone.color();
+    let primary = s.tone.color(&palette);
 
     let (from, to, negative) = fill_span(v, s.bipolar);
-    let fill_color = if negative { theme::WARM } else { primary };
+    let fill_color = if negative { palette.warm } else { primary };
     painter.rect_filled(
         egui::Rect::from_min_max(
             egui::pos2(rect.left() + from * rect.width(), track_rect.top()),
@@ -238,15 +365,15 @@ fn draw(ui: &egui::Ui, rect: egui::Rect, s: &HSlider, hovered: bool) {
                 egui::pos2(center_x, track_y - 4.0),
                 egui::pos2(center_x, track_y + 4.0),
             ],
-            egui::Stroke::new(1.0, theme::TEXT_4),
+            egui::Stroke::new(1.0, palette.tick),
         );
     }
 
     // Thumb.
     let thumb_color = if hovered {
-        theme::ACCENT_SOFT
+        palette.thumb_hover
     } else {
-        theme::BG_3
+        palette.thumb
     };
     let center = egui::pos2(thumb_x, track_y);
     painter.circle_filled(center, style.thumb_radius, thumb_color);
