@@ -785,6 +785,46 @@ fn state_loaded_while_active_is_visible_to_the_host_immediately() {
     assert_eq!(get_value(&mut instance, "taps"), 7.0);
 }
 
+/// The same load, but saved again after deactivation with no audio block
+/// in between — the sequence a host performs when it opens a project while
+/// the transport is stopped and the user saves before pressing play.
+///
+/// `get_value` above reads the shared atomics, so it cannot see this: the
+/// values are in `shared` either way. What the plugin OBJECT holds is a
+/// different question, and once deactivated the main-thread save path asks
+/// the object, not the atomics. `activate` syncs shared -> plugin, but
+/// until ba todo #1376 `deactivate` did not, so the object still held its
+/// pre-load values and this save wrote every parameter at its default —
+/// the loaded project silently persisted as a blank one.
+#[test]
+fn state_loaded_while_active_survives_deactivation_without_a_block() {
+    let mut instance = bridge_instance();
+    let bytes = serde_json::to_vec(&json!({
+        "params": { "mix": 0.125, "taps": 7.0, "bypass": 1.0, "internal": 18.0 }
+    }))
+    .unwrap();
+
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(load_state(&mut instance, &bytes));
+    // Deliberately no `process()` — that is what makes this the failing
+    // case. A single block would consume `params_dirty` and copy the
+    // loaded values into the plugin, hiding the defect.
+    instance.deactivate(processor);
+
+    let saved = state_json(&save_state(&mut instance));
+    let params = &saved["params"];
+    assert_eq!(
+        params["mix"], 0.125,
+        "a state saved after deactivation must describe the state that was \
+         loaded, not the values the plugin object was left holding"
+    );
+    assert_eq!(params["taps"], 7.0);
+    assert_eq!(params["bypass"], 1.0);
+    assert_eq!(params["internal"], 18.0);
+}
+
 /// The load path that runs while the plugin is active writes the shared
 /// atomics directly instead of going through `Param::set_plain`, so it has
 /// to reproduce that method's guards itself. If it doesn't, reopening the
