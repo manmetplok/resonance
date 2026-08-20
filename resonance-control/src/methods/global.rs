@@ -48,8 +48,64 @@ use serde::{Deserialize, Serialize};
 /// values at the playhead and say nothing about the rest of the song.
 pub const LIST_EVENTS: &str = "global.list_events";
 
+/// `global.add_tempo_event` — put a tempo change on the tempo track at a
+/// bar ([`AddTempoEventParams`] -> [`MutationAck`](crate::MutationAck)).
+///
+/// **Upsert by bar.** A bar carries at most one tempo event, so adding at
+/// a bar that already has one REPLACES its BPM rather than stacking a
+/// second event there. Calling twice with different values therefore
+/// leaves the second value and one event, not two — which is also what
+/// makes the call safe to retry.
+///
+/// Bar 1 is the song's initial tempo; adding there rewrites it, exactly
+/// as `transport.set_tempo` does.
+pub const ADD_TEMPO_EVENT: &str = "global.add_tempo_event";
+
+/// `global.add_signature_event` — put a meter change on the signature
+/// track at a bar ([`AddSignatureEventParams`] ->
+/// [`MutationAck`](crate::MutationAck)).
+///
+/// **Upsert by bar**, on the same rule as [`ADD_TEMPO_EVENT`]: one meter
+/// per bar, a second add at the same bar replaces the first.
+///
+/// Bar 1 is the song's initial meter; adding there rewrites it, which is
+/// all `transport.set_time_signature` can do. Every LATER meter change
+/// needs this method.
+pub const ADD_SIGNATURE_EVENT: &str = "global.add_signature_event";
+
 /// All `global.*` method names.
-pub const METHODS: &[&str] = &[LIST_EVENTS];
+pub const METHODS: &[&str] = &[LIST_EVENTS, ADD_TEMPO_EVENT, ADD_SIGNATURE_EVENT];
+
+/// Params for [`ADD_TEMPO_EVENT`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AddTempoEventParams {
+    /// 1-based bar the new tempo takes effect at. An existing tempo
+    /// event at this bar is overwritten, not duplicated. Bar 0 is
+    /// rejected; bar 1 rewrites the song's initial tempo.
+    pub bar: u32,
+    /// Beats per minute from this bar until the next tempo event.
+    /// Rejected outside 20..=300 rather than clamped, so a caller that
+    /// asked for something impossible learns it instead of silently
+    /// getting a different tempo.
+    pub bpm: f32,
+}
+
+/// Params for [`ADD_SIGNATURE_EVENT`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AddSignatureEventParams {
+    /// 1-based bar the new meter takes effect at. An existing meter
+    /// event at this bar is overwritten, not duplicated. Bar 0 is
+    /// rejected; bar 1 rewrites the song's initial meter.
+    pub bar: u32,
+    /// Beats per bar (the top number), 1..=32.
+    pub numerator: u8,
+    /// Note value that gets the beat (the bottom number): a power of two
+    /// in 1..=32, e.g. 8 for 7/8. Resolved, not an exponent — an
+    /// out-of-range or non-power-of-two value is rejected.
+    pub denominator: u8,
+}
 
 /// One tempo change on the global tempo track.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

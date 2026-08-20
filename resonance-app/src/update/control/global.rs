@@ -19,6 +19,25 @@
 //! these events 0-based. [`state_bar`] and [`wire_bar`] are the only two
 //! places that conversion happens.
 //!
+//! # One event per bar: the adds upsert
+//!
+//! `global.add_tempo_event` / `global.add_signature_event` REPLACE an
+//! existing event of their kind at that bar rather than stacking a
+//! second one on it. `AddSignatureEvent` always behaved that way;
+//! `AddTempoEvent` used to push unconditionally and re-sort, leaving two
+//! events on one bar — a duplicate bar in `list_events` and in
+//! `song.summary`, and a bar that `tempo_event_index` (a find-first)
+//! could no longer address unambiguously.
+//!
+//! That asymmetry is fixed in the domain message itself (ba todo #1382,
+//! `update::global_track`), not papered over here by picking between an
+//! add and an edit: the handler would then have to dispatch
+//! `UpdateTempoEvent`, which is classified `UndoAction::Skip` because it
+//! is the drag-move message, so the "correction" case would silently be
+//! the one edit a user could not undo. Fixing the message keeps one code
+//! path, keeps the classification at `Record`, and stops the GUI's own
+//! double-click from producing the duplicate too.
+//!
 //! # Undo, and why every mutator must route through `update()`
 //!
 //! Global-track edits are ALREADY undoable — not here, but in the
@@ -39,13 +58,16 @@
 //! tempo map, so with nothing open the honest answer is `busy` rather
 //! than a made-up 120 BPM 4/4 that reads like a real song.
 
-use crate::message::Message;
+use crate::message::{GlobalTrackMessage, Message};
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::global::{
-    self as proto, GlobalEvents, SignatureEventView, TempoEventView,
+    self as proto, AddSignatureEventParams, AddTempoEventParams, GlobalEvents, SignatureEventView,
+    TempoEventView,
 };
 use resonance_control::{Request, Response, RpcError};
+
+use super::reply::{ack_task, reject};
 
 /// Handle a `global.*` request, or `None` when `method` belongs to
 /// another namespace.
@@ -55,6 +77,8 @@ pub(super) fn try_handle(
 ) -> Option<(Response, Task<Message>)> {
     let handled = match request.method.as_str() {
         proto::LIST_EVENTS => list_events(app, request),
+        proto::ADD_TEMPO_EVENT => add_tempo_event(app, request),
+        proto::ADD_SIGNATURE_EVENT => add_signature_event(app, request),
         _ => return None,
     };
     Some(handled)
@@ -68,6 +92,65 @@ fn list_events(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
         revision: app.revision(),
     };
     (super::success(request, &result), Task::none())
+}
+
+/// `global.add_tempo_event` — a tempo change at a bar, upserting.
+///
+/// Dispatches the GUI's own `AddTempoEvent`, which since ba todo #1382
+/// replaces an existing event at that bar instead of pushing a second
+/// one (see [`crate::update::global_track`]): one bar, one tempo, so a
+/// repeated call is a correction rather than a pile-up and the bar stays
+/// a usable address for `global.edit_*` / `global.remove_*`.
+fn add_tempo_event(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: AddTempoEventParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let bar = match state_bar(params.bar) {
+        Ok(bar) => bar,
+        Err(e) => return reject(request, e),
+    };
+    if let Err(e) = super::validate_bpm(params.bpm as f64) {
+        return reject(request, e);
+    }
+    let task = super::run_via_update(
+        app,
+        Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
+            bar,
+            bpm: params.bpm,
+        }),
+    );
+    ack_task(app, request, task)
+}
+
+/// `global.add_signature_event` — a meter change at a bar, upserting.
+///
+/// `AddSignatureEvent` has always overwritten an existing event at the
+/// same bar; the meter is validated first so an illegal one is refused
+/// with a reason instead of being written to the track.
+fn add_signature_event(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: AddSignatureEventParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let bar = match state_bar(params.bar) {
+        Ok(bar) => bar,
+        Err(e) => return reject(request, e),
+    };
+    // Shared with `transport.set_time_signature`, which writes the bar-1
+    // event of this same track (ba doc #286 §2).
+    if let Err(e) = super::validate_time_signature(params.numerator, params.denominator) {
+        return reject(request, e);
+    }
+    let task = super::run_via_update(
+        app,
+        Message::GlobalTrack(GlobalTrackMessage::AddSignatureEvent {
+            bar,
+            numerator: params.numerator,
+            denominator: params.denominator,
+        }),
+    );
+    ack_task(app, request, task)
 }
 
 // ---------------------------------------------------------------------------
@@ -112,10 +195,8 @@ fn wire_bar(bar: u32) -> u32 {
 /// 1-based wire bar -> app 0-based bar, rejecting bar 0 rather than
 /// underflowing to the last bar of the song.
 ///
-/// Not called yet — `list_events` only converts the other way. It is
-/// established here rather than inlined later so that every `global.*`
-/// mutator (slices #1382-#1384) reads a bar the same way.
-#[allow(dead_code)]
+/// Every `global.*` mutator reads its `bar` param through here, so the
+/// conversion and the bar-0 refusal are written once for the namespace.
 pub(super) fn state_bar(bar: u32) -> Result<u32, RpcError> {
     bar.checked_sub(1)
         .ok_or_else(|| RpcError::invalid_params("bars are 1-based; bar must be at least 1"))
@@ -125,7 +206,12 @@ pub(super) fn state_bar(bar: u32) -> Result<u32, RpcError> {
 /// or `None` when no tempo change starts there.
 ///
 /// Resolve and use immediately: the vector re-sorts on every mutation.
-/// Unused until the mutating slices land; see [`state_bar`].
+///
+/// Still unused after the add slice (#1382): `add_tempo_event` needs no
+/// lookup, because `AddTempoEvent` itself upserts by bar rather than the
+/// handler picking between an add and an edit. The index-addressed
+/// messages that need this are `UpdateTempoEvent` (#1383) and
+/// `remove_tempo_event` (#1384).
 #[allow(dead_code)]
 pub(super) fn tempo_event_index(app: &Resonance, bar: u32) -> Option<usize> {
     let bar = state_bar(bar).ok()?;
@@ -136,7 +222,9 @@ pub(super) fn tempo_event_index(app: &Resonance, bar: u32) -> Option<usize> {
 /// bar), or `None` when no meter change starts there.
 ///
 /// Resolve and use immediately: the vector re-sorts on every mutation.
-/// Unused until the mutating slices land; see [`state_bar`].
+/// Unused for the same reason as [`tempo_event_index`] — the add path
+/// upserts without one; `UpdateSignatureEvent` (#1383) and
+/// `remove_signature_event` (#1384) are the callers.
 #[allow(dead_code)]
 pub(super) fn signature_event_index(app: &Resonance, bar: u32) -> Option<usize> {
     let bar = state_bar(bar).ok()?;

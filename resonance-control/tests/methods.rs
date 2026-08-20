@@ -5,8 +5,8 @@ use resonance_control::common::{MutationAck, PositionSpec};
 use resonance_control::ids::{ClipId, JobId, SectionDefinitionId, TrackId};
 use resonance_control::job::{JobStarted, JobState, JobStatus, WaitParams};
 use resonance_control::methods::{
-    self, control, generate, harmony, mixer, notes, project, render, section, track, transport,
-    vocal,
+    self, control, generate, global, harmony, mixer, notes, project, render, section, track,
+    transport, vocal,
 };
 use resonance_control::PROTOCOL_VERSION;
 use serde_json::json;
@@ -275,4 +275,41 @@ fn mixer_and_vocal_params_roundtrip() {
     let render_all: vocal::RenderParams = serde_json::from_value(json!({})).unwrap();
     assert_eq!(render_all, vocal::RenderParams::default());
     assert!(render_all.voicebank.is_none());
+}
+
+#[test]
+fn global_add_params_roundtrip_with_1_based_bars() {
+    // `bar` is the address, not an index, and it is 1-based like every
+    // other bar on this surface (ba doc #286 §2).
+    let tempo = global::AddTempoEventParams {
+        bar: 33,
+        bpm: 140.0,
+    };
+    assert_eq!(
+        serde_json::to_value(tempo).unwrap(),
+        json!({"bar": 33, "bpm": 140.0})
+    );
+    let back: global::AddTempoEventParams =
+        serde_json::from_value(json!({"bar": 33, "bpm": 140.0})).unwrap();
+    assert_eq!(back, tempo);
+
+    // The denominator is RESOLVED (8 for 7/8), never an exponent.
+    let meter = global::AddSignatureEventParams {
+        bar: 17,
+        numerator: 7,
+        denominator: 8,
+    };
+    assert_eq!(
+        serde_json::to_value(meter).unwrap(),
+        json!({"bar": 17, "numerator": 7, "denominator": 8})
+    );
+    let back: global::AddSignatureEventParams =
+        serde_json::from_value(json!({"bar": 17, "numerator": 7, "denominator": 8})).unwrap();
+    assert_eq!(back, meter);
+
+    // Both adds are advertised, so a client can tell from the handshake
+    // whether this build can write the tempo map.
+    let caps = methods::capabilities();
+    assert!(caps.contains(&global::ADD_TEMPO_EVENT));
+    assert!(caps.contains(&global::ADD_SIGNATURE_EVENT));
 }
