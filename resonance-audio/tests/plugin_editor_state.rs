@@ -447,7 +447,7 @@ fn titlebar_close_is_picked_up_and_the_host_destroys_the_window() {
 }
 
 #[test]
-fn titlebar_close_with_was_destroyed_does_not_double_destroy() {
+fn titlebar_close_with_was_destroyed_is_acknowledged_with_a_destroy() {
     let (mut instance, state) = make_instance(GuiBehaviour::working());
     let state_ref = unsafe { &*state };
     assert_eq!(instance.open_gui(), Ok(()));
@@ -457,9 +457,52 @@ fn titlebar_close_with_was_destroyed_does_not_double_destroy() {
     assert!(instance.take_gui_closed());
     assert!(!instance.gui_open());
     assert_eq!(
-        state_ref.destroy_calls, 0,
-        "the plugin destroyed its own window; destroying it again is a use-after-free"
+        state_ref.destroy_calls, 1,
+        "clap/ext/gui.h: \"If was_destroyed is true, then the host must call \
+         clap_plugin_gui->destroy() to acknowledge the gui destruction.\" \
+         was_destroyed describes the WINDOW; the plugin never frees its own \
+         gui object, so destroy is the host's call either way"
     );
+}
+
+/// The property the two tests above are really protecting, stated once as
+/// a sequence rather than as a call count.
+///
+/// A plugin-initiated close must leave the plugin's own create/destroy
+/// pairing balanced, so that re-opening allocates on top of nothing. When
+/// `take_gui_closed` skipped the destroy, `gui_open` was still cleared —
+/// so the next `open_gui` sailed past its already-open guard and called
+/// `create` a second time on a gui that had never been destroyed. That is
+/// the shape of ba todo #1352 (a third editor dying in EGL init), which
+/// is why this pins the sequence and not just the teardown.
+#[test]
+fn reopening_after_a_titlebar_close_creates_only_on_a_balanced_teardown() {
+    for was_destroyed in [true, false] {
+        let (mut instance, state) = make_instance(GuiBehaviour::working());
+        let state_ref = unsafe { &*state };
+
+        assert_eq!(instance.open_gui(), Ok(()));
+        assert_eq!(state_ref.create_calls, 1);
+        assert_eq!(state_ref.destroy_calls, 0);
+
+        plugin_reports_closed(state_ref, was_destroyed);
+        assert!(instance.take_gui_closed());
+        assert_eq!(
+            state_ref.destroy_calls, 1,
+            "was_destroyed={was_destroyed}: the close must be acknowledged \
+             with exactly one destroy"
+        );
+
+        assert_eq!(instance.open_gui(), Ok(()));
+        assert_eq!(
+            (state_ref.create_calls, state_ref.destroy_calls),
+            (2, 1),
+            "was_destroyed={was_destroyed}: re-opening must create again, and \
+             every create must be preceded by the destroy of the one before \
+             it — two creates against one destroy is an allocation on top of \
+             a live gui"
+        );
+    }
 }
 
 #[test]

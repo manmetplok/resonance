@@ -120,26 +120,45 @@ impl ClapInstance {
     /// went from open to closed, which is the engine's cue to emit
     /// `AudioEvent::PluginEditorState { open: false, failure: None }`.
     ///
-    /// Per the CLAP spec the host owns the teardown unless the plugin
-    /// already destroyed the window itself (`was_destroyed`), so we call
-    /// `destroy` exactly when the plugin did not.
+    /// `destroy` is called unconditionally, and `was_destroyed` does not
+    /// affect the teardown at all.
+    ///
+    /// That is what the spec asks for in both directions, and an earlier
+    /// version of this function had it exactly backwards. From
+    /// `clap/ext/gui.h`, on `clap_host_gui.closed`:
+    ///
+    /// > If was_destroyed is true, then the host must call
+    /// > clap_plugin_gui->destroy() to acknowledge the gui destruction.
+    ///
+    /// `was_destroyed` describes the *window*, not the plugin's gui
+    /// object — the plugin never frees that itself. `create` "allocates
+    /// gui resources" and `destroy` "free[s] all resources associated
+    /// with the gui", and both are the host's to call. So when the flag
+    /// is true the host MUST destroy to acknowledge; when it is false the
+    /// host is choosing to tear the gui down, which is what `close_gui`
+    /// does anyway. Either way: destroy once.
+    ///
+    /// Skipping it on the `was_destroyed` path leaked the plugin's gui
+    /// resources for the rest of the instance's life, and — because
+    /// `gui_open` is cleared here — let the next `open_gui` call `create`
+    /// straight past its already-open guard with no intervening
+    /// `destroy`, which is not a sequence `gui.h` sanctions. Both are the
+    /// same class as ba todo #1352.
     ///
     /// Called from the engine thread's once-per-iteration poll while
     /// holding the instance lock — never from the audio callback.
     pub fn take_gui_closed(&mut self) -> bool {
-        let Some(was_destroyed) = self.host_data.take_gui_closed() else {
+        let Some(_was_destroyed) = self.host_data.take_gui_closed() else {
             return false;
         };
         if !self.gui_open {
             // A stale notification for a window we already tore down.
             return false;
         }
-        if !was_destroyed {
-            if let Some(gui) = self.gui_ext {
-                unsafe {
-                    if let Some(destroy) = (*gui).destroy {
-                        destroy(self.plugin);
-                    }
+        if let Some(gui) = self.gui_ext {
+            unsafe {
+                if let Some(destroy) = (*gui).destroy {
+                    destroy(self.plugin);
                 }
             }
         }
