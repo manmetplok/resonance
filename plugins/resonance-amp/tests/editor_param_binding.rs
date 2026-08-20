@@ -216,6 +216,28 @@ fn declared_params() -> Vec<(String, String)> {
     out
 }
 
+/// Every parameter ID `params.rs` declares, read from the first argument
+/// of each `*Param::new(...)` call.
+///
+/// IDs rather than field names on purpose: the id is what the host, the
+/// automation lane and `track.plugin_params` address the parameter by, so
+/// it is the name that has to line up with what `param()` hands out. A
+/// field renamed without its id (or vice versa) is exactly the drift this
+/// file exists to catch, and comparing field names would miss it.
+fn declared_param_ids() -> BTreeSet<String> {
+    let src = code_only(PARAMS_SRC);
+    let mut out = BTreeSet::new();
+    for (i, _) in src.match_indices("Param::new(") {
+        let rest = &src[i + "Param::new(".len()..];
+        let Some(open) = rest.find('"') else { continue };
+        let Some(close) = rest[open + 1..].find('"') else {
+            continue;
+        };
+        out.insert(rest[open + 1..open + 1 + close].to_string());
+    }
+    out
+}
+
 /// The body of a function in `lib.rs`, by the start of its signature.
 fn lib_fn_body(signature: &str) -> String {
     let body = code_only(LIB_SRC);
@@ -359,41 +381,41 @@ fn no_caption_restates_the_range_the_unit_or_the_readout() {
 // Surface guard: declared, registered, drawn, swept
 // ---------------------------------------------------------------------------
 
-/// A parameter that `params.rs` declares but `lib.rs` never returns from
-/// `param()` exists for the DSP and the editor and for nobody else: no
-/// host automation, no `track.plugin_params`, no plugin state. The
-/// reverse — a registered field that no longer exists — will not
-/// compile, so this is the direction that can rot.
+/// A parameter that `params.rs` declares but that never comes back out of
+/// the host-facing `param()` exists for the DSP and the editor and for
+/// nobody else: no host automation, no `track.plugin_params`, no plugin
+/// state. The reverse — a registered field that no longer exists — will
+/// not compile, so this is the direction that can rot.
+///
+/// Asked of the RUNTIME surface, not of the source. An earlier version
+/// scraped `lib.rs`'s `param()` body for `&self.params.<field>` and broke
+/// the moment that function was refactored to delegate
+/// (`self.params.param_at(index)`) — it then found nothing, reported an
+/// empty surface, and failed a plugin whose registration was perfectly
+/// fine. Walking `0..param_count()` and asking each parameter for its own
+/// id is what "registered with the host" actually means, and it cannot
+/// care how the delegation is spelled.
 #[test]
 fn every_declared_param_is_registered_with_the_host() {
-    let declared: BTreeSet<String> = declared_params().into_iter().map(|(n, _)| n).collect();
+    let declared: BTreeSet<String> = declared_param_ids();
 
-    let body = lib_fn_body("fn param(&self, index: usize)");
-    let registered: BTreeSet<String> = body
-        .match_indices("&self.params.")
-        .map(|(i, needle)| {
-            body[i + needle.len()..]
-                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .next()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .filter(|name| !name.is_empty())
+    let plugin = ResonanceAmp::new();
+    let registered: BTreeSet<String> = (0..plugin.param_count())
+        .map(|i| plugin.param(i).id().to_string())
         .collect();
 
     assert_eq!(
         declared, registered,
-        "params.rs and lib.rs's `param()` disagree about the parameter surface"
+        "params.rs declares one parameter surface and `param()` hands the \
+         host another"
     );
-
-    let count: usize = lib_fn_body("fn param_count(&self)")
-        .trim()
-        .parse()
-        .expect("param_count should be a bare literal");
     assert_eq!(
-        count,
+        plugin.param_count(),
         declared.len(),
-        "param_count reports {count} for {} declared parameters",
+        "param_count reports {} for {} declared parameters — an index in \
+         range that maps to no distinct parameter is a silently duplicated \
+         or unreachable control",
+        plugin.param_count(),
         declared.len()
     );
 }
