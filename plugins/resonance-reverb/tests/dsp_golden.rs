@@ -30,12 +30,18 @@
 //! construction from fixed constants, and the FDN modulation LFOs are
 //! built with fixed staggered phases. There is no RNG.
 //!
-//! `ReverbDsp::clear()` — what the host's `reset()` calls — does *not*
-//! reset those LFO phases: it clears the delay lines, the damping
-//! filters and the feedback state, and leaves `fdn.lfos` free-running.
-//! So a reset instance and a fresh instance do not render identically.
-//! Every scenario below therefore constructs a **fresh plugin**, which
-//! is the only starting state that is reproducible.
+//! `ReverbDsp::clear()` — what the host's `reset()` calls — used to
+//! leave those LFO phases free-running while clearing everything else,
+//! so a reset instance and a fresh instance did not render identically.
+//! Todo #1378 fixed that, and `tests/reset.rs` now pins the equivalence
+//! directly.
+//!
+//! Every scenario below still constructs a **fresh plugin**. That is now
+//! a style choice rather than a workaround — but keep it: a golden whose
+//! scenarios share one instance depends on scenario ORDER, and the next
+//! piece of state that `clear()` forgets would show up here as an
+//! inexplicable golden diff instead of as a clean failure in
+//! `tests/reset.rs`.
 //!
 //! # Tolerance: bit-exact
 //!
@@ -284,9 +290,8 @@ fn scenarios() -> Vec<Scenario> {
 
 /// Deterministic render of one scenario into the golden sample stream.
 ///
-/// A fresh plugin per scenario, never a reused-and-reset one: see the
-/// module header — `reset()` leaves the FDN modulation LFOs where they
-/// were, so only construction is a reproducible starting state.
+/// A fresh plugin per scenario, never a reused-and-reset one — so this
+/// render can never depend on scenario order. See the module header.
 fn render_scenario(s: &Scenario) -> Vec<f32> {
     let mut plugin = ResonanceReverb::new();
     (s.setup)(&plugin.params);

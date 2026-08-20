@@ -175,6 +175,15 @@ impl FdnBank {
         for f in &mut self.damping {
             f.clear();
         }
+        // The modulation LFOs advance on EVERY sample regardless of mod
+        // depth, so leaving them running made a reset tank render a
+        // different tail from a fresh one — the modal detuning picked up
+        // wherever the previous audio left it. `reset()` restores each
+        // channel's constructed phase, which keeps the bank's stagger
+        // (ba todo #1378).
+        for lfo in &mut self.lfos {
+            lfo.reset();
+        }
         self.feedback = [0.0; CHANNELS];
         self.energy_smoothed = [0.0; CHANNELS];
     }

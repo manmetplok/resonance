@@ -84,3 +84,49 @@ fn non_finite_initial_phase_is_sanitized() {
     let mut direct = Lfo::new(1.0, 48_000.0, 0.75);
     assert_eq!(wrapped.next(), direct.next());
 }
+
+#[test]
+fn reset_rewinds_to_the_constructed_phase() {
+    // Not to zero: LFO banks are built with a per-channel phase stagger
+    // to keep them decorrelated, so resetting to zero would collapse the
+    // bank into unison rather than clear it (ba todo #1378).
+    let mut lfo = Lfo::new(3.0, 48_000.0, 0.25);
+    let first = lfo.next();
+    for _ in 0..1_000 {
+        let _ = lfo.next();
+    }
+    lfo.reset();
+    assert_eq!(
+        lfo.next().to_bits(),
+        first.to_bits(),
+        "reset must resume the exact sample sequence a fresh LFO produces"
+    );
+}
+
+#[test]
+fn reset_leaves_the_rate_alone() {
+    // `clear()` on a DSP block means "forget the audio", not "forget how
+    // you were configured" — the host sets rates from parameters, which
+    // a reset must not silently revert.
+    let mut lfo = Lfo::new(1.0, 48_000.0, 0.0);
+    lfo.set_rate(200.0, 48_000.0);
+    let fast: Vec<u32> = (0..8).map(|_| lfo.next().to_bits()).collect();
+
+    lfo.reset();
+    let after: Vec<u32> = (0..8).map(|_| lfo.next().to_bits()).collect();
+    assert_eq!(fast, after, "reset changed the rate as well as the phase");
+}
+
+#[test]
+fn reset_on_an_untouched_lfo_changes_nothing() {
+    let mut fresh = Lfo::new(2.0, 48_000.0, 0.6);
+    let mut reset_first = Lfo::new(2.0, 48_000.0, 0.6);
+    reset_first.reset();
+    for i in 0..16 {
+        assert_eq!(
+            fresh.next().to_bits(),
+            reset_first.next().to_bits(),
+            "sample {i} diverged"
+        );
+    }
+}

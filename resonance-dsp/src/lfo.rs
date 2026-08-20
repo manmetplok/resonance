@@ -8,6 +8,13 @@
 pub struct Lfo {
     phase: f32,
     phase_inc: f32,
+    /// The phase this LFO was constructed with, so [`reset`](Lfo::reset)
+    /// can restore it. Banks of LFOs are routinely built with a
+    /// per-channel phase STAGGER to keep them decorrelated (the reverb's
+    /// FDN offsets channel `c` by `c / CHANNELS`), so resetting to zero
+    /// would collapse the bank into unison — a different sound, not a
+    /// cleared one.
+    initial_phase: f32,
 }
 
 const TABLE_BITS: usize = 10;
@@ -82,11 +89,27 @@ impl Lfo {
         Self {
             phase,
             phase_inc: sanitized_phase_inc(rate_hz, sample_rate),
+            initial_phase: phase,
         }
     }
 
     pub fn set_rate(&mut self, rate_hz: f32, sample_rate: f32) {
         self.phase_inc = sanitized_phase_inc(rate_hz, sample_rate);
+    }
+
+    /// Rewind the oscillator to the phase it was constructed with,
+    /// leaving its rate alone.
+    ///
+    /// This is what a DSP block's `clear()` / CLAP's `reset()` needs: the
+    /// phase accumulator free-runs on every sample, so without this a
+    /// "cleared" block still carries the modulation phase of whatever it
+    /// was playing before, and renders a measurably different tail from a
+    /// freshly constructed one given identical input (ba todo #1378).
+    ///
+    /// Restores the CONSTRUCTED phase rather than zero — see
+    /// [`initial_phase`](Self::initial_phase).
+    pub fn reset(&mut self) {
+        self.phase = self.initial_phase;
     }
 
     #[inline]
