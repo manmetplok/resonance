@@ -82,12 +82,21 @@ Prog is not a form so much as a refusal to reuse one. Common shapes:
 | Riff-and-return | A recurring instrumental figure between contrasting episodes — rondo with distortion. |
 | Odd-metre vamp | 5/4, 7/8, 11/8 groupings over a static harmony. |
 
-**Meter changes exist in the DAW but not in this API.** The signature track
-supports them; no control method reaches it, and `song_summary` reports the meter
-at the playhead rather than the song's. See the skill body — ask the user rather
-than inferring. For through-composed material, note that one definition per
-section means the chord grid is never shared: that is correct here, and it is why
-prog projects have many more definitions than a pop song of the same length.
+**Meter changes are writable from this API.** `global_add_signature_event` puts
+a meter change on the signature track at a 1-based bar, and `global_list_events`
+(or `song_summary.signature_events`) reads the whole track back — so a
+multi-meter prog form can be built end to end without the user touching the GUI.
+Read the track before laying anything out, and write the meter map *before* the
+placements: bars change length past a meter change, and existing material keeps
+its position in time rather than in bars. What has not changed is that
+`song_summary.time_signature` reports the meter at the **playhead**, not the
+song's; the event list is the only honest source. See the skill body for the
+choice between a real meter change and an odd grouping inside the grid, and for
+the `insert_bars` trap that strands events at their old bars.
+
+For through-composed material, note that one definition per section means the
+chord grid is never shared: that is correct here, and it is why prog projects
+have many more definitions than a pop song of the same length.
 
 ## Bar math
 
@@ -105,9 +114,28 @@ A section starting at bar *S* has its bar *N* at `S + N - 1`. The next section
 starts at `S + length`. Both are 1-based; clip- and section-relative beats are
 0-based.
 
-**These durations assume one tempo and one meter throughout.** The DAW has a
+**The table above assumes one tempo and one meter throughout.** The DAW has a
 tempo track as well as a signature track, and `song_summary` reports both
 `tempo_bpm` and `time_signature` **as they are at the playhead** — neither is a
-statement about the song. On anything with tempo or meter changes, the table
-above gives the duration of a passage at that tempo, not the length of the song.
-Ask rather than compute.
+statement about the song, and neither ever was.
+
+You no longer have to ask where the changes are: `song_summary.tempo_events` and
+`.signature_events` (or `global_list_events`) list every one of them with the
+1-based bar it takes effect at, sorted, and neither list is ever empty — bar 1
+carries the initial values, so **length 1 in both means the table above holds for
+the whole song**. Longer means it holds only per segment, and the song's length
+is the sum of the segments. Compute it; do not ask, and do not read `tempo_bpm`.
+
+Two things will make that arithmetic wrong if you assume them away:
+
+- **Tempo does not step between events, it ramps.** With 120 at bar 1 and 140 at
+  bar 17, the bars in between get progressively faster — the segment is *not*
+  sixteen bars of 120. If you want a flat segment and then a change, write a
+  second event at the same tempo just before the change (120 at bar 1, 120 at
+  bar 16, 140 at bar 17): bars 1–15 are then genuinely 120 and bar 16 is the
+  ramp. If you want the ramp, say so, and do not quote a duration computed as if
+  it were a step.
+- **The `240 / T` figure is the 4/4 bar.** A passage in another meter has a
+  different bar length, so read the section's real extent back from
+  `song_sections` and the event lists rather than extending the table by
+  arithmetic you have not checked.
