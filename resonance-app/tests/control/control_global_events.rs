@@ -271,16 +271,24 @@ fn adding_at_bar_1_rewrites_the_initial_events_rather_than_duplicating_them() {
 }
 
 #[test]
-fn an_added_tempo_event_is_undoable() {
+fn an_added_tempo_event_is_undoable_in_exactly_one_entry() {
     // The contract for every control edit: it lands in undo like a
     // manual one. It only holds because the handler synthesizes a
     // `GlobalTrackMessage` and routes it through `update()`, where
     // `undo::classify` maps `GlobalTrack(_)` to `Record` — writing
     // `app.tempo_events` directly would pass every assertion above and
     // silently bypass undo (doc #286 §3).
+    //
+    // The COUNT is asserted alongside the round trip, and redo after it,
+    // because a value-only round trip passes just as happily when the
+    // add recorded two entries: the first undo would restore the track
+    // and the second would silently roll back whatever the client did
+    // before it (ba todo #1385).
     let mut app = app_with_project();
+    let entries_before = undo_entry_count(&app);
     let _: MutationAck = add_tempo(&mut app, 33, 140.0).result().expect("add succeeds");
     assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (33, 140.0)]);
+    assert_eq!(undo_entry_count(&app), entries_before + 1, "one add, one entry");
 
     let _ = app.update(Message::Undo);
 
@@ -289,13 +297,33 @@ fn an_added_tempo_event_is_undoable() {
         vec![(1, 120.0)],
         "undo should take the tempo event back off the track"
     );
+    assert_eq!(
+        undo_entry_count(&app),
+        entries_before,
+        "and the single entry is spent: a second undo would otherwise eat the caller's \
+         previous edit"
+    );
+
+    let _ = app.update(Message::Redo);
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0), (33, 140.0)],
+        "and redo puts it back"
+    );
 }
 
 #[test]
-fn an_added_signature_event_is_undoable() {
+fn an_added_signature_event_is_undoable_in_exactly_one_entry() {
+    // Same contract as the tempo add, and worth its own test because the
+    // two take different routes into the classifier's `GlobalTrack(_) =>
+    // Record` arm — and because `AddSignatureEvent` also sets the shelf
+    // selection, which is the kind of extra state change that tempts a
+    // second undo entry into existence.
     let mut app = app_with_project();
+    let entries_before = undo_entry_count(&app);
     let _: MutationAck = add_signature(&mut app, 33, 7, 8).result().expect("add succeeds");
     assert_eq!(meter_triples(&mut app), vec![(1, 4, 4), (33, 7, 8)]);
+    assert_eq!(undo_entry_count(&app), entries_before + 1, "one add, one entry");
 
     let _ = app.update(Message::Undo);
 
@@ -303,6 +331,14 @@ fn an_added_signature_event_is_undoable() {
         meter_triples(&mut app),
         vec![(1, 4, 4)],
         "undo should take the meter change back off the track"
+    );
+    assert_eq!(undo_entry_count(&app), entries_before, "exactly one entry");
+
+    let _ = app.update(Message::Redo);
+    assert_eq!(
+        meter_triples(&mut app),
+        vec![(1, 4, 4), (33, 7, 8)],
+        "and redo puts it back"
     );
 }
 
@@ -1109,4 +1145,194 @@ fn the_removes_are_advertised_in_the_hello_capabilities() {
     let capabilities = resonance_control::methods::capabilities();
     assert!(capabilities.contains(&proto::REMOVE_TEMPO_EVENT));
     assert!(capabilities.contains(&proto::REMOVE_SIGNATURE_EVENT));
+}
+
+// ---------------------------------------------------------------------------
+// The undo contract across the whole namespace (ba todo #1385)
+// ---------------------------------------------------------------------------
+//
+// The three slices above each pin their own mutators' undo behaviour, and
+// between them all six are round-tripped. Two things no per-slice test can
+// reach are left, and they are what this section is:
+//
+// 1. THE CLASSIFICATION ITSELF. Every handler's correctness rests on four
+//    `undo::classify` arms, and until now all four were asserted only
+//    INDIRECTLY, through the state a round trip leaves behind. Reclassify
+//    `SelectEvent` from `Skip` to `Record` and the removes quietly start
+//    recording two entries per deletion; reclassify `UpdateTempoEvent`
+//    from `Skip` to `Record` and every tempo edit records two. Both
+//    failures surface a long way from the change, as a second undo doing
+//    something surprising. `classify` is a pure function of the message,
+//    so the arms can simply be asserted.
+//
+// 2. A MIXED SEQUENCE. Every test above starts from a clean project and
+//    performs one edit, so all of them pass even if the entry accounting
+//    is off by a constant. It takes a run of edits across BOTH tracks,
+//    undone one at a time back to the start, to show that each edit's
+//    entry restores exactly its own edit and no more.
+
+/// Every `GlobalTrackMessage` variant's undo classification, as the
+/// `global.*` handlers rely on it.
+///
+/// The match is exhaustive on purpose: a new variant will not compile
+/// until someone states what undo should do with it, rather than
+/// inheriting `Record` from the classifier's `GlobalTrack(_)` catch-all
+/// by default. That default is right for a message that mutates the
+/// track and wrong for anything gesture-shaped or view-only, and the
+/// difference is invisible at the call site.
+fn expected_action(message: &GlobalTrackMessage) -> &'static str {
+    match message {
+        // Aiming the shelf (and the removes' `DeleteSelectedEvent`) is
+        // view state, not an edit.
+        GlobalTrackMessage::SelectEvent(_) => "Skip",
+        // The drag bracket: `UpdateTempoEvent` is the mid-gesture move,
+        // so its entry comes from the Begin/Commit pair around it. This
+        // is why `global.edit_tempo_event` dispatches all three.
+        GlobalTrackMessage::StartTempoDrag(_) => "Begin",
+        GlobalTrackMessage::UpdateTempoEvent { .. } => "Skip",
+        GlobalTrackMessage::EndTempoDrag => "Commit",
+        // The plain edits: one dispatch, one entry.
+        GlobalTrackMessage::AddTempoEvent { .. } => "Record",
+        GlobalTrackMessage::AddSignatureEvent { .. } => "Record",
+        GlobalTrackMessage::UpdateSignatureEvent { .. } => "Record",
+        GlobalTrackMessage::DeleteSelectedEvent => "Record",
+    }
+}
+
+fn action_name(action: &resonance_app::undo::UndoAction) -> &'static str {
+    use resonance_app::undo::UndoAction;
+    match action {
+        UndoAction::Skip => "Skip",
+        UndoAction::Record => "Record",
+        UndoAction::RecordCoalesced(_) => "RecordCoalesced",
+        UndoAction::Begin => "Begin",
+        UndoAction::Commit => "Commit",
+    }
+}
+
+#[test]
+fn the_classifier_arms_the_global_handlers_depend_on_are_what_they_claim() {
+    let messages = [
+        GlobalTrackMessage::AddTempoEvent { bar: 32, bpm: 140.0 },
+        GlobalTrackMessage::UpdateTempoEvent {
+            index: 1,
+            bar: 32,
+            bpm: 140.0,
+        },
+        GlobalTrackMessage::StartTempoDrag(1),
+        GlobalTrackMessage::EndTempoDrag,
+        GlobalTrackMessage::AddSignatureEvent {
+            bar: 32,
+            numerator: 7,
+            denominator: 8,
+        },
+        GlobalTrackMessage::UpdateSignatureEvent {
+            index: 1,
+            numerator: 7,
+            denominator: 8,
+        },
+        GlobalTrackMessage::SelectEvent(Some(SelectedGlobalEvent {
+            kind: GlobalTrackKind::Tempo,
+            index: 1,
+        })),
+        GlobalTrackMessage::SelectEvent(None),
+        GlobalTrackMessage::DeleteSelectedEvent,
+    ];
+
+    for message in messages {
+        let expected = expected_action(&message);
+        let actual = action_name(&resonance_app::undo::classify(&Message::GlobalTrack(
+            message.clone(),
+        )));
+        assert_eq!(
+            actual, expected,
+            "undo::classify({message:?}) is {actual}, not {expected} — the global.* handlers \
+             are built on this classification, and changing it changes how many undo entries \
+             every one of them records"
+        );
+    }
+}
+
+#[test]
+fn a_run_of_edits_across_both_tracks_undoes_one_edit_at_a_time_back_to_the_start() {
+    // The off-by-one detector. Four edits of four different shapes — an
+    // add on each track, the bracketed tempo edit, and a removal (which
+    // is itself two dispatches) — then four undos, each asserted to land
+    // on the state the previous step left. If any single edit records
+    // two entries, or none, the run walks off by that much and one of
+    // these intermediate assertions fails; the per-slice tests above all
+    // still pass, because each of them starts clean and stops after one
+    // undo.
+    let mut app = app_with_project();
+    assert_eq!(
+        undo_entry_count(&app),
+        0,
+        "a freshly opened project has nothing to undo"
+    );
+
+    // The four states the run passes through, oldest first.
+    let initial = (vec![(1, 120.0)], vec![(1, 4, 4)]);
+    let after_tempo_add = (vec![(1, 120.0), (33, 140.0)], vec![(1, 4, 4)]);
+    let after_meter_add = (vec![(1, 120.0), (33, 140.0)], vec![(1, 4, 4), (33, 7, 8)]);
+    let after_tempo_edit = (vec![(1, 120.0), (17, 96.0)], vec![(1, 4, 4), (33, 7, 8)]);
+    let after_meter_remove = (vec![(1, 120.0), (17, 96.0)], vec![(1, 4, 4)]);
+
+    let _: MutationAck = add_tempo(&mut app, 33, 140.0).result().expect("tempo add");
+    let _: MutationAck = add_signature(&mut app, 33, 7, 8).result().expect("meter add");
+    // Retune AND relocate in one call, so the undone entry has to carry
+    // both halves of the bracket's edit.
+    let _: MutationAck = edit_tempo(&mut app, serde_json::json!({"bar": 33, "bpm": 96.0, "new_bar": 17}))
+        .result()
+        .expect("tempo edit");
+    let _: MutationAck = remove_signature(&mut app, 33).result().expect("meter removal");
+
+    assert_eq!(state(&mut app), after_meter_remove.clone());
+    assert_eq!(
+        undo_entry_count(&app),
+        4,
+        "four client edits, four undo entries — the selection dispatches the removal and the \
+         edit bracket also make are classified Skip and must not add any"
+    );
+
+    for expected in [
+        after_tempo_edit.clone(),
+        after_meter_add.clone(),
+        after_tempo_add.clone(),
+        initial.clone(),
+    ] {
+        let _ = app.update(Message::Undo);
+        assert_eq!(
+            state(&mut app),
+            expected,
+            "each undo must step back exactly one client edit"
+        );
+    }
+    assert_eq!(undo_entry_count(&app), 0, "and the history is spent, not overdrawn");
+
+    // A fifth undo has nothing of ours left to take, and must not reach
+    // behind the start of the run.
+    let _ = app.update(Message::Undo);
+    assert_eq!(state(&mut app), initial, "nothing left to undo");
+
+    // Forwards again, for the same reason: a redo stack that gained or
+    // lost an entry replays the run out of step.
+    for expected in [
+        after_tempo_add,
+        after_meter_add,
+        after_tempo_edit,
+        after_meter_remove,
+    ] {
+        let _ = app.update(Message::Redo);
+        assert_eq!(
+            state(&mut app),
+            expected,
+            "each redo must step forward exactly one client edit"
+        );
+    }
+}
+
+/// Both tracks as the wire reports them, for step-by-step comparison
+/// through an undo run.
+fn state(app: &mut Resonance) -> (Vec<(u32, f32)>, Vec<(u32, u8, u8)>) {
+    (tempo_pairs(app), meter_triples(app))
 }
