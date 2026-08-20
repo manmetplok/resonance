@@ -94,8 +94,16 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Set the global time signature, e.g. numerator 3, denominator 4 for 3/4 \
-                       (undoable edit).",
+        description = "Set the meter the song STARTS in, e.g. numerator 3, denominator 4 for \
+                       3/4 (undoable edit). \
+                       \
+                       THIS REWRITES THE BAR-1 EVENT OF THE SIGNATURE TRACK ONLY. It is not a \
+                       song-wide setting: if the song already changes meter later, those \
+                       changes stay exactly where they are, and this call moves only the \
+                       opening. To write a meter change anywhere else — a 7/8 bridge, a 6/8 \
+                       middle eight — use global_add_signature_event, which takes the bar. \
+                       global_list_events shows the whole track, so you can see what is \
+                       already on it before touching bar 1.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<transport::TransportResult>()
     )]

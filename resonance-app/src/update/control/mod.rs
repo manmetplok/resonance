@@ -414,6 +414,29 @@ pub(super) fn validate_time_signature(numerator: u8, denominator: u8) -> Result<
     Ok(())
 }
 
+/// Validate a tempo exactly as the app's own tempo field does: finite,
+/// and inside [`BPM_RANGE`].
+///
+/// One definition for the whole control layer, for the same reason as
+/// [`validate_time_signature`]: `transport.set_tempo` writes the bar-1
+/// tempo event and `global.add_tempo_event` writes the rest of the tempo
+/// track, and the two must not be able to disagree about what a legal
+/// tempo is. Rejects rather than clamps (which is what the GUI's
+/// `CommitBpm` / `UpdateTempoEvent` do), so a client learns why instead
+/// of silently getting a different tempo than it asked for.
+pub(super) fn validate_bpm(bpm: f64) -> Result<(), RpcError> {
+    if !bpm.is_finite() || !BPM_RANGE.contains(&bpm) {
+        return Err(RpcError::invalid_params(format!(
+            "bpm {bpm} out of range {BPM_RANGE:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Tempo range every control method accepts, mirroring the clamp in
+/// `CommitBpm` and `GlobalTrackMessage::UpdateTempoEvent`.
+const BPM_RANGE: std::ops::RangeInclusive<f64> = 20.0..=300.0;
+
 /// Parse params for a method whose params are entirely optional:
 /// absent/null params mean "defaults". (`Request::params` alone maps
 /// absent to JSON `null`, which serde refuses to turn into a struct.)

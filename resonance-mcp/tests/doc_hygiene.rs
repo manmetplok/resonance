@@ -192,6 +192,17 @@ fn known_traps_stay_documented() {
         ("generate_part", &["IGNORES"]),
         // The bass default is a placeholder, not a part.
         ("generate_part", &["RootPulse"]),
+        // transport.set_time_signature rewrites the bar-1 event and
+        // nothing else, so on a song that already changes meter it moves
+        // the opening and silently leaves the rest — an agent that reads
+        // only this tool must be sent to the one that takes a bar (ba doc
+        // #286 §5).
+        ("transport_set_time_signature", &["global_add_signature_event"]),
+        // Both adds upsert by bar. A caller cannot guess whether a second
+        // add at the same bar replaces or duplicates, and the two answers
+        // lead to very different songs.
+        ("global_add_tempo_event", &["REPLACES"]),
+        ("global_add_signature_event", &["REPLACES"]),
     ];
     for (tool, needles) in required {
         let description = by_name
