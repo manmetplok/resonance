@@ -44,6 +44,25 @@
 //!     RESONANCE_BLESS=1 cargo test -p resonance-gate --test dsp_golden
 //!
 //! A pure refactor must never need this.
+//!
+//! # Re-blessed once, deliberately (ba todo #1343)
+//!
+//! The fixture was regenerated when the swapped ballistics were fixed:
+//! `attack` had been driving the closing ramp and `release` the opening
+//! one, so every scenario here rendered its edges the wrong way round.
+//! 65 180 of 65 184 samples moved, peak delta 0.50 — a real sound change,
+//! signed off as such, not a rounding drift.
+//!
+//! The scenario table below was NOT retuned. Its settings span the useful
+//! range of both controls and stay meaningful under either reading, so
+//! leaving them alone keeps the fixture comparable across the change:
+//! the diff is purely what the fix did, with nothing else moving at the
+//! same time.
+//!
+//! `tests/ballistics.rs` is the test that says which way round the two
+//! controls belong. This file only pins that the samples do not move
+//! unnoticed; it would have been just as happy with the inverted build,
+//! which is exactly why the bug survived here for as long as it did.
 
 use std::path::PathBuf;
 

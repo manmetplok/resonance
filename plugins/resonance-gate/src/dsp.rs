@@ -20,6 +20,11 @@
 //!   a drum bus; `range` caps the attenuation so the closed state ducks
 //!   rather than mutes.
 //!
+//! The ballistics are the compressor's, but they cannot be used as
+//! named: they run on the gain-reduction envelope, which for a gate
+//! rises as it CLOSES. See [`gate_ballistics`] — getting this backwards
+//! made both controls do the opposite of their labels (ba todo #1343).
+//!
 //! The detector runs a peak envelope with instant attack and a short
 //! release ([`DETECTOR_RELEASE_MS`]) rather than reading instantaneous
 //! `|x|`. Without it the threshold comparison sees the waveform itself,
@@ -52,6 +57,38 @@ pub struct GateSettings {
     /// Detector high-pass cutoff in Hz; `0` disables it. Keeps kick
     /// bleed from holding a snare gate open.
     pub key_hpf_hz: f32,
+}
+
+/// Build the ballistics pair for a GATE from its attack/release times.
+///
+/// The ballistics run on the GAIN-REDUCTION envelope, and
+/// [`Ballistics::step_envelope`] applies `attack_coef` when that envelope
+/// RISES. For a compressor that is the right word: reduction rises as the
+/// signal crosses the threshold, so "attack" is the onset of gain
+/// reduction. A gate inverts it — reduction rises when the gate CLOSES —
+/// so using the pair as named made `attack` the closing ramp and
+/// `release` the opening one, the opposite of what every gate ever built
+/// means by those words, and the opposite of what this crate's own docs,
+/// knob labels and param ids claim (ba todo #1343).
+///
+/// So the coefficients are crossed over: the gate's `release_ms` drives
+/// the RISING (closing) ramp, and its `attack_ms` drives the FALLING
+/// (opening) one.
+///
+/// Note this crosses the *coefficients*, not the arguments to
+/// [`Ballistics::from_times`]. That matters: `from_times` clamps its
+/// attack argument to a 0.1 ms floor and its release argument to 1.0 ms,
+/// and this gate's attack range reaches down to 0.05 ms. Passing the
+/// times to the opposite parameters would drag the wrong floor along and
+/// quietly turn a 0.05 ms attack into 1 ms.
+fn gate_ballistics(sample_rate: f32, attack_ms: f32, release_ms: f32) -> Ballistics {
+    let named = Ballistics::from_times(sample_rate, attack_ms, release_ms);
+    Ballistics {
+        // Envelope rising = gate closing = the gate's `release`.
+        attack_coef: named.release_coef,
+        // Envelope falling = gate opening = the gate's `attack`.
+        release_coef: named.attack_coef,
+    }
 }
 
 /// Target gain reduction in dB for a detector level, before ballistics.
@@ -202,7 +239,7 @@ impl GateDsp {
             gr_db: 0.0,
             state: GateState::Closed,
             hold_remaining: 0,
-            ballistics: Ballistics::from_times(sample_rate, 1.0, 100.0),
+            ballistics: gate_ballistics(sample_rate, 1.0, 100.0),
             cached_attack: 1.0,
             cached_release: 100.0,
             hpf_l: KeyHighPass::default(),
@@ -239,7 +276,7 @@ impl GateDsp {
         {
             self.cached_attack = s.attack_ms;
             self.cached_release = s.release_ms;
-            self.ballistics = Ballistics::from_times(self.sample_rate, s.attack_ms, s.release_ms);
+            self.ballistics = gate_ballistics(self.sample_rate, s.attack_ms, s.release_ms);
         }
         if (s.key_hpf_hz - self.cached_hpf_hz).abs() > f32::EPSILON {
             self.cached_hpf_hz = s.key_hpf_hz;

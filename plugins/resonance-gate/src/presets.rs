@@ -10,24 +10,33 @@
 //! shipped with (finding P7). `tests/presets.rs` fails if any preset
 //! here covers fewer than every declared id.
 //!
-//! ## Why the attack values look large and the release values small
+//! ## Attack opens, release closes (ba todo #1343)
 //!
-//! This crate's ballistics are the compressor's, and they are applied to
-//! the *gain-reduction* envelope: reduction rising (the gate closing)
-//! uses the `attack` coefficient, reduction falling (the gate opening)
-//! uses `release`. So in this plugin, as it stands today, `attack` is
-//! the closing ramp and `release` is the opening ramp — the opposite of
-//! the usual gate convention, where attack is how fast the gate opens.
-//! Measured, not assumed: with `attack` 100 ms / `release` 1 ms the gate
-//! opens on a step in 3.7 ms; swap them and it takes 418 ms.
+//! These values read the conventional way round: `attack` is how fast
+//! the gate OPENS, `release` how fast it closes. Percussive patches
+//! therefore carry a short attack and a longer release.
 //!
-//! These presets are tuned to what the plugin actually does, so they
-//! sound right in today's build: percussive patches carry a short
-//! `release` (snap open) and a longer `attack` (controlled close).
-//! **If the inversion is fixed (ba todo #1343), the `attack` and
-//! `release` values in `presets/*.json` must be swapped in the same
-//! commit** — otherwise every percussive preset here starts fading in
-//! over tens of milliseconds.
+//! That was not always true. The ballistics are the compressor's and run
+//! on the *gain-reduction* envelope, where reduction RISES as the gate
+//! closes — so used as named they made `attack` the closing ramp and
+//! `release` the opening one, inverting both controls. This bank was
+//! originally tuned against that inverted behaviour, and #1343 swapped
+//! the DSP and these JSONs together in one commit. If you are comparing
+//! against a build from before that, the numbers here will look
+//! reversed; they are not.
+//!
+//! Two of the nine did not simply swap:
+//!
+//! * **Init — Default** was left alone. It mirrors the declared param
+//!   defaults (attack 1 ms, release 100 ms), which already read
+//!   conventionally — the inversion is what made the default patch fade
+//!   in over ~0.4 s, and fixing the DSP is what makes it snap open as it
+//!   always claimed to. Swapping it would have re-broken it.
+//! * **Trance Gate (Keyed)** wanted a 3 ms close, which was reachable
+//!   only because the value used to travel through the `attack` param
+//!   (floor 0.05 ms). The `release` param's floor is 5 ms, so its close
+//!   ramp is now 5 ms. Inaudible on a keyed stutter, but it is a real
+//!   2 ms deviation from the original patch rather than a pure swap.
 
 use crate::params::{GateParams, PARAM_COUNT};
 
