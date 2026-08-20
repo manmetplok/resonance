@@ -69,6 +69,11 @@ fn with_instrument(app: &mut Resonance) {
             max_value: 20000.0,
             default_value: 1000.0,
             current_value: 640.0,
+            // ba todo #1290 widened ParamInfo with text/unit/stepped/
+            // choices/module/hidden. Defaulting them keeps this fixture's
+            // subject the preset capture and recall, not the parameter
+            // formatting it never asserts on.
+            ..Default::default()
         }],
         has_gui: false,
         has_sidechain_input: false,
