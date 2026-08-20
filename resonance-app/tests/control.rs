@@ -34,6 +34,8 @@ mod control_external_instrument;
 mod control_generate;
 #[path = "control/control_generate_after_load.rs"]
 mod control_generate_after_load;
+#[path = "control/control_global_events.rs"]
+mod control_global_events;
 #[path = "control/control_import_midi.rs"]
 mod control_import_midi;
 #[path = "control/control_jobs.rs"]
