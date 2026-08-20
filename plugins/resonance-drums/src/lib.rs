@@ -19,6 +19,11 @@ pub mod drum_map;
 pub mod dsp;
 #[cfg(feature = "editor")]
 mod editor;
+/// Test-only: draw the pad inspector at whatever width the caller gives
+/// it. The editor module is otherwise private (ba todo #1377).
+#[cfg(feature = "editor")]
+#[doc(hidden)]
+pub use editor::test_draw_pad_inspector;
 pub mod kit;
 pub mod kit_loader;
 mod mic_catalog;

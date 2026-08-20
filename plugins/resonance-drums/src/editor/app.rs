@@ -222,7 +222,7 @@ fn draw_pads_body(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     // Bottom row: KIT card + GLOBAL card.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(gap, 0.0);
-        let half = (ui.available_width() - gap) * 0.5;
+        let half = super::body_width(ui, gap) * 0.5;
         ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
             draw_kit_row_card(ui, app);
         });
@@ -239,7 +239,7 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         .corner_radius(theme::RADIUS_PANEL)
         .inner_margin(egui::Margin::symmetric(14, 12));
     frame.show(ui, |ui| {
-        ui.set_min_width(ui.available_width() - 28.0);
+        ui.set_min_width(super::body_width(ui, 28.0));
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("KIT")
@@ -354,7 +354,7 @@ fn draw_global_row_card(ui: &mut egui::Ui, params: &DrumParams) {
         .corner_radius(theme::RADIUS_PANEL)
         .inner_margin(egui::Margin::symmetric(14, 12));
     frame.show(ui, |ui| {
-        ui.set_min_width(ui.available_width() - 28.0);
+        ui.set_min_width(super::body_width(ui, 28.0));
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("GLOBAL")

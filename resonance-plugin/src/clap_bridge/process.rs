@@ -463,7 +463,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         Ok(ProcessStatus::ContinueIfNotQuiet)
     }
 
-    fn deactivate(mut self, main_thread: &mut ClapMainThread<'a, P>) {
+    fn deactivate(self, main_thread: &mut ClapMainThread<'a, P>) {
         main_thread.host_handle.set_active(false);
 
         // Hand the plugin back holding the shared values, mirroring

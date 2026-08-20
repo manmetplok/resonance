@@ -404,7 +404,7 @@ fn draw_placeholder_knob(ui: &mut egui::Ui, label: &str) {
 fn draw_articulations(ui: &mut egui::Ui, bridge: &KitBridge, pad: &crate::params::PadParams) {
     let frame = inline_group_frame();
     frame.show(ui, |ui| {
-        ui.set_min_width(ui.available_width() - 28.0);
+        ui.set_min_width(super::body_width(ui, 28.0));
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("ARTICULATIONS")
@@ -482,7 +482,7 @@ fn draw_close_mics_card(
     pad_idx: usize,
 ) {
     inline_group_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width() - 28.0);
+        ui.set_min_width(super::body_width(ui, 28.0));
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("CLOSE MICS")
@@ -526,7 +526,7 @@ fn draw_close_mics_card(
                         .size(9.5),
                 );
                 egui::ComboBox::from_id_salt(format!("pad_{}_mic_{}", pad_idx, position))
-                    .width(ui.available_width() - 4.0)
+                    .width(super::body_width(ui, 4.0))
                     .selected_text(
                         egui::RichText::new(current.clone())
                             .color(theme::TEXT_1)
@@ -594,7 +594,7 @@ fn draw_oh_blend_card(
     pad: &crate::params::PadParams,
 ) {
     inline_group_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width() - 28.0);
+        ui.set_min_width(super::body_width(ui, 28.0));
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("OVERHEAD BLEND")
@@ -629,7 +629,7 @@ fn draw_oh_blend_card(
                     .size(9.5),
             );
             egui::ComboBox::from_id_salt("oh_setup_inspector")
-                .width(ui.available_width() - 4.0)
+                .width(super::body_width(ui, 4.0))
                 .selected_text(
                     egui::RichText::new(if current.is_empty() {
                         "(load a kit first)".to_string()
