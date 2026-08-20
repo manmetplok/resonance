@@ -130,26 +130,19 @@ fn adopt_live_instance(
     was_missing
 }
 
-/// The index a slot occupies among the chain's **live** slots — i.e.
-/// where the engine has to put it for the app's order and the engine's
-/// processing order to agree.
+/// Where the engine has to put this instance for the app's order and
+/// the engine's processing order to agree.
 ///
-/// The two are not the same number. The app's `Vec` keeps a missing
-/// plugin's slot so the chain does not silently reshuffle around it; the
-/// engine's chain never had that instance at all. With the second of
-/// three plugins missing, the app's third slot is the engine's second,
-/// and asking the engine to move it to index 2 would put it past the end
-/// of a two-plugin chain.
+/// Just [`plugin_chain::engine_slot_index`] with the slot located by id
+/// first. The translation rule itself lives there, shared with
+/// `update::plugin_replace`, because the two paths that name a position
+/// to the engine — a recovered plugin and a replacement — must not be
+/// able to disagree about what a position is.
 ///
 /// `None` when `instance_id` isn't in the chain.
 fn live_slot_index(chain: &[PluginSlotState], instance_id: PluginInstanceId) -> Option<usize> {
     let position = chain.iter().position(|p| p.instance_id == instance_id)?;
-    Some(
-        chain[..position]
-            .iter()
-            .filter(|p| !p.availability.is_missing())
-            .count(),
-    )
+    Some(crate::plugin_chain::engine_slot_index(chain, position))
 }
 
 /// Finish a missing → available recovery: hand the new instance the

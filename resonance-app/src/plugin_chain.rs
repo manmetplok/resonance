@@ -1,16 +1,51 @@
-//! Domain rules for a track's plugin chain (ba todo #1261).
+//! Domain rules for a plugin chain (ba todo #1261).
 //!
-//! A track's chain is an ordered `Vec` where the index *is* the
-//! processing order. On an instrument track one slot is structural: it
-//! is what receives MIDI and what every sub-track inherits its latency
-//! from. Effects sit after it. That rule is a property of the chain, not
-//! of any one caller, so it lives here and every path that reorders a
-//! chain applies it — the control API, and any future mixer
-//! drag-to-reorder.
+//! A chain is an ordered `Vec` where the index *is* the processing
+//! order. On an instrument track one slot is structural: it is what
+//! receives MIDI and what every sub-track inherits its latency from.
+//! Effects sit after it. That rule is a property of the chain, not of
+//! any one caller, so it lives here and every path that reorders a chain
+//! applies it — the control API, and any future mixer drag-to-reorder.
+//!
+//! The instrument rule is track-only; [`engine_slot_index`] is not — it
+//! applies to track, bus and master chains alike.
 
-use crate::state::TrackState;
+use crate::state::{PluginSlotState, TrackState};
 use crate::Resonance;
 use resonance_audio::types::TrackType;
+
+/// Translate an **app** chain index into the **engine** index that means
+/// the same position (ba doc #275 P5, todo #1309).
+///
+/// The two are different numbers whenever the chain carries a missing
+/// plugin. The app's `Vec` keeps that plugin's slot — it is what holds
+/// the plugin's position and the settings preserved for it (ba todo
+/// #1308) — while the engine's chain never contained the instance at
+/// all. With two dead slots ahead of it, the app's slot 2 is the
+/// engine's slot 0.
+///
+/// Every command that names a position to the engine has to come through
+/// here. There are two such paths and they must agree:
+///
+/// * a missing plugin that comes back is appended by the engine and has
+///   to be moved to where its slot sits (`engine_events::plugins`);
+/// * a replacement dropped into a slot is appended by the engine and has
+///   to be moved to where that slot sits (`update::plugin_replace`).
+///
+/// Getting it wrong is silent and audible: the plugin lands at the wrong
+/// point in the chain and hears the wrong signal. Passing the app index
+/// straight through can also run off the end of a shorter chain, where
+/// the engine's own clamp quietly turns it into "last".
+///
+/// `index` past the end of `chain` counts the whole chain, which is the
+/// right answer for "append here".
+pub(crate) fn engine_slot_index(chain: &[PluginSlotState], index: usize) -> usize {
+    chain
+        .iter()
+        .take(index)
+        .filter(|p| !p.availability.is_missing())
+        .count()
+}
 
 /// Which chain index holds the track's instrument, if it has one.
 ///

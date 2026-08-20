@@ -493,6 +493,11 @@ fn swapping_a_missing_plugin_keeps_its_place_in_the_chain() {
         _ => None,
     });
     assert_eq!(added, Some(slots[1].0));
+    // NOTE: app index 1 and engine index 1 coincide on this chain (one
+    // live slot ahead of the replaced one), so this assertion pins that
+    // a move is sent and roughly where — it does NOT discriminate the
+    // two numbering schemes. That is
+    // `a_replacement_is_moved_to_the_engine_index_not_the_app_index`.
     assert!(
         cmds.iter().any(|c| matches!(
             c,
@@ -501,6 +506,93 @@ fn swapping_a_missing_plugin_keeps_its_place_in_the_chain() {
         )),
         "and moved to the engine index the slot corresponds to; got {cmds:?}"
     );
+}
+
+/// The replace path's half of "app index != engine index" — the twin of
+/// [`a_recovered_plugin_gets_its_state_back_and_is_moved_to_the_right_engine_slot`],
+/// and the more likely path of the two: recovery needs the user to
+/// reinstall a plugin, this needs one click.
+///
+/// A replacement is APPENDED by the engine and then moved to the slot's
+/// position, and that position has to be counted in the engine's
+/// numbering. The engine's chain holds only the plugins that
+/// instantiated, so every missing slot ahead of the replaced one shifts
+/// the two schemes apart. Send the app index and the replacement lands
+/// behind plugins it should be in front of — a different signal path,
+/// silently.
+///
+/// Both fixtures are built so the engine's own end-clamp cannot rescue a
+/// wrong number: the wrong index is a *valid* position in the engine's
+/// chain, just not the right one.
+#[test]
+fn a_replacement_is_moved_to_the_engine_index_not_the_app_index() {
+    // [missing, missing, EQ, COMP] — replace the EQ, at app index 2.
+    // The engine's chain is [eq, comp]; the EQ belongs at engine index 0,
+    // and app index 2 would clamp to 1, leaving the replacement AFTER
+    // the compressor instead of in front of it.
+    let mut app = app();
+    app.test_push_track_plugin(TRACK, slot(200, VERB_ID, "MegaVerb"));
+    app.test_push_track_plugin(TRACK, slot(201, VERB_ID, "MegaVerb"));
+    app.test_push_track_plugin(TRACK, slot(EQ, EQ_ID, "Resonance EQ"));
+    app.test_push_track_plugin(TRACK, slot(COMP, COMP_ID, "Resonance Compressor"));
+    refuse(&mut app, 200, VERB_ID);
+    refuse(&mut app, 201, VERB_ID);
+
+    let rx = app.test_capture_engine();
+    let _ = app.update(Message::Plugin(PluginMessage::ReplacePlugin {
+        instance_id: EQ,
+        plugin: catalog_entry(COMP_ID),
+    }));
+    assert_eq!(
+        replacement_move_index(rx),
+        Some(0),
+        "app slot 2, engine slot 0: the two dead slots ahead of it are not in the engine's \
+         chain at all, so counting slots instead of LIVE slots puts the replacement behind \
+         the compressor"
+    );
+
+    // And it is not a constant: [missing, EQ, missing, COMP] — replace
+    // the COMP, at app index 3. One live slot ahead of it, so engine
+    // index 1.
+    let mut app = crate::missing_plugin_slot::app();
+    app.test_push_track_plugin(TRACK, slot(200, VERB_ID, "MegaVerb"));
+    app.test_push_track_plugin(TRACK, slot(EQ, EQ_ID, "Resonance EQ"));
+    app.test_push_track_plugin(TRACK, slot(201, VERB_ID, "MegaVerb"));
+    app.test_push_track_plugin(TRACK, slot(COMP, COMP_ID, "Resonance Compressor"));
+    refuse(&mut app, 200, VERB_ID);
+    refuse(&mut app, 201, VERB_ID);
+
+    let rx = app.test_capture_engine();
+    let _ = app.update(Message::Plugin(PluginMessage::ReplacePlugin {
+        instance_id: COMP,
+        plugin: catalog_entry(EQ_ID),
+    }));
+    assert_eq!(
+        replacement_move_index(rx),
+        Some(1),
+        "app slot 3, engine slot 1: only the EQ is live ahead of it"
+    );
+}
+
+/// The `to_index` of the move that follows the replacement's add, i.e.
+/// the engine position the app asked for. Reads the add first so it
+/// cannot be fooled by a move aimed at some other instance.
+fn replacement_move_index(
+    rx: resonance_audio::__test_support::Receiver<AudioCommand>,
+) -> Option<usize> {
+    let cmds: Vec<AudioCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    let added = cmds.iter().find_map(|c| match c {
+        AudioCommand::AddPlugin { id_hint, .. } => *id_hint,
+        _ => None,
+    })?;
+    cmds.iter().find_map(|c| match c {
+        AudioCommand::MovePlugin {
+            instance_id,
+            to_index,
+            ..
+        } if *instance_id == added => Some(*to_index),
+        _ => None,
+    })
 }
 
 /// A swap discards the outgoing plugin's preserved settings, because

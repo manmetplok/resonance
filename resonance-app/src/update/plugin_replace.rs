@@ -265,19 +265,16 @@ fn chain_mut(r: &mut Resonance, locator: PluginLocator) -> Option<&mut Vec<Plugi
 
 /// The engine-side index that corresponds to app-chain index `index`.
 ///
-/// The engine's chain holds only the plugins that actually
-/// instantiated, so a chain with a missing slot in it numbers
-/// differently on the two sides. See
-/// `engine_events::plugins::live_slot_index`, which answers the same
-/// question from the other direction.
+/// Just [`plugin_chain::engine_slot_index`] against this locator's
+/// chain. The translation rule lives there rather than here because
+/// `engine_events::plugins` needs the same answer when a missing plugin
+/// comes back, and two copies of a rule that must agree is how they
+/// drift apart.
 fn live_index(r: &Resonance, locator: PluginLocator, index: usize) -> Option<usize> {
-    Some(
-        chain(r, locator)?
-            .get(..index)?
-            .iter()
-            .filter(|p| !p.availability.is_missing())
-            .count(),
-    )
+    Some(crate::plugin_chain::engine_slot_index(
+        chain(r, locator)?,
+        index,
+    ))
 }
 
 fn add_command(
