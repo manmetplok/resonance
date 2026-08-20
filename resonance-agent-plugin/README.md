@@ -15,9 +15,9 @@ instead of costing context on every session the way a tool description does.
 
 | Skill | Invoke | Covers |
 |---|---|---|
-| `song-structure` | `/resonance-agent-plugin:song-structure` | Choosing a form and laying it out. Definitions vs. placements, the `place: false` trap, bar math. |
+| `song-structure` | `/resonance-agent-plugin:song-structure` | Choosing a form and laying it out. Definitions vs. placements, the `place: false` trap, bar math, the tempo and signature tracks. |
 | `arranging` | `/resonance-agent-plugin:arranging` | Chord grids, `generate_part`, hand-written MIDI, density and register across sections. |
-| `drumming` | `/resonance-agent-plugin:drumming` | The pattern library, and hand-written grooves the library cannot reach. |
+| `drumming` | `/resonance-agent-plugin:drumming` | The pattern library, and hand-written grooves the library cannot reach — including odd metre, with or without a real meter change. |
 | `mixing` | `/resonance-agent-plugin:mixing` | Measure → diagnose → balance → verify. Faults, balance, tone, dynamics, in that order. |
 | `mastering` | `/resonance-agent-plugin:mastering` | Master-bus chain on `com.resonance.mastering`, stage by stage, to delivery targets. |
 
@@ -92,6 +92,10 @@ enforces it:
 - every `mcp__resonance__<tool>` named anywhere in this directory must exist in
   the router, so a renamed or removed tool fails the suite instead of failing
   mid-mix;
+- every `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}` path a skill points at
+  must exist on disk. Progressive disclosure is only as good as the pointer: an
+  agent told to read a reference that has been renamed does not error, it just
+  carries on without the material;
 - every `SKILL.md` must call `control_hello`.
 
 That last one covers what versioning cannot. The app is a separate binary from
@@ -101,7 +105,12 @@ skills open by checking the methods they need against it and stopping if one is
 missing. Do not remove that step.
 
 When you bump `PROTOCOL_VERSION`, bump `version` here too — installed copies
-only pick up changes when that field moves.
+only pick up changes when that field moves. The reverse does not hold: a purely
+additive release (new methods, no wire break) leaves `PROTOCOL_VERSION` and the
+pin alone, but still needs the plugin `version` bumped if the skills changed, or
+installed copies keep teaching the old procedure. 0.2.0 was exactly that — epic
+#205 made the tempo and signature tracks reachable, so `song-structure` and
+`drumming` stopped telling agents to ask the user for a meter change.
 
 ## Writing more skills
 

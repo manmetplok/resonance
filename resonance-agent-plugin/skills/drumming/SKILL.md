@@ -5,7 +5,7 @@ when_to_use: >-
   Triggers on requests like "write a drum part", "the drums are boring", "add a
   fill", "make it a shuffle", "jazz drums", "swing this", "a 7/8 groove", "give
   the chorus bigger drums", "program a beat", "double-time the bridge".
-allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_sections mcp__resonance__song_tracks mcp__resonance__song_notes
+allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_sections mcp__resonance__song_tracks mcp__resonance__song_notes mcp__resonance__global_list_events
 ---
 
 # Drum programming in resonance
@@ -26,6 +26,11 @@ running app is older than this plugin — say so and stop.
 
 `mcp__resonance__song_tracks` for a drums track — `generate_drums` rejects any
 other kind, and `track_add {kind: "drums"}` makes one.
+
+For odd-metre work (step 3) also check `global.list_events` and
+`global.add_signature_event`. They are newer than the rest of the surface; if
+they are missing, the running app predates them and the only meter changes you
+get are the ones the user already put on the global track.
 
 ## 1. The pattern library
 
@@ -96,28 +101,65 @@ entry, and a two-bar 16th-note groove is already ~60 notes. Use
 `start_beat` is **0-based and clip-relative**. Bars in the arrangement are
 1-based. Velocity is 1–127.
 
-## 3. Odd metre without a signature event
+## 3. Odd metre: find out what the meter actually is, then choose
 
-The DAW has a signature track and supports per-bar meter changes, but **the
-control surface cannot reach it** — there is no method to add or read a signature
-event, and `mcp__resonance__transport_set_time_signature` only rewrites the bar-0
-one. Worse, `song_summary.time_signature` reports the meter **at the playhead**,
-so a 4/4 reading is not evidence the song is in 4/4 throughout.
+**First, read the signature track — do not ask, and do not assume.**
 
-Check with the user before writing odd-metre drums. If they have already put
-signature events on the global track, work in real bars and the grid is on your
-side.
+`mcp__resonance__global_list_events` returns the song's `signature_events`
+(`{bar, numerator, denominator}`, denominator resolved: 8 for 7/8) and its
+`tempo_events`. `song_summary` carries the same two lists, so a summary you have
+already read answers this for free. The list is **never empty** — bar 1 is the
+song's initial meter — so **length 1 means one meter throughout** and anything
+longer tells you exactly which bars change and to what.
 
-If they have not, a 7/8 groove in a 4/4 song is written as a recurring 3+2+2
-sixteenth grouping inside the 4/4 grid: the music is right, the bar lines
-disagree with it, and the pattern's period no longer matches the bar. Say so when
-you do it — the phrase only realigns with the downbeat every 7 bars.
+**`song_summary.time_signature` is still the meter at the PLAYHEAD**, not the
+song's meter. It moves when the cursor moves. A 4/4 reading there is not evidence
+the song is in 4/4 throughout, and it never was — the difference now is that you
+have somewhere correct to look instead of a question for the user.
+
+Then pick one of two, and say which:
+
+**A. Put a real signature event on the track.** The default when the meter
+genuinely changes.
+
+```
+global_add_signature_event   # {bar, numerator, denominator} — 1-based bar
+```
+
+Upserts by bar (a second add at the same bar replaces the first, so retrying is
+safe), `numerator` 1..=32, `denominator` a resolved power of two in 1..=32.
+`global_edit_signature_event` changes an existing one and `global_remove_signature_event`
+takes one away; both refuse an empty bar, and remove refuses bar 1. Nothing here
+is a silent no-op.
+
+Two things to get right, both of which cost real work if you get them wrong:
+
+- **Write the event before the notes.** Bar/beat positions you send to
+  `notes_create_clip` and `notes_insert_many` are read against the meter map as
+  it stands, and existing material keeps its position in *time* rather than in
+  bars — so adding the event afterwards moves the drums you just wrote onto
+  different bars.
+- **`transport_set_time_signature` will not do this.** It rewrites the bar-1
+  event only, so on a song that already changes meter it moves the opening and
+  leaves the bridge alone. Use it for what the song *starts* in.
+
+**B. Write the odd grouping inside the existing grid.** Still correct, still
+useful — the right answer when the user wants the *feel* without changing the
+meter: a 7/8 figure phrasing across a steady 4/4 pulse, or a part that has to
+keep lining up with material that is not moving. A 7/8 groove becomes a recurring
+3+2+2 sixteenth grouping inside the 4/4 grid: the music is right, the bar lines
+disagree with it by design, and the pattern's period no longer matches the bar.
+Say so when you do it — the phrase only realigns with the downbeat every 7 bars.
 `${CLAUDE_SKILL_DIR}/references/grooves.md` has the realignment table for the
 common groupings.
 
-The other option is to ask them to add the signature event by hand in the
-global-tracks shelf. For a long passage, that is usually the better answer. Do
-not pick silently.
+**One trap in both directions:** `arrangement_insert_bars` /
+`arrangement_remove_bars` do **not** move tempo or signature events (confirmed
+defect, ba todo #1388). Insert 8 bars before the bridge and the 7/8 event stays
+at its old bar while the bridge moves past it, leaving your odd-metre drums in
+4/4 and four bars of the previous section in 7/8. If you or anyone else inserts
+or removes bars, re-read `global_list_events` and put the events back where the
+music went.
 
 ## 4. Velocity is the difference between a part and a grid
 

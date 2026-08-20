@@ -69,8 +69,19 @@ impl Resonance {
 pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
     match m {
         GlobalTrackMessage::AddTempoEvent { bar, bpm } => {
-            r.tempo_events.push(state::TempoEvent { bar, bpm });
-            r.tempo_events.sort_by_key(|e| e.bar);
+            // Upsert by bar, exactly like `AddSignatureEvent` below (ba
+            // todo #1382). This used to push unconditionally, so a
+            // second add at an occupied bar left TWO tempo events on
+            // that bar: an ambiguous address for everything that finds
+            // an event by bar (the control API's `global.*` methods, the
+            // shelf's own hit test) and a duplicate bar in the tempo
+            // list `song.summary` reports.
+            if let Some(existing) = r.tempo_events.iter_mut().find(|e| e.bar == bar) {
+                existing.bpm = bpm;
+            } else {
+                r.tempo_events.push(state::TempoEvent { bar, bpm });
+                r.tempo_events.sort_by_key(|e| e.bar);
+            }
             r.rebuild_and_send_tempo();
             r.sync_tempo_display();
         }

@@ -192,6 +192,53 @@ fn known_traps_stay_documented() {
         ("generate_part", &["IGNORES"]),
         // The bass default is a placeholder, not a part.
         ("generate_part", &["RootPulse"]),
+        // transport.set_time_signature rewrites the bar-1 event and
+        // nothing else, so on a song that already changes meter it moves
+        // the opening and silently leaves the rest — an agent that reads
+        // only this tool must be sent to the one that takes a bar (ba doc
+        // #286 §5).
+        ("transport_set_time_signature", &["global_add_signature_event"]),
+        // Both adds upsert by bar. A caller cannot guess whether a second
+        // add at the same bar replaces or duplicates, and the two answers
+        // lead to very different songs.
+        ("global_add_tempo_event", &["REPLACES"]),
+        ("global_add_signature_event", &["REPLACES"]),
+        // The edits are the mirror image of the adds and a caller cannot
+        // guess which it got: `edit_*` REFUSES a bar with no event on it
+        // rather than upserting, so the description has to say what
+        // happens when nothing is there.
+        (
+            "global_edit_tempo_event",
+            &["IF NO TEMPO EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        (
+            "global_edit_signature_event",
+            &["IF NO METER EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        // Only a tempo event can be relocated, and not the bar-1 one.
+        // Both refusals are explicit errors rather than the silent
+        // no-ops the GUI's own path performs (ba doc #286 §2).
+        ("global_edit_tempo_event", &["CANNOT BE MOVED"]),
+        ("global_edit_signature_event", &["NO new_bar HERE"]),
+        // The removes refuse an empty bar rather than reading it as
+        // "already gone" — the tempting reading, and the wrong one: the
+        // change the caller meant to drop is still in the song at some
+        // other bar (ba todo #1384).
+        (
+            "global_remove_tempo_event",
+            &["IF NO TEMPO EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        (
+            "global_remove_signature_event",
+            &["IF NO METER EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        // Bar 1 is REFUSED, not ignored. `Resonance::remove_tempo_event`
+        // / `remove_signature_event` guard with `index > 0` and then just
+        // return, so the failure this wording prevents is an agent
+        // reading `ok` from a delete that deleted nothing and having no
+        // way to tell (ba doc #286 §2).
+        ("global_remove_tempo_event", &["BAR 1 CANNOT BE REMOVED"]),
+        ("global_remove_signature_event", &["BAR 1 CANNOT BE REMOVED"]),
     ];
     for (tool, needles) in required {
         let description = by_name

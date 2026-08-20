@@ -59,11 +59,20 @@ fn summary(app: &Resonance, request: &Request) -> Response {
         .tempo_map
         .sample_to_bar(end_sample, app.sample_rate);
     let result = SongSummary {
+        // The transport's BPM and meter track the PLAYHEAD, not the song
+        // (ba todo #1381): on a song with changes they are whatever sits
+        // under the cursor. They stay, because every client reads them,
+        // but the two event lists below ship in the same response so a
+        // client can see that they are only a local reading — and both
+        // the wire docs and the `song_summary` tool description now say
+        // so outright.
         tempo_bpm: app.transport.bpm as f64,
         time_signature: TimeSignature {
             numerator: app.transport.time_sig_num,
             denominator: app.transport.time_sig_den,
         },
+        tempo_events: super::global::tempo_event_views(app),
+        signature_events: super::global::signature_event_views(app),
         key: view_model::song_key(app),
         sample_rate: app.sample_rate,
         // `sample_to_bar` bars are 0-based, so bar+frac IS the length.

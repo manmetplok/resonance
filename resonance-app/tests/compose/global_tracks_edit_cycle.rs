@@ -177,6 +177,62 @@ fn update_tempo_event_propagates_to_tempo_map() {
     assert!((app.test_transport_bpm() - 140.0).abs() < 0.01);
 }
 
+/// `AddTempoEvent` upserts by bar: a bar carries at most one tempo
+/// event (ba todo #1382).
+///
+/// It used to push unconditionally and re-sort, so adding at a bar that
+/// already had an event left TWO of them on that bar. Everything that
+/// finds an event by bar — the shelf's hit test, the control API's
+/// `global.*` methods — then addressed only the first, and the tempo
+/// list `song.summary` reports carried a duplicate bar. The signature
+/// track has always overwritten instead; this is the tempo half.
+#[test]
+fn add_tempo_event_overwrites_an_existing_event_at_the_same_bar() {
+    let mut app = build_expanded_app();
+    // Demo seeds one event at bar 0.
+    assert_eq!(app.test_tempo_events().len(), 1);
+
+    let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
+        bar: 16,
+        bpm: 140.0,
+    }));
+    let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
+        bar: 16,
+        bpm: 96.0,
+    }));
+
+    let events = app.test_tempo_events();
+    assert_eq!(events.len(), 2, "one initial event + one at bar 16: {events:?}");
+    assert_eq!(events[1].bar, 16);
+    assert!(
+        (events[1].bpm - 96.0).abs() < 0.01,
+        "the second add should have replaced the first: {events:?}"
+    );
+    // The draw routine reads the tempo_map snapshot, so the replacement
+    // has to have gone through `rebuild_and_send_tempo` too.
+    let map = app.test_tempo_map();
+    assert_eq!(map.tempo_points.len(), 2);
+    assert!((map.tempo_points[1].bpm - 96.0).abs() < 0.01);
+}
+
+/// Adding a tempo event at a NEW bar still inserts, in bar order — the
+/// upsert above must not have turned every add into an edit of the
+/// nearest event.
+#[test]
+fn add_tempo_event_at_a_new_bar_still_inserts_in_bar_order() {
+    let mut app = build_expanded_app();
+
+    for (bar, bpm) in [(32u32, 140.0f32), (16, 96.0)] {
+        let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::AddTempoEvent {
+            bar,
+            bpm,
+        }));
+    }
+
+    let bars: Vec<u32> = app.test_tempo_events().iter().map(|e| e.bar).collect();
+    assert_eq!(bars, vec![0, 16, 32], "sorted by bar");
+}
+
 /// Selecting a global event must update interaction state so the
 /// canvas can recolor the dot / pill on the next paint.
 #[test]

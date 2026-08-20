@@ -16,6 +16,7 @@ pub mod compose;
 pub mod control;
 pub mod edit;
 pub mod external;
+pub mod global;
 pub mod master;
 pub mod meter;
 pub mod project;

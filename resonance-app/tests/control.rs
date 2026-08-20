@@ -12,6 +12,8 @@
 
 #[path = "control/control_arrangement_bars.rs"]
 mod control_arrangement_bars;
+#[path = "control/control_arrangement_global_events.rs"]
+mod control_arrangement_global_events;
 #[path = "control/control_bus.rs"]
 mod control_bus;
 #[path = "control/control_bus_create_commit.rs"]
@@ -34,6 +36,8 @@ mod control_external_instrument;
 mod control_generate;
 #[path = "control/control_generate_after_load.rs"]
 mod control_generate_after_load;
+#[path = "control/control_global_events.rs"]
+mod control_global_events;
 #[path = "control/control_import_midi.rs"]
 mod control_import_midi;
 #[path = "control/control_jobs.rs"]
@@ -86,6 +90,8 @@ mod control_sidechain;
 mod control_socket_roundtrip;
 #[path = "control/control_song_routing.rs"]
 mod control_song_routing;
+#[path = "control/control_song_summary_tempo_map.rs"]
+mod control_song_summary_tempo_map;
 #[path = "control/control_song_views.rs"]
 mod control_song_views;
 #[path = "control/control_track_add_plugin_result.rs"]
