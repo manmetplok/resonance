@@ -35,15 +35,19 @@
 //! lists are always non-empty and a song with no changes reports exactly
 //! one entry in each. It cannot be MOVED either — it is what "the start
 //! of the song" means — so [`EDIT_TEMPO_EVENT`]'s `new_bar` is refused
-//! on it.
+//! on it, and so is [`REMOVE_TEMPO_EVENT`] / [`REMOVE_SIGNATURE_EVENT`]
+//! aimed at bar 1. Refused, not ignored: the app's own removal helpers
+//! silently skip index 0, and a client told `ok` by a call that deleted
+//! nothing has no way to find that out.
 //!
-//! # Add creates, edit changes
+//! # Add creates, edit changes, remove takes away
 //!
 //! `add_*` upserts: it writes the event whether or not one was there.
-//! `edit_*` addresses one that already exists and refuses an empty bar,
-//! because the two possible readings of "edit a bar with nothing on it"
-//! — create it, or tell me I am wrong about the song — lead to very
-//! different songs, and only one of them is recoverable.
+//! `edit_*` and `remove_*` address one that already exists and refuse an
+//! empty bar, because the two possible readings of "edit/remove a bar
+//! with nothing on it" — do it silently, or tell me I am wrong about the
+//! song — lead to very different songs, and only one of them is
+//! recoverable.
 
 use serde::{Deserialize, Serialize};
 
@@ -114,6 +118,39 @@ pub const EDIT_TEMPO_EVENT: &str = "global.edit_tempo_event";
 /// with [`ADD_SIGNATURE_EVENT`] and drop the old one.
 pub const EDIT_SIGNATURE_EVENT: &str = "global.edit_signature_event";
 
+/// `global.remove_tempo_event` — take the tempo event off a bar
+/// ([`RemoveTempoEventParams`] -> [`MutationAck`](crate::MutationAck)).
+///
+/// The song then keeps whatever tempo the previous event set, right
+/// through the bar this one used to change it at.
+///
+/// **Two refusals, both explicit.** A bar with no tempo event on it is
+/// an `invalid_params` refusal, on the same rule as [`EDIT_TEMPO_EVENT`].
+/// And bar 1 cannot be removed at all: it carries the song's initial
+/// tempo, so removing it would leave the song with no tempo before the
+/// first change. Retune it with [`EDIT_TEMPO_EVENT`] instead.
+///
+/// Neither is a silent no-op — which matters more here than anywhere
+/// else in the namespace, because the app's own `remove_tempo_event`
+/// helper skips index 0 without saying so, and a caller that got `ok`
+/// back from a delete that deleted nothing would go on to build the rest
+/// of the song on a tempo map it believes it changed.
+pub const REMOVE_TEMPO_EVENT: &str = "global.remove_tempo_event";
+
+/// `global.remove_signature_event` — take the meter event off a bar
+/// ([`RemoveSignatureEventParams`] -> [`MutationAck`](crate::MutationAck)).
+///
+/// The song then stays in whatever meter the previous event set, right
+/// through the bar this one used to change it at — so removing the 7/8
+/// event at bar 33 puts the bridge back into the meter the section
+/// before it was in.
+///
+/// **The same two refusals as [`REMOVE_TEMPO_EVENT`]**, for the same
+/// reasons: an empty bar is refused rather than acknowledged, and bar 1
+/// carries the song's initial meter and cannot be removed (change it
+/// with [`EDIT_SIGNATURE_EVENT`] or `transport.set_time_signature`).
+pub const REMOVE_SIGNATURE_EVENT: &str = "global.remove_signature_event";
+
 /// All `global.*` method names.
 pub const METHODS: &[&str] = &[
     LIST_EVENTS,
@@ -121,6 +158,8 @@ pub const METHODS: &[&str] = &[
     ADD_SIGNATURE_EVENT,
     EDIT_TEMPO_EVENT,
     EDIT_SIGNATURE_EVENT,
+    REMOVE_TEMPO_EVENT,
+    REMOVE_SIGNATURE_EVENT,
 ];
 
 /// Params for [`ADD_TEMPO_EVENT`].
@@ -204,6 +243,33 @@ pub struct EditSignatureEventParams {
     /// current one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denominator: Option<u8>,
+}
+
+/// Params for [`REMOVE_TEMPO_EVENT`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RemoveTempoEventParams {
+    /// 1-based bar of the tempo event to remove. There must already be
+    /// one exactly there — an empty bar is rejected rather than treated
+    /// as "already removed", because it means the caller is wrong about
+    /// where the change sits and the event it meant to drop is still
+    /// standing.
+    ///
+    /// Bar 1 is rejected too: it is the song's initial tempo and the one
+    /// event the tempo track cannot be without. Edit it with
+    /// [`EDIT_TEMPO_EVENT`].
+    pub bar: u32,
+}
+
+/// Params for [`REMOVE_SIGNATURE_EVENT`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RemoveSignatureEventParams {
+    /// 1-based bar of the meter event to remove, on exactly the same two
+    /// rules as [`RemoveTempoEventParams::bar`]: an empty bar is
+    /// rejected, and so is bar 1 — the song's initial meter, which
+    /// [`EDIT_SIGNATURE_EVENT`] changes instead.
+    pub bar: u32,
 }
 
 /// One tempo change on the global tempo track.

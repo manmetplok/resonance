@@ -1,10 +1,16 @@
 //! `global_*` — the song-wide tempo and time-signature tracks (ba doc
 //! #286): reading both tracks, and writing changes onto them at a bar.
 //!
-//! `add_*` creates or overwrites at a bar; `edit_*` addresses an event
-//! that is already there and refuses an empty bar. Both descriptions say
-//! so explicitly, because a caller cannot guess which of those two a
-//! method does and the wrong guess writes a plausible but wrong song.
+//! `add_*` creates or overwrites at a bar; `edit_*` and `remove_*`
+//! address an event that is already there and refuse an empty bar. Every
+//! description says so explicitly, because a caller cannot guess which of
+//! those two a method does and the wrong guess writes a plausible but
+//! wrong song.
+//!
+//! The `remove_*` descriptions additionally spell out that bar 1 is
+//! refused. Both refusals are things the app's own removal helpers do
+//! SILENTLY, and an agent that reads `ok` from a delete that deleted
+//! nothing has no way back to the truth.
 
 use crate::server::ResonanceMcp;
 use rmcp::handler::server::tool::schema_for_output;
@@ -206,6 +212,80 @@ impl ResonanceMcp {
         Parameters(params): Parameters<global::EditSignatureEventParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(global::EDIT_SIGNATURE_EVENT, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Take a tempo change off the song's tempo track, so the tempo set by the \
+                       previous event runs straight through the bar this one used to change it \
+                       at (undoable edit — one undo puts the event back with its bpm and its \
+                       bar, exactly like deleting it on the global-tracks shelf by hand). \
+                       \
+                       bar is 1-based and names the event to remove. IF NO TEMPO EVENT SITS \
+                       EXACTLY ON THAT BAR THE CALL IS REFUSED and nothing changes. It is NOT \
+                       treated as \"already removed\": an empty bar means the change you meant \
+                       to drop is still in the song at some other bar, and an \"ok\" here would \
+                       send you on to build the rest of the arrangement against a tempo map you \
+                       believe you corrected. Read global_list_events first to see which bars \
+                       actually carry events. \
+                       \
+                       BAR 1 CANNOT BE REMOVED. It is the song's initial tempo — the song has to \
+                       start at some tempo, so this track always has an event on bar 1 — and \
+                       asking is an explicit refusal, never a silent no-op that reports success \
+                       and deletes nothing. Change its value with global_edit_tempo_event (or \
+                       transport_set_tempo) instead; removing a LATER tempo change is what this \
+                       tool is for. \
+                       \
+                       Removing an event changes where every bar after it falls in TIME, while \
+                       clips, markers and automation keep their time positions — so material \
+                       after this bar lands on different bars than before. It also clears \
+                       whatever was selected on the global-tracks shelf. Read the track back \
+                       with global_list_events to confirm; you cannot hear it.",
+        annotations(destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn global_remove_tempo_event(
+        &self,
+        Parameters(params): Parameters<global::RemoveTempoEventParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(global::REMOVE_TEMPO_EVENT, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Take a meter (time-signature) change off the song's signature track, so \
+                       the meter set by the previous event runs straight through the bar this \
+                       one used to change it at — removing the 7/8 event at bar 33 puts the \
+                       bridge back into the meter the section before it was in (undoable edit — \
+                       one undo puts the event back, exactly like deleting it on the \
+                       global-tracks shelf by hand). \
+                       \
+                       bar is 1-based and names the event to remove. IF NO METER EVENT SITS \
+                       EXACTLY ON THAT BAR THE CALL IS REFUSED and nothing changes — not \
+                       reported as \"already removed\", for the same reason \
+                       global_remove_tempo_event refuses: the change you meant to drop is still \
+                       in the song somewhere else. Read global_list_events first. \
+                       \
+                       BAR 1 CANNOT BE REMOVED. It is the song's initial meter — the song has to \
+                       start in some meter — and asking is an explicit refusal rather than a \
+                       silent no-op. Use global_edit_signature_event (or \
+                       transport_set_time_signature) to change what the song starts in. \
+                       \
+                       Removing a meter event changes how long the bars after it are, and \
+                       existing clips, markers and automation keep their positions in TIME \
+                       rather than in bars, so material after this bar lands on different bars \
+                       than before — including bar/beat positions you send to other tools, which \
+                       are read against this map. It also clears whatever was selected on the \
+                       global-tracks shelf. Read the track back with global_list_events; you \
+                       cannot hear it.",
+        annotations(destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn global_remove_signature_event(
+        &self,
+        Parameters(params): Parameters<global::RemoveSignatureEventParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(global::REMOVE_SIGNATURE_EVENT, &params)
             .await
     }
 }
