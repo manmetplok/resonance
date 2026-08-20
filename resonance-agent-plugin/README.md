@@ -15,15 +15,36 @@ instead of costing context on every session the way a tool description does.
 
 | Skill | Invoke | Covers |
 |---|---|---|
+| `song-structure` | `/resonance-agent-plugin:song-structure` | Choosing a form and laying it out. Definitions vs. placements, the `place: false` trap, bar math. |
+| `arranging` | `/resonance-agent-plugin:arranging` | Chord grids, `generate_part`, hand-written MIDI, density and register across sections. |
+| `drumming` | `/resonance-agent-plugin:drumming` | The pattern library, and hand-written grooves the library cannot reach. |
 | `mixing` | `/resonance-agent-plugin:mixing` | Measure → diagnose → balance → verify. Faults, balance, tone, dynamics, in that order. |
 | `mastering` | `/resonance-agent-plugin:mastering` | Master-bus chain on `com.resonance.mastering`, stage by stage, to delivery targets. |
 
-Both are model-invocable, so Claude reaches for them when you just say "mix
-this" — you do not have to type the command.
+All five are model-invocable, so Claude reaches for them when you just say "mix
+this" or "write a drum part" — you do not have to type the command.
 
-`skills/mixing/references/reading-meters.md` is shared by both: meter field
-semantics, the `null`-vs-zero and `render`-vs-`live` traps, and the loudness
-targets per stage.
+They run roughly in that order — structure, then parts, then balance — and each
+one hands off to the next by pointing at it. Claude Code has no notion of a
+nested "sub-skill", so `drumming` and `song-structure` are siblings of
+`arranging` rather than children of it. That is the better shape anyway: "write
+me a jazz drum part" is a complete request on its own and should not have to load
+the whole arranging procedure to get answered.
+
+Reference files are shared across skills via `${CLAUDE_PLUGIN_ROOT}`:
+
+| File | Shared by |
+|---|---|
+| `skills/mixing/references/reading-meters.md` | `mixing`, `mastering` |
+| `skills/song-structure/references/forms.md` | `song-structure`, `arranging` |
+| `skills/arranging/references/generators.md` | `arranging` |
+| `skills/drumming/references/drum-map.md` | `drumming` |
+| `skills/drumming/references/grooves.md` | `drumming` |
+
+`drum-map.md` is worth calling out: the kit is General MIDI in the middle and
+**not** GM at the edges (note 39 is a sidestick, not a clap; 21–29 are extended
+articulations in no GM chart), so a part written from GM memory triggers the
+wrong pads. Its ground truth is `resonance-common/src/drum_map.rs`.
 
 ## Install
 

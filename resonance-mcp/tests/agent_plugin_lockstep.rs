@@ -16,7 +16,11 @@
 //!   it: `claude plugin validate` warns on unknown manifest keys, and a
 //!   warning nobody can fix is a warning everybody learns to ignore;
 //! - every `mcp__resonance__<tool>` mentioned in any `SKILL.md` or
-//!   reference file against the router's actual tool list.
+//!   reference file against the router's actual tool list;
+//! - every `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}` path the
+//!   skills point each other at, against the files on disk. Progressive
+//!   disclosure only works if the pointer resolves: an agent told to read
+//!   a reference that has been renamed just carries on without it.
 
 use resonance_mcp::ResonanceMcp;
 use std::collections::BTreeSet;
@@ -105,6 +109,63 @@ fn skills_only_name_tools_that_exist() {
                 "{} names mcp__resonance__{tool}, which this server does not publish. \
                  A skill that calls a tool by a name nobody serves fails silently at the \
                  worst moment — fix the skill, or restore the tool.",
+                file.display(),
+            );
+        }
+    }
+}
+
+/// The `${VAR}/relative/path` references in `text`, as `(var, path)`.
+fn referenced_paths(text: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    for var in ["${CLAUDE_PLUGIN_ROOT}", "${CLAUDE_SKILL_DIR}"] {
+        let mut rest = text;
+        while let Some(at) = rest.find(var) {
+            rest = &rest[at + var.len()..];
+            if !rest.starts_with('/') {
+                continue;
+            }
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == '`' || c == ')')
+                .unwrap_or(rest.len());
+            found.push((var.to_string(), rest[1..end].to_string()));
+            rest = &rest[end..];
+        }
+    }
+    found
+}
+
+#[test]
+fn cross_references_between_skills_resolve() {
+    let root = plugin_dir();
+    let mut files = Vec::new();
+    markdown_files(&root, &mut files);
+
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("read skill markdown");
+        // `${CLAUDE_SKILL_DIR}` is the directory holding this SKILL.md; for a
+        // reference file it is that file's own skill directory, one level up.
+        let skill_dir = if file.file_name().is_some_and(|n| n == "SKILL.md") {
+            file.parent().expect("SKILL.md has a parent").to_path_buf()
+        } else {
+            file.parent()
+                .and_then(Path::parent)
+                .expect("reference file sits under a skill dir")
+                .to_path_buf()
+        };
+
+        for (var, rel) in referenced_paths(&text) {
+            let base = if var == "${CLAUDE_PLUGIN_ROOT}" {
+                root.clone()
+            } else {
+                skill_dir.clone()
+            };
+            let target = base.join(&rel);
+            assert!(
+                target.exists(),
+                "{} points at {var}/{rel}, which does not exist. Progressive disclosure is only \
+                 as good as the pointer: an agent told to read a missing reference does not \
+                 error, it just proceeds without the material.",
                 file.display(),
             );
         }
