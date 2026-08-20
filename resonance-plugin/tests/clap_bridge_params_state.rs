@@ -961,11 +961,10 @@ fn extra_state_is_saved_and_restored_through_both_paths() {
     // A blob with no `params` object is a failed load on both paths — but
     // the saver still sees it. The inactive path has always worked that
     // way (`load_state` hands the state to the saver regardless of the
-    // param result); the active path only agrees since it started running
-    // the saver *before* the param stores, which is what keeps the
-    // extra-state `load()` — file I/O, potentially many audio blocks long
-    // — out of the window where a concurrent editor push-back can still
-    // clobber a loaded param (ba todo #1363).
+    // param result); the active path agrees because it runs the saver
+    // before reporting the failure, so the same file loads the same way
+    // whether or not the transport happened to be running (ba todo #1363,
+    // preserved through the reordering in #1374).
     let paramless = serde_json::to_vec(&json!({ "ir_path": "/tmp/fourth.wav" })).unwrap();
 
     *extra().loaded.lock().unwrap() = None;

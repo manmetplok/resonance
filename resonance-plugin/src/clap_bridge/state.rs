@@ -109,47 +109,56 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // Threading: `state::load` is [main-thread] and CLAP allows it
             // to run while `process` ([audio-thread]) is in flight. The
             // synchronization is per-param atomics plus the `params_dirty`
-            // flag: values are stored first (Relaxed), then the flag with
-            // Release; the audio thread swaps the flag with Acquire at the
-            // top of each block, so once it observes the flag, every loaded
-            // value is visible and overwrites the plugin's params. Two
-            // in-flight races remain and are benign or handled:
+            // flag: every value is stored first (Relaxed), then the extra
+            // state, then the flag with Release. The audio thread swaps the
+            // flag with Acquire at the top of each block, so once it
+            // observes the flag, the whole load — values and extra state —
+            // is visible, and the values overwrite the plugin's params.
+            //
+            // The flag alone was never enough, though. It is stored
+            // *after* the values, so between a value's store and the flag
+            // a loaded value sat in the atomics with nothing announcing
+            // it, and the audio thread's editor push-back — which had only
+            // that flag and a compare-exchange to go on — could overwrite
+            // it with the plugin's stale one. Permanently: the flag that
+            // followed then copied the overwritten value into the plugin.
+            // ba todo #1363 narrowed that window; it did not close it.
+            //
+            // What closes it is `params_gen`, bumped either side of this
+            // whole block (ba todo #1374). Odd means "a load is publishing
+            // right now", and the push-back reads it around its own store
+            // and stands down when it is odd or when it moved. So there is
+            // no longer any moment at which a value stored here is
+            // exposed: before the flag it is covered by the generation,
+            // after the flag by the flag itself.
+            //
+            // Two in-flight races remain and are benign or handled:
             //
             // - A `ParamValue` event in the same block stores into the same
             //   atomics. Host automation racing a host-initiated load has no
             //   defined winner; either serialization is acceptable.
-            // - The audio thread's editor push-back could overwrite a slot
-            //   loaded after this block's dirty-check. Since ba todo #1363
-            //   that path re-reads `params_dirty` (Acquire) before each
-            //   store and abandons the rest of the push-back once it sees
-            //   it set, so a load that has published the flag survives and
-            //   the still-set flag re-syncs the plugin next block. The
-            //   `compare_exchange_value` is only the inner guard now, for a
-            //   load landing in the few instructions after that check.
+            // - The generation check and the push-back's compare-exchange
+            //   are two instructions, not one, so a load that stores a
+            //   slot the value it already held — indistinguishable from
+            //   not storing it at all — can still lose that slot to a
+            //   pending editor edit. See the note at the push-back in
+            //   `process.rs` for why that case changes nothing the host
+            //   reads back or re-saves.
             //
-            //   What that does NOT close: the stores below happen BEFORE
-            //   the flag, so a push-back store landing between this load's
-            //   store of a given slot and its store of the flag still wins,
-            //   and that value is still lost. That window is now as narrow
-            //   as this protocol can make it — the extra-state saver used
-            //   to run inside it and no longer does (see the call below) —
-            //   but it is not empty: it spans the remaining value stores
-            //   plus the flag store, a few dozen instructions.
-            //
-            //   Two ways to shrink it further were considered and not
-            //   taken. Storing the flag *before* the values inverts the
-            //   protocol (the audio thread would copy stale values on
-            //   seeing the flag) and is simply wrong. Storing it before
-            //   the extra state loads announces the params while the
-            //   non-param state — the IR the gains were saved for — is
-            //   still arriving, trading a narrow window for a wide
-            //   inconsistency. Closing the remainder needs the writer to
-            //   publish *atomically*: a generation counter bumped before
-            //   and after the value stores, which the push-back re-checks
-            //   around its own stores. That is a change to `ClapShared`
-            //   and to both sides of this protocol, so it is deliberately
-            //   left for its own todo. See `process.rs` for the full
-            //   argument on the reader side.
+            // Ordering of the two halves is therefore no longer a trade.
+            // It used to be one: the saver ran *before* the param stores
+            // purely to keep its unbounded work (reading an IR off disk,
+            // rebuilding a wavetable) out of the window in which a stored
+            // value could still be clobbered (ba todo #1363), at the cost
+            // of announcing the extra state well ahead of the params it
+            // belongs with. With the window closed, the order is chosen
+            // for the reason it should be — matching the inactive path,
+            // whose `ResonancePlugin::load_state` default loads params and
+            // then calls the saver — and the two halves now reach the
+            // audio thread as one transition: the params are invisible
+            // until the flag, which is stored once the saver has returned,
+            // and the generation keeps the audio thread from applying
+            // either half early.
             let mut state: serde_json::Value = serde_json::from_slice(&data)
                 .map_err(|_| PluginError::Message("Failed to load state"))?;
             // Migrate first, exactly as the inactive path's
@@ -163,38 +172,47 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // first place (ba todo #1360).
             crate::state::migrate(&mut state, self.shared.param_renames);
 
-            // The extra-state saver runs BEFORE the param stores, unlike
-            // the inactive path (which has no reason to care about the
-            // order, since it holds the plugin and publishes nothing).
+            // Everything from here to `end_param_publish` is one
+            // transition as far as the audio thread is concerned: it will
+            // neither apply a half-published load nor write into one.
+            self.shared.begin_param_publish();
+
+            let params_ok = crate::state::load_params_from_shared_json(
+                &self.shared.param_metas,
+                &self.shared.param_values,
+                &state,
+            );
+
+            // Then the extra state, in the same order as the inactive
+            // path's `ResonancePlugin::load_state` default. `load()` is
+            // arbitrary plugin work — reading an IR off disk, rebuilding a
+            // wavetable — so it can span many audio blocks; ba todo #1363
+            // hoisted it above the param stores to keep that unbounded
+            // stretch out of the window where a stored-but-unannounced
+            // value could be clobbered. The generation this block is
+            // wrapped in closes that window however long it stays open, so
+            // the hoist has nothing left to buy and the natural order is
+            // back (ba todo #1374).
             //
-            // `load()` is arbitrary plugin work — reading an IR off disk,
-            // rebuilding a wavetable — so it can easily span many audio
-            // blocks. Running it after the param stores put it squarely
-            // inside the window in which loaded values sit in shared with
-            // no `params_dirty` announcing them, which is precisely where
-            // the audio thread's editor push-back can still overwrite one
-            // and lose it for good. Moving it ahead of the stores takes
-            // that unbounded stretch out of the window without changing
-            // what the plugin observes: the extra state still lands
-            // before the params, same as before (ba todo #1363).
-            //
-            // Side effect, and an improvement: the saver now also runs for
-            // a blob whose `params` object is missing, which is what the
+            // It runs whether or not the params parsed, which is what the
             // inactive path has always done (`load_state` calls the saver
-            // regardless of the param result). The two paths agreeing is
-            // the whole point of this file.
+            // regardless of the param result). Otherwise the same file
+            // would load differently depending on whether the transport
+            // happened to be running — the divergence this whole path
+            // exists to avoid — so the failure below is reported *after*
+            // the saver has had the blob.
             if let Some(saver) = &self.extra_state_saver {
                 saver.load(&state);
             }
 
-            if !crate::state::load_params_from_shared_json(
-                &self.shared.param_metas,
-                &self.shared.param_values,
-                &state,
-            ) {
+            if params_ok {
+                self.shared.params_dirty.store(true, Ordering::Release);
+            }
+            self.shared.end_param_publish();
+            if !params_ok {
+                // Nothing was stored, so there was nothing to announce.
                 return Err(PluginError::Message("Failed to load state"));
             }
-            self.shared.params_dirty.store(true, Ordering::Release);
         }
 
         Ok(())

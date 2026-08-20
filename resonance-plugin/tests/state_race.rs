@@ -32,7 +32,14 @@
 //! That gives full control of the interleaving with no sleeps, no retries
 //! and no serialisation of the two operations.
 //!
-//! ba todo #1341.
+//! The third test needs one thing more: the load has to be caught
+//! *part-way through itself*, between storing a value and announcing it.
+//! The plugin's extra-state saver is the hook for that — the bridge calls
+//! it from inside exactly that window — and it is what hands the parked
+//! audio thread back in. See
+//! `a_state_load_landing_inside_the_value_store_window_survives`.
+//!
+//! ba todos #1341, #1363, #1374.
 
 mod common;
 
@@ -48,8 +55,8 @@ use clack_plugin::entry::SinglePluginEntry;
 
 use common::{TestHost, TestHostShared};
 use resonance_plugin::{
-    stable_hash, ClapBridge, EventIterator, FloatParam, FloatRange, OutputBuffer, Param,
-    ResonancePlugin, TempoInfo,
+    stable_hash, ClapBridge, EventIterator, ExtraStateSaver, FloatParam, FloatRange, OutputBuffer,
+    Param, ResonancePlugin, TempoInfo,
 };
 use serde_json::{json, Value};
 
@@ -189,11 +196,19 @@ struct RaceParams {
     loaded: FloatParam,
     hook_late: HookParam,
     edited: FloatParam,
+    /// Blocks whose `process()` reached the plugin. The bridge runs the
+    /// whole of its own `process()` — the dirty re-sync and the editor
+    /// push-back included — before it calls the plugin, so a bump here is
+    /// proof that a block's push-back has been *and gone*. That is what
+    /// lets the extra-state saver below wait for the thing it is trying to
+    /// provoke instead of sleeping and hoping.
+    passes: AtomicU64,
 }
 
 impl RaceParams {
     fn new() -> Self {
         Self {
+            passes: AtomicU64::new(0),
             hook_early: HookParam::new("hook_early"),
             loaded: FloatParam::new(
                 "loaded",
@@ -231,7 +246,7 @@ impl RaceParams {
 /// parameters — because cargo runs the tests in this binary concurrently and
 /// they would otherwise fight over one plugin's state.
 macro_rules! race_plugin {
-    ($ty:ident, $slot:ident, $params:ident, $id:literal) => {
+    ($ty:ident, $slot:ident, $params:ident, $id:literal $(, saver: $saver:path)?) => {
         static $slot: OnceLock<Arc<RaceParams>> = OnceLock::new();
 
         /// The handle a real plugin hands to its editor: the very same param
@@ -274,7 +289,13 @@ macro_rules! race_plugin {
                 _events: &mut EventIterator<'_>,
                 _tempo: Option<TempoInfo>,
             ) {
+                self.params.passes.fetch_add(1, Ordering::Release);
             }
+            $(
+                fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
+                    Some($saver() as Arc<dyn ExtraStateSaver>)
+                }
+            )?
         }
     };
 }
@@ -282,6 +303,76 @@ macro_rules! race_plugin {
 race_plugin!(EditorPlugin, EDITOR_SLOT, editor_params, "test.race-editor");
 race_plugin!(LatePlugin, LATE_SLOT, late_params, "test.race-late");
 race_plugin!(EarlyPlugin, EARLY_SLOT, early_params, "test.race-early");
+race_plugin!(
+    WindowPlugin,
+    WINDOW_SLOT,
+    window_params,
+    "test.race-window",
+    saver: window_saver
+);
+
+// ---------------------------------------------------------------------------
+// The hook that suspends the *writer*, from inside its own publication window
+// ---------------------------------------------------------------------------
+
+/// The extra-state saver of `WindowPlugin`.
+///
+/// `clap_bridge::state`'s active-path load stores every param value into
+/// the shared atomics, calls this, and only then stores `params_dirty`.
+/// So the bridge itself parks the main thread here, in the middle of a
+/// load, with the loaded values sitting in the atomics and nothing yet
+/// announcing them — the one place a test cannot otherwise reach, and the
+/// window ba todo #1374 is about.
+///
+/// A real saver spends this time reading an IR off disk. This one hands
+/// the audio thread back in: it releases the block parked at `hook_early`
+/// and waits until two blocks have run their push-back to completion, so
+/// the push-back reads the loaded value back with no flag to warn it off.
+#[derive(Default)]
+struct WindowSaver {
+    armed: AtomicBool,
+}
+
+impl WindowSaver {
+    /// Do the hand-over on the next `load()` only. Every other load in the
+    /// process (including the ones other tests in this binary run) must
+    /// pass through untouched.
+    fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+}
+
+impl ExtraStateSaver for WindowSaver {
+    fn save(&self) -> serde_json::Map<String, Value> {
+        serde_json::Map::new()
+    }
+
+    fn load(&self, _state: &Value) {
+        if !self.armed.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        let params = window_params();
+        let target = params.passes.load(Ordering::Acquire) + 2;
+        params.hook_early.gate.release();
+
+        // Two full blocks: the one that was parked mid-push-back, plus a
+        // whole fresh one, so a push-back that only clobbers on its second
+        // look is caught too. No assert — panicking here would unwind
+        // through the CLAP C ABI. The test's own assertions report.
+        let deadline = Instant::now() + PATIENCE;
+        while params.passes.load(Ordering::Acquire) < target && Instant::now() < deadline {
+            thread::yield_now();
+        }
+    }
+}
+
+static WINDOW_SAVER: OnceLock<Arc<WindowSaver>> = OnceLock::new();
+
+fn window_saver() -> Arc<WindowSaver> {
+    WINDOW_SAVER
+        .get_or_init(|| Arc::new(WindowSaver::default()))
+        .clone()
+}
 
 // ---------------------------------------------------------------------------
 // Host side: an instance on this thread, its audio processor on another
@@ -580,6 +671,78 @@ fn a_state_load_landing_before_the_push_back_read_survives() {
         target,
         "and `params_dirty` must carry it into the plugin's own storage on a \
          later block"
+    );
+
+    shutdown(instance, audio);
+}
+
+/// The last of the three, and the only one that catches the load
+/// *mid-publication*.
+///
+/// Both tests above let `state::load` run to completion before the audio
+/// thread moves again, so `params_dirty` is always up by the time the
+/// push-back looks — and guard 1 (the dirty re-check) is enough. The real
+/// residual was the window *inside* the load: values already stored into
+/// the shared atomics, flag not stored yet. In there the push-back sees a
+/// difference between the plugin's stale value and a shared value it has
+/// no reason to distrust, and its compare-exchange **succeeds**, because
+/// the value it compares against is the freshly loaded one it just read.
+/// The load is then lost for good: the flag arrives, and the next block
+/// copies the clobbered value into the plugin.
+///
+/// The saver is the way in. The bridge calls it between the value stores
+/// and the flag store, so `WindowSaver::load` runs with the window held
+/// open and lets the parked audio thread take two full blocks inside it.
+/// That hook only exists because #1374 also put the saver back after the
+/// param stores, where the inactive path has always had it — while it ran
+/// *before* them (ba todo #1363's mitigation) there was no point in a load
+/// at which any test could get control, which is a large part of why this
+/// window went two rounds without one.
+///
+/// What closes this is the publication generation `state::load` bumps
+/// before and after itself (`ClapShared::params_gen`): the push-back reads
+/// it around its own store, finds it odd, and stands down.
+///
+/// ba todo #1374.
+#[test]
+fn a_state_load_landing_inside_the_value_store_window_survives() {
+    let params = window_params();
+    let (mut instance, processor) = activate::<WindowPlugin>(c"test.race-window");
+    let audio = spawn_audio(processor);
+
+    let target = 375.0_f64;
+    assert_ne!(
+        params.loaded.get_plain(),
+        target,
+        "the test must actually change something"
+    );
+
+    // Park `process()` in its push-back loop at slot 0: before it reads
+    // the `loaded` slot back, and after it has already taken (and cleared)
+    // `params_dirty` for this block.
+    params.hook_early.gate.arm();
+    params.hook_early.gate.wait_until_reached();
+
+    // Arm the saver, then load. The load stores `loaded` into the shared
+    // atomics, then calls the saver, which releases the audio thread and
+    // lets it run its push-back twice over — all before the load stores
+    // the flag.
+    window_saver().arm();
+    load_state(&mut instance, &state_bytes(target));
+
+    audio.wait_blocks(3);
+
+    assert_eq!(
+        get_value(&mut instance, "loaded"),
+        target,
+        "the loaded value must survive a push-back that ran while the load \
+         was still publishing itself"
+    );
+    assert_eq!(
+        params.loaded.get_plain(),
+        target,
+        "and the flag stored afterwards must carry it into the plugin's own \
+         storage, not the value the push-back put back"
     );
 
     shutdown(instance, audio);

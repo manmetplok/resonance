@@ -188,12 +188,30 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             }
         }
 
-        // Re-sync params from shared atomics if state was loaded while active
-        if self.shared.params_dirty.swap(false, Ordering::Acquire) {
+        // Re-sync params from shared atomics if state was loaded while
+        // active.
+        //
+        // Gated on an even publication generation: a load that is still
+        // part-way through storing its values (see `ClapShared::params_gen`)
+        // has not become visible yet, and copying out of the middle of one
+        // would hand the plugin a mix of the old state and the new. There
+        // is no waiting involved — an odd generation just leaves
+        // `params_dirty` set for a later block, which is exactly what the
+        // flag is for.
+        let publish_gen = self.shared.param_publish_gen();
+        if publish_gen & 1 == 0 && self.shared.params_dirty.swap(false, Ordering::Acquire) {
             for i in 0..self.plugin.param_count() {
                 if i < self.shared.param_values.len() {
                     self.plugin.param(i).set_plain(self.shared.get_value(i));
                 }
+            }
+            // A load that opened its window *after* the check above could
+            // have been publishing while the loop ran, so what the plugin
+            // just took may be a blend. Hand the flag back rather than
+            // leave it: the next block re-runs the copy against the
+            // finished load.
+            if self.shared.param_publish_gen() != publish_gen {
+                self.shared.params_dirty.store(true, Ordering::Release);
             }
         }
 
@@ -216,19 +234,20 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // second; load-then-conditional-store is essentially free on
         // x86 when the value is unchanged.
         //
-        // # Racing a concurrent `state::load` (ba todo #1363)
+        // # Racing a concurrent `state::load` (ba todos #1363, #1374)
         //
         // CLAP allows `state::load` ([main-thread]) to run concurrently
         // with `process` ([audio-thread]). Load stores every param into
-        // the shared atomics (Relaxed) and then sets `params_dirty`
-        // (Release). A load that lands after this block's dirty swap
-        // above is therefore *not* handled by that swap, and a naive
-        // store here would put the plugin's stale value back over the
-        // freshly loaded one. Because the still-set dirty flag makes the
-        // *next* block copy shared -> plugin, that clobber is permanent:
-        // the load is lost, not merely delayed.
+        // the shared atomics (Relaxed), runs the plugin's extra-state
+        // saver, and then sets `params_dirty` (Release). A load that
+        // lands after this block's dirty swap above is therefore *not*
+        // handled by that swap, and a naive store here would put the
+        // plugin's stale value back over the freshly loaded one. Because
+        // the still-set dirty flag makes the *next* block copy shared ->
+        // plugin, that clobber is permanent: the load is lost, not merely
+        // delayed.
         //
-        // Two guards, in the order they fire:
+        // Three guards, in the order they fire:
         //
         // 1. `params_dirty` is re-read immediately before each store. A
         //    load that has already announced itself makes the audio
@@ -238,7 +257,24 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         //    is safe to write either). The loaded values stay untouched
         //    and the still-set flag re-syncs the plugin from them next
         //    block.
-        // 2. The store itself is a compare-exchange against the value we
+        // 2. `params_gen` is read before the store and again after it
+        //    (ba todo #1374). Odd means a load is publishing right now:
+        //    its values are already in the atomics with no flag yet
+        //    announcing them, which is precisely the case guard 1 cannot
+        //    see, so the push-back stands down. A generation that
+        //    *changed* across the store means a whole window opened (and
+        //    possibly closed) around it, so the store is undone — a
+        //    compare-exchange back to the value we found, which can only
+        //    land if nothing has written the slot since — and the
+        //    push-back stands down as well.
+        //
+        //    This is the read side of a seqlock, but the reader here is
+        //    itself a writer of the same slots, so it cannot re-read and
+        //    retry its way to a consistent view. It does not need to:
+        //    abandoning the push-back is always available and always
+        //    correct. That keeps the audio thread wait-free — a fixed
+        //    two loads and at most one extra exchange, never a spin.
+        // 3. The store itself is a compare-exchange against the value we
         //    just read, so a load landing in the few instructions
         //    between that read and the exchange makes the exchange fail
         //    and leaves the loaded value in place.
@@ -254,22 +290,21 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // preset recall — leaves the instrument in a state that matches
         // neither the preset nor anything the user asked for.
         //
-        // What this does NOT close, honestly: load stores its values
-        // *before* it stores the flag, so there is a residual window in
-        // which a value is already in shared but no flag has announced
-        // it. A push-back store landing inside that window still wins
-        // and still loses the load. Guard 1 shrinks the exposure from
-        // "the whole span between the dirty swap and the push-back read"
-        // (which is the bulk of a block, including the entire event
-        // decode and the reads of every earlier slot) to "between load's
-        // store of this one slot and load's store of the flag". Note
-        // that `clap_bridge/state.rs` runs the extra-state saver's
-        // `load()` inside that window, which widens it for plugins that
-        // carry extra state. Closing it completely needs the writer side
-        // to publish atomically — a generation counter bumped before and
-        // after the value stores, which the push-back could re-check
-        // around its own stores — and that is a change to `ClapShared`
-        // and the load path, not to this file.
+        // What this does NOT close, honestly: guard 2 brackets the store
+        // but cannot fuse with it, and guard 3 keys on the slot's value.
+        // So one case survives — a load whose value for a slot is
+        // *exactly the value that slot already held*, published in the
+        // handful of instructions between the bracket and the exchange.
+        // Nothing distinguishes it from no write at all, so the exchange
+        // succeeds and the plugin ends up with the editor's pending edit
+        // instead of the loaded value. Note what that case is not: the
+        // shared atomics already agreed with the load, so nothing the
+        // host reads back or re-saves is wrong, and the only difference
+        // is which of two values — one of them a knob the user is
+        // holding — reaches the DSP. Closing it needs the load's values
+        // to live somewhere this loop cannot write at all: a staging
+        // buffer the dirty flag hands over, which is a change to the
+        // layout of `ClapShared` and to every reader of `param_values`.
         for i in 0..self.plugin.param_count() {
             if i < self.shared.param_values.len() {
                 let plugin_v = self.plugin.param(i).get_plain();
@@ -285,7 +320,27 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     if self.shared.params_dirty.load(Ordering::Acquire) {
                         break;
                     }
-                    let _ = self.shared.compare_exchange_value(i, shared_v, plugin_v);
+                    let gen_before = self.shared.param_publish_gen();
+                    if gen_before & 1 == 1 {
+                        // A load is publishing right now. Whatever is in
+                        // this slot may be one of its values with no flag
+                        // announcing it yet; hands off, and off every
+                        // later slot too.
+                        break;
+                    }
+                    let stored = self.shared.compare_exchange_value(i, shared_v, plugin_v);
+                    if self.shared.param_publish_gen() != gen_before {
+                        // A publication window opened around the exchange.
+                        // If the exchange landed it may have landed on a
+                        // loaded value, so put back what was there — the
+                        // compare-exchange makes that safe, since it can
+                        // only land while the slot still holds what we
+                        // just wrote.
+                        if stored {
+                            let _ = self.shared.compare_exchange_value(i, plugin_v, shared_v);
+                        }
+                        break;
+                    }
                 }
             }
         }

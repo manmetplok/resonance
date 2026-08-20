@@ -204,6 +204,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             // lives in the audio processor (ba todo #1360).
             param_renames: temp.param_renames(),
             params_dirty: AtomicBool::new(false),
+            params_gen: AtomicU64::new(0),
         })
     }
 

@@ -80,6 +80,28 @@ pub struct ClapShared<'a> {
     /// Flag: shared param values have been updated (e.g. state load while active).
     /// The audio processor should re-sync plugin params from shared atomics.
     pub(crate) params_dirty: AtomicBool,
+    /// Publication generation for `clap_bridge::state`'s active-path load:
+    /// **even** means quiescent, **odd** means a `[main-thread]` load is
+    /// part-way through publishing itself into `param_values` /
+    /// `params_dirty`.
+    ///
+    /// This is the writer's half of a seqlock, and it is what makes a load
+    /// atomic with respect to the audio thread (ba todo #1374). Before it,
+    /// the only announcement was `params_dirty`, stored *after* the values:
+    /// between a value's store and that flag, a loaded value sat in
+    /// `param_values` with nothing marking it, and the audio thread's
+    /// editor push-back could overwrite it — permanently, because the flag
+    /// that followed then copied the overwritten value into the plugin
+    /// (ba todos #1363, #1374).
+    ///
+    /// The reader is the push-back in `clap_bridge::process`, which is a
+    /// *writer* of the same slots rather than a copying reader, so it does
+    /// not spin and retry: it checks the counter around its own store and
+    /// abandons the push-back if it moved. See the protocol note there.
+    ///
+    /// `AtomicU64` rather than `AtomicU32` only so the bridge's shared-state
+    /// constructor needs no further imports; a wrap takes 2^64 loads.
+    pub(crate) params_gen: AtomicU64,
 }
 
 impl ClapShared<'_> {
@@ -95,7 +117,8 @@ impl ClapShared<'_> {
         self.param_values[slot].store(value.to_bits(), Ordering::Relaxed);
     }
 
-    /// Store `new` into the slot only if it still holds `current`.
+    /// Store `new` into the slot only if it still holds `current`; report
+    /// whether it landed.
     ///
     /// Used by the audio thread's editor push-back so it cannot clobber a
     /// value the main thread wrote concurrently (state load): if the CAS
@@ -103,15 +126,63 @@ impl ClapShared<'_> {
     /// (set by the writer) makes the next block re-sync the plugin from
     /// shared. Lock-free, no allocation — a single `compare_exchange` on
     /// the slot's `AtomicU64`.
+    ///
+    /// `SeqCst` so it shares one total order with the [`params_gen`]
+    /// checks the push-back brackets it with: the exchange must not be
+    /// reordered across either of them, or the bracket proves nothing.
+    /// On x86-64 this is the same `lock cmpxchg` a `Relaxed` exchange
+    /// compiles to.
+    ///
+    /// [`params_gen`]: Self::params_gen
     pub fn compare_exchange_value(&self, slot: usize, current: f64, new: f64) -> bool {
         self.param_values[slot]
             .compare_exchange(
                 current.to_bits(),
                 new.to_bits(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
             )
             .is_ok()
+    }
+
+    /// Main thread, `state::load`: open the publication window.
+    ///
+    /// Everything stored between this and [`end_param_publish`] — every
+    /// param value, the extra-state saver's work, and the `params_dirty`
+    /// flag that announces them — is one transition as far as the audio
+    /// thread is concerned: it neither applies a half-published load nor
+    /// writes into one.
+    ///
+    /// Only the main thread bumps this (CLAP declares `state::load`
+    /// `[main-thread]`, so two loads cannot overlap), which is why a plain
+    /// load/store pair is enough and no read-modify-write is needed.
+    ///
+    /// [`end_param_publish`]: Self::end_param_publish
+    pub(crate) fn begin_param_publish(&self) {
+        let current = self.params_gen.load(Ordering::Relaxed);
+        self.params_gen
+            .store(current.wrapping_add(1), Ordering::SeqCst);
+        // Keep the value stores that follow from being reordered *ahead*
+        // of the odd generation that has to precede them: a release fence
+        // orders every access before it ahead of every store after it.
+        std::sync::atomic::fence(Ordering::Release);
+    }
+
+    /// Main thread, `state::load`: close the publication window.
+    ///
+    /// `SeqCst` also publishes every value store and the `params_dirty`
+    /// flag that precede it, so an audio thread that observes an even
+    /// generation observes the whole load.
+    pub(crate) fn end_param_publish(&self) {
+        let current = self.params_gen.load(Ordering::Relaxed);
+        self.params_gen
+            .store(current.wrapping_add(1), Ordering::SeqCst);
+    }
+
+    /// Audio thread: the current publication generation. Odd means a load
+    /// is publishing right now.
+    pub(crate) fn param_publish_gen(&self) -> u64 {
+        self.params_gen.load(Ordering::SeqCst)
     }
 }
 
