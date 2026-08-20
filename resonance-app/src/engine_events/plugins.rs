@@ -825,3 +825,27 @@ pub(super) fn bypass_changed(
 ) {
     r.with_plugin_mut(instance_id, |slot| slot.bypassed = bypassed);
 }
+
+/// Adopt the engine's editor-state echo (ba todo #1347).
+///
+/// `editor_open` now reflects only what the engine reported. Three things
+/// reach here: a successful open, a close (host- or user-initiated,
+/// including a window closed from its own titlebar), and a failed open.
+///
+/// On a FAILURE the slot is also selected into the generic parameter
+/// panel. That panel is reachable for every plugin since ba todo #1306,
+/// and it is the only thing left to fall back on when a floating editor
+/// refuses — otherwise the press appears to do nothing at all. The
+/// error banner still fires from the accompanying `AudioEvent::Error`,
+/// so the user gets both the reason and somewhere to go.
+pub(super) fn editor_state(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    open: bool,
+    failure: Option<resonance_audio::types::PluginEditorFailure>,
+) {
+    r.with_plugin_mut(instance_id, |slot| slot.editor_open = open);
+    if failure.is_some() {
+        r.mixer.selected_plugin = Some(instance_id);
+    }
+}

@@ -439,6 +439,13 @@ impl Resonance {
     /// for the tint, which the widget tree does not expose — `iced_test`
     /// can read a text candidate's content but never its colour.
     #[doc(hidden)]
+/// Test-only: which plugin the generic parameter panel currently shows,
+    /// if any — the surface a refused editor falls back to (ba todo #1347).
+    #[doc(hidden)]
+    pub fn test_selected_plugin(&self) -> Option<resonance_audio::types::PluginInstanceId> {
+        self.mixer.selected_plugin
+    }
+
     pub fn test_strip_editor_toggle(
         &self,
         instance_id: resonance_audio::types::PluginInstanceId,

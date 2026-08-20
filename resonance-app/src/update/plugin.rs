@@ -190,14 +190,22 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             }
         }
         PluginMessage::OpenPluginEditor(instance_id) => {
+            // NOT set optimistically (ba todo #1347). The engine reports
+            // both outcomes as `AudioEvent::PluginEditorState`, so the
+            // mirror is moved by the echo alone. Setting it here made a
+            // plugin whose window failed to open read "Close Editor" over
+            // nothing, with no way back — the engine said only
+            // `Error("Failed to open plugin editor")`, naming no instance.
             let _ = r.engine
                 .send(AudioCommand::OpenPluginEditor { instance_id });
-            r.with_plugin_mut(instance_id, |p| p.editor_open = true);
         }
         PluginMessage::ClosePluginEditor(instance_id) => {
+            // Same rule in the other direction: `handle_close_plugin_editor`
+            // emits `closed` unconditionally, including for an unknown
+            // instance and for a close that was a no-op, so the echo can
+            // always be trusted to clear the flag.
             let _ = r.engine
                 .send(AudioCommand::ClosePluginEditor { instance_id });
-            r.with_plugin_mut(instance_id, |p| p.editor_open = false);
             let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
         }
         PluginMessage::RescanPlugins => {

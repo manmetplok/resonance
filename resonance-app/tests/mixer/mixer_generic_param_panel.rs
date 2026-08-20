@@ -26,6 +26,7 @@ use iced_test::selector::Candidate;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, PluginMessage, UiMessage};
 use resonance_app::state::{PluginSlotState, ViewMode};
+use resonance_audio::types::AudioEvent;
 use resonance_app::{theme, Resonance};
 use resonance_audio::types::{ParamInfo, TrackType};
 
@@ -306,6 +307,13 @@ fn pressing_the_strip_editor_toggle_opens_the_floating_editor() {
 fn pressing_the_strip_editor_toggle_again_closes_the_floating_editor() {
     let mut app = app_with_plugin(true);
     app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
+    // The engine's confirmation is what makes the editor "open" now
+    // (ba todo #1347); the press on its own no longer moves the flag.
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: true,
+        failure: None,
+    });
 
     assert!(
         matches!(
@@ -317,8 +325,10 @@ fn pressing_the_strip_editor_toggle_again_closes_the_floating_editor() {
 }
 
 /// The glyph lights up while the editor is open. That tint is the only
-/// feedback a press gives — the engine reports neither success nor
-/// failure per instance (ba todo #1347) — so it has to track the state.
+/// feedback a press gives, so it has to track the state — and since ba
+/// todo #1347 it tracks the ENGINE's report rather than the press, so a
+/// window that refused to open leaves the glyph down instead of lit over
+/// nothing.
 ///
 /// Asserted through the view's own decision rather than the widget
 /// tree: `iced_test` can read a text candidate's content but never its
@@ -332,7 +342,21 @@ fn the_strip_editor_toggle_is_tinted_while_the_editor_is_open() {
         "closed: the glyph sits back in the strip's dim icon ramp"
     );
 
+    // The press alone no longer tints it: since ba todo #1347 the flag
+    // moves only on the engine's report, so a window that failed to open
+    // cannot leave the glyph lit over nothing.
     app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
+    assert_eq!(
+        app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
+        Some(theme::TEXT_DIM),
+        "pressing open must not tint anything until the engine confirms"
+    );
+
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: true,
+        failure: None,
+    });
     assert_eq!(
         app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
         Some(theme::ACCENT),
@@ -341,6 +365,11 @@ fn the_strip_editor_toggle_is_tinted_while_the_editor_is_open() {
     );
 
     app.test_dispatch(Message::Plugin(PluginMessage::ClosePluginEditor(INSTANCE)));
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: false,
+        failure: None,
+    });
     assert_eq!(
         app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
         Some(theme::TEXT_DIM),
@@ -364,4 +393,98 @@ fn clicking_the_slot_again_closes_the_panel() {
 
     let mut ui = simulator(&app);
     assert!(ui.find(PARAM).is_err(), "the panel closed again");
+}
+
+// ---------------------------------------------------------------------------
+// editor_open reflects only what the engine reported (ba todo #1347)
+// ---------------------------------------------------------------------------
+
+/// A failed open must not leave the slot claiming the editor is up.
+///
+/// This is the symptom the todo was filed for: `update/plugin.rs` set
+/// `editor_open = true` the moment the command went out, and the engine
+/// answered a failure with `Error("Failed to open plugin editor")` — no
+/// instance id — so nothing could ever correct it. The slot read "Close
+/// Editor" over a window that was never there, and pressing it sent a
+/// close for an editor that did not exist.
+#[test]
+fn a_refused_open_leaves_the_slot_closed_and_offers_the_generic_panel() {
+    let mut app = app_with_plugin(true);
+
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: false,
+        failure: Some(resonance_audio::types::PluginEditorFailure::CreateFailed),
+    });
+
+    assert!(
+        matches!(
+            app.test_strip_editor_toggle(INSTANCE).map(|(msg, _)| msg),
+            Some(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)))
+        ),
+        "after a refused open the toggle must still OFFER to open, not \
+         offer to close a window that is not there"
+    );
+    assert_eq!(
+        app.test_selected_plugin(),
+        Some(INSTANCE),
+        "a refused editor must fall back to the generic parameter panel — \
+         it is the only way left to see this plugin's parameters, and \
+         without it the press appears to do nothing at all"
+    );
+}
+
+/// A window the user closes from its own titlebar clears the flag.
+///
+/// Nothing asked the app to close it, so before #1347 there was no
+/// message and no event — the slot stayed "open" for the rest of the
+/// session and the toggle offered to close an already-closed window.
+#[test]
+fn a_titlebar_close_clears_the_flag_without_the_app_asking() {
+    let mut app = app_with_plugin(true);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: true,
+        failure: None,
+    });
+
+    // No app-side message: this arrives entirely on the engine's word.
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: false,
+        failure: None,
+    });
+
+    assert!(
+        matches!(
+            app.test_strip_editor_toggle(INSTANCE).map(|(msg, _)| msg),
+            Some(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)))
+        ),
+        "the slot must go back to offering an open once the window is gone"
+    );
+}
+
+/// A successful open does NOT select the generic panel.
+///
+/// The fallback is for failures only; hijacking the panel on every
+/// successful open would fight the user's own selection.
+#[test]
+fn a_successful_open_leaves_the_panel_selection_alone() {
+    let mut app = app_with_plugin(true);
+    let before = app.test_selected_plugin();
+
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: true,
+        failure: None,
+    });
+
+    assert_eq!(
+        app.test_selected_plugin(),
+        before,
+        "a working editor must not steal the parameter panel"
+    );
 }

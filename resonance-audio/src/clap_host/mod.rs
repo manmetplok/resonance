@@ -84,10 +84,18 @@ pub(super) struct HostData {
     /// turns it into `AudioEvent::PluginEditorState`.
     gui_closed: AtomicBool,
     /// Companion to `gui_closed`: the `was_destroyed` argument of the
-    /// notification. `true` means the plugin already destroyed its own
-    /// window and the host must NOT call `gui.destroy()` again. Written
-    /// before `gui_closed` is set and read after it is taken, so the
-    /// release/acquire pair on `gui_closed` publishes it.
+    /// notification.
+    ///
+    /// INFORMATIONAL ONLY — it does not decide the teardown, and an
+    /// earlier version of this comment said the opposite. `clap/ext/gui.h`
+    /// on `clap_host_gui.closed`: "If was_destroyed is true, then the host
+    /// must call clap_plugin_gui->destroy() to acknowledge the gui
+    /// destruction." The flag describes the WINDOW, not the plugin's gui
+    /// object, which the plugin never frees itself. So the host calls
+    /// `destroy` either way (ba todo #1347).
+    ///
+    /// Written before `gui_closed` is set and read after it is taken, so
+    /// the release/acquire pair on `gui_closed` publishes it.
     gui_closed_was_destroyed: AtomicBool,
 }
 
@@ -156,8 +164,9 @@ unsafe extern "C" fn host_request_restart(host: *const clap_host) {
 /// without the host having asked (ba todo #1347): the user closed the
 /// floating window from its own titlebar, or the plugin tore its editor
 /// down itself. Main-thread callback; we only latch the flag, the
-/// engine thread's `poll_plugin_host_requests` performs the teardown
-/// (`destroy` unless `was_destroyed`) and emits the event.
+/// engine thread's `poll_plugin_host_requests` performs the teardown —
+/// `destroy` unconditionally, see `gui_closed_was_destroyed` — and emits
+/// the event.
 unsafe extern "C" fn host_gui_closed(host: *const clap_host, was_destroyed: bool) {
     if let Some(data) = host_data_from(host) {
         data.gui_closed_was_destroyed

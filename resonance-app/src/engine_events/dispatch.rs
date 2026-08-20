@@ -406,13 +406,14 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             plugins::state_saved(r, instance_id, data)
         }
         // The engine's real editor open/failed/closed report (ba doc
-        // #283, ba todo #1347). Mirroring it onto `PluginSlotState.
-        // editor_open` — and dropping the optimistic `editor_open = true`
-        // in `update/plugin.rs` — is ba todo #1306's second half; until
-        // then the failure still reaches the user through the
-        // accompanying `AudioEvent::Error`. Consumed here for
-        // exhaustiveness.
-        E::PluginEditorState { .. } => {}
+        // #283, ba todo #1347). This is the ONLY thing that moves
+        // `PluginSlotState.editor_open`; `update/plugin.rs` no longer
+        // sets it optimistically.
+        E::PluginEditorState {
+            instance_id,
+            open,
+            failure,
+        } => plugins::editor_state(r, instance_id, open, failure),
         E::BusPluginAdded {
             bus_id,
             instance_id,
