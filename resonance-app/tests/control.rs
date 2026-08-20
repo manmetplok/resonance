@@ -100,6 +100,8 @@ mod control_song_summary_tempo_map;
 mod control_song_views;
 #[path = "control/control_track_add_plugin_result.rs"]
 mod control_track_add_plugin_result;
+#[path = "control/control_replace_effect.rs"]
+mod control_replace_effect;
 #[path = "control/control_track_dispatch.rs"]
 mod control_track_dispatch;
 #[path = "control/control_track_mixer.rs"]

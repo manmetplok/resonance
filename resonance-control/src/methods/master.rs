@@ -27,6 +27,10 @@ pub const REMOVE_EFFECT: &str = "master.remove_effect";
 /// `master.move_effect` — reorder the master chain ([`MoveEffectParams`]
 /// -> `MutationAck`).
 pub const MOVE_EFFECT: &str = "master.move_effect";
+/// `master.replace_effect` — put a different plugin in a chain slot,
+/// keeping its position ([`ReplaceEffectParams`] ->
+/// [`ReplaceEffectResult`](crate::methods::track::ReplaceEffectResult)).
+pub const REPLACE_EFFECT: &str = "master.replace_effect";
 /// `master.set_fx_bypass` — bypass/unbypass the whole master chain
 /// ([`SetFxBypassParams`]).
 pub const SET_FX_BYPASS: &str = "master.set_fx_bypass";
@@ -64,6 +68,7 @@ pub const METHODS: &[&str] = &[
     ADD_EFFECT,
     REMOVE_EFFECT,
     MOVE_EFFECT,
+    REPLACE_EFFECT,
     SET_FX_BYPASS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
@@ -184,6 +189,26 @@ pub struct MoveEffectParams {
     /// last slot; moving an effect to where it already sits is an
     /// accepted no-op.
     pub to_slot: u32,
+}
+
+/// Params for `master.replace_effect` — the master twin of
+/// [`track::ReplaceEffectParams`](crate::methods::track::ReplaceEffectParams),
+/// with the same addressing and the same relocate-vs-swap rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ReplaceEffectParams {
+    /// 0-based chain position of the plugin to replace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// CLAP id of the plugin to replace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based; defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// CLAP id of the plugin that takes the slot. Naming the plugin
+    /// already there relocates a missing one and keeps its settings.
+    pub new_plugin_id: String,
 }
 
 /// Params for `master.set_fx_bypass`. Idempotent: this SETS the state

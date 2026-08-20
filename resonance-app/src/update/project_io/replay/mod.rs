@@ -65,6 +65,19 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // statuses via `apply_freeze_restore`.
     r.freeze.reset();
 
+    // Missing-plugin warning (ba doc #275 P5, todo #1309). A genuine
+    // disk load starts with a clean slate: every slot is re-added
+    // optimistically and the engine's refusals raise the warning again
+    // for THIS project. An undo/redo replay re-adds the same plugins and
+    // gets the same refusals, so it would re-raise the modal on every
+    // history step — the same reason the missing-FILE modal is opened
+    // only for disk loads (`engine_events::project_io::all_cleared`).
+    if r.io.pending_undo_extras.is_none() {
+        r.missing_plugins.reset();
+    } else {
+        r.missing_plugins.dismiss();
+    }
+
     // Point the engine at the loaded project's directory so that
     // subsequent imports and recordings stream into it.
     let _ = r.engine

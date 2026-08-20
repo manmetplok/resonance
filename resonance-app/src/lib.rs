@@ -103,6 +103,11 @@ pub struct Resonance {
     /// Only the button's label depends on it; a scan is fast enough that
     /// nothing is blocked while it runs.
     pub(crate) plugin_scan_in_progress: bool,
+    /// Whether the "this project uses plugins this machine hasn't got"
+    /// warning is showing (ba doc #275 P5, todo #1309). Session state
+    /// only — which slots are missing is derived from the chains by
+    /// [`Resonance::missing_plugin_slots`].
+    pub(crate) missing_plugins: crate::state::MissingPluginState,
     /// Cached pick-list option lists for the view layer. Rebuilt only
     /// when source data changes (devices, busses, plugin scan) so a
     /// continuous resize doesn't reallocate option vecs every frame.
@@ -765,6 +770,7 @@ impl Resonance {
             available_plugins: Vec::new(),
             plugin_scan_failures: Vec::new(),
             plugin_scan_in_progress: false,
+            missing_plugins: crate::state::MissingPluginState::default(),
             view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
             error_message: None,

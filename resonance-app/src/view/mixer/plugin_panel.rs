@@ -47,19 +47,30 @@ impl crate::Resonance {
             })
             .collect();
 
-        let plugin_element = match &plugin.custom {
-            PluginCustomState::Generic => resonance_plugin::ui::view_generic_params(&ui_params),
-        };
-
         let inst_id = selected_id;
-        let mapped = plugin_element.map(move |event| {
-            use resonance_plugin::ui::PluginUiEvent;
-            match event {
-                PluginUiEvent::SetParam(param_id, value) => {
-                    Message::Plugin(PluginMessage::SetPluginParam(inst_id, param_id, value))
-                }
+        // A slot with nothing behind it has no parameters to draw — and
+        // drawing an empty generic panel is exactly the "dead slot that
+        // looks like a working plugin" this surface exists to end. The
+        // body becomes the recovery surface instead (ba doc #275 P5,
+        // todo #1309).
+        let mapped: Element<'_, Message> = match plugin.availability.reason() {
+            Some(reason) => self.missing_plugin_body(plugin, reason),
+            None => {
+                let plugin_element = match &plugin.custom {
+                    PluginCustomState::Generic => {
+                        resonance_plugin::ui::view_generic_params(&ui_params)
+                    }
+                };
+                plugin_element.map(move |event| {
+                    use resonance_plugin::ui::PluginUiEvent;
+                    match event {
+                        PluginUiEvent::SetParam(param_id, value) => {
+                            Message::Plugin(PluginMessage::SetPluginParam(inst_id, param_id, value))
+                        }
+                    }
+                })
             }
-        });
+        };
 
         // Header with plugin name, optional Open Editor button, and close.
         let mut header = row![
@@ -109,5 +120,100 @@ impl crate::Resonance {
         .style(theme::panel_bg);
 
         Some(panel.into())
+    }
+
+    /// The panel body for a slot the engine could not fill: what is
+    /// missing, why, and the two ways out of it.
+    ///
+    /// This is the GUI half of the replace capability, and it lives here
+    /// rather than on the strip for two reasons. The strip's slot row is
+    /// a 140 px budget already carrying four icon controls, and — more
+    /// to the point — this panel is the ONE plugin surface that serves
+    /// all three chains, so a missing plugin on a bus or on the master
+    /// gets the same recovery affordance a track plugin does. The strip
+    /// pill's warning tint is what leads the user here.
+    ///
+    /// The picker is the whole gesture: choosing the SAME plugin (which
+    /// the catalog only offers once a rescan has found it again)
+    /// relocates the slot and brings its saved settings back; choosing a
+    /// different one swaps it and keeps the chain position. Removal is
+    /// deliberately not repeated here — the strip's × already does it,
+    /// and the consequence is stated rather than made one click easier.
+    fn missing_plugin_body(&self, plugin: &PluginSlotState, reason: &str) -> Element<'_, Message> {
+        let instance_id = plugin.instance_id;
+        let candidates = self.replacement_candidates(instance_id);
+
+        let mut body = column![
+            text(format!(
+                "\u{26a0} {} is not available on this machine",
+                plugin.plugin_name
+            ))
+            .size(12)
+            .color(theme::BAD),
+            text(reason.to_owned()).size(10).color(theme::TEXT_2),
+            text(format!(
+                "{}  \u{2014}  {}",
+                plugin.clap_plugin_id, plugin.clap_file_path
+            ))
+            .size(9)
+            .color(theme::TEXT_3),
+            text(
+                "Its settings are kept with this slot: reinstall the plugin and rescan, \
+                 or pick a replacement below. Removing the slot discards them."
+            )
+            .size(10)
+            .color(theme::TEXT_2),
+        ]
+        .spacing(6);
+
+        if candidates.is_empty() {
+            body = body.push(
+                text("No plugins have been scanned yet.")
+                    .size(10)
+                    .color(theme::TEXT_3),
+            );
+        } else {
+            body = body.push(
+                iced::widget::pick_list(
+                    candidates,
+                    None::<resonance_audio::types::ScannedPlugin>,
+                    move |plugin: resonance_audio::types::ScannedPlugin| {
+                        Message::Plugin(PluginMessage::ReplacePlugin {
+                            instance_id,
+                            plugin,
+                        })
+                    },
+                )
+                .placeholder("Replace with\u{2026}")
+                .text_size(12)
+                .padding([8, 10])
+                .width(Length::Fixed(320.0)),
+            );
+        }
+
+        body.into()
+    }
+
+    /// Which plugins may take over a slot: instruments for a track's
+    /// instrument slot, effects everywhere else.
+    ///
+    /// The distinction is not cosmetic — an instrument in an insert slot
+    /// receives no MIDI and an effect in the instrument slot leaves the
+    /// track with no sound source — and it is the same split the
+    /// `+ Add instrument` / `+ Add to chain` pickers already make.
+    fn replacement_candidates(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> std::rc::Rc<[resonance_audio::types::ScannedPlugin]> {
+        let is_instrument_slot = self.registry.tracks.iter().any(|t| {
+            crate::plugin_chain::instrument_slot(self, t)
+                .and_then(|i| t.plugins.get(i))
+                .is_some_and(|p| p.instance_id == instance_id)
+        });
+        if is_instrument_slot {
+            self.view_caches.instrument_plugins.clone()
+        } else {
+            self.view_caches.fx_plugins.clone()
+        }
     }
 }

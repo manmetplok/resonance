@@ -370,6 +370,54 @@ pub struct PluginSlotState {
     /// echo is what says the flag really moved. Persisted per slot, so a
     /// chain reloads bypassed exactly where it was saved.
     pub bypassed: bool,
+    /// Whether there is a live plugin instance behind this slot.
+    ///
+    /// A slot is created optimistically — by the project-load replay, by
+    /// a control-API add, or by the engine's own `PluginAdded` echo —
+    /// and only the engine can say whether the `.clap` actually
+    /// instantiated. `AudioEvent::PluginLoadFailed` flips it to
+    /// [`PluginAvailability::Missing`]; `PluginAdded` flips it back
+    /// (ba doc #275 P5, todo #1309).
+    pub availability: PluginAvailability,
+}
+
+/// Whether a [`PluginSlotState`] has a plugin behind it.
+///
+/// The slot outlives the instance on purpose: it is what carries the
+/// missing plugin's preserved settings (its opaque blob in
+/// `plugin_state_cache`, its parameter values in
+/// `pending_plugin_param_overrides` — ba todo #1308), and it is what
+/// holds the plugin's POSITION in the chain. Removing it is the one
+/// gesture that throws those away, so nothing does it automatically.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PluginAvailability {
+    /// Either instantiated, or an add whose echo has not come back yet.
+    /// The optimistic default: an add is expected to succeed, and a
+    /// slot that flashed "missing" for one event-pump tick on every
+    /// project load would be worse than useless.
+    #[default]
+    Available,
+    /// The engine could not instantiate this plugin on this machine.
+    Missing {
+        /// The loader's own words, as reported by
+        /// `AudioEvent::PluginLoadFailed`.
+        reason: String,
+    },
+}
+
+impl PluginAvailability {
+    /// True when there is no live instance behind the slot.
+    pub fn is_missing(&self) -> bool {
+        matches!(self, PluginAvailability::Missing { .. })
+    }
+
+    /// Why the plugin is unavailable, or `None` when it is loaded.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            PluginAvailability::Available => None,
+            PluginAvailability::Missing { reason } => Some(reason.as_str()),
+        }
+    }
 }
 
 impl PluginSlotState {
@@ -392,6 +440,7 @@ impl PluginSlotState {
             has_sidechain_input: false,
             editor_open: false,
             bypassed: false,
+            availability: PluginAvailability::Available,
         }
     }
 

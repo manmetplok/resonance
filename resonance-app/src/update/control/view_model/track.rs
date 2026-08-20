@@ -225,10 +225,28 @@ pub(in crate::update::control) fn plugin_entries(
                 } else {
                     PluginKind::Effect
                 },
+                status: slot_status(p),
+                unavailable_reason: p.availability.reason().map(str::to_owned),
                 params: p.params.iter().map(param_view).collect(),
             }
         })
         .collect()
+}
+
+/// A slot's wire status (ba doc #275 P5, todo #1309).
+///
+/// Shared by all three `plugin_params` builders — track, bus and master
+/// fill the same [`track::PluginParamsEntry`], and a chain slot means
+/// the same thing wherever it sits, so the three cannot be allowed to
+/// answer this differently.
+pub(in crate::update::control) fn slot_status(
+    p: &crate::state::PluginSlotState,
+) -> track::PluginSlotStatus {
+    if p.availability.is_missing() {
+        track::PluginSlotStatus::Missing
+    } else {
+        track::PluginSlotStatus::Loaded
+    }
 }
 
 /// "No such plugin on this track", listing what the track does carry so

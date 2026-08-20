@@ -7,7 +7,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use rmcp::{tool, tool_router};
-use resonance_control::methods::{master, plugin_preset};
+use resonance_control::methods::{master, plugin_preset, track};
 use resonance_control::MutationAck;
 
 #[tool_router(router = router_master, vis = "pub(crate)")]
@@ -122,6 +122,36 @@ impl ResonanceMcp {
         Parameters(params): Parameters<master::MoveEffectParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke(master::MOVE_EFFECT, &params).await
+    }
+
+    #[tool(
+        description = "Put a different plugin in one of the master chain's slots, KEEPING its \
+                       position. Addressed like master_remove_effect — by slot OR by plugin_id \
+                       plus occurrence — plus new_plugin_id, a CLAP id from plugins_catalog. \
+                       \
+                       Position matters more here than anywhere: the master chain IS its order, \
+                       and a limiter that must sit last has to still sit last after the EQ in \
+                       front of it is swapped. remove + add cannot do that — master_add_effect \
+                       only appends. \
+                       \
+                       It is also how a MISSING plugin is recovered. master_plugin_params \
+                       reports status: \"missing\" for a slot whose plugin is not installed on \
+                       the machine running the app: the slot holds its position but nothing is \
+                       behind it, so the mix is going out unprocessed at that stage. Pass the \
+                       SAME plugin_id as new_plugin_id to RELOCATE it (after installing it and \
+                       calling plugins_rescan), which restores the settings the project saved; \
+                       pass a different id to SWAP it, keeping the position but discarding \
+                       those settings. outcome in the reply says which happened. Do not remove \
+                       a missing plugin to tidy up — removal is what destroys its recoverable \
+                       settings. Undoable.",
+        annotations(destructive_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<track::ReplaceEffectResult>()
+    )]
+    async fn master_replace_effect(
+        &self,
+        Parameters(params): Parameters<master::ReplaceEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(master::REPLACE_EFFECT, &params).await
     }
 
     #[tool(

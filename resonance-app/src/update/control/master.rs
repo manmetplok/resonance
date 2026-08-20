@@ -41,6 +41,7 @@ pub(super) fn try_handle(
         master::ADD_EFFECT => add_effect(app, request),
         master::REMOVE_EFFECT => remove_effect(app, request),
         master::MOVE_EFFECT => move_effect(app, request),
+        master::REPLACE_EFFECT => replace_effect(app, request),
         master::SET_FX_BYPASS => set_fx_bypass(app, request),
         master::PLUGIN_PARAMS => plugin_params(app, request),
         master::SET_PLUGIN_PARAM => set_plugin_param(app, request),
@@ -243,6 +244,8 @@ fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
                 slot: i as u32,
                 occurrence: *occurrence,
                 kind: track::PluginKind::Effect,
+                status: view_model::slot_status(p),
+                unavailable_reason: p.availability.reason().map(str::to_owned),
                 params: p.params.iter().map(view_model::param_view).collect(),
             }
         })
@@ -417,6 +420,37 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         Message::Master(MasterMessage::RemovePluginFromMaster(instance_id)),
     );
     (ack(app, request), task)
+}
+
+/// `master.replace_effect` — put a different plugin in one of the
+/// master chain's slots, keeping its position (ba doc #275 P5, todo
+/// #1309).
+///
+/// Position matters more here than anywhere: the master chain's order is
+/// the mastering chain, and a limiter that has to sit last must still
+/// sit last after the EQ before it is swapped out.
+fn replace_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::ReplaceEffectParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let (entry, instance_id) = match resolve_master_effect(
+        app,
+        params.slot,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        "replace",
+    ) {
+        Ok(found) => found,
+        Err(error) => return reject(request, error),
+    };
+    super::replace::replace_resolved_slot(
+        app,
+        request,
+        instance_id,
+        entry.slot,
+        &params.new_plugin_id,
+    )
 }
 
 /// `master.move_effect` — reorder the master chain.

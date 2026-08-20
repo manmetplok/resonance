@@ -389,6 +389,12 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             to_index,
         } => plugins::track_moved(r, track_id, instance_id, to_index),
         E::PluginsScanned { plugins } => plugins::scanned(r, plugins),
+        E::PluginLoadFailed {
+            instance_id,
+            clap_plugin_id,
+            clap_file_path,
+            reason,
+        } => plugins::load_failed(r, instance_id, clap_plugin_id, clap_file_path, reason),
         E::PluginParamText {
             instance_id,
             param_id,

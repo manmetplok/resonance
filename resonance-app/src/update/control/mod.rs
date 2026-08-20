@@ -55,6 +55,8 @@ mod plugin_presets;
 mod plugins;
 mod project;
 mod render;
+/// The shared half of `track/bus/master.replace_effect` (todo #1309).
+mod replace;
 /// The reply vocabulary every namespace answers with (todo #1258).
 mod reply;
 mod section;

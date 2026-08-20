@@ -31,6 +31,10 @@ pub const REMOVE_EFFECT: &str = "bus.remove_effect";
 /// `bus.move_effect` — reorder a bus's chain ([`MoveEffectParams`] ->
 /// `MutationAck`).
 pub const MOVE_EFFECT: &str = "bus.move_effect";
+/// `bus.replace_effect` — put a different plugin in a chain slot,
+/// keeping its position ([`ReplaceEffectParams`] ->
+/// [`ReplaceEffectResult`](crate::methods::track::ReplaceEffectResult)).
+pub const REPLACE_EFFECT: &str = "bus.replace_effect";
 /// `bus.set_fx_bypass` — bypass/unbypass a bus's whole chain
 /// ([`SetFxBypassParams`] -> `MutationAck`).
 pub const SET_FX_BYPASS: &str = "bus.set_fx_bypass";
@@ -69,6 +73,7 @@ pub const METHODS: &[&str] = &[
     ADD_EFFECT,
     REMOVE_EFFECT,
     MOVE_EFFECT,
+    REPLACE_EFFECT,
     SET_FX_BYPASS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
@@ -197,6 +202,28 @@ pub struct MoveEffectParams {
     /// last slot; moving an effect to where it already sits is an
     /// accepted no-op.
     pub to_slot: u32,
+}
+
+/// Params for `bus.replace_effect` — the bus twin of
+/// [`track::ReplaceEffectParams`](crate::methods::track::ReplaceEffectParams),
+/// with the same addressing and the same relocate-vs-swap rule. See
+/// that type for why replacing is not remove-then-add.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ReplaceEffectParams {
+    pub bus_id: TrackId,
+    /// 0-based chain position of the plugin to replace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// CLAP id of the plugin to replace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based; defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// CLAP id of the plugin that takes the slot. Naming the plugin
+    /// already there relocates a missing one and keeps its settings.
+    pub new_plugin_id: String,
 }
 
 /// Params for `bus.set_fx_bypass`. Idempotent: this SETS the state

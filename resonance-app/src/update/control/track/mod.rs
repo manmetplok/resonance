@@ -77,6 +77,7 @@ pub(super) fn try_handle(
         track_methods::ADD_EFFECT => lifecycle::add_effect(app, request),
         track_methods::REMOVE_EFFECT => chain::remove_effect(app, request),
         track_methods::MOVE_EFFECT => chain::move_effect(app, request),
+        track_methods::REPLACE_EFFECT => chain::replace_effect(app, request),
         track_methods::SET_OUTPUT => output::set_output(app, request),
         track_methods::ADD_SEND => sends::add_send(app, request),
         track_methods::SET_SEND => sends::set_send(app, request),

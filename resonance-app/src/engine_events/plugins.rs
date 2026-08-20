@@ -24,15 +24,14 @@ pub(super) fn track_added(
     // Idempotent: if the plugin slot already exists (created by project load),
     // just update its params and has_gui. Otherwise push a new slot.
     let mut inserted = false;
+    let mut recovered = false;
     if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
         if let Some(slot) = track
             .plugins
             .iter_mut()
             .find(|p| p.instance_id == instance_id)
         {
-            slot.params = params;
-            slot.has_gui = has_gui;
-            slot.has_sidechain_input = has_sidechain_input;
+            recovered = adopt_live_instance(slot, params, has_gui, has_sidechain_input);
         } else {
             track.plugins.push(
                 PluginSlotState::new(
@@ -50,6 +49,23 @@ pub(super) fn track_added(
     }
     if inserted {
         r.insert_plugin_index(instance_id, PluginLocator::Track(track_id));
+    }
+    if recovered {
+        let live = r
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == track_id)
+            .and_then(|t| live_slot_index(&t.plugins, instance_id));
+        restore_after_recovery(
+            r,
+            instance_id,
+            live.map(|to_index| AudioCommand::MovePlugin {
+                track_id,
+                instance_id,
+                to_index,
+            }),
+        );
     }
 
     // If this plugin was added as part of a preset, load the saved
@@ -86,6 +102,82 @@ pub(super) fn track_added(
         .send(AudioCommand::SavePluginState { instance_id });
 
     ensure_subtracks(r, track_id, output_port_count, &output_port_names);
+}
+
+/// Write a live instance's report onto the slot that was waiting for it,
+/// and say whether that slot was **missing** until now.
+///
+/// The plain case is a project load or an add whose echo arrived: the
+/// slot simply adopts the engine's parameter list and capability flags.
+/// The interesting case is recovery — a slot the engine had already
+/// refused (`PluginLoadFailed`) that now instantiates, because the user
+/// relocated it, replaced it, or installed the plugin and rescanned. A
+/// recovered slot needs two things a fresh one does not, and
+/// [`restore_after_recovery`] does both: its preserved state pushed into
+/// the new instance, and its POSITION restored, because the engine
+/// appends to a chain that has been running without it.
+fn adopt_live_instance(
+    slot: &mut PluginSlotState,
+    params: Vec<ParamInfo>,
+    has_gui: bool,
+    has_sidechain_input: bool,
+) -> bool {
+    let was_missing = slot.availability.is_missing();
+    slot.params = params;
+    slot.has_gui = has_gui;
+    slot.has_sidechain_input = has_sidechain_input;
+    slot.availability = PluginAvailability::Available;
+    was_missing
+}
+
+/// The index a slot occupies among the chain's **live** slots — i.e.
+/// where the engine has to put it for the app's order and the engine's
+/// processing order to agree.
+///
+/// The two are not the same number. The app's `Vec` keeps a missing
+/// plugin's slot so the chain does not silently reshuffle around it; the
+/// engine's chain never had that instance at all. With the second of
+/// three plugins missing, the app's third slot is the engine's second,
+/// and asking the engine to move it to index 2 would put it past the end
+/// of a two-plugin chain.
+///
+/// `None` when `instance_id` isn't in the chain.
+fn live_slot_index(chain: &[PluginSlotState], instance_id: PluginInstanceId) -> Option<usize> {
+    let position = chain.iter().position(|p| p.instance_id == instance_id)?;
+    Some(
+        chain[..position]
+            .iter()
+            .filter(|p| !p.availability.is_missing())
+            .count(),
+    )
+}
+
+/// Finish a missing → available recovery: hand the new instance the
+/// state the slot has been holding for it, and put it back where it
+/// belongs in the engine's chain.
+///
+/// `reposition` is the chain-specific move command (`MovePlugin` /
+/// `MovePluginInBus` / `MovePluginInMaster`), already aimed at the live
+/// index. The engine clamps and no-ops a move that changes nothing, so
+/// sending it unconditionally costs a command and nothing else.
+///
+/// The blob goes first and the parked parameter values go after it (the
+/// caller runs [`apply_pending_param_overrides`] next), the same order
+/// the load path uses: the blob is the plugin's whole state, the
+/// parameter list is the user's explicit edits on top of it.
+fn restore_after_recovery(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    reposition: Option<AudioCommand>,
+) {
+    if let Some(data) = r.plugin_state_cache.get(&instance_id).cloned() {
+        let _ = r
+            .engine
+            .send(AudioCommand::LoadPluginState { instance_id, data });
+    }
+    if let Some(cmd) = reposition {
+        let _ = r.engine.send(cmd);
+    }
 }
 
 /// Re-apply the parameter values a project load parked for this plugin
@@ -291,6 +383,91 @@ pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.plugin_scan_in_progress = false;
 }
 
+/// An add that produced no instance (ba doc #275 P5, todo #1309).
+///
+/// Two outcomes, decided by whether the failure names a slot:
+///
+/// * **it does** — the project-load replay and the control API both
+///   pass an `id_hint`, so the slot that was created optimistically for
+///   this instance is marked [`PluginAvailability::Missing`] and the
+///   load warning is raised. The slot KEEPS its position in the chain
+///   and keeps the preserved settings hanging off it (ba todo #1308);
+///   only an explicit remove throws those away.
+/// * **it does not** — the mixer's "+ FX" picker lets the engine
+///   allocate, so a failure there added nothing and there is no slot to
+///   mark. It surfaces as a plain error, which is all it ever was.
+pub(super) fn load_failed(
+    r: &mut Resonance,
+    instance_id: Option<PluginInstanceId>,
+    clap_plugin_id: String,
+    clap_file_path: String,
+    reason: String,
+) {
+    let marked = instance_id.is_some_and(|instance_id| {
+        // Not `with_plugin_mut`: its `debug_assert` treats an unknown id
+        // as a bug, and here an id with no slot is an ordinary outcome —
+        // the plugin was removed while the add was in flight.
+        mark_slot_missing(r, instance_id, &reason)
+    });
+    if marked {
+        r.missing_plugins.note_failure();
+    } else {
+        r.error_message = Some(format!(
+            "Could not load plugin {}{}: {reason}",
+            if clap_plugin_id.is_empty() {
+                clap_file_path.as_str()
+            } else {
+                clap_plugin_id.as_str()
+            },
+            if clap_plugin_id.is_empty() {
+                String::new()
+            } else {
+                format!(" ({clap_file_path})")
+            }
+        ));
+    }
+}
+
+/// Flip one slot to [`PluginAvailability::Missing`], wherever it lives.
+/// `false` when no chain carries `instance_id`.
+fn mark_slot_missing(r: &mut Resonance, instance_id: PluginInstanceId, reason: &str) -> bool {
+    let apply = |slot: &mut PluginSlotState| {
+        slot.availability = PluginAvailability::Missing {
+            reason: reason.to_owned(),
+        };
+        // A slot with no instance behind it has no editor window to
+        // open; leaving the flag set would offer a control that reaches
+        // nothing.
+        slot.editor_open = false;
+        slot.has_gui = false;
+    };
+    for track in &mut r.registry.tracks {
+        if let Some(slot) = track
+            .plugins
+            .iter_mut()
+            .find(|p| p.instance_id == instance_id)
+        {
+            apply(slot);
+            return true;
+        }
+    }
+    for bus in &mut r.registry.busses {
+        if let Some(slot) = bus.plugins.iter_mut().find(|p| p.instance_id == instance_id) {
+            apply(slot);
+            return true;
+        }
+    }
+    if let Some(slot) = r
+        .master_plugins
+        .iter_mut()
+        .find(|p| p.instance_id == instance_id)
+    {
+        apply(slot);
+        return true;
+    }
+    false
+}
+
 /// Bundles the scan could not load (ba todo #1307).
 ///
 /// Recorded rather than logged: a `.clap` that fails to load is simply
@@ -386,15 +563,14 @@ pub(super) fn bus_added(
     has_sidechain_input: bool,
 ) {
     let mut inserted = false;
+    let mut recovered = false;
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
         if let Some(slot) = bus
             .plugins
             .iter_mut()
             .find(|p| p.instance_id == instance_id)
         {
-            slot.params = params;
-            slot.has_gui = has_gui;
-            slot.has_sidechain_input = has_sidechain_input;
+            recovered = adopt_live_instance(slot, params, has_gui, has_sidechain_input);
         } else {
             bus.plugins.push(
                 PluginSlotState::new(
@@ -412,6 +588,23 @@ pub(super) fn bus_added(
     }
     if inserted {
         r.insert_plugin_index(instance_id, PluginLocator::Bus(bus_id));
+    }
+    if recovered {
+        let live = r
+            .registry
+            .busses
+            .iter()
+            .find(|b| b.id == bus_id)
+            .and_then(|b| live_slot_index(&b.plugins, instance_id));
+        restore_after_recovery(
+            r,
+            instance_id,
+            live.map(|to_index| AudioCommand::MovePluginInBus {
+                bus_id,
+                instance_id,
+                to_index,
+            }),
+        );
     }
     apply_pending_param_overrides(r, instance_id);
     let _ = r.engine
@@ -487,14 +680,13 @@ pub(super) fn master_added(
     has_gui: bool,
     has_sidechain_input: bool,
 ) {
+    let mut recovered = false;
     if let Some(slot) = r
         .master_plugins
         .iter_mut()
         .find(|p| p.instance_id == instance_id)
     {
-        slot.params = params;
-        slot.has_gui = has_gui;
-        slot.has_sidechain_input = has_sidechain_input;
+        recovered = adopt_live_instance(slot, params, has_gui, has_sidechain_input);
     } else {
         r.master_plugins.push(
             PluginSlotState::new(
@@ -508,6 +700,17 @@ pub(super) fn master_added(
             .with_sidechain_input(has_sidechain_input),
         );
         r.insert_plugin_index(instance_id, PluginLocator::Master);
+    }
+    if recovered {
+        let live = live_slot_index(&r.master_plugins, instance_id);
+        restore_after_recovery(
+            r,
+            instance_id,
+            live.map(|to_index| AudioCommand::MovePluginInMaster {
+                instance_id,
+                to_index,
+            }),
+        );
     }
     apply_pending_param_overrides(r, instance_id);
     let _ = r.engine

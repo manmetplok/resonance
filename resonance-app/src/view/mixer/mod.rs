@@ -239,7 +239,8 @@ impl crate::Resonance {
     ) -> Element<'_, Message> {
         // ASCII ".." suffix (not '…') — this pill's width was tuned
         // around the narrower two-dot tail.
-        let pname = crate::util::short_with(&plugin.plugin_name, 14, "..");
+        let missing = plugin.availability.is_missing();
+        let pname = slot_pill_label(&plugin.plugin_name, missing);
         let pid = plugin.instance_id;
         // The name opens the generic parameter panel — for every plugin,
         // GUI or not (ba todo #1306, audit finding X4).
@@ -264,7 +265,38 @@ impl crate::Resonance {
         // followed by the plugin name on a tinted ACCENT_DIM background
         // with an ACCENT_LINE border. FX slots stay as a plainer hairline
         // pill so the eye picks up the instrument as the dominant slot.
-        let name_btn = if is_instrument_slot {
+        let name_btn = if missing {
+            // A slot with no plugin behind it reads as an error state,
+            // not as a quieter version of a working slot: the pill takes
+            // the BAD tint the relink modal uses for a missing file, and
+            // the glyph in `slot_pill_label` says so without relying on
+            // colour alone. It stays clickable — the parameter panel is
+            // where the reason and the replace picker live.
+            button(text(pname).size(10).color(theme::BAD))
+                .on_press(click_msg)
+                .width(Length::Fill)
+                .style(move |_theme, status| {
+                    let bg = match status {
+                        iced::widget::button::Status::Hovered
+                        | iced::widget::button::Status::Pressed => Color {
+                            a: 0.22,
+                            ..theme::BAD
+                        },
+                        _ => theme::BAD_DIM,
+                    };
+                    iced::widget::button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: theme::BAD,
+                        border: iced::Border {
+                            color: theme::BAD_LINE,
+                            width: 1.0,
+                            radius: theme::RADIUS_SM.into(),
+                        },
+                        ..Default::default()
+                    }
+                })
+                .padding([5, 9])
+        } else if is_instrument_slot {
             let label_color = if is_selected {
                 theme::TEXT_1
             } else {
@@ -382,6 +414,25 @@ impl crate::Resonance {
             .spacing(SLOT_ICON_GAP + 1.0)
             .align_y(alignment::Vertical::Center)
             .into()
+    }
+}
+
+/// The text on a mixer strip's plugin pill.
+///
+/// A missing plugin is prefixed with a warning glyph and gets two fewer
+/// characters of name to pay for it — the pill's width budget is fixed
+/// (see [`SLOT_ICON_PAD_X`]), and the marker has to survive the strip
+/// being narrow. It is a glyph rather than only a colour so the state is
+/// legible without relying on hue, and it is in the *text* rather than a
+/// separate widget so a widget-tree test can read it back.
+///
+/// Split out so the mixer strip and any other slot surface answer this
+/// the same way, and so `test_strip_plugin_label` can assert it directly.
+pub(crate) fn slot_pill_label(plugin_name: &str, missing: bool) -> String {
+    if missing {
+        format!("\u{26a0} {}", crate::util::short_with(plugin_name, 12, ".."))
+    } else {
+        crate::util::short_with(plugin_name, 14, "..")
     }
 }
 

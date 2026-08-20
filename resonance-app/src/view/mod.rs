@@ -22,6 +22,7 @@ pub(crate) mod menus;
 pub mod midi_editor;
 pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
+pub(crate) mod missing_plugins_dialog;
 pub(crate) mod relink_dialog;
 pub(crate) mod remote_indicator;
 pub mod performance;
@@ -144,6 +145,17 @@ impl crate::Resonance {
             stack![
                 base,
                 import_progress_dialog::view_import_progress_overlay(self)
+            ]
+            .into()
+        } else if self.missing_plugins.modal_open && self.has_missing_plugins() {
+            // Missing-plugin load warning (ba doc #275 P5, todo #1309):
+            // raised when a project's chains reference plugins this
+            // machine hasn't got. Sits ABOVE the relink modal in this
+            // chain only because one modal shows at a time; the two are
+            // independent and a project can trip both.
+            stack![
+                base,
+                missing_plugins_dialog::view_missing_plugins_overlay(self)
             ]
             .into()
         } else if self.relink.modal_open && !self.relink.modal_targets.is_empty() {

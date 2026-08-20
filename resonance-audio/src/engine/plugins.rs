@@ -273,15 +273,21 @@ pub(crate) fn handle_add_plugin(
 ) {
     let path = Path::new(&clap_file_path);
 
-    let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id, ctx) {
-        Some(idx) => idx,
-        None => return,
+    let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
+        Ok(idx) => idx,
+        Err(reason) => {
+            report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+            return;
+        }
     };
 
-    let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx)
+    let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id.clone())
     {
-        Some(id) => id,
-        None => return,
+        Ok(id) => id,
+        Err(reason) => {
+            report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+            return;
+        }
     };
 
     let plugin_name = state.bundles[bundle_idx]
@@ -328,12 +334,13 @@ pub(crate) fn handle_add_plugin(
                 output_port_names,
             });
         }
-        Err(e) => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
-                "Failed to create plugin instance: {}",
-                e
-            )));
-        }
+        Err(e) => report_plugin_load_failure(
+            ctx,
+            id_hint,
+            &actual_plugin_id,
+            &clap_file_path,
+            format!("Failed to create plugin instance: {}", e),
+        ),
     }
 }
 
@@ -606,31 +613,26 @@ pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
 }
 
 /// Returns the index of the bundle that owns `clap_plugin_id`, loading
-/// the file from disk if needed. Sends an error event and returns `None`
-/// on load failure.
-pub(crate) fn ensure_bundle(
+/// the file from disk if needed. `Err` carries the loader's reason; the
+/// caller turns it into a [`AudioEvent::PluginLoadFailed`] naming the
+/// slot that stays empty.
+pub fn ensure_bundle(
     bundles: &mut Vec<ClapBundle>,
     path: &Path,
     clap_plugin_id: &str,
-    ctx: &HandlerCtx,
-) -> Option<usize> {
+) -> Result<usize, String> {
     if let Some(idx) = bundles
         .iter()
         .position(|b| b.descriptors().iter().any(|d| d.id == clap_plugin_id))
     {
-        return Some(idx);
+        return Ok(idx);
     }
     match ClapBundle::load(path) {
         Ok(bundle) => {
             bundles.push(bundle);
-            Some(bundles.len() - 1)
+            Ok(bundles.len() - 1)
         }
-        Err(e) => {
-            let _ = ctx
-                .event_tx
-                .send(AudioEvent::Error(format!("Failed to load plugin: {}", e)));
-            None
-        }
+        Err(e) => Err(format!("Failed to load plugin: {}", e)),
     }
 }
 
@@ -640,18 +642,60 @@ pub(crate) fn ensure_bundle(
 pub(crate) fn resolve_plugin_id(
     bundle: &ClapBundle,
     clap_plugin_id: String,
-    ctx: &HandlerCtx,
-) -> Option<String> {
+) -> Result<String, String> {
     if !clap_plugin_id.is_empty() {
-        return Some(clap_plugin_id);
+        return Ok(clap_plugin_id);
     }
     match bundle.descriptors().first() {
-        Some(d) => Some(d.id.clone()),
-        None => {
-            let _ = ctx
-                .event_tx
-                .send(AudioEvent::Error("No plugins found in file".to_string()));
-            None
-        }
+        Some(d) => Ok(d.id.clone()),
+        None => Err("No plugins found in file".to_string()),
+    }
+}
+
+/// Report an add that produced no instance, on any of the three chains.
+///
+/// One event, not two: this REPLACES the bare
+/// [`AudioEvent::Error`](AudioEvent::Error) the three add handlers used
+/// to send. That string named no instance, so the app could only show it
+/// as a toast — and a project missing five plugins raised five toasts of
+/// which the user saw the last, while the five dead slots looked exactly
+/// like working ones. `PluginLoadFailed` carries the same words plus the
+/// identity needed to mark the slot, and the app decides how to present
+/// it (badge + load warning when it maps to a slot, plain error when it
+/// does not).
+pub(crate) fn report_plugin_load_failure(
+    ctx: &HandlerCtx,
+    id_hint: Option<PluginInstanceId>,
+    clap_plugin_id: &str,
+    clap_file_path: &str,
+    reason: String,
+) {
+    let _ = ctx.event_tx.send(plugin_load_failed_event(
+        id_hint,
+        clap_plugin_id,
+        clap_file_path,
+        reason,
+    ));
+}
+
+/// Build the failure event, separately from sending it, so the one thing
+/// that makes it useful can be pinned by a test without an engine
+/// thread: **the event carries the instance id the command asked for**.
+///
+/// That is the whole difference from the `AudioEvent::Error` string this
+/// replaced. Drop `id_hint` on the floor here and the app is back to
+/// knowing that *something* failed and having no idea which slot to
+/// mark — which is the bug (ba doc #275 P5, todo #1309).
+pub fn plugin_load_failed_event(
+    id_hint: Option<PluginInstanceId>,
+    clap_plugin_id: &str,
+    clap_file_path: &str,
+    reason: String,
+) -> AudioEvent {
+    AudioEvent::PluginLoadFailed {
+        instance_id: id_hint,
+        clap_plugin_id: clap_plugin_id.to_string(),
+        clap_file_path: clap_file_path.to_string(),
+        reason,
     }
 }

@@ -302,6 +302,13 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | PluginMessage::AddPluginToTrackWithId { .. }
             | PluginMessage::RemovePluginFromTrack(_, _)
             | PluginMessage::MovePluginInTrack { .. } => UndoAction::Record,
+            // Replacing a slot's plugin is a chain edit like any other,
+            // and one the user must be able to take back: a swap
+            // DISCARDS the outgoing plugin's preserved state (ba todo
+            // #1308), and the snapshot taken before this message is the
+            // only place that state still exists afterwards. Never
+            // coalesced — two replaces in a row are two decisions.
+            PluginMessage::ReplacePlugin { .. } => UndoAction::Record,
             // Routing a key is a project edit like any other insert
             // change, so it takes an undo entry of its own.
             PluginMessage::SetPluginSidechain { .. } => UndoAction::Record,

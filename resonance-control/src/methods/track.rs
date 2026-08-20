@@ -32,6 +32,10 @@ pub const REMOVE_EFFECT: &str = "track.remove_effect";
 /// `track.move_effect` — reorder the insert chain
 /// ([`MoveEffectParams`] -> `MutationAck`).
 pub const MOVE_EFFECT: &str = "track.move_effect";
+/// `track.replace_effect` — put a different plugin in a chain slot,
+/// keeping its position ([`ReplaceEffectParams`] ->
+/// [`ReplaceEffectResult`]).
+pub const REPLACE_EFFECT: &str = "track.replace_effect";
 /// `track.set_output` — route a track to master or into a bus
 /// ([`SetOutputParams`] -> `MutationAck`).
 pub const SET_OUTPUT: &str = "track.set_output";
@@ -96,6 +100,7 @@ pub const METHODS: &[&str] = &[
     ADD_EFFECT,
     REMOVE_EFFECT,
     MOVE_EFFECT,
+    REPLACE_EFFECT,
     SET_OUTPUT,
     ADD_SEND,
     SET_SEND,
@@ -328,7 +333,44 @@ pub struct PluginParamsEntry {
     /// un-bypassing the chain predictable.
     #[serde(default)]
     pub bypassed: bool,
+    /// Whether there is actually a plugin behind this slot on the
+    /// machine the app is running on (ba doc #275 P5, todo #1309).
+    ///
+    /// Defaults to [`PluginSlotStatus::Loaded`], which is what every
+    /// slot was assumed to be before this field existed — and the
+    /// assumption that made a missing plugin invisible over the wire: a
+    /// dead slot reported an empty `params` list, indistinguishable
+    /// from a plugin that genuinely has no parameters, and every
+    /// `set_plugin_param` against it succeeded and changed no sound.
+    #[serde(default)]
+    pub status: PluginSlotStatus,
+    /// Why the plugin could not be loaded, in the plugin loader's own
+    /// words. Present only when `status` is `missing`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    /// The plugin's parameters. **Empty when `status` is `missing`** —
+    /// there is no instance to ask, and the values the project saved are
+    /// held opaquely against the slot until the plugin comes back
+    /// (ba todo #1308), not exposed as live parameters that could be
+    /// read as current.
     pub params: Vec<PluginParamView>,
+}
+
+/// Whether a chain slot has a live plugin behind it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSlotStatus {
+    /// Instantiated and processing audio.
+    #[default]
+    Loaded,
+    /// The project asked for a plugin this machine hasn't got, or the
+    /// `.clap` refused to instantiate. The slot keeps its position in
+    /// the chain and keeps the settings the project saved for it, so
+    /// installing the plugin (then `plugins.rescan`) or calling
+    /// `replace_effect` recovers it. Removing the slot is what discards
+    /// those settings.
+    Missing,
 }
 
 /// Params for `track.set_output` — where a track's post-fader audio
@@ -470,6 +512,85 @@ pub struct MoveEffectParams {
     /// chain clamps to the last slot rather than failing. Moving an
     /// effect to the slot it already occupies is an accepted no-op.
     pub to_slot: u32,
+}
+
+// ---------------------------------------------------------------------------
+// replace_effect (ba doc #275 P5, todo #1309)
+// ---------------------------------------------------------------------------
+
+/// Params for `track.replace_effect`: swap the plugin in one chain slot
+/// for another **without moving the slot**. The effect to replace is
+/// addressed exactly as [`RemoveEffectParams`] addresses it — either
+/// `slot` or `plugin_id` (+ `occurrence`), never both and never neither.
+///
+/// Why this exists rather than remove-then-add: `add_effect` only ever
+/// APPENDS, so the pair puts the replacement at the END of the chain,
+/// and chain order is audible — a compressor that was before the reverb
+/// ends up after it. It also cannot be used at all on a plugin that is
+/// MISSING, because removing that slot is what throws away the settings
+/// the project saved for it (ba todo #1308).
+///
+/// Unlike `remove_effect` and `move_effect`, this accepts the track's
+/// INSTRUMENT slot: a synth that will not load is the worst version of
+/// this problem, not an exempt one, and swapping it leaves the track
+/// with a sound source instead of none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ReplaceEffectParams {
+    pub track_id: TrackId,
+    /// 0-based chain position of the plugin to replace, as reported by
+    /// [`PluginParamsEntry::slot`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u32>,
+    /// CLAP id of the plugin to replace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance of `plugin_id`, 0-based; defaults to the first.
+    /// Only meaningful together with `plugin_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// CLAP id of the plugin that takes the slot, from
+    /// `plugins.catalog`.
+    ///
+    /// Naming the plugin that is ALREADY in the slot is meaningful and
+    /// not a mistake: it relocates a missing plugin to wherever the
+    /// catalog now finds it, keeping the instance and therefore the
+    /// settings saved against it. That is the "I moved my plugin folder,
+    /// then ran `plugins.rescan`" recovery, and it is the only form of
+    /// replace that brings the original sound back.
+    pub new_plugin_id: String,
+}
+
+/// Result of `*.replace_effect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ReplaceEffectResult {
+    /// The chain position the replacement occupies — the same one the
+    /// plugin it replaced had. Reported so a caller can confirm the
+    /// position survived without re-reading `plugin_params`.
+    pub slot: u32,
+    /// The plugin now in that slot.
+    pub plugin_id: String,
+    pub outcome: ReplaceOutcome,
+    pub revision: u64,
+}
+
+/// What a `replace_effect` turned out to mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ReplaceOutcome {
+    /// The slot's own plugin was re-instantiated from the path the
+    /// catalog now has for it. Its saved settings come back with it.
+    Relocated,
+    /// A different plugin took the position. The outgoing plugin's saved
+    /// settings went with it — they could not mean anything to a plugin
+    /// that never had them.
+    Swapped,
+    /// The slot already carries this plugin and it is loaded. Nothing
+    /// was changed; reported rather than silently acked so a caller can
+    /// tell "already the case" from "did something".
+    AlreadyLoaded,
 }
 
 /// One plugin parameter — its number, and what that number means.

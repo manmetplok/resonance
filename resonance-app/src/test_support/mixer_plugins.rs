@@ -243,6 +243,135 @@ impl Resonance {
             .unwrap_or_default()
     }
 
+    /// Test-only: the text on a mixer strip's plugin pill — the marker a
+    /// user reads a missing plugin off (ba todo #1309).
+    ///
+    /// A hook rather than a direct call because `view::mixer` is
+    /// crate-private, and the label is a pure function so there is
+    /// nothing to build an app for.
+    #[doc(hidden)]
+    pub fn test_strip_plugin_label(plugin_name: &str, missing: bool) -> String {
+        crate::view::mixer::slot_pill_label(plugin_name, missing)
+    }
+
+    /// Test-only: the bus twin of [`Self::test_push_track_plugin`].
+    #[doc(hidden)]
+    pub fn test_push_bus_plugin(
+        &mut self,
+        bus_id: resonance_audio::types::BusId,
+        plugin: state::PluginSlotState,
+    ) {
+        let instance_id = plugin.instance_id;
+        if let Some(bus) = self.registry.busses.iter_mut().find(|b| b.id == bus_id) {
+            bus.plugins.push(plugin);
+            self.insert_plugin_index(instance_id, state::PluginLocator::Bus(bus_id));
+        }
+    }
+
+    /// Test-only: the master twin of [`Self::test_push_track_plugin`].
+    #[doc(hidden)]
+    pub fn test_push_master_plugin(&mut self, plugin: state::PluginSlotState) {
+        let instance_id = plugin.instance_id;
+        self.master_plugins.push(plugin);
+        self.insert_plugin_index(instance_id, state::PluginLocator::Master);
+    }
+
+    /// Test-only: park an opaque CLAP state blob against an instance,
+    /// as a project load does for a plugin whose `.clap` is missing
+    /// (ba todo #1308). Lets a test assert what a recovery hands back
+    /// without staging a whole save/load round trip.
+    #[doc(hidden)]
+    pub fn test_seed_plugin_state(
+        &mut self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+        data: Vec<u8>,
+    ) {
+        self.plugin_state_cache.insert(instance_id, data);
+    }
+
+    /// Test-only: the chain as `(instance_id, clap_plugin_id, missing)`
+    /// triples, in slot order (ba todo #1309).
+    ///
+    /// One accessor for all three chains, because the property under
+    /// test — "a missing plugin keeps its position" — is about the
+    /// sequence, and asserting it against a `Vec` of triples reads as
+    /// the chain the user is looking at.
+    #[doc(hidden)]
+    pub fn test_chain_slots(&self, chain: TestChain) -> Vec<(u64, String, bool)> {
+        let slots: &[state::PluginSlotState] = match chain {
+            TestChain::Track(id) => self
+                .registry
+                .tracks
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| t.plugins.as_slice())
+                .unwrap_or_default(),
+            TestChain::Bus(id) => self
+                .registry
+                .busses
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| b.plugins.as_slice())
+                .unwrap_or_default(),
+            TestChain::Master => self.master_plugins.as_slice(),
+        };
+        slots
+            .iter()
+            .map(|p| {
+                (
+                    p.instance_id,
+                    p.clap_plugin_id.clone(),
+                    p.availability.is_missing(),
+                )
+            })
+            .collect()
+    }
+
+    /// Test-only: why a slot has no plugin behind it, or `None` when it
+    /// has one (or does not exist).
+    #[doc(hidden)]
+    pub fn test_plugin_unavailable_reason(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<String> {
+        self.registry
+            .tracks
+            .iter()
+            .flat_map(|t| t.plugins.iter())
+            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
+            .chain(self.master_plugins.iter())
+            .find(|p| p.instance_id == instance_id)
+            .and_then(|p| p.availability.reason())
+            .map(str::to_owned)
+    }
+
+    /// Test-only: whether the missing-plugin load warning is on screen,
+    /// and the one-line summary of each row it is showing
+    /// (`"<plugin> — <chain> · slot N"`).
+    ///
+    /// The rows are returned as the strings the modal renders rather
+    /// than as a struct, because what this warning has to get right is
+    /// what it SAYS — the generic error it replaced named no plugin and
+    /// no position (ba todo #1309).
+    #[doc(hidden)]
+    pub fn test_missing_plugin_warning(&self) -> Option<Vec<String>> {
+        if !self.missing_plugins.modal_open {
+            return None;
+        }
+        Some(
+            self.missing_plugin_slots()
+                .iter()
+                .map(|slot| {
+                    format!(
+                        "{} \u{2014} {}",
+                        slot.plugin_name,
+                        crate::view::missing_plugins_dialog::slot_location(slot)
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// Test-only: the chain-reorder affordances the mixer draws for one
     /// chain, slot by slot — the exact `(▲, ▼)` messages the inspector
     /// row and the strip slot attach to their carets, with `None` where

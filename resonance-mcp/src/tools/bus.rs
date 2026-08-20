@@ -139,6 +139,34 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Put a different plugin in one of a bus's chain slots, KEEPING its \
+                       position. Addressed like bus_remove_effect — by slot OR by plugin_id \
+                       plus occurrence — plus new_plugin_id, a CLAP id from plugins_catalog. \
+                       \
+                       Use this instead of remove + add: bus_add_effect only APPENDS, so the \
+                       pair moves the plugin to the end of the chain, and order over a group \
+                       sum is audible. \
+                       \
+                       It is also how a MISSING plugin is recovered. bus_plugin_params reports \
+                       status: \"missing\" for a slot whose plugin is not installed on the \
+                       machine running the app: the slot holds its position but nothing is \
+                       behind it. Pass the SAME plugin_id as new_plugin_id to RELOCATE it \
+                       (after installing it and calling plugins_rescan), which restores the \
+                       settings the project saved; pass a different id to SWAP it, keeping the \
+                       position but discarding those settings. outcome in the reply says which \
+                       happened. Do not remove a missing plugin to tidy up — removal is what \
+                       destroys its recoverable settings. Undoable.",
+        annotations(destructive_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<track::ReplaceEffectResult>()
+    )]
+    async fn bus_replace_effect(
+        &self,
+        Parameters(params): Parameters<bus::ReplaceEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(bus::REPLACE_EFFECT, &params).await
+    }
+
+    #[tool(
         description = "Bypass or re-engage a bus's ENTIRE effect chain in one call — the A/B \
                        for \"is this bus processing helping?\". bypassed: true passes the \
                        group through unprocessed; false puts the chain back. This SETS the \

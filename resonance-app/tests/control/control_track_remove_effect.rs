@@ -188,8 +188,14 @@ fn removing_the_instrument_is_refused() {
             .error
             .unwrap_or_else(|| panic!("{params} should be refused"));
         assert_eq!(error.kind(), ErrorKind::InvalidParams, "for {params}");
+        // The refusal has to name a route that actually replaces the
+        // instrument. It used to name `track.add_instrument`, which only
+        // APPENDS — following that advice on a track that already has an
+        // instrument leaves it with two, the original still at slot 0.
+        // `track.replace_effect` (ba todo #1309) is the first route that
+        // really does swap slot 0, so that is where the refusal points.
         assert!(
-            error.message.contains("track.add_instrument"),
+            error.message.contains("track.replace_effect"),
             "the error must point at the replacement path: {}",
             error.message
         );

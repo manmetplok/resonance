@@ -130,6 +130,29 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         );
     }
 
+    // The way back to the load warning after it has been dismissed (ba
+    // doc #275 P5, todo #1309). Scan failures above are about the
+    // MACHINE's catalog; this is about THIS PROJECT's chains, and the
+    // two are different problems that happen to share a section: a
+    // plugin can be absent from the catalog and used by no project, or
+    // present in the catalog and still refuse to instantiate.
+    let missing_slots = r.missing_plugin_slots();
+    if !missing_slots.is_empty() {
+        plugins_section = plugins_section.push(
+            button(
+                text(format!(
+                    "{} plugin slot(s) in this project could not be loaded \u{2014} review",
+                    missing_slots.len()
+                ))
+                .size(10)
+                .color(theme::BAD),
+            )
+            .on_press(Message::Ui(UiMessage::ShowMissingPlugins))
+            .style(|_theme, status| theme::small_button_style(status))
+            .padding([2, 0]),
+        );
+    }
+
     let dialog_content = column![
         title,
         Space::new().height(16),

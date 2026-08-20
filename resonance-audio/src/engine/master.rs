@@ -11,7 +11,9 @@ use std::path::Path;
 
 use crate::types::*;
 
-use super::plugins::{allocate_plugin_instance_id, ensure_bundle, resolve_plugin_id};
+use super::plugins::{
+    allocate_plugin_instance_id, ensure_bundle, report_plugin_load_failure, resolve_plugin_id,
+};
 use super::thread::{HandlerCtx, HandlerState};
 
 pub(crate) fn handle_add_plugin_to_master(
@@ -22,15 +24,21 @@ pub(crate) fn handle_add_plugin_to_master(
     id_hint: Option<PluginInstanceId>,
 ) {
     let path = Path::new(&clap_file_path);
-    let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id, ctx) {
-        Some(idx) => idx,
-        None => return,
+    let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
+        Ok(idx) => idx,
+        Err(reason) => {
+            report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+            return;
+        }
     };
-    let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id, ctx)
-    {
-        Some(id) => id,
-        None => return,
-    };
+    let actual_plugin_id =
+        match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id.clone()) {
+            Ok(id) => id,
+            Err(reason) => {
+                report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+                return;
+            }
+        };
     let plugin_name = state.bundles[bundle_idx]
         .descriptors()
         .iter()
@@ -58,12 +66,13 @@ pub(crate) fn handle_add_plugin_to_master(
                 has_sidechain_input,
             });
         }
-        Err(e) => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
-                "Failed to create plugin instance: {}",
-                e
-            )));
-        }
+        Err(e) => report_plugin_load_failure(
+            ctx,
+            id_hint,
+            &actual_plugin_id,
+            &clap_file_path,
+            format!("Failed to create plugin instance: {}", e),
+        ),
     }
 }
 

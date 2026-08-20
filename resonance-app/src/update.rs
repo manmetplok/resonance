@@ -28,6 +28,7 @@ pub mod midi_clip;
 pub mod midi_editor;
 pub mod mixer;
 pub mod plugin;
+pub mod plugin_replace;
 pub mod pool;
 pub mod project_io;
 pub mod reference;

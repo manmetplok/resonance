@@ -94,7 +94,13 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // (nothing has been imported yet when the startup modal is up, so
         // the tracker is empty); allow it through so the overlay can be
         // cleared if it somehow appears.
-        | Message::Ui(UiMessage::DismissImportProgress) => false,
+        | Message::Ui(UiMessage::DismissImportProgress)
+        // Same reasoning for the missing-plugin warning: it reports on
+        // an OPEN project's chains, so it cannot be showing while the
+        // startup modal is up — and if it somehow is, being able to
+        // close it is strictly better than not.
+        | Message::Ui(UiMessage::DismissMissingPlugins)
+        | Message::Ui(UiMessage::ShowMissingPlugins) => false,
         // Project I/O drives the modal itself: always allow.
         Message::ProjectIo(_) => false,
         // Export modal drives its own overlay; gated at the open site.
@@ -325,6 +331,13 @@ fn plugin_edit_target(
         // signal as surely as any parameter does (ba todo #1305).
         SetPluginBypass { instance_id, .. } => r.track_of_plugin(*instance_id),
         AddPluginToTrack(track_id, _) | RemovePluginFromTrack(track_id, _) => Some(*track_id),
+        // Swapping the plugin in a slot changes what the chain renders
+        // exactly as adding or removing one does, so a frozen track goes
+        // stale for it. Resolved through the instance id because the
+        // message names no chain — it works on busses and master too,
+        // and neither of those freezes, so `track_of_plugin` correctly
+        // answers `None` for them.
+        ReplacePlugin { instance_id, .. } => r.track_of_plugin(*instance_id),
         AddPluginToTrackWithId { track_id, .. } | MovePluginInTrack { track_id, .. } => {
             Some(*track_id)
         }

@@ -317,6 +317,35 @@ pub enum AudioEvent {
     PluginScanFailed {
         failures: Vec<PluginScanFailure>,
     },
+    /// An `AddPlugin` / `AddPluginToBus` / `AddPluginToMaster` that
+    /// produced no instance (ba doc #275 P5, todo #1309).
+    ///
+    /// This is the counterpart of
+    /// [`PluginAdded`](Self::PluginAdded)/[`BusPluginAdded`](Self::BusPluginAdded)/[`MasterPluginAdded`](Self::MasterPluginAdded):
+    /// exactly one of the two answers every add command. Before it
+    /// existed the only answer was a bare [`Error`](Self::Error) string
+    /// with no instance in it, so a project loaded on a machine without
+    /// one of its plugins kept a placeholder slot that looked like a
+    /// working plugin and did nothing — the app had no way to tell that
+    /// slot apart from one whose echo was merely still in flight.
+    ///
+    /// `instance_id` is the `id_hint` the command carried, which is what
+    /// makes the event addressable: the project-load replay and the
+    /// control API both name the instance up front, so the app can mark
+    /// *that* slot unavailable. It is `None` for an add that let the
+    /// engine allocate (the mixer's "+ FX" picker), where no slot exists
+    /// to mark and the failure is just a message.
+    ///
+    /// Not fatal and not a chain edit: the engine's own chain simply
+    /// never gains the instance, and every other plugin keeps its
+    /// position.
+    PluginLoadFailed {
+        instance_id: Option<PluginInstanceId>,
+        clap_plugin_id: String,
+        clap_file_path: String,
+        /// Why it could not be loaded, in the loader's own words.
+        reason: String,
+    },
     /// How the plugin renders a parameter it was just given, so the
     /// app's mirror can say `"Low-pass"` or `"40 %"` about the value it
     /// now holds instead of the one the plugin had when it loaded (ba

@@ -87,6 +87,10 @@ pub mod __test_support {
     /// The engine's plugin instance-id allocation rule, shared by the
     /// track / bus / master add paths — see `tests/plugin_id_ranges.rs`.
     pub use crate::engine::plugins::allocate_plugin_instance_id;
+    /// The add-failure report every chain's add path goes through, and
+    /// the two lookups that can produce a reason for it — see
+    /// `tests/plugin_load_failure.rs` (ba doc #275 P5, todo #1309).
+    pub use crate::engine::plugins::{ensure_bundle, plugin_load_failed_event};
     /// The RIFF/WAVE chunk walk behind `ClipSource::open_wav` — a pure
     /// function over bytes, so `tests/wav_chunk_parse.rs` can drive every
     /// malformed-header case without touching the filesystem.

@@ -1033,6 +1033,23 @@ pub enum PluginMessage {
         instance_id: PluginInstanceId,
         to_index: usize,
     },
+    /// Put `plugin` in the slot currently holding `instance_id`,
+    /// **keeping the slot's position in its chain** (ba doc #275 P5,
+    /// todo #1309).
+    ///
+    /// One message for all three chains, because plugin instance ids are
+    /// unique across tracks, busses and master. What it does depends on
+    /// what the slot already holds — a relocate of the same plugin keeps
+    /// the instance and its preserved settings, a different plugin gets
+    /// a fresh instance and the old one's settings are discarded with
+    /// it. See [`crate::update::plugin_replace`].
+    ///
+    /// This exists because the alternative — remove then add — puts the
+    /// replacement at the END of the chain, and chain order is audible.
+    ReplacePlugin {
+        instance_id: PluginInstanceId,
+        plugin: ScannedPlugin,
+    },
     TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
     /// Recall a preset onto a plugin: every parameter it names, applied
@@ -1330,6 +1347,20 @@ pub enum UiMessage {
     /// only — the import already ran; this just hides the overlay and
     /// clears the transient progress tracker. Never undoable.
     DismissImportProgress,
+    /// Close the missing-plugin load warning (ba doc #275 P5, todo
+    /// #1309) and keep it closed for this project.
+    ///
+    /// It stays closed even as further failures arrive, because they do
+    /// arrive one at a time: without that, dismissing the warning during
+    /// a load that is still reporting would be undone by the next
+    /// failure and the modal would look un-closable. Presentational
+    /// only — the dead slots and their preserved settings are untouched,
+    /// so this is never undoable.
+    DismissMissingPlugins,
+    /// Re-open the missing-plugin load warning after it was dismissed
+    /// (Settings -> Plugins). Overrides the dismissal, because the user
+    /// asked for it this time.
+    ShowMissingPlugins,
     /// Open the right-click track context menu (design doc #181, ba todo
     /// #581), anchored at `x` / `y` in arrange-area space. Also selects the
     /// track so the "Freeze selected tracks" entry targets what was clicked.

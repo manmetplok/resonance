@@ -126,7 +126,43 @@ pub(super) fn move_effect(app: &mut Resonance, request: &Request) -> (Response, 
 }
 
 // ---------------------------------------------------------------------------
-// Shared chain addressing for remove_effect / move_effect
+// track.replace_effect
+// ---------------------------------------------------------------------------
+
+/// `track.replace_effect` — put a different plugin in a chain slot,
+/// keeping its position (ba doc #275 P5, todo #1309).
+///
+/// The addressing and the rejection wording are this layer's; everything
+/// after the slot is resolved is shared with the bus and master surfaces
+/// (`super::super::replace`).
+pub(super) fn replace_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track::ReplaceEffectParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0).cloned() else {
+        return not_found_track(request, params.track_id.0);
+    };
+    let address = ChainAddress {
+        slot: params.slot,
+        plugin_id: params.plugin_id.as_deref(),
+        occurrence: params.occurrence,
+    };
+    let (entry, instance_id) = match resolve_chain_effect(app, &t, address, ChainVerb::Replace) {
+        Ok(found) => found,
+        Err(error) => return reject(request, error),
+    };
+    crate::update::control::replace::replace_resolved_slot(
+        app,
+        request,
+        instance_id,
+        entry.slot,
+        &params.new_plugin_id,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Shared chain addressing for remove_effect / move_effect / replace_effect
 // ---------------------------------------------------------------------------
 
 /// How a caller named one plugin on a track's chain: by `slot`, or by
@@ -141,10 +177,11 @@ struct ChainAddress<'a> {
 /// What the caller is doing with the addressed plugin — only used to
 /// word the rejections, so "name the effect to remove" doesn't appear on
 /// a failed move.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ChainVerb {
     Remove,
     Move,
+    Replace,
 }
 
 impl ChainVerb {
@@ -152,18 +189,28 @@ impl ChainVerb {
         match self {
             ChainVerb::Remove => "remove",
             ChainVerb::Move => "move",
+            ChainVerb::Replace => "replace",
         }
     }
 
-    /// Why the track's instrument is off limits for this verb.
-    fn instrument_refusal(self) -> &'static str {
+    /// Why the track's instrument is off limits for this verb, or `None`
+    /// when it is not.
+    ///
+    /// **Replace is the exception**, and deliberately so: a synth that
+    /// will not load is the worst case of a missing plugin, not an
+    /// exempt one, and swapping it in place leaves the track with a
+    /// sound source instead of none. Removing it would leave the track
+    /// silent, and moving it would displace what every sub-track and the
+    /// PDC table are anchored to — those two really are off limits.
+    fn instrument_refusal(self) -> Option<&'static str> {
         match self {
             ChainVerb::Remove => {
-                "replace it with track.add_instrument instead of removing it"
+                Some("replace it with track.replace_effect instead of removing it")
             }
-            ChainVerb::Move => {
-                "instruments are not chain-ordered inserts; it stays at the head of the chain"
-            }
+            ChainVerb::Move => Some(
+                "instruments are not chain-ordered inserts; it stays at the head of the chain",
+            ),
+            ChainVerb::Replace => None,
         }
     }
 }
@@ -221,13 +268,12 @@ fn resolve_chain_effect(
     };
 
     if entry.kind == track::PluginKind::Instrument {
-        return Err(RpcError::invalid_params(format!(
-            "slot {} on track {} is the track's INSTRUMENT ({}), not an effect; {}",
-            entry.slot,
-            t.id,
-            entry.plugin_id,
-            verb.instrument_refusal()
-        )));
+        if let Some(refusal) = verb.instrument_refusal() {
+            return Err(RpcError::invalid_params(format!(
+                "slot {} on track {} is the track's INSTRUMENT ({}), not an effect; {refusal}",
+                entry.slot, t.id, entry.plugin_id,
+            )));
+        }
     }
 
     let instance_id = instance_for(t, &entry.plugin_id, entry.occurrence).ok_or_else(|| {

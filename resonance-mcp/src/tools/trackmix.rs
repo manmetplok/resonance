@@ -246,6 +246,40 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Put a different plugin in one of a track's chain slots, KEEPING its \
+                       position. Address the slot exactly as track_remove_effect does — by slot \
+                       OR by plugin_id plus occurrence — and give new_plugin_id, a CLAP id from \
+                       plugins_catalog. \
+                       \
+                       Use this instead of remove + add. track_add_effect only ever APPENDS, so \
+                       the pair moves the plugin to the END of the chain, and chain order is \
+                       audible: a compressor that was before the reverb ends up after it. \
+                       Unlike remove, this also works on the track's INSTRUMENT. \
+                       \
+                       Its other job is recovering a MISSING plugin. track_plugin_params \
+                       reports status: \"missing\" for a slot whose plugin isn't installed on \
+                       the machine running the app — the slot is real and holds its position, \
+                       but there is nothing behind it, its params list is empty, and \
+                       track_set_plugin_param against it changes no sound. Two ways out: pass \
+                       the SAME plugin_id as new_plugin_id to RELOCATE it (after installing the \
+                       plugin and calling plugins_rescan), which brings the settings the \
+                       project saved back with it; or pass a different id to SWAP it, which \
+                       keeps the chain position but discards the missing plugin's saved \
+                       settings, because they cannot mean anything to another plugin. The reply \
+                       says which of the two happened (outcome: relocated / swapped / \
+                       already_loaded). Do NOT remove a missing plugin to 'clean up' — removal \
+                       is what destroys its recoverable settings. Undoable.",
+        annotations(destructive_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<track::ReplaceEffectResult>()
+    )]
+    async fn track_replace_effect(
+        &self,
+        Parameters(params): Parameters<track::ReplaceEffectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(track::REPLACE_EFFECT, &params).await
+    }
+
+    #[tool(
         description = "List a track's plugins and every parameter each one exposes — id, name, \
                        current value, min, max, default, and what the value MEANS: text (the \
                        plugin's own rendering, \"40 %\", \"-6.0 dB\", \"Low-pass\"), unit, \

@@ -43,6 +43,7 @@ pub(super) fn try_handle(
         bus::ADD_EFFECT => add_effect(app, request),
         bus::REMOVE_EFFECT => remove_effect(app, request),
         bus::MOVE_EFFECT => move_effect(app, request),
+        bus::REPLACE_EFFECT => replace_effect(app, request),
         bus::SET_FX_BYPASS => set_fx_bypass(app, request),
         bus::PLUGIN_PARAMS => plugin_params(app, request),
         bus::SET_PLUGIN_PARAM => set_plugin_param(app, request),
@@ -279,6 +280,8 @@ fn bus_plugin_entries(bus: &BusState) -> Vec<track::PluginParamsEntry> {
                 slot: i as u32,
                 occurrence: *occurrence,
                 kind: track::PluginKind::Effect,
+                status: view_model::slot_status(p),
+                unavailable_reason: p.availability.reason().map(str::to_owned),
                 params: p.params.iter().map(view_model::param_view).collect(),
             }
         })
@@ -467,6 +470,38 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         Message::Bus(BusMessage::RemovePluginFromBus(params.bus_id.0, instance_id)),
     );
     (ack(app, request), task)
+}
+
+/// `bus.replace_effect` — put a different plugin in one of the group's
+/// chain slots, keeping its position (ba doc #275 P5, todo #1309).
+///
+/// Addressing is this surface's (`resolve_bus_effect`); everything after
+/// the slot is resolved is shared with the track and master surfaces.
+fn replace_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::ReplaceEffectParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(b) = find_bus(app, params.bus_id.0) else {
+        return not_found_bus(request, params.bus_id.0);
+    };
+    let (entry, instance_id) = match resolve_bus_effect(
+        b,
+        params.slot,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        "replace",
+    ) {
+        Ok(found) => found,
+        Err(error) => return reject(request, error),
+    };
+    super::replace::replace_resolved_slot(
+        app,
+        request,
+        instance_id,
+        entry.slot,
+        &params.new_plugin_id,
+    )
 }
 
 /// `bus.move_effect` — reorder the group's chain.

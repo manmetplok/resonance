@@ -67,6 +67,13 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.import_progress_modal_open = false;
             r.import_progress.clear();
         }
+        UiMessage::DismissMissingPlugins => {
+            r.missing_plugins.dismiss();
+        }
+        UiMessage::ShowMissingPlugins => {
+            r.missing_plugins.show();
+            r.mixer.settings_open = false;
+        }
         UiMessage::StartNewProject => {
             return project_io::save_project_as_dialog();
         }
