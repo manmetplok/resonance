@@ -571,6 +571,7 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
         for (slot, pp) in t.plugins.iter_mut().zip(b.plugins.iter()) {
             slot.plugin_name = pp.plugin_name.clone();
         }
+        apply_plugin_bypass(&r.engine, &mut t.plugins, &b.plugins);
     }
 }
 
@@ -634,6 +635,7 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
         for (slot, pp) in bus.plugins.iter_mut().zip(b.plugins.iter()) {
             slot.plugin_name = pp.plugin_name.clone();
         }
+        apply_plugin_bypass(&r.engine, &mut bus.plugins, &b.plugins);
     }
 }
 
@@ -753,6 +755,8 @@ fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     for (slot, pp) in r.master_plugins.iter_mut().zip(b.master_plugins.iter()) {
         slot.plugin_name = pp.plugin_name.clone();
     }
+    let master_saved = b.master_plugins.clone();
+    apply_plugin_bypass(&r.engine, &mut r.master_plugins, &master_saved);
 }
 
 fn push_all_plugin_states(r: &mut Resonance, target: &LoadedProject) {
@@ -1029,4 +1033,35 @@ fn apply_pool(r: &mut Resonance, b: &ProjectFile) {
         });
     }
     r.recompute_pool_usage();
+}
+
+/// Apply the saved per-slot bypass to one chain, telling the engine about
+/// every slot that actually moved (ba todo #1305).
+///
+/// This is what makes bypass UNDOABLE rather than merely persisted. Undo
+/// restores through the diff replay, not through a reload, and the diff
+/// used to copy only `plugin_name` per slot — so an undo of a bypass
+/// recorded its entry, replayed, and changed nothing. `plugin_set_matches`
+/// compares slot IDENTITY only, deliberately: a bypass-only change is not
+/// a structural change and must not force the whole project to reload.
+/// That means the difference has to be applied here, or nowhere.
+///
+/// Sends only on a real change. The engine crossfades a bypass, and
+/// re-asserting the state a slot is already in would start a fade for a
+/// value that is not moving.
+fn apply_plugin_bypass(
+    engine: &resonance_audio::AudioEngine,
+    slots: &mut [crate::state::PluginSlotState],
+    saved: &[ProjectPlugin],
+) {
+    for (slot, pp) in slots.iter_mut().zip(saved.iter()) {
+        if slot.bypassed == pp.bypassed {
+            continue;
+        }
+        slot.bypassed = pp.bypassed;
+        let _ = engine.send(AudioCommand::SetPluginBypass {
+            instance_id: slot.instance_id,
+            bypassed: pp.bypassed,
+        });
+    }
 }

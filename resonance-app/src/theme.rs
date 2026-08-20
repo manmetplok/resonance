@@ -143,6 +143,10 @@ pub mod fa {
     pub const WAVE_SQUARE: char = '\u{f83e}';
     pub const COMPACT_DISC: char = '\u{f51f}';
     pub const SLIDERS: char = '\u{f1de}';
+    /// Per-slot bypass (ba todo #1305). Verified present in the bundled
+    /// fa-solid-900.otf rather than assumed — a missing codepoint renders
+    /// as tofu and no test would catch it.
+    pub const POWER_OFF: char = '\u{f011}';
     /// Eye — used for the input-monitor toggle.
     pub const EYE: char = '\u{f06e}';
     /// Trash can — used for the track delete button.

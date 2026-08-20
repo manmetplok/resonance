@@ -223,3 +223,180 @@ fn a_project_written_before_the_field_existed_loads_as_running() {
         "a missing `bypassed` key must read as not-bypassed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Undo (ba todo #1305, caught by review)
+// ---------------------------------------------------------------------------
+
+/// Bypass is UNDOABLE, not merely recorded.
+///
+/// The first cut of this todo classified `SetPluginBypass` as
+/// `UndoAction::Record` and stopped there, which looks right and is not:
+/// undo restores through `try_diff_replay`, and the diff copied only
+/// `plugin_name` per slot. So an undo pushed its entry, replayed, and
+/// changed nothing at all — the flag stayed put and the engine was never
+/// told.
+///
+/// It could not fall back to a full reload either. `plugin_set_matches`
+/// compares slot IDENTITY only (instance id + clap id + path), by design:
+/// a bypass-only change is not structural and must not cost a reload. So
+/// the difference has to be applied by the diff, or nowhere.
+///
+/// This asserts BOTH halves of what undo has to do — move the app flag
+/// back, and tell the engine — because either alone leaves the mixer and
+/// the audio disagreeing.
+#[test]
+fn undo_restores_a_bypassed_slot_and_tells_the_engine() {
+    let mut app = app_with_chains();
+    let before = app.test_snapshot_for_undo();
+
+    bypass(&mut app, TRACK_EQ);
+    assert_eq!(
+        app.test_plugin_bypass_flags().get(&TRACK_EQ),
+        Some(&true),
+        "precondition: the slot is bypassed before we undo"
+    );
+
+    let rx = app.test_capture_engine();
+    app.test_begin_restore_from_snapshot(before);
+
+    assert_eq!(
+        app.test_plugin_bypass_flags().get(&TRACK_EQ),
+        Some(&false),
+        "undo left the slot bypassed — the diff replay dropped the flag"
+    );
+    assert_eq!(
+        bypass_commands(&drain(&rx)),
+        vec![(TRACK_EQ, false)],
+        "undo moved the app flag but never told the engine, so the mixer \
+         would read un-bypassed while the audio stayed bypassed"
+    );
+}
+
+/// The same, one chain over, because the diff applies each chain in its
+/// own arm and a fix that reaches only tracks is the likeliest shape of a
+/// partial one.
+#[test]
+fn undo_restores_a_bypassed_bus_and_master_slot_too() {
+    let mut app = app_with_chains();
+    let before = app.test_snapshot_for_undo();
+
+    bypass(&mut app, BUS_EQ);
+    bypass(&mut app, MASTER_EQ);
+
+    let rx = app.test_capture_engine();
+    app.test_begin_restore_from_snapshot(before);
+
+    let flags = app.test_plugin_bypass_flags();
+    assert_eq!(flags.get(&BUS_EQ), Some(&false), "the bus slot did not undo");
+    assert_eq!(
+        flags.get(&MASTER_EQ),
+        Some(&false),
+        "the master slot did not undo"
+    );
+
+    let mut issued = bypass_commands(&drain(&rx));
+    issued.sort();
+    assert_eq!(
+        issued,
+        vec![(BUS_EQ, false), (MASTER_EQ, false)],
+        "each restored slot must be reported to the engine exactly once"
+    );
+}
+
+/// A slot the undo does not change costs no command. The engine
+/// crossfades a bypass, so re-asserting a value that is not moving would
+/// start a fade for nothing.
+#[test]
+fn undo_says_nothing_about_slots_that_did_not_move() {
+    let mut app = app_with_chains();
+    bypass(&mut app, TRACK_EQ);
+
+    // Snapshot taken WITH the track slot already bypassed, so undoing the
+    // later bus change must leave it alone.
+    let before = app.test_snapshot_for_undo();
+    bypass(&mut app, BUS_EQ);
+
+    let rx = app.test_capture_engine();
+    app.test_begin_restore_from_snapshot(before);
+
+    assert_eq!(
+        bypass_commands(&drain(&rx)),
+        vec![(BUS_EQ, false)],
+        "only the slot that actually moved may be re-sent"
+    );
+    assert_eq!(
+        app.test_plugin_bypass_flags().get(&TRACK_EQ),
+        Some(&true),
+        "the untouched slot must keep its state"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The GUI reaches every chain (ba todo #1305, caught by review)
+// ---------------------------------------------------------------------------
+
+/// A human can bypass a plugin on ALL THREE chains, not just the two the
+/// inspector draws.
+///
+/// The first cut wired the inspector chain row, which covers a selected
+/// track and a selected bus. `view/mixer/inspector/mod.rs` has no master
+/// branch — the master chain is drawn only by the strip — so a master
+/// plugin could be bypassed over MCP and not by hand. That is exactly the
+/// inversion ba doc #276's dual-surface rule exists to prevent, and this
+/// todo's DONE WHEN names the master chain explicitly.
+#[test]
+fn every_chain_offers_a_bypass_control_including_the_master() {
+    let app = app_with_chains();
+    for (instance_id, chain) in [
+        (TRACK_EQ, "track"),
+        (BUS_EQ, "bus"),
+        (MASTER_EQ, "master"),
+    ] {
+        assert!(
+            app.test_strip_bypass_toggle(instance_id).is_some(),
+            "the {chain} chain draws no bypass control, so an agent can \
+             bypass it and a human cannot"
+        );
+    }
+}
+
+/// The control SETS rather than toggles, and it sets the opposite of what
+/// the slot currently is — so the button and the wire raise the identical
+/// message and cannot drift apart.
+#[test]
+fn the_strip_control_sets_the_opposite_of_the_current_state() {
+    use resonance_app::message::{Message, PluginMessage};
+
+    let mut app = app_with_chains();
+    let (message, _) = app
+        .test_strip_bypass_toggle(MASTER_EQ)
+        .expect("the master slot draws a bypass control");
+    assert!(
+        matches!(
+            message,
+            Message::Plugin(PluginMessage::SetPluginBypass {
+                instance_id,
+                bypassed: true,
+            }) if instance_id == MASTER_EQ
+        ),
+        "a running slot's control must ask for bypassed: true"
+    );
+
+    bypass(&mut app, MASTER_EQ);
+    let (message, _) = app
+        .test_strip_bypass_toggle(MASTER_EQ)
+        .expect("still drawn once bypassed");
+    assert!(
+        matches!(
+            message,
+            Message::Plugin(PluginMessage::SetPluginBypass {
+                instance_id,
+                bypassed: false,
+            }) if instance_id == MASTER_EQ
+        ),
+        "a bypassed slot's control must ask for bypassed: false — a \
+         control that always sent `true` would look like a toggle and be \
+         a one-way trip"
+    );
+}

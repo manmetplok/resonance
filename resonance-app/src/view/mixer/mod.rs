@@ -361,12 +361,18 @@ impl crate::Resonance {
         if let Some(editor) = editor_toggle(plugin) {
             icons = icons.push(editor);
         }
+        // Bypass sits after the carets and before delete, mirroring the
+        // inspector chain row (name - carets - BYP) and leaving the
+        // editor toggle immediately after the name, which
+        // `the_strip_offers_an_editor_toggle_only_for_a_gui_plugin` pins
+        // as a layout contract.
         let icons = icons
             .push(reorder::move_buttons(
                 &moves,
                 SLOT_ICON_SIZE,
                 SLOT_ICON_PAD_X,
             ))
+            .push(bypass_toggle(plugin))
             .push(plugin_del)
             .align_y(alignment::Vertical::Center);
 
@@ -418,6 +424,55 @@ const SLOT_ICON_GAP: f32 = 1.0;
 /// reached depended on a property of the plugin the user cannot see —
 /// and the parameter panel had no route at all on the eleven bundled
 /// plugins, every one of which declares a GUI.
+/// The strip's per-slot bypass control (ba doc #275 finding X3, todo
+/// #1305).
+///
+/// The strip is the ONLY surface that draws the master chain — the mixer
+/// inspector handles a selected bus and a selected track and has no
+/// master branch — so without this control a master plugin could be
+/// bypassed over MCP and not by a human. That is the inversion ba doc
+/// #276's dual-surface rule exists to prevent, and the todo names the
+/// master chain explicitly.
+///
+/// Drawn for every slot, unlike the editor toggle: bypass needs no
+/// capability from the plugin.
+fn bypass_toggle(plugin: &PluginSlotState) -> Element<'static, Message> {
+    let (message, color) = bypass_toggle_spec(plugin);
+    button(
+        theme::icon(theme::fa::POWER_OFF)
+            .size(SLOT_ICON_SIZE)
+            .color(color),
+    )
+    .on_press(message)
+    .style(|_theme, status| theme::small_button_style(status))
+    .padding([1, SLOT_ICON_PAD_X])
+    .into()
+}
+
+/// What the strip's bypass control carries and how it is tinted.
+///
+/// Split out for the same reason as [`editor_toggle_spec`]: `iced_test`
+/// reads a text candidate's content but never its colour, so the tint —
+/// which is the whole feedback that a slot is bypassed — is only
+/// assertable through this.
+///
+/// Sends a SET, never a toggle, so the strip, the inspector row and the
+/// control API all raise the identical message and cannot drift.
+pub(crate) fn bypass_toggle_spec(plugin: &PluginSlotState) -> (Message, Color) {
+    let color = if plugin.bypassed {
+        theme::WARM
+    } else {
+        theme::TEXT_3
+    };
+    (
+        Message::Plugin(PluginMessage::SetPluginBypass {
+            instance_id: plugin.instance_id,
+            bypassed: !plugin.bypassed,
+        }),
+        color,
+    )
+}
+
 fn editor_toggle(plugin: &PluginSlotState) -> Option<Element<'static, Message>> {
     let (message, color) = editor_toggle_spec(plugin)?;
     Some(

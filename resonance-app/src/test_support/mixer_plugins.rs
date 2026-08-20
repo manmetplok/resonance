@@ -325,6 +325,30 @@ impl Resonance {
         crate::view::mixer::editor_toggle_spec(plugin)
     }
 
+    /// Test-only: what the mixer STRIP's per-slot bypass control carries
+    /// and how it is tinted, for a slot in any of the three chains
+    /// (ba todo #1305).
+    ///
+    /// The strip is the only surface that draws the MASTER chain — the
+    /// inspector handles a selected bus and a selected track and has no
+    /// master branch — so this is what a test uses to show a human can
+    /// reach a master plugin's bypass, not only an MCP client.
+    #[doc(hidden)]
+    pub fn test_strip_bypass_toggle(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<(crate::message::Message, iced::Color)> {
+        let plugin = self
+            .registry
+            .tracks
+            .iter()
+            .flat_map(|t| t.plugins.iter())
+            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
+            .chain(self.master_plugins.iter())
+            .find(|p| p.instance_id == instance_id)?;
+        Some(crate::view::mixer::bypass_toggle_spec(plugin))
+    }
+
     /// Test-only: declare that a seeded plugin has a GUI, as a real
     /// scan result would (ba todo #1306).
     ///
