@@ -19,6 +19,7 @@ use resonance_music_theory::{
 
 use crate::chord_box::{self, Dims, Marker, Nut};
 use crate::compose::{ChordState, ComposeState, SectionDefinitionState};
+use crate::state::{SignatureEvent, TempoEvent};
 
 // -- Page layout (A4, mm) ----------------------------------------------------
 
@@ -474,9 +475,77 @@ fn new_page(ops: Vec<Op>) -> PdfPage {
     PdfPage::new(Mm(PAGE_W), Mm(PAGE_H), ops)
 }
 
-fn draw_page_header(ops: &mut Vec<Op>, title: &str, bpm: f32, time_sig_num: u8) {
+/// Tempo and meter for the page header — the values the SONG starts in,
+/// plus whether it changes them later on (ba todo #1390).
+///
+/// Built from the tempo/signature tracks, never from `transport.bpm` /
+/// `transport.time_sig_num`: those track the PLAYHEAD, so on a song with
+/// changes they are whatever sits under the cursor at export time, and
+/// the same project exports a different header after a seek (the trap
+/// epic #205 documented for `song.summary`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SongHeader {
+    /// BPM at the first tempo event.
+    pub bpm: f32,
+    /// Time signature at the first signature event.
+    pub numerator: u8,
+    pub denominator: u8,
+    /// A later event departs from the starting tempo / meter.
+    pub tempo_changes: bool,
+    pub meter_changes: bool,
+}
+
+impl Default for SongHeader {
+    fn default() -> Self {
+        Self {
+            bpm: 120.0,
+            numerator: 4,
+            denominator: 4,
+            tempo_changes: false,
+            meter_changes: false,
+        }
+    }
+}
+
+impl SongHeader {
+    /// Read the song's own starting tempo and meter off the global
+    /// tracks. Both vectors are kept sorted by bar and always carry a
+    /// bar-0 entry; an empty one falls back to 120 BPM 4/4.
+    pub fn from_song(tempo_events: &[TempoEvent], signature_events: &[SignatureEvent]) -> Self {
+        let mut header = Self::default();
+        if let Some(first) = tempo_events.first() {
+            header.bpm = first.bpm;
+            header.tempo_changes = tempo_events.iter().any(|e| e.bpm != first.bpm);
+        }
+        if let Some(first) = signature_events.first() {
+            header.numerator = first.numerator;
+            header.denominator = first.denominator;
+            header.meter_changes = signature_events
+                .iter()
+                .any(|e| e.numerator != first.numerator || e.denominator != first.denominator);
+        }
+        header
+    }
+
+    /// The header's right-hand info line, e.g. `Tempo: 120 BPM  |  6/8`.
+    /// A song that changes says so per value rather than silently
+    /// printing its opening one as if it held for the whole sheet.
+    pub fn info_line(&self) -> String {
+        let changes = |c: bool| if c { " (changes)" } else { "" };
+        format!(
+            "Tempo: {} BPM{}  |  {}/{}{}",
+            self.bpm as u32,
+            changes(self.tempo_changes),
+            self.numerator,
+            self.denominator,
+            changes(self.meter_changes),
+        )
+    }
+}
+
+fn draw_page_header(ops: &mut Vec<Op>, title: &str, header: SongHeader) {
     ops.extend(text_op(title, MARGIN, MARGIN, 14.0, BuiltinFont::HelveticaBold, black()));
-    let info = format!("Tempo: {} BPM  |  {}/4", bpm as u32, time_sig_num);
+    let info = header.info_line();
     ops.extend(text_op(&info, MARGIN + 90.0, MARGIN, 8.0, BuiltinFont::Helvetica, gray(0.4)));
     ops.push(Op::SetOutlineColor { col: gray(0.7) });
     ops.push(Op::SetOutlineThickness { pt: Pt(0.4) });
@@ -528,8 +597,7 @@ fn collect_section_chords(compose: &ComposeState) -> Vec<(&SectionDefinitionStat
 
 fn render_fretboard_pages(
     title: &str,
-    bpm: f32,
-    time_sig_num: u8,
+    header: SongHeader,
     section_chords: &[(&SectionDefinitionState, Vec<&ChordState>)],
     tuning: &Tuning,
 ) -> Vec<PdfPage> {
@@ -543,7 +611,7 @@ fn render_fretboard_pages(
     for &(def, ref chords) in section_chords {
         // Start each section on a fresh page
         if !ops.is_empty() { pages.push(new_page(std::mem::take(&mut ops))); }
-        draw_page_header(&mut ops, title, bpm, time_sig_num);
+        draw_page_header(&mut ops, title, header);
         cursor_y = MARGIN + HEADER_H;
 
         // Section header
@@ -554,7 +622,7 @@ fn render_fretboard_pages(
         if let Some(scale) = def.scale {
             if cursor_y + scale_h > max_y {
                 pages.push(new_page(std::mem::take(&mut ops)));
-                draw_page_header(&mut ops, title, bpm, time_sig_num);
+                draw_page_header(&mut ops, title, header);
                 cursor_y = MARGIN + HEADER_H;
             }
             draw_scale_fretboard(&mut ops, cursor_y, tuning, &scale);
@@ -565,7 +633,7 @@ fn render_fretboard_pages(
         for row_chords in chords.chunks(CHORDS_PER_ROW) {
             if cursor_y + FB_CELL_H > max_y {
                 pages.push(new_page(std::mem::take(&mut ops)));
-                draw_page_header(&mut ops, title, bpm, time_sig_num);
+                draw_page_header(&mut ops, title, header);
                 cursor_y = MARGIN + HEADER_H;
             }
 
@@ -586,8 +654,7 @@ fn render_fretboard_pages(
 // -- Keyboard page renderer --------------------------------------------------
 
 fn render_keyboard_pages(
-    bpm: f32,
-    time_sig_num: u8,
+    header: SongHeader,
     section_chords: &[(&SectionDefinitionState, Vec<&ChordState>)],
 ) -> Vec<PdfPage> {
     let mut pages = Vec::new();
@@ -598,7 +665,7 @@ fn render_keyboard_pages(
     for &(def, ref chords) in section_chords {
         // Each section on a fresh page
         if !ops.is_empty() { pages.push(new_page(std::mem::take(&mut ops))); }
-        draw_page_header(&mut ops, "Keyboard Chords", bpm, time_sig_num);
+        draw_page_header(&mut ops, "Keyboard Chords", header);
         cursor_y = MARGIN + HEADER_H;
 
         draw_section_header(&mut ops, cursor_y, def);
@@ -614,7 +681,7 @@ fn render_keyboard_pages(
         for row_chords in chords.chunks(CHORDS_PER_ROW) {
             if cursor_y + KB_CELL_H > max_y {
                 pages.push(new_page(std::mem::take(&mut ops)));
-                draw_page_header(&mut ops, "Keyboard Chords", bpm, time_sig_num);
+                draw_page_header(&mut ops, "Keyboard Chords", header);
                 cursor_y = MARGIN + HEADER_H;
             }
 
@@ -633,12 +700,12 @@ fn render_keyboard_pages(
 
 // -- Public entry point ------------------------------------------------------
 
-pub fn build_chord_sheet_pdf(compose: &ComposeState, bpm: f32, time_sig_num: u8) -> Vec<u8> {
+pub fn build_chord_sheet_pdf(compose: &ComposeState, header: SongHeader) -> Vec<u8> {
     let section_chords = collect_section_chords(compose);
 
     if section_chords.is_empty() {
         let mut ops = Vec::new();
-        draw_page_header(&mut ops, "Chord Sheet", bpm, time_sig_num);
+        draw_page_header(&mut ops, "Chord Sheet", header);
         ops.extend(text_op("No chords to display.", MARGIN, MARGIN + 18.0, 10.0, BuiltinFont::Helvetica, gray(0.5)));
         let mut doc = PdfDocument::new("Chord Sheet");
         doc.pages.push(new_page(ops));
@@ -649,15 +716,15 @@ pub fn build_chord_sheet_pdf(compose: &ComposeState, bpm: f32, time_sig_num: u8)
     let mut doc = PdfDocument::new("Chord Sheet");
 
     // Guitar 6-string
-    doc.pages.extend(render_fretboard_pages(GUITAR_6.name, bpm, time_sig_num, &section_chords, &GUITAR_6));
+    doc.pages.extend(render_fretboard_pages(GUITAR_6.name, header, &section_chords, &GUITAR_6));
     // Guitar 8-string
-    doc.pages.extend(render_fretboard_pages(GUITAR_8.name, bpm, time_sig_num, &section_chords, &GUITAR_8));
+    doc.pages.extend(render_fretboard_pages(GUITAR_8.name, header, &section_chords, &GUITAR_8));
     // Bass 4-string
-    doc.pages.extend(render_fretboard_pages(BASS_4.name, bpm, time_sig_num, &section_chords, &BASS_4));
+    doc.pages.extend(render_fretboard_pages(BASS_4.name, header, &section_chords, &BASS_4));
     // Bass 5-string
-    doc.pages.extend(render_fretboard_pages(BASS_5.name, bpm, time_sig_num, &section_chords, &BASS_5));
+    doc.pages.extend(render_fretboard_pages(BASS_5.name, header, &section_chords, &BASS_5));
     // Keyboard
-    doc.pages.extend(render_keyboard_pages(bpm, time_sig_num, &section_chords));
+    doc.pages.extend(render_keyboard_pages(header, &section_chords));
 
     let mut warnings = Vec::new();
     doc.save(&PdfSaveOptions::default(), &mut warnings)
