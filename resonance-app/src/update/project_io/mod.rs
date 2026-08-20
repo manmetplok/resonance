@@ -214,11 +214,8 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.error_message = Some(format!("Open template failed: {e}"));
         }
         ProjectIoMessage::ExportChordSheet => {
-            let pdf_bytes = crate::chord_sheet_pdf::build_chord_sheet_pdf(
-                &r.compose,
-                r.transport.bpm,
-                r.transport.time_sig_num,
-            );
+            let pdf_bytes =
+                crate::chord_sheet_pdf::build_chord_sheet_pdf(&r.compose, chord_sheet_header(r));
             return dialogs::chord_sheet_dialog(pdf_bytes);
         }
         ProjectIoMessage::ChordSheetPathSelected(Some(path), data) => {
@@ -229,6 +226,17 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::ChordSheetPathSelected(None, _) => {}
     }
     Task::none()
+}
+
+/// Tempo and meter for the exported chord sheet's page header.
+///
+/// Reads the song's own global tracks, NOT `r.transport` (ba todo
+/// #1390): the transport's `bpm` / `time_sig_num` are playhead
+/// readings, so on a song that changes meter the header used to print
+/// whatever sat under the cursor — and moving the cursor changed the
+/// PDF. Same trap epic #205 documented for `song.summary`.
+pub fn chord_sheet_header(r: &Resonance) -> crate::chord_sheet_pdf::SongHeader {
+    crate::chord_sheet_pdf::SongHeader::from_song(&r.tempo_events, &r.signature_events)
 }
 
 /// Begin an async manual save. Requires `r.io.project_path` to already be

@@ -21,6 +21,8 @@ mod autosave_settings;
 mod autosave_write;
 #[path = "io/browser_handlers.rs"]
 mod browser_handlers;
+#[path = "io/chord_sheet_header.rs"]
+mod chord_sheet_header;
 #[path = "io/engine_events_plugin_move_mirror.rs"]
 mod engine_events_plugin_move_mirror;
 #[path = "io/engine_events_pool_mirror.rs"]
