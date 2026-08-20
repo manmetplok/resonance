@@ -12,6 +12,8 @@
 
 #[path = "control/control_arrangement_bars.rs"]
 mod control_arrangement_bars;
+#[path = "control/control_arrangement_global_events.rs"]
+mod control_arrangement_global_events;
 #[path = "control/control_bus.rs"]
 mod control_bus;
 #[path = "control/control_bus_create_commit.rs"]
