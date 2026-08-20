@@ -88,6 +88,8 @@ mod control_sidechain;
 mod control_socket_roundtrip;
 #[path = "control/control_song_routing.rs"]
 mod control_song_routing;
+#[path = "control/control_song_summary_tempo_map.rs"]
+mod control_song_summary_tempo_map;
 #[path = "control/control_song_views.rs"]
 mod control_song_views;
 #[path = "control/control_track_add_plugin_result.rs"]

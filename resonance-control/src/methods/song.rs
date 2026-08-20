@@ -8,6 +8,7 @@ use crate::common::{
 use crate::ids::{
     ChordId, ClipId, NoteId, SectionDefinitionId, SectionPlacementId, SendId, TrackId,
 };
+use crate::methods::global::{SignatureEventView, TempoEventView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -55,8 +56,40 @@ pub struct VocalParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SongSummary {
+    /// Tempo AT THE PLAYHEAD, in BPM — not a property of the song.
+    ///
+    /// A song can change tempo at any bar, and this field reports only
+    /// the value under the cursor when the call was made: it moves when
+    /// the playhead moves and the song has not changed at all.
+    /// [`Self::tempo_events`] is the song's actual tempo track and is
+    /// what any bar/time arithmetic must be built on.
     pub tempo_bpm: f64,
+    /// Meter AT THE PLAYHEAD — not a property of the song.
+    ///
+    /// Same caveat as [`Self::tempo_bpm`], and the more damaging of the
+    /// two: reading `4/4` here on a song that drops into 7/8 at the
+    /// bridge silently shifts every bar count that follows.
+    /// [`Self::signature_events`] is the song's actual signature track.
     pub time_signature: TimeSignature,
+    /// The song's whole tempo track: every tempo change with the 1-based
+    /// bar it takes effect at, sorted by bar.
+    ///
+    /// Never empty — bar 1 is the song's initial tempo and cannot be
+    /// removed — so `len() == 1` means "no tempo changes; `tempo_bpm`
+    /// holds throughout" and `len() > 1` means `tempo_bpm` is true only
+    /// where the playhead happens to sit. That makes "does this song
+    /// change tempo?" answerable from this response alone.
+    /// `global.list_events` returns the same list on its own.
+    #[serde(default)]
+    pub tempo_events: Vec<TempoEventView>,
+    /// The song's whole signature track: every meter change with the
+    /// 1-based bar it takes effect at, sorted by bar.
+    ///
+    /// Never empty, for the same reason as [`Self::tempo_events`]: bar 1
+    /// is the song's initial meter, so `len() == 1` means one meter
+    /// throughout.
+    #[serde(default)]
+    pub signature_events: Vec<SignatureEventView>,
     /// Global key, when the song defines one (otherwise key lives
     /// per-section, see [`SectionDefinitionView::scale`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]

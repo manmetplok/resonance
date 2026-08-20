@@ -7,6 +7,7 @@ use resonance_control::common::{
 use resonance_control::ids::{
     ChordId, ClipId, SectionDefinitionId, SectionPlacementId, SendId, TrackId,
 };
+use resonance_control::methods::global::{SignatureEventView, TempoEventView};
 use resonance_control::methods::song::{
     ChordView, ClipView, LyricLineView, NoteView, NotesView, SectionDefinitionView,
     SectionPlacementView, SectionsView, SendView, SongSummary, SyllableView, TrackDetail,
@@ -72,11 +73,37 @@ fn track_summary_reports_parentage_and_routing() {
 #[test]
 fn song_summary_matches_documented_shape() {
     let summary = SongSummary {
-        tempo_bpm: 120.0,
+        // The transport reading at the playhead — which sits in the
+        // bridge, so it is 140 and 7/8 while the SONG starts at 120 and
+        // 4/4. That divergence is the whole point of shipping the event
+        // lists alongside (ba todo #1381).
+        tempo_bpm: 140.0,
         time_signature: TimeSignature {
-            numerator: 4,
-            denominator: 4,
+            numerator: 7,
+            denominator: 8,
         },
+        tempo_events: vec![
+            TempoEventView {
+                bar: 1,
+                bpm: 120.0,
+            },
+            TempoEventView {
+                bar: 9,
+                bpm: 140.0,
+            },
+        ],
+        signature_events: vec![
+            SignatureEventView {
+                bar: 1,
+                numerator: 4,
+                denominator: 4,
+            },
+            SignatureEventView {
+                bar: 17,
+                numerator: 7,
+                denominator: 8,
+            },
+        ],
         key: Some(KeyScale {
             tonic: "A".to_owned(),
             scale: "minor".to_owned(),
@@ -103,8 +130,16 @@ fn song_summary_matches_documented_shape() {
     assert_eq!(
         serde_json::to_value(&summary).unwrap(),
         json!({
-            "tempo_bpm": 120.0,
-            "time_signature": {"numerator": 4, "denominator": 4},
+            "tempo_bpm": 140.0,
+            "time_signature": {"numerator": 7, "denominator": 8},
+            "tempo_events": [
+                {"bar": 1, "bpm": 120.0},
+                {"bar": 9, "bpm": 140.0}
+            ],
+            "signature_events": [
+                {"bar": 1, "numerator": 4, "denominator": 4},
+                {"bar": 17, "numerator": 7, "denominator": 8}
+            ],
             "key": {"tonic": "A", "scale": "minor"},
             "sample_rate": 48000,
             "length_bars": 16.0,

@@ -63,23 +63,8 @@ pub(super) fn try_handle(
 /// `global.list_events` — both global tracks, in bar order.
 fn list_events(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let result = GlobalEvents {
-        tempo_events: app
-            .tempo_events
-            .iter()
-            .map(|e| TempoEventView {
-                bar: wire_bar(e.bar),
-                bpm: e.bpm,
-            })
-            .collect(),
-        signature_events: app
-            .signature_events
-            .iter()
-            .map(|e| SignatureEventView {
-                bar: wire_bar(e.bar),
-                numerator: e.numerator,
-                denominator: e.denominator,
-            })
-            .collect(),
+        tempo_events: tempo_event_views(app),
+        signature_events: signature_event_views(app),
         revision: app.revision(),
     };
     (super::success(request, &result), Task::none())
@@ -88,6 +73,36 @@ fn list_events(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
 // ---------------------------------------------------------------------------
 // Shared helpers for the whole `global.*` namespace
 // ---------------------------------------------------------------------------
+
+/// The tempo track as wire views, in bar order.
+///
+/// `song.summary` carries the same list (ba todo #1381) so that a client
+/// can tell from one read whether the song changes tempo at all. It is
+/// built here rather than there so the two answers cannot drift apart —
+/// in particular so they cannot disagree about the 0-based state bar to
+/// 1-based wire bar conversion.
+pub(super) fn tempo_event_views(app: &Resonance) -> Vec<TempoEventView> {
+    app.tempo_events
+        .iter()
+        .map(|e| TempoEventView {
+            bar: wire_bar(e.bar),
+            bpm: e.bpm,
+        })
+        .collect()
+}
+
+/// The signature track as wire views, in bar order. Shared with
+/// `song.summary`; see [`tempo_event_views`].
+pub(super) fn signature_event_views(app: &Resonance) -> Vec<SignatureEventView> {
+    app.signature_events
+        .iter()
+        .map(|e| SignatureEventView {
+            bar: wire_bar(e.bar),
+            numerator: e.numerator,
+            denominator: e.denominator,
+        })
+        .collect()
+}
 
 /// App 0-based bar -> 1-based wire bar.
 fn wire_bar(bar: u32) -> u32 {
