@@ -15,7 +15,7 @@
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{Message, PluginMessage};
 use resonance_app::state::ViewMode;
-use resonance_app::{Resonance, STARTUP_TAB};
+use resonance_app::Resonance;
 use resonance_audio::types::{
     AudioCommand, AudioEvent, ParamInfo, PluginScanFailure, ScannedPlugin, TrackType,
 };
@@ -33,12 +33,12 @@ fn scanned(id: &str, name: &str, is_instrument: bool) -> ScannedPlugin {
         name: name.to_owned(),
         vendor: "Resonance".to_owned(),
         is_instrument,
+        ..Default::default()
     }
 }
 
 fn app() -> Resonance {
-    let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-plugins-rescan.rprj"));
     app.test_add_track(TRACK, TrackType::Instrument);
@@ -144,8 +144,7 @@ fn a_rescan_works_with_no_project_open() {
     // A catalog is a fact about the machine, not about a project — an
     // agent should be able to install a plugin and find it before it
     // creates anything (the same reason `plugins.catalog` is not gated).
-    let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     let response = rescan(&mut app);
     assert!(
         response.error.is_none(),
@@ -175,6 +174,7 @@ fn a_rescan_leaves_an_instantiated_plugin_alone() {
             max_value: 1.0,
             default_value: 0.3,
             current_value: 0.8,
+            ..Default::default()
         }],
         has_gui: false,
         has_sidechain_input: false,

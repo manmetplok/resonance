@@ -46,6 +46,9 @@ mod job;
 mod master;
 mod meter;
 mod notes;
+/// Per-slot and whole-chain bypass, shared by all three surfaces
+/// (ba todo #1305).
+mod bypass;
 mod plugin_presets;
 /// `plugins.rescan` — the installed-plugin catalog's one mutation
 /// (todo #1307). `plugins.catalog` is read-only and lives in `song`.

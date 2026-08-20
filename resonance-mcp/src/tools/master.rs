@@ -199,6 +199,28 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Bypass or re-engage ONE plugin in the master chain, leaving the rest of the chain \
+                       running — the A/B for \"is this one plugin earning its place?\". \
+                       Distinct from master_set_fx_bypass, which mutes the whole chain: the \
+                       two are independent, so a chain-bypassed master chain still remembers \
+                       which slots were individually bypassed and re-engaging the chain \
+                       restores the mix rather than switching everything on. Address the \
+                       plugin exactly as master_set_plugin_param does (plugin_id + \
+                       occurrence; omitted means the first plugin). Read master_plugin_params to see \
+                       each slot's current bypassed flag. The engine crossfades over a few \
+                       milliseconds, so toggling mid-playback does not click. SETS rather \
+                       than toggles, so a retry is safe. Undoable, and saved with the \
+                       project.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn master_set_plugin_bypass(
+        &self,
+        Parameters(params): Parameters<master::SetPluginBypassParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(master::SET_PLUGIN_BYPASS, &params).await
+    }
+
+    #[tool(
         description = "Route a track's or bus's audio into the external SIDECHAIN KEY of a \
                        plugin ON THE MASTER CHAIN — the detector input. The mastering use is \
                        narrow but real: a bus compressor on the master keyed from the kick, so \

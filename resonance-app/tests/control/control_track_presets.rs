@@ -15,7 +15,7 @@
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{Message, TrackMessage};
 use resonance_app::state::ViewMode;
-use resonance_app::{Resonance, STARTUP_TAB};
+use resonance_app::Resonance;
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
 use resonance_control::methods::track::{AddResult, PresetsView};
 use resonance_control::{ErrorKind, MutationAck, Request, Response};
@@ -45,8 +45,7 @@ fn preset_dir() -> std::path::PathBuf {
 
 fn app() -> Resonance {
     let _ = preset_dir();
-    let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-track-presets.rprj"));
     app.test_add_track(TRACK, TrackType::Instrument);

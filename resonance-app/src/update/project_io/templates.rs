@@ -652,6 +652,7 @@ pub fn builtin_templates() -> Vec<Template> {
 fn builtin_plugin(instance_id: u64, name: &str, clap_plugin_id: &str) -> ProjectPlugin {
     ProjectPlugin {
         instance_id,
+        bypassed: false,
         plugin_name: name.to_string(),
         clap_plugin_id: clap_plugin_id.to_string(),
         clap_file_path: String::new(),

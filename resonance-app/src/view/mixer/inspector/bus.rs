@@ -325,7 +325,13 @@ fn chain_group(
                 index,
                 chain_len,
             );
-            col = col.push(super::chain::chain_row(&plugin.plugin_name, false, &moves));
+            col = col.push(super::chain::chain_row(
+                &plugin.plugin_name,
+                false,
+                &moves,
+                plugin.instance_id,
+                plugin.bypassed,
+            ));
         }
     }
 

@@ -213,6 +213,7 @@ pub(in crate::update::control) fn plugin_entries(
                 .and_modify(|n| *n += 1)
                 .or_insert(0);
             track::PluginParamsEntry {
+                bypassed: p.bypassed,
                 plugin_id: p.clap_plugin_id.clone(),
                 name: p.plugin_name.clone(),
                 // Chain index, instrument included: slot order is

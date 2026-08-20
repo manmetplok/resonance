@@ -64,6 +64,8 @@ mod control_notes_create_insert_race;
 mod control_notes_move_clip;
 #[path = "control/control_notes_read_your_writes.rs"]
 mod control_notes_read_your_writes;
+#[path = "control/control_plugin_bypass.rs"]
+mod control_plugin_bypass;
 #[path = "control/control_plugin_param_bounds.rs"]
 mod control_plugin_param_bounds;
 #[path = "control/control_plugin_param_meta.rs"]
@@ -74,6 +76,8 @@ mod control_plugin_presets;
 mod control_plugin_params_persist;
 #[path = "control/control_plugins_catalog.rs"]
 mod control_plugins_catalog;
+#[path = "control/control_plugins_rescan.rs"]
+mod control_plugins_rescan;
 #[path = "control/control_project.rs"]
 mod control_project;
 #[path = "control/control_render.rs"]
@@ -102,6 +106,8 @@ mod control_track_dispatch;
 mod control_track_mixer;
 #[path = "control/control_track_move_effect.rs"]
 mod control_track_move_effect;
+#[path = "control/control_track_presets.rs"]
+mod control_track_presets;
 #[path = "control/control_track_remove_effect.rs"]
 mod control_track_remove_effect;
 #[path = "control/control_transport.rs"]

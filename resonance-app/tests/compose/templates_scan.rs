@@ -79,6 +79,7 @@ fn make_project_with_content() -> ProjectFile {
         input_port_index: None,
         plugins: vec![ProjectPlugin {
             instance_id: 1,
+            bypassed: false,
             plugin_name: "Test Plugin".to_string(),
             clap_plugin_id: "test.id".to_string(),
             clap_file_path: "test.clap".to_string(),
@@ -110,6 +111,7 @@ fn make_project_with_content() -> ProjectFile {
         fx_bypassed: false,
         plugins: vec![ProjectPlugin {
             instance_id: 2,
+            bypassed: false,
             plugin_name: "Bus Plugin".to_string(),
             clap_plugin_id: "bus.id".to_string(),
             clap_file_path: "bus.clap".to_string(),
@@ -164,6 +166,7 @@ fn compute_summary_with_master_plugins() {
     project.master_plugins = vec![
         ProjectPlugin {
             instance_id: 1,
+            bypassed: false,
             plugin_name: "Master Plugin".to_string(),
             clap_plugin_id: "master.id".to_string(),
             clap_file_path: "master.clap".to_string(),

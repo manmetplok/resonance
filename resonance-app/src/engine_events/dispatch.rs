@@ -460,7 +460,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // persistence and `track.set_fx_bypass` control method are todo
         // #1305, which is where this event gets mirrored into app state.
         // Consumed for exhaustiveness until then.
-        E::PluginBypassChanged { .. } => {}
+        E::PluginBypassChanged {
+            instance_id,
+            bypassed,
+            own_bypass_param,
+        } => plugins::bypass_changed(r, instance_id, bypassed, own_bypass_param),
 
         // Peak meter snapshot — drive the VU decay+update from the
         // engine's view of the world. See `update::tick`.

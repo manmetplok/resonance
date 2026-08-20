@@ -345,14 +345,29 @@ pub(super) fn replay_plugins(
             r.pending_plugin_param_overrides
                 .insert(pp.instance_id, pp.params.clone());
         }
-        gui_plugins.push(PluginSlotState::new(
+        // Restore a bypassed slot through the very same command a user
+        // toggle sends, so there is one path into the engine. Only when
+        // it is actually bypassed: the engine's default is running, and
+        // a command per slot on every load would be noise.
+        if pp.bypassed {
+            let _ = r.engine.send(AudioCommand::SetPluginBypass {
+                instance_id: pp.instance_id,
+                bypassed: true,
+            });
+        }
+        let mut slot = PluginSlotState::new(
             pp.instance_id,
             pp.plugin_name.clone(),
             pp.clap_plugin_id.clone(),
             pp.clap_file_path.clone(),
             Vec::new(),
             false,
-        ));
+        );
+        // Seeded rather than left to the echo: the mixer draws before
+        // the engine answers, and a slot that flashed un-bypassed for a
+        // frame would read as the project having lost the setting.
+        slot.bypassed = pp.bypassed;
+        gui_plugins.push(slot);
     }
     gui_plugins
 }

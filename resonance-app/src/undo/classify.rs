@@ -305,6 +305,12 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Routing a key is a project edit like any other insert
             // change, so it takes an undo entry of its own.
             PluginMessage::SetPluginSidechain { .. } => UndoAction::Record,
+            // Bypassing a slot is a project edit and it persists, so it
+            // takes an entry. Deliberately NOT coalesced: a knob drag
+            // emits one message per frame and wants collapsing, but two
+            // bypass toggles are two decisions a user expects to undo
+            // separately (ba todo #1305).
+            PluginMessage::SetPluginBypass { .. } => UndoAction::Record,
             // A preset recall is one gesture, so it takes one entry —
             // and it must NOT coalesce with anything: coalescing a recall
             // into a neighbouring knob edit would make the two undo

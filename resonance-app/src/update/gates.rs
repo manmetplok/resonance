@@ -321,6 +321,9 @@ fn plugin_edit_target(
         // Re-keying a detector changes the rendered signal on the
         // plugin's own track, so a frozen track must go stale for it.
         SetPluginSidechain { instance_id, .. } => r.track_of_plugin(*instance_id),
+        // Taking a plugin out of the chain changes that track's rendered
+        // signal as surely as any parameter does (ba todo #1305).
+        SetPluginBypass { instance_id, .. } => r.track_of_plugin(*instance_id),
         AddPluginToTrack(track_id, _) | RemovePluginFromTrack(track_id, _) => Some(*track_id),
         AddPluginToTrackWithId { track_id, .. } | MovePluginInTrack { track_id, .. } => {
             Some(*track_id)

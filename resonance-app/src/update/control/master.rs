@@ -44,6 +44,7 @@ pub(super) fn try_handle(
         master::SET_FX_BYPASS => set_fx_bypass(app, request),
         master::PLUGIN_PARAMS => plugin_params(app, request),
         master::SET_PLUGIN_PARAM => set_plugin_param(app, request),
+        master::SET_PLUGIN_BYPASS => set_plugin_bypass(app, request),
         master::PLUGIN_PRESETS => plugin_presets(app, request),
         master::LOAD_PLUGIN_PRESET => load_plugin_preset(app, request),
         master::SAVE_PLUGIN_PRESET => save_plugin_preset(app, request),
@@ -236,6 +237,7 @@ fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
                 .and_modify(|n| *n += 1)
                 .or_insert(0);
             track::PluginParamsEntry {
+                bypassed: p.bypassed,
                 plugin_id: p.clap_plugin_id.clone(),
                 name: p.plugin_name.clone(),
                 slot: i as u32,
@@ -691,3 +693,21 @@ fn chain_description(app: &Resonance) -> String {
         .join(", ")
 }
 
+/// `master.set_plugin_bypass` — one slot on the master chain.
+fn set_plugin_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: master::SetPluginBypassParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let chain = app.master_plugins.clone();
+    super::bypass::run(
+        app,
+        request,
+        &chain,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        params.bypassed,
+        super::bypass::first_slot,
+        "the master chain",
+    )
+}

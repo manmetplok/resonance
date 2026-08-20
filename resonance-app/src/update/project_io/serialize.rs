@@ -53,6 +53,7 @@ fn project_plugin(r: &Resonance, p: &crate::state::PluginSlotState) -> ProjectPl
     };
     ProjectPlugin {
         instance_id: p.instance_id,
+        bypassed: p.bypassed,
         plugin_name: p.plugin_name.clone(),
         clap_plugin_id: p.clap_plugin_id.clone(),
         clap_file_path: p.clap_file_path.clone(),

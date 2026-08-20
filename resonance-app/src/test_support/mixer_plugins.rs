@@ -97,6 +97,32 @@ impl Resonance {
         &self.sidechain.routes
     }
 
+    /// Test-only: every slot's per-plugin bypass flag, keyed by instance
+    /// id, across all three chains (ba todo #1305).
+    ///
+    /// One map rather than three accessors because the flag's whole point
+    /// is that it means the same thing wherever the slot lives — a test
+    /// that had to ask a different question per chain could not state
+    /// that.
+    #[doc(hidden)]
+    pub fn test_plugin_bypass_flags(&self) -> std::collections::BTreeMap<u64, bool> {
+        let mut out = std::collections::BTreeMap::new();
+        for t in &self.registry.tracks {
+            for p in &t.plugins {
+                out.insert(p.instance_id, p.bypassed);
+            }
+        }
+        for b in &self.registry.busses {
+            for p in &b.plugins {
+                out.insert(p.instance_id, p.bypassed);
+            }
+        }
+        for p in &self.master_plugins {
+            out.insert(p.instance_id, p.bypassed);
+        }
+        out
+    }
+
     /// Test-only: read the most recent aux-send rejection forwarded to
     /// the UI (`None` once a later send succeeds).
     #[doc(hidden)]

@@ -983,6 +983,18 @@ pub enum VocalTuningMessage {
 
 #[derive(Debug, Clone)]
 pub enum PluginMessage {
+    /// Bypass (or re-engage) ONE slot, wherever it sits — track, bus or
+    /// master (ba doc #275 finding X3, todo #1305).
+    ///
+    /// Addressed by instance id alone, because that is already unique
+    /// across all three chains; the surface it lives on is not part of
+    /// the request and so cannot be got wrong. SETS rather than toggles,
+    /// so a retried control-API call cannot flip a slot back on, and so
+    /// project load can restore a saved state through the same path.
+    SetPluginBypass {
+        instance_id: PluginInstanceId,
+        bypassed: bool,
+    },
     AddPluginToTrack(TrackId, ScannedPlugin),
     /// Add a plugin whose instance id the *app* chose up front, and
     /// mirror a placeholder slot into `TrackState.plugins` immediately,

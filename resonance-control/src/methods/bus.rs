@@ -40,6 +40,9 @@ pub const PLUGIN_PARAMS: &str = "bus.plugin_params";
 /// `bus.set_plugin_param` — set one parameter on a bus plugin
 /// ([`SetPluginParamParams`] -> `MutationAck`).
 pub const SET_PLUGIN_PARAM: &str = "bus.set_plugin_param";
+/// `bus.set_plugin_bypass` — bypass/unbypass ONE slot in a bus's chain
+/// ([`SetPluginBypassParams`] -> `MutationAck`).
+pub const SET_PLUGIN_BYPASS: &str = "bus.set_plugin_bypass";
 /// `bus.plugin_presets` — a bus plugin's factory and user presets
 /// ([`PluginPresetsParams`] ->
 /// [`PluginPresetsView`](crate::methods::plugin_preset::PluginPresetsView)).
@@ -69,6 +72,7 @@ pub const METHODS: &[&str] = &[
     SET_FX_BYPASS,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    SET_PLUGIN_BYPASS,
     PLUGIN_PRESETS,
     LOAD_PLUGIN_PRESET,
     SAVE_PLUGIN_PRESET,
@@ -398,4 +402,32 @@ pub struct ClearSidechainParams {
 
 fn default_true() -> bool {
     true
+}
+
+/// Params for `bus.set_plugin_bypass` — bypass ONE slot in the chain
+/// (ba doc #275 finding X3, todo #1305).
+///
+/// Distinct from `bus.set_fx_bypass`, which mutes the whole chain at
+/// once. The two are independent: a chain-bypassed bus still remembers
+/// which of its slots were individually bypassed, so re-engaging the
+/// chain restores the mix rather than turning everything on.
+///
+/// The plugin is addressed exactly as `bus.set_plugin_param` addresses
+/// it. Idempotent: this SETS the state rather than toggling, so a retried
+/// request cannot flip a slot back on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetPluginBypassParams {
+    pub bus_id: TrackId,
+    /// CLAP id of the plugin in this chain; omitted targets the first slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance to address when the chain carries `plugin_id` more
+    /// than once; 0-based, defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// `true` takes the plugin out of the signal path; `false` puts it
+    /// back. The engine crossfades over a few milliseconds rather than
+    /// switching, so a toggle mid-playback does not click.
+    pub bypassed: bool,
 }

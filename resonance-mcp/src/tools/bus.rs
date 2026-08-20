@@ -156,6 +156,28 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Bypass or re-engage ONE plugin in a bus's effect chain, leaving the rest of the chain \
+                       running — the A/B for \"is this one plugin earning its place?\". \
+                       Distinct from bus_set_fx_bypass, which mutes the whole chain: the \
+                       two are independent, so a chain-bypassed bus still remembers \
+                       which slots were individually bypassed and re-engaging the chain \
+                       restores the mix rather than switching everything on. Address the \
+                       plugin exactly as bus_set_plugin_param does (plugin_id + \
+                       occurrence; omitted means the first plugin). Read bus_plugin_params to see \
+                       each slot's current bypassed flag. The engine crossfades over a few \
+                       milliseconds, so toggling mid-playback does not click. SETS rather \
+                       than toggles, so a retry is safe. Undoable, and saved with the \
+                       project.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn bus_set_plugin_bypass(
+        &self,
+        Parameters(params): Parameters<bus::SetPluginBypassParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(bus::SET_PLUGIN_BYPASS, &params).await
+    }
+
+    #[tool(
         description = "List a bus's effects and every parameter each one exposes — id, name, \
                        current value, min, max, default, and what the value MEANS: text (the \
                        plugin's own rendering), unit, module, stepped, choices and hidden, \

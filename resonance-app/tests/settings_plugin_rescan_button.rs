@@ -16,7 +16,7 @@ use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, PluginMessage, UiMessage};
 use resonance_app::state::ViewMode;
-use resonance_app::{theme, Resonance, STARTUP_TAB};
+use resonance_app::{theme, Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, PluginScanFailure, ScannedPlugin};
 
 const WINDOW: (f32, f32) = (1440.0, 900.0);
@@ -44,8 +44,7 @@ fn drain(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<Au
 
 /// An app with Settings open and one plugin in the catalog.
 fn app_with_settings_open() -> Resonance {
-    let _ = STARTUP_TAB.set(ViewMode::Arrange);
-    let (mut app, _task) = Resonance::new();
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     // Without an active project the startup modal owns the screen and no
     // other overlay renders at all.
     app.test_set_active_project(true);
@@ -56,6 +55,7 @@ fn app_with_settings_open() -> Resonance {
             name: "Resonance Reverb".to_owned(),
             vendor: "Resonance".to_owned(),
             is_instrument: false,
+            ..Default::default()
         }],
     });
     let _ = app.update(Message::Ui(UiMessage::OpenSettings));

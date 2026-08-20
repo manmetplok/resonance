@@ -6,6 +6,22 @@ use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
     match m {
+        PluginMessage::SetPluginBypass {
+            instance_id,
+            bypassed,
+        } => {
+            // No optimistic mirror: the engine crossfades and its
+            // `PluginBypassChanged` echo is what moves `slot.bypassed`.
+            // Sending regardless of the mirrored value keeps this a SET —
+            // and a slot the app believes is already bypassed but the
+            // engine does not (a restore that raced a load) still lands.
+            let _ = r
+                .engine
+                .send(resonance_audio::types::AudioCommand::SetPluginBypass {
+                    instance_id,
+                    bypassed,
+                });
+        }
         PluginMessage::AddPluginToTrack(track_id, plugin) => {
             let _ = r.engine.send(AudioCommand::AddPlugin {
                 track_id,

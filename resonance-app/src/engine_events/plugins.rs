@@ -608,3 +608,24 @@ pub(super) fn sidechain_route_changed(
 pub(super) fn master_fx_bypass_changed(r: &mut Resonance, bypassed: bool) {
     r.master_fx_bypassed = bypassed;
 }
+
+/// Adopt the engine's per-slot bypass echo (ba todo #1305).
+///
+/// The app never sets this optimistically. `SetPluginBypass` starts a
+/// crossfade rather than flipping a switch, so the echo is the only point
+/// at which the flag has actually moved — and the same echo carries a
+/// restore issued by project load, a GUI click and a control-API call
+/// alike, so all three land through one path and cannot disagree.
+///
+/// `own_bypass_param` is reported but not stored: it says whether the
+/// plugin keeps running (and so keeps its latency in the chain) rather
+/// than being skipped, which is the engine's business, not a fact the
+/// app mirrors.
+pub(super) fn bypass_changed(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    bypassed: bool,
+    _own_bypass_param: bool,
+) {
+    r.with_plugin_mut(instance_id, |slot| slot.bypassed = bypassed);
+}

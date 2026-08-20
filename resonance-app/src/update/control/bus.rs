@@ -46,6 +46,7 @@ pub(super) fn try_handle(
         bus::SET_FX_BYPASS => set_fx_bypass(app, request),
         bus::PLUGIN_PARAMS => plugin_params(app, request),
         bus::SET_PLUGIN_PARAM => set_plugin_param(app, request),
+        bus::SET_PLUGIN_BYPASS => set_plugin_bypass(app, request),
         bus::PLUGIN_PRESETS => plugin_presets(app, request),
         bus::LOAD_PLUGIN_PRESET => load_plugin_preset(app, request),
         bus::SAVE_PLUGIN_PRESET => save_plugin_preset(app, request),
@@ -272,6 +273,7 @@ fn bus_plugin_entries(bus: &BusState) -> Vec<track::PluginParamsEntry> {
                 .and_modify(|n| *n += 1)
                 .or_insert(0);
             track::PluginParamsEntry {
+                bypassed: p.bypassed,
                 plugin_id: p.clap_plugin_id.clone(),
                 name: p.plugin_name.clone(),
                 slot: i as u32,
@@ -740,5 +742,28 @@ fn save_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task
         params.occurrence,
         &params.name,
         params.overwrite,
+    )
+}
+
+/// `bus.set_plugin_bypass` — one slot on a bus's chain.
+fn set_plugin_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::SetPluginBypassParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(b) = find_bus(app, params.bus_id.0) else {
+        return not_found_bus(request, params.bus_id.0);
+    };
+    let host = format!("bus {}", b.id);
+    let chain = b.plugins.clone();
+    super::bypass::run(
+        app,
+        request,
+        &chain,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        params.bypassed,
+        super::bypass::first_slot,
+        &host,
     )
 }

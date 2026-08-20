@@ -303,6 +303,46 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Bypass or re-engage a track's ENTIRE insert chain in one call — the A/B \
+                       for \"is this track's processing helping?\". bypassed: true passes the \
+                       track through unprocessed; false puts the chain back. The mixer strip \
+                       has always had this button; this is the wire equivalent. Does not \
+                       disturb the per-slot flags — see track_set_plugin_bypass. SETS rather \
+                       than toggles, so a retry cannot flip the chain back on; setting the \
+                       state it is already in is a no-op. Plugins and their settings are kept \
+                       either way. Undoable.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn track_set_fx_bypass(
+        &self,
+        Parameters(params): Parameters<track::SetFxBypassParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::SET_FX_BYPASS, &params).await
+    }
+
+    #[tool(
+        description = "Bypass or re-engage ONE plugin on a track, leaving the rest of the \
+                       chain running — the A/B for \"is this one plugin earning its place?\". \
+                       Distinct from track_set_fx_bypass, which mutes the whole chain: the \
+                       two are independent, so a chain-bypassed track still remembers which \
+                       slots were individually bypassed and re-engaging the chain restores \
+                       the mix rather than switching everything on. Address the plugin \
+                       exactly as track_set_plugin_param does (plugin_id + occurrence; \
+                       omitted means the track's instrument). Read track_plugin_params to \
+                       see each slot's current bypassed flag. The engine crossfades over a \
+                       few milliseconds, so toggling mid-playback does not click. SETS \
+                       rather than toggles, so a retry is safe. Undoable, and saved with \
+                       the project.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn track_set_plugin_bypass(
+        &self,
+        Parameters(params): Parameters<track::SetPluginBypassParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::SET_PLUGIN_BYPASS, &params).await
+    }
+
+    #[tool(
         description = "Save a track as a reusable preset: its type, mixer settings, instrument \
                        identity and its whole plugin chain INCLUDING each plugin's internal \
                        state, so recalling it restores the sound and not just the plugin names. \

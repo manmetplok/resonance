@@ -598,6 +598,13 @@ fn default_track_type() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectPlugin {
     pub instance_id: u64,
+    /// Whether this ONE slot was bypassed, independently of the chain's
+    /// `fx_bypassed` (ba todo #1305).
+    ///
+    /// `#[serde(default)]` so every project written before per-slot
+    /// bypass existed loads as not-bypassed, which is what it was.
+    #[serde(default)]
+    pub bypassed: bool,
     pub plugin_name: String,
     pub clap_plugin_id: String,
     pub clap_file_path: String,

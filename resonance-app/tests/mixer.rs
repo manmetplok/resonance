@@ -67,6 +67,8 @@ mod mixer_inspector_sends_snapshot;
 mod mixer_strip_external_instrument;
 #[path = "mixer/mixer_sub_track_grouping.rs"]
 mod mixer_sub_track_grouping;
+#[path = "mixer/plugin_bypass_persistence.rs"]
+mod plugin_bypass_persistence;
 #[path = "mixer/sidechain_persistence.rs"]
 mod sidechain_persistence;
 #[path = "mixer/track_group_registry.rs"]

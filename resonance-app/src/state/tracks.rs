@@ -362,6 +362,14 @@ pub struct PluginSlotState {
     pub has_sidechain_input: bool,
     /// Whether the host has currently opened the plugin's editor window.
     pub editor_open: bool,
+    /// Whether this ONE slot is bypassed, independently of the chain's
+    /// own `fx_bypassed` (ba doc #275 finding X3, todo #1305).
+    ///
+    /// Mirrors `AudioEvent::PluginBypassChanged`, never set optimistically:
+    /// the engine crossfades the change over a few milliseconds and its
+    /// echo is what says the flag really moved. Persisted per slot, so a
+    /// chain reloads bypassed exactly where it was saved.
+    pub bypassed: bool,
 }
 
 impl PluginSlotState {
@@ -383,6 +391,7 @@ impl PluginSlotState {
             has_gui,
             has_sidechain_input: false,
             editor_open: false,
+            bypassed: false,
         }
     }
 

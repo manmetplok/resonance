@@ -82,6 +82,8 @@ pub(super) fn try_handle(
         track_methods::SET_SEND => sends::set_send(app, request),
         track_methods::REMOVE_SEND => sends::remove_send(app, request),
         track_methods::SET_PLUGIN_PARAM => params::set_plugin_param(app, request),
+        track_methods::SET_FX_BYPASS => set_fx_bypass(app, request),
+        track_methods::SET_PLUGIN_BYPASS => set_plugin_bypass(app, request),
         track_methods::PLUGIN_PRESETS => presets::plugin_presets(app, request),
         track_methods::LOAD_PLUGIN_PRESET => presets::load_plugin_preset(app, request),
         track_methods::SAVE_PLUGIN_PRESET => presets::save_plugin_preset(app, request),
@@ -123,4 +125,62 @@ fn instance_for(
         .filter(|p| p.clap_plugin_id == plugin_id)
         .nth(occurrence as usize)
         .map(|p| p.instance_id)
+}
+
+/// `track.set_fx_bypass` — SET, not toggle.
+///
+/// Closes the audit's inverse parity gap: the mixer strip has had this
+/// button since forever, `bus` and `master` have had the method, and
+/// `track` had neither wire nor tool (ba doc #276 section 0).
+///
+/// `TrackMessage::ToggleTrackFxBypass` flips, so dispatching it
+/// unconditionally would turn a bypassed chain back ON when a client
+/// retried a request whose reply it never saw. Read the mirrored state
+/// and dispatch only a real change; setting the state it is already in
+/// is a no-op with no undo entry — same shape as `bus.set_fx_bypass`.
+fn set_fx_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track_methods::SetFxBypassParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0) else {
+        return not_found_track(request, params.track_id.0);
+    };
+    if t.fx_bypassed == params.bypassed {
+        return (ack(app, request), Task::none());
+    }
+    let task = crate::update::control::run_via_update(
+        app,
+        Message::Track(crate::message::TrackMessage::ToggleTrackFxBypass(
+            params.track_id.0,
+        )),
+    );
+    (ack(app, request), task)
+}
+
+/// `track.set_plugin_bypass` — one slot, not the whole chain.
+fn set_plugin_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: track_methods::SetPluginBypassParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(t) = find_track(app, params.track_id.0).cloned() else {
+        return not_found_track(request, params.track_id.0);
+    };
+    let host = format!("track {}", t.id);
+    // Resolved before `run` takes `&mut app`: the default needs the
+    // scanned-plugin catalog to know which slot is the instrument, and a
+    // closure holding `app` would still be borrowing it.
+    let default_id = crate::update::control::bypass::instrument_or_first(app, &t);
+    let default = move |_: &[crate::state::PluginSlotState]| default_id;
+    crate::update::control::bypass::run(
+        app,
+        request,
+        &t.plugins,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        params.bypassed,
+        default,
+        &host,
+    )
 }

@@ -1,7 +1,7 @@
 //! CHAIN group — plugin rows and the functional "+ Add to chain" /
 //! "+ Add instrument" picker for the mixer inspector.
 
-use iced::widget::{column, container, pick_list, row, text, Space};
+use iced::widget::{button, column, container, pick_list, row, text, Space};
 use iced::{Element, Length};
 use resonance_audio::types::{ScannedPlugin, TrackType};
 
@@ -57,7 +57,13 @@ pub(super) fn chain_group(
                 i,
                 chain_len,
             );
-            col = col.push(chain_row(&plugin.plugin_name, is_instrument_slot, &moves));
+            col = col.push(chain_row(
+                &plugin.plugin_name,
+                is_instrument_slot,
+                &moves,
+                plugin.instance_id,
+                plugin.bypassed,
+            ));
         }
     }
 
@@ -116,6 +122,53 @@ pub(super) fn empty_chain_row() -> Element<'static, Message> {
         .into()
 }
 
+/// The BYP control: a real toggle since ba todo #1305.
+///
+/// It was a `text("BYP")` label for a long time — the chain row LOOKED
+/// like it offered per-plugin bypass and did nothing, which is the
+/// audit's finding X3. Sends a SET rather than a toggle so the wire and
+/// the button raise the identical message, and lights up when the slot
+/// is bypassed so the state is readable without hovering.
+fn bypass_button(
+    instance_id: resonance_audio::types::PluginInstanceId,
+    bypassed: bool,
+) -> Element<'static, Message> {
+    let label = text("BYP")
+        .size(9)
+        .font(theme::UI_FONT_SEMIBOLD)
+        .color(if bypassed {
+            theme::BG_1
+        } else {
+            theme::TEXT_3
+        });
+    button(label)
+        .padding([2, 5])
+        .on_press(Message::Plugin(
+            crate::message::PluginMessage::SetPluginBypass {
+                instance_id,
+                bypassed: !bypassed,
+            },
+        ))
+        .style(move |_theme, status| {
+            let bg = match (bypassed, status) {
+                (true, _) => theme::WARM,
+                (false, iced::widget::button::Status::Hovered) => theme::BG_3,
+                (false, _) => iced::Color::TRANSPARENT,
+            };
+            iced::widget::button::Style {
+                background: Some(iced::Background::Color(bg)),
+                text_color: if bypassed { theme::BG_1 } else { theme::TEXT_3 },
+                border: iced::Border {
+                    color: if bypassed { theme::WARM } else { theme::LINE_2 },
+                    width: 1.0,
+                    radius: theme::RADIUS_SM.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
 /// One plugin row of a CHAIN group: bullet · name · ▲▼ · BYP.
 ///
 /// `moves` carries the two reorder messages for this slot (ba todo
@@ -126,6 +179,8 @@ pub(super) fn chain_row(
     name: &str,
     is_instrument_slot: bool,
     moves: &ChainMoves,
+    instance_id: resonance_audio::types::PluginInstanceId,
+    bypassed: bool,
 ) -> Element<'static, Message> {
     let bullet_color = if is_instrument_slot {
         theme::ACCENT_SOFT
@@ -156,10 +211,7 @@ pub(super) fn chain_row(
             Space::new().width(Length::Fill),
             reorder::move_buttons(moves, 10.0, 3),
             Space::new().width(8),
-            text("BYP")
-                .size(9)
-                .font(theme::UI_FONT_SEMIBOLD)
-                .color(theme::TEXT_3),
+            bypass_button(instance_id, bypassed),
         ]
         .align_y(iced::alignment::Vertical::Center),
     )

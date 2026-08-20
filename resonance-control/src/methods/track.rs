@@ -48,6 +48,16 @@ pub const PLUGIN_PARAMS: &str = "track.plugin_params";
 /// `track.set_plugin_param` — set one plugin parameter
 /// ([`SetPluginParamParams`] -> `MutationAck`).
 pub const SET_PLUGIN_PARAM: &str = "track.set_plugin_param";
+/// `track.set_fx_bypass` — bypass/unbypass a track's whole insert chain
+/// ([`SetFxBypassParams`] -> `MutationAck`).
+///
+/// Closes the audit's one INVERSE parity gap (ba doc #276 section 0): the
+/// GUI has had this button since forever and `bus`/`master` have had the
+/// method, while `track` had neither wire nor tool.
+pub const SET_FX_BYPASS: &str = "track.set_fx_bypass";
+/// `track.set_plugin_bypass` — bypass/unbypass ONE slot in a track's
+/// chain ([`SetPluginBypassParams`] -> `MutationAck`).
+pub const SET_PLUGIN_BYPASS: &str = "track.set_plugin_bypass";
 /// `track.set_sidechain` — route another track's or bus's audio into a
 /// plugin's external sidechain key ([`SetSidechainParams`] ->
 /// `MutationAck`).
@@ -92,6 +102,8 @@ pub const METHODS: &[&str] = &[
     REMOVE_SEND,
     PLUGIN_PARAMS,
     SET_PLUGIN_PARAM,
+    SET_FX_BYPASS,
+    SET_PLUGIN_BYPASS,
     PLUGIN_PRESETS,
     LOAD_PLUGIN_PRESET,
     SAVE_PLUGIN_PRESET,
@@ -307,6 +319,15 @@ pub struct PluginParamsEntry {
     /// the same `plugin_id` — pass as `occurrence` to address it.
     pub occurrence: u32,
     pub kind: PluginKind,
+    /// Whether this ONE slot is bypassed (ba todo #1305).
+    ///
+    /// Independent of the chain's own bypass: `track.set_fx_bypass` mutes
+    /// every insert at once, this reports the per-slot flag that
+    /// `track.set_plugin_bypass` sets. A chain-bypassed track therefore
+    /// still reports its slots' individual states, which is what makes
+    /// un-bypassing the chain predictable.
+    #[serde(default)]
+    pub bypassed: bool,
     pub params: Vec<PluginParamView>,
 }
 
@@ -790,4 +811,46 @@ pub struct ApplyPresetParams {
     /// Name for the new track. Omitted takes the preset's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+/// Params for `track.set_fx_bypass`. Idempotent: this SETS the state
+/// rather than toggling it, so a client that lost track of the current
+/// value — or that retried a request it never saw the answer to — cannot
+/// flip the track's processing back on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetFxBypassParams {
+    pub track_id: TrackId,
+    /// `true` bypasses every insert on this track (it passes through
+    /// unprocessed); `false` re-engages them. Does not touch the
+    /// per-slot flags — see [`SetPluginBypassParams`].
+    pub bypassed: bool,
+}
+
+/// Params for `track.set_plugin_bypass` — bypass ONE slot in the chain
+/// (ba doc #275 finding X3, todo #1305).
+///
+/// Distinct from `track.set_fx_bypass`, which mutes the whole chain at
+/// once. The two are independent: a chain-bypassed track still remembers
+/// which of its slots were individually bypassed, so re-engaging the
+/// chain restores the mix rather than turning everything on.
+///
+/// The plugin is addressed exactly as `track.set_plugin_param` addresses
+/// it. Idempotent: this SETS the state rather than toggling, so a retried
+/// request cannot flip a slot back on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetPluginBypassParams {
+    pub track_id: TrackId,
+    /// CLAP id of the plugin in this chain; omitted targets the track's instrument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Which instance to address when the chain carries `plugin_id` more
+    /// than once; 0-based, defaults to the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u32>,
+    /// `true` takes the plugin out of the signal path; `false` puts it
+    /// back. The engine crossfades over a few milliseconds rather than
+    /// switching, so a toggle mid-playback does not click.
+    pub bypassed: bool,
 }
