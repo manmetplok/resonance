@@ -124,10 +124,13 @@ impl WavetableParams {
             // Filter
             filter: FilterParams::new(),
 
-            // LFOs
-            lfo1: LfoParams::new(1, 1.0, 0.5, true),
-            lfo2: LfoParams::new(2, 2.0, 0.3, true),
-            lfo3: LfoParams::new(3, 0.5, 0.3, false),
+            // LFOs. Depth defaults to zero on all three, matching
+            // `presets/init.json` (ba todo #1354) — a fresh instance must
+            // not arrive with three LFOs already modulating. The rates are
+            // the resting values a user then dials depth into.
+            lfo1: LfoParams::new(1, 1.0, 0.0, true),
+            lfo2: LfoParams::new(2, 2.0, 0.0, true),
+            lfo3: LfoParams::new(3, 0.5, 0.0, false),
 
             // Modulation matrix
             mod_slots: (0..NUM_MOD_SLOTS).map(ModSlotParams::new).collect(),

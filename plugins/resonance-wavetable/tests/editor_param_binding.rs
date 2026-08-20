@@ -491,11 +491,12 @@ fn every_knob_used_to_reset_to_its_range_minimum() {
         "delay.time_r".into(),
         "distortion.mix".into(),
         "filter.cutoff".into(),
-        "lfo1.depth".into(),
+        // The three `lfoN_depth` are absent on purpose: ba todo #1354 set
+        // their declared default to 0.0, which *is* their range minimum, so
+        // the old reset gesture happened to agree with the declaration
+        // there. Their rates still drift.
         "lfo1.rate".into(),
-        "lfo2.depth".into(),
         "lfo2.rate".into(),
-        "lfo3.depth".into(),
         "lfo3.rate".into(),
         "master_volume".into(),
         "mod_env.attack".into(),
@@ -514,7 +515,7 @@ fn every_knob_used_to_reset_to_its_range_minimum() {
 
     // The three worst, spelled out.
     assert_eq!(p.master_volume.default_value(), 0.8); // reset used to mute
-    assert_eq!(p.filter.cutoff.default_value(), 8000.0); // reset used to give 20 Hz
+    assert_eq!(p.filter.cutoff.default_value(), 20000.0); // reset used to give 20 Hz
     assert_eq!(p.lfo2.rate.default_value(), 2.0); // reset used to give 0.01 Hz
 
     // Two int knobs had the same problem.
@@ -682,17 +683,22 @@ fn every_factory_preset_loads_bit_identically() {
     }
 }
 
-/// The four parameters on which the "Init" preset disagrees with
-/// `params.rs`.
+/// A fresh instance, the host's "reset to default" and the "Init" preset
+/// are all the same sound.
 ///
-/// Not a migration bug and deliberately not fixed here: the editor never
-/// touched these — a fresh instance and the host's own reset use the
-/// declared defaults, while picking "Init" from the preset pill applies
-/// these instead. Reported with ba todo #1285 as a separate call about
-/// which side is right; the parameter is the truth for the *controls*,
-/// but changing a shipped preset changes a sound.
+/// They used to differ on four parameters — `filter_cutoff` (8 kHz
+/// declared against 20 kHz in the preset) and the three `lfoN_depth`
+/// (0.5/0.3/0.3 declared against 0.0). Reported with ba todo #1285 and
+/// decided in ba todo #1354: init.json won, and the declarations moved to
+/// match it. "Init" means inert, and of the two candidate sounds a fresh
+/// instance that arrives pre-filtered at 8 kHz with three LFOs already
+/// modulating is the surprising one.
+///
+/// The rule the rest of this file works to — the parameter declaration is
+/// the truth — is not repealed by that; this was the one place where the
+/// declaration was the mistake.
 #[test]
-fn the_init_preset_disagrees_with_four_declared_defaults() {
+fn the_init_preset_matches_every_declared_default() {
     let params = WavetableParams::default();
     let init = PRESETS
         .iter()
@@ -702,11 +708,13 @@ fn the_init_preset_disagrees_with_four_declared_defaults() {
     let map = value.get("params").and_then(|v| v.as_object()).unwrap();
 
     let mut disagree: Vec<(String, f32, f32)> = Vec::new();
+    let mut checked = 0usize;
     for i in 0..PARAM_COUNT {
         let param = params.param_at(i);
         let Some(preset) = map.get(param.id()).and_then(|v| v.as_f64()) else {
             continue;
         };
+        checked += 1;
         let declared = param.default_plain() as f32;
         if preset as f32 != declared {
             disagree.push((param.id().to_string(), preset as f32, declared));
@@ -716,12 +724,13 @@ fn the_init_preset_disagrees_with_four_declared_defaults() {
 
     assert_eq!(
         disagree,
-        vec![
-            ("filter_cutoff".to_string(), 20000.0, 8000.0),
-            ("lfo1_depth".to_string(), 0.0, 0.5),
-            ("lfo2_depth".to_string(), 0.0, 0.3),
-            ("lfo3_depth".to_string(), 0.0, 0.3),
-        ],
-        "the Init preset's divergence from params.rs changed"
+        Vec::new(),
+        "(id, init.json, declared) — picking Init must be a no-op on a \
+         fresh instance"
+    );
+    // And the comparison was not vacuous: Init carries every parameter.
+    assert_eq!(
+        checked, PARAM_COUNT,
+        "Init must name every parameter for this to mean anything"
     );
 }

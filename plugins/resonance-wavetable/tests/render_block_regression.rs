@@ -14,6 +14,20 @@
 //! sample & hold RNG path), the block effects chain, and the smoother
 //! fast-forward taken when an effect is disabled.
 //!
+//! Every scenario but `init_single` spells out the parameters it depends on
+//! rather than leaning on `WavetableParams::new()`'s defaults, so a change to
+//! a *default* cannot quietly change what this test renders. ba todo #1354
+//! is why, and it caught this file out twice: moving `filter_cutoff`'s
+//! default to 20 kHz turned `lfo_sh_hpf` (a highpass at the default cutoff)
+//! into silence, and taking the `lfoN_depth` defaults to 0.0 left mod slots
+//! 0, 1 and 3 of `full_chain_u5` — the scenario that exists to pin the
+//! modulation matrix — permanently inert while it went on rendering a
+//! healthy 0.83 peak. Only the second round of that fix made the golden
+//! move for `init_single` alone.
+//!
+//! `init_single` is the deliberate exception: it exists to render the
+//! default patch, so it does follow the declarations.
+//!
 //! To (re)generate the golden after an *intentional* audio change:
 //!
 //!     RESONANCE_BLESS_RENDER_BLOCK=1 cargo test -p resonance-wavetable \
@@ -126,6 +140,13 @@ fn scenarios() -> Vec<Scenario> {
         p.filter.env_depth.set_value(0.3);
         p.filter.keytrack.set_value(0.4);
         p.filter.drive.set_value(0.6);
+        // Spelled out rather than left to the declared defaults, which ba
+        // todo #1354 took to zero: mod slots 0, 1 and 3 below all scale by
+        // `lfoN_depth`, so without these three lines the scenario that
+        // exists to pin the modulation matrix stops driving it.
+        p.lfo1.depth.set_value(0.5);
+        p.lfo2.depth.set_value(0.3);
+        p.lfo3.depth.set_value(0.3);
         p.mod_slots[0].source.set_value(1); // LFO1
         p.mod_slots[0].destination.set_value(1); // osc1 position
         p.mod_slots[0].amount.set_value(0.3);
@@ -165,6 +186,7 @@ fn scenarios() -> Vec<Scenario> {
         p.unison.detune.set_value(30.0);
         p.max_voices.set_value(1);
         p.filter.enabled.set_value(true);
+        p.filter.cutoff.set_value(8000.0);
         v.push(Scenario {
             name: "glide_u3",
             params: p,
@@ -182,13 +204,17 @@ fn scenarios() -> Vec<Scenario> {
         p.unison.voices.set_value(2);
         p.lfo1.shape.set_value(4); // sample & hold
         p.lfo1.rate.set_value(9.5);
+        p.lfo1.depth.set_value(0.5);
         p.lfo1.retrigger.set_value(true);
         p.lfo2.shape.set_value(2); // saw
+        p.lfo2.depth.set_value(0.3);
         p.lfo2.retrigger.set_value(true);
         p.lfo3.shape.set_value(3); // square
+        p.lfo3.depth.set_value(0.3);
         p.lfo3.retrigger.set_value(true);
         p.filter.enabled.set_value(true);
         p.filter.filter_type.set_value(1); // highpass
+        p.filter.cutoff.set_value(8000.0);
         p.filter.resonance.set_value(0.8);
         p.mod_slots[0].source.set_value(1);
         p.mod_slots[0].destination.set_value(5);
@@ -216,6 +242,7 @@ fn scenarios() -> Vec<Scenario> {
         p.unison.spread.set_value(1.0);
         p.filter.enabled.set_value(true);
         p.filter.filter_type.set_value(2); // bandpass
+        p.filter.cutoff.set_value(8000.0);
         v.push(Scenario {
             name: "voice_stealing_u7",
             params: p,

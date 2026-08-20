@@ -22,7 +22,11 @@ impl FilterParams {
             cutoff: FloatParam::new(
                 "filter_cutoff",
                 "Filter Cutoff",
-                8000.0,
+                // Fully open, matching `presets/init.json` (ba todo #1354):
+                // a fresh instance and the host's "reset to default" must
+                // sound inert, and 8 kHz meant every new instance arrived
+                // pre-filtered.
+                20000.0,
                 FloatRange::Skewed {
                     min: 20.0,
                     max: 20000.0,

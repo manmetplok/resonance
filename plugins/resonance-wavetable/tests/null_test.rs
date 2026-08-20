@@ -103,6 +103,12 @@ fn scenarios() -> Vec<(&'static str, WavetableParams, Vec<u8>)> {
         p.filter.env_depth.set_value(0.25);
         p.filter.keytrack.set_value(0.3);
         p.filter.drive.set_value(0.45);
+        // Spelled out rather than left to the declared defaults, which ba
+        // todo #1354 took to zero: without these the four LFO mod slots
+        // below contribute nothing and this scenario stops covering them.
+        p.lfo1.depth.set_value(0.5);
+        p.lfo2.depth.set_value(0.3);
+        p.lfo3.depth.set_value(0.3);
         p.mod_slots[0].source.set_value(1); // LFO1
         p.mod_slots[0].destination.set_value(1); // osc1 position
         p.mod_slots[0].amount.set_value(0.35);
@@ -137,6 +143,7 @@ fn scenarios() -> Vec<(&'static str, WavetableParams, Vec<u8>)> {
         p.unison.detune.set_value(25.0);
         p.max_voices.set_value(1);
         p.filter.enabled.set_value(true);
+        p.filter.cutoff.set_value(8000.0);
         v.push(("glide_u3", p, vec![36, 60, 48, 72]));
     }
 
@@ -147,15 +154,21 @@ fn scenarios() -> Vec<(&'static str, WavetableParams, Vec<u8>)> {
         p.osc1.enabled.set_value(true);
         p.osc1.wavetable.set_value(8);
         p.unison.voices.set_value(2);
+        // Depths spelled out for the same reason as scenario 2: they are
+        // what makes the S&H RNG path and the two mod slots audible at all.
         p.lfo1.shape.set_value(4); // sample & hold
         p.lfo1.rate.set_value(11.0);
+        p.lfo1.depth.set_value(0.5);
         p.lfo1.retrigger.set_value(true);
         p.lfo2.shape.set_value(2); // saw
+        p.lfo2.depth.set_value(0.3);
         p.lfo2.retrigger.set_value(true);
         p.lfo3.shape.set_value(3); // square
+        p.lfo3.depth.set_value(0.3);
         p.lfo3.retrigger.set_value(true);
         p.filter.enabled.set_value(true);
         p.filter.filter_type.set_value(1); // highpass
+        p.filter.cutoff.set_value(8000.0);
         p.filter.resonance.set_value(0.85);
         p.mod_slots[0].source.set_value(1);
         p.mod_slots[0].destination.set_value(5);
@@ -177,6 +190,7 @@ fn scenarios() -> Vec<(&'static str, WavetableParams, Vec<u8>)> {
         p.unison.spread.set_value(1.0);
         p.filter.enabled.set_value(true);
         p.filter.filter_type.set_value(2); // bandpass
+        p.filter.cutoff.set_value(8000.0);
         v.push((
             "voice_stealing_u7",
             p,
@@ -193,6 +207,30 @@ fn render_all() -> Vec<f32> {
         all.extend(render_scenario(&params, &notes));
     }
     all
+}
+
+/// Guards the scenario table itself, per scenario. `output_matches_golden`
+/// only checks the concatenation, so one scenario could fall silent and
+/// still leave a healthy peak overall — which is exactly what ba todo
+/// #1354's cutoff change did to `lfo_sh_hpf` before the scenarios were made
+/// explicit. A silent scenario matches its (blessed) golden forever.
+///
+/// Note the limit of this guard: it catches silence, not *inertness*. The
+/// same todo left three of `full_chain_u5`'s mod slots contributing nothing
+/// while the scenario went on rendering at full level, and no peak check can
+/// see that. Spelling the parameters out at the call site is what prevents
+/// it; this is only the backstop for the loudest failure mode.
+#[test]
+fn every_scenario_renders_audio() {
+    for (name, params, notes) in scenarios() {
+        let out = render_scenario(&params, &notes);
+        let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 1e-3, "scenario `{name}` rendered silence");
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "scenario `{name}` rendered non-finite samples"
+        );
+    }
 }
 
 #[test]
@@ -232,17 +270,30 @@ fn output_matches_golden() {
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
 
-    // The golden was captured before the optimisation work. Every transform
-    // applied since is a caching or hoisting change that re-uses the identical
-    // expression, so all of those are bit-exact against it — with exactly one
-    // deliberate exception:
+    // The golden was re-captured for ba todo #1354, which moved four declared
+    // defaults onto the "Init" preset's values — `filter_cutoff` 8 kHz ->
+    // 20 kHz and the three `lfoN_depth` -> 0.0. Only `init_single` moved by
+    // it: every other scenario now spells out the cutoff and the LFO depths
+    // it depends on, so a change to a *default* cannot quietly change what
+    // this test renders. (Before that it could and did — the default cutoff
+    // was the only thing keeping `lfo_sh_hpf`'s highpass from removing the
+    // whole signal, and the default depths were what made four mod slots in
+    // `full_chain_u5` audible.)
+    //
+    // Every transform applied to the DSP itself is a caching or hoisting
+    // change that re-uses the identical expression, so all of those are
+    // bit-exact against the golden — with exactly one deliberate exception:
     //
     //   `f32::tanh` -> `resonance_dsp::tanh_fast` in the filter drive
     //   soft-clip and the distortion waveshaper.
     //
     // That substitution is the *only* thing that may move a sample here, and
     // the bounds below pin how far. If a future change pushes past them, it is
-    // altering the sound and needs its own justification.
+    // altering the sound and needs its own justification. (The re-capture
+    // folded the accumulated `tanh_fast` drift — 20008 samples of
+    // `full_chain_u5`, peak 1.8e-5 — into the golden, so the tolerance now
+    // has nothing outstanding to absorb; it stays as the bound on that
+    // substitution, not as a licence.)
     //
     // -80 dBFS peak / -100 dBFS RMS are roughly 2.5 and 25 orders of magnitude
     // below the rendered signal respectively, and sit under the dither floor
