@@ -203,6 +203,23 @@ fn known_traps_stay_documented() {
         // lead to very different songs.
         ("global_add_tempo_event", &["REPLACES"]),
         ("global_add_signature_event", &["REPLACES"]),
+        // The edits are the mirror image of the adds and a caller cannot
+        // guess which it got: `edit_*` REFUSES a bar with no event on it
+        // rather than upserting, so the description has to say what
+        // happens when nothing is there.
+        (
+            "global_edit_tempo_event",
+            &["IF NO TEMPO EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        (
+            "global_edit_signature_event",
+            &["IF NO METER EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        // Only a tempo event can be relocated, and not the bar-1 one.
+        // Both refusals are explicit errors rather than the silent
+        // no-ops the GUI's own path performs (ba doc #286 §2).
+        ("global_edit_tempo_event", &["CANNOT BE MOVED"]),
+        ("global_edit_signature_event", &["NO new_bar HERE"]),
     ];
     for (tool, needles) in required {
         let description = by_name
