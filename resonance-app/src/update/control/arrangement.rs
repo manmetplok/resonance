@@ -65,6 +65,10 @@ fn run(
         placements_moved: outcome.placements_moved,
         markers_moved: outcome.markers_moved,
         automation_points_moved: outcome.automation_points_moved,
+        tempo_events_moved: outcome.tempo_events_moved,
+        signature_events_moved: outcome.signature_events_moved,
+        tempo_events_removed: outcome.tempo_events_removed,
+        signature_events_removed: outcome.signature_events_removed,
         clips_deleted: outcome
             .clips_deleted
             .iter()

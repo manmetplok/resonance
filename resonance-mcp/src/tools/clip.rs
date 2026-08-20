@@ -239,9 +239,13 @@ impl ResonanceMcp {
                        at_bar is 1-based. Anything that STARTS before at_bar stays put, even if \
                        it plays across the insertion point (a clip is never stretched). \
                        Positions move musically, so a project with tempo changes lands on the \
-                       right beat. Returns what moved: {shift_samples, audio_clips_moved, \
+                       right beat. Tempo and time-signature changes move with the music they \
+                       were written for; the song's opening tempo/meter at bar 1 stays, so the \
+                       new bars take it. Returns what moved: {shift_samples, audio_clips_moved, \
                        midi_clips_moved, placements_moved, markers_moved, \
-                       automation_points_moved}.",
+                       automation_points_moved, tempo_events_moved, signature_events_moved}. \
+                       shift_samples is measured after the edit: moving a tempo change stretches \
+                       its ramp, so it is not always count x the old bar length.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<arrangement::ShiftResult>()
     )]
@@ -259,8 +263,13 @@ impl ResonanceMcp {
                        \
                        Anything that STARTS inside the removed bars is DELETED, so the call is \
                        refused with a count of what would go unless confirm: true. Clips that \
-                       start before the cut are left alone and keep their length. Returns the \
-                       same tally as insert_bars plus clips_deleted and placements_deleted.",
+                       start before the cut are left alone and keep their length. A tempo or \
+                       time-signature change INSIDE the removed bars is not deleted: it is \
+                       clamped onto the cut so the music after the splice keeps the tempo and \
+                       meter it was written in, and if that lands two of a kind on one bar the \
+                       later one wins (reported as tempo_events_removed / \
+                       signature_events_removed). Returns the same tally as insert_bars plus \
+                       clips_deleted and placements_deleted.",
         annotations(destructive_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<arrangement::ShiftResult>()
     )]
