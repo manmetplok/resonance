@@ -41,9 +41,11 @@ use serde::{Deserialize, Serialize};
 /// every meter change in the song, with the bar each takes effect at. No
 /// params; returns [`GlobalEvents`]. Read-only.
 ///
-/// This is the only way to learn whether a song HAS tempo or meter
-/// changes. `song.summary`'s `tempo_bpm` / `time_signature` are the values
-/// at the playhead and say nothing about the rest of the song.
+/// `song.summary` carries these same two lists (ba todo #1381), so a
+/// client that already reads the summary does not need this call to
+/// learn whether the song changes tempo or meter. What it must not do is
+/// trust the summary's `tempo_bpm` / `time_signature`: those are the
+/// values at the playhead and say nothing about the rest of the song.
 pub const LIST_EVENTS: &str = "global.list_events";
 
 /// All `global.*` method names.

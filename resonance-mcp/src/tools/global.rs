@@ -14,11 +14,14 @@ impl ResonanceMcp {
         description = "Every tempo change and every meter change in the song, each with the \
                        1-based bar it takes effect at. Read-only. \
                        \
-                       THIS IS THE ONLY WAY TO SEE WHETHER THE SONG CHANGES TEMPO OR METER. \
-                       song_summary reports tempo_bpm and time_signature AT THE PLAYHEAD, not \
-                       for the song: on a song that speeds up in the chorus or drops into 7/8 \
-                       for a bridge, those two fields are a confident, wrong answer, and every \
-                       bar-to-time calculation built on them inherits the error. Read this \
+                       THIS, OR song_summary's tempo_events / signature_events, IS HOW YOU SEE \
+                       WHETHER THE SONG CHANGES TEMPO OR METER — the two carry the same two \
+                       lists, so a summary you have already read answers it with no extra \
+                       call. What never answers it is song_summary's tempo_bpm and \
+                       time_signature: those are the values AT THE PLAYHEAD, not for the song, \
+                       so on a song that speeds up in the chorus or drops into 7/8 for a \
+                       bridge they are a confident, wrong answer and every bar-to-time \
+                       calculation built on them inherits the error. Read the event lists \
                        before working out where anything sits in time, before writing drums in \
                        an odd metre, and before assuming a bar is four beats long. \
                        \

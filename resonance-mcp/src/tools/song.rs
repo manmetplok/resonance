@@ -12,12 +12,28 @@ use resonance_control::methods::song;
 #[tool_router(router = router_song, vis = "pub(crate)")]
 impl ResonanceMcp {
     #[tool(
-        description = "Whole-song overview: tempo (BPM), time signature, key (when global), \
-                       length, transport state and playhead (bar.beat), the ordered section \
-                       arrangement, and one summary line per track (id, name, kind, instrument, \
-                       mute/solo, volume as linear gain AND volume_db, pan, output routing, \
-                       clip count). Read-only. Call this first — every other tool's ids come \
-                       from here or the other song_* views. \
+        description = "Whole-song overview: the tempo and meter tracks in full, key (when \
+                       global), length, transport state and playhead (bar.beat), the ordered \
+                       section arrangement, and one summary line per track (id, name, kind, \
+                       instrument, mute/solo, volume as linear gain AND volume_db, pan, output \
+                       routing, clip count). Read-only. Call this first — every other tool's \
+                       ids come from here or the other song_* views. \
+                       \
+                       TEMPO AND METER ARE NOT SINGLE VALUES. `tempo_bpm` and `time_signature` \
+                       are the values AT THE PLAYHEAD at the moment of the call — they are NOT \
+                       properties of the song, and they change when the playhead moves even \
+                       though the song did not. A song can change tempo or meter at any bar. \
+                       The song itself is `tempo_events` ({bar, bpm}) and `signature_events` \
+                       ({bar, numerator, denominator}, denominator resolved: 8 for 7/8): every \
+                       change, sorted, with the 1-based bar it takes effect at. Neither list is \
+                       ever empty, because bar 1 carries the initial tempo and initial meter — \
+                       so length 1 means \"no changes, the value above holds throughout\" and \
+                       length > 1 means the value above is true only where the cursor happens \
+                       to sit. Do every bar, beat and duration calculation from the event \
+                       lists. Reading 4/4 from `time_signature` on a song that drops into 7/8 \
+                       at the bridge is how a whole arrangement lands on the wrong bars, and \
+                       nothing reports an error when it does. global_list_events returns the \
+                       same two lists on their own. \
                        \
                        SUB-TRACKS: a track carrying `parent_id` is a child of a multi-output \
                        instrument, not an independent part — the drum kit routes Kick, Snare, \
