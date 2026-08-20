@@ -61,14 +61,13 @@ impl<'a> ComposeTrackCanvas<'a> {
         }
     }
 
-    /// Total ticks in the section, summing per-bar numerators.
+    /// Total ticks in the section, summing each bar's length.
     pub(super) fn section_total_ticks(&self) -> u64 {
-        (0..self.section_length_bars)
-            .map(|b| {
-                self.tempo_map.numerator_at_bar(self.start_bar + b) as u64
-                    * TICKS_PER_QUARTER_NOTE
-            })
-            .sum()
+        crate::view::compose::section_total_ticks(
+            self.tempo_map,
+            self.start_bar,
+            self.section_length_bars,
+        )
     }
 
     /// Map a section-relative tick position to pixel x within `clip_width`.
@@ -95,17 +94,14 @@ impl<'a> ComposeTrackCanvas<'a> {
         let mut tick: f64 = 0.0;
         if bar > self.start_bar {
             for b in self.start_bar..bar {
-                tick +=
-                    self.tempo_map.numerator_at_bar(b) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+                tick += self.tempo_map.bar_len_ticks_at(b) as f64;
             }
         } else if bar < self.start_bar {
             for b in bar..self.start_bar {
-                tick -=
-                    self.tempo_map.numerator_at_bar(b) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+                tick -= self.tempo_map.bar_len_ticks_at(b) as f64;
             }
         }
-        let bar_ticks =
-            self.tempo_map.numerator_at_bar(bar) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+        let bar_ticks = self.tempo_map.bar_len_ticks_at(bar) as f64;
         tick += frac * bar_ticks;
         tick
     }
@@ -199,7 +195,7 @@ impl<'a> ComposeTrackCanvas<'a> {
         for bar_offset in 0..self.section_length_bars {
             let bar = self.start_bar + bar_offset;
             let num = self.tempo_map.numerator_at_bar(bar) as u64;
-            let bar_ticks = num * TICKS_PER_QUARTER_NOTE;
+            let bar_ticks = self.tempo_map.bar_len_ticks_at(bar);
 
             // Bar line — LINE, 1px (matches the redesign's hairline ruler).
             let x = clip_area.x + self.tick_to_x(tick_pos as f64, clip_area.width);

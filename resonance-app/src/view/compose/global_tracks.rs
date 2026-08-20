@@ -9,7 +9,7 @@ use iced::widget::canvas::{self, Frame, Geometry};
 use iced::widget::Canvas;
 use iced::{mouse, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
-use resonance_audio::types::{TempoMap, TICKS_PER_QUARTER_NOTE};
+use resonance_audio::types::TempoMap;
 
 use crate::message::Message;
 use crate::theme;
@@ -47,12 +47,11 @@ struct ComposeGlobalTracksCanvas<'a> {
 
 impl<'a> ComposeGlobalTracksCanvas<'a> {
     fn section_total_ticks(&self) -> u64 {
-        (0..self.section_length_bars)
-            .map(|b| {
-                self.tempo_map.numerator_at_bar(self.start_bar + b) as u64
-                    * TICKS_PER_QUARTER_NOTE
-            })
-            .sum()
+        crate::view::compose::section_total_ticks(
+            self.tempo_map,
+            self.start_bar,
+            self.section_length_bars,
+        )
     }
 
     /// Map a section-relative tick to pixel x.
@@ -70,13 +69,11 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
         let end = bar.min(self.start_bar + self.section_length_bars);
         if bar > self.start_bar {
             for b in self.start_bar..end {
-                tick +=
-                    self.tempo_map.numerator_at_bar(b) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+                tick += self.tempo_map.bar_len_ticks_at(b) as f64;
             }
         } else if bar < self.start_bar {
             for b in bar..self.start_bar {
-                tick -=
-                    self.tempo_map.numerator_at_bar(b) as f64 * TICKS_PER_QUARTER_NOTE as f64;
+                tick -= self.tempo_map.bar_len_ticks_at(b) as f64;
             }
         }
         tick

@@ -2,6 +2,7 @@
 
 use super::conversion::{sample_frac_to_tick_frac, tick_frac_to_sample_frac};
 use super::map::TempoMap;
+use super::signature::{bar_len_quarters, bar_len_ticks, beat_len_ticks, ticks_to_quarters};
 use super::TICKS_PER_QUARTER_NOTE;
 
 /// Tolerance used when snapping a derived beat position back onto the beat
@@ -63,11 +64,13 @@ impl TempoMap {
         )
     }
 
-    /// Number of beats in bar `bar_idx`.
+    /// Number of beats in bar `bar_idx` — the signature's numerator, one
+    /// beat per note of value `1/denominator`. A 7/8 bar has seven beats,
+    /// each an eighth note; it does *not* have 3.5 quarter-note beats.
     pub fn beats_in_bar(&self, bar_idx: usize) -> u32 {
         self.bar_table
             .get(bar_idx)
-            .map(|e| e.ticks_in_bar / TICKS_PER_QUARTER_NOTE as u32)
+            .map(|e| e.numerator as u32)
             .unwrap_or(self.numerator as u32)
     }
 
@@ -75,7 +78,7 @@ impl TempoMap {
     /// Uses logarithmic interpolation for correct intra-bar tempo.
     pub fn beat_sample_in_bar(&self, bar_idx: usize, beat: u32, sample_rate: u32) -> Option<u64> {
         let entry = self.bar_table.get(bar_idx)?;
-        let num_beats = entry.ticks_in_bar as f64 / TICKS_PER_QUARTER_NOTE as f64;
+        let num_beats = entry.numerator as f64;
         if beat as f64 >= num_beats {
             return None;
         }
@@ -85,9 +88,18 @@ impl TempoMap {
             let sf = tick_frac_to_sample_frac(tick_frac, entry.bpm as f64, ne.arrival_bpm as f64);
             Some(entry.sample + (sf * bar_samples) as u64)
         } else {
-            let spb = sample_rate as f64 * 60.0 / entry.bpm as f64;
+            let spb =
+                self.samples_per_signature_beat(entry.bpm as f64, entry.denominator, sample_rate);
             Some(entry.sample + (beat as f64 * spb) as u64)
         }
+    }
+
+    /// Samples in one beat of the signature — one note of value
+    /// `1/denominator`. BPM counts quarter notes, so an eighth-note beat
+    /// is half a BPM beat.
+    fn samples_per_signature_beat(&self, bpm: f64, denominator: u8, sample_rate: u32) -> f64 {
+        let samples_per_quarter = sample_rate as f64 * 60.0 / bpm;
+        samples_per_quarter * ticks_to_quarters(beat_len_ticks(denominator))
     }
 
     /// Samples per beat at the given sample rate (uses `bpm` field).
@@ -95,9 +107,12 @@ impl TempoMap {
         sample_rate as f64 * 60.0 / self.bpm as f64
     }
 
-    /// Samples per bar at the given sample rate.
+    /// Samples per bar at the given sample rate, from the project's
+    /// default signature. Uses the bar's length in *quarter notes* —
+    /// [`samples_per_beat`](Self::samples_per_beat) is a quarter note, so
+    /// a 7/8 bar is 3.5 of them, not 7.
     pub fn samples_per_bar(&self, sample_rate: u32) -> f64 {
-        self.samples_per_beat(sample_rate) * self.numerator as f64
+        self.samples_per_beat(sample_rate) * bar_len_quarters(self.numerator, self.denominator)
     }
 
     /// Convert a sample position to (bar, beat, fractional_beat).
@@ -105,7 +120,8 @@ impl TempoMap {
     /// so the position accounts for tempo changes.
     pub fn position_to_bars(&self, sample_pos: u64, sample_rate: u32) -> (u32, u8, f64) {
         if self.bar_table.is_empty() {
-            let spb = self.samples_per_beat(sample_rate);
+            let spb =
+                self.samples_per_signature_beat(self.bpm as f64, self.denominator, sample_rate);
             let total_beats =
                 snap_to_beat_grid(sample_pos as f64 / spb, SNAP_TOLERANCE_SAMPLES / spb);
             let bar = (total_beats / self.numerator as f64).floor() as u32 + 1;
@@ -123,7 +139,7 @@ impl TempoMap {
         };
         let entry = &self.bar_table[idx];
         let bar = idx as u32 + 1; // 1-based
-        let num_beats = entry.ticks_in_bar as f64 / TICKS_PER_QUARTER_NOTE as f64;
+        let num_beats = entry.numerator as f64;
         if let Some(next) = self.bar_table.get(idx + 1) {
             let bar_samples = (next.sample - entry.sample) as f64;
             let sample_frac = if bar_samples > 0.0 {
@@ -154,7 +170,8 @@ impl TempoMap {
             // beats from the last entry forever would report that entry's bar
             // with an unbounded beat. Extrapolates at the last entry's tempo
             // and meter, matching `bar_to_sample`'s inverse.
-            let spb = sample_rate as f64 * 60.0 / entry.bpm as f64;
+            let spb =
+                self.samples_per_signature_beat(entry.bpm as f64, entry.denominator, sample_rate);
             if !spb.is_finite() || spb <= 0.0 || num_beats <= 0.0 {
                 return (bar, 1, 0.0);
             }
@@ -301,13 +318,13 @@ impl TempoMap {
         // Past end of bar table: extrapolate from the last entry.
         if let Some(last) = self.bar_table.last() {
             let bars_past = bar as u64 - (self.bar_table.len() as u64 - 1);
-            let spb = self.table_sample_rate as f64 * 60.0 / last.bpm as f64;
-            let num = last.numerator as f64;
-            return last.sample + (bars_past as f64 * spb * num) as u64;
+            let spq = self.table_sample_rate as f64 * 60.0 / last.bpm as f64;
+            let quarters = ticks_to_quarters(last.ticks_in_bar as u64);
+            return last.sample + (bars_past as f64 * spq * quarters) as u64;
         }
         // No bar table at all: flat BPM.
-        let spb = self.table_sample_rate as f64 * 60.0 / self.bpm as f64;
-        (bar as f64 * spb * self.numerator as f64) as u64
+        let spq = self.table_sample_rate as f64 * 60.0 / self.bpm as f64;
+        (bar as f64 * spq * bar_len_quarters(self.numerator, self.denominator)) as u64
     }
 
     /// Return the interpolated (bpm, numerator, denominator) at a sample
@@ -333,8 +350,8 @@ impl TempoMap {
     /// 0-based and fraction is 0.0..1.0 within the bar.
     pub fn sample_to_bar(&self, sample_pos: u64, sample_rate: u32) -> (u32, f64) {
         if self.bar_table.is_empty() {
-            let spb = sample_rate as f64 * 60.0 / self.bpm as f64;
-            let bar_samples = spb * self.numerator as f64;
+            let spq = sample_rate as f64 * 60.0 / self.bpm as f64;
+            let bar_samples = spq * bar_len_quarters(self.numerator, self.denominator);
             if bar_samples <= 0.0 {
                 return (0, 0.0);
             }
@@ -362,8 +379,8 @@ impl TempoMap {
             (bar, frac)
         } else {
             // Past the last bar entry: extrapolate.
-            let spb = sample_rate as f64 * 60.0 / entry.bpm as f64;
-            let bar_samples = spb * entry.numerator as f64;
+            let spq = sample_rate as f64 * 60.0 / entry.bpm as f64;
+            let bar_samples = spq * ticks_to_quarters(entry.ticks_in_bar as u64);
             if bar_samples <= 0.0 {
                 return (bar, 0.0);
             }
@@ -405,6 +422,10 @@ impl TempoMap {
     }
 
     /// Return the time signature numerator active at a given 0-based bar.
+    ///
+    /// This is the bar's *beat count*, not its length: do not multiply it
+    /// by [`TICKS_PER_QUARTER_NOTE`] to get a bar's tick span, because a
+    /// 7/8 beat is an eighth note. Use [`Self::bar_len_ticks_at`].
     pub fn numerator_at_bar(&self, bar: u32) -> u8 {
         if let Some(entry) = self.bar_table.get(bar as usize) {
             return entry.numerator;
@@ -413,5 +434,34 @@ impl TempoMap {
             .last()
             .map(|e| e.numerator)
             .unwrap_or(self.numerator)
+    }
+
+    /// Return the time signature denominator active at a given 0-based bar.
+    pub fn denominator_at_bar(&self, bar: u32) -> u8 {
+        if let Some(entry) = self.bar_table.get(bar as usize) {
+            return entry.denominator;
+        }
+        self.bar_table
+            .last()
+            .map(|e| e.denominator)
+            .unwrap_or(self.denominator)
+    }
+
+    /// Length of a given 0-based bar in ticks, honouring both halves of
+    /// the signature active there. The single answer every caller that
+    /// needs a bar's tick span should use — see
+    /// [`bar_len_ticks`](super::signature::bar_len_ticks).
+    pub fn bar_len_ticks_at(&self, bar: u32) -> u64 {
+        if let Some(entry) = self.bar_table.get(bar as usize) {
+            return entry.ticks_in_bar as u64;
+        }
+        bar_len_ticks(self.numerator_at_bar(bar), self.denominator_at_bar(bar))
+    }
+
+    /// Length of a given 0-based bar in quarter notes — the unit BPM
+    /// counts in, so `samples_per_beat * bar_len_quarters_at(bar)` is the
+    /// bar's length in samples.
+    pub fn bar_len_quarters_at(&self, bar: u32) -> f64 {
+        ticks_to_quarters(self.bar_len_ticks_at(bar))
     }
 }

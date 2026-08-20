@@ -23,7 +23,9 @@ use midly::{
     Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
 };
 
-use crate::types::{MidiNote, SignaturePoint, TempoMap, TempoPoint, TICKS_PER_QUARTER_NOTE};
+use crate::types::{
+    bar_len_ticks, MidiNote, SignaturePoint, TempoMap, TempoPoint, TICKS_PER_QUARTER_NOTE,
+};
 
 /// One named source track for a multi-track (Format 1) export.
 pub struct MidiTrackSource<'a> {
@@ -140,8 +142,8 @@ fn build_note_track<'a>(name: Option<&'a str>, notes: &[MidiNote]) -> Track<'a> 
 /// the tick of the bar each takes effect.
 ///
 /// Bar→tick conversion mirrors [`TempoMap`]'s bar table, where a bar
-/// holds `numerator * TICKS_PER_QUARTER_NOTE` ticks and the signature
-/// active before the first signature point is that first point's value.
+/// holds [`bar_len_ticks`] ticks and the signature active before the
+/// first signature point is that first point's value.
 fn build_conductor_track(tempo_map: &TempoMap) -> Track<'static> {
     let mut events: Vec<(u64, TrackEventKind<'static>)> = Vec::new();
 
@@ -186,31 +188,35 @@ fn build_conductor_track(tempo_map: &TempoMap) -> Track<'static> {
 }
 
 /// Absolute tick at the start of a 0-based bar, mirroring `TempoMap`'s
-/// bar table: each bar spans `numerator_at_bar(bar) * TPQN` ticks.
+/// bar table: each bar spans `bar_len_ticks(numerator, denominator)`
+/// ticks, so a 7/8 bar is seven eighth-notes (ba todo #1389).
 fn tick_at_bar(tempo_map: &TempoMap, bar: u32) -> u64 {
     (0..bar)
-        .map(|b| numerator_at_bar(tempo_map, b) as u64 * TICKS_PER_QUARTER_NOTE)
+        .map(|b| {
+            let (num, den) = signature_at_bar(tempo_map, b);
+            bar_len_ticks(num, den)
+        })
         .sum()
 }
 
-/// Time-signature numerator active at a 0-based bar, derived from the
-/// signature points directly (no bar table needed). Mirrors
+/// Time signature active at a 0-based bar, derived from the signature
+/// points directly (no bar table needed). Mirrors
 /// `TempoMap::rebuild_bar_table`: when signature points exist, bars
-/// before the first point inherit that first point's numerator.
-fn numerator_at_bar(tempo_map: &TempoMap, bar: u32) -> u8 {
+/// before the first point inherit that first point's signature.
+fn signature_at_bar(tempo_map: &TempoMap, bar: u32) -> (u8, u8) {
     let points: &[SignaturePoint] = &tempo_map.signature_points;
     match points.first() {
-        None => tempo_map.numerator,
+        None => (tempo_map.numerator, tempo_map.denominator),
         Some(first) => {
-            let mut num = first.numerator;
+            let mut sig = (first.numerator, first.denominator);
             for p in points {
                 if p.bar <= bar {
-                    num = p.numerator;
+                    sig = (p.numerator, p.denominator);
                 } else {
                     break;
                 }
             }
-            num
+            sig
         }
     }
 }
@@ -437,13 +443,6 @@ fn scale_tick(raw: u64, src_ppq: u32) -> u64 {
     ((2 * num + den) / (2 * den)) as u64
 }
 
-/// Engine ticks in one bar of `numerator/denominator`, musically correct
-/// (accounts for the denominator). E.g. 4/4 → 1920, 6/8 → 1440.
-fn bar_ticks(numerator: u8, denominator: u8) -> u64 {
-    let den = denominator.max(1) as u64;
-    numerator as u64 * 4 * TICKS_PER_QUARTER_NOTE / den
-}
-
 /// Map an absolute engine tick to its 0-based bar index under the meter
 /// map described by `sigs` (sorted by tick). Signature changes take effect
 /// at the bar boundary at or before their tick.
@@ -463,7 +462,7 @@ fn tick_to_bar(target: u64, sigs: &[SignatureEvent]) -> u32 {
                 break;
             }
         }
-        let len = bar_ticks(num, den);
+        let len = bar_len_ticks(num, den);
         if len == 0 || target < cur + len {
             return bar;
         }

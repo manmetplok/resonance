@@ -3,7 +3,7 @@ use iced::widget::canvas;
 use iced::{Color, Point, Size};
 
 use crate::theme;
-use resonance_audio::types::avg_bpm_for_bar;
+use resonance_audio::types::{avg_bpm_for_bar, bar_len_quarters};
 use super::TimelineCanvas;
 
 /// One bar yielded by [`TimelineCanvas::for_each_visible_bar`]: its
@@ -19,6 +19,9 @@ pub(super) struct VisibleBar {
     /// Time-signature numerator (beats per bar) active in this bar.
     numerator: u8,
     sample_pos: f64,
+    /// Samples in one beat of *this bar's* signature — the bar's sample
+    /// span divided by its numerator, so an eighth-note beat in 6/8 is
+    /// half a quarter-note beat (ba todo #1389).
     samples_per_beat: f64,
     sr: f64,
     zoom: f32,
@@ -58,6 +61,12 @@ impl TimelineCanvas<'_> {
             .first()
             .map(|e| e.numerator)
             .unwrap_or(4);
+        let mut cur_den = self
+            .tempo_map
+            .signature_points
+            .first()
+            .map(|e| e.denominator)
+            .unwrap_or(4);
         let mut si: usize =
             if self.tempo_map.signature_points.first().map(|e| e.bar) == Some(0) {
                 1
@@ -69,6 +78,7 @@ impl TimelineCanvas<'_> {
             while let Some(e) = self.tempo_map.signature_points.get(si) {
                 if e.bar == bar {
                     cur_num = e.numerator;
+                    cur_den = e.denominator;
                     si += 1;
                 } else {
                     break;
@@ -76,8 +86,16 @@ impl TimelineCanvas<'_> {
             }
 
             let cur_bpm = avg_bpm_for_bar(bar, &self.tempo_map.tempo_points);
-            let samples_per_beat = sr * 60.0 / cur_bpm;
-            let samples_per_bar = samples_per_beat * cur_num as f64;
+            // BPM counts quarter notes; a bar is `bar_len_quarters` of
+            // them (3.0 for 6/8, not 6.0). The beat spacing then follows
+            // from the bar, so beat lines land on eighth notes in 6/8.
+            let samples_per_quarter = sr * 60.0 / cur_bpm;
+            let samples_per_bar = samples_per_quarter * bar_len_quarters(cur_num, cur_den);
+            let samples_per_beat = if cur_num > 0 {
+                samples_per_bar / cur_num as f64
+            } else {
+                samples_per_bar
+            };
             let bar_seconds = samples_per_bar / sr;
             let bar_pixel_width = bar_seconds as f32 * self.zoom;
 

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::conversion::{arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar};
-use super::TICKS_PER_QUARTER_NOTE;
+use super::signature::{bar_len_ticks, ticks_to_quarters};
 
 /// A tempo change point on the tempo track.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +34,9 @@ pub(super) struct BarEntry {
     pub arrival_bpm: f32,
     /// Cumulative tick count at the start of this bar.
     pub tick: u64,
-    /// Number of ticks in this bar (depends on time signature).
+    /// Number of ticks in this bar — `numerator` notes of value
+    /// `1/denominator`, i.e. both halves of the signature (see
+    /// [`super::signature::bar_len_ticks`]).
     pub ticks_in_bar: u32,
     /// Time signature numerator active at this bar.
     pub numerator: u8,
@@ -122,7 +124,7 @@ impl TempoMap {
             }
             let bpm = bpm_at_bar(b as f64, &self.tempo_points) as f32;
             let arr = arrival_bpm_at_bar(b, &self.tempo_points) as f32;
-            let ticks_in_bar = cur_num as u32 * TICKS_PER_QUARTER_NOTE as u32;
+            let ticks_in_bar = bar_len_ticks(cur_num, cur_den) as u32;
             self.bar_table.push(BarEntry {
                 sample: sample_pos.round() as u64,
                 bpm,
@@ -134,8 +136,13 @@ impl TempoMap {
             });
             tick_pos += ticks_in_bar as u64;
             let avg = avg_bpm_for_bar(b, &self.tempo_points);
-            let samples_per_beat = sr * 60.0 / avg;
-            sample_pos += samples_per_beat * cur_num as f64;
+            // BPM counts quarter notes, so the bar's length in samples is
+            // its length in *quarters*, not its numerator: a 7/8 bar is
+            // 3.5 quarters long, not 7. Deriving it from `ticks_in_bar`
+            // keeps the tick and sample sides of this table locked to one
+            // another whatever the signature (ba todo #1389).
+            let samples_per_quarter = sr * 60.0 / avg;
+            sample_pos += samples_per_quarter * ticks_to_quarters(ticks_in_bar as u64);
         }
     }
 

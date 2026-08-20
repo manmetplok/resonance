@@ -5,10 +5,10 @@
 //! [`TICKS_PER_QUARTER_NOTE`] and the tempo map's signature track, so it
 //! is independent of sample rate and the (sample-keyed) bar table.
 
-use crate::types::{SignaturePoint, TempoMap, TICKS_PER_QUARTER_NOTE};
+use crate::types::{bar_len_ticks, SignaturePoint, TempoMap, TICKS_PER_WHOLE_NOTE};
 
 /// Ticks in a whole note (4 quarter notes).
-const TICKS_PER_WHOLE: u64 = 4 * TICKS_PER_QUARTER_NOTE;
+const TICKS_PER_WHOLE: u64 = TICKS_PER_WHOLE_NOTE;
 
 /// The base note value of a quantize grid (the denominator side of the
 /// musical fraction, e.g. `Eighth` == 1/8).
@@ -88,15 +88,6 @@ impl Division {
         };
         t.max(1)
     }
-}
-
-/// Length of a bar (in ticks) for a `numerator/denominator` time
-/// signature. A bar holds `numerator` notes of value `1/denominator`.
-fn bar_len_ticks(numerator: u8, denominator: u8) -> u64 {
-    if numerator == 0 || denominator == 0 {
-        return TICKS_PER_WHOLE; // degenerate signature → one whole note
-    }
-    (numerator as u64 * TICKS_PER_WHOLE / denominator as u64).max(1)
 }
 
 /// One run of consecutive bars sharing a time signature.
