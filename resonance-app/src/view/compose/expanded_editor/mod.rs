@@ -325,14 +325,13 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
 // ---------------------------------------------------------------------------
 
 impl<'a> ExpandedEditorCanvas<'a> {
-    /// Section duration in ticks, summing per-bar numerators.
+    /// Section duration in ticks, summing each bar's length.
     pub(super) fn section_ticks(&self) -> u64 {
-        (0..self.section_length_bars)
-            .map(|b| {
-                self.tempo_map.numerator_at_bar(self.start_bar + b) as u64
-                    * TICKS_PER_QUARTER_NOTE
-            })
-            .sum()
+        crate::view::compose::section_total_ticks(
+            self.tempo_map,
+            self.start_bar,
+            self.section_length_bars,
+        )
     }
 
     pub(super) fn layout(&self, bounds: Rectangle) -> PianoRollLayout {

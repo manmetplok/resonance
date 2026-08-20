@@ -21,4 +21,4 @@ pub mod tracks;
 pub mod vocal_lane;
 pub mod vocal_roll;
 
-pub use layout::{section_total_beats, workspace_width};
+pub use layout::{section_total_beats, section_total_ticks, workspace_width};

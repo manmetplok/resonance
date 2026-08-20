@@ -7,7 +7,7 @@
 //! - bar pixel width >= 20 → snap to bars
 //! - lower zoom → snap to multi-bar increments
 
-use resonance_audio::types::{bpm_at_bar, TempoMap};
+use resonance_audio::types::{bar_len_quarters, bpm_at_bar, TempoMap};
 
 /// Snap a sample position to the nearest bar or beat boundary,
 /// accounting for the tempo map. At high zoom (bar wider than 40 px)
@@ -38,8 +38,13 @@ pub fn snap_sample_to_grid_tempo(
     }
     // When there's no meaningful tempo map, use the flat-BPM path.
     if tempo_map.tempo_points.len() <= 1 {
-        let samples_per_beat = sample_rate as f64 * 60.0 / bpm as f64;
-        let samples_per_bar = samples_per_beat * time_sig_num as f64;
+        // BPM counts quarter notes, so the bar's length comes from the
+        // signature's length in quarters, not its numerator; the beat
+        // step then follows from the bar (ba todo #1389).
+        let samples_per_quarter = sample_rate as f64 * 60.0 / bpm as f64;
+        let samples_per_bar =
+            samples_per_quarter * bar_len_quarters(time_sig_num, tempo_map.denominator_at_bar(0));
+        let samples_per_beat = samples_per_bar / time_sig_num as f64;
         let bar_pixel_width = (samples_per_bar / sample_rate as f64) as f32 * zoom;
         let step = if bar_pixel_width >= 40.0 {
             samples_per_beat
@@ -61,8 +66,8 @@ pub fn snap_sample_to_grid_tempo(
     // Determine snap resolution from the local bar pixel width.
     let local_bpm = bpm_at_bar(bar as f64, &tempo_map.tempo_points);
     let cur_num = tempo_map.numerator_at_bar(bar);
-    let spb = sample_rate as f64 * 60.0 / local_bpm;
-    let bar_samples = spb * cur_num as f64;
+    let spq = sample_rate as f64 * 60.0 / local_bpm;
+    let bar_samples = spq * tempo_map.bar_len_quarters_at(bar);
     let bar_px = (bar_samples / sample_rate as f64) as f32 * zoom;
 
     let snap_to_beats = bar_px >= 40.0;

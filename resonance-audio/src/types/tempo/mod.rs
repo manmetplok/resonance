@@ -3,6 +3,8 @@
 //! Split into submodules by responsibility:
 //!
 //! - [`map`]: the `TempoMap` struct, bar table construction, BPM lookup.
+//! - [`signature`]: how long a bar is — the one definition of bar length,
+//!   shared with the quantize grid so the two cannot drift apart.
 //! - [`conversion`]: pure beat ↔ sample ↔ tick conversion helpers.
 //! - [`bars`]: bar / beat / subdivision math on `TempoMap`.
 //! - [`format`]: `Display` impls and human-readable formatting helpers.
@@ -106,9 +108,13 @@ mod bars;
 mod conversion;
 mod format;
 mod map;
+mod signature;
 
 pub use conversion::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar, sample_frac_to_tick_frac,
     tick_frac_to_sample_frac,
 };
 pub use map::{SignaturePoint, TempoMap, TempoPoint};
+pub use signature::{
+    bar_len_quarters, bar_len_ticks, beat_len_ticks, ticks_to_quarters, TICKS_PER_WHOLE_NOTE,
+};

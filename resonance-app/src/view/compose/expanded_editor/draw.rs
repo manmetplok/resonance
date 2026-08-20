@@ -86,7 +86,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
         for bar_offset in 0..self.section_length_bars {
             let bar = self.start_bar + bar_offset;
             let num = self.tempo_map.numerator_at_bar(bar) as u64;
-            let bar_ticks = num * tpb;
+            let bar_ticks = self.tempo_map.bar_len_ticks_at(bar);
 
             // Bar line — LINE, 1px hairline like the rest of the redesign.
             let x = grid_x + viewport.tick_to_x_local(tick_pos);

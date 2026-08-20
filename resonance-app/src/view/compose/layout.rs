@@ -24,6 +24,21 @@ pub fn section_total_beats(tempo_map: &TempoMap, start_bar: u32, length_bars: u3
         .sum()
 }
 
+/// Total tick span across the section, summing each bar's length from the
+/// tempo map.
+///
+/// This is *not* `section_total_beats * TICKS_PER_QUARTER_NOTE`: ticks are
+/// quarter-note-based but a beat is a note of value `1/denominator`, so a
+/// 6/8 bar is six beats but only three quarter notes — 1440 ticks, not
+/// 2880. Canvases that place notes (which carry real ticks) must use this;
+/// canvases that only lay out equal-width beat cells use
+/// [`section_total_beats`] (ba todo #1389).
+pub fn section_total_ticks(tempo_map: &TempoMap, start_bar: u32, length_bars: u32) -> u64 {
+    (0..length_bars)
+        .map(|b| tempo_map.bar_len_ticks_at(start_bar + b))
+        .sum()
+}
+
 /// Pixel width of every Compose-tab lane (chord lane, track lane, drum
 /// lane, global tempo/signature rows). Equal to `NAME_COLUMN_WIDTH` plus
 /// `section_total_beats * BEAT_PX_COMPOSE`.
