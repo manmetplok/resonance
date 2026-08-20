@@ -82,11 +82,12 @@ Prog is not a form so much as a refusal to reuse one. Common shapes:
 | Riff-and-return | A recurring instrumental figure between contrasting episodes — rondo with distortion. |
 | Odd-metre vamp | 5/4, 7/8, 11/8 groupings over a static harmony. |
 
-**Meter is global in resonance.** See the skill body: pick the dominant meter and
-write odd groupings inside it, or set the odd meter globally, and say which. For
-through-composed material, note that one definition per section means the chord
-grid is never shared — that is correct here, and it is why prog projects have
-many more definitions than a pop song of the same length.
+**Meter changes exist in the DAW but not in this API.** The signature track
+supports them; no control method reaches it, and `song_summary` reports the meter
+at the playhead rather than the song's. See the skill body — ask the user rather
+than inferring. For through-composed material, note that one definition per
+section means the chord grid is never shared: that is correct here, and it is why
+prog projects have many more definitions than a pop song of the same length.
 
 ## Bar math
 
@@ -103,3 +104,10 @@ At tempo *T* BPM in 4/4, one bar is `240 / T` seconds.
 A section starting at bar *S* has its bar *N* at `S + N - 1`. The next section
 starts at `S + length`. Both are 1-based; clip- and section-relative beats are
 0-based.
+
+**These durations assume one tempo and one meter throughout.** The DAW has a
+tempo track as well as a signature track, and `song_summary` reports both
+`tempo_bpm` and `time_signature` **as they are at the playhead** — neither is a
+statement about the song. On anything with tempo or meter changes, the table
+above gives the duration of a passage at that tempo, not the length of the song.
+Ask rather than compute.

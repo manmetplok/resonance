@@ -58,9 +58,10 @@ get dense.
 
 ## Progressive — odd groupings
 
-Meter is global in resonance, so odd-metre material is normally written as
-groupings inside a 4/4 grid. The pattern's period stops matching the bar; note
-when it realigns.
+The DAW has a signature track, but the control API cannot write to it, so unless
+the user has already placed a signature event, odd-metre material is written as
+groupings inside the existing grid. The pattern's period then stops matching the
+bar; note when it realigns.
 
 | Grouping | Period (beats) | Accent beats within one period | Realigns with 4/4 every |
 |---|---|---|---|

@@ -81,28 +81,45 @@ Then check it: placements must not overlap, and bar N of a section that starts a
 bar S is `S + N - 1`. Off-by-one here is the most common structural bug, and it
 does not surface until parts are generated on top of it.
 
-## 4. Meter is global
+## 4. Meter: the app has a signature track, this API does not
 
-`mcp__resonance__transport_set_time_signature` sets **one time signature for the
-whole project**. There is no per-section meter.
+The DAW supports **per-bar time-signature changes** on its signature track, in
+the global-tracks shelf above the timeline. A song can absolutely be in 4/4 and
+then 7/8.
 
-For anything that changes meter mid-song — most prog, much classical — you have
-two honest options, and you should tell the user which you took:
+**The control surface cannot reach it.** There is no method to add, edit, read or
+delete a signature event. Three consequences, all of which bite:
 
-- **Pick the dominant meter** and write the odd-metre passages as groupings
-  *inside* that grid (a 7/8 riff as recurring 3+2+2 sixteenth groups in 4/4).
-  The music is right; the bar lines disagree with it, so section boundaries stop
-  landing on downbeats and the bar math in step 3 has to be done in beats.
-- **Set the odd meter globally** and write the 4/4 passages inside it instead.
-  Better when the odd metre dominates.
+- **You cannot create a meter change.** Only the user can, by hand in the GUI. If
+  the arrangement needs one, say so and ask — do not pretend the limitation is
+  the song's.
+- **`mcp__resonance__transport_set_time_signature` rewrites only the bar-0
+  event.** It does not clear later changes and does not make the song
+  single-meter. On a song that already changes meter, calling it changes the
+  opening and silently leaves everything after the first change alone.
+- **`song_summary.time_signature` is the meter at the PLAYHEAD, not the song's
+  meter.** It reports whatever signature is active where the cursor sits, and
+  nothing in the response indicates that meter changes exist at all. A 4/4
+  reading is not evidence the song is in 4/4 throughout.
 
-Do not silently pick one. This is a real limitation of the surface, not a
-detail.
+So if the user says the song changes meter, believe them over `song_summary`, and
+**ask where the changes are** — the bar math in step 3 cannot be derived from
+anything this API returns.
+
+For writing odd-metre material without a signature event, you have two honest
+options. Say which you took:
+
+- **Write the odd grouping inside the existing grid** — a 7/8 riff as recurring
+  3+2+2 sixteenth groups in 4/4. The music is right; the bar lines disagree with
+  it, so section boundaries stop landing on downbeats and bar math has to be done
+  in beats.
+- **Ask the user to add the signature event**, then work in real bars. Better for
+  anything where the notation matters or the passage is long.
 
 ## 5. Build it
 
 ```
-transport_set_time_signature   # if not 4/4
+transport_set_time_signature   # if not 4/4 — writes the bar-0 event only
 transport_set_tempo
 section_create {place: false}  # ×N, keep the section_ids
 section_place                  # ×M, at explicit start_bars

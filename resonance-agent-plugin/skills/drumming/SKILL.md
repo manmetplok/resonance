@@ -96,19 +96,28 @@ entry, and a two-bar 16th-note groove is already ~60 notes. Use
 `start_beat` is **0-based and clip-relative**. Bars in the arrangement are
 1-based. Velocity is 1–127.
 
-## 3. Meter is global
+## 3. Odd metre without a signature event
 
-`transport_set_time_signature` sets **one time signature for the whole project**.
-There is no per-section meter.
+The DAW has a signature track and supports per-bar meter changes, but **the
+control surface cannot reach it** — there is no method to add or read a signature
+event, and `mcp__resonance__transport_set_time_signature` only rewrites the bar-0
+one. Worse, `song_summary.time_signature` reports the meter **at the playhead**,
+so a 4/4 reading is not evidence the song is in 4/4 throughout.
 
-So a 7/8 groove in an otherwise-4/4 song is written as a recurring 3+2+2
+Check with the user before writing odd-metre drums. If they have already put
+signature events on the global track, work in real bars and the grid is on your
+side.
+
+If they have not, a 7/8 groove in a 4/4 song is written as a recurring 3+2+2
 sixteenth grouping inside the 4/4 grid: the music is right, the bar lines
 disagree with it, and the pattern's period no longer matches the bar. Say so when
-you do it — and note that the phrase only comes back into alignment with the
-downbeat every 7 bars.
+you do it — the phrase only realigns with the downbeat every 7 bars.
+`${CLAUDE_SKILL_DIR}/references/grooves.md` has the realignment table for the
+common groupings.
 
-If the odd metre dominates, set it globally instead and write the straight
-passages inside it. Do not pick silently.
+The other option is to ask them to add the signature event by hand in the
+global-tracks shelf. For a long passage, that is usually the better answer. Do
+not pick silently.
 
 ## 4. Velocity is the difference between a part and a grid
 
