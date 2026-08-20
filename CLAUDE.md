@@ -6,6 +6,18 @@ implements them, `ba-planner` triages the backlog, `ba-researcher`
 gathers external knowledge, and `ba-reverse-engineer` keeps the platform
 registry in sync.
 
+## Driving the DAW from an agent
+
+`resonance-mcp` exposes the running app's control surface as MCP tools;
+`resonance-agent-plugin/` is a Claude Code plugin of **skills** (`mixing`,
+`mastering`) that use them. It ships no `.mcp.json` on purpose — register the
+server with `claude mcp add` so the tools stay named `mcp__resonance__<tool>`.
+
+The two are kept in step by `resonance-mcp/tests/agent_plugin_lockstep.rs`: a
+skill naming a tool that no longer exists, or a `PROTOCOL_VERSION` bump the
+plugin has not been re-read against, fails the suite. Skills are per-craft,
+never per-project — see the plugin's README before adding one.
+
 ## Tests
 
 Run the suite with `./scripts/run-tests.py` (add `-p <crate>` to narrow it).

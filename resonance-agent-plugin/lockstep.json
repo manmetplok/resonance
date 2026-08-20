@@ -1,0 +1,4 @@
+{
+  "_comment": "Read by resonance-mcp/tests/agent_plugin_lockstep.rs, not by Claude Code. Kept out of .claude-plugin/plugin.json because `metadata` is not a field the plugin manifest schema knows, and `claude plugin validate` warns on it.",
+  "control_protocol_version": 1
+}
