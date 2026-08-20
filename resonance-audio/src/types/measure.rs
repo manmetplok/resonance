@@ -58,13 +58,29 @@ pub enum MeasureSource {
 /// buffer, so the whole-range figures cannot be derived from it. On that
 /// path — and only there — the following fields carry documented
 /// placeholders rather than measurements: `sample_peak_db`
-/// (`FLOOR_DBFS`), `clipped_samples` (`0`), `mono_penalty_db` (`0.0`),
-/// `bands` ([`BandShares::SILENT`]), and `range_start` / `range_end` /
-/// `frames` (all `0`, since the live meter integrates from the start of
-/// the session, not over a range). `lufs_short_term_max` and
+/// (`FLOOR_DBFS`), `crest_db` (`0.0`), `clipped_samples` (`0`),
+/// `correlation` (`0.0`), `mono_penalty_db` (`0.0`), `bands`
+/// ([`BandShares::SILENT`]), and `range_start` / `range_end` / `frames`
+/// (all `0`, since the live meter integrates from the start of the
+/// session, not over a range). `lufs_short_term_max` and
 /// `lufs_momentary_max` carry the meter's *current* short-term and
 /// momentary readings, not maxima. Read [`source`](Self::source) to know
 /// which set of rules applies.
+///
+/// A consumer must treat every field in that list as ABSENT on the live
+/// path, not as a measurement. `crest_db` and `correlation` are the two
+/// that bite, because their placeholder `0.0` is a plausible reading:
+/// 0 dB crest means a square wave and 0 correlation means a fully wide
+/// image, so a client that reports them verbatim tells the user the mix
+/// is squashed and decorrelated when nothing was measured at all. That
+/// is not hypothetical — `meter.measure` shipped a first cut doing
+/// exactly this, caught in review (todos #1219, #1247), because these
+/// two were missing from the list above.
+///
+/// Ground truth for the two: `ABMeterTap::snapshot` fills only the
+/// loudness and true-peak fields and ends with `..MeterSnapshot::
+/// default()`, and neither `CrestMeter` nor `CorrelationMeter` is
+/// instantiated anywhere on the live path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MixMeasurement {
     /// Which slice of the mix this measures.
@@ -102,14 +118,18 @@ pub struct MixMeasurement {
     /// Maximum absolute sample value, dBFS. Floored at
     /// [`FLOOR_DBFS`][resonance_metering::offline::FLOOR_DBFS].
     pub sample_peak_db: f32,
-    /// Peak-to-RMS ratio over the WHOLE range, dB. `0.0` for silence.
+    /// Peak-to-RMS ratio over the WHOLE range, dB. `0.0` for silence —
+    /// and `0.0` as a PLACEHOLDER on [`MeasureSource::Live`], where
+    /// nothing measures it. See the availability rules on the struct.
     pub crest_db: f32,
     /// Number of channel samples at or beyond digital full scale
     /// (`|x| >= 1.0`), counted per channel sample rather than per frame.
     pub clipped_samples: u64,
     /// Pearson correlation of L against R over the whole range, in
     /// `[-1, 1]`. `+1` is mono-identical, `0` uncorrelated, `-1` fully
-    /// anti-phase. `0.0` for a silent or single-sided range.
+    /// anti-phase. `0.0` for a silent or single-sided range — and `0.0`
+    /// as a PLACEHOLDER on [`MeasureSource::Live`], where nothing
+    /// measures it. See the availability rules on the struct.
     pub correlation: f32,
     /// Loudness lost when the range is folded to mono, dB (negative means
     /// level is lost). See
