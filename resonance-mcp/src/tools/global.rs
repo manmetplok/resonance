@@ -1,5 +1,10 @@
 //! `global_*` — the song-wide tempo and time-signature tracks (ba doc
 //! #286): reading both tracks, and writing changes onto them at a bar.
+//!
+//! `add_*` creates or overwrites at a bar; `edit_*` addresses an event
+//! that is already there and refuses an empty bar. Both descriptions say
+//! so explicitly, because a caller cannot guess which of those two a
+//! method does and the wrong guess writes a plausible but wrong song.
 
 use crate::server::ResonanceMcp;
 use rmcp::handler::server::tool::schema_for_output;
@@ -121,6 +126,86 @@ impl ResonanceMcp {
         Parameters(params): Parameters<global::AddSignatureEventParams>,
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(global::ADD_SIGNATURE_EVENT, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Change a tempo change that is ALREADY on the song's tempo track: retune \
+                       it, move it to another bar, or both (undoable edit — one undo puts back \
+                       the old bpm and the old bar together). \
+                       \
+                       bar names the event to change and is 1-based. IF NO TEMPO EVENT SITS \
+                       EXACTLY ON THAT BAR THE CALL IS REFUSED and nothing changes — this tool \
+                       never creates one. That is deliberate: an empty bar means you are wrong \
+                       about where the change is, and inventing an event there would leave the \
+                       one you meant to edit untouched behind a reassuring \"ok\". Read \
+                       global_list_events first if you are unsure which bars carry events; use \
+                       global_add_tempo_event when you actually want to create one. \
+                       \
+                       OMITTED FIELDS ARE LEFT ALONE. {bar: 33, bpm: 96} retunes the bridge and \
+                       leaves it starting at bar 33; {bar: 33, new_bar: 41} moves it to bar 41 \
+                       at its current tempo. Sending neither bpm nor new_bar is refused rather \
+                       than accepted as a no-op. bpm must be 20..=300; outside that the call is \
+                       refused, not quietly clamped to a tempo you did not ask for. \
+                       \
+                       MOVING: new_bar is the only way to relocate an event on either global \
+                       track, and it has two refusals. Bar 1 CANNOT BE MOVED — it is the song's \
+                       initial tempo and it is what \"the start of the song\" means, so new_bar \
+                       on bar 1 is refused (its bpm is editable here, and a tempo change \
+                       anywhere else is a separate event). And a bar holds at most one tempo \
+                       event, so moving onto an occupied bar is refused instead of leaving two \
+                       there. Both are explicit errors, never silent no-ops. \
+                       \
+                       Moving or retuning shifts where every later bar falls in TIME while \
+                       clips, markers and automation keep their time positions, so material \
+                       after this event lands on different bars than before. Read the result \
+                       back with global_list_events — you cannot hear it.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn global_edit_tempo_event(
+        &self,
+        Parameters(params): Parameters<global::EditTempoEventParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(global::EDIT_TEMPO_EVENT, &params)
+            .await
+    }
+
+    #[tool(
+        description = "Change a meter (time-signature) change that is ALREADY on the song's \
+                       signature track — turn the 7/8 bridge into 5/8, or fix a denominator you \
+                       got wrong (undoable edit, one undo restores the previous meter). \
+                       \
+                       bar names the event to change and is 1-based. IF NO METER EVENT SITS \
+                       EXACTLY ON THAT BAR THE CALL IS REFUSED and nothing changes — this tool \
+                       never creates one, for the same reason global_edit_tempo_event does not: \
+                       an empty bar means you are wrong about where the change is. Read \
+                       global_list_events to see which bars carry events; use \
+                       global_add_signature_event to create one. \
+                       \
+                       OMITTED FIELDS ARE LEFT ALONE, and the pair is validated as the meter it \
+                       ends up being: editing a 7/8 event with {numerator: 5} gives 5/8. Sending \
+                       neither numerator nor denominator is refused rather than accepted as a \
+                       no-op. numerator is 1..=32; denominator is the note value that gets the \
+                       beat, RESOLVED and a power of two in 1..=32 — 8 for 5/8, not the exponent \
+                       3. Anything else is refused and nothing changes. \
+                       \
+                       THERE IS NO new_bar HERE: unlike a tempo event, a meter event cannot be \
+                       moved in place. To move one, add the meter change at the bar you want \
+                       with global_add_signature_event and remove the old event. \
+                       \
+                       Changing a meter changes how long the bars after it are, and existing \
+                       clips, markers and automation keep their positions in TIME rather than in \
+                       bars, so material after this event lands on different bars than before. \
+                       Read the result back with global_list_events — you cannot hear it.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<MutationAck>()
+    )]
+    async fn global_edit_signature_event(
+        &self,
+        Parameters(params): Parameters<global::EditSignatureEventParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(global::EDIT_SIGNATURE_EVENT, &params)
             .await
     }
 }

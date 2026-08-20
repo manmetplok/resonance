@@ -33,7 +33,17 @@
 //! its initial meter. It cannot be removed (only edited, which is what
 //! `transport.set_tempo` / `transport.set_time_signature` do), so both
 //! lists are always non-empty and a song with no changes reports exactly
-//! one entry in each.
+//! one entry in each. It cannot be MOVED either — it is what "the start
+//! of the song" means — so [`EDIT_TEMPO_EVENT`]'s `new_bar` is refused
+//! on it.
+//!
+//! # Add creates, edit changes
+//!
+//! `add_*` upserts: it writes the event whether or not one was there.
+//! `edit_*` addresses one that already exists and refuses an empty bar,
+//! because the two possible readings of "edit a bar with nothing on it"
+//! — create it, or tell me I am wrong about the song — lead to very
+//! different songs, and only one of them is recoverable.
 
 use serde::{Deserialize, Serialize};
 
@@ -73,8 +83,45 @@ pub const ADD_TEMPO_EVENT: &str = "global.add_tempo_event";
 /// needs this method.
 pub const ADD_SIGNATURE_EVENT: &str = "global.add_signature_event";
 
+/// `global.edit_tempo_event` — change the tempo event that already sits
+/// on a bar ([`EditTempoEventParams`] -> [`MutationAck`](crate::MutationAck)).
+///
+/// **Addresses an existing event; it does not create one.** `bar` names
+/// the event to change, and a bar with no tempo event there is an
+/// `invalid_params` refusal rather than an upsert —
+/// [`ADD_TEMPO_EVENT`] is the method that creates. Omitted fields keep
+/// their current value, so `{bar: 33, bpm: 96}` retunes the bridge
+/// without touching where it starts.
+///
+/// This is the one method on either track that can MOVE an event:
+/// `new_bar` relocates it, keeping the list sorted. Bar 1 is the
+/// exception — the song's initial tempo may be retuned but not
+/// relocated, and asking is refused rather than ignored.
+pub const EDIT_TEMPO_EVENT: &str = "global.edit_tempo_event";
+
+/// `global.edit_signature_event` — change the meter event that already
+/// sits on a bar ([`EditSignatureEventParams`] ->
+/// [`MutationAck`](crate::MutationAck)).
+///
+/// **Addresses an existing event; it does not create one**, on the same
+/// rule as [`EDIT_TEMPO_EVENT`]: an empty bar is refused, and
+/// [`ADD_SIGNATURE_EVENT`] is the method that creates. Omitted fields
+/// keep their current value, so `{bar: 17, numerator: 5}` turns 7/8 into
+/// 5/8.
+///
+/// Unlike [`EDIT_TEMPO_EVENT`] it has no `new_bar`: a meter event's bar
+/// is not editable in place. Put the meter change at the bar you want
+/// with [`ADD_SIGNATURE_EVENT`] and drop the old one.
+pub const EDIT_SIGNATURE_EVENT: &str = "global.edit_signature_event";
+
 /// All `global.*` method names.
-pub const METHODS: &[&str] = &[LIST_EVENTS, ADD_TEMPO_EVENT, ADD_SIGNATURE_EVENT];
+pub const METHODS: &[&str] = &[
+    LIST_EVENTS,
+    ADD_TEMPO_EVENT,
+    ADD_SIGNATURE_EVENT,
+    EDIT_TEMPO_EVENT,
+    EDIT_SIGNATURE_EVENT,
+];
 
 /// Params for [`ADD_TEMPO_EVENT`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -105,6 +152,58 @@ pub struct AddSignatureEventParams {
     /// in 1..=32, e.g. 8 for 7/8. Resolved, not an exponent — an
     /// out-of-range or non-power-of-two value is rejected.
     pub denominator: u8,
+}
+
+/// Params for [`EDIT_TEMPO_EVENT`].
+///
+/// At least one of `bpm` / `new_bar` must be present: a call that changes
+/// nothing is refused rather than acknowledged, so a caller that omitted
+/// the field it meant to send finds out instead of reading back an
+/// unchanged track and wondering.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct EditTempoEventParams {
+    /// 1-based bar of the tempo event to change. There must already be
+    /// one exactly there — an empty bar is rejected, not filled in
+    /// (that is [`ADD_TEMPO_EVENT`]'s job).
+    pub bar: u32,
+    /// New beats per minute, or absent to keep the current tempo.
+    /// Rejected outside 20..=300 rather than clamped, matching
+    /// [`AddTempoEventParams::bpm`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bpm: Option<f32>,
+    /// 1-based bar to move the event to, or absent to leave it where it
+    /// is. The list stays sorted afterwards.
+    ///
+    /// Rejected when it already carries a different tempo event (one bar
+    /// holds at most one), and rejected when `bar` is 1: the song's
+    /// initial tempo is anchored to the start of the song and can only
+    /// be retuned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_bar: Option<u32>,
+}
+
+/// Params for [`EDIT_SIGNATURE_EVENT`].
+///
+/// At least one of `numerator` / `denominator` must be present, for the
+/// same reason as [`EditTempoEventParams`]. There is deliberately no
+/// `new_bar`: see [`EDIT_SIGNATURE_EVENT`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct EditSignatureEventParams {
+    /// 1-based bar of the meter event to change. There must already be
+    /// one exactly there — an empty bar is rejected, not filled in
+    /// (that is [`ADD_SIGNATURE_EVENT`]'s job).
+    pub bar: u32,
+    /// New beats per bar (the top number), 1..=32, or absent to keep the
+    /// current one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numerator: Option<u8>,
+    /// New note value that gets the beat (the bottom number): a power of
+    /// two in 1..=32, resolved rather than an exponent. Absent keeps the
+    /// current one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denominator: Option<u8>,
 }
 
 /// One tempo change on the global tempo track.

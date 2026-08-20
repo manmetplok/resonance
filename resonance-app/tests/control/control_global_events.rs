@@ -387,3 +387,376 @@ fn the_adds_are_advertised_in_the_hello_capabilities() {
     assert!(capabilities.contains(&proto::ADD_TEMPO_EVENT));
     assert!(capabilities.contains(&proto::ADD_SIGNATURE_EVENT));
 }
+
+// ---------------------------------------------------------------------------
+// `global.edit_tempo_event` / `global.edit_signature_event` (ba todo #1383)
+// ---------------------------------------------------------------------------
+
+fn edit_tempo(app: &mut Resonance, params: serde_json::Value) -> Response {
+    call(app, proto::EDIT_TEMPO_EVENT, &params)
+}
+
+fn edit_signature(app: &mut Resonance, params: serde_json::Value) -> Response {
+    call(app, proto::EDIT_SIGNATURE_EVENT, &params)
+}
+
+/// A song with a 140 BPM 7/8 bridge at wire bar 33, added through the
+/// control surface so every edit test starts from a track a client could
+/// itself have written.
+fn app_with_a_bridge() -> Resonance {
+    let mut app = app_with_project();
+    let _: MutationAck = add_tempo(&mut app, 33, 140.0).result().expect("tempo add");
+    let _: MutationAck = add_signature(&mut app, 33, 7, 8).result().expect("meter add");
+    app
+}
+
+fn undo_entry_count(app: &Resonance) -> usize {
+    app.test_undo_history().test_undo_entries().len()
+}
+
+#[test]
+fn editing_a_tempo_event_changes_only_the_named_field() {
+    // Omitted fields keep their current value: retuning the bridge must
+    // not also move it back to wherever a default would have put it.
+    let mut app = app_with_a_bridge();
+    let ack: MutationAck = edit_tempo(&mut app, serde_json::json!({"bar": 33, "bpm": 96.0}))
+        .result()
+        .expect("global.edit_tempo_event succeeds");
+    assert_eq!(ack.revision, app.revision(), "the ack carries the post-edit revision");
+
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (33, 96.0)]);
+}
+
+#[test]
+fn editing_a_signature_event_changes_only_the_named_field() {
+    // 7/8 edited with `numerator: 5` is 5/8 — the denominator it already
+    // had, not a default 4.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = edit_signature(&mut app, serde_json::json!({"bar": 33, "numerator": 5}))
+        .result()
+        .expect("global.edit_signature_event succeeds");
+
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4), (33, 5, 8)]);
+}
+
+#[test]
+fn moving_a_tempo_event_keeps_the_list_sorted() {
+    // `new_bar` is the only way to relocate an event on either track.
+    // The move goes backwards past another event here, so a handler that
+    // forgot `EndTempoDrag` (which re-sorts) would leave the list out of
+    // order and every by-bar address after it pointing at the wrong one.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = add_tempo(&mut app, 17, 100.0).result().expect("second add");
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (17, 100.0), (33, 140.0)]);
+
+    let _: MutationAck = edit_tempo(&mut app, serde_json::json!({"bar": 33, "new_bar": 9}))
+        .result()
+        .expect("the move succeeds");
+
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0), (9, 140.0), (17, 100.0)],
+        "moved to bar 9 at its own tempo, list re-sorted"
+    );
+}
+
+#[test]
+fn one_undo_after_a_tempo_edit_restores_both_the_bpm_and_the_bar() {
+    // THE point of this slice. `GlobalTrackMessage::UpdateTempoEvent` is
+    // the GUI's drag-MOVE message and is classified `UndoAction::Skip`;
+    // its undo entry comes from the `StartTempoDrag` (Begin) /
+    // `EndTempoDrag` (Commit) bracket around it. A handler that
+    // dispatched `UpdateTempoEvent` bare would pass every assertion in
+    // the three tests above and produce an edit that can never be
+    // undone (ba doc #286 §3).
+    let mut app = app_with_a_bridge();
+    let before = tempo_pairs(&mut app);
+    let entries_before = undo_entry_count(&app);
+
+    // Both fields at once, so the assertion catches a bracket that
+    // restores one of them and not the other.
+    let _: MutationAck = edit_tempo(
+        &mut app,
+        serde_json::json!({"bar": 33, "bpm": 96.0, "new_bar": 41}),
+    )
+    .result()
+    .expect("edit succeeds");
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (41, 96.0)]);
+
+    let _ = app.update(Message::Undo);
+
+    assert_eq!(
+        tempo_pairs(&mut app),
+        before,
+        "one undo must put back the bpm AND the bar together"
+    );
+    assert_eq!(
+        undo_entry_count(&app),
+        entries_before,
+        "the bracket is ONE entry: a second undo would otherwise be needed, \
+         and would step back past an edit the client never made"
+    );
+}
+
+#[test]
+fn redo_reapplies_a_tempo_edit() {
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = edit_tempo(
+        &mut app,
+        serde_json::json!({"bar": 33, "bpm": 96.0, "new_bar": 41}),
+    )
+    .result()
+    .expect("edit succeeds");
+
+    let _ = app.update(Message::Undo);
+    let _ = app.update(Message::Redo);
+
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (41, 96.0)]);
+}
+
+#[test]
+fn one_undo_after_a_signature_edit_restores_the_previous_meter() {
+    // No bracket here, and the asymmetry is deliberate:
+    // `UpdateSignatureEvent` has no drag gesture behind it, so it falls
+    // to `undo::classify`'s `GlobalTrack(_) => Record` arm and one
+    // dispatch is one complete entry. Asserted so that a later
+    // "consistency" refactor cannot wrap it in the tempo bracket and
+    // turn one entry into two, or drop the tempo bracket to match this.
+    let mut app = app_with_a_bridge();
+    let before = meter_triples(&mut app);
+    let entries_before = undo_entry_count(&app);
+
+    let _: MutationAck = edit_signature(
+        &mut app,
+        serde_json::json!({"bar": 33, "numerator": 5, "denominator": 4}),
+    )
+    .result()
+    .expect("edit succeeds");
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4), (33, 5, 4)]);
+
+    let _ = app.update(Message::Undo);
+
+    assert_eq!(meter_triples(&mut app), before, "one undo restores the meter");
+    assert_eq!(undo_entry_count(&app), entries_before, "exactly one entry");
+
+    let _ = app.update(Message::Redo);
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4), (33, 5, 4)]);
+}
+
+#[test]
+fn a_tempo_edit_records_exactly_one_revision_bump() {
+    // Three messages go out (Begin / Skip / Commit) and exactly one of
+    // them is a committed change, so the counter a client watches for
+    // concurrent user edits must move by one — not by three, which would
+    // read as "someone else is editing" on every call.
+    let mut app = app_with_a_bridge();
+    let before = app.revision();
+    let _: MutationAck = edit_tempo(&mut app, serde_json::json!({"bar": 33, "bpm": 96.0}))
+        .result()
+        .expect("edit succeeds");
+    assert_eq!(app.revision(), before + 1);
+}
+
+#[test]
+fn an_undone_tempo_edit_takes_the_gui_tempo_map_with_it() {
+    // The event vectors are not the only thing the edit touched:
+    // `rebuild_and_send_tempo` runs as part of the domain messages, and
+    // the restore path re-runs it. A test that only read the wire lists
+    // would miss a tempo map left describing the edited song.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = edit_tempo(&mut app, serde_json::json!({"bar": 33, "bpm": 96.0}))
+        .result()
+        .expect("edit succeeds");
+    assert!((app.test_tempo_map().tempo_points[1].bpm - 96.0).abs() < 1e-4);
+
+    let _ = app.update(Message::Undo);
+
+    let points = &app.test_tempo_map().tempo_points;
+    assert_eq!(points.len(), 2, "{points:?}");
+    assert!(
+        (points[1].bpm - 140.0).abs() < 1e-4,
+        "the tempo map must track the undo, not just the event list: {points:?}"
+    );
+}
+
+#[test]
+fn editing_the_bar_1_tempo_event_retunes_the_song_and_the_transport() {
+    // The initial event can have its value changed — that is the same
+    // edit `transport.set_tempo` makes — and with the playhead at the
+    // start the transport display follows.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = edit_tempo(&mut app, serde_json::json!({"bar": 1, "bpm": 90.0}))
+        .result()
+        .expect("retuning bar 1 succeeds");
+
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 90.0), (33, 140.0)]);
+    assert!((app.test_transport_bpm() - 90.0).abs() < 1e-4);
+}
+
+#[test]
+fn moving_the_bar_1_tempo_event_is_refused_not_ignored() {
+    // `UpdateTempoEvent` pins `event.bar = 0` for index 0, so the GUI's
+    // own path silently ignores the move. Over the wire that is the
+    // worst outcome available: `ok` back, list unchanged, and no way to
+    // tell a refusal from something having re-created the event.
+    let mut app = app_with_a_bridge();
+    let before = tempo_pairs(&mut app);
+
+    let error = edit_tempo(&mut app, serde_json::json!({"bar": 1, "new_bar": 5}))
+        .error
+        .expect("moving the initial tempo event must be refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(
+        error.message.contains("bar 1"),
+        "the refusal must name what it refused: {}",
+        error.message
+    );
+
+    assert_eq!(tempo_pairs(&mut app), before, "nothing moved");
+}
+
+#[test]
+fn editing_a_bar_with_no_event_on_it_is_refused_rather_than_creating_one() {
+    // `edit_*` addresses an event; `add_*` creates one. Upserting here
+    // would hide a client's wrong idea of where the change sits behind a
+    // plausible `ok`, while leaving the event it meant to edit standing.
+    let mut app = app_with_a_bridge();
+
+    let error = edit_tempo(&mut app, serde_json::json!({"bar": 20, "bpm": 96.0}))
+        .error
+        .expect("bar 20 carries no tempo event");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("bar 20"), "{}", error.message);
+
+    let error = edit_signature(&mut app, serde_json::json!({"bar": 20, "numerator": 5}))
+        .error
+        .expect("bar 20 carries no meter event");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (33, 140.0)], "nothing created");
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4), (33, 7, 8)]);
+}
+
+#[test]
+fn moving_a_tempo_event_onto_an_occupied_bar_is_refused() {
+    // One bar, one tempo — the invariant `AddTempoEvent`'s upsert
+    // enforces (ba todo #1382). A move must not slip a duplicate past it
+    // through the back door and leave a bar that cannot be addressed
+    // unambiguously.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = add_tempo(&mut app, 17, 100.0).result().expect("second add");
+
+    let error = edit_tempo(&mut app, serde_json::json!({"bar": 33, "new_bar": 17}))
+        .error
+        .expect("bar 17 is taken");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0), (17, 100.0), (33, 140.0)],
+        "no duplicate, and nothing moved"
+    );
+}
+
+#[test]
+fn moving_a_tempo_event_onto_its_own_bar_is_a_permitted_no_move() {
+    // `new_bar == bar` is not a collision with itself; a client
+    // re-sending the position it already believes is safe.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = edit_tempo(
+        &mut app,
+        serde_json::json!({"bar": 33, "new_bar": 33, "bpm": 96.0}),
+    )
+    .result()
+    .expect("edit succeeds");
+
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (33, 96.0)]);
+}
+
+#[test]
+fn an_edit_that_names_no_field_is_refused_rather_than_acked_as_a_no_op() {
+    // Otherwise a caller that omitted the field it meant to send reads
+    // an unchanged track back and cannot tell whether the call or its
+    // idea of the song is wrong. It also keeps an empty entry out of the
+    // undo history.
+    let mut app = app_with_a_bridge();
+    let entries_before = undo_entry_count(&app);
+
+    for response in [
+        edit_tempo(&mut app, serde_json::json!({"bar": 33})),
+        edit_signature(&mut app, serde_json::json!({"bar": 33})),
+    ] {
+        assert_eq!(
+            response.error.expect("an edit must change something").kind(),
+            ErrorKind::InvalidParams
+        );
+    }
+    assert_eq!(undo_entry_count(&app), entries_before, "no empty undo entry");
+}
+
+#[test]
+fn an_edited_bpm_out_of_range_is_refused_not_clamped() {
+    // `UpdateTempoEvent` clamps to 20..=300 for the GUI's drag, so
+    // without an explicit check this call would silently become 300 —
+    // and `global.add_tempo_event`, which refuses, would disagree with
+    // `global.edit_tempo_event` about what a legal tempo is. Two paths
+    // into one list must not have two answers (ba doc #286 §2).
+    let mut app = app_with_a_bridge();
+    for bpm in [19.0, 500.0] {
+        let error = edit_tempo(&mut app, serde_json::json!({"bar": 33, "bpm": bpm}))
+            .error
+            .unwrap_or_else(|| panic!("bpm {bpm} should be rejected"));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams, "for bpm {bpm}");
+    }
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0), (33, 140.0)],
+        "no clamped tempo reached the track"
+    );
+}
+
+#[test]
+fn an_edited_meter_is_validated_as_the_pair_it_becomes() {
+    // The omitted half is filled in from the event before validation, so
+    // `denominator: 3` against a 7/8 event is rejected as 7/3 rather
+    // than slipping through because the numerator was fine.
+    let mut app = app_with_a_bridge();
+    for params in [
+        serde_json::json!({"bar": 33, "denominator": 3}),
+        serde_json::json!({"bar": 33, "numerator": 0}),
+        serde_json::json!({"bar": 33, "numerator": 33}),
+    ] {
+        let error = edit_signature(&mut app, params.clone())
+            .error
+            .unwrap_or_else(|| panic!("{params} should be rejected"));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams, "for {params}");
+    }
+    assert_eq!(
+        meter_triples(&mut app),
+        vec![(1, 4, 4), (33, 7, 8)],
+        "a rejected meter must not reach the track"
+    );
+}
+
+#[test]
+fn bar_0_is_refused_by_the_edits_too() {
+    let mut app = app_with_a_bridge();
+    for response in [
+        edit_tempo(&mut app, serde_json::json!({"bar": 0, "bpm": 96.0})),
+        edit_tempo(&mut app, serde_json::json!({"bar": 33, "new_bar": 0})),
+        edit_signature(&mut app, serde_json::json!({"bar": 0, "numerator": 5})),
+    ] {
+        assert_eq!(
+            response.error.expect("bar 0 is not a bar").kind(),
+            ErrorKind::InvalidParams
+        );
+    }
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (33, 140.0)]);
+}
+
+#[test]
+fn the_edits_are_advertised_in_the_hello_capabilities() {
+    let capabilities = resonance_control::methods::capabilities();
+    assert!(capabilities.contains(&proto::EDIT_TEMPO_EVENT));
+    assert!(capabilities.contains(&proto::EDIT_SIGNATURE_EVENT));
+}
