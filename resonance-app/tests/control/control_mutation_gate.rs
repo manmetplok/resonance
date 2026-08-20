@@ -106,10 +106,9 @@ fn mutating_methods() -> Vec<&'static str> {
 fn allowlisted_methods() -> Vec<&'static str> {
     // `track.plugin_params` is the read-only member of the
     // otherwise-mutating `track::*` namespace. `plugins.*` — the
-    // installed-plugin catalog and its deprecated `track.plugins` alias
-    // — is read-only AND project-independent: it reads the startup
-    // scanner's results, so gating it made a pure catalog query answer
-    // `busy` with nothing open (todo #1236).
+    // installed-plugin catalog — is read-only AND project-independent:
+    // it reads the startup scanner's results, so gating it made a pure
+    // catalog query answer `busy` with nothing open (todo #1236).
     let mut methods = vec!["control.hello", methods::track::PLUGIN_PARAMS];
     for namespace in [
         methods::song::METHODS,

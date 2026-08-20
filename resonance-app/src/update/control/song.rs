@@ -40,13 +40,7 @@ pub(super) fn try_handle(app: &Resonance, request: &Request) -> Option<Response>
         song::TRACKS => tracks(app, request),
         song::NOTES => notes(app, request),
         song::VOCAL => vocal(app, request),
-        // `plugins.catalog`, plus the deprecated `track.plugins`
-        // spelling it was renamed from (todo #1236) — one handler, so
-        // the two can never answer differently.
-        #[allow(deprecated)]
-        m if m == plugins::CATALOG || m == plugins::PLUGINS_DEPRECATED_ALIAS => {
-            plugin_catalog(app, request)
-        }
+        plugins::CATALOG => plugin_catalog(app, request),
         track::PLUGIN_PARAMS => plugin_params(app, request),
         _ => return None,
     };
@@ -358,9 +352,9 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
 /// reported; they are what `track.add_instrument` / `track.add_effect`
 /// accept.
 ///
-/// Also answers the deprecated `track.plugins` alias — the name this
-/// method carried until todo #1236, whose "track." prefix read as a
-/// per-track query and cost a field agent a session's debugging.
+/// It carried the name `track.plugins` until todo #1236: that "track."
+/// prefix read as a per-track query and cost a field agent a session's
+/// debugging. The alias kept for the rename was removed in todo #1240.
 ///
 /// Reads `app.available_plugins`, which the scanner fills at startup, so
 /// it needs NO open project and is listed in

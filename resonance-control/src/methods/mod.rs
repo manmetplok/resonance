@@ -41,9 +41,15 @@ pub mod vocal;
 ///
 /// Every entry is scheduled for removal; see the alias constant's own
 /// doc comment for what it was renamed to.
-#[allow(deprecated)]
+///
+/// **Currently empty** — `track.plugins`, the one entry this list ever
+/// had, was removed in todo #1240. The function stays regardless: it is
+/// the RULE that `resonance-mcp`'s one-tool-per-method test
+/// (`combined_router_exposes_every_control_method`) excludes aliases by,
+/// so deleting it would force the next rename to re-add a hardcoded
+/// exception instead of just listing the alias here.
 pub fn deprecated_aliases() -> Vec<&'static str> {
-    vec![plugins::PLUGINS_DEPRECATED_ALIAS]
+    Vec::new()
 }
 
 /// Every method name in protocol v1, in stable namespace order. This is

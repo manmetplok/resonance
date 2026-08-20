@@ -358,8 +358,8 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
     method == HELLO
         || methods::song::METHODS.contains(&method)
         || methods::project::METHODS.contains(&method)
-        // `plugins.catalog` (and its deprecated `track.plugins` alias)
-        // reads `available_plugins`, which the scanner fills at startup
+        // `plugins.catalog` reads `available_plugins`, which the
+        // scanner fills at startup
         // and which no project owns. Gating it made a pure catalog query
         // answer `busy` with nothing open, so an agent could not even
         // find out what it had to build with before opening a project

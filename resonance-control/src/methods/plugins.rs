@@ -20,21 +20,11 @@ use serde::{Deserialize, Serialize};
 /// [`PluginCatalog`]).
 pub const CATALOG: &str = "plugins.catalog";
 
-/// The old name for [`CATALOG`], kept reachable for one release so an
-/// existing client does not break on the rename. It resolves to the
-/// same handler and returns the same [`PluginCatalog`].
+/// All `plugins.*` method names — what `control.hello` advertises.
 ///
-/// **New clients must not use it.** It is scheduled for removal in a
-/// following release; there is deliberately no MCP tool under this name,
-/// so an agent sees exactly one spelling (`plugins_catalog`). This
-/// constant is the single place the alias is documented.
-#[deprecated(note = "renamed to `plugins.catalog` (CATALOG); this alias goes in a later release")]
-pub const PLUGINS_DEPRECATED_ALIAS: &str = "track.plugins";
-
-/// All `plugins.*` method names, including the deprecated alias — so
-/// `control.hello` tells the truth about every name the app answers.
-#[allow(deprecated)]
-pub const METHODS: &[&str] = &[CATALOG, PLUGINS_DEPRECATED_ALIAS];
+/// The `track.plugins` alias that #1236 kept reachable for one release
+/// was removed in todo #1240; `plugins.catalog` is the only spelling.
+pub const METHODS: &[&str] = &[CATALOG];
 
 /// Result of `plugins.catalog`: the built-in plugin catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

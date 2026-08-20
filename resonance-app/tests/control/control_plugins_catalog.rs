@@ -7,11 +7,14 @@
 //! feature — while `track.plugin_params` had reported the real loaded
 //! chain, with full parameter metadata, all along.
 //!
-//! Two properties are asserted here: the deprecated alias still answers
-//! identically (it is kept for one release), and the catalog is
-//! answerable with NO project open — it reads the startup scanner's
-//! results, which no project owns, so the mutation gate must not turn it
-//! into `busy`.
+//! The `track.plugins` alias that #1236 kept for one release was removed
+//! in todo #1240, so `plugins.catalog` is now the only spelling — the
+//! test below pins that the old name is genuinely gone rather than
+//! silently still answering.
+//!
+//! The other property asserted here is that the catalog is answerable
+//! with NO project open — it reads the startup scanner's results, which
+//! no project owns, so the mutation gate must not turn it into `busy`.
 
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
@@ -21,8 +24,10 @@ use resonance_audio::types::{AudioEvent, ScannedPlugin};
 use resonance_control::methods::plugins::{PluginCatalog, CATALOG};
 use resonance_control::{ErrorKind, Request, Response};
 
-#[allow(deprecated)]
-const ALIAS: &str = resonance_control::methods::plugins::PLUGINS_DEPRECATED_ALIAS;
+/// The name the catalog carried before #1236. Spelled out rather than
+/// imported: the constant it came from no longer exists, and the point
+/// of the test below is that nothing answers to this string.
+const REMOVED_ALIAS: &str = "track.plugins";
 
 /// An app with a scanned catalog but NO active project.
 fn app_without_project() -> Resonance {
@@ -92,20 +97,20 @@ fn a_mutating_method_is_still_gated_with_no_project_open() {
 }
 
 #[test]
-fn the_deprecated_alias_returns_exactly_the_same_payload() {
+fn the_removed_alias_no_longer_answers() {
+    // The deprecation window closed in todo #1240. A client still
+    // spelling it the old way must get a clean `unsupported`, not a
+    // silent success — that is the whole point of removing it rather
+    // than leaving it to rot.
     let mut app = app_without_project();
-    let new_name: serde_json::Value = catalog(&mut app, CATALOG).result().expect("succeeds");
-    let old_name: serde_json::Value = catalog(&mut app, ALIAS)
-        .result()
-        .expect("the alias is kept reachable for one release");
-    assert_eq!(
-        new_name, old_name,
-        "one handler serves both names, so they cannot answer differently"
-    );
+    let error = catalog(&mut app, REMOVED_ALIAS)
+        .error
+        .expect("the alias was removed, so nothing should answer to it");
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
 }
 
 #[test]
-fn both_names_are_advertised_in_the_hello_capabilities() {
+fn only_the_current_name_is_advertised_in_the_hello_capabilities() {
     let mut app = app_without_project();
     let hello: resonance_control::methods::control::HelloResult = roundtrip(
         &mut app,
@@ -121,11 +126,12 @@ fn both_names_are_advertised_in_the_hello_capabilities() {
 
     assert!(
         hello.capabilities.iter().any(|m| m == CATALOG),
-        "the new name must be advertised"
+        "the current name must be advertised"
     );
     assert!(
-        hello.capabilities.iter().any(|m| m == ALIAS),
-        "and so must the alias, or control.hello lies about what the app answers"
+        !hello.capabilities.iter().any(|m| m == REMOVED_ALIAS),
+        "the removed alias must be gone from capabilities too, or \
+         control.hello advertises a name the app no longer answers"
     );
     assert!(
         !hello.capabilities.iter().any(|m| m == "track.plugin_list"),
@@ -146,7 +152,6 @@ fn the_catalog_never_mutates() {
     let mut app = app_without_project();
     let before = app.revision();
     let _ = catalog(&mut app, CATALOG);
-    let _ = catalog(&mut app, ALIAS);
     assert_eq!(app.revision(), before);
     assert!(!app.is_dirty());
 }
