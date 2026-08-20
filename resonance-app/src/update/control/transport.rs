@@ -141,23 +141,10 @@ fn set_time_signature(app: &mut Resonance, request: &Request) -> (Response, Task
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if params.numerator == 0 || params.numerator > 32 {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "time-signature numerator {} out of range 1..=32",
-                params.numerator
-            )),
-        );
-    }
-    if !matches!(params.denominator, 1 | 2 | 4 | 8 | 16 | 32) {
-        return reject(
-            request,
-            RpcError::invalid_params(format!(
-                "time-signature denominator {} must be a power of two (1..=32)",
-                params.denominator
-            )),
-        );
+    // Shared with `global.*`, which writes the rest of the signature
+    // track — one rule for what a legal meter is (ba doc #286 §2).
+    if let Err(e) = super::validate_time_signature(params.numerator, params.denominator) {
+        return reject(request, e);
     }
     simple(
         app,

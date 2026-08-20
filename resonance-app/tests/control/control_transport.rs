@@ -252,6 +252,7 @@ fn set_time_signature_directly_and_undoably() {
 
     for params in [
         serde_json::json!({ "numerator": 0, "denominator": 4 }),
+        serde_json::json!({ "numerator": 33, "denominator": 4 }),
         serde_json::json!({ "numerator": 4, "denominator": 5 }),
     ] {
         let response = call(&mut app, "transport.set_time_signature", params);

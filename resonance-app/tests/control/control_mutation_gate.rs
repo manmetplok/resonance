@@ -79,6 +79,11 @@ fn mutating_methods() -> Vec<&'static str> {
         // `arrangement.*` restructures the open project's timeline (ba
         // doc #275 P2).
         methods::arrangement::METHODS,
+        // `global.list_events` reads only, but like `master.summary` it
+        // describes the OPEN project — reporting the default 120 BPM 4/4
+        // with nothing open would read like a real song's tempo map (ba
+        // doc #286). The rest of `global.*` mutates outright.
+        methods::global::METHODS,
         // `pool.list` reads only, but like `master.summary` it describes
         // the OPEN project — an empty asset list reads like "this project
         // has no samples", which is a different claim from "there is no

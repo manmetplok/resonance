@@ -39,6 +39,7 @@ mod clip;
 mod edit;
 mod external;
 mod generate;
+mod global;
 mod harmony;
 mod import_midi;
 mod job;
@@ -271,6 +272,14 @@ pub fn execute(
         return result;
     }
 
+    // The global tempo / time-signature tracks (ba doc #286). Sits below
+    // the gate like `master.summary`: `global.list_events` mutates
+    // nothing, but it reports the OPEN project's tempo map, so with
+    // nothing open `busy` is honest and a default 120 BPM 4/4 is not.
+    if let Some(result) = global::try_handle(app, request) {
+        return result;
+    }
+
     if is_protocol_method(method) {
         // Known in protocol v1, but its namespace todo hasn't landed
         // yet. Stable `unsupported` kind either way; the message tells a
@@ -380,6 +389,29 @@ fn is_protocol_method(method: &str) -> bool {
 /// control handler returns it, `update.rs` forwards it).
 pub(crate) fn run_via_update(app: &mut Resonance, message: Message) -> Task<Message> {
     app.update(message)
+}
+
+/// Validate a time signature exactly as the app's own signature track
+/// does: numerator `1..=32`, denominator a power of two in `1..=32`
+/// (resolved, e.g. `8` for 7/8 — never the exponent).
+///
+/// One definition for the whole control layer: `transport.set_time_signature`
+/// rewrites the bar-1 event and `global.*` writes the rest of the
+/// signature track, and the two must not be able to disagree about what
+/// a legal meter is (ba doc #286 §2). Rejects rather than clamps, so a
+/// client learns why instead of silently getting a different meter.
+pub(super) fn validate_time_signature(numerator: u8, denominator: u8) -> Result<(), RpcError> {
+    if numerator == 0 || numerator > 32 {
+        return Err(RpcError::invalid_params(format!(
+            "time-signature numerator {numerator} out of range 1..=32"
+        )));
+    }
+    if !matches!(denominator, 1 | 2 | 4 | 8 | 16 | 32) {
+        return Err(RpcError::invalid_params(format!(
+            "time-signature denominator {denominator} must be a power of two (1..=32)"
+        )));
+    }
+    Ok(())
 }
 
 /// Parse params for a method whose params are entirely optional:

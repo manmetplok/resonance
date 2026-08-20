@@ -81,6 +81,7 @@ impl ResonanceMcp {
             + Self::router_song()
             + Self::router_project()
             + Self::router_transport()
+            + Self::router_global()
             + Self::router_trackmix()
             + Self::router_external()
             + Self::router_master()
