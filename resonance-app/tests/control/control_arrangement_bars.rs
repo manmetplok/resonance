@@ -257,6 +257,106 @@ fn removing_bars_that_hold_clips_needs_confirmation() {
     assert_eq!(result.clips_deleted.len(), 2, "both are reported");
 }
 
+// ---------------------------------------------------------------------------
+// The collections that have no other coverage
+// ---------------------------------------------------------------------------
+
+fn add_marker(app: &mut Resonance, id: u64, start_bar: u64, end_bar: Option<u64>) -> u64 {
+    app.test_add_marker(resonance_app::state::ArrangementMarker {
+        id,
+        name: format!("m{id}"),
+        color: [0, 0, 0],
+        start_sample: (start_bar - 1) * BAR,
+        end_sample: end_bar.map(|b| (b - 1) * BAR),
+        seeded: false,
+    })
+}
+
+fn install_lane(app: &mut Resonance, bars: &[u64]) {
+    use resonance_audio::types::AudioEvent;
+    use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
+    let points = bars
+        .iter()
+        .map(|b| Breakpoint::new((b - 1) * BAR, 0.5, CurveKind::Linear))
+        .collect();
+    let lane = AutomationLane::new(1, AutomationTarget::MasterGain, points);
+    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane });
+}
+
+fn lane_points(app: &Resonance) -> Vec<u64> {
+    app.test_automation()
+        .lanes
+        .values()
+        .flat_map(|l| l.points.iter().map(|p| p.time_frames))
+        .collect()
+}
+
+/// Markers and automation breakpoints ride the shift too, and a ranged
+/// marker takes its end with it.
+#[test]
+fn markers_and_automation_move_with_the_cut() {
+    let mut app = app_with_project();
+    let before_cut = add_marker(&mut app, 1, 3, None);
+    let after_cut = add_marker(&mut app, 2, 9, Some(11));
+    install_lane(&mut app, &[3, 9, 17]);
+
+    let result = insert(&mut app, 9, 2);
+
+    let marker = |id: u64| {
+        app.test_markers()
+            .markers
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| (m.start_sample, m.end_sample))
+            .expect("marker survives the shift")
+    };
+    assert_eq!(marker(before_cut), (2 * BAR, None), "before the cut, unmoved");
+    assert_eq!(
+        marker(after_cut),
+        (10 * BAR, Some(12 * BAR)),
+        "bar 9 -> bar 11, and the range end moves with the start"
+    );
+    assert_eq!(result.markers_moved, 1);
+
+    assert_eq!(
+        lane_points(&app),
+        vec![2 * BAR, 10 * BAR, 18 * BAR],
+        "only the breakpoints at or after the cut move"
+    );
+    assert_eq!(result.automation_points_moved, 2);
+}
+
+/// Removing bars can pull a later breakpoint onto or past one that sat
+/// inside the removed span and stayed. The engine requires lanes sorted
+/// by time, so the mirror has to re-sort rather than hand it a lane that
+/// runs backwards.
+#[test]
+fn a_removal_leaves_the_automation_lane_sorted() {
+    let mut app = app_with_project();
+    // Bar 7 is inside the removed 5..8 and does not move; bar 9 lands on
+    // bar 5, i.e. BEFORE it.
+    install_lane(&mut app, &[1, 7, 9]);
+
+    call(
+        &mut app,
+        proto::REMOVE_BARS,
+        &RemoveBarsParams {
+            at_bar: 5,
+            count: 4,
+            confirm: true,
+        },
+    )
+    .result::<ShiftResult>()
+    .expect("nothing starts inside bars 5..8 but the breakpoint");
+
+    let points = lane_points(&app);
+    assert!(
+        points.windows(2).all(|w| w[0] <= w[1]),
+        "the lane is still sorted ascending: {points:?}"
+    );
+    assert_eq!(points, vec![0, 4 * BAR, 6 * BAR]);
+}
+
 /// insert then remove the same span is the identity — the check that the
 /// two directions really are inverses.
 #[test]

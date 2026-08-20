@@ -42,6 +42,96 @@ pub(crate) struct MusicalAnchors {
     loop_out: u64,
 }
 
+/// How many anchors [`MusicalAnchors::displace_from`] displaced, per kind.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Displaced {
+    pub audio_clips: u32,
+    pub midi_clips: u32,
+    pub markers: u32,
+    pub automation_points: u32,
+}
+
+impl MusicalAnchors {
+    /// Move every anchor that currently sits at or after `cut` by
+    /// `delta_ticks`, leaving the rest alone. Used by the structural bar
+    /// shift (`update::arrangement`), which is a tick-space displacement
+    /// and a tempo-map change at once: displace here, rebuild the map,
+    /// then [`reanchor_to_tempo`] writes both back in one step.
+    ///
+    /// The selection is made in SAMPLES against `r`, not in ticks against
+    /// the anchors already captured: a tick is ~50 samples at 120 BPM, so
+    /// comparing ticks would sweep in the last few dozen samples before
+    /// the cut and move a clip that starts before it.
+    ///
+    /// The playhead and the loop range are deliberately not displaced —
+    /// they are the user's viewport, not song content.
+    pub(crate) fn displace_from(
+        &mut self,
+        r: &Resonance,
+        cut: SamplePos,
+        delta_ticks: i64,
+    ) -> Displaced {
+        fn displace(tick: &mut u64, delta_ticks: i64) {
+            *tick = (*tick as i64 + delta_ticks).max(0) as u64;
+        }
+        let mut moved = Displaced::default();
+
+        for (clip_id, tick) in self.audio_clips.iter_mut() {
+            let Some(clip) = r.clips.iter().find(|c| c.id == *clip_id) else {
+                continue;
+            };
+            if clip.start_sample < cut {
+                continue;
+            }
+            displace(tick, delta_ticks);
+            moved.audio_clips += 1;
+        }
+
+        for (clip_id, tick) in self.midi_clips.iter_mut() {
+            let Some(clip) = r.midi_clips.iter().find(|c| c.id == *clip_id) else {
+                continue;
+            };
+            if clip.start_sample < cut {
+                continue;
+            }
+            displace(tick, delta_ticks);
+            moved.midi_clips += 1;
+        }
+
+        for (id, start, end) in self.markers.iter_mut() {
+            let Some(marker) = r.markers.markers.iter().find(|m| m.id == *id) else {
+                continue;
+            };
+            if marker.start_sample < cut {
+                continue;
+            }
+            displace(start, delta_ticks);
+            if let Some(end) = end.as_mut() {
+                displace(end, delta_ticks);
+            }
+            moved.markers += 1;
+        }
+
+        for (target, ticks) in self.automation.iter_mut() {
+            let Some(lane) = r.automation.lanes.get(target) else {
+                continue;
+            };
+            if lane.points.len() != ticks.len() {
+                continue;
+            }
+            for (point, tick) in lane.points.iter().zip(ticks.iter_mut()) {
+                if point.time_frames < cut {
+                    continue;
+                }
+                displace(tick, delta_ticks);
+                moved.automation_points += 1;
+            }
+        }
+
+        moved
+    }
+}
+
 /// Read the project's absolute positions as ticks under the CURRENT map.
 /// Call this before the tempo map is rebuilt.
 pub(crate) fn musical_anchors(r: &Resonance) -> MusicalAnchors {
