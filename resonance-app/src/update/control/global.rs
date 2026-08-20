@@ -60,6 +60,19 @@
 //! in this file — bare `UpdateTempoEvent` applies, reads back, and acks
 //! correctly while being permanently un-undoable.
 //!
+//! Removal is the same hazard once more, and this time there is no
+//! message that does it directly. `Resonance::remove_tempo_event` /
+//! `remove_signature_event` (`update::global_track`) are plain methods
+//! that splice the vector and rebuild the tempo map; calling either from
+//! here would delete the event, reach the engine, ack with a bumped
+//! revision — and never pass through `Resonance::update`, so
+//! `undo::classify` would never see it and the deletion could not be
+//! undone. The only message route is `DeleteSelectedEvent`, which reads
+//! `interaction.selected_global_event` and calls those helpers itself
+//! from inside `update`, landing on the `GlobalTrack(_) => Record` arm.
+//! So [`remove_tempo_event`] and [`remove_signature_event`] select then
+//! delete; see [`remove_selected`].
+//!
 //! # Gating
 //!
 //! `global.list_events` mutates nothing, but it sits BELOW the shared
@@ -69,11 +82,13 @@
 //! than a made-up 120 BPM 4/4 that reads like a real song.
 
 use crate::message::{GlobalTrackMessage, Message};
+use crate::state::{GlobalTrackKind, SelectedGlobalEvent};
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::global::{
     self as proto, AddSignatureEventParams, AddTempoEventParams, EditSignatureEventParams,
-    EditTempoEventParams, GlobalEvents, SignatureEventView, TempoEventView,
+    EditTempoEventParams, GlobalEvents, RemoveSignatureEventParams, RemoveTempoEventParams,
+    SignatureEventView, TempoEventView,
 };
 use resonance_control::{Request, Response, RpcError};
 
@@ -91,6 +106,8 @@ pub(super) fn try_handle(
         proto::ADD_SIGNATURE_EVENT => add_signature_event(app, request),
         proto::EDIT_TEMPO_EVENT => edit_tempo_event(app, request),
         proto::EDIT_SIGNATURE_EVENT => edit_signature_event(app, request),
+        proto::REMOVE_TEMPO_EVENT => remove_tempo_event(app, request),
+        proto::REMOVE_SIGNATURE_EVENT => remove_signature_event(app, request),
         _ => return None,
     };
     Some(handled)
@@ -332,12 +349,153 @@ fn edit_signature_event(app: &mut Resonance, request: &Request) -> (Response, Ta
     ack_task(app, request, task)
 }
 
+/// `global.remove_tempo_event` — take the tempo change off a bar, so the
+/// previous tempo runs straight through it.
+///
+/// Both refusals below are the point of the method. The GUI cannot ask
+/// for either (the shelf offers no delete on the bar-1 dot, and there is
+/// nothing to click on an empty bar), so over the wire they are new
+/// requests that the domain layer answers with silence.
+fn remove_tempo_event(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: RemoveTempoEventParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    // Bar 0 first, as in the edits: "bars are 1-based" is a better answer
+    // than "no event there" for an address that is not a bar at all.
+    if let Err(e) = state_bar(params.bar) {
+        return reject(request, e);
+    }
+    let index = match tempo_event_index(app, params.bar) {
+        Some(index) => index,
+        None => {
+            return reject(
+                request,
+                nothing_to_remove("tempo", params.bar, proto::ADD_TEMPO_EVENT),
+            )
+        }
+    };
+    if index == 0 {
+        return reject(
+            request,
+            initial_event_is_permanent(
+                "tempo",
+                params.bar,
+                "the song has to start at some tempo",
+                proto::EDIT_TEMPO_EVENT,
+            ),
+        );
+    }
+    remove_selected(app, request, GlobalTrackKind::Tempo, index)
+}
+
+/// `global.remove_signature_event` — take the meter change off a bar, so
+/// the previous meter runs straight through it.
+///
+/// Same two refusals as [`remove_tempo_event`], enforced here rather than
+/// inherited: `Resonance::remove_signature_event` has its own
+/// `index > 0` guard and its own silence.
+fn remove_signature_event(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: RemoveSignatureEventParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    if let Err(e) = state_bar(params.bar) {
+        return reject(request, e);
+    }
+    let index = match signature_event_index(app, params.bar) {
+        Some(index) => index,
+        None => {
+            return reject(
+                request,
+                nothing_to_remove("meter", params.bar, proto::ADD_SIGNATURE_EVENT),
+            )
+        }
+    };
+    if index == 0 {
+        return reject(
+            request,
+            initial_event_is_permanent(
+                "meter",
+                params.bar,
+                "the song has to start in some meter",
+                proto::EDIT_SIGNATURE_EVENT,
+            ),
+        );
+    }
+    remove_selected(app, request, GlobalTrackKind::Signature, index)
+}
+
+/// Delete the event at `index` on `kind`'s track, through `update()`.
+///
+/// # Why two messages, and why not the obvious one
+///
+/// Removal has no `GlobalTrackMessage` of its own.
+/// `Resonance::remove_tempo_event(index)` and `remove_signature_event`
+/// exist and look exactly like the call to make — they splice the
+/// vector, rebuild the tempo map, send the engine command and sync the
+/// display. They are also `pub(crate)` methods, not messages, so calling
+/// one from here would skip `Resonance::update` and therefore skip
+/// `undo::classify` entirely: the event would vanish, the engine would
+/// agree, the ack would carry a revision, and no amount of undo would
+/// ever bring it back. A test that did not exercise undo would pass.
+///
+/// `GlobalTrackMessage::DeleteSelectedEvent` is the only route that goes
+/// through `update`, and it takes its target from
+/// `interaction.selected_global_event` rather than from a payload. So
+/// the removal is two dispatches: `SelectEvent` to aim it, then
+/// `DeleteSelectedEvent` to fire. `SelectEvent` is classified
+/// `UndoAction::Skip` (it is the shelf's click handler) and
+/// `DeleteSelectedEvent` falls to `GlobalTrack(_) => Record`, so the
+/// pair is exactly one undo entry — the same one the Delete key produces.
+///
+/// # The GUI selection it moves, and why it is left cleared
+///
+/// Aiming the delete overwrites whatever the user had selected on the
+/// shelf, and `DeleteSelectedEvent` then `take()`s it, so the call ends
+/// with nothing selected. That end state is deliberate, not residue:
+///
+/// - `SelectedGlobalEvent` holds an INDEX, and every index above the one
+///   removed has just shifted down by one. Restoring the caller's
+///   previous selection verbatim would leave the shelf highlighting — and
+///   its inline meter pick_lists editing, and its Delete key aimed at —
+///   the event NEXT to the one the user picked. A silently re-aimed
+///   Delete key is a worse bug than a cleared highlight.
+/// - Re-resolving the old selection by bar would avoid that, but it would
+///   also make the wire path end somewhere the GUI's own delete never
+///   ends. Routing exists so that a remote edit IS the manual edit (ba
+///   doc #286 §3); a bespoke selection-restoring epilogue is exactly the
+///   divergent path §3 declines to build for the adds and edits.
+/// - Nothing is lost by it: the selection is transient view state, absent
+///   from the undo snapshot, and after a deletion "the thing that just
+///   changed" no longer exists to highlight.
+fn remove_selected(
+    app: &mut Resonance,
+    request: &Request,
+    kind: GlobalTrackKind,
+    index: usize,
+) -> (Response, Task<Message>) {
+    let select = super::run_via_update(
+        app,
+        Message::GlobalTrack(GlobalTrackMessage::SelectEvent(Some(SelectedGlobalEvent {
+            kind,
+            index,
+        }))),
+    );
+    let delete = super::run_via_update(
+        app,
+        Message::GlobalTrack(GlobalTrackMessage::DeleteSelectedEvent),
+    );
+    ack_task(app, request, Task::batch([select, delete]))
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers for the whole `global.*` namespace
 // ---------------------------------------------------------------------------
 
-/// "No tempo/meter event at bar N" — the miss every by-bar `edit_*` (and,
-/// from ba todo #1384, `remove_*`) reports.
+/// "No tempo/meter event at bar N" — the miss every by-bar `edit_*`
+/// reports. `remove_*` reports the same miss in its own words; see
+/// [`nothing_to_remove`].
 ///
 /// `edit_*` deliberately refuses an empty bar instead of upserting like
 /// `add_*` does. A client that mistakes which bar carries the change it
@@ -350,6 +508,43 @@ fn no_event_at(kind: &str, bar: u32, add_method: &str) -> RpcError {
         "no {kind} event at bar {bar} — edit changes an event that is already there. \
          Read the track with {} to see which bars carry events, or create one with {add_method}",
         proto::LIST_EVENTS
+    ))
+}
+
+/// "No tempo/meter event at bar N" for the removes — the same miss as
+/// [`no_event_at`], with the wording a delete needs.
+///
+/// A caller cannot be allowed to read this as "fine, it was already
+/// gone". Removing a bar that never carried the event means the change
+/// the caller wanted gone is still in the song, at whatever bar it really
+/// sits on, and an `ok` here would send it off to build the rest of the
+/// arrangement against a tempo map it believes it corrected. #1383 set
+/// the precedent for `edit_*`; the reasoning is stronger for `remove_*`,
+/// because "already absent" is a genuinely tempting reading.
+fn nothing_to_remove(kind: &str, bar: u32, add_method: &str) -> RpcError {
+    RpcError::invalid_params(format!(
+        "no {kind} event at bar {bar}, so there is nothing to remove there — this is not \
+         reported as success, because the change you meant to drop is still in the song at \
+         some other bar. Read the track with {} to see which bars carry events ({add_method} \
+         is what puts one there)",
+        proto::LIST_EVENTS
+    ))
+}
+
+/// "Bar 1 carries the initial tempo/meter and cannot be removed."
+///
+/// The refusal that gives this slice its name.
+/// `Resonance::remove_tempo_event` / `remove_signature_event` both guard
+/// with `index > 0` and then simply RETURN — no error, no log, nothing
+/// removed. A wrapper that dispatched into that guard would ack with a
+/// revision and leave the track untouched, which is the one outcome a
+/// client cannot diagnose: indistinguishable from a delete that worked
+/// and something that put the event straight back.
+fn initial_event_is_permanent(kind: &str, bar: u32, because: &str, edit_method: &str) -> RpcError {
+    RpcError::invalid_params(format!(
+        "bar {bar} carries the song's initial {kind} and cannot be removed — {because}, so \
+         this track always has an event on bar 1. Change its value with {edit_method}; \
+         removing a LATER {kind} change is what this method is for"
     ))
 }
 
@@ -414,9 +609,11 @@ pub(super) fn state_bar(bar: u32) -> Result<u32, RpcError> {
 /// or `None` when no tempo change starts there.
 ///
 /// Resolve and use immediately: the vector re-sorts on every mutation —
-/// [`edit_tempo_event`] resolves, validates and dispatches without ever
-/// letting an index outlive the call, and `remove_tempo_event` (ba todo
-/// #1384) will do the same.
+/// [`edit_tempo_event`] and [`remove_tempo_event`] resolve, validate and
+/// dispatch without ever letting an index outlive the call. The removes
+/// are the sharper case: the index they resolve is carried into
+/// `SelectedGlobalEvent`, which the shelf then draws from, so an index
+/// resolved a mutation ago would aim the deletion at a neighbour.
 ///
 /// `None` is what makes `edit_*` refuse an empty bar rather than upsert
 /// like `add_*` does; the adds need no lookup at all, because
@@ -430,8 +627,8 @@ pub(super) fn tempo_event_index(app: &Resonance, bar: u32) -> Option<usize> {
 /// bar), or `None` when no meter change starts there.
 ///
 /// Resolve and use immediately, for the same reason as
-/// [`tempo_event_index`]. [`edit_signature_event`] is the caller today;
-/// `remove_signature_event` (ba todo #1384) joins it.
+/// [`tempo_event_index`]. [`edit_signature_event`] and
+/// [`remove_signature_event`] are the callers.
 pub(super) fn signature_event_index(app: &Resonance, bar: u32) -> Option<usize> {
     let bar = state_bar(bar).ok()?;
     app.signature_events.iter().position(|e| e.bar == bar)

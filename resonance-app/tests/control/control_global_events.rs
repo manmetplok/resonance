@@ -1,6 +1,7 @@
 //! `global.*` — the song-wide tempo and time-signature tracks: the read
-//! path (`list_events`, ba todo #1380) and the adds (`add_tempo_event` /
-//! `add_signature_event`, ba todo #1382), against design doc #286.
+//! path (`list_events`, ba todo #1380), the adds (`add_tempo_event` /
+//! `add_signature_event`, ba todo #1382), the edits (ba todo #1383) and
+//! the removes (ba todo #1384), against design doc #286.
 //!
 //! The app has always kept per-bar tempo and meter changes on the
 //! global-tracks shelf, and until this method none of the 118 control
@@ -14,7 +15,7 @@
 
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{GlobalTrackMessage, Message};
-use resonance_app::state::ViewMode;
+use resonance_app::state::{GlobalTrackKind, SelectedGlobalEvent, ViewMode};
 use resonance_app::Resonance;
 use resonance_control::methods::global::{self as proto, GlobalEvents};
 use resonance_control::{ErrorKind, MutationAck, Request, Response};
@@ -759,4 +760,353 @@ fn the_edits_are_advertised_in_the_hello_capabilities() {
     let capabilities = resonance_control::methods::capabilities();
     assert!(capabilities.contains(&proto::EDIT_TEMPO_EVENT));
     assert!(capabilities.contains(&proto::EDIT_SIGNATURE_EVENT));
+}
+
+// ---------------------------------------------------------------------------
+// `global.remove_tempo_event` / `global.remove_signature_event` (ba todo #1384)
+// ---------------------------------------------------------------------------
+//
+// Two things are under test here that the assertions alone do not make
+// obvious.
+//
+// 1. THE UNDO ROUTE. Removal has no `GlobalTrackMessage` of its own.
+//    `Resonance::remove_tempo_event(index)` / `remove_signature_event`
+//    are `pub(crate)` methods that splice the vector, rebuild the tempo
+//    map and send the engine command — everything a handler appears to
+//    need — but they are not messages, so calling one bypasses
+//    `Resonance::update` and therefore `undo::classify`. The deletion
+//    works, reads back, acks with a revision, and can never be undone.
+//    The handler instead dispatches `SelectEvent` (classified `Skip`)
+//    then `DeleteSelectedEvent` (which falls to `GlobalTrack(_) =>
+//    Record`). The `*_is_undoable` tests below are what make that route
+//    load-bearing: replacing the pair with a direct
+//    `app.remove_tempo_event(index)` passes every other test in this
+//    section and fails those two.
+//
+// 2. BAR 1 IS REFUSED, NOT IGNORED. Both helpers guard with `index > 0`
+//    and then simply return, so a wrapper that dispatched into that
+//    guard would report success and delete nothing.
+
+fn remove_tempo(app: &mut Resonance, bar: u32) -> Response {
+    call(
+        app,
+        proto::REMOVE_TEMPO_EVENT,
+        &serde_json::json!({ "bar": bar }),
+    )
+}
+
+fn remove_signature(app: &mut Resonance, bar: u32) -> Response {
+    call(
+        app,
+        proto::REMOVE_SIGNATURE_EVENT,
+        &serde_json::json!({ "bar": bar }),
+    )
+}
+
+#[test]
+fn removing_a_tempo_event_leaves_the_previous_tempo_running_through_that_bar() {
+    let mut app = app_with_a_bridge();
+    let ack: MutationAck = remove_tempo(&mut app, 33)
+        .result()
+        .expect("global.remove_tempo_event succeeds");
+    assert_eq!(ack.revision, app.revision(), "the ack carries the post-removal revision");
+
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0)],
+        "the bridge's tempo change is gone; 120 now runs through bar 33"
+    );
+}
+
+#[test]
+fn removing_a_signature_event_leaves_the_previous_meter_running_through_that_bar() {
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = remove_signature(&mut app, 33)
+        .result()
+        .expect("global.remove_signature_event succeeds");
+
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4)], "the 7/8 bridge is back in 4/4");
+}
+
+#[test]
+fn removing_the_middle_of_three_tempo_events_takes_the_named_one() {
+    // The handler resolves bar -> index and hands that index to
+    // `SelectedGlobalEvent`. An off-by-one there, or an index resolved
+    // before some other mutation re-sorted the list, would delete a
+    // neighbour — and the ack would look identical.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = add_tempo(&mut app, 17, 100.0).result().expect("second add");
+    let _: MutationAck = add_tempo(&mut app, 49, 90.0).result().expect("third add");
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0), (17, 100.0), (33, 140.0), (49, 90.0)]
+    );
+
+    let _: MutationAck = remove_tempo(&mut app, 33).result().expect("removal succeeds");
+
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0), (17, 100.0), (49, 90.0)],
+        "only bar 33 went"
+    );
+}
+
+#[test]
+fn a_removed_tempo_event_is_undoable() {
+    // THE point of this slice, and the reason the handler does not call
+    // `Resonance::remove_tempo_event` directly. One undo must put the
+    // event back with BOTH its fields, and must cost exactly one entry —
+    // `SelectEvent` is `UndoAction::Skip`, so aiming the delete adds
+    // nothing to the history.
+    let mut app = app_with_a_bridge();
+    let before = tempo_pairs(&mut app);
+    let entries_before = undo_entry_count(&app);
+
+    let _: MutationAck = remove_tempo(&mut app, 33).result().expect("removal succeeds");
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0)]);
+
+    let _ = app.update(Message::Undo);
+
+    assert_eq!(
+        tempo_pairs(&mut app),
+        before,
+        "one undo must restore the removed event with its bar AND its bpm"
+    );
+    assert_eq!(
+        undo_entry_count(&app),
+        entries_before,
+        "the select+delete pair is ONE entry: SelectEvent is classified Skip, so a second \
+         entry would mean the aiming dispatch is recording history of its own"
+    );
+
+    let _ = app.update(Message::Redo);
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0)], "and redo takes it away again");
+}
+
+#[test]
+fn a_removed_signature_event_is_undoable() {
+    // Same contract for the meter track, asserted separately because it
+    // travels through a different helper (`remove_signature_event`, which
+    // also re-derives the transport's displayed meter).
+    let mut app = app_with_a_bridge();
+    let before = meter_triples(&mut app);
+    let entries_before = undo_entry_count(&app);
+
+    let _: MutationAck = remove_signature(&mut app, 33).result().expect("removal succeeds");
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4)]);
+
+    let _ = app.update(Message::Undo);
+
+    assert_eq!(
+        meter_triples(&mut app),
+        before,
+        "one undo must restore the removed event with its bar, numerator AND denominator"
+    );
+    assert_eq!(undo_entry_count(&app), entries_before, "exactly one entry");
+
+    let _ = app.update(Message::Redo);
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4)]);
+}
+
+#[test]
+fn a_removal_records_exactly_one_revision_bump() {
+    // Two messages go out and exactly one of them is a committed change,
+    // so the counter a client watches for concurrent user edits must move
+    // by one — not by two, which would read as "someone else is editing"
+    // after every removal.
+    let mut app = app_with_a_bridge();
+    let before = app.revision();
+    let _: MutationAck = remove_tempo(&mut app, 33).result().expect("removal succeeds");
+    assert_eq!(app.revision(), before + 1);
+}
+
+#[test]
+fn an_undone_removal_takes_the_gui_tempo_map_with_it() {
+    // The event vectors are not the only thing the removal touched:
+    // `rebuild_and_send_tempo` runs inside the domain helper, and the
+    // restore path re-runs it. A test reading only the wire lists would
+    // miss a tempo map still describing the shortened song.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = remove_tempo(&mut app, 33).result().expect("removal succeeds");
+    assert_eq!(app.test_tempo_map().tempo_points.len(), 1);
+
+    let _ = app.update(Message::Undo);
+
+    let points = &app.test_tempo_map().tempo_points;
+    assert_eq!(points.len(), 2, "{points:?}");
+    assert!(
+        (points[1].bpm - 140.0).abs() < 1e-4,
+        "the tempo map must track the undo, not just the event list: {points:?}"
+    );
+}
+
+#[test]
+fn removing_the_bar_1_tempo_event_is_refused_not_ignored() {
+    // `Resonance::remove_tempo_event` guards with `index > 0` and then
+    // RETURNS — no error, nothing removed. A wrapper that dispatched into
+    // that guard would ack with a revision and leave the track untouched,
+    // which is the one outcome a client cannot diagnose.
+    let mut app = app_with_a_bridge();
+    let before = tempo_pairs(&mut app);
+    let entries_before = undo_entry_count(&app);
+
+    let error = remove_tempo(&mut app, 1)
+        .error
+        .expect("removing the song's initial tempo must be refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(
+        error.message.contains("bar 1"),
+        "the refusal must name what it refused: {}",
+        error.message
+    );
+
+    assert_eq!(tempo_pairs(&mut app), before, "nothing removed");
+    assert_eq!(
+        undo_entry_count(&app),
+        entries_before,
+        "a refusal must not leave an empty entry in the history"
+    );
+}
+
+#[test]
+fn removing_the_bar_1_signature_event_is_refused_not_ignored() {
+    let mut app = app_with_a_bridge();
+    let before = meter_triples(&mut app);
+
+    let error = remove_signature(&mut app, 1)
+        .error
+        .expect("removing the song's initial meter must be refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("bar 1"), "{}", error.message);
+
+    assert_eq!(meter_triples(&mut app), before, "nothing removed");
+}
+
+#[test]
+fn removing_a_bar_with_no_event_on_it_is_refused_rather_than_acked_as_already_gone() {
+    // "It is not there, so consider it removed" is the tempting reading
+    // and the wrong one: an empty bar means the change the caller meant
+    // to drop is still in the song at some other bar. #1383 set this
+    // precedent for `edit_*`.
+    let mut app = app_with_a_bridge();
+
+    let error = remove_tempo(&mut app, 20)
+        .error
+        .expect("bar 20 carries no tempo event");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("bar 20"), "{}", error.message);
+
+    let error = remove_signature(&mut app, 20)
+        .error
+        .expect("bar 20 carries no meter event");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+
+    assert_eq!(
+        tempo_pairs(&mut app),
+        vec![(1, 120.0), (33, 140.0)],
+        "and nothing else was removed on the way past"
+    );
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4), (33, 7, 8)]);
+}
+
+#[test]
+fn removing_a_bar_that_only_the_other_track_has_an_event_on_is_refused() {
+    // The two tracks are addressed by the same bar numbers but are
+    // separate lists. Removing the tempo event at a bar that carries only
+    // a meter change must not fall through to the meter track.
+    let mut app = app_with_project();
+    let _: MutationAck = add_signature(&mut app, 17, 5, 4).result().expect("meter add");
+
+    let error = remove_tempo(&mut app, 17)
+        .error
+        .expect("bar 17 carries a meter event, not a tempo event");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+
+    assert_eq!(meter_triples(&mut app), vec![(1, 4, 4), (17, 5, 4)], "untouched");
+}
+
+#[test]
+fn bar_0_is_refused_by_the_removes_too() {
+    let mut app = app_with_a_bridge();
+    for response in [remove_tempo(&mut app, 0), remove_signature(&mut app, 0)] {
+        assert_eq!(
+            response.error.expect("bar 0 is not a bar").kind(),
+            ErrorKind::InvalidParams
+        );
+    }
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (33, 140.0)]);
+}
+
+#[test]
+fn a_removal_clears_the_shelf_selection_rather_than_restoring_the_users() {
+    // A decided side effect, pinned so it cannot drift either way.
+    //
+    // The only message route to a deletion is `DeleteSelectedEvent`,
+    // which takes its target from `interaction.selected_global_event`, so
+    // the handler has to aim it — overwriting whatever the user had
+    // selected — and the message then `take()`s it. The end state is
+    // therefore "nothing selected", and it is deliberately NOT restored:
+    // `SelectedGlobalEvent` holds an INDEX, every index above the removed
+    // one has just shifted down by one, and putting the old value back
+    // would leave the shelf's inline pick_lists and its Delete key aimed
+    // at the event NEXT to the one the user picked. Cleared is also
+    // exactly where the GUI's own delete leaves it.
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = add_tempo(&mut app, 49, 90.0).result().expect("third event");
+
+    // The user has bar 49 selected — index 2, which the removal below
+    // shifts to index 1.
+    let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(Some(
+        SelectedGlobalEvent {
+            kind: GlobalTrackKind::Tempo,
+            index: 2,
+        },
+    ))));
+
+    let _: MutationAck = remove_tempo(&mut app, 33).result().expect("removal succeeds");
+
+    assert_eq!(
+        app.test_selected_global_event(),
+        None,
+        "the selection is left cleared: restoring index 2 would now point past the end, and \
+         restoring any stale index would re-aim the shelf's Delete key at a neighbour"
+    );
+}
+
+#[test]
+fn a_refused_removal_leaves_the_shelf_selection_alone() {
+    // The refusals happen BEFORE the aiming dispatch, so a rejected call
+    // must not disturb what the user is looking at either.
+    let mut app = app_with_a_bridge();
+    let selected = SelectedGlobalEvent {
+        kind: GlobalTrackKind::Tempo,
+        index: 1,
+    };
+    let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::SelectEvent(Some(
+        selected,
+    ))));
+
+    assert!(remove_tempo(&mut app, 1).error.is_some());
+    assert!(remove_tempo(&mut app, 20).error.is_some());
+
+    assert_eq!(app.test_selected_global_event(), Some(selected));
+}
+
+#[test]
+fn a_removal_reaches_the_engine_and_the_gui_tempo_map() {
+    let mut app = app_with_a_bridge();
+    let _: MutationAck = remove_signature(&mut app, 33).result().expect("removal succeeds");
+
+    assert_eq!(
+        app.test_tempo_map().signature_points.len(),
+        1,
+        "the shelf's own tempo map follows the removal, not just the event list"
+    );
+}
+
+#[test]
+fn the_removes_are_advertised_in_the_hello_capabilities() {
+    let capabilities = resonance_control::methods::capabilities();
+    assert!(capabilities.contains(&proto::REMOVE_TEMPO_EVENT));
+    assert!(capabilities.contains(&proto::REMOVE_SIGNATURE_EVENT));
 }

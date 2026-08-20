@@ -220,6 +220,25 @@ fn known_traps_stay_documented() {
         // no-ops the GUI's own path performs (ba doc #286 §2).
         ("global_edit_tempo_event", &["CANNOT BE MOVED"]),
         ("global_edit_signature_event", &["NO new_bar HERE"]),
+        // The removes refuse an empty bar rather than reading it as
+        // "already gone" — the tempting reading, and the wrong one: the
+        // change the caller meant to drop is still in the song at some
+        // other bar (ba todo #1384).
+        (
+            "global_remove_tempo_event",
+            &["IF NO TEMPO EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        (
+            "global_remove_signature_event",
+            &["IF NO METER EVENT SITS EXACTLY ON THAT BAR THE CALL IS REFUSED"],
+        ),
+        // Bar 1 is REFUSED, not ignored. `Resonance::remove_tempo_event`
+        // / `remove_signature_event` guard with `index > 0` and then just
+        // return, so the failure this wording prevents is an agent
+        // reading `ok` from a delete that deleted nothing and having no
+        // way to tell (ba doc #286 §2).
+        ("global_remove_tempo_event", &["BAR 1 CANNOT BE REMOVED"]),
+        ("global_remove_signature_event", &["BAR 1 CANNOT BE REMOVED"]),
     ];
     for (tool, needles) in required {
         let description = by_name
