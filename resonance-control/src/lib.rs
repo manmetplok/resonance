@@ -20,6 +20,23 @@
 //! Protocol evolution is additive within a major version; renaming or
 //! removing methods/fields bumps [`PROTOCOL_VERSION`]. Deserialization is
 //! tolerant of unknown fields so newer peers can talk to older ones.
+//!
+//! **One exception, and it is deliberate: retiring a method that was
+//! already published as deprecated does not bump the version.** A rename
+//! keeps the old spelling reachable for a release and says so in the
+//! constant's own doc (see the `track.plugins` -> `plugins.catalog`
+//! rename in todos #1236/#1240); dropping it at the end of that window
+//! is the second half of a change the version was never asked to
+//! describe, and the announcement was the deprecation, not the number.
+//!
+//! The reason this is worth writing down rather than judging case by
+//! case: the handshake compares versions with `!=`, not `>=`, so a bump
+//! refuses every client that has not been rebuilt — including the
+//! installed `resonance-mcp` binary — and forces a matching re-pin of
+//! the agent plugin's `lockstep.json`. Bumping to announce the removal
+//! of a name with no MCP tool and no known caller would break far more
+//! than it documents. A method that was NOT deprecated first still bumps;
+//! that is the whole point of the window.
 
 pub mod common;
 pub mod framing;
