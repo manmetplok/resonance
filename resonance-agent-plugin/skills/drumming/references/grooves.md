@@ -58,10 +58,14 @@ get dense.
 
 ## Progressive — odd groupings
 
-The DAW has a signature track, but the control API cannot write to it, so unless
-the user has already placed a signature event, odd-metre material is written as
-groupings inside the existing grid. The pattern's period then stops matching the
-bar; note when it realigns.
+The control API *can* write to the signature track
+(`mcp__resonance__global_add_signature_event`, by 1-based bar), so a real meter
+change is the default for a passage that genuinely changes meter — read the
+skill's step 3. What follows is the other option, and it is not a fallback: odd
+groupings *inside* the existing grid are the right answer whenever the feel
+should be odd but the meter should not move — a figure phrasing across a steady
+4/4 pulse, or a part that has to keep lining up with material in the original
+meter. The pattern's period then stops matching the bar; note when it realigns.
 
 | Grouping | Period (beats) | Accent beats within one period | Realigns with 4/4 every |
 |---|---|---|---|
@@ -78,9 +82,10 @@ Put the **kick on the group heads** and the **snare on one interior accent** —
 the grouping has to be audible in the kit or it is just a bar that ends early. A
 crash on each realignment point tells the listener where the cycle closes.
 
-Polymetre is the other prog device the global-meter limit actually helps with: a
-5-beat kick figure over a 4-beat hat line phases naturally and resolves after 20
-beats, and neither part has to fight the bar lines.
+Polymetre is the case where a signature event is the *wrong* tool and this
+approach is the right one: a 5-beat kick figure over a 4-beat hat line phases
+against a single unchanging meter and resolves after 20 beats. Write a 5/4 event
+instead and the hats are the part fighting the bar lines.
 
 ## Latin
 

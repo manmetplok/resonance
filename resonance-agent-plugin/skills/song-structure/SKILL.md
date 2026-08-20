@@ -5,7 +5,7 @@ when_to_use: >-
   Triggers on requests like "give this a structure", "start a new song", "what
   form should this be", "add a bridge", "make it an AABA", "12-bar blues",
   "extend the outro", "this needs a pre-chorus", "lay out the arrangement".
-allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_sections mcp__resonance__song_tracks
+allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_sections mcp__resonance__song_tracks mcp__resonance__global_list_events
 ---
 
 # Song structure in resonance
@@ -20,6 +20,12 @@ rebuilding everything inside it.
 Call `mcp__resonance__control_hello`. This needs `section.create`,
 `section.place` and `transport.set_time_signature`. If any is missing, the
 running app is older than this plugin — say so and stop.
+
+Meter and tempo *changes* (step 4) additionally need `global.list_events` and
+`global.add_signature_event` / `global.add_tempo_event`. Those are newer than
+the rest, so check them only when the song actually needs a change; if they are
+absent the running app predates them and you are back to asking the user to add
+the event by hand in the global-tracks shelf.
 
 Then `mcp__resonance__song_summary` and `mcp__resonance__song_sections`. If the
 song already has structure, you are editing, not creating: read what is there
@@ -81,50 +87,120 @@ Then check it: placements must not overlap, and bar N of a section that starts a
 bar S is `S + N - 1`. Off-by-one here is the most common structural bug, and it
 does not surface until parts are generated on top of it.
 
-## 4. Meter: the app has a signature track, this API does not
+## 4. Meter and tempo changes: the global tracks
 
-The DAW supports **per-bar time-signature changes** on its signature track, in
-the global-tracks shelf above the timeline. A song can absolutely be in 4/4 and
-then 7/8.
+The DAW keeps **per-bar meter changes** on a signature track and **per-bar tempo
+changes** on a tempo track, in the global-tracks shelf above the timeline. A song
+can be in 4/4 and then 7/8, at 96 BPM and then 140.
 
-**The control surface cannot reach it.** There is no method to add, edit, read or
-delete a signature event. Three consequences, all of which bite:
+**The control surface reaches both.** Writing a meter change used to be
+impossible here and the honest answer was "ask the user to do it in the GUI";
+that is no longer true, and telling a user it is would be inventing a limitation.
 
-- **You cannot create a meter change.** Only the user can, by hand in the GUI. If
-  the arrangement needs one, say so and ask — do not pretend the limitation is
-  the song's.
-- **`mcp__resonance__transport_set_time_signature` rewrites only the bar-0
-  event.** It does not clear later changes and does not make the song
-  single-meter. On a song that already changes meter, calling it changes the
-  opening and silently leaves everything after the first change alone.
-- **`song_summary.time_signature` is the meter at the PLAYHEAD, not the song's
-  meter.** It reports whatever signature is active where the cursor sits, and
-  nothing in the response indicates that meter changes exist at all. A 4/4
-  reading is not evidence the song is in 4/4 throughout.
+### Read the tracks before you compute anything
 
-So if the user says the song changes meter, believe them over `song_summary`, and
-**ask where the changes are** — the bar math in step 3 cannot be derived from
-anything this API returns.
+- `mcp__resonance__global_list_events` returns `tempo_events` (`{bar, bpm}`) and
+  `signature_events` (`{bar, numerator, denominator}`, denominator resolved: 8
+  for 7/8) for the whole song, sorted, with 1-based bars.
+- **Neither list is ever empty.** Bar 1 carries the song's initial tempo and its
+  initial meter and cannot be removed — so **length 1 means "no changes, one
+  meter and one tempo throughout"**, and length > 1 means the song changes.
+  That is the whole test, and it costs no extra call: `song_summary` carries the
+  same two lists, so step 0 already answered it.
+- **`song_summary.time_signature` and `tempo_bpm` are still PLAYHEAD values.**
+  They report whatever is active where the cursor happens to sit, and they change
+  when the playhead moves even though the song did not. A 4/4 reading there is
+  *not* evidence the song is in 4/4 throughout. The new methods did not fix those
+  two fields — they put a correct answer next to them. Do every bar, beat and
+  duration calculation from the event lists.
 
-For writing odd-metre material without a signature event, you have two honest
-options. Say which you took:
+The old instruction was to ask the user where the changes are. Don't: read them.
+Ask only about changes the song does not have yet.
 
-- **Write the odd grouping inside the existing grid** — a 7/8 riff as recurring
-  3+2+2 sixteenth groups in 4/4. The music is right; the bar lines disagree with
-  it, so section boundaries stop landing on downbeats and bar math has to be done
-  in beats.
-- **Ask the user to add the signature event**, then work in real bars. Better for
-  anything where the notation matters or the passage is long.
+### Write a meter change with `global_add_signature_event`
+
+`{bar, numerator, denominator}`, and the same shape for
+`mcp__resonance__global_add_tempo_event` `{bar, bpm}`:
+
+- `bar` is **1-based** and **upserts** — one event per bar, so a second add at
+  the same bar replaces the first instead of stacking two there. Re-sending a
+  call you are unsure landed is safe.
+- `numerator` is 1..=32; `denominator` is the note value that gets the beat,
+  **resolved and a power of two** in 1..=32 — 8 for 7/8, not the exponent 3.
+  `bpm` is 20..=300. Out of range is **refused**, not quietly clamped.
+- `mcp__resonance__global_edit_signature_event` / `global_edit_tempo_event`
+  change an event that **already exists** and refuse an empty bar — they never
+  create one. `mcp__resonance__global_remove_signature_event` /
+  `global_remove_tempo_event` take one away, refuse an empty bar, and **refuse
+  bar 1**: that is the song's initial meter/tempo and the track cannot be without
+  it (edit it, or use `transport_set_time_signature` / `transport_set_tempo`).
+  None of those refusals is a silent no-op, so an `ok` means it happened.
+- A signature event has no `new_bar`. To move one, add at the bar you want and
+  remove the old one. A tempo event can be moved with `edit`'s `new_bar` — except
+  bar 1, which is what "the start of the song" means.
+
+**`mcp__resonance__transport_set_time_signature` is still the wrong tool for a
+meter change.** It rewrites the **bar-1 event only**. On a song that already
+changes meter it moves the opening and leaves every later change standing —
+which reads as "it did nothing". Use it for what the song *starts* in, and
+`global_add_signature_event` for everywhere else. Reaching for it to put a song
+into 7/8 at the bridge is the same mistake it always was; the fix is now a call,
+not a request to the user.
+
+### Two traps that did not go away
+
+**Meter and tempo map first, material second.** A meter or tempo change makes the
+bars after it a different length, and existing clips, markers and automation keep
+their positions in **time**, not in bars. Adding a 7/8 event at bar 17 to a
+finished arrangement lands everything after bar 17 on different bars.
+(`transport_set_tempo` is the one exception — changing the song's *starting*
+tempo re-anchors the arrangement and clips keep their bars.)
+
+**`arrangement_insert_bars` / `arrangement_remove_bars` do not move tempo or
+signature events.** Confirmed defect, not yet fixed — ba todo #1388. Inserting 8
+bars at bar 20 shifts clips, section placements, markers and automation, and
+**strands the 7/8 event at bar 33** while the bridge it was written for moves to
+bar 41. Removing bars *over* an event does not delete or move it either. Now that
+you can create meter changes rather than only users, you are far more likely to
+be the one who hits this. So: if you insert or remove bars in a song with any
+event past the cut, read `global_list_events` afterwards, put the affected events
+back where the music went (`global_add_signature_event`,
+`global_edit_tempo_event`), and **tell the user you had to**.
+
+### Real meter change, or grouping inside the grid?
+
+Both are legitimate and the choice is yours to make and to state:
+
+- **A real signature event** is now the default whenever the meter genuinely
+  changes. Bar lines land where the music does, section boundaries sit on
+  downbeats, and bar math is bar math.
+- **The odd grouping inside the existing grid** — a 7/8 riff as recurring 3+2+2
+  sixteenth groups in 4/4 — is still correct, and still the better answer when
+  the user wants the *feel* without the notation: a polymetric figure over a
+  steady 4/4 pulse, or a phrase that has to keep lining up with material that is
+  not changing meter. The bar lines disagree with the music by design, so section
+  boundaries stop landing on downbeats and bar math has to be done in beats.
+  `${CLAUDE_PLUGIN_ROOT}/skills/drumming/references/grooves.md` has the
+  groupings and the realignment table.
+
+Say which you took. What you must not do is pick the grouping *because the API
+cannot do the other one* — it can.
 
 ## 5. Build it
 
 ```
-transport_set_time_signature   # if not 4/4 — writes the bar-0 event only
-transport_set_tempo
+global_list_events             # what the two global tracks already carry
+transport_set_time_signature   # the meter the song STARTS in — bar-1 event only
+transport_set_tempo            # the tempo it starts at
+global_add_signature_event     # ×N, every LATER meter change, addressed by bar
+global_add_tempo_event         # ×N, every later tempo change
 section_create {place: false}  # ×N, keep the section_ids
 section_place                  # ×M, at explicit start_bars
 section_set_scale              # per section, if the song modulates
 ```
+
+**The global tracks come before the sections, not after.** Placements are given
+in bars, and a meter or tempo change written afterwards moves every bar past it.
 
 `mcp__resonance__section_set_scale` takes `{tonic, scale}` with `scale` one of
 `chromatic, major, minor, dorian, phrygian, lydian, mixolydian, locrian,
@@ -134,7 +210,8 @@ from.
 
 To insert or remove time inside an existing arrangement, use
 `mcp__resonance__arrangement_insert_bars` / `arrangement_remove_bars` rather than
-re-placing everything by hand.
+re-placing everything by hand — then repair the global tracks by hand, because
+those two do not move tempo or signature events (step 4).
 
 ## 6. Verify
 
@@ -142,8 +219,13 @@ re-placing everything by hand.
 landed where you intended and nothing overlaps. Placement bugs are invisible
 until parts are on top, and much more expensive to fix then.
 
-Report the form as a bar map — *section → start bar → length* — so the user can
-see the shape without opening the GUI.
+If you touched the global tracks, read them back with `global_list_events` too.
+You cannot hear a meter change, and an event one bar off looks exactly like an
+event in the right place until parts are written against it.
+
+Report the form as a bar map — *section → start bar → length*, plus any meter or
+tempo change and the bar it takes effect at — so the user can see the shape
+without opening the GUI.
 
 ## Next
 
