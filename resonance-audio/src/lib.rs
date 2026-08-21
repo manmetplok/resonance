@@ -66,6 +66,10 @@ pub mod __test_support {
     /// (ba todo #1290) — pure over a formatter closure, so
     /// `tests/clap_param_meta.rs` can drive it without a plugin.
     pub use crate::clap_host::{choice_labels, MAX_CHOICE_STEPS};
+    /// The `.clap` path → dlopen-target resolution (macOS bundle dirs
+    /// descend to `Contents/MacOS/<name>`) — pure over the filesystem,
+    /// so `tests/clap_bundle_path.rs` can drive it with temp dirs.
+    pub use crate::clap_host::bundle_binary_path;
     pub use crate::engine::{
         chunk_span, encode_buffer_for_test, freeze_terminal_event, midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,

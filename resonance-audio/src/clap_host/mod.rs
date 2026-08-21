@@ -30,6 +30,7 @@ mod process;
 mod state;
 
 pub use bundle::ClapBundle;
+pub use bundle::bundle_binary_path;
 pub use instance::{ClapInstance, StereoBufMut};
 pub use param_meta::{choice_labels, unit_from_text, MAX_CHOICE_STEPS};
 
