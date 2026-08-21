@@ -116,6 +116,10 @@ pub fn draw(ui: &mut egui::Ui, app: &mut IrEditorApp) {
 }
 
 fn load_ir_clicked(app: &IrEditorApp) {
+    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
+    // thread, or the AppKit main thread under the Cocoa runtime, where a
+    // modal panel is the supported path and the runtime's reentrancy
+    // guard skips nested paints (macos-editor-plan.md §3h).
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Impulse response (WAV)", &["wav"])
         .pick_file()

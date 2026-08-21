@@ -163,6 +163,10 @@ fn format_khz(hz: f32) -> String {
 }
 
 fn load_model_clicked(app: &AmpEditorApp) {
+    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
+    // thread, or the AppKit main thread under the Cocoa runtime, where a
+    // modal panel is the supported path and the runtime's reentrancy
+    // guard skips nested paints (macos-editor-plan.md §3h).
     let Some(path) = rfd::FileDialog::new()
         .add_filter("NAM model", &["nam"])
         .pick_file()

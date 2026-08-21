@@ -69,9 +69,12 @@ pub(super) fn load_installed_kit(bridge: &KitBridge, item: &InstalledItem) {
 }
 
 pub(super) fn load_kit_clicked(bridge: &KitBridge) {
-    // Sync rfd dialog on the editor thread. Blocks briefly while the
-    // native file picker is up; the loader thread then does all the
-    // heavy work off the UI thread.
+    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
+    // thread, or the AppKit main thread under the Cocoa runtime, where a
+    // modal panel is the supported path and the runtime's reentrancy
+    // guard skips nested paints (macos-editor-plan.md §3h). Blocks
+    // briefly while the native file picker is up; the loader thread then
+    // does all the heavy work off the UI thread.
     let picked = rfd::FileDialog::new()
         .add_filter("Drum kit manifest", &["json"])
         .pick_file();

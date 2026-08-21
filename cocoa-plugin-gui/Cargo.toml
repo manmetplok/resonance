@@ -40,3 +40,11 @@ path = "examples/hello.rs"
 name = "editor_size"
 path = "tests/editor_size.rs"
 harness = false
+
+# Reentrancy-guard regression test (plan §3h): a nested modal run loop —
+# what an rfd dialog opened from `ui()` runs — must not re-enter `ui()`,
+# and a host destroy landing inside it must tear down cleanly.
+[[test]]
+name = "modal_reentrancy"
+path = "tests/modal_reentrancy.rs"
+harness = false

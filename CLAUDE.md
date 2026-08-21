@@ -68,7 +68,12 @@ Four things to know before adding tests (background in ba doc #285):
   ```sh
   cargo test -p resonance-gate --test editor_open_cocoa -- --ignored --nocapture
   cargo test -p cocoa-plugin-gui --test editor_size -- --ignored --nocapture
+  cargo test -p cocoa-plugin-gui --test modal_reentrancy -- --ignored --nocapture
   ```
+
+  The third one guards the rfd-dialog path: `ui()` may block in a modal
+  run loop, and the runtime must neither re-enter `ui()` nor crash when a
+  host destroy lands mid-modal.
 
   These two are `harness = false` (libtest never pumps the AppKit main
   thread — the tests would hang, not fail) and hand-roll the `--ignored`

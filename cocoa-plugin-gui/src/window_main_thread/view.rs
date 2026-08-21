@@ -472,6 +472,18 @@ impl EditorView {
         if ivars.in_paint.get() || !ivars.alive.load(Ordering::Relaxed) {
             return;
         }
+        // Keep the view alive for the whole frame: `ui()` may start a
+        // modal run loop (an rfd dialog), and a modal loop services the
+        // main queue — where a host `destroy()` can land and drop the
+        // registry's strong references to this very object while this
+        // method is still on the stack (plan item 3h). AppKit's display
+        // machinery happens to hold its own references today (the 3h
+        // negative control passed without this retain), but that is its
+        // internal timing, not a contract — same rationale as the retains
+        // in `handle_close_request` and `tick`. `paint_inner` tolerates
+        // resuming on a torn-down view (its `paint` state is gone, so it
+        // returns before touching GL).
+        let _keep_alive = self.retain();
         ivars.in_paint.set(true);
         self.paint_inner();
         ivars.in_paint.set(false);
