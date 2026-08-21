@@ -16,6 +16,8 @@
 //!   long-running operations (project I/O, SVS render, mixdown).
 //! - [`ids`] / [`common`]: shared id newtypes (the app's real `u64` ids,
 //!   serialized verbatim) and compact view primitives.
+//! - [`socket`]: the socket-path resolution rule, so server and client
+//!   can never disagree on where the socket lives.
 //!
 //! Protocol evolution is additive within a major version; renaming or
 //! removing methods/fields bumps [`PROTOCOL_VERSION`]. Deserialization is
@@ -44,6 +46,7 @@ pub mod ids;
 pub mod job;
 pub mod methods;
 pub mod rpc;
+pub mod socket;
 
 pub use common::{
     BeatRange, KeyScale, MutationAck, PositionSpec, SongPosition, TimeSignature, TrackKind,

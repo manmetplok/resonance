@@ -59,7 +59,9 @@ fn a_write_from_another_thread_is_observed_by_the_handle() {
 // End-to-end, against a live compositor (ignored by default)
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+// Linux-only: it drives the real Wayland `Editor` (and `hyprctl`); the
+// pure `SharedSize` tests above still run on every platform.
+#[cfg(all(test, target_os = "linux"))]
 mod live {
     use std::time::{Duration, Instant};
 

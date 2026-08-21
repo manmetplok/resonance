@@ -1,6 +1,6 @@
 //! Param-typed egui widget helpers for plugin editors.
 //!
-//! Binds the pure egui widgets from `wayland_plugin_gui::widgets` (and
+//! Binds the pure egui widgets from `plugin_gui_core::widgets` (and
 //! plain egui controls) to this crate's parameter types: each helper
 //! reads the param, draws the widget, and writes the value back if it
 //! changed. Feature-gated behind `editor-widgets` so DSP-only consumers
@@ -42,9 +42,9 @@
 //! tested with nothing in the fleet calling them.
 
 use crate::param::{BoolParam, FloatParam, Param};
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
-/// The cell `wayland_plugin_gui::widgets::knob` allocates: 64 px wide,
+/// The cell `plugin_gui_core::widgets::knob` allocates: 64 px wide,
 /// a 40 px dial plus 36 px of label and value rows.
 ///
 /// Mirrored here so the text field that replaces a knob during entry
@@ -117,7 +117,7 @@ pub fn float_knob(ui: &mut egui::Ui, param: &FloatParam, label: &str, sub_label:
     let mut normalized = param.normalized_value();
     let value_text = param.display(param.value() as f64);
     let drawn = ui.scope(|ui| {
-        wayland_plugin_gui::widgets::knob(
+        plugin_gui_core::widgets::knob(
             ui,
             &mut normalized,
             0.0..=1.0,

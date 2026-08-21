@@ -1,6 +1,7 @@
 //! CLAP GUI extension wrapper. Drives the plugin's editor window
 //! through the standard `is_api_supported → create → get_size → show`
-//! sequence on Wayland. We don't currently implement the embedding
+//! sequence, negotiating the platform's native window API (Wayland on
+//! Linux, Cocoa on macOS). We don't currently implement the embedding
 //! path — every editor opens as a floating top-level window.
 //!
 //! Every step that can refuse is classified into a
@@ -8,7 +9,16 @@
 //! report *which* plugin failed and *why* (ba todo #1347); the engine
 //! turns that into `AudioEvent::PluginEditorState`.
 
-use clap_sys::ext::gui::CLAP_WINDOW_API_WAYLAND;
+use std::ffi::CStr;
+
+#[cfg(target_os = "macos")]
+use clap_sys::ext::gui::CLAP_WINDOW_API_COCOA as CLAP_WINDOW_API_NATIVE;
+#[cfg(not(target_os = "macos"))]
+use clap_sys::ext::gui::CLAP_WINDOW_API_WAYLAND as CLAP_WINDOW_API_NATIVE;
+
+/// The window API this host offers plugins — the counterpart of the
+/// plugin side's `editor_host::native_api()`.
+const NATIVE_API: &CStr = CLAP_WINDOW_API_NATIVE;
 
 use crate::types::PluginEditorFailure;
 
@@ -28,7 +38,7 @@ impl ClapInstance {
         self.gui_open
     }
 
-    /// Open the plugin's editor window as a floating Wayland window.
+    /// Open the plugin's editor window as a floating native window.
     ///
     /// Walks the full CLAP GUI negotiation sequence:
     /// `is_api_supported` → `create` → `get_size` → `show`. Returns the
@@ -47,13 +57,13 @@ impl ClapInstance {
             let Some(is_supported) = (*gui).is_api_supported else {
                 return Err(PluginEditorFailure::UnsupportedWindowApi);
             };
-            if !is_supported(self.plugin, CLAP_WINDOW_API_WAYLAND.as_ptr(), true) {
+            if !is_supported(self.plugin, NATIVE_API.as_ptr(), true) {
                 return Err(PluginEditorFailure::UnsupportedWindowApi);
             }
             let Some(create) = (*gui).create else {
                 return Err(PluginEditorFailure::CreateFailed);
             };
-            if !create(self.plugin, CLAP_WINDOW_API_WAYLAND.as_ptr(), true) {
+            if !create(self.plugin, NATIVE_API.as_ptr(), true) {
                 return Err(PluginEditorFailure::CreateFailed);
             }
             // Best-effort size negotiation (ignore errors — the plugin has

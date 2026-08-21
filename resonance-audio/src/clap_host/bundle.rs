@@ -9,7 +9,7 @@
 //! [`ClapBundle::create_instance`].
 
 use std::ffi::{CStr, CString};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::ptr;
 
@@ -60,7 +60,10 @@ impl ClapBundle {
             .ok_or_else(|| "Invalid path encoding".to_string())?;
         let path_cstring = CString::new(path_str).map_err(|e| format!("Invalid path: {}", e))?;
 
-        let library = unsafe { libloading::Library::new(path) }
+        // `path` may be a macOS-style bundle directory; dlopen needs the
+        // binary inside it. `clap_entry.init()` still receives the
+        // original `.clap` path either way, as entry.h specifies.
+        let library = unsafe { libloading::Library::new(bundle_binary_path(path)) }
             .map_err(|e| format!("Failed to load library: {}", e))?;
 
         let entry: *const clap_plugin_entry = unsafe {
@@ -411,6 +414,43 @@ impl Drop for ClapBundle {
         // the bundle initialised — exactly the state we want it in.
         let _ = self.entry;
     }
+}
+
+/// The file to actually `dlopen` for a `.clap` path. A plain file (the
+/// Linux layout) is the shared object itself. A directory is a
+/// macOS-style bundle whose binary lives at `Contents/MacOS/<name>`,
+/// where `<name>` comes from Info.plist's `CFBundleExecutable` when
+/// present and the bundle's file stem otherwise (the two match for
+/// every conventionally packaged plugin).
+pub fn bundle_binary_path(path: &Path) -> PathBuf {
+    if !path.is_dir() {
+        return path.to_path_buf();
+    }
+    let contents = path.join("Contents");
+    let name = std::fs::read_to_string(contents.join("Info.plist"))
+        .ok()
+        .and_then(|plist| plist_executable(&plist))
+        .or_else(|| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        });
+    match name {
+        Some(name) => contents.join("MacOS").join(name),
+        // No stem means a bare path like "/"; hand it to dlopen
+        // unchanged and let it produce the error.
+        None => path.to_path_buf(),
+    }
+}
+
+/// Minimal `CFBundleExecutable` extraction from an XML Info.plist: the
+/// first `<string>` after the key. Deliberately not a plist parser — a
+/// wrong or absent answer only means falling back to the file stem.
+fn plist_executable(plist: &str) -> Option<String> {
+    let rest = &plist[plist.find("<key>CFBundleExecutable</key>")?..];
+    let start = rest.find("<string>")? + "<string>".len();
+    let end = rest[start..].find("</string>")? + start;
+    let name = rest[start..end].trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Read the first-party factory-preset bank out of a loaded plugin

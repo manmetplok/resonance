@@ -13,6 +13,10 @@ pub enum EditorError {
     GlLoad(String),
     ThreadSpawn(std::io::Error),
     ChannelClosed,
+    /// Cocoa runtime failures (window / NSOpenGL setup). One variant for
+    /// the platform, mirroring how the Wayland variants group by stage;
+    /// the message carries the stage detail.
+    Cocoa(String),
 }
 
 impl fmt::Display for EditorError {
@@ -27,6 +31,7 @@ impl fmt::Display for EditorError {
             Self::GlLoad(msg) => write!(f, "GL function load failed: {msg}"),
             Self::ThreadSpawn(err) => write!(f, "editor thread spawn failed: {err}"),
             Self::ChannelClosed => write!(f, "editor thread channel closed"),
+            Self::Cocoa(msg) => write!(f, "cocoa editor runtime failed: {msg}"),
         }
     }
 }

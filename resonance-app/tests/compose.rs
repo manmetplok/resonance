@@ -67,6 +67,8 @@ mod drum_kit_pads;
 mod drum_pattern_library;
 #[path = "compose/drum_section_coverage.rs"]
 mod drum_section_coverage;
+#[path = "compose/fresh_project_tempo_map.rs"]
+mod fresh_project_tempo_map;
 #[path = "compose/generator_section.rs"]
 mod generator_section;
 #[path = "compose/global_tracks_edit_cycle.rs"]

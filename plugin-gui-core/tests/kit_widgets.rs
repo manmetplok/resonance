@@ -7,8 +7,8 @@
 //! to the shared widget cannot quietly change what a migrating editor
 //! gets.
 
-use wayland_plugin_gui::egui;
-use wayland_plugin_gui::widgets::{
+use plugin_gui_core::egui;
+use plugin_gui_core::widgets::{
     chip::{chip_styled, Chip, ChipStyle},
     segmented::{segmented, SegmentedStyle},
     slider::{
@@ -326,11 +326,11 @@ fn the_shared_slider_defaults_to_the_canonical_palette() {
     // would read as a different product beside its own knobs.
     assert_eq!(
         SliderPalette::LAVENDER.accent,
-        wayland_plugin_gui::theme::lavender::ACCENT
+        plugin_gui_core::theme::lavender::ACCENT
     );
     assert_eq!(
         SliderPalette::LAVENDER.warm,
-        wayland_plugin_gui::theme::lavender::WARM
+        plugin_gui_core::theme::lavender::WARM
     );
 
     // Geometry is not part of the palette, and the EQ's band columns are

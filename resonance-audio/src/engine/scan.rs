@@ -1,7 +1,9 @@
-//! Plugin bundle scanning. Iterates a fixed set of directories
-//! (`~/.clap`, `/usr/lib/clap/`, `target/bundled/`) and loads every
-//! `.clap` file or directory it finds. The collected descriptors are
-//! sent back to the app via `AudioEvent::PluginsScanned`.
+//! Plugin bundle scanning. Iterates the platform's CLAP directories
+//! (`~/.clap` + `/usr/lib/clap/` on Linux, `~/Library/Audio/Plug-Ins/CLAP`
+//! + `/Library/Audio/Plug-Ins/CLAP` on macOS, per entry.h), any extra
+//! dirs in `$CLAP_PATH`, and `target/bundled/`, and loads every `.clap`
+//! file or directory it finds. The collected descriptors are sent back
+//! to the app via `AudioEvent::PluginsScanned`.
 //!
 //! Two entry points, and the difference between them matters (ba todo
 //! #1307, finding X10):
@@ -77,27 +79,58 @@ pub(crate) fn scan_plugins(
 /// catalog it reports is the whole set (old bundles included), because
 /// that is what the app mirrors wholesale.
 pub fn rescan_plugins(bundles: &mut Vec<ClapBundle>, event_tx: &Sender<AudioEvent>) {
-    let dirs = scan_dirs();
-    let (scanned, failures) = load_bundles(&dirs, bundles);
-    report(&dirs, scanned, failures, event_tx);
+    rescan_plugins_in(&scan_dirs(), bundles, event_tx);
+}
+
+/// [`rescan_plugins`] over a given set of directories.
+///
+/// The seam `tests/plugin_rescan.rs` drives. A test must not scan the
+/// machine's real plugin directories: `dlopen`ing whatever third-party
+/// `.clap` files happen to be installed pulls their static initialisers
+/// and `atexit` handlers into the test process, and a broken one takes
+/// the process down at exit with the tests already passed (ba doc #285;
+/// see also [`ClapBundle`]'s `Drop` impl for the same problem's other
+/// half).
+pub fn rescan_plugins_in(
+    dirs: &[PathBuf],
+    bundles: &mut Vec<ClapBundle>,
+    event_tx: &Sender<AudioEvent>,
+) {
+    let (scanned, failures) = load_bundles(dirs, bundles);
+    report(dirs, scanned, failures, event_tx);
 }
 
 /// The directories a scan looks in, in priority order.
 fn scan_dirs() -> Vec<PathBuf> {
     let mut scan_dirs: Vec<PathBuf> = Vec::new();
 
-    // ~/.clap/
+    // The platform's per-user and system-wide CLAP dirs, as documented
+    // in CLAP's entry.h.
+    let (user_rel, sys_path) = if cfg!(target_os = "macos") {
+        ("Library/Audio/Plug-Ins/CLAP", "/Library/Audio/Plug-Ins/CLAP")
+    } else {
+        (".clap", "/usr/lib/clap")
+    };
     if let Some(home) = std::env::var_os("HOME") {
-        let clap_dir = PathBuf::from(home).join(".clap");
+        let clap_dir = PathBuf::from(home).join(user_rel);
         if clap_dir.is_dir() {
             scan_dirs.push(clap_dir);
         }
     }
-
-    // /usr/lib/clap/
-    let sys_dir = PathBuf::from("/usr/lib/clap");
+    let sys_dir = PathBuf::from(sys_path);
     if sys_dir.is_dir() {
         scan_dirs.push(sys_dir);
+    }
+
+    // $CLAP_PATH: extra search dirs, `:`-separated (also entry.h).
+    if let Some(paths) = std::env::var_os("CLAP_PATH") {
+        for dir in std::env::split_paths(&paths) {
+            // Skip entries that just re-list a standard dir, so a
+            // plugin isn't cataloged twice.
+            if dir.is_dir() && !scan_dirs.contains(&dir) {
+                scan_dirs.push(dir);
+            }
+        }
     }
 
     // Bundled plugins: find target/bundled/ relative to the executable.
@@ -144,7 +177,8 @@ fn is_clap_bundle(path: &Path) -> bool {
         || path.to_str().map(|s| s.ends_with(".clap")).unwrap_or(false)
 }
 
-/// Load every bundle under `dirs` that `bundles` does not already hold,
+/// Load every bundle under `dirs` — recursively, see
+/// [`collect_clap_paths`] — that `bundles` does not already hold,
 /// appending the new ones. Returns the catalog for ALL loaded bundles
 /// (already-present ones included) and the failures this pass hit.
 ///
@@ -156,39 +190,34 @@ fn load_bundles(
 ) -> (Vec<ScannedPlugin>, Vec<PluginScanFailure>) {
     let mut failures = Vec::new();
 
+    let mut clap_paths = Vec::new();
     for dir in dirs {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !is_clap_bundle(&path) {
-                continue;
-            }
-            // Resolve symlinks for loading — and for identity: two
-            // directories can point at one bundle, and loading it twice
-            // would double every entry in the catalog.
-            let real_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-            let real_path_str = real_path.to_string_lossy().to_string();
-            if bundles.iter().any(|b| b.path() == real_path_str) {
-                continue;
-            }
+        collect_clap_paths(dir, 0, &mut clap_paths);
+    }
 
-            match ClapBundle::load(&real_path) {
-                // Keep the bundle alive for later instantiation.
-                Ok(bundle) => bundles.push(bundle),
-                Err(e) => {
-                    // Not swallowed: a bundle that fails to load is the
-                    // difference between "this plugin does not exist" and
-                    // "this plugin is broken", and only one of those is
-                    // the user's to fix (ba todo #1307).
-                    eprintln!("Failed to scan {}: {}", path.display(), e);
-                    failures.push(PluginScanFailure {
-                        path: real_path_str,
-                        reason: e,
-                    });
-                }
+    for path in clap_paths {
+        // Resolve symlinks for loading — and for identity: two
+        // directories can point at one bundle, and loading it twice
+        // would double every entry in the catalog.
+        let real_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let real_path_str = real_path.to_string_lossy().to_string();
+        if bundles.iter().any(|b| b.path() == real_path_str) {
+            continue;
+        }
+
+        match ClapBundle::load(&real_path) {
+            // Keep the bundle alive for later instantiation.
+            Ok(bundle) => bundles.push(bundle),
+            Err(e) => {
+                // Not swallowed: a bundle that fails to load is the
+                // difference between "this plugin does not exist" and
+                // "this plugin is broken", and only one of those is
+                // the user's to fix (ba todo #1307).
+                eprintln!("Failed to scan {}: {}", path.display(), e);
+                failures.push(PluginScanFailure {
+                    path: real_path_str,
+                    reason: e,
+                });
             }
         }
     }
@@ -246,4 +275,26 @@ fn report(
         let _ = event_tx.send(AudioEvent::PluginScanFailed { failures });
     }
     let _ = event_tx.send(AudioEvent::PluginsScanned { plugins: scanned });
+}
+
+/// Gather every `.clap` under `dir` into `out`, recursing into vendor
+/// subdirectories (entry.h: the search paths are scanned recursively —
+/// macOS installers in particular nest bundles as e.g.
+/// `CLAP/u-he/Hive.clap`) but not into `.clap` bundle directories
+/// themselves. Depth-capped so a symlink cycle can't spin the scan
+/// forever.
+fn collect_clap_paths(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    const MAX_DEPTH: usize = 4;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_clap_bundle(&path) {
+            out.push(path);
+        } else if path.is_dir() && depth < MAX_DEPTH {
+            collect_clap_paths(&path, depth + 1, out);
+        }
+    }
 }

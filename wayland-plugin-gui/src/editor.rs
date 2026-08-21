@@ -10,33 +10,10 @@ use crate::error::EditorError;
 use crate::size::SharedSize;
 use crate::window_thread::{Command, EditorThread};
 
-/// Options passed to [`Editor::new`].
-#[derive(Debug, Clone)]
-pub struct EditorOptions {
-    pub title: String,
-    /// Wayland `app_id` (reverse-DNS) for the editor window. The
-    /// compositor uses this for taskbar grouping, `xdg-foreign`
-    /// parenting, and window-rule matching. Plugins **must** override
-    /// the default to a plugin-specific id; otherwise every editor
-    /// hosted by this crate collides in the compositor.
-    pub app_id: String,
-    pub initial_size: (u32, u32),
-    pub min_size: (u32, u32),
-    pub resizable: bool,
-}
-
-impl Default for EditorOptions {
-    fn default() -> Self {
-        Self {
-            title: "Plugin Editor".to_string(),
-            // Generic fallback. Callers should pass their own.
-            app_id: "com.resonance.plugin".to_string(),
-            initial_size: (800, 600),
-            min_size: (400, 300),
-            resizable: true,
-        }
-    }
-}
+// The options struct lives in `plugin-gui-core` (shared with every
+// runtime); re-exported here so `crate::editor::EditorOptions` paths
+// inside this crate keep resolving.
+pub use plugin_gui_core::EditorOptions;
 
 /// A handle to a running editor window.
 ///

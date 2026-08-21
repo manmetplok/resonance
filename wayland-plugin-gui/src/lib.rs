@@ -14,6 +14,12 @@
 //! - The caller supplies an [`EditorApp`] whose `ui()` method is invoked on the editor
 //!   thread every frame.
 //!
+//! The platform-neutral pieces of the editor contract — [`EditorApp`],
+//! [`EditorOptions`], [`EditorError`], the [`theme`] and [`widgets`]
+//! modules, and the [`egui`] re-export — live in `plugin-gui-core` and are
+//! re-exported here, so this crate's API is unchanged by the extraction
+//! (macos-editor-plan.md item 3a).
+//!
 //! # Scope
 //!
 //! Wayland only, floating-only (no `set_parent`). By default the runtime draws
@@ -30,23 +36,37 @@
 //! decorations and only falling back to the client frame when the compositor
 //! forces client-side mode (useful where a real native titlebar exists, e.g.
 //! KWin). Clipboard, DnD, and IME are not implemented in the initial version.
+//!
+//! On non-Linux targets the windowing body of this crate — [`Editor`]
+//! included — is compiled out (the Wayland stack does not exist there);
+//! only the `plugin-gui-core` re-exports below remain, so the many plugin
+//! files that import `wayland_plugin_gui::{egui, theme, widgets, ...}`
+//! compile everywhere while the runtime itself is selected per platform
+//! in `resonance_plugin::editor_host` (macos-editor-plan.md item 3c).
 
-mod app;
+#[cfg(target_os = "linux")]
 mod editor;
+#[cfg(target_os = "linux")]
 mod egl_context;
-mod error;
+#[cfg(target_os = "linux")]
 mod input;
-mod size;
-pub mod theme;
-pub mod widgets;
+#[cfg(target_os = "linux")]
 mod window_thread;
 
-pub use app::EditorApp;
-pub use editor::{Editor, EditorOptions};
-pub use error::EditorError;
+// Keep `crate::app` / `crate::error` / `crate::size` resolvable for the
+// windowing modules above without touching their imports: the modules
+// moved to `plugin-gui-core`, these root aliases put them back on the
+// old paths crate-internally.
+#[cfg(target_os = "linux")]
+use plugin_gui_core::{app, error, size};
+
+pub use plugin_gui_core::{theme, widgets, EditorApp, EditorError, EditorOptions};
+
+#[cfg(target_os = "linux")]
+pub use editor::Editor;
 
 // Re-export egui so consumers don't need to pin a matching version themselves.
-pub use egui;
+pub use plugin_gui_core::egui;
 
 /// CSD fallback-frame geometry, exposed for integration tests only.
 ///
@@ -54,6 +74,7 @@ pub use egui;
 /// implementation detail of the client-side decoration fallback). Re-exported
 /// here so the `tests/` close-button hit-test can drive the same pure geometry
 /// the live paint path uses, without an in-crate `#[cfg(test)]` module.
+#[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use window_thread::decorations as csd_geometry;
 
@@ -61,4 +82,5 @@ pub use window_thread::decorations as csd_geometry;
 /// tests only (same rationale as [`csd_geometry`]): plugins read the
 /// live size through [`Editor::get_size`], never through this type.
 #[doc(hidden)]
-pub use size::SharedSize;
+pub use plugin_gui_core::SharedSize;
+

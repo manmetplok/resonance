@@ -1,0 +1,10 @@
+[package]
+name = "plugin-gui-core"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-neutral core of the plugin editor GUI: the EditorApp contract, options, errors, size feedback, theme, and the pure egui widget set shared by every runtime (wayland-plugin-gui today, cocoa-plugin-gui per macos-editor-plan.md)."
+
+[dependencies]
+# egui + the `default_fonts` requirement documented in wayland-plugin-gui's
+# manifest: without it the font atlas is empty and text collapses.
+egui.workspace = true

@@ -18,6 +18,7 @@ pub(crate) mod io;
 pub(crate) mod latency;
 #[cfg(target_os = "linux")]
 mod input_pipewire;
+#[cfg(target_os = "linux")]
 mod output_pipewire;
 mod limits;
 pub(crate) mod midi_clock;
@@ -60,8 +61,10 @@ pub mod __test_support {
     pub use crate::clap_host::{ClapBundle, ClapInstance, PluginMap, PluginSlot, SyncClapInstance};
     /// The live, additive plugin rescan (ba todo #1307) — exposed so
     /// `tests/plugin_rescan.rs` can assert it never loads a bundle it
-    /// already holds, which is what keeps running instances safe.
-    pub use crate::engine::scan::rescan_plugins;
+    /// already holds, which is what keeps running instances safe. The
+    /// `_in` variant takes the directories to scan, so the test drives a
+    /// temp dir rather than the machine's real plugin folders.
+    pub use crate::engine::scan::{rescan_plugins, rescan_plugins_in};
     /// Build a `ClapInstance` around a hand-rolled raw `clap_plugin` —
     /// see `tests/clap_latency_tracking.rs` (doc #260 finding #10).
     pub use crate::clap_host::__instance_from_raw_for_test;
@@ -69,6 +72,10 @@ pub mod __test_support {
     /// (ba todo #1290) — pure over a formatter closure, so
     /// `tests/clap_param_meta.rs` can drive it without a plugin.
     pub use crate::clap_host::{choice_labels, MAX_CHOICE_STEPS};
+    /// The `.clap` path → dlopen-target resolution (macOS bundle dirs
+    /// descend to `Contents/MacOS/<name>`) — pure over the filesystem,
+    /// so `tests/clap_bundle_path.rs` can drive it with temp dirs.
+    pub use crate::clap_host::bundle_binary_path;
     pub use crate::engine::{
         chunk_span, encode_buffer_for_test, freeze_terminal_event, midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,

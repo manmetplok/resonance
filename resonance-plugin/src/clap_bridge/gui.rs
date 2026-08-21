@@ -57,20 +57,21 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
     fn set_scale(&mut self, _scale: f64) -> Result<(), PluginError> {
         // Deliberately refused, per the CLAP gui contract: `set_scale`
         // "can be ignored if the plugin will query the OS directly", and
-        // returning false tells the host exactly that. We are Wayland-only
-        // (see `get_preferred_api`), where the windowing API uses logical
-        // pixels and the compositor is authoritative: the GUI runtime
-        // derives its integer buffer scale from
-        // `CompositorHandler::scale_factor_changed` (wayland-plugin-gui's
-        // `State::buffer_scale` is the single source of truth feeding
+        // returning false tells the host exactly that. On both platforms
+        // the windowing API speaks logical pixels and the window system is
+        // authoritative for the scale factor, so the GUI runtime queries
+        // it directly: the Wayland runtime derives its integer buffer
+        // scale from `CompositorHandler::scale_factor_changed`
+        // (wayland-plugin-gui's `State::buffer_scale` feeds
         // `wl_surface.set_buffer_scale`, the EGL buffer size, and egui's
-        // `pixels_per_point`). Applying a host-supplied factor on top
-        // would double-scale; fractional scaling is a planned
-        // wp-fractional-scale-v1 upgrade on the runtime side, not a host
-        // hint. clack maps this `Err` to a plain `false` return at the C
-        // boundary (no host error log).
+        // `pixels_per_point`), and the Cocoa runtime reads the view's
+        // `backingScaleFactor`, re-read on
+        // `viewDidChangeBackingProperties`. Applying a host-supplied
+        // factor on top would double-scale either one. clack maps this
+        // `Err` to a plain `false` return at the C boundary (no host
+        // error log).
         Err(PluginError::Message(
-            "scale is derived from the Wayland compositor",
+            "scale is derived from the window system",
         ))
     }
 
@@ -112,15 +113,19 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
     }
 
     fn set_parent(&mut self, _window: Window) -> Result<(), PluginError> {
-        // We are Wayland-only and floating-only in v1. Pretend to succeed so
-        // hosts that call set_parent unconditionally (even with is_floating=true)
-        // don't fail the handshake.
+        // Floating-only in v1 on both platforms, so there is nothing to
+        // parent to. Pretend to succeed so hosts that call set_parent
+        // unconditionally (even with is_floating=true) don't fail the
+        // handshake. This becomes a real implementation when embedded
+        // mode lands (macos-editor-plan.md item 3g: attach the runtime's
+        // NSView to the host-supplied one), not before.
         Ok(())
     }
 
     fn set_transient(&mut self, _window: Window) -> Result<(), PluginError> {
         // v1: no-op. Could later map to xdg-foreign-unstable-v2 on Wayland
-        // to mark the plugin window as transient for the host window.
+        // (or the host NSWindow on macOS) to mark the plugin window as
+        // transient for the host window.
         Ok(())
     }
 

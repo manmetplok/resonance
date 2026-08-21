@@ -5,6 +5,20 @@ edition = "2021"
 description = "Wayland-native plugin GUI runtime: hosts an egui UI in a floating top-level Wayland window, designed to be spawned from inside a CLAP/VST plugin dylib."
 
 [dependencies]
+# The platform-neutral editor contract (EditorApp/Options/Error, theme,
+# widgets, the egui re-export) — extracted per macos-editor-plan.md 3a.
+plugin-gui-core = { path = "../plugin-gui-core" }
+
+# egui's `default_fonts` feature is REQUIRED — without it no glyphs are loaded,
+# the font atlas is empty, and text has zero-width metrics (layouts collapse,
+# text is invisible).
+egui.workspace = true
+
+# The whole windowing body is `#[cfg(target_os = "linux")]` (non-Linux gets a
+# stub `Editor` so dependents keep compiling), so everything Wayland/EGL only
+# exists on Linux — which is also what lets `cargo check --workspace` work on
+# macOS, where wayland-sys cannot even configure.
+[target.'cfg(target_os = "linux")'.dependencies]
 # Wayland client + SCTK for windowing, input, XDG shell, decorations, fractional scaling.
 smithay-client-toolkit = "0.20"
 wayland-client = "0.31"
@@ -16,11 +30,8 @@ khronos-egl = { version = "6", features = ["dynamic"] }
 libloading = "0.8"
 glow = "0.17"
 
-# egui + the glow painter. egui's `default_fonts` feature is REQUIRED — without it
-# no glyphs are loaded, the font atlas is empty, and text has zero-width metrics
-# (layouts collapse, text is invisible). egui_glow's default features pull in
-# egui-winit which we don't want, so we disable them and wire glow manually.
-egui.workspace = true
+# egui's glow painter. egui_glow's default features pull in egui-winit which we
+# don't want, so we disable them and wire glow manually.
 egui_glow.workspace = true
 
 # Misc.

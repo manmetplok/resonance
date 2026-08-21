@@ -20,7 +20,13 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
     match event {
         // Transport / clock / device events
         E::PlayheadMoved(pos) => r.transport.playhead = pos,
-        E::SampleRateDetected { sample_rate } => r.sample_rate = sample_rate,
+        E::SampleRateDetected { sample_rate } => {
+            r.sample_rate = sample_rate;
+            // The tempo map's bar table is denominated in samples, so it
+            // must be rebuilt at the detected rate — construction built it
+            // at the 44.1k placeholder.
+            r.rebuild_tempo_map();
+        }
         E::Stopped => transport::stopped(r),
         // The engine echoes a key route change back. It is the authority
         // on what is actually keyed, so reconcile the GUI mirror to the

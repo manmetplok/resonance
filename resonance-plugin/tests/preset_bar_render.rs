@@ -13,7 +13,7 @@
 use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::presets::{FactoryPreset, PresetBank, PresetEditor, PresetRef, PresetSession};
 use resonance_plugin::{FloatParam, FloatRange, Param, PresetEvent};
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 const FACTORY: &[FactoryPreset] = &[
     FactoryPreset {

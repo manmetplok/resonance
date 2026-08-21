@@ -2,9 +2,8 @@
 
 use std::sync::Arc;
 
-use resonance_plugin::editor_host::RuntimeEditorHandle;
+use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
-use wayland_plugin_gui::{Editor as RuntimeEditor, EditorOptions};
 
 use resonance_plugin::presets::PresetSession;
 
@@ -39,11 +38,11 @@ impl EqEditorFactory {
 
 impl EditorFactory for EqEditorFactory {
     fn supports(&self, api_name: &str, is_floating: bool) -> bool {
-        is_floating && api_name == "wayland"
+        is_floating && api_name == native_api()
     }
 
     fn preferred(&self) -> Option<(&'static str, bool)> {
-        Some(("wayland", true))
+        Some((native_api(), true))
     }
 
     fn preferred_size(&self) -> (u32, u32) {

@@ -1,4 +1,4 @@
-//! Reverb editor — egui UI hosted by `wayland-plugin-gui`.
+//! Reverb editor — egui UI hosted by the platform GUI runtime.
 //!
 //! Layout (top-down):
 //! - Header: plugin name, preset dropdown, live readouts, freeze indicator.
@@ -8,12 +8,12 @@
 
 use std::sync::Arc;
 
-use resonance_plugin::editor_host::RuntimeEditorHandle;
+use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
 use resonance_plugin::Param;
-use wayland_plugin_gui::{egui, Editor as RuntimeEditor, EditorApp, EditorOptions};
+use wayland_plugin_gui::{egui, EditorApp};
 
 use crate::params::{ReverbParams, PARAM_COUNT};
 use crate::viz::ReverbViz;
@@ -49,10 +49,10 @@ impl ReverbEditorFactory {
 
 impl EditorFactory for ReverbEditorFactory {
     fn supports(&self, api_name: &str, is_floating: bool) -> bool {
-        is_floating && api_name == "wayland"
+        is_floating && api_name == native_api()
     }
     fn preferred(&self) -> Option<(&'static str, bool)> {
-        Some(("wayland", true))
+        Some((native_api(), true))
     }
     fn preferred_size(&self) -> (u32, u32) {
         (WINDOW_W, WINDOW_H)

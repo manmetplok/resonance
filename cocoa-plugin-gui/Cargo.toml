@@ -1,0 +1,50 @@
+[package]
+name = "cocoa-plugin-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Cocoa-native plugin GUI runtime: hosts an egui UI in a floating NSWindow on the AppKit main thread, designed to be spawned from inside a CLAP/VST plugin dylib."
+
+[dependencies]
+# The platform-neutral editor contract (EditorApp/EditorOptions/EditorError,
+# SharedSize, theme, widgets, the egui re-export). Unconditional: the
+# non-macOS stub body needs the same types.
+plugin-gui-core = { path = "../plugin-gui-core" }
+
+# AppKit + the main-thread machinery. Target-gated so the crate is an
+# API-compatible stub everywhere else (mirroring wayland-plugin-gui's
+# inverted gating; see macos-editor-plan.md §4).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+# `objc2-open-gl` gates the NSOpenGLContext parameter methods (GLint etc.).
+objc2-app-kit = { version = "0.3", features = ["objc2-open-gl"] }
+# Main-queue dispatch for the Send `Editor` handle.
+dispatch2 = "0.3"
+
+# egui + the glow painter — the same pairing the Wayland runtime uses; only
+# the GL context provider differs (NSOpenGLContext instead of EGL).
+egui.workspace = true
+egui_glow.workspace = true
+glow = "0.17"
+# dlopen of the OpenGL framework for glow's function loader.
+libloading = "0.8"
+
+[[example]]
+name = "hello"
+path = "examples/hello.rs"
+
+# Live size test (plan §3f). `harness = false` because the scenario needs
+# the main thread handed to NSApplication (see `src/test_support.rs`);
+# without `--ignored` it skips, so the default suite stays headless.
+[[test]]
+name = "editor_size"
+path = "tests/editor_size.rs"
+harness = false
+
+# Reentrancy-guard regression test (plan §3h): a nested modal run loop —
+# what an rfd dialog opened from `ui()` runs — must not re-enter `ui()`,
+# and a host destroy landing inside it must tear down cleanly.
+[[test]]
+name = "modal_reentrancy"
+path = "tests/modal_reentrancy.rs"
+harness = false

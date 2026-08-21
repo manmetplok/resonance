@@ -8,7 +8,7 @@
 //! same gesture at 0.008 per pixel (0.002 with Shift) while everything
 //! else ran at 0.005.
 
-use wayland_plugin_gui::widgets::{
+use plugin_gui_core::widgets::{
     knob_drag_unit, KnobStyle, KNOB_DRAG_SPEED, KNOB_DRAG_SPEED_FINE,
 };
 
