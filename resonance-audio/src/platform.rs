@@ -211,8 +211,59 @@ pub(crate) fn pipewire_max_quantum() -> Option<u32> {
     run_pw_metadata("clock.max-quantum").and_then(|s| s.parse().ok())
 }
 
-/// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
+/// Enumerate available input devices: PipeWire/PulseAudio sources via
+/// `pactl` where that works (Linux, the primary path), falling back to
+/// cpal enumeration wherever it doesn't — no `pactl` binary at all
+/// (macOS), or a PulseAudio-less setup.
 pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>) {
+    let (devices, default_name) = enumerate_input_devices_pactl();
+    if !devices.is_empty() {
+        return (devices, default_name);
+    }
+    enumerate_input_devices_cpal()
+}
+
+/// cpal-based enumeration fallback. cpal has no separate description
+/// string, so the device name doubles as one; the names round-trip
+/// through the name-matching device selection in
+/// [`build_input_stream_cpal`], so a device picked in the UI is the one
+/// that gets opened.
+fn enumerate_input_devices_cpal() -> (Vec<InputDeviceInfo>, Option<String>) {
+    let host = cpal::default_host();
+    let device_name =
+        |d: &cpal::Device| d.description().ok().map(|desc| desc.name().to_string());
+    let default_name = host.default_input_device().as_ref().and_then(device_name);
+    let mut devices = Vec::new();
+    if let Ok(devs) = host.input_devices() {
+        for d in devs {
+            let Some(name) = device_name(&d) else {
+                continue;
+            };
+            // Prefer the default config's channel count (what a stream
+            // would actually open with); fall back to the largest
+            // advertised layout, then to 0 = "unknown".
+            let channels = d
+                .default_input_config()
+                .ok()
+                .map(|c| c.channels())
+                .or_else(|| {
+                    d.supported_input_configs()
+                        .ok()
+                        .and_then(|configs| configs.map(|c| c.channels()).max())
+                })
+                .unwrap_or(0);
+            devices.push(InputDeviceInfo {
+                description: name.clone(),
+                name,
+                channels,
+            });
+        }
+    }
+    (devices, default_name)
+}
+
+/// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
+fn enumerate_input_devices_pactl() -> (Vec<InputDeviceInfo>, Option<String>) {
     let mut devices = Vec::new();
 
     let default_name = run_pactl(&["get-default-source"]).map(|s| s.trim().to_string());
