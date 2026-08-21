@@ -5549,6 +5549,7 @@ dependencies = [
  "clack-extensions",
  "clack-host",
  "clack-plugin",
+ "cocoa-plugin-gui",
  "dirs",
  "iced",
  "parking_lot",

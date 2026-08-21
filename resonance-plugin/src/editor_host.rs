@@ -1,25 +1,46 @@
-//! The bridge from a live `wayland-plugin-gui` window to the host.
+//! The bridge from a live GUI-runtime window to the host.
 //!
 //! [`crate::gui::PluginEditor`] is what the CLAP bridge calls when a host
-//! opens, moves, resizes or closes an editor; `wayland_plugin_gui::Editor`
-//! is the window that actually exists. The two are deliberately unrelated
-//! — `gui.rs` names no GUI runtime so a plugin can be built on anything —
-//! so *something* has to sit between them, and that something is
-//! [`RuntimeEditorHandle`].
+//! opens, moves, resizes or closes an editor; [`RuntimeEditor`] — the
+//! platform GUI runtime's `Editor` — is the window that actually exists.
+//! The two are deliberately unrelated — `gui.rs` names no GUI runtime so a
+//! plugin can be built on anything — so *something* has to sit between
+//! them, and that something is [`RuntimeEditorHandle`].
 //!
 //! It lives here, feature-gated behind `editor-widgets` alongside the other
-//! wayland-gui glue, because it is the same code for every plugin: the
-//! adapter is a property of the two traits, not of any plugin's UI. All 11
+//! editor glue, because it is the same code for every plugin: the adapter
+//! is a property of the two traits, not of any plugin's UI. All 11
 //! first-party plugins carried a verbatim copy of it until ba todo #1336.
+//!
+//! This module is also where the platform runtime is *selected*: the
+//! [`RuntimeEditor`] alias and [`native_api`] are the only places in the
+//! plugin stack that name a platform, so factories import everything from
+//! here and a future win32 runtime is a one-line cfg (macos-editor-plan.md
+//! §4).
 //!
 //! DSP-only consumers of this crate never enable the feature and so never
 //! pull in the GUI stack.
 
 /// The platform's GUI runtime editor, re-exported so plugin factories can
 /// name `editor_host::RuntimeEditor` instead of a platform crate
-/// (macos-editor-plan.md item 3a; the factories migrate in 3c, and the
-/// macOS arm switches to `cocoa_plugin_gui::Editor` in 3b).
+/// (macos-editor-plan.md items 3a/3c).
+#[cfg(target_os = "linux")]
 pub use wayland_plugin_gui::Editor as RuntimeEditor;
+#[cfg(target_os = "macos")]
+pub use cocoa_plugin_gui::Editor as RuntimeEditor;
+
+/// The CLAP window-api name of the platform's native GUI runtime —
+/// `"wayland"` where [`RuntimeEditor`] is the Wayland runtime, `"cocoa"`
+/// where it is the Cocoa one. Factories use it in `supports`/`preferred`
+/// so negotiation is platform-correct everywhere at once instead of 11
+/// hard-coded strings (macos-editor-plan.md item 3c).
+pub fn native_api() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cocoa"
+    } else {
+        "wayland"
+    }
+}
 
 // The platform-neutral halves of the editor contract, re-exported for the
 // same reason: one import surface for factories on every platform.
@@ -27,7 +48,7 @@ pub use plugin_gui_core::{EditorApp, EditorError, EditorOptions};
 
 use crate::gui::PluginEditor;
 
-/// Adapts a running `wayland_plugin_gui::Editor` to [`PluginEditor`].
+/// Adapts a running [`RuntimeEditor`] to [`PluginEditor`].
 ///
 /// Construct one with [`RuntimeEditorHandle::new`] in an
 /// [`EditorFactory::create`](crate::gui::EditorFactory::create) and box it;

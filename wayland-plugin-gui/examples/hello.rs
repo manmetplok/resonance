@@ -5,8 +5,12 @@
 //!
 //!     cargo run -p wayland-plugin-gui --example hello
 
+// The runtime only exists on Linux; elsewhere the example compiles to a
+// stub main (same shape as cocoa-plugin-gui's hello, mirrored).
+#[cfg(target_os = "linux")]
 use wayland_plugin_gui::{egui, Editor, EditorApp, EditorOptions};
 
+#[cfg(target_os = "linux")]
 struct HelloApp {
     counter: u32,
     slider: f32,
@@ -14,6 +18,7 @@ struct HelloApp {
     close_calls: u32,
 }
 
+#[cfg(target_os = "linux")]
 impl EditorApp for HelloApp {
     fn on_close(&mut self) {
         self.close_calls += 1;
@@ -50,6 +55,7 @@ impl EditorApp for HelloApp {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn main() {
     let app = HelloApp {
         counter: 0,
@@ -77,4 +83,10 @@ fn main() {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("wayland-plugin-gui is Linux-only; on macOS run:");
+    eprintln!("    cargo run -p cocoa-plugin-gui --example hello");
 }

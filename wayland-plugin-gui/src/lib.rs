@@ -37,11 +37,12 @@
 //! forces client-side mode (useful where a real native titlebar exists, e.g.
 //! KWin). Clipboard, DnD, and IME are not implemented in the initial version.
 //!
-//! On non-Linux targets the windowing body of this crate is compiled out
-//! (the Wayland stack does not exist there) and [`Editor`] is a stub whose
-//! `new` always errors; plugins that name this crate keep compiling until
-//! they are migrated to the platform-selected runtime in
-//! `resonance_plugin::editor_host` (macos-editor-plan.md items 3b/3c).
+//! On non-Linux targets the windowing body of this crate — [`Editor`]
+//! included — is compiled out (the Wayland stack does not exist there);
+//! only the `plugin-gui-core` re-exports below remain, so the many plugin
+//! files that import `wayland_plugin_gui::{egui, theme, widgets, ...}`
+//! compile everywhere while the runtime itself is selected per platform
+//! in `resonance_plugin::editor_host` (macos-editor-plan.md item 3c).
 
 #[cfg(target_os = "linux")]
 mod editor;
@@ -83,50 +84,3 @@ pub use window_thread::decorations as csd_geometry;
 #[doc(hidden)]
 pub use plugin_gui_core::SharedSize;
 
-/// Non-Linux stub of the [`Editor`] handle: the same public surface, with
-/// `new` always returning an error because there is no Wayland to talk
-/// to. Exists so the 11 plugin factories that name
-/// `wayland_plugin_gui::Editor` keep compiling on macOS between port
-/// steps 3a and 3c; none of the other methods can ever run, since no
-/// instance can be constructed.
-#[cfg(not(target_os = "linux"))]
-mod editor_stub {
-    use plugin_gui_core::{EditorApp, EditorError, EditorOptions};
-
-    pub struct Editor {
-        size: (u32, u32),
-        resizable: bool,
-    }
-
-    impl Editor {
-        /// Always fails: this runtime is Wayland-only. The macOS runtime
-        /// is `cocoa-plugin-gui` (macos-editor-plan.md item 3b).
-        pub fn new<A: EditorApp>(_app: A, _options: EditorOptions) -> Result<Self, EditorError> {
-            Err(EditorError::WaylandConnect(
-                "no Wayland on this platform (the macOS runtime is cocoa-plugin-gui)".to_string(),
-            ))
-        }
-
-        pub fn show(&self) {}
-
-        pub fn hide(&self) {}
-
-        pub fn set_size(&mut self, width: u32, height: u32) -> Result<(), EditorError> {
-            self.size = (width, height);
-            Ok(())
-        }
-
-        pub fn get_size(&self) -> (u32, u32) {
-            self.size
-        }
-
-        pub fn is_resizable(&self) -> bool {
-            self.resizable
-        }
-
-        pub fn destroy(self) {}
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub use editor_stub::Editor;

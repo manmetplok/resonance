@@ -135,17 +135,26 @@ fn dropped_within(editor: Box<dyn PluginEditor>, budget: Duration) -> bool {
 
 /// `create` must refuse an api/floating combo it does not support
 /// *without* trying to open anything — this is the branch that keeps a
-/// non-Wayland host from getting a window it cannot embed, and it is
-/// also what makes this part of the file safe to run headless.
+/// foreign-platform host from getting a window it cannot embed, and it
+/// is also what makes this part of the file safe to run headless. The
+/// factory answers with `editor_host::native_api()` since port item 3c,
+/// so this asserts against the same helper: the platform's own api is
+/// supported (floating only) and the *other* platform's is refused —
+/// which checks the negotiation on whichever OS the suite runs.
 #[test]
 fn create_refuses_an_unsupported_api() {
     let factory = factory();
-    assert!(factory.supports("wayland", true));
-    assert!(!factory.supports("wayland", false), "embedded is not supported");
+    let native = resonance_plugin::editor_host::native_api();
+    let foreign = if native == "wayland" { "cocoa" } else { "wayland" };
+
+    assert!(factory.supports(native, true));
+    assert!(!factory.supports(native, false), "embedded is not supported");
+    assert!(!factory.supports(foreign, true));
     assert!(!factory.supports("x11", true));
 
     assert!(factory.create("x11", true).is_none());
-    assert!(factory.create("wayland", false).is_none());
+    assert!(factory.create(foreign, true).is_none());
+    assert!(factory.create(native, false).is_none());
 }
 
 #[test]
@@ -231,7 +240,7 @@ fn the_editor_opens_resizes_and_closes() {
     let preferred = factory.preferred_size();
 
     let mut editor = factory
-        .create("wayland", true)
+        .create(resonance_plugin::editor_host::native_api(), true)
         .expect("no editor window — run this test from a Wayland session");
 
     editor.show();

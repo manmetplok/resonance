@@ -8,8 +8,14 @@ default = []
 ui = ["iced"]
 # egui widget helpers bound to this crate's param types, for plugin editors
 # built on `plugin-gui-core` widgets + the platform GUI runtime. Off by
-# default so DSP-only consumers stay lean.
-editor-widgets = ["dep:wayland-plugin-gui", "dep:plugin-gui-core"]
+# default so DSP-only consumers stay lean. The runtime deps live in target
+# tables below, so enabling the feature pulls in only the platform's own
+# runtime (`dep:` entries for the other target are ignored there).
+editor-widgets = [
+    "dep:wayland-plugin-gui",
+    "dep:cocoa-plugin-gui",
+    "dep:plugin-gui-core",
+]
 
 [dependencies]
 clack-plugin = { workspace = true }
@@ -21,8 +27,16 @@ parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 iced = { workspace = true, optional = true }
-wayland-plugin-gui = { path = "../wayland-plugin-gui", optional = true }
 plugin-gui-core = { path = "../plugin-gui-core", optional = true }
+
+# The platform GUI runtimes behind `editor_host::RuntimeEditor`. Target-gated
+# so each platform builds only its own windowing stack; both crates stay
+# workspace members so `-p` addressing works everywhere regardless.
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-plugin-gui = { path = "../wayland-plugin-gui", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa-plugin-gui = { path = "../cocoa-plugin-gui", optional = true }
 
 [dev-dependencies]
 # Drive the CLAP bridge from the host side in tests (activate + latency query).

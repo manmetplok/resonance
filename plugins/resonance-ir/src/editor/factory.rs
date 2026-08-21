@@ -2,7 +2,7 @@
 //!
 //! `IrEditorFactory` implements
 //! [`resonance_plugin::gui::EditorFactory`] and constructs a
-//! `wayland_plugin_gui::Editor` hosting the egui [`IrEditorApp`].
+//! [`RuntimeEditor`] (the platform GUI runtime's editor) hosting the egui [`IrEditorApp`].
 //! `RuntimeEditorHandle` adapts that runtime editor to the
 //! [`PluginEditor`] trait the plugin host expects.
 
@@ -10,9 +10,8 @@ use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use resonance_plugin::editor_host::RuntimeEditorHandle;
+use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
-use wayland_plugin_gui::{Editor as RuntimeEditor, EditorOptions};
 
 use crate::params::IrParams;
 use crate::viz::IrViz;
@@ -57,11 +56,11 @@ impl IrEditorFactory {
 
 impl EditorFactory for IrEditorFactory {
     fn supports(&self, api_name: &str, is_floating: bool) -> bool {
-        is_floating && api_name == "wayland"
+        is_floating && api_name == native_api()
     }
 
     fn preferred(&self) -> Option<(&'static str, bool)> {
-        Some(("wayland", true))
+        Some((native_api(), true))
     }
 
     fn preferred_size(&self) -> (u32, u32) {

@@ -50,10 +50,13 @@
 //! IME are not implemented in the initial version, matching the Wayland
 //! runtime's v1 scope.
 //!
-//! On non-macOS targets the windowing body of this crate is compiled out and
-//! [`Editor`] is a stub whose `new` always errors, mirroring how
-//! `wayland-plugin-gui` stubs itself off Linux — both crates stay workspace
-//! members and `cargo check --workspace` passes on both platforms.
+//! On non-macOS targets the windowing body of this crate — [`Editor`]
+//! included — is compiled out; only the pure [`input`] module and the
+//! `plugin-gui-core` re-exports remain, mirroring how `wayland-plugin-gui`
+//! compiles itself out off Linux. Both crates stay workspace members and
+//! `cargo check --workspace` passes on both platforms; the runtime is
+//! selected per platform in `resonance_plugin::editor_host`
+//! (macos-editor-plan.md item 3c).
 
 #[cfg(target_os = "macos")]
 mod editor;
@@ -80,49 +83,3 @@ pub use plugin_gui_core::egui;
 #[doc(hidden)]
 pub use plugin_gui_core::SharedSize;
 
-/// Non-macOS stub of the [`Editor`] handle: the same public surface, with
-/// `new` always returning an error because there is no AppKit to talk to.
-/// Exists so `resonance_plugin::editor_host` can name this crate on every
-/// platform once the factories migrate (macos-editor-plan.md item 3c); none
-/// of the other methods can ever run, since no instance can be constructed.
-#[cfg(not(target_os = "macos"))]
-mod editor_stub {
-    use plugin_gui_core::{EditorApp, EditorError, EditorOptions};
-
-    pub struct Editor {
-        size: (u32, u32),
-        resizable: bool,
-    }
-
-    impl Editor {
-        /// Always fails: this runtime is Cocoa-only. The Linux runtime
-        /// is `wayland-plugin-gui`.
-        pub fn new<A: EditorApp>(_app: A, _options: EditorOptions) -> Result<Self, EditorError> {
-            Err(EditorError::Cocoa(
-                "no Cocoa on this platform (the Linux runtime is wayland-plugin-gui)".to_string(),
-            ))
-        }
-
-        pub fn show(&self) {}
-
-        pub fn hide(&self) {}
-
-        pub fn set_size(&mut self, width: u32, height: u32) -> Result<(), EditorError> {
-            self.size = (width, height);
-            Ok(())
-        }
-
-        pub fn get_size(&self) -> (u32, u32) {
-            self.size
-        }
-
-        pub fn is_resizable(&self) -> bool {
-            self.resizable
-        }
-
-        pub fn destroy(self) {}
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub use editor_stub::Editor;
