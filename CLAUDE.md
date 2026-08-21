@@ -60,3 +60,16 @@ Four things to know before adding tests (background in ba doc #285):
   mapped at — a tiling compositor overrides that (this machine tiles every
   editor to 1571x856), and asserting on it fails for reasons that are nothing
   to do with the plugin.
+
+  The same pair exists for the Cocoa runtime, run by hand from a logged-in
+  macOS session (same lifecycle, same watchdog; the wedge is a main-thread-
+  dispatch deadlock instead of a thread-join hang):
+
+  ```sh
+  cargo test -p resonance-gate --test editor_open_cocoa -- --ignored --nocapture
+  cargo test -p cocoa-plugin-gui --test editor_size -- --ignored --nocapture
+  ```
+
+  These two are `harness = false` (libtest never pumps the AppKit main
+  thread — the tests would hang, not fail) and hand-roll the `--ignored`
+  convention, so the default suite still skips them on every platform.

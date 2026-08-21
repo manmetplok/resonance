@@ -65,6 +65,13 @@ mod gl_context;
 #[cfg(target_os = "macos")]
 mod window_main_thread;
 
+// NSApplication pump for the live `harness = false` tests (this crate's
+// `tests/editor_size.rs` and resonance-gate's `tests/editor_open_cocoa.rs`).
+// Not part of the editor API.
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub mod test_support;
+
 // NSEvent-value → egui translation. Pure (egui + std only) and compiled
 // unconditionally so its unit tests run on every platform.
 #[doc(hidden)]

@@ -5445,6 +5445,7 @@ dependencies = [
  "clack-extensions",
  "clack-host",
  "clack-plugin",
+ "cocoa-plugin-gui",
  "egui",
  "resonance-common",
  "resonance-dsp",

@@ -32,3 +32,11 @@ libloading = "0.8"
 [[example]]
 name = "hello"
 path = "examples/hello.rs"
+
+# Live size test (plan §3f). `harness = false` because the scenario needs
+# the main thread handed to NSApplication (see `src/test_support.rs`);
+# without `--ignored` it skips, so the default suite stays headless.
+[[test]]
+name = "editor_size"
+path = "tests/editor_size.rs"
+harness = false

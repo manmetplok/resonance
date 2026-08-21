@@ -27,6 +27,7 @@ egui = { workspace = true, optional = true }
 # own serde_json. This was a normal dependency that nothing used at all
 # (ba todo #1330, finding C4).
 serde_json.workspace = true
+
 # `tests/state.rs` drives this plugin through a real (in-process) CLAP host
 # across the C ABI, which is the only way to reach the state path the bridge
 # takes while the plugin is active and its object lives in the audio processor.
@@ -34,3 +35,16 @@ clack-host = { workspace = true }
 clack-plugin = { workspace = true }
 clack-extensions = { workspace = true, features = ["clack-host"] }
 
+# The NSApplication pump for tests/editor_open_cocoa.rs (its module docs
+# say why the Cocoa round trip cannot run under libtest). The runtime
+# itself still arrives through resonance-plugin's RuntimeEditor pair.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+cocoa-plugin-gui = { path = "../../cocoa-plugin-gui" }
+
+# The macOS editor round trip (plan §3f). `harness = false` because the
+# scenario needs the main thread handed to NSApplication; without
+# `--ignored` it skips, so the default suite stays headless on both OSes.
+[[test]]
+name = "editor_open_cocoa"
+path = "tests/editor_open_cocoa.rs"
+harness = false
