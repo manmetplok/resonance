@@ -4709,6 +4709,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "plugin-gui-core"
+version = "0.1.0"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5520,6 +5527,7 @@ dependencies = [
  "dirs",
  "iced",
  "parking_lot",
+ "plugin-gui-core",
  "resonance-common",
  "resonance-plugin",
  "serde",
@@ -7447,6 +7455,7 @@ dependencies = [
  "glow 0.17.0",
  "khronos-egl",
  "libloading",
+ "plugin-gui-core",
  "raw-window-handle",
  "smithay-client-toolkit 0.20.0",
  "wayland-client",

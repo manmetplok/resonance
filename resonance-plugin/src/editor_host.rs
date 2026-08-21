@@ -15,7 +15,15 @@
 //! DSP-only consumers of this crate never enable the feature and so never
 //! pull in the GUI stack.
 
-use wayland_plugin_gui::Editor as RuntimeEditor;
+/// The platform's GUI runtime editor, re-exported so plugin factories can
+/// name `editor_host::RuntimeEditor` instead of a platform crate
+/// (macos-editor-plan.md item 3a; the factories migrate in 3c, and the
+/// macOS arm switches to `cocoa_plugin_gui::Editor` in 3b).
+pub use wayland_plugin_gui::Editor as RuntimeEditor;
+
+// The platform-neutral halves of the editor contract, re-exported for the
+// same reason: one import surface for factories on every platform.
+pub use plugin_gui_core::{EditorApp, EditorError, EditorOptions};
 
 use crate::gui::PluginEditor;
 

@@ -1,5 +1,5 @@
 //! The live window size, shared between the editor thread and the
-//! public [`crate::Editor`] handle.
+//! public `Editor` handle of the runtime crate.
 //!
 //! The window's size is decided by the *compositor*, not by us: a
 //! `xdg_toplevel.configure` arrives whenever the user drags the window
@@ -42,7 +42,7 @@ impl SharedSize {
 
     /// Publish a new size. Called by the editor thread for every size it
     /// actually applies — compositor-driven or requested — and
-    /// optimistically by [`crate::Editor::set_size`].
+    /// optimistically by the runtime's `Editor::set_size`.
     pub fn set(&self, size: (u32, u32)) {
         self.0.store(pack(size), Ordering::Relaxed);
     }

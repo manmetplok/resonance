@@ -9,6 +9,11 @@
 //! crate's hidden `csd_geometry` re-export), so a button the user can see is a
 //! button this test can hit.
 
+// The CSD frame (and its `csd_geometry` re-export) only exists in the
+// Linux windowing body; on other targets this compiles to an empty
+// test binary.
+#![cfg(target_os = "linux")]
+
 use wayland_plugin_gui::csd_geometry::{
     FrameLayout, BORDER_WIDTH, CLOSE_BUTTON_SIZE, TITLEBAR_HEIGHT,
 };

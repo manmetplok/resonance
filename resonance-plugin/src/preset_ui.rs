@@ -23,7 +23,7 @@
 //! Feature-gated behind `editor-widgets` with the rest of the egui
 //! helpers, so DSP-only consumers don't pull in the GUI stack.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::param::Param;
 use crate::presets::{

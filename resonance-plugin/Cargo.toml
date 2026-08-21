@@ -7,8 +7,9 @@ edition = "2021"
 default = []
 ui = ["iced"]
 # egui widget helpers bound to this crate's param types, for plugin editors
-# built on `wayland-plugin-gui`. Off by default so DSP-only consumers stay lean.
-editor-widgets = ["dep:wayland-plugin-gui"]
+# built on `plugin-gui-core` widgets + the platform GUI runtime. Off by
+# default so DSP-only consumers stay lean.
+editor-widgets = ["dep:wayland-plugin-gui", "dep:plugin-gui-core"]
 
 [dependencies]
 clack-plugin = { workspace = true }
@@ -21,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 iced = { workspace = true, optional = true }
 wayland-plugin-gui = { path = "../wayland-plugin-gui", optional = true }
+plugin-gui-core = { path = "../plugin-gui-core", optional = true }
 
 [dev-dependencies]
 # Drive the CLAP bridge from the host side in tests (activate + latency query).
