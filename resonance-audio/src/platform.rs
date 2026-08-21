@@ -308,6 +308,10 @@ pub(crate) fn enumerate_input_devices() -> (Vec<InputDeviceInfo>, Option<String>
 /// while the global recording flag is off (doc #260 finding #3).
 /// Regular recording / monitoring streams pass `None`.
 #[allow(clippy::too_many_arguments)]
+// `rec_producer` only needs the `mut` for the Linux-only PipeWire
+// attempt (`&mut` reborrow); elsewhere it's moved straight into the
+// cpal builder.
+#[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
 pub(crate) fn build_input_stream(
     source_name: Option<&str>,
     shared: Arc<SharedState>,

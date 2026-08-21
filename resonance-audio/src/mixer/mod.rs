@@ -44,7 +44,7 @@ mod render_core;
 mod test_support;
 mod track_block;
 
-pub(crate) use callback::{mix_audio, CallbackInputs, CallbackScratch};
+pub(crate) use callback::{mix_audio, CallbackInputs, CallbackScratch, MixFn};
 
 pub use audition::mix_audition_overlay;
 pub use automation_apply::{auto_gain_ramp, auto_master_volume, auto_muted};

@@ -35,6 +35,14 @@ use crate::mixer::common::{transport_pos_beats, TransportSnap};
 use crate::mixer::midi_stash::MidiStash;
 use crate::mixer::render_core::BlockScratch;
 
+/// The mixer callback an output backend drives: fills the interleaved
+/// f32 slice (`frames * channels` samples) for one output cycle.
+/// Boxed so `engine::mod` can hand over the fully-captured
+/// [`mix_audio`](super::mix_audio) closure without threading its dozen
+/// generics through the backend builders (native PipeWire on Linux,
+/// cpal everywhere).
+pub(crate) type MixFn = Box<dyn FnMut(&mut [f32], usize) + Send + 'static>;
+
 /// Everything one audio callback reads: the engine's shared state, the
 /// locks it may try to read, the wait-free snapshots it may load, and the
 /// stream geometry. All borrowed and `Copy`.

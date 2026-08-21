@@ -38,7 +38,7 @@ use std::sync::atomic::Ordering;
 
 use super::audition::mix_audition_overlay;
 use super::live_midi::pickup_live_midi;
-pub(crate) use context::{CallbackInputs, CallbackScratch};
+pub(crate) use context::{CallbackInputs, CallbackScratch, MixFn};
 use context::BlockTiming;
 
 /// Mix audio from all active clips into the output buffer.

@@ -448,6 +448,7 @@ pub struct AudioEngine {
     /// test constructors. Held so follow-up work can query pw
     /// time-info / Latency params via
     /// [`output_pipewire::PipeWireOutputHandle::with_stream`].
+    #[cfg(target_os = "linux")]
     pw_output: Option<crate::output_pipewire::PipeWireOutputHandle>,
     /// Join handle for the engine control thread. `Drop` sends a
     /// `ShutDown` command (which breaks the thread's loop, since the
@@ -601,7 +602,7 @@ impl AudioEngine {
         // PipeWire attempt, then the cpal fallback) — each call
         // allocates a fresh scratch set and the losing attempt's set is
         // simply dropped with its backend.
-        let make_mixer = |native_backend: bool| -> (crate::output_pipewire::MixFn, ringbuf::HeapProd<f32>) {
+        let make_mixer = |native_backend: bool| -> (crate::mixer::MixFn, ringbuf::HeapProd<f32>) {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
             let tracks_audio = Arc::clone(&tracks_audio);
@@ -700,7 +701,7 @@ impl AudioEngine {
             let mut load_meter = crate::cycle_load::CycleLoadMeter::new(
                 std::env::var_os("RESONANCE_AUDIO_STATS").is_some(),
             );
-            let mix: crate::output_pipewire::MixFn =
+            let mix: crate::mixer::MixFn =
                 Box::new(move |data: &mut [f32], channels: usize| {
                     let mix_start = std::time::Instant::now();
                     mixer::mix_audio(
@@ -801,10 +802,24 @@ impl AudioEngine {
         // renders straight into the graph cycle (~1 quantum of output
         // buffering) and exposes real latency/time info — with cpal as
         // the explicit fallback for non-PipeWire hosts (doc #260
-        // finding #11).
+        // finding #11). PipeWire only exists on Linux; everywhere else
+        // the cpal path *is* the output backend.
         let force_cpal = std::env::var_os("RESONANCE_FORCE_CPAL_OUTPUT").is_some();
+        #[cfg(target_os = "linux")]
         let mut pw_output: Option<crate::output_pipewire::PipeWireOutputHandle> = None;
+        #[cfg(target_os = "linux")]
         let mut out_channels = channels;
+        #[cfg(not(target_os = "linux"))]
+        let (stream, monitor_prod_raw, used_fixed_buffer) = {
+            if force_cpal {
+                eprintln!(
+                    "audio: RESONANCE_FORCE_CPAL_OUTPUT set — cpal is already the only output backend on this platform"
+                );
+            }
+            let (s, p, fixed) = build_cpal_with_fallback()?;
+            (Some(s), p, fixed)
+        };
+        #[cfg(target_os = "linux")]
         let (stream, monitor_prod_raw, used_fixed_buffer) = if force_cpal {
             eprintln!("audio: RESONANCE_FORCE_CPAL_OUTPUT set — skipping native PipeWire output");
             let (s, p, fixed) = build_cpal_with_fallback()?;
@@ -838,7 +853,12 @@ impl AudioEngine {
                 }
             }
         };
+        #[cfg(target_os = "linux")]
         let channels = out_channels;
+        #[cfg(target_os = "linux")]
+        let backend = if pw_output.is_some() { "pipewire" } else { "cpal" };
+        #[cfg(not(target_os = "linux"))]
+        let backend = "cpal";
 
         // One-line negotiation summary so latency regressions are diagnosable
         // from stderr alone. `probed_*` being None means the pw-metadata
@@ -847,7 +867,7 @@ impl AudioEngine {
         // the pipewire quantum".
         eprintln!(
             "audio: backend={} device={:?} sample_rate={} (cpal_default={}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
-            if pw_output.is_some() { "pipewire" } else { "cpal" },
+            backend,
             device_name,
             sample_rate,
             default_rate,
@@ -916,6 +936,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: stream,
+            #[cfg(target_os = "linux")]
             pw_output,
             engine_thread: Some(engine_thread),
             shared,
@@ -1031,6 +1052,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: None,
+            #[cfg(target_os = "linux")]
             pw_output: None,
             engine_thread: None,
             shared,
@@ -1072,6 +1094,7 @@ impl AudioEngine {
             cmd_tx,
             event_rx,
             _stream: None,
+            #[cfg(target_os = "linux")]
             pw_output: None,
             engine_thread: None,
             shared,

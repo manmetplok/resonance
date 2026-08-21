@@ -44,13 +44,7 @@ use spa::pod::serialize::PodSerializer;
 use spa::pod::{Object, Pod, Value};
 
 use crate::engine::SharedState;
-
-/// The mixer callback the output stream drives: fills the interleaved
-/// f32 slice (`frames * channels` samples) for one graph cycle.
-/// Boxed so `engine::mod` can hand over the fully-captured
-/// `mixer::mix_audio` closure without threading its dozen generics
-/// through here.
-pub(crate) type MixFn = Box<dyn FnMut(&mut [f32], usize) + Send + 'static>;
+use crate::mixer::MixFn;
 
 /// Handle returned by [`build`]. Owns the PipeWire thread loop, the
 /// core, the stream, and the registered listener. Drop order matters

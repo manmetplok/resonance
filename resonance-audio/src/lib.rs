@@ -18,6 +18,7 @@ pub(crate) mod io;
 pub(crate) mod latency;
 #[cfg(target_os = "linux")]
 mod input_pipewire;
+#[cfg(target_os = "linux")]
 mod output_pipewire;
 mod limits;
 pub(crate) mod midi_clock;
