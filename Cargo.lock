@@ -1113,6 +1113,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocoa-plugin-gui"
+version = "0.1.0"
+dependencies = [
+ "dispatch2",
+ "egui",
+ "egui_glow",
+ "glow 0.17.0",
+ "libloading",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "plugin-gui-core",
+]
+
+[[package]]
 name = "codespan-reporting"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3905,6 +3920,7 @@ dependencies = [
  "objc2-core-text",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-open-gl",
  "objc2-quartz-core 0.3.2",
 ]
 
@@ -4164,6 +4180,15 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.2",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-open-gl"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ecc7fd7519a189d9ba9ed9de51af81e41d096aea1d08cca59fd9d8c65d8f585"
+dependencies = [
+ "objc2 0.6.4",
 ]
 
 [[package]]

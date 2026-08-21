@@ -15,7 +15,7 @@ resonance-music-theory ──┬─► resonance-app  (pure theory, no audio/app
 resonance-common ──► resonance-audio, every plugin
 resonance-plugin ──┬─► every plugin, resonance-app (UI helpers)
                    └─► wayland-plugin-gui ──► every plugin (editor feature)
-plugin-gui-core ──► wayland-plugin-gui, resonance-plugin (editor contract + widgets)
+plugin-gui-core ──► wayland-plugin-gui, cocoa-plugin-gui, resonance-plugin (editor contract + widgets)
 ```
 
 Hard rules — these are load-bearing for build times, testability, and cognitive load:
@@ -25,7 +25,8 @@ Hard rules — these are load-bearing for build times, testability, and cognitiv
 - `resonance-dsp`, `resonance-metering`, `resonance-common` are framework-agnostic — no Iced, no CLAP, no plugin trait. They're reusable building blocks.
 - `resonance-svs` (singing-voice synthesis) depends only on `resonance-music-theory`. It renders DiffSinger `.ds` segments to audio headless, and ships its own CLI binary so the pipeline can be exercised without booting the app.
 - `plugin-gui-core` is the platform-neutral half of the editor stack: the `EditorApp`/`EditorOptions`/`EditorError` contract, the fleet theme, and the pure egui widget set. No windowing code; builds on every OS.
-- `wayland-plugin-gui` is the editor runtime — it hosts an egui UI in its own Wayland window/thread, building on `plugin-gui-core` for the shared contract (and re-exporting it, so plugins have one import surface). It is the optional `editor`-feature dep of every plugin and knows nothing about any specific plugin or the app. Its windowing body is Linux-only; other targets get a stub `Editor` so the workspace builds everywhere (the macOS runtime is scoped in `macos-editor-plan.md`).
+- `wayland-plugin-gui` is the Linux editor runtime — it hosts an egui UI in its own Wayland window/thread, building on `plugin-gui-core` for the shared contract (and re-exporting it, so plugins have one import surface). It is the optional `editor`-feature dep of every plugin and knows nothing about any specific plugin or the app. Its windowing body is Linux-only; other targets get a stub `Editor` so the workspace builds everywhere.
+- `cocoa-plugin-gui` is the macOS editor runtime — same public `Editor` surface, inverted mechanics: the window lives on the AppKit main thread (which AppKit requires) and the `Send` handle dispatches onto it; rendering is NSOpenGLView + the same egui_glow painter. Windowing body macOS-only, stub elsewhere. Plugins reach whichever runtime matches the platform through `resonance_plugin::editor_host` (migration tracked in `macos-editor-plan.md` item 3c).
 - `resonance-app` is allowed to depend on everything; it is the integration layer.
 
 When extending: add new building blocks to the lowest layer they fit, not the most convenient one. A new filter goes in `resonance-dsp`, not in the plugin that needs it first.
