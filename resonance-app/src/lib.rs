@@ -837,6 +837,17 @@ impl Resonance {
         // frame (rendered before the first `Tick`) shows real values.
         app.refresh_transport_labels();
 
+        // Build the tempo map's bar table up front. `TempoMap::default()`
+        // has an empty table and `table_sample_rate: 0`, under which
+        // `bar_to_sample` maps every bar to 0 — and anything gating on a
+        // bar span (the Compose track canvas's `section_end <=
+        // section_start` guard) silently draws nothing. Project load
+        // replays rebuild it, but a File → New project never replays, so
+        // without this the Compose synth lanes stay blank until the
+        // project is reopened. Rebuilt again on `SampleRateDetected` once
+        // the real device rate is known.
+        app.rebuild_tempo_map();
+
         app
     }
 
