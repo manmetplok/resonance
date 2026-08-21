@@ -477,8 +477,8 @@ pub struct AudioEngine {
     /// Holds the PipeWire graph at the engine's rate for the lifetime
     /// of the engine (`None` when the force was rejected and we follow
     /// the graph instead). Declared last so its `Drop` — which hands
-    /// the graph back by clearing `clock.force-rate` — runs after the
-    /// output stream has been torn down.
+    /// the graph back by restoring the `clock.force-rate` we found —
+    /// runs after the output stream has been torn down.
     _graph_force: Option<platform::GraphRateForce>,
 }
 

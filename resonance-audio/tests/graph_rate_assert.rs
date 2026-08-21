@@ -7,7 +7,8 @@
 //! tests pin the decision logic around it.
 
 use resonance_audio::__test_support::{
-    choose_assert_rate, parse_pw_metadata_value, CANONICAL_RATE,
+    choose_assert_rate, force_release_target, needs_reassert, parse_pw_metadata_value,
+    reassert_source_key, CANONICAL_RATE,
 };
 
 // --- choose_assert_rate -------------------------------------------------
@@ -85,4 +86,82 @@ fn parses_non_numeric_value_as_string() {
     // The array-typed settings entries also flow through this parser.
     let out = "update: id:0 key:'clock.allowed-rates' value:'[ 48000 ]' type:''";
     assert_eq!(parse_pw_metadata_value(out), Some("[ 48000 ]"));
+}
+
+// --- force_release_target ------------------------------------------------
+
+#[test]
+fn release_restores_the_unforced_state_we_found() {
+    // The common case: nothing was forced before us, so letting go
+    // writes 0 and hands the graph back to its configured rate.
+    assert_eq!(force_release_target(Some(48_000), 48_000, 0), Some(0));
+}
+
+#[test]
+fn release_restores_a_pre_existing_foreign_force() {
+    // Someone had forced 96k before the DAW started; we forced 48k.
+    // Releasing must put *their* value back, not clear the force.
+    assert_eq!(
+        force_release_target(Some(48_000), 48_000, 96_000),
+        Some(96_000)
+    );
+}
+
+#[test]
+fn release_leaves_an_identical_pre_existing_force_alone() {
+    // The user already had our exact rate forced. `current == ours`
+    // reads as "still ours", but clearing it would take away a setting
+    // we never made — write nothing.
+    assert_eq!(force_release_target(Some(48_000), 48_000, 48_000), None);
+}
+
+#[test]
+fn release_leaves_a_later_foreign_force_alone() {
+    // Another client re-forced the graph after we engaged; clobbering
+    // it on our way out would be rude and wrong.
+    assert_eq!(force_release_target(Some(44_100), 48_000, 0), None);
+}
+
+#[test]
+fn release_writes_nothing_when_the_metadata_is_unreadable() {
+    // A `None` readback means pw-metadata is gone or its output no
+    // longer parses; we can't tell whose value is in there.
+    assert_eq!(force_release_target(None, 48_000, 0), None);
+}
+
+// --- needs_reassert ------------------------------------------------------
+
+#[test]
+fn first_input_stream_reasserts() {
+    assert!(needs_reassert(None, Some("alsa_input.usb-Focusrite")));
+    assert!(needs_reassert(None, None));
+}
+
+#[test]
+fn rebuilding_the_same_source_does_not_respawn_pw_metadata() {
+    // Count-in -> record rebuilds the input stream on the engine
+    // thread with the same device; a subprocess there is a dropout
+    // risk and cannot change the graph rate anyway.
+    let last = reassert_source_key(Some("alsa_input.usb-Focusrite"));
+    assert!(!needs_reassert(
+        Some(&last),
+        Some("alsa_input.usb-Focusrite")
+    ));
+}
+
+#[test]
+fn switching_source_reasserts() {
+    let last = reassert_source_key(Some("alsa_input.usb-Focusrite"));
+    assert!(needs_reassert(Some(&last), Some("alsa_input.pci-hdmi")));
+    // ...including switching back to the default device.
+    assert!(needs_reassert(Some(&last), None));
+}
+
+#[test]
+fn default_source_is_distinguishable_from_never_asserted() {
+    // `None` (default device) must not collide with "no re-assert has
+    // happened yet", or the very first build would be skipped.
+    let last = reassert_source_key(None);
+    assert!(!needs_reassert(Some(&last), None));
+    assert!(needs_reassert(None, None));
 }

@@ -261,6 +261,30 @@ fn write_force_rate(rate: u32) -> Option<()> {
     .map(|_| ())
 }
 
+/// Read `clock.force-rate` from the PipeWire settings metadata.
+/// `None` = no PipeWire / no pw-metadata / unparseable output.
+fn read_force_rate() -> Option<u32> {
+    run_pw_metadata("clock.force-rate").and_then(|s| s.parse::<u32>().ok())
+}
+
+/// What a [`GraphRateForce`] holding `ours` should write when it lets
+/// go, given `current` (the value in the metadata right now) and
+/// `previous` (the value that was there before it engaged). `None`
+/// means write nothing:
+///
+/// * `current` isn't ours — another client re-forced the graph after
+///   we did, so clearing would clobber their setting;
+/// * `previous == ours` — the graph was already forced to this rate
+///   before the engine started (by the user's config, `pw-metadata` by
+///   hand, or another DAW), so "restoring" is a no-op and we must not
+///   clear it. This is why the guard restores rather than writing 0.
+pub fn force_release_target(current: Option<u32>, ours: u32, previous: u32) -> Option<u32> {
+    if current != Some(ours) || previous == ours {
+        return None;
+    }
+    Some(previous)
+}
+
 /// RAII assertion of a PipeWire graph rate via the settings metadata's
 /// `clock.force-rate`. The force switches the graph immediately — even
 /// with other streams running (they get resampled) and regardless of
@@ -268,27 +292,45 @@ fn write_force_rate(rate: u32) -> Option<()> {
 /// `settings.check-rate = true` is set, in which case PipeWire ignores
 /// the update silently; the metadata still echoes it, so that corner
 /// can't be detected from here). The metadata outlives this process —
-/// it only resets when the daemon restarts — hence the `Drop` clear.
+/// it only resets when the daemon restarts — hence the `Drop` restore.
 pub(crate) struct GraphRateForce {
     rate: u32,
+    /// The `clock.force-rate` that was in the metadata before this
+    /// guard engaged (0 = unforced). Both the reject path and `Drop`
+    /// write this back rather than a hard 0, so a force the user had
+    /// set before the DAW started survives the session.
+    previous: u32,
 }
 
 impl GraphRateForce {
     /// Force the graph to `rate` and verify the settings metadata took
     /// the update. `None` means the environment rejected it (no
     /// PipeWire, no pw-metadata binary, no settings object) — the
-    /// caller should fall back to following the graph rate.
+    /// caller should fall back to following the graph rate, and the
+    /// metadata is left exactly as it was found.
     pub(crate) fn engage(rate: u32) -> Option<Self> {
+        // Read before writing: this is the only chance to learn what
+        // the graph was forced to before us, and both failure paths
+        // below need it.
+        let previous = read_force_rate().unwrap_or(0);
         write_force_rate(rate)?;
-        let readback = run_pw_metadata("clock.force-rate").and_then(|s| s.parse::<u32>().ok());
+        let readback = read_force_rate();
         if readback != Some(rate) {
             eprintln!(
                 "audio: clock.force-rate {rate} not accepted (readback {readback:?}); following graph rate instead"
             );
+            // The write above already landed — the metadata is global
+            // and only resets on daemon restart, so returning without
+            // undoing it would leave the graph forced at our rate
+            // forever (and `pipewire_graph_rate()` would then keep
+            // reading it back on every later launch). Restore what we
+            // found; our write was the last known one, and it
+            // demonstrably did not produce the value we asked for.
+            let _ = write_force_rate(previous);
             return None;
         }
         ASSERTED_GRAPH_RATE.store(rate, std::sync::atomic::Ordering::Relaxed);
-        Some(Self { rate })
+        Some(Self { rate, previous })
     }
 
     /// The rate this guard holds the graph at.
@@ -300,12 +342,12 @@ impl GraphRateForce {
 impl Drop for GraphRateForce {
     fn drop(&mut self) {
         ASSERTED_GRAPH_RATE.store(0, std::sync::atomic::Ordering::Relaxed);
-        // Hand the graph back, but only if the force is still ours —
-        // if another client re-forced meanwhile, clearing would
-        // clobber their setting.
-        let current = run_pw_metadata("clock.force-rate").and_then(|s| s.parse::<u32>().ok());
-        if current == Some(self.rate) {
-            let _ = write_force_rate(0);
+        clear_reassert_source();
+        // Hand the graph back to whatever it was forced to before us
+        // (0 = unforced) — see [`force_release_target`] for the two
+        // cases where writing nothing is the right answer.
+        if let Some(target) = force_release_target(read_force_rate(), self.rate, self.previous) {
+            let _ = write_force_rate(target);
         }
     }
 }
@@ -323,14 +365,62 @@ pub(crate) fn assert_graph_rate(
     GraphRateForce::engage(target)
 }
 
+/// The input source a re-assert was last done for (see
+/// [`reassert_source_key`]); `None` = never.
+static LAST_REASSERT_SOURCE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Identity of an input source for re-assert purposes. The default
+/// device (`None`) gets a reserved key so "never re-asserted" stays
+/// distinguishable from "re-asserted for the default device".
+pub fn reassert_source_key(source: Option<&str>) -> String {
+    source.unwrap_or("<default>").to_string()
+}
+
+/// Whether an input-stream build for `source` should re-assert the
+/// graph force, given `last` (the source a re-assert was last done
+/// for, `None` = never).
+///
+/// Input streams are rebuilt for reasons other than a device switch —
+/// the count-in → record transition and the external-instrument
+/// latency ping both rebuild on the *engine thread* — and every
+/// re-assert spawns `pw-metadata` (2 s worst case). Only a device that
+/// actually changed can have re-negotiated the graph onto a foreign
+/// rate, so that is the only case worth paying a subprocess for.
+pub fn needs_reassert(last: Option<&str>, source: Option<&str>) -> bool {
+    match last {
+        None => true,
+        Some(prev) => prev != reassert_source_key(source),
+    }
+}
+
 /// Re-write the currently asserted graph rate, if any. Called from the
 /// input-stream builders so a device switch mid-session re-asserts the
-/// engine's rate (best effort; a no-op when nothing is asserted).
-pub(crate) fn reassert_graph_force() {
+/// engine's rate (best effort; a no-op when nothing is asserted, or
+/// when this source was already re-asserted for — see
+/// [`needs_reassert`]).
+pub(crate) fn reassert_graph_force(source_name: Option<&str>) {
     let rate = ASSERTED_GRAPH_RATE.load(std::sync::atomic::Ordering::Relaxed);
-    if rate != 0 {
-        let _ = write_force_rate(rate);
+    if rate == 0 {
+        return;
     }
+    {
+        let mut last = LAST_REASSERT_SOURCE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !needs_reassert(last.as_deref(), source_name) {
+            return;
+        }
+        *last = Some(reassert_source_key(source_name));
+    }
+    let _ = write_force_rate(rate);
+}
+
+/// Forget the last re-asserted source so the next engine's first input
+/// stream re-asserts again. Called when the guard drops.
+fn clear_reassert_source() {
+    *LAST_REASSERT_SOURCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// Enumerate available PipeWire/PulseAudio input sources via `pactl`.
@@ -443,8 +533,10 @@ pub(crate) fn build_input_stream(
 ) -> Result<(crate::input_handle::InputHandle, u32, u16), String> {
     // Input streams are (re)built on device switches — re-assert the
     // engine's graph rate so the new device negotiation can't leave
-    // the graph on a foreign rate.
-    reassert_graph_force();
+    // the graph on a foreign rate. Gated on the source having actually
+    // changed: this runs on the engine thread, and record start
+    // rebuilds the input stream on the same device.
+    reassert_graph_force(source_name);
     #[cfg(target_os = "linux")]
     {
         match crate::input_pipewire::build(
