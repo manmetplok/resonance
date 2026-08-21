@@ -515,7 +515,28 @@ pub(crate) fn handle_set_plugin_bypass(
     });
 }
 
+/// Deadlock rule for editor open/close (macos-editor-plan.md §1): on
+/// macOS the editor runtime dispatches window work to the AppKit main
+/// thread and blocks until it is serviced, so the engine control thread
+/// — CLAP's "main thread" for hosted plugins, i.e. this handler — must
+/// be a dedicated thread distinct from the process main thread, and the
+/// process main thread must never block on the engine control thread
+/// (today the app only sends non-blocking `AudioCommand`s, so it
+/// doesn't). Asserted in debug builds; a violation would present as the
+/// teardown wedge `editor_open` guards against, not an error.
+fn debug_assert_editor_deadlock_rule() {
+    #[cfg(target_os = "macos")]
+    // SAFETY: pthread_main_np takes no arguments and only inspects the
+    // calling thread; it returns non-zero iff this is the main thread.
+    debug_assert!(
+        unsafe { libc::pthread_main_np() } == 0,
+        "plugin editor open/close must run on the engine control thread, \
+         not the process main thread (see the deadlock rule above)"
+    );
+}
+
 pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
+    debug_assert_editor_deadlock_rule();
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         // open_gui is a main-thread operation; the audio thread holds
         // a different lock. Block briefly if the audio thread is
@@ -535,6 +556,7 @@ pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginIns
 }
 
 pub(crate) fn handle_close_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
+    debug_assert_editor_deadlock_rule();
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
             inst.0.close_gui();

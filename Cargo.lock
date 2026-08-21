@@ -5324,6 +5324,7 @@ dependencies = [
  "flacenc",
  "hound",
  "indexmap",
+ "libc",
  "libloading",
  "memmap2",
  "midir",
