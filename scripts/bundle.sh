@@ -48,8 +48,17 @@ dirs_under_plugins() {
     done
 }
 
-mapfile -t plugins < <(dirs_under_plugins | sort)
-mapfile -t members < <(members_under_plugins | sort)
+# Plain read loops instead of mapfile: macOS ships bash 3.2, which has
+# no mapfile, and this script must run there (it produces the macOS
+# .clap bundles).
+plugins=()
+while IFS= read -r plugin; do
+    plugins+=("$plugin")
+done < <(dirs_under_plugins | sort)
+members=()
+while IFS= read -r member; do
+    members+=("$member")
+done < <(members_under_plugins | sort)
 
 if [ ${#plugins[@]} -eq 0 ]; then
     echo "error: no plugin crates found under plugins/" >&2
@@ -115,9 +124,45 @@ staging=target/bundled.new
 rm -rf "$staging"
 mkdir -p "$staging"
 
+# Minimal Info.plist for a macOS .clap bundle. CFBundleExecutable is
+# the one key the loader actually reads (clap_host/bundle.rs
+# `bundle_binary_path`, which falls back to the bundle's file stem —
+# the executable is named after the plugin so both agree);
+# CFBundleIdentifier and the BNDL package type are the macOS bundle
+# conventions hosts and installers expect.
+write_info_plist() {
+    cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>$1</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.resonance.$1</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+</dict>
+</plist>
+EOF
+}
+
+# Publish in the platform's .clap shape. On Linux a .clap is the cdylib
+# itself, renamed. On macOS it is a bundle DIRECTORY
+# (Foo.clap/Contents/MacOS/Foo) — that is what CLAP hosts dlopen into
+# and what our scanner catalogs without descending.
+os="$(uname -s)"
 for plugin in "${plugins[@]}"; do
-    so_name="lib${plugin//-/_}.so"
-    cp "target/release/$so_name" "$staging/${plugin}.clap"
+    if [ "$os" = "Darwin" ]; then
+        dylib_name="lib${plugin//-/_}.dylib"
+        bundle="$staging/${plugin}.clap"
+        mkdir -p "$bundle/Contents/MacOS"
+        cp "target/release/$dylib_name" "$bundle/Contents/MacOS/${plugin}"
+        write_info_plist "$plugin" > "$bundle/Contents/Info.plist"
+    else
+        so_name="lib${plugin//-/_}.so"
+        cp "target/release/$so_name" "$staging/${plugin}.clap"
+    fi
     echo "  Bundled ${plugin}.clap"
 done
 
