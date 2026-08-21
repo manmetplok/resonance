@@ -38,7 +38,7 @@ pub type ConnId = u64;
 /// Value of the env var that disables the control endpoint entirely.
 pub const NO_CONTROL_ENV: &str = "RESONANCE_NO_CONTROL";
 /// Env var overriding the socket path.
-pub const SOCKET_PATH_ENV: &str = "RESONANCE_CONTROL_SOCKET";
+pub use resonance_control::socket::SOCKET_PATH_ENV;
 
 // ---------------------------------------------------------------------------
 // Bridge message types (socket threads -> update loop)
@@ -111,33 +111,10 @@ pub fn control_disabled() -> bool {
     std::env::var(NO_CONTROL_ENV).as_deref() == Ok("1")
 }
 
-/// Resolve the control-socket path (doc #265):
-/// `$RESONANCE_CONTROL_SOCKET` verbatim when set, else
-/// `$XDG_RUNTIME_DIR/resonance/control.sock`, else
-/// `/tmp/resonance-<uid>/control.sock`.
-pub fn socket_path() -> PathBuf {
-    if let Ok(path) = std::env::var(SOCKET_PATH_ENV) {
-        if !path.is_empty() {
-            return PathBuf::from(path);
-        }
-    }
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-        if !runtime.is_empty() {
-            return PathBuf::from(runtime)
-                .join("resonance")
-                .join("control.sock");
-        }
-    }
-    PathBuf::from(format!("/tmp/resonance-{}", process_uid())).join("control.sock")
-}
-
-/// The process's real uid, read from `/proc/self` to avoid a libc
-/// dependency. Falls back to 0 only if `/proc` is unavailable, which on
-/// the supported platform (Linux) does not happen in practice.
-fn process_uid() -> u32 {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(0)
-}
+/// Resolve the control-socket path. The rule lives in
+/// [`resonance_control::socket`] so this server side and the
+/// `resonance-mcp` client side can never disagree on it (doc #265).
+pub use resonance_control::socket::socket_path;
 
 /// Create the socket's parent directory with `0700` permissions. If it
 /// already exists, tighten it to `0700` defensively (it is per-user

@@ -5340,6 +5340,7 @@ dependencies = [
 name = "resonance-control"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "schemars",
  "serde",
  "serde_json",

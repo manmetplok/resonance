@@ -10,6 +10,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 schemars = { workspace = true, optional = true }
 
+# `socket::process_uid` only. Kept target-gated so the wire types stay
+# buildable anywhere.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 # Derive `schemars::JsonSchema` on every param/result/view type so
 # clients (the `resonance-mcp` MCP server) can publish JSON schemas

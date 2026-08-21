@@ -23,34 +23,12 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Env var overriding the control-socket path (same as the app).
-pub const SOCKET_PATH_ENV: &str = "RESONANCE_CONTROL_SOCKET";
+pub use resonance_control::socket::SOCKET_PATH_ENV;
 
-/// Resolve the control-socket path exactly like the app does (doc #265):
-/// `$RESONANCE_CONTROL_SOCKET` verbatim when set, else
-/// `$XDG_RUNTIME_DIR/resonance/control.sock`, else
-/// `/tmp/resonance-<uid>/control.sock`.
-pub fn socket_path() -> PathBuf {
-    if let Ok(path) = std::env::var(SOCKET_PATH_ENV) {
-        if !path.is_empty() {
-            return PathBuf::from(path);
-        }
-    }
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-        if !runtime.is_empty() {
-            return PathBuf::from(runtime)
-                .join("resonance")
-                .join("control.sock");
-        }
-    }
-    PathBuf::from(format!("/tmp/resonance-{}", process_uid())).join("control.sock")
-}
-
-/// The process's real uid, read from `/proc/self` to avoid a libc
-/// dependency (mirrors the app's resolution so both sides agree).
-fn process_uid() -> u32 {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(0)
-}
+/// Resolve the control-socket path exactly like the app does: both
+/// sides call the same [`resonance_control::socket`] rule (doc #265),
+/// so they agree by construction.
+pub use resonance_control::socket::socket_path;
 
 /// A failed control call, with enough context to phrase an actionable
 /// tool error for the model.
