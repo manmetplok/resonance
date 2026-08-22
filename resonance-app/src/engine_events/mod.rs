@@ -19,6 +19,7 @@ pub(crate) mod pool;
 mod presets;
 mod project_io;
 mod reference;
+mod takes;
 mod tracks;
 mod transport;
 

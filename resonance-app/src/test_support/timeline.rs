@@ -234,4 +234,22 @@ impl Resonance {
     pub fn test_timeline_fingerprint(&self) -> crate::view::timeline::TimelineFingerprint {
         self.timeline_canvas_data().fingerprint()
     }
+
+    /// Test-only: read the mirrored cycle-record take groups (epic #15).
+    /// Drives `tests/timeline/take_group_mirror.rs`, which asserts that
+    /// `TakeCaptured` events alone reconstruct the take lanes — the app
+    /// never reads takes back out of the engine.
+    #[doc(hidden)]
+    pub fn test_take_groups(&self) -> &[resonance_common::TakeGroup] {
+        &self.take_groups.groups
+    }
+
+    /// Test-only: mutable access to the take-group mirror, so the comp /
+    /// active-take projections can be exercised ahead of todo #409's
+    /// `TakeCompChanged` / `ActiveTakeChanged` events existing to carry
+    /// them through the real dispatch.
+    #[doc(hidden)]
+    pub fn test_take_groups_mut(&mut self) -> &mut state::TakeGroupState {
+        &mut self.take_groups
+    }
 }
