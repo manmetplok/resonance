@@ -232,11 +232,18 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         // recorded clips themselves arrive via `RecordingFinished`.
         E::TakeCaptured {
             group_id,
+            take_id,
             track_id,
             slot,
             pass_index,
             content,
-        } => takes::take_captured(r, group_id, track_id, slot, pass_index, content),
+        } => takes::take_captured(r, group_id, take_id, track_id, slot, pass_index, content),
+        // Comp / active-take echoes (epic #15, todo #409). The engine has
+        // already applied these to what it plays and bounces. Their
+        // projections exist on `TakeGroupState`; wiring them through to it
+        // is todo #411, so for now they are accepted without acting —
+        // keeping the match exhaustive with no catch-all arm.
+        E::TakeCompChanged { .. } | E::ActiveTakeChanged { .. } => {}
 
         // MIDI clip + note events
         E::MidiClipCreated {

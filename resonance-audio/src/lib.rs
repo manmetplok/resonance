@@ -138,6 +138,15 @@ pub mod __test_support {
         sum_to_stereo, transport_pos_beats,
         whole_frame_push_len,
     };
+    /// Take-comp playback (epic #15, doc #165): the control-thread flatten
+    /// of the authoritative take groups into the audio-thread table, the
+    /// per-segment render with its equal-power seam crossfades, and the
+    /// block entry point that drives both through the real `render_block`
+    /// — see `tests/take_comp_render.rs`.
+    pub use crate::mixer::{
+        build_comp_table, mix_track_comp, render_take_comp_for_test, CompRenderTable, CompSpan,
+        TrackComp, COMP_XFADE_FRAMES,
+    };
     pub use crate::platform::{
         choose_assert_rate, force_release_target, needs_reassert, parse_pw_metadata_value,
         reassert_source_key, CANONICAL_RATE,

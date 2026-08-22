@@ -527,16 +527,28 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
         &mut state.next_clip_id,
         reopen,
     );
+    let mut captured_any = false;
     for take in rolled {
         let group_id = loop_record_group_for(state, take.track_id);
+        let content = TakeContent::Audio {
+            clip_ref: take.clip_id,
+        };
+        let take_id = super::takes::store_take(
+            state,
+            group_id,
+            take.track_id,
+            slot,
+            pass_index,
+            &content,
+        );
+        captured_any = true;
         let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
             group_id,
+            take_id,
             track_id: take.track_id,
             slot,
             pass_index,
-            content: TakeContent::Audio {
-                clip_ref: take.clip_id,
-            },
+            content,
         });
     }
 
@@ -544,13 +556,25 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     let midi_takes = super::midi::capture_loop_record_midi_pass(ctx, state, slot.end());
     for (track_id, notes) in midi_takes {
         let group_id = loop_record_group_for(state, track_id);
+        let content = TakeContent::Midi { notes };
+        let take_id =
+            super::takes::store_take(state, group_id, track_id, slot, pass_index, &content);
+        captured_any = true;
         let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
             group_id,
+            take_id,
             track_id,
             slot,
             pass_index,
-            content: TakeContent::Midi { notes },
+            content,
         });
+    }
+
+    // Republish the comp playback table so the pass just captured is
+    // immediately audible — with no comp and no active take yet, the
+    // default cover is the most recent take.
+    if captured_any {
+        super::takes::publish_take_comp(ctx, state);
     }
 
     if reopen {

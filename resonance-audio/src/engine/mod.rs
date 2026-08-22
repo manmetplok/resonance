@@ -96,6 +96,7 @@ pub(crate) mod plugins;
 pub(crate) mod reference;
 pub(crate) mod sidechain;
 pub(crate) mod scan;
+pub(crate) mod takes;
 mod thread;
 mod tracks;
 mod transport;
@@ -283,6 +284,17 @@ pub struct SharedState {
     /// cost is an `is_empty` check per plugin).
     pub sidechain_routes: arc_swap::ArcSwap<Vec<SidechainRoute>>,
 
+    /// Lock-free snapshot of the take-comp playback plan (epic #15, doc
+    /// #165). Published by the control thread whenever a take group is
+    /// captured, comped, or has its active take changed, and read once per
+    /// block by the live mixer and the offline bounce so a comped /
+    /// active-take selection plays — and bounces — as one part. The
+    /// authoritative `TakeGroup`s live on the control thread
+    /// (`HandlerState::take_groups`); this is the flattened,
+    /// audio-thread-visible view. Empty until the first take is recorded,
+    /// so projects without take lanes pay nothing.
+    pub take_comp: arc_swap::ArcSwap<crate::mixer::CompRenderTable>,
+
     // -- Audition preview (doc #175) --
     /// Decoded preview source, published wait-free by the engine thread and
     /// read by the audio callback. `None` when no preview is loaded. See
@@ -376,6 +388,7 @@ impl Default for SharedState {
             ref_meter: resonance_metering::AtomicMeterSnapshot::new(),
             aux_sends: arc_swap::ArcSwap::from_pointee(Vec::new()),
             sidechain_routes: arc_swap::ArcSwap::from_pointee(Vec::new()),
+            take_comp: arc_swap::ArcSwap::from_pointee(crate::mixer::CompRenderTable::default()),
             audition_source: arc_swap::ArcSwapOption::empty(),
             audition_playing: AtomicBool::new(false),
             audition_pos_bits: AtomicU64::new(0),

@@ -320,6 +320,11 @@ pub(super) fn render_chunk(
     let sidechain_guard = ctx.shared.sidechain_routes.load();
     scratch.sidechain.begin_block(&sidechain_guard);
 
+    // Take-comp playback table: the offline bounce reads the same published
+    // table the live callback does, so a comped / active-take selection
+    // renders into the exported WAV exactly as it plays back.
+    let take_comp_guard = ctx.shared.take_comp.load();
+
     // Per-track / sub-track / bus rendering: shared with the live audio
     // callback (`mixer/render_core.rs`). The Bounce strategy swaps the
     // live path's non-blocking locks for deterministic blocking ones
@@ -349,6 +354,7 @@ pub(super) fn render_chunk(
             active_busses,
             aux_sends: &aux_guard,
             sidechain_routes: &sidechain_guard,
+            take_comp: &take_comp_guard,
             playhead: pos,
             frames,
             latency_comp: ctx.latency_comp,
