@@ -12,7 +12,7 @@ use crate::Resonance;
 
 use super::{
     automation, aux_sends, clips, freeze, midi, midi_map, plugins, pool, project_io, reference,
-    tracks, transport,
+    takes, tracks, transport,
 };
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
@@ -229,10 +229,14 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         ),
         // Cycle-record take capture (epic #15). The engine emits one
         // `TakeCaptured` per loop pass with its take-group/slot id; the
-        // recorded clips themselves arrive via `RecordingFinished`. GUI
-        // take-lane mirroring/comping is a follow-up todo, so for now we
-        // accept the event without acting — keeping the match exhaustive.
-        E::TakeCaptured { .. } => {}
+        // recorded clips themselves arrive via `RecordingFinished`.
+        E::TakeCaptured {
+            group_id,
+            track_id,
+            slot,
+            pass_index,
+            content,
+        } => takes::take_captured(r, group_id, track_id, slot, pass_index, content),
 
         // MIDI clip + note events
         E::MidiClipCreated {

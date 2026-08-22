@@ -270,6 +270,12 @@ pub struct Resonance {
     /// This is what makes a key route persistable: the save path
     /// serializes app state, and until this existed no app state held it.
     pub(crate) sidechain: state::SidechainState,
+    /// GUI-side mirror of the engine's cycle-record take groups (epic #15,
+    /// doc #165), reconstructed purely from `TakeCaptured` — one group per
+    /// record run, one take per loop pass. This is what stops a captured
+    /// pass from being dropped on the floor: the engine emits every take,
+    /// and until this existed the dispatch discarded them.
+    pub(crate) take_groups: state::TakeGroupState,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
     /// External-instrument tracks: per-track bank/program/latency config plus
@@ -842,6 +848,7 @@ impl Resonance {
             track_groups: state::TrackGroupRegistry::new(),
             aux: state::AuxSendState::default(),
             sidechain: state::SidechainState::default(),
+            take_groups: state::TakeGroupState::default(),
             undo: UndoHistory::new(),
             external_instruments: std::collections::HashMap::new(),
             device_registry,
