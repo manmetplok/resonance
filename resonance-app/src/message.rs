@@ -1301,6 +1301,11 @@ pub enum UiMessage {
     /// Fold / unfold one of the mixer-inspector groups (SIGNAL /
     /// ROUTING / CHAIN). Runtime UI state only.
     ToggleMixerInspectorGroup(MixerInspectorGroup),
+    /// Fold / unfold a track's take lane — the stack of cycle-recorded
+    /// takes shown beneath it (epic #15, doc #165). Runtime UI state only:
+    /// the takes persist, whether their folder is open does not. The comp
+    /// ribbon on the track lane stays visible either way.
+    ToggleTakeLane(TrackId),
     /// Toggle MIDI clock send (engine acts as clock master).
     ToggleMidiClockSend,
     /// Pick the hardware port for MIDI clock send. `None` clears.

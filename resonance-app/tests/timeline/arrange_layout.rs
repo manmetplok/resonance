@@ -248,6 +248,7 @@ fn cumulative_y_is_gapless_across_mixed_pitches() {
             ArrangeRowKind::GroupHeader(_) => GROUP_HEADER_HEIGHT,
             ArrangeRowKind::Track(_) => TRACK_HEIGHT,
             ArrangeRowKind::AutomationLane { .. } => AUTOMATION_LANE_ROW_HEIGHT,
+            ArrangeRowKind::TakeRow { .. } => resonance_app::theme::TAKE_ROW_HEIGHT,
         };
         assert_eq!(row.height, pitch);
         expected_top += pitch;

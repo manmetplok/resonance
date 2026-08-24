@@ -197,6 +197,44 @@ pub(crate) fn view_track_header(
         Space::new().width(0).height(0).into()
     };
 
+    // ---- Take-lane expand/collapse caret + take count (epic #15, doc
+    // #165) ----
+    // Shown whenever the track has at least one cycle-record take group.
+    // Same fold affordance as the automation caret and the group header
+    // (`collapse_caret`: ▾ expanded / ▸ collapsed), dispatching
+    // `UiMessage::ToggleTakeLane` — the transient set that decides whether
+    // the takes show as stacked sub-rows. The count is the total across the
+    // track's groups: one lane per slot, so a track recorded over two loop
+    // regions reports both stacks' takes together. Tracks with no takes
+    // collapse the cluster to a zero-size spacer, leaving the pre-#413
+    // layout (and its alignment snapshots) untouched.
+    let take_count: usize = r
+        .take_groups
+        .groups
+        .iter()
+        .filter(|g| g.track_id == track_id)
+        .map(|g| g.takes.len())
+        .sum();
+    let take_lane_expanded = r.interaction.take_lane_expanded_tracks.contains(&track_id);
+    let take_caret: Element<'static, Message> = if take_count > 0 {
+        mouse_area(
+            row![
+                crate::view::controls::collapse_caret(take_lane_expanded),
+                Space::new().width(2),
+                text(format!("{take_count} takes"))
+                    .size(9)
+                    .font(theme::MONO_FONT)
+                    .color(theme::TEXT_3),
+                Space::new().width(6),
+            ]
+            .align_y(alignment::Vertical::Center),
+        )
+        .on_press(Message::Ui(UiMessage::ToggleTakeLane(track_id)))
+        .into()
+    } else {
+        Space::new().width(0).height(0).into()
+    };
+
     // Bottom of the cell: 4-button row, right-aligned to keep the glyph +
     // name visually the dominant element. The automation caret cluster
     // leads the row, then the "via group" chips, before the fill, so they
@@ -210,6 +248,7 @@ pub(crate) fn view_track_header(
     let button_row = if frozen {
         row![
             automation_caret,
+            take_caret,
             locked_chip(),
             via_group_mute_chip,
             via_group_solo_chip,
@@ -219,6 +258,7 @@ pub(crate) fn view_track_header(
     } else {
         row![
             automation_caret,
+            take_caret,
             via_group_mute_chip,
             via_group_solo_chip,
             Space::new().width(Length::Fill),

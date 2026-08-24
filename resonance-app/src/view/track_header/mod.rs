@@ -45,6 +45,7 @@
 mod automation_lane;
 pub(crate) mod group_header;
 mod shelf;
+mod take_lane;
 pub(crate) mod track;
 
 use iced::widget::{column, container, stack, Space};
@@ -189,6 +190,36 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         label_fold ^= lh.finish();
     }
     label_fold.hash(&mut h);
+    // Take rows (epic #15, doc #165): the column mirrors the canvas's
+    // `TakeRow` rows with per-take cells and shows a caret + take count on
+    // recorded tracks, so group membership, the takes themselves, the comp
+    // cover behind each cell's role chip, and the transient expanded set
+    // must all invalidate the lazy cache. The groups are an ordered Vec, so
+    // a sequential hash is enough; the expanded set is sorted first because
+    // a `HashSet` has no stable iteration order.
+    r.take_groups.groups.len().hash(&mut h);
+    for g in &r.take_groups.groups {
+        g.id.hash(&mut h);
+        g.track_id.hash(&mut h);
+        g.slot.hash(&mut h);
+        g.active_take.hash(&mut h);
+        for t in &g.takes {
+            t.id.hash(&mut h);
+            t.pass_index.hash(&mut h);
+        }
+        for seg in &g.comp.segments {
+            seg.take_id.hash(&mut h);
+            seg.range.hash(&mut h);
+        }
+    }
+    let mut takes_expanded: Vec<_> = r
+        .interaction
+        .take_lane_expanded_tracks
+        .iter()
+        .copied()
+        .collect();
+    takes_expanded.sort_unstable();
+    takes_expanded.hash(&mut h);
     for t in &r.registry.tracks {
         if t.sub_track.is_some() {
             continue;
@@ -299,7 +330,13 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         .filter(|t| t.sub_track.is_none())
         .collect();
     let automation_rows = r.arrange_automation_rows();
-    let layout = ArrangeRowLayout::build(&sorted_tracks, &r.track_groups, &automation_rows);
+    let take_rows = r.arrange_take_rows();
+    let layout = ArrangeRowLayout::build_with_takes(
+        &sorted_tracks,
+        &r.track_groups,
+        &automation_rows,
+        &take_rows,
+    );
 
     let scroll_y = r.viewport.scroll_offset_y.max(0.0);
 
@@ -419,6 +456,40 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                     .unwrap_or_default();
                 lane_col = lane_col
                     .push(automation_lane::view_automation_lane_header(label, row.height));
+            }
+            // Slim take cell mirroring the canvas's take sub-row (epic
+            // #15). The role chip is derived from the same
+            // `effective_cover` the canvas draws from, so the column can
+            // never disagree with the lane about which take is soloed or
+            // comped. A take that vanished mid-frame degrades to an empty
+            // label rather than a missing row.
+            ArrangeRowKind::TakeRow { group, take, .. } => {
+                let (label, role) = r
+                    .take_groups
+                    .group(group)
+                    .and_then(|g| {
+                        let t = g.take(take)?;
+                        let cover =
+                            crate::view::timeline::takes::effective_cover(g);
+                        let role = if g.active_take == Some(take) {
+                            take_lane::TakeRole::Active
+                        } else {
+                            match cover.iter().filter(|s| s.take_id == take).count() {
+                                0 => take_lane::TakeRole::Unused,
+                                n => take_lane::TakeRole::Comped(n),
+                            }
+                        };
+                        Some((
+                            format!(
+                                "Take {}",
+                                t.pass_index.saturating_add(1)
+                            ),
+                            role,
+                        ))
+                    })
+                    .unwrap_or_else(|| (String::new(), take_lane::TakeRole::Unused));
+                lane_col =
+                    lane_col.push(take_lane::view_take_lane_header(label, role, row.height));
             }
         }
     }

@@ -408,6 +408,14 @@ impl TimelineCanvas<'_> {
             Some(ArrangeRowKind::AutomationLane { track, .. }) => {
                 captured(Message::Ui(UiMessage::SelectTrack(Some(track))))
             }
+            // Same fallback for a take sub-row: selecting the owning track
+            // is the safe, non-destructive reading of a press on the take
+            // stack. The comping gestures that will claim these rows first
+            // (select active take / split / promote) are todo #414's —
+            // rendering, todo #413, deliberately adds no new pointer verb.
+            Some(ArrangeRowKind::TakeRow { track, .. }) => {
+                captured(Message::Ui(UiMessage::SelectTrack(Some(track))))
+            }
             None => captured(Message::Ui(UiMessage::SelectTrack(None))),
         }
     }

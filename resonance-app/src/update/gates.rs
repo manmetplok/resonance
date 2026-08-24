@@ -80,6 +80,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::ToggleReferencePanel)
         | Message::Ui(UiMessage::CloseMarkersOverview)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
+        | Message::Ui(UiMessage::ToggleTakeLane(_))
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
         | Message::Ui(UiMessage::ToggleMidiClockRecv)

@@ -186,6 +186,17 @@ pub struct ClipInteractionState {
     /// `ArrangeRowLayout` build so the canvas, track-header column and
     /// hit-testing all agree on the extra rows.
     pub automation_expanded_tracks: std::collections::HashSet<TrackId>,
+    /// Tracks whose take lanes are expanded into stacked take sub-rows
+    /// (epic #15, doc #165). Transient view state — not project data, not
+    /// undoable, not persisted (the takes themselves are; whether their
+    /// folder is open is not). Toggled by `UiMessage::ToggleTakeLane`;
+    /// consumed by the shared `ArrangeRowLayout` build so the canvas and
+    /// the track-header column agree on the extra rows.
+    ///
+    /// The comp ribbon on the track's own lane is drawn regardless of this
+    /// set — a folded take lane must still show which take is audible
+    /// where.
+    pub take_lane_expanded_tracks: std::collections::HashSet<TrackId>,
 }
 
 impl ClipInteractionState {

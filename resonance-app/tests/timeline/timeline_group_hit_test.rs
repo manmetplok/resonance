@@ -352,7 +352,9 @@ fn drag_drop_skips_collapsed_members() {
         .iter()
         .find_map(|r| match r.kind {
             ArrangeRowKind::Track(id) => Some((r.y_top, r.height, id)),
-            ArrangeRowKind::GroupHeader(_) | ArrangeRowKind::AutomationLane { .. } => None,
+            ArrangeRowKind::GroupHeader(_)
+            | ArrangeRowKind::AutomationLane { .. }
+            | ArrangeRowKind::TakeRow { .. } => None,
         })
         .expect("at least one visible track row remains");
     let (y_top, h, id) = first_track_row;

@@ -59,6 +59,8 @@ mod quantize_persistence;
 mod selection_bar;
 #[path = "timeline/take_group_mirror.rs"]
 mod take_group_mirror;
+#[path = "timeline/take_lane_render.rs"]
+mod take_lane_render;
 #[path = "timeline/test_arrangement_markers.rs"]
 mod test_arrangement_markers;
 #[path = "timeline/timeline_automation_device_lanes.rs"]

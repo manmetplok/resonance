@@ -80,6 +80,8 @@ impl crate::Resonance {
             frozen_tracks,
             drag: self.drag_placement.as_ref(),
             automation_expanded_tracks: &self.interaction.automation_expanded_tracks,
+            take_groups: &self.take_groups,
+            take_lane_expanded_tracks: &self.interaction.take_lane_expanded_tracks,
         }
     }
 
