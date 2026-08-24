@@ -7,12 +7,11 @@
 //! pass was discarded, so the "no take is ever silently lost" acceptance
 //! criterion is exactly what these cases pin.
 //!
-//! The comp / active-take projections doc #165 also assigns to this todo
-//! are asserted directly on `TakeGroupState`: their engine echoes
-//! (`TakeCompChanged` / `ActiveTakeChanged`) now exist on `AudioEvent`
-//! (todo #409) but are not routed through dispatch until todo #411, so
-//! there is still no event to drive them with. Move those two cases onto
-//! `test_apply_engine_event` when that lands.
+//! The comp / active-take projections doc #165 also assigns to this seam
+//! are driven through the same dispatch since todo #411 routed
+//! `TakeCompChanged` / `ActiveTakeChanged`: nothing here reaches into the
+//! mirror directly, so an unrouted echo fails these cases instead of
+//! passing on a hand-written projection call.
 
 use resonance_app::Resonance;
 use resonance_audio::types::AudioEvent;
@@ -231,7 +230,10 @@ fn comp_changed_replaces_the_comp_cover() {
             take_id: 1,
         },
     ];
-    app.test_take_groups_mut().comp_changed(1, segments.clone());
+    app.test_apply_engine_event(AudioEvent::TakeCompChanged {
+        group_id: 1,
+        segments: segments.clone(),
+    });
     assert_eq!(app.test_take_groups()[0].comp.segments, segments);
     // Those two segments tile the slot exactly.
     assert!(app.test_take_groups()[0].is_full_cover());
@@ -241,7 +243,10 @@ fn comp_changed_replaces_the_comp_cover() {
         range: SLOT,
         take_id: 1,
     }];
-    app.test_take_groups_mut().comp_changed(1, next.clone());
+    app.test_apply_engine_event(AudioEvent::TakeCompChanged {
+        group_id: 1,
+        segments: next.clone(),
+    });
     assert_eq!(app.test_take_groups()[0].comp.segments, next);
 }
 
@@ -251,10 +256,16 @@ fn active_take_changed_sets_then_clears_the_soloed_take() {
     app.test_apply_engine_event(captured(1, 7, 0));
     assert_eq!(app.test_take_groups()[0].active_take, None);
 
-    app.test_take_groups_mut().active_take_changed(1, Some(0));
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: 1,
+        take_id: Some(0),
+    });
     assert_eq!(app.test_take_groups()[0].active_take, Some(0));
 
-    app.test_take_groups_mut().active_take_changed(1, None);
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: 1,
+        take_id: None,
+    });
     assert_eq!(app.test_take_groups()[0].active_take, None);
 }
 
@@ -262,14 +273,17 @@ fn active_take_changed_sets_then_clears_the_soloed_take() {
 fn comp_and_active_changes_for_unknown_group_are_noops() {
     let mut app = Resonance::new_for_test().0;
 
-    app.test_take_groups_mut().comp_changed(
-        99,
-        vec![CompSegment {
+    app.test_apply_engine_event(AudioEvent::TakeCompChanged {
+        group_id: 99,
+        segments: vec![CompSegment {
             range: SLOT,
             take_id: 1,
         }],
-    );
-    app.test_take_groups_mut().active_take_changed(99, Some(1));
+    });
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: 99,
+        take_id: Some(1),
+    });
 
     // No group was invented from a comp/active echo alone.
     assert!(app.test_take_groups().is_empty());

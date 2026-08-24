@@ -33,6 +33,9 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Automation(_)
+        // Comping edits a recorded lane, which only exists inside a
+        // project — block while the startup modal owns the screen.
+        | Message::Take(_)
         | Message::Viewport(_)
         | Message::Reference(_)
         | Message::GlobalTrack(_)
@@ -167,6 +170,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Automation(_)
+        | Message::Take(_)
         | Message::Group(_)
         | Message::Viewport(_)
         | Message::Reference(_)
@@ -227,6 +231,7 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Automation(_)
+        | Message::Take(_)
         | Message::Group(_)
         | Message::Viewport(_)
         | Message::Reference(_)
@@ -435,7 +440,33 @@ impl crate::Resonance {
         if self.plugin_move_is_refused(message) {
             return true;
         }
+        if self.take_edit_is_refused(message) {
+            return true;
+        }
         false
+    }
+
+    /// A take-lane comp edit that would change nothing (epic #15, todo
+    /// #411).
+    ///
+    /// Gated for the reason [`plugin_move_is_refused`](Self::plugin_move_is_refused)
+    /// spells out: `update_inner` records the undo snapshot and bumps the
+    /// control-API revision *before* dispatch, so an edit refused inside
+    /// the handler would still leave an undo entry that restores an
+    /// identical snapshot and a revision bump a remote client would read
+    /// as a concurrent edit.
+    ///
+    /// The predicate is `update::takes::plan` itself — the same function
+    /// the handler applies — so the gate and the edit can never disagree
+    /// about what "changes nothing" means. It covers an unknown group or
+    /// take, a solo that is already current, a split off the slot or on an
+    /// existing boundary, a promote clamped away to nothing, and deleting
+    /// a group's last take.
+    fn take_edit_is_refused(&self, message: &crate::message::Message) -> bool {
+        let crate::message::Message::Take(m) = message else {
+            return false;
+        };
+        crate::update::takes::plan(self, m).is_none()
     }
 
     /// A chain reorder the domain rule refuses (ba todo #1261).

@@ -78,6 +78,15 @@ pub fn describe(message: &Message) -> String {
         Message::Transport(_) => "transport",
         Message::VocalTuning(_) => "vocal edit",
         Message::Automation(_) => "automation edit",
+        Message::Take(t) => match t {
+            TakeMessage::SetActiveTake {
+                take_id: Some(_), ..
+            } => "solo take",
+            TakeMessage::SetActiveTake { .. } => "clear take solo",
+            TakeMessage::SplitCompAtPlayhead { .. } => "split comp",
+            TakeMessage::PromoteTakeSegment { .. } => "promote take",
+            TakeMessage::DeleteTake { .. } => "delete take",
+        },
         Message::Freeze(_) => "freeze",
         Message::Marker(_) | Message::MarkerUi(_) => "marker edit",
         Message::Arrangement(crate::message::ArrangementMessage::InsertBars { .. }) => {

@@ -113,9 +113,11 @@ fn authored_project(dir: &Path) -> Resonance {
     capture_midi_pass(&mut app, OTHER_GROUP, 0, 60);
     capture_midi_pass(&mut app, OTHER_GROUP, 1, 64);
 
-    app.test_take_groups_mut().comp_changed(
-        GROUP,
-        vec![
+    // Comp / solo arrive the way they do live: as the engine's echoes of
+    // the commands an edit sent (todo #411 routes both through dispatch).
+    app.test_apply_engine_event(AudioEvent::TakeCompChanged {
+        group_id: GROUP,
+        segments: vec![
             CompSegment {
                 range: TimelineRange::new(96_000, 64_000),
                 take_id: 0,
@@ -129,9 +131,11 @@ fn authored_project(dir: &Path) -> Resonance {
                 take_id: 1,
             },
         ],
-    );
-    app.test_take_groups_mut()
-        .active_take_changed(OTHER_GROUP, Some(1));
+    });
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: OTHER_GROUP,
+        take_id: Some(1),
+    });
     app
 }
 
@@ -435,14 +439,18 @@ fn a_comp_edit_reverses_through_the_diff_replay() {
         .map(|s| s.take_id)
         .collect();
 
-    // Promote take 1 across the whole slot and solo take 2 — the shape of
-    // edit todo #411's handlers will make.
+    // Promote take 1 across the whole slot and solo take 2, echoed back
+    // from the engine exactly as todo #411's handlers drive it.
     let mut comp = Comp::new();
     comp.promote(SLOT, 1);
-    app.test_take_groups_mut()
-        .comp_changed(GROUP, comp.segments.clone());
-    app.test_take_groups_mut()
-        .active_take_changed(GROUP, Some(2));
+    app.test_apply_engine_event(AudioEvent::TakeCompChanged {
+        group_id: GROUP,
+        segments: comp.segments.clone(),
+    });
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: GROUP,
+        take_id: Some(2),
+    });
     assert_eq!(app.test_take_groups()[0].comp.segments.len(), 1);
 
     app.test_begin_restore_from_snapshot(before);

@@ -33,6 +33,7 @@ pub mod pool;
 pub mod project_io;
 pub mod reference;
 pub mod relink;
+pub mod takes;
 pub mod tempo_reanchor;
 pub mod tick;
 pub mod track;
@@ -138,6 +139,7 @@ impl crate::Resonance {
             Message::VocalTuning(m) => vocal_tuning::handle(self, m),
             Message::Plugin(m) => plugin::handle(self, m),
             Message::Automation(m) => automation::handle(self, m),
+            Message::Take(m) => takes::handle(self, m),
             Message::Viewport(m) => viewport::handle(self, m),
             Message::ProjectIo(m) => project_io::handle(self, m),
             Message::Group(m) => group::handle(self, m),
