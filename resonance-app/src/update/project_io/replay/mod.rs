@@ -268,6 +268,9 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // project's `audio/` directory (or none at all). `replay_take_groups`
     // re-seeds the mirror from the project file afterwards, and only
     // adds, so this clear is the one thing dropping the old project's.
+    // (`ClearAll` genuinely does empty the engine's map as of ba todo
+    // #1394 — it did not when this comment was first written, which is
+    // how a loaded project inherited the previous one's comp table.)
     r.take_groups.clear();
 
     // Bump the app-side sub-track id counter past any persisted ids so

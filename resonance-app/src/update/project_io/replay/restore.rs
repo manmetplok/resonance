@@ -32,13 +32,30 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// drops stale take lanes, rather than a rebuild that happens to overwrite
 /// them.
 ///
-/// Take groups are pure app-side data on this build: the engine's
-/// take-group map is rebuilt by cycle recording, and there is no command
-/// to push a restored comp back into it yet (`SetTakeComp` /
-/// `SetActiveTake` are todo #409's). So nothing is sent to the engine here
-/// — exactly the shape [`restore_quantize`] and [`restore_track_groups`]
-/// have, and the same "engine re-sync lands with the playback work" note
-/// [`restore_references`] carries.
+/// **The engine is told, once, at the end** (ba todo #1394). Take groups
+/// are born in the engine — cycle recording calls `store_take` per pass —
+/// but a project load has no capture to be born from, so until
+/// `AudioCommand::RestoreTakeGroups` existed the engine held no groups
+/// after a reload: the lanes were drawn and the comp rendered **silence**,
+/// on playback and on bounce alike. The command replaces the engine's
+/// store wholesale and republishes the comp table, which is why a loaded
+/// comp is audible without touching the transport.
+///
+/// It carries `r.take_groups.groups` — the mirror as it stands after this
+/// function has seeded it — rather than `project.take_groups`. The two are
+/// equal at both existing call sites, but sending the mirror means the
+/// engine matches what the user is *looking at* whatever a caller did
+/// beforehand, so a caller that forgot to clear produces an app-side bug
+/// rather than a silent engine/app divergence.
+///
+/// The send is unconditional: a project with no take lanes must still
+/// clear the engine's store, or opening it after a comped project would
+/// leave the old comp governing clip ids the new project reuses.
+///
+/// Missing takes are sent too. Their `clip_ref` names a WAV the engine
+/// will not find, so the comp renders that span silent — but the take
+/// keeps its id, and every other segment of the cover keeps playing.
+/// Dropping it would renumber nothing and break everything.
 ///
 /// **Missing recorded audio.** An audio take names its WAV by `clip_ref`,
 /// resolved against the project directory through
@@ -77,6 +94,10 @@ pub(crate) fn replay_take_groups(
             r.take_groups.mark_missing(group.id, take.id);
         }
     }
+
+    let _ = r.engine.send(AudioCommand::RestoreTakeGroups {
+        groups: r.take_groups.groups.clone(),
+    });
 }
 
 /// Restore the Performance-mode footer selection (epic #11, todo #312):

@@ -663,3 +663,117 @@ fn partial_take_at_a_seam_ramps_out_instead_of_cutting() {
     let max_step = l.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
     assert!(max_step < 0.05, "seam must stay click-free; largest step {max_step}");
 }
+
+// ---------------------------------------------------------------------------
+// A comp restored from a saved project (todo #1394)
+// ---------------------------------------------------------------------------
+//
+// `store_take` was the only writer of the engine's take-group store, so
+// after a reload the store was empty, `build_comp_table` produced an empty
+// table and the comp the user could see rendered nothing — on playback and
+// on bounce alike. These go the whole way: serde round-trip the group the
+// way `project.json` does, rehydrate the store through the real restore,
+// and render the result through the production block on both strategies.
+
+/// The comped output of `group`, rendered live and bounced (asserted
+/// identical inside `render_block_both_ways`).
+fn comped_output(group: TakeGroup) -> Vec<f32> {
+    let table = build_comp_table(&groups(group));
+    render_block_both_ways(&table, || {
+        vec![
+            const_clip(A_CLIP, SLOT_LEN as usize, 1.0),
+            const_clip(B_CLIP, SLOT_LEN as usize, 0.25),
+        ]
+    })
+}
+
+/// A saved comp plays *and bounces* exactly as it did before the save.
+///
+/// Sample-for-sample against the pre-save render, so a restore that lost
+/// the segment order, the slot binding or a take's `clip_ref` fails here
+/// rather than passing on a "something came out" check.
+#[test]
+fn a_restored_comp_bounces_identically_to_before_the_save() {
+    let mut authored = two_take_group();
+    authored.comp = split_comp();
+    let before = comped_output(authored.clone());
+
+    // The real durable hop: `ProjectFile.take_groups` stores the shared
+    // model verbatim, so this is the shape a reload hands back.
+    let json = serde_json::to_string(&authored).expect("serialize take group");
+    let saved: TakeGroup = serde_json::from_str(&json).expect("deserialize take group");
+
+    // Rehydrate the engine's store exactly as `RestoreTakeGroups` does.
+    let mut store: HashMap<TakeGroupId, TakeGroup> = HashMap::new();
+    let mut next_group_id = 1u64;
+    resonance_audio::__test_support::restore_take_groups_in_place(
+        &mut store,
+        &mut next_group_id,
+        vec![saved],
+    );
+
+    let table = build_comp_table(&store);
+    assert!(
+        !table.is_empty(),
+        "an empty table after a reload is exactly the silent-comp bug"
+    );
+    assert!(
+        table.is_governed(A_CLIP) && table.is_governed(B_CLIP),
+        "restored take clips must still be governed, or the raw passes double-play"
+    );
+
+    let after = render_block_both_ways(&table, || {
+        vec![
+            const_clip(A_CLIP, SLOT_LEN as usize, 1.0),
+            const_clip(B_CLIP, SLOT_LEN as usize, 0.25),
+        ]
+    });
+    assert_eq!(
+        after, before,
+        "a reloaded comp must render sample-for-sample as it did before the save"
+    );
+
+    // Not vacuous: the segments really do carry two different takes.
+    let a = (DECLICK + 100) as usize;
+    let b = (SEAM + SEAM_HALF + 100) as usize;
+    assert!((after[a] - 1.0).abs() < 1e-6, "take A segment, got {}", after[a]);
+    assert!((after[b] - 0.25).abs() < 1e-6, "take B segment, got {}", after[b]);
+}
+
+/// A soloed take survives the same round trip: the group's `active_take`
+/// still overrides the comp after a reload, so the slot plays that one take
+/// whole rather than the composite.
+#[test]
+fn a_restored_active_take_still_overrides_the_comp() {
+    let mut authored = two_take_group();
+    authored.comp = split_comp();
+    authored.active_take = Some(1);
+
+    let json = serde_json::to_string(&authored).expect("serialize take group");
+    let saved: TakeGroup = serde_json::from_str(&json).expect("deserialize take group");
+
+    let mut store: HashMap<TakeGroupId, TakeGroup> = HashMap::new();
+    let mut next_group_id = 1u64;
+    resonance_audio::__test_support::restore_take_groups_in_place(
+        &mut store,
+        &mut next_group_id,
+        vec![saved],
+    );
+
+    let out = render_block_both_ways(&build_comp_table(&store), || {
+        vec![
+            const_clip(A_CLIP, SLOT_LEN as usize, 1.0),
+            const_clip(B_CLIP, SLOT_LEN as usize, 0.25),
+        ]
+    });
+
+    // Take B (0.25) across the whole slot, including where the comp would
+    // otherwise have played take A.
+    for probe in [(DECLICK + 100) as usize, (SEAM + SEAM_HALF + 100) as usize] {
+        assert!(
+            (out[probe] - 0.25).abs() < 1e-6,
+            "soloed take must play the whole slot; frame {probe} is {}",
+            out[probe]
+        );
+    }
+}

@@ -26,7 +26,8 @@ use std::path::Path;
 
 use resonance_app::project::{load_project, save_project, LoadedProject, ProjectFile};
 use resonance_app::Resonance;
-use resonance_audio::types::{AudioEvent, TrackType};
+use resonance_audio::__test_support::Receiver;
+use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
 use resonance_common::{Comp, CompSegment, Take, TakeContent, TakeGroup, TakeNote, TimelineRange};
 
 const TRACK: u64 = 7;
@@ -546,4 +547,145 @@ fn take_groups_round_trip_through_serde_verbatim() {
     let back: ProjectFile = serde_json::from_str(&json).expect("deserialize");
 
     assert_eq!(back.take_groups, vec![group]);
+}
+
+// ---------------------------------------------------------------------------
+// Reaching the engine (ba todo #1394)
+// ---------------------------------------------------------------------------
+//
+// Persisting the lanes app-side is only half of doc #165's "persists across
+// save/load": the engine renders the comp, and until `RestoreTakeGroups`
+// existed nothing ever wrote its take-group store outside a live capture.
+// The lanes came back on screen and the comp came back **silent**, on
+// playback and on bounce alike.
+//
+// Asserting the mirror alone would pass for exactly that build, so these
+// assert what the engine is *told* — the same reason `take_comp_edits.rs`
+// checks commands rather than state.
+
+/// Every `RestoreTakeGroups` in `cmds`, as the groups each carried.
+fn restore_commands(cmds: &[AudioCommand]) -> Vec<Vec<TakeGroup>> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            AudioCommand::RestoreTakeGroups { groups } => Some(groups.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
+    let mut cmds = Vec::new();
+    while let Ok(cmd) = rx.try_recv() {
+        cmds.push(cmd);
+    }
+    cmds
+}
+
+/// Opening a project pushes its take groups into the engine, comp and all.
+#[test]
+fn opening_a_project_pushes_its_take_groups_into_the_engine() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let saved = authored_project(dir.path()).test_build_project_file();
+
+    let mut app = app_at(dir.path());
+    let rx = app.test_capture_engine();
+    app.test_replay_loaded_project_from(LoadedProject {
+        file: saved.clone(),
+        project_dir: dir.path().to_path_buf(),
+        midi_notes: std::collections::HashMap::new(),
+        plugin_states: std::collections::HashMap::new(),
+    });
+
+    let sent = restore_commands(&drain(&rx));
+    assert_eq!(sent.len(), 1, "exactly one restore per load");
+    assert_eq!(
+        sent[0], saved.take_groups,
+        "the engine is handed the saved groups verbatim — ids, clip_refs, \
+         comp and active take are what make the comp audible"
+    );
+}
+
+/// A take whose WAV is gone is still sent. Its span renders silent, but the
+/// take keeps its id, so every other segment of the cover keeps playing;
+/// withholding it would leave the engine's comp naming a take it does not
+/// hold, which `build_comp_table` resolves by dropping the *span*.
+#[test]
+fn a_missing_take_is_still_sent_to_the_engine() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let saved = authored_project(dir.path()).test_build_project_file();
+    std::fs::remove_file(dir.path().join("audio/clip_101.wav")).expect("remove take wav");
+
+    let mut app = app_at(dir.path());
+    let rx = app.test_capture_engine();
+    app.test_replay_loaded_project_from(LoadedProject {
+        file: saved,
+        project_dir: dir.path().to_path_buf(),
+        midi_notes: std::collections::HashMap::new(),
+        plugin_states: std::collections::HashMap::new(),
+    });
+
+    let sent = restore_commands(&drain(&rx));
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0][0].takes.len(),
+        3,
+        "the flagged take travels with the rest"
+    );
+    assert_eq!(app.test_missing_takes(), vec![(GROUP, 1)], "and is flagged");
+}
+
+/// A project with no take lanes still sends the command, so the engine's
+/// store is emptied. Skipping the send for an empty project would leave the
+/// previous project's comp governing clip ids the new project reuses —
+/// those clips would vanish from the ordinary clip path and the stale comp
+/// would play in their place.
+#[test]
+fn opening_a_lane_free_project_still_clears_the_engines_store() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = app_at(dir.path());
+    let rx = app.test_capture_engine();
+
+    app.test_replay_loaded_project_from(LoadedProject {
+        file: ProjectFile::default(),
+        project_dir: dir.path().to_path_buf(),
+        midi_notes: std::collections::HashMap::new(),
+        plugin_states: std::collections::HashMap::new(),
+    });
+
+    let sent = restore_commands(&drain(&rx));
+    assert_eq!(sent.len(), 1, "the send is unconditional");
+    assert!(sent[0].is_empty(), "and carries nothing, which empties the store");
+}
+
+/// Undo/redo re-syncs the engine too. The diff replay sends no `ClearAll`,
+/// so this command is the only thing that tells the engine a take was
+/// deleted or a comp reversed — and it must carry the *target* snapshot's
+/// groups, not the ones it is replacing.
+#[test]
+fn undoing_a_capture_re_syncs_the_engines_take_groups() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = app_at(dir.path());
+    capture_audio_pass(&mut app, GROUP, 0, 100);
+    write_take_wav(dir.path(), 100);
+
+    let one_take = app.test_snapshot_for_undo();
+    capture_audio_pass(&mut app, GROUP, 1, 101);
+    write_take_wav(dir.path(), 101);
+
+    let rx = app.test_capture_engine();
+    app.test_begin_restore_from_snapshot(one_take);
+
+    let sent = restore_commands(&drain(&rx));
+    assert_eq!(sent.len(), 1, "the undo re-syncs the engine once");
+    assert_eq!(sent[0].len(), 1, "one group");
+    assert_eq!(
+        sent[0][0].takes.len(),
+        1,
+        "the undone pass is gone from what the engine is told, not just from the mirror"
+    );
+    assert_eq!(
+        sent[0][0].takes[0].content,
+        TakeContent::Audio { clip_ref: 100 },
+        "and the surviving take is the first pass"
+    );
 }

@@ -113,13 +113,15 @@ pub fn try_diff_replay(
     // `apply_audio_clips`; this rebuilds the asset list and usage tally.
     apply_pool(r, target_file);
 
-    // -- Cycle-record take lanes (epic #15, todo #412) -----------------
-    // Take groups are pure app-side data too — the engine's take-group
-    // map is built by cycle recording and there is no command to push a
-    // restored comp back into it yet (#409) — so an undo/redo that
-    // promoted a segment, soloed a take or deleted one is reconciled
-    // verbatim here. They never alter the project shape, so, like the
-    // pool and the quantize state, they are absent from
+    // -- Cycle-record take lanes (epic #15, todo #412/#1394) -----------
+    // An undo/redo that promoted a segment, soloed a take or deleted one
+    // is reconciled verbatim here: the mirror is rebuilt from the target
+    // snapshot and `replay_take_groups` pushes the result into the engine
+    // with `RestoreTakeGroups`. That command replaces the engine's store
+    // wholesale, which is what this path needs — unlike a project load it
+    // sends no `ClearAll`, so a merge would resurrect the very takes an
+    // undo just deleted. Take groups never alter the project shape, so,
+    // like the pool and the quantize state, they are absent from
     // `structurally_compatible` and always take this fast path.
     apply_take_groups(r, target_file);
 

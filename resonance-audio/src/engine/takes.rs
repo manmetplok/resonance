@@ -84,6 +84,57 @@ pub fn push_take(
     take_id
 }
 
+/// Replace `take_groups` wholesale with `groups`, raising `next_group_id`
+/// above every restored group id. The pure half of
+/// [`handle_restore_take_groups`] — no `HandlerState`, no publish — so
+/// `tests/loop_record_takes.rs` can pin the store/allocator contract
+/// against the real code.
+///
+/// Two invariants live here:
+///
+/// - **Replace, don't merge.** Both senders rebuild the app-side mirror
+///   from scratch before sending, so replacing keeps the two identical;
+///   merging would resurrect takes an undo had just deleted.
+/// - **The allocator only ever rises.** Taking `max` rather than assigning
+///   means a restore can never hand a *later* cycle-record run an id that
+///   an earlier one in the same session already used — which a plain
+///   `= highest + 1` would do when a project holding one group is loaded
+///   on top of a session that had already recorded several.
+///
+/// Take ids need no reservation: [`push_take`] derives them from the
+/// group's own takes, so a restored group allocates correctly the moment
+/// it is present.
+pub fn restore_take_groups_in_place(
+    take_groups: &mut std::collections::HashMap<TakeGroupId, TakeGroup>,
+    next_group_id: &mut TakeGroupId,
+    groups: Vec<TakeGroup>,
+) {
+    take_groups.clear();
+    for group in groups {
+        *next_group_id = (*next_group_id).max(group.id + 1);
+        take_groups.insert(group.id, group);
+    }
+}
+
+/// Rehydrate the take-group store from a loaded project (or an undo
+/// snapshot) and republish the comp table, so a restored comp plays and
+/// bounces without waiting for a transport change (ba todo #1394).
+///
+/// Silent by design: the app is the sender *and* the mirror here, so there
+/// is nothing to tell it that it did not just say.
+pub(crate) fn handle_restore_take_groups(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    groups: Vec<TakeGroup>,
+) {
+    restore_take_groups_in_place(
+        &mut state.take_groups,
+        &mut state.next_take_group_id,
+        groups,
+    );
+    publish_take_comp(ctx, state);
+}
+
 /// Flatten the authoritative take groups into the audio-thread-visible
 /// comp playback table and publish it wait-free. Called whenever a group is
 /// captured, comped, or has its active take changed — the single point at

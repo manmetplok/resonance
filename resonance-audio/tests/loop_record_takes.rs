@@ -303,3 +303,166 @@ fn vocal_tracks_still_capture_audio() {
         "a vocal track renders through the audio path and keeps audio capture"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Rehydrating the store from a saved project (todo #1394, doc #292)
+// ---------------------------------------------------------------------------
+//
+// `store_take` was the only writer of `HandlerState::take_groups`, so a
+// project load left the engine holding no groups at all: the app drew the
+// lanes and the engine rendered silence. These pin the store + allocator
+// contract of the restore, which is the pure half of the new
+// `AudioCommand::RestoreTakeGroups` handler.
+
+use std::collections::HashMap;
+
+use resonance_audio::__test_support::{push_take, restore_take_groups_in_place};
+use resonance_common::{Comp, CompSegment, TakeContent, TakeGroup, TakeGroupId, TimelineRange};
+
+/// A saved group with `takes` audio takes and a comp that names the last
+/// of them — the shape a comped cycle-record run persists.
+fn saved_group(id: TakeGroupId, track_id: u64, takes: u64) -> TakeGroup {
+    let slot = TimelineRange::new(0, 48_000);
+    let mut group = TakeGroup::new(id, track_id, slot);
+    for i in 0..takes {
+        push_take(
+            &mut group,
+            slot,
+            i as u32,
+            &TakeContent::Audio {
+                clip_ref: id * 100 + i,
+            },
+        );
+    }
+    group.comp = Comp {
+        segments: vec![CompSegment {
+            range: slot,
+            take_id: takes - 1,
+        }],
+    };
+    group
+}
+
+/// Every saved group lands in the engine's store, keyed by its own id and
+/// carrying its comp verbatim. Without this the published comp table is
+/// empty and a loaded comp neither plays nor bounces.
+#[test]
+fn restoring_seeds_every_saved_group_with_its_comp() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        vec![saved_group(1, 7, 3), saved_group(2, 8, 2)],
+    );
+
+    assert_eq!(store.len(), 2, "a project's groups all come back");
+    let g1 = store.get(&1).expect("group 1 keyed by its own id");
+    assert_eq!(g1.track_id, 7);
+    assert_eq!(g1.takes.len(), 3, "no take is dropped on the way in");
+    assert_eq!(
+        g1.comp.segments.iter().map(|s| s.take_id).collect::<Vec<_>>(),
+        vec![2],
+        "the comp is what makes the group audible; it must survive"
+    );
+    assert_eq!(store.get(&2).expect("group 2").takes.len(), 2);
+}
+
+/// The allocator is pushed above every restored id, so the next
+/// cycle-record run cannot re-issue a group a loaded project already
+/// holds. It re-issued `1` before this landed, and because take ids are
+/// allocated *within* a group the new run's first take then took id `0` —
+/// silently replacing a restored take in the app's `(group, take)`-keyed
+/// mirror.
+#[test]
+fn restoring_reserves_group_ids_past_the_highest_saved_one() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        vec![saved_group(1, 7, 2), saved_group(9, 8, 1), saved_group(4, 9, 1)],
+    );
+
+    assert_eq!(
+        next, 10,
+        "the next group id must clear the highest restored id, not merely the last"
+    );
+}
+
+/// The bump only ever raises. A project holding one low-numbered group,
+/// loaded into a session that had already recorded several, must not drag
+/// the allocator back down onto ids that session has handed out.
+#[test]
+fn restoring_never_lowers_the_group_allocator() {
+    let mut store = HashMap::new();
+    let mut next = 12u64;
+
+    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 1)]);
+
+    assert_eq!(next, 12, "a low restored id must not rewind the allocator");
+}
+
+/// Restoring replaces; it never merges. Both senders — a disk load and an
+/// undo/redo diff replay — rebuild the app-side mirror from scratch first,
+/// and the undo path sends no `ClearAll`, so merging would resurrect the
+/// takes an undo had just deleted.
+#[test]
+fn restoring_replaces_the_previous_projects_groups() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+
+    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 3)]);
+    // Project B holds one group, with a different id and a different track.
+    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(5, 8, 1)]);
+
+    assert_eq!(store.len(), 1, "project A's group must not linger");
+    assert!(store.contains_key(&5));
+    assert!(
+        !store.contains_key(&1),
+        "a stale group governs clip ids the new project reuses"
+    );
+}
+
+/// An empty project still clears the store. The send is unconditional for
+/// exactly this: opening a project with no take lanes on top of a comped
+/// one otherwise left the old comp governing — and playing over — clip ids
+/// the new project had reused.
+#[test]
+fn restoring_an_empty_project_clears_the_store() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+
+    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 2)]);
+    restore_take_groups_in_place(&mut store, &mut next, Vec::new());
+
+    assert!(store.is_empty(), "a take-lane-free project must empty the store");
+    assert_eq!(next, 2, "clearing the store does not rewind the allocator");
+}
+
+/// Take ids need no reservation of their own — `push_take` allocates from
+/// the group it is given, so a further take on a *restored* group picks up
+/// where the saved takes left off. Confirming, rather than assuming, the
+/// claim doc #292 makes about the allocator surviving a rehydration.
+#[test]
+fn a_further_take_on_a_restored_group_gets_a_fresh_id() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+    let slot = TimelineRange::new(0, 48_000);
+
+    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 3)]);
+
+    let group = store.get_mut(&1).expect("restored group");
+    let saved_ids: Vec<_> = group.takes.iter().map(|t| t.id).collect();
+    assert_eq!(saved_ids, vec![0, 1, 2], "precondition: three saved takes");
+
+    let fresh = push_take(group, slot, 3, &TakeContent::Audio { clip_ref: 999 });
+
+    assert_eq!(fresh, 3, "the id continues the restored group's own sequence");
+    assert_eq!(group.takes.len(), 4, "no restored take is overwritten");
+    for id in saved_ids {
+        assert!(group.take(id).is_some(), "restored take {id} must survive");
+    }
+}
