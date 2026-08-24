@@ -21,6 +21,64 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
     }
 }
 
+/// Seed the cycle-record take lanes (epic #15, design doc #165) from a
+/// saved project file (or an undo snapshot).
+///
+/// **Additive on purpose.** Like `replay_sends` this only pushes what the
+/// file carries; emptying the previous project's mirror is
+/// `wipe_registry`'s job (via
+/// [`TakeGroupState::clear`](crate::state::TakeGroupState::clear)). Keeping
+/// the two apart is what makes the wipe the single place a project load
+/// drops stale take lanes, rather than a rebuild that happens to overwrite
+/// them.
+///
+/// Take groups are pure app-side data on this build: the engine's
+/// take-group map is rebuilt by cycle recording, and there is no command
+/// to push a restored comp back into it yet (`SetTakeComp` /
+/// `SetActiveTake` are todo #409's). So nothing is sent to the engine here
+/// — exactly the shape [`restore_quantize`] and [`restore_track_groups`]
+/// have, and the same "engine re-sync lands with the playback work" note
+/// [`restore_references`] carries.
+///
+/// **Missing recorded audio.** An audio take names its WAV by `clip_ref`,
+/// resolved against the project directory through
+/// [`clip_audio_file`](crate::project::clip_audio_file). A take whose file
+/// is gone — the bundle was moved without its `audio/` folder, or a hand
+/// edit deleted it — is **kept and flagged**
+/// ([`TakeGroupState::mark_missing`](crate::state::TakeGroupState::mark_missing)),
+/// never dropped, for the same reason
+/// [`restore_pool`] keeps a missing asset: the comp cover references takes
+/// by id, so silently dropping one would leave the comp pointing at a take
+/// that no longer exists and quietly punch a hole in the composite. Doc
+/// #165's acceptance is explicit that no take is ever silently lost.
+/// MIDI takes carry their notes inline and can never go missing.
+pub(crate) fn replay_take_groups(
+    r: &mut Resonance,
+    project: &ProjectFile,
+    project_dir: &std::path::Path,
+) {
+    for group in &project.take_groups {
+        r.take_groups.groups.push(group.clone());
+        for take in &group.takes {
+            let resonance_common::TakeContent::Audio { clip_ref } = take.content else {
+                continue;
+            };
+            let rel = crate::project::clip_audio_file(clip_ref);
+            if project_dir.join(&rel).exists() {
+                continue;
+            }
+            // Loud, because the take is otherwise indistinguishable from
+            // one that simply recorded silence.
+            eprintln!(
+                "project load: take {} of group {} has no recorded audio at {} — \
+                 kept in the lane so the comp stays intact",
+                take.id, group.id, rel
+            );
+            r.take_groups.mark_missing(group.id, take.id);
+        }
+    }
+}
+
 /// Restore the Performance-mode footer selection (epic #11, todo #312):
 /// the instrument tuning and capo offset that drive the live fingering
 /// diagrams. Pure app-side state with no engine counterpart, so it's

@@ -53,6 +53,7 @@ fn make_minimal_project() -> ProjectFile {
         quantize_settings: Default::default(),
         automation_lanes: Vec::new(),
         performance: Default::default(),
+        take_groups: Vec::new(),
     }
 }
 

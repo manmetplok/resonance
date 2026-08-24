@@ -113,6 +113,16 @@ pub fn try_diff_replay(
     // `apply_audio_clips`; this rebuilds the asset list and usage tally.
     apply_pool(r, target_file);
 
+    // -- Cycle-record take lanes (epic #15, todo #412) -----------------
+    // Take groups are pure app-side data too — the engine's take-group
+    // map is built by cycle recording and there is no command to push a
+    // restored comp back into it yet (#409) — so an undo/redo that
+    // promoted a segment, soloed a take or deleted one is reconciled
+    // verbatim here. They never alter the project shape, so, like the
+    // pool and the quantize state, they are absent from
+    // `structurally_compatible` and always take this fast path.
+    apply_take_groups(r, target_file);
+
     // -- Quantize state (ba todo #395) ---------------------------------
     // The groove library + last-used quantize settings are pure app-side
     // data (no engine instances), so an undo/redo that edited them is
@@ -1033,6 +1043,28 @@ fn apply_pool(r: &mut Resonance, b: &ProjectFile) {
         });
     }
     r.recompute_pool_usage();
+}
+
+/// Restore the cycle-record take lanes from a snapshot on the fast (diff)
+/// path (epic #15, todo #412).
+///
+/// Same split as the slow path, just with the clear inlined: the wipe that
+/// `wipe_registry` performs there has no counterpart on this path (nothing
+/// is cleared at all), so it happens here immediately before the shared
+/// [`super::replay::replay_take_groups`] re-seeds.
+///
+/// The project directory comes from `r.io.project_path`, still set during
+/// an in-session undo/redo — exactly as [`apply_pool`] resolves its assets
+/// — so a take whose WAV was deleted mid-session is re-flagged on every
+/// history step rather than going quiet.
+fn apply_take_groups(r: &mut Resonance, b: &ProjectFile) {
+    // No anchored path (can't happen on the undo path, which only records
+    // with a saved project): an empty dir joins to a bare relative path
+    // that won't exist, which flags rather than hides — the safe way round
+    // for takes, where "present" is the claim that could mislead.
+    let project_dir = r.io.project_path.clone().unwrap_or_default();
+    r.take_groups.clear();
+    super::replay::replay_take_groups(r, b, &project_dir);
 }
 
 /// Apply the saved per-slot bypass to one chain, telling the engine about
