@@ -18,11 +18,26 @@
 //!   the always-visible comp ribbon on the track lane, and the expanded
 //!   stack of take cards.
 //!
-//! Interaction (select the active take, split at the playhead, promote a
-//! segment) is todo #414 and lands beside these as an `input` module.
+//! * [`input`] — hit-testing (todo #414): which comping verb a pointer
+//!   position names. Resolves through the same layout and band helpers the
+//!   draw pass uses, so a gesture can only ever hit what is drawn.
+//! * [`overlay`] — the interaction pass (todo #414): the promote preview
+//!   and the affordance captions, on the *uncached* overlay frame because
+//!   they follow the pointer.
+//!
+//! The gestures the lane answers to, all resolved on the canvas:
+//!
+//! | gesture | message |
+//! |---|---|
+//! | click a take card | `SetActiveTake` (a second click releases the solo) |
+//! | drag across a take card | `PromoteTakeSegment` over the raw drag range |
+//! | click the comp ribbon | `SplitCompAtPlayhead` |
+//! | right-click a take card | `DeleteTake` |
 
 mod draw;
 pub mod geometry;
+pub(super) mod input;
+mod overlay;
 
 pub use geometry::{
     audible_extent, comp_ribbon_band, effective_cover, silent_ranges, take_card_band, take_label,

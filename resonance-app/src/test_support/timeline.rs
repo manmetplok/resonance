@@ -31,6 +31,15 @@ impl Resonance {
         self.viewport.zoom = zoom;
     }
 
+    /// Test-only: the arrange-view zoom (pixels per second). Pairs with
+    /// [`test_set_arrange_zoom`](Self::test_set_arrange_zoom) so a gesture
+    /// test can convert a sample position into the canvas x the pointer
+    /// has to land on without hard-coding the default zoom.
+    #[doc(hidden)]
+    pub fn test_arrange_zoom(&self) -> f32 {
+        self.viewport.zoom
+    }
+
     /// Test-only: read the GUI-side audio clip list. Used by the
     /// engine-event mirroring tests to assert that fade/gain events
     /// land on the matching `ClipState`.
@@ -226,6 +235,59 @@ impl Resonance {
             .map(|hit| (hit.target, hit.index))
     }
 
+    /// Test-only: the take card under a canvas-space position, as
+    /// `(group, take, slot_start, slot_end)` — the comping hit region of
+    /// epic #15 / todo #414.
+    ///
+    /// The slot is returned deliberately: the take **card** is drawn over
+    /// the take's audible extent, but the comp addresses the whole slot,
+    /// so this is what a promote is aimed at. A press over the "no audio
+    /// here" part of a punched-in take's row is a hit, not a miss.
+    #[doc(hidden)]
+    pub fn test_take_card_at(&self, x: f32, y: f32) -> Option<(u64, u64, u64, u64)> {
+        self.timeline_canvas_data()
+            .take_card_at(iced::Point::new(x, y))
+            .map(|hit| (hit.group_id, hit.take_id, hit.slot.start, hit.slot.end()))
+    }
+
+    /// Test-only: the comp-ribbon group under a canvas-space position —
+    /// the split gesture's hit region, present whether the take lane is
+    /// folded or expanded (epic #15, todo #414).
+    #[doc(hidden)]
+    pub fn test_comp_ribbon_at(&self, x: f32, y: f32) -> Option<u64> {
+        self.timeline_canvas_data()
+            .comp_ribbon_at(iced::Point::new(x, y))
+            .map(|hit| hit.group_id)
+    }
+
+    /// Test-only: the mouse cursor the timeline canvas would show at a
+    /// canvas-space position, given `state`. Pins the take lane's
+    /// affordances — `NotAllowed` over a comp ribbon whose split has no
+    /// cut point, `Grab` over a take card (todo #414).
+    #[doc(hidden)]
+    pub fn test_timeline_cursor(
+        &self,
+        state: &crate::view::timeline::TimelineState,
+        x: f32,
+        y: f32,
+    ) -> iced::mouse::Interaction {
+        use iced::widget::canvas::Program as _;
+        let width = if self.viewport.viewport_width > 0.0 {
+            self.viewport.viewport_width
+        } else {
+            1200.0
+        };
+        let height = if self.viewport.viewport_height > 0.0 {
+            self.viewport.viewport_height
+        } else {
+            900.0
+        };
+        let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(width, height));
+        let cursor = iced::mouse::Cursor::Available(iced::Point::new(x, y));
+        self.timeline_canvas_data()
+            .mouse_interaction(state, bounds, cursor)
+    }
+
     /// Test-only: the timeline canvas's cache fingerprint for the current
     /// app state. Two states whose fingerprints differ repaint the cached
     /// geometry layer; equal fingerprints reuse it. Pins that transient
@@ -263,6 +325,16 @@ impl Resonance {
         let mut pairs: Vec<(u64, u64)> = self.take_groups.missing_takes.iter().copied().collect();
         pairs.sort_unstable();
         pairs
+    }
+
+    /// Test-only: flag a take's recorded WAV as absent from this machine,
+    /// the state a project load reaches through `restore_pool` (todo
+    /// #412). Standing in for the load so a render / fingerprint test can
+    /// exercise the flag directly — the *other* route into the missing
+    /// state, an unresolvable `clip_ref`, needs no hook.
+    #[doc(hidden)]
+    pub fn test_mark_take_missing(&mut self, group_id: u64, take_id: u64) {
+        self.take_groups.mark_missing(group_id, take_id);
     }
 
     /// Test-only: whether a track's take lane is currently unfolded into

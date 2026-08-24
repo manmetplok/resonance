@@ -68,6 +68,41 @@ pub(crate) struct BreakpointDrag {
     pub index: usize,
 }
 
+/// An in-flight comping gesture on a take card (epic #15, todo #414).
+///
+/// One press starts it and the *release* decides what it was: a click
+/// (under [`TAKE_DRAG_SLOP_PX`]) solos the take, anything wider promotes
+/// the dragged range into the comp. That is why nothing is published on
+/// press — the two verbs are indistinguishable until the pointer stops.
+///
+/// Only the gesture's own identity and pointer travel live here. The
+/// slot, the take's audible extent and the row's screen geometry are all
+/// re-resolved from the mirror and the layout on every frame rather than
+/// captured at press time, so a scroll mid-drag moves the preview band
+/// with its row instead of leaving it behind, and an engine echo arriving
+/// mid-gesture cannot leave the preview describing a stale lane.
+///
+/// [`TAKE_DRAG_SLOP_PX`]: super::takes::input::TAKE_DRAG_SLOP_PX
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TakePromoteDrag {
+    pub track_id: resonance_audio::types::TrackId,
+    pub group_id: resonance_common::TakeGroupId,
+    pub take_id: resonance_common::TakeId,
+    pub anchor_x: f32,
+    pub cursor_x: f32,
+    /// Latest pointer y, for anchoring the caption only.
+    pub cursor_y: f32,
+}
+
+impl TakePromoteDrag {
+    /// Has the pointer travelled far enough for this gesture to be a
+    /// promote rather than a click? Read on the *release* — that is the
+    /// moment the two verbs stop being the same gesture.
+    pub(crate) fn is_promote(&self) -> bool {
+        (self.cursor_x - self.anchor_x).abs() >= super::takes::input::TAKE_DRAG_SLOP_PX
+    }
+}
+
 pub(super) type UpdateResult = Option<canvas::Action<Message>>;
 
 pub(super) fn captured(msg: Message) -> UpdateResult {

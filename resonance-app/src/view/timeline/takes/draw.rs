@@ -239,26 +239,11 @@ impl TimelineCanvas<'_> {
             TakeContent::Audio { clip_ref } => self.take_clip(*clip_ref),
             TakeContent::Midi { .. } => None,
         };
-        // An audio take is "missing" when its recording is not on this
-        // machine — either the app never mirrored a clip for it, or the
-        // project load flagged the WAV as absent (todo #412's
-        // `missing_takes`, which keeps the take in the comp rather than
-        // silently punching a hole in the cover).
-        let missing = matches!(take.content, TakeContent::Audio { .. })
-            && (clip.is_none() || self.take_groups.is_missing(group.id, take.id));
-
-        // Where this take really carries audio. A MIDI take has no clip to
-        // intersect with — its notes are its extent — and a take whose
-        // media is missing keeps its full lane so the degradation is
-        // visible across the whole span the comp may use.
-        let audible = match (&take.content, clip, missing) {
-            (TakeContent::Audio { .. }, Some(clip), false) => audible_extent(
-                group.slot,
-                clip.start_sample,
-                clip.duration_samples,
-            ),
-            _ => Some(group.slot),
-        };
+        let missing = self.take_is_missing(group, take);
+        // Where this take really carries audio. Resolved through the shared
+        // helper so the comping gestures of todo #414 target exactly what
+        // this card draws (the #732 rule).
+        let audible = self.take_audible_extent(group, take);
 
         // ---- "No audio here" ----
         // The parts of the lane the take does not reach. Drawn before the
@@ -441,11 +426,57 @@ impl TimelineCanvas<'_> {
         }
     }
 
+    /// Is this take's recording absent from this machine?
+    ///
+    /// Two ways in: the app never mirrored a clip for the take's
+    /// `clip_ref`, or the project load flagged its WAV as missing (todo
+    /// #412's `missing_takes`, which keeps the take in the comp rather than
+    /// silently punching a hole in the cover). Only audio takes can be
+    /// missing — a MIDI take carries its notes inline.
+    pub(in crate::view::timeline::takes) fn take_is_missing(
+        &self,
+        group: &TakeGroup,
+        take: &resonance_common::Take,
+    ) -> bool {
+        let clip_absent = match &take.content {
+            TakeContent::Audio { clip_ref } => self.take_clip(*clip_ref).is_none(),
+            TakeContent::Midi { .. } => return false,
+        };
+        clip_absent || self.take_groups.is_missing(group.id, take.id)
+    }
+
+    /// The stretch of `group`'s slot this take actually carries audio over
+    /// — its clip's extent intersected with the slot — or `None` when the
+    /// two do not meet at all.
+    ///
+    /// A MIDI take has no clip to intersect with (its notes are its
+    /// extent), and a take whose media is missing keeps its full lane so
+    /// the degradation stays visible across the whole span the comp may
+    /// use. Shared with the interaction pass so a promote preview marks
+    /// silence exactly where the card draws its flat line.
+    pub(in crate::view::timeline::takes) fn take_audible_extent(
+        &self,
+        group: &TakeGroup,
+        take: &resonance_common::Take,
+    ) -> Option<TimelineRange> {
+        match &take.content {
+            TakeContent::Audio { clip_ref } if !self.take_is_missing(group, take) => {
+                let clip = self.take_clip(*clip_ref)?;
+                audible_extent(group.slot, clip.start_sample, clip.duration_samples)
+            }
+            _ => Some(group.slot),
+        }
+    }
+
     /// A sub-range of the slot as `(x0, x1)` clamped to `card`, or `None`
     /// when it collapses to nothing. Clamping matters: a stale mirror can
     /// echo a segment that overhangs the slot, and it must never paint
     /// outside the card it belongs to.
-    fn sub_span(&self, range: TimelineRange, card: Rectangle) -> Option<(f32, f32)> {
+    pub(in crate::view::timeline::takes) fn sub_span(
+        &self,
+        range: TimelineRange,
+        card: Rectangle,
+    ) -> Option<(f32, f32)> {
         let (sx, sw) = self.slot_rect(range, f32::INFINITY)?;
         let x0 = sx.max(card.x);
         let x1 = (sx + sw).min(card.x + card.width);
@@ -456,7 +487,11 @@ impl TimelineCanvas<'_> {
     /// it is degenerate or entirely off-screen. `viewport_width` bounds the
     /// visibility test; pass `f32::INFINITY` for sub-ranges already known to
     /// sit inside a visible slot.
-    fn slot_rect(&self, range: TimelineRange, viewport_width: f32) -> Option<(f32, f32)> {
+    pub(in crate::view::timeline::takes) fn slot_rect(
+        &self,
+        range: TimelineRange,
+        viewport_width: f32,
+    ) -> Option<(f32, f32)> {
         if range.is_empty() {
             return None;
         }

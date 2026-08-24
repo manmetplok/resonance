@@ -61,6 +61,8 @@ mod selection_bar;
 mod take_comp_edits;
 #[path = "timeline/take_group_mirror.rs"]
 mod take_group_mirror;
+#[path = "timeline/take_lane_input.rs"]
+mod take_lane_input;
 #[path = "timeline/take_lane_render.rs"]
 mod take_lane_render;
 #[path = "timeline/test_arrangement_markers.rs"]
