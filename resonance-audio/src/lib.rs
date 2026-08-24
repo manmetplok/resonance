@@ -100,6 +100,12 @@ pub mod __test_support {
     /// `tests/loop_record_takes.rs` can pin "a restored group is never
     /// re-issued to a later cycle-record run" against the real code.
     pub use crate::engine::takes::restore_take_groups_in_place;
+    /// Headless harness over the engine control thread's real
+    /// `HandlerCtx` + `HandlerState` (ba todo #1399), so a test can run a
+    /// whole command handler — not an extracted pure half of one — with
+    /// no audio device and no engine thread. Used by
+    /// `tests/loop_record_takes.rs` to pin `ClearAll`'s take-lane reset.
+    pub use crate::engine::EngineHandlerHarness;
     /// The "crossfade or land immediately" rule every bypass handler
     /// shares — see `tests/plugin_bypass.rs`.
     pub use crate::engine::plugins::apply_bypass_request;

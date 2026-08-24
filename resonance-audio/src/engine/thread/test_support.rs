@@ -1,0 +1,166 @@
+//! Headless harness over the engine control thread's own
+//! [`HandlerCtx`] + [`HandlerState`], so an integration test can run a
+//! real command handler without an audio device, a CLAP plugin or the
+//! engine thread (ba todo #1399).
+//!
+//! Same purpose as `mixer::test_support` one layer down, and the same
+//! rule: it drives the *real* handler, and it starts from
+//! [`HandlerState::new`] — the state the live engine thread starts from —
+//! so what the harness proves is what the engine does.
+//!
+//! The exposed surface is deliberately narrow: `HandlerCtx` and
+//! `HandlerState` stay `pub(crate)`, and each accessor here is one thing
+//! a test needs to observe. Widen it a method at a time.
+
+use std::sync::Arc;
+
+use crossbeam_channel::{Receiver, Sender};
+use indexmap::IndexMap;
+use parking_lot::{Mutex, RwLock};
+use ringbuf::traits::Split;
+
+use resonance_common::{TakeGroup, TakeGroupId};
+
+use crate::clap_host::PluginMap;
+use crate::engine::{automation::AutomationSnapshot, takes, tracks, SharedState};
+use crate::mixer::CompRenderTable;
+use crate::types::*;
+
+use super::{HandlerCtx, HandlerState};
+
+/// Owns every `Arc` a [`HandlerCtx`] borrows, plus the [`HandlerState`]
+/// the handlers mutate. `HandlerCtx` holds references rather than the
+/// `Arc`s themselves, so it cannot be stored alongside them — it is
+/// rebuilt per call in [`Self::with_ctx`] instead.
+pub struct EngineHandlerHarness {
+    shared: Arc<SharedState>,
+    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
+    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
+    master: Arc<RwLock<MasterBus>>,
+    clips: Arc<RwLock<Vec<AudioClip>>>,
+    midi_clips: Arc<RwLock<Vec<MidiClip>>>,
+    plugins: Arc<RwLock<PluginMap>>,
+    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
+    automation: Arc<arc_swap::ArcSwap<AutomationSnapshot>>,
+    monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
+    event_tx: Sender<AudioEvent>,
+    /// Held only so `event_tx` never reports disconnected; nothing drains
+    /// it yet.
+    _event_rx: Receiver<AudioEvent>,
+    cmd_tx_retry: Sender<AudioCommand>,
+    /// Held only so `cmd_tx_retry` never reports disconnected; nothing
+    /// drains it.
+    _cmd_rx_retry: Receiver<AudioCommand>,
+    state: HandlerState,
+}
+
+impl Default for EngineHandlerHarness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EngineHandlerHarness {
+    /// A harness at the engine's cold-start state: no tracks, no clips,
+    /// no plugins, every allocator at 1, nothing published.
+    ///
+    /// Unlike the real thread this adds no default track — a handler
+    /// test says what it needs.
+    pub fn new() -> Self {
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+        let (cmd_tx_retry, _cmd_rx_retry) = crossbeam_channel::unbounded::<AudioCommand>();
+        let (live_midi_tx, _) = crossbeam_channel::unbounded();
+        let (live_control_tx, _) = crossbeam_channel::unbounded();
+        let (clock_tx, _) = crossbeam_channel::unbounded();
+
+        // The monitor ring is never driven here; one frame of capacity
+        // keeps the allocation trivial.
+        let (prod, _cons) = ringbuf::HeapRb::<f32>::new(1).split();
+
+        Self {
+            shared: Arc::new(SharedState::default()),
+            tracks: Arc::new(RwLock::new(IndexMap::new())),
+            busses: Arc::new(RwLock::new(IndexMap::new())),
+            master: Arc::new(RwLock::new(MasterBus::new())),
+            clips: Arc::new(RwLock::new(Vec::new())),
+            midi_clips: Arc::new(RwLock::new(Vec::new())),
+            plugins: Arc::new(RwLock::new(IndexMap::new())),
+            tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
+            latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
+                crate::latency::LatencyComp::empty(),
+            )),
+            automation: Arc::new(arc_swap::ArcSwap::from_pointee(
+                AutomationSnapshot::default(),
+            )),
+            monitor_prod: Arc::new(Mutex::new(prod)),
+            event_tx,
+            _event_rx,
+            cmd_tx_retry,
+            _cmd_rx_retry,
+            state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
+        }
+    }
+
+    /// Build the borrowed [`HandlerCtx`] and hand it, with the mutable
+    /// state, to a real handler.
+    fn with_ctx<R>(&mut self, f: impl FnOnce(&HandlerCtx, &mut HandlerState) -> R) -> R {
+        let ctx = HandlerCtx {
+            shared: &self.shared,
+            tracks: &self.tracks,
+            busses: &self.busses,
+            master: &self.master,
+            clips: &self.clips,
+            midi_clips: &self.midi_clips,
+            plugins: &self.plugins,
+            tempo_map: &self.tempo_map,
+            latency_comp: &self.latency_comp,
+            automation: &self.automation,
+            monitor_prod: &self.monitor_prod,
+            event_tx: &self.event_tx,
+            cmd_tx_retry: &self.cmd_tx_retry,
+            sample_rate: 48_000,
+            buf_frames: 128,
+            quantum: 128,
+        };
+        f(&ctx, &mut self.state)
+    }
+
+    /// Put `group` into the authoritative take-group store and publish
+    /// the resulting comp table — the state a finished cycle-record pass
+    /// leaves behind (`transport::finalize_loop_record_pass`), or a
+    /// project load via `RestoreTakeGroups`.
+    pub fn seed_take_group(&mut self, group: TakeGroup) {
+        self.state.take_groups.insert(group.id, group);
+        self.with_ctx(|ctx, state| takes::publish_take_comp(ctx, state));
+    }
+
+    /// Set the take-group id allocator, as capturing `n` groups would.
+    pub fn set_next_take_group_id(&mut self, id: TakeGroupId) {
+        self.state.next_take_group_id = id;
+    }
+
+    /// Run the real `AudioCommand::ClearAll` handler.
+    pub fn clear_all(&mut self) {
+        self.with_ctx(tracks::handle_clear_all);
+    }
+
+    /// Ids currently in the engine's authoritative take-group store,
+    /// ascending.
+    pub fn take_group_ids(&self) -> Vec<TakeGroupId> {
+        let mut ids: Vec<TakeGroupId> = self.state.take_groups.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The take-group id allocator's current value.
+    pub fn next_take_group_id(&self) -> TakeGroupId {
+        self.state.next_take_group_id
+    }
+
+    /// The comp table the audio thread and the offline bounce actually
+    /// read — `SharedState::take_comp`, not the control-thread store.
+    pub fn published_comp_table(&self) -> Arc<CompRenderTable> {
+        self.shared.take_comp.load_full()
+    }
+}

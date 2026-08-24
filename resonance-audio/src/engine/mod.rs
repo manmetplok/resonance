@@ -98,6 +98,7 @@ pub(crate) mod sidechain;
 pub(crate) mod scan;
 pub(crate) mod takes;
 mod thread;
+pub use thread::test_support::EngineHandlerHarness;
 mod tracks;
 mod transport;
 mod vocal_analysis;

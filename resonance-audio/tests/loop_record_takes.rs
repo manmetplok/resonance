@@ -690,3 +690,137 @@ fn a_mixed_project_reserves_off_its_audio_takes_only() {
         "the audio group's clip_refs (300, 301) still have to be cleared"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `ClearAll` resets the take-group state (todo #1394, covered by #1399)
+// ---------------------------------------------------------------------------
+//
+// `handle_clear_all` cleared eight tables and five id allocators but left
+// `take_groups`, `next_take_group_id` and the published comp table
+// untouched — while the app's `wipe_registry` had asserted since #412 that
+// it did all three. The published table is what `render/clips.rs` consults
+// through `is_governed`, so a project opened on top of a comped one lost
+// the clip ids it reused to the *previous* project's comp: those clips
+// vanished from the ordinary clip path and the stale comp played instead.
+//
+// The three effects are asserted separately and each is reachable on its
+// own, so dropping any one line fails at least one case here. That matters
+// because the indirect coverage — every `ClearAll` sender follows up with
+// an unconditional `RestoreTakeGroups`, which would paper over all three —
+// is exactly what let the app-side assertion go unverified for months.
+//
+// This runs the real handler, not an extracted pure half of it, via the
+// headless `EngineHandlerHarness` over the engine thread's own
+// `HandlerCtx` + `HandlerState`.
+
+use resonance_audio::__test_support::EngineHandlerHarness;
+
+/// A harness holding one comped three-take group (id 1, clips 100..102),
+/// with the comp table published — where a cycle-record run or a project
+/// load leaves the engine.
+fn harness_with_a_comped_group() -> EngineHandlerHarness {
+    let mut h = EngineHandlerHarness::new();
+    h.seed_take_group(saved_group(1, 7, 3));
+    // As capturing group 1 would have left the allocator.
+    h.set_next_take_group_id(2);
+
+    assert_eq!(h.take_group_ids(), vec![1], "precondition: the group is stored");
+    assert!(
+        h.published_comp_table().is_governed(102),
+        "precondition: the comp governs the take's clip"
+    );
+    h
+}
+
+/// The store itself: `ClearAll` must empty it. A lingering group is what
+/// governs — and silences — the next project's reused clip ids.
+#[test]
+fn clear_all_empties_the_take_group_store() {
+    let mut h = harness_with_a_comped_group();
+
+    h.clear_all();
+
+    assert!(
+        h.take_group_ids().is_empty(),
+        "the previous project's take groups must not survive a ClearAll"
+    );
+}
+
+/// The allocator: `ClearAll` must reset it to 1, like every other id
+/// counter it resets. Left high, a `File > New` session numbers its first
+/// take group after a project that is no longer open, and the app-side
+/// mirror — keyed by `(group, take)` — is built expecting a fresh start.
+#[test]
+fn clear_all_resets_the_take_group_allocator() {
+    let mut h = harness_with_a_comped_group();
+    assert_eq!(h.next_take_group_id(), 2, "precondition: the allocator moved");
+
+    h.clear_all();
+
+    assert_eq!(
+        h.next_take_group_id(),
+        1,
+        "the take-group allocator must restart with the other id counters"
+    );
+}
+
+/// The publish: emptying the control-thread store is not enough on its
+/// own. `SharedState::take_comp` is the copy the audio callback and the
+/// offline bounce read, and until it is republished the cleared project's
+/// comp is still the one governing clip ids and still the one that plays.
+#[test]
+fn clear_all_publishes_the_now_empty_comp_table() {
+    let mut h = harness_with_a_comped_group();
+
+    h.clear_all();
+
+    let table = h.published_comp_table();
+    assert!(
+        table.is_empty(),
+        "the audio thread still reads the cleared project's comp table"
+    );
+    assert!(
+        !table.is_governed(102),
+        "a stale governed clip id hides the new project's clip 102 from the clip path"
+    );
+    assert!(
+        table.track_comp(7).is_none(),
+        "the cleared project's comp would still render over track 7"
+    );
+}
+
+/// End to end, in the shape the bug took: comp a project, `ClearAll`, then
+/// open a project that reuses clip id 102 on a different track. Nothing of
+/// the first project may govern or play.
+#[test]
+fn a_project_loaded_after_clear_all_keeps_its_reused_clip_ids() {
+    let mut h = harness_with_a_comped_group();
+
+    h.clear_all();
+
+    // Project B: one group on another track whose takes happen to reuse
+    // clip ids the first project's comp governed.
+    let mut group_b = TakeGroup::new(4, 9, TimelineRange::new(0, 48_000));
+    push_take(
+        &mut group_b,
+        TimelineRange::new(0, 48_000),
+        0,
+        &TakeContent::Audio { clip_ref: 102 },
+    );
+    h.seed_take_group(group_b);
+
+    let table = h.published_comp_table();
+    assert!(
+        table.track_comp(7).is_none(),
+        "project A's track still has a comp after its project was closed"
+    );
+    let spans = &table
+        .track_comp(9)
+        .expect("project B's group must play on its own track")
+        .spans;
+    assert_eq!(
+        spans.iter().map(|s| s.clip_id).collect::<Vec<_>>(),
+        vec![102],
+        "clip 102 must play as project B's take, not project A's"
+    );
+}

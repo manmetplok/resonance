@@ -13,6 +13,7 @@
 //! each `AudioCommand` to the appropriate category handler.
 
 mod dispatch;
+pub(crate) mod test_support;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -220,6 +221,56 @@ pub(crate) struct HandlerState {
     pub deferred_clip_commands: Vec<super::clips::DeferredClipCommand>,
 }
 
+impl HandlerState {
+    /// The engine control thread's starting state: every id allocator at
+    /// 1, every store empty, no recording or bounce in flight.
+    ///
+    /// Split out of [`engine_thread`] so the headless harness in
+    /// [`test_support`] starts from the *same* state the real thread
+    /// does. A second, hand-written copy of this field list would drift
+    /// the moment a field gained a non-default starting value, and a
+    /// harness that starts from a state the engine never has proves
+    /// nothing about the engine.
+    pub(crate) fn new(
+        sample_rate: u32,
+        live_midi_tx: Sender<LiveMidiEvent>,
+        live_control_tx: Sender<LiveControlEvent>,
+        clock_tx: Sender<MidiClockEvent>,
+    ) -> Self {
+        Self {
+            next_track_id: 1,
+            next_bus_id: 1,
+            next_clip_id: 1,
+            next_asset_id: 1,
+            next_plugin_id: 1,
+            next_send_id: 1,
+            aux_sends: IndexMap::new(),
+            sidechain_routes: Default::default(),
+            next_take_group_id: 1,
+            rec: RecordingState::new(sample_rate),
+            bundles: Vec::new(),
+            imports: ImportQueue::default(),
+            project_dir: None,
+            midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
+            midi_recording: HashMap::new(),
+            live_note_stash: MidiStash::new(),
+            midi_clock_sender: MidiClockSender::new(),
+            midi_clock_receiver: MidiClockReceiver::new(clock_tx),
+            midi_clock_tempo: ClockTempoTracker::default(),
+            midi_clock_external_running: false,
+            midi_clock_last_emitted_bpm: 0.0,
+            pending_bounce: None,
+            reference: super::reference::ReferencePlayer::new(),
+            loop_record_session: None,
+            take_groups: HashMap::new(),
+            automation_lanes: automation::AutomationLanes::new(),
+            external_instruments: external_instrument::ExternalInstruments::new(),
+            pending_latency_ping: None,
+            deferred_clip_commands: Vec::new(),
+        }
+    }
+}
+
 /// Rebuild the audio-thread automation snapshot from the engine-thread
 /// lane map and publish it wait-free. Called after any lane mutation so
 /// the audio callback and bounce see the new lanes on their next block.
@@ -260,37 +311,7 @@ pub(crate) fn engine_thread(
     buf_frames: usize,
     quantum: usize,
 ) {
-    let mut state = HandlerState {
-        next_track_id: 1,
-        next_bus_id: 1,
-        next_clip_id: 1,
-        next_asset_id: 1,
-        next_plugin_id: 1,
-        next_send_id: 1,
-        aux_sends: IndexMap::new(),
-        sidechain_routes: Default::default(),
-        next_take_group_id: 1,
-        rec: RecordingState::new(sample_rate),
-        bundles: Vec::new(),
-        imports: ImportQueue::default(),
-        project_dir: None,
-        midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
-        midi_recording: HashMap::new(),
-        live_note_stash: MidiStash::new(),
-        midi_clock_sender: MidiClockSender::new(),
-        midi_clock_receiver: MidiClockReceiver::new(clock_tx),
-        midi_clock_tempo: ClockTempoTracker::default(),
-        midi_clock_external_running: false,
-        midi_clock_last_emitted_bpm: 0.0,
-        pending_bounce: None,
-        reference: super::reference::ReferencePlayer::new(),
-        loop_record_session: None,
-        take_groups: HashMap::new(),
-        automation_lanes: automation::AutomationLanes::new(),
-        external_instruments: external_instrument::ExternalInstruments::new(),
-        pending_latency_ping: None,
-        deferred_clip_commands: Vec::new(),
-    };
+    let mut state = HandlerState::new(sample_rate, live_midi_tx, live_control_tx, clock_tx);
     let ctx = HandlerCtx {
         shared: &shared,
         tracks: &tracks_arc,
