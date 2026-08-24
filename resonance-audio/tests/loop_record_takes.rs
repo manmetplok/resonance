@@ -167,3 +167,139 @@ fn trailing_pass_rolls_without_reopening_and_clears_buffers() {
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
+
+// ---------------------------------------------------------------------------
+// Take-id allocation and the audio/MIDI capture split (todo #409, doc #292)
+// ---------------------------------------------------------------------------
+
+/// A take id must be unique within its group. Deriving it from
+/// `pass_index` was only sound while a `(group, pass)` pair could emit at
+/// most once — and it cannot be relied on to: `finalize_loop_record_pass`
+/// runs an audio loop and a MIDI loop that resolve to the *same* group for
+/// the same track, so a track present in both emits twice at one
+/// `pass_index`.
+///
+/// This drives the real allocator with exactly that shape. Under the old
+/// `take_id = pass_index` rule both takes below would come back as `0`.
+#[test]
+fn two_captures_in_one_pass_get_distinct_take_ids() {
+    use resonance_audio::__test_support::push_take;
+    use resonance_common::{TakeContent, TakeGroup, TimelineRange};
+
+    let slot = TimelineRange::new(0, 48_000);
+    let mut group = TakeGroup::new(1, 7, slot);
+
+    // Pass 0 emits twice for the same track: the audio roll, then the MIDI
+    // capture — the exact sequence `finalize_loop_record_pass` produces.
+    let audio_id = push_take(&mut group, slot, 0, &TakeContent::Audio { clip_ref: 100 });
+    let midi_id = push_take(
+        &mut group,
+        slot,
+        0,
+        &TakeContent::Midi { notes: Vec::new() },
+    );
+
+    assert_ne!(
+        audio_id, midi_id,
+        "two takes captured in one pass must not share an id"
+    );
+    assert_eq!(group.takes.len(), 2, "both takes must be retained");
+    assert!(group.take(audio_id).is_some());
+    assert!(group.take(midi_id).is_some());
+}
+
+/// Ids stay unique — and resolvable — across several passes, including
+/// when a pass emits twice. The group is the id's scope, so the sequence
+/// is dense and monotonic regardless of how the passes broke down.
+#[test]
+fn take_ids_stay_unique_across_passes() {
+    use resonance_audio::__test_support::push_take;
+    use resonance_common::{TakeContent, TakeGroup, TimelineRange};
+
+    let slot = TimelineRange::new(0, 48_000);
+    let mut group = TakeGroup::new(1, 7, slot);
+
+    let mut ids = Vec::new();
+    for pass in 0..3u32 {
+        ids.push(push_take(
+            &mut group,
+            slot,
+            pass,
+            &TakeContent::Audio {
+                clip_ref: 100 + u64::from(pass),
+            },
+        ));
+        // Pass 1 also yields a MIDI take, as a dual-armed track would.
+        if pass == 1 {
+            ids.push(push_take(
+                &mut group,
+                slot,
+                pass,
+                &TakeContent::Midi { notes: Vec::new() },
+            ));
+        }
+    }
+
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), ids.len(), "take ids must all be distinct: {ids:?}");
+    assert_eq!(sorted, vec![0, 1, 2, 3], "ids should be dense and monotonic");
+    for id in ids {
+        assert!(group.take(id).is_some(), "take {id} must be resolvable");
+    }
+}
+
+/// The capture-side predicate: which armed tracks get an audio recording
+/// buffer. A track whose instrument runs in-process records a MIDI
+/// performance, not audio — giving it a buffer wrote a junk WAV per pass
+/// and filed a spurious second take (ba doc #292).
+#[test]
+fn only_tracks_without_an_in_process_instrument_capture_audio() {
+    use resonance_audio::types::{Track, TrackType};
+
+    let audio = Track::new(1, "audio".into());
+    assert!(
+        !audio.runs_internal_instrument(),
+        "an audio track captures audio"
+    );
+
+    let instrument = Track::with_type(2, "synth".into(), TrackType::Instrument);
+    assert!(
+        instrument.runs_internal_instrument(),
+        "an in-process instrument track must NOT open an audio recording buffer"
+    );
+}
+
+/// External-instrument tracks (epic #39) are `Instrument`-typed and accept
+/// MIDI, but their synth is outboard: the audio comes back on the return
+/// input and recording it is the entire point of the feature. Excluding
+/// them — as a blanket `accepts_midi()` test would — would break it, so
+/// pin the distinction rather than leaving it to the predicate's shape.
+#[test]
+fn external_instrument_tracks_still_capture_their_audio_return() {
+    use resonance_audio::types::{Track, TrackType};
+
+    let external = Track::with_type(3, "outboard".into(), TrackType::Instrument);
+    external.set_external(true);
+
+    assert!(external.track_type.accepts_midi(), "precondition: accepts MIDI");
+    assert!(
+        !external.runs_internal_instrument(),
+        "an external instrument's audio return must still be recorded"
+    );
+}
+
+/// `Vocal` tracks also accept MIDI, but they render through the audio path
+/// rather than an in-process instrument, so they keep audio capture too.
+#[test]
+fn vocal_tracks_still_capture_audio() {
+    use resonance_audio::types::{Track, TrackType};
+
+    let vocal = Track::with_type(4, "vox".into(), TrackType::Vocal);
+    assert!(vocal.track_type.accepts_midi(), "precondition: accepts MIDI");
+    assert!(
+        !vocal.runs_internal_instrument(),
+        "a vocal track renders through the audio path and keeps audio capture"
+    );
+}

@@ -206,7 +206,10 @@ fn render_track_source(
         });
     }
 
-    if track.track_type == TrackType::Instrument && !track.is_external() {
+    // The same predicate the capture side uses to decide whether to open
+    // an audio recording buffer, so playback and capture cannot drift
+    // apart about what a track's source is.
+    if track.runs_internal_instrument() {
         render_instrument_source(track, disp, ctx, scratch, strategy)
     } else {
         Some(TrackSource {

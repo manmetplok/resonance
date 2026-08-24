@@ -308,6 +308,30 @@ impl Track {
         self.external.store(v, Ordering::Relaxed);
     }
 
+    /// True when this track's sound is generated in-process by an
+    /// instrument plugin, so it has no audio input of its own.
+    ///
+    /// This is the single rule behind two decisions that must agree:
+    ///
+    /// - **Playback** (`mixer::render::track_pass::render_track_source`)
+    ///   runs the instrument for such a track and the clip + monitor mix
+    ///   for every other one.
+    /// - **Capture** (`engine::transport::begin_recording_stream`) opens an
+    ///   audio recording buffer for every armed track *except* these —
+    ///   arming one records a MIDI performance, not an audio signal.
+    ///   Recording both filed two takes for a single loop pass and left a
+    ///   junk WAV per pass behind (ba doc #292).
+    ///
+    /// Note the two exclusions this deliberately does **not** make.
+    /// External-instrument tracks (epic #39) are `Instrument`-typed but
+    /// their synth is outboard, so their audio genuinely arrives on the
+    /// return input and must still be recorded. `Vocal` tracks accept MIDI
+    /// yet render through the audio path, so they keep audio capture too.
+    /// Testing `track_type.accepts_midi()` instead of this would break both.
+    pub fn runs_internal_instrument(&self) -> bool {
+        self.track_type == TrackType::Instrument && !self.is_external()
+    }
+
     pub fn mono(&self) -> bool {
         self.mono.load(Ordering::Relaxed)
     }

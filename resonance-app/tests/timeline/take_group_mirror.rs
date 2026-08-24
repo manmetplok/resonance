@@ -9,10 +9,10 @@
 //!
 //! The comp / active-take projections doc #165 also assigns to this todo
 //! are asserted directly on `TakeGroupState`: their engine echoes
-//! (`TakeCompChanged` / `ActiveTakeChanged`) belong to todo #409 and are
-//! not on `AudioEvent` yet, so there is no event to route through
-//! dispatch. Move those two cases onto `test_apply_engine_event` when the
-//! variants land.
+//! (`TakeCompChanged` / `ActiveTakeChanged`) now exist on `AudioEvent`
+//! (todo #409) but are not routed through dispatch until todo #411, so
+//! there is still no event to drive them with. Move those two cases onto
+//! `test_apply_engine_event` when that lands.
 
 use resonance_app::Resonance;
 use resonance_audio::types::AudioEvent;
@@ -23,11 +23,14 @@ const SLOT: TimelineRange = TimelineRange {
     length: 44_100,
 };
 
-/// A captured audio pass. The engine derives no take id of its own yet, so
-/// `pass_index` is what distinguishes takes within a group.
+/// A captured audio pass, as a run that yields exactly one take per pass
+/// produces it: the engine's `take_id` then counts up in step with
+/// `pass_index`. The two are independent fields, though — see
+/// [`two_takes_in_one_pass_are_both_retained`].
 fn captured(group_id: u64, track_id: u64, pass_index: u32) -> AudioEvent {
     AudioEvent::TakeCaptured {
         group_id,
+        take_id: u64::from(pass_index),
         track_id,
         slot: SLOT,
         pass_index,
@@ -61,6 +64,44 @@ fn first_pass_creates_group_then_passes_fold_into_it() {
     // Take ids are unique within the group, so a comp can address them.
     let ids: Vec<u64> = g.takes.iter().map(|t| t.id).collect();
     assert_eq!(ids, vec![0, 1, 2]);
+}
+
+#[test]
+fn two_takes_in_one_pass_are_both_retained() {
+    // A single loop pass can yield two takes for one track — the engine's
+    // audio roll and its MIDI capture resolve to the same group (ba doc
+    // #292). The mirror keys on `take_id`, not `pass_index`, so both are
+    // kept; while the id was derived app-side from `pass_index` the second
+    // silently replaced the first.
+    let mut app = Resonance::new_for_test().0;
+
+    app.test_apply_engine_event(AudioEvent::TakeCaptured {
+        group_id: 1,
+        take_id: 0,
+        track_id: 7,
+        slot: SLOT,
+        pass_index: 0,
+        content: TakeContent::Audio { clip_ref: 5_000 },
+    });
+    app.test_apply_engine_event(AudioEvent::TakeCaptured {
+        group_id: 1,
+        take_id: 1,
+        track_id: 7,
+        slot: SLOT,
+        pass_index: 0,
+        content: TakeContent::Midi { notes: Vec::new() },
+    });
+
+    let g = &app.test_take_groups()[0];
+    assert_eq!(g.takes.len(), 2, "both takes of the pass must be retained");
+    assert_eq!(
+        g.takes.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![0, 1],
+        "the takes are addressable by their engine-assigned ids"
+    );
+    // Both came from the same pass; `pass_index` alone cannot tell them
+    // apart, which is exactly why it is not the identity.
+    assert!(g.takes.iter().all(|t| t.pass_index == 0));
 }
 
 #[test]
@@ -128,6 +169,7 @@ fn midi_take_content_is_mirrored_verbatim() {
     }];
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id: 3,
+        take_id: 0,
         track_id: 9,
         slot: SLOT,
         pass_index: 0,
@@ -148,6 +190,7 @@ fn re_delivered_take_replaces_rather_than_duplicates() {
     // The same pass again (a re-delivery) must not create a duplicate.
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id: 1,
+        take_id: 0,
         track_id: 7,
         slot: SLOT,
         pass_index: 0,

@@ -88,6 +88,12 @@ pub mod __test_support {
     };
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
+    /// The take-id allocator behind every captured cycle-record pass
+    /// (epic #15, ba doc #292). Pure over a `TakeGroup`, so
+    /// `tests/loop_record_takes.rs` can pin "ids are unique within their
+    /// group" against the real code — including the case where one pass
+    /// emits twice for the same track.
+    pub use crate::engine::takes::push_take;
     /// The "crossfade or land immediately" rule every bypass handler
     /// shares — see `tests/plugin_bypass.rs`.
     pub use crate::engine::plugins::apply_bypass_request;

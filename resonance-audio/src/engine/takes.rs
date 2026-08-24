@@ -18,7 +18,9 @@
 
 use std::sync::Arc;
 
-use resonance_common::{CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange};
+use resonance_common::{
+    CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
+};
 
 use crate::types::{AudioEvent, TrackId};
 
@@ -26,10 +28,17 @@ use super::thread::{HandlerCtx, HandlerState};
 
 /// Record a freshly-captured take into the authoritative take-group store,
 /// creating the group (bound to `slot`) on its first take. Returns the
-/// engine-assigned [`TakeId`] — the loop pass index, which is unique within
-/// a group since each track yields exactly one take per pass. The app
-/// mirrors this id so later comp / active-take commands line up with what
-/// the engine renders.
+/// engine-assigned [`TakeId`], which the app mirrors so later comp /
+/// active-take commands line up with what the engine renders.
+///
+/// The id is allocated from the group itself — one past the highest it
+/// already holds — rather than derived from `pass_index`. Deriving it would
+/// be sound only if a `(group, pass)` pair could never emit twice, and it
+/// can: `finalize_loop_record_pass` runs an audio loop and a MIDI loop that
+/// both resolve to the *same* group for the same track, so a track present
+/// in both would get two takes sharing one id (ba doc #292). Allocating per
+/// group makes "unique within its group" true by construction, whatever the
+/// capture path does.
 pub(crate) fn store_take(
     state: &mut HandlerState,
     group_id: TakeGroupId,
@@ -38,12 +47,39 @@ pub(crate) fn store_take(
     pass_index: u32,
     content: &TakeContent,
 ) -> TakeId {
-    let take_id = pass_index as TakeId;
     let group = state
         .take_groups
         .entry(group_id)
         .or_insert_with(|| TakeGroup::new(group_id, track_id, slot));
     group.slot = slot;
+    push_take(group, slot, pass_index, content)
+}
+
+/// Append one take to `group`, rebinding it to `slot`, and return the id
+/// allocated for it: one past the highest id the group already holds, or
+/// `0` when it is empty.
+///
+/// Allocating from the group rather than from a counter kept beside it
+/// means the allocator cannot drift out of step with the takes actually
+/// present — including for a group rehydrated from a saved project, where
+/// a separate counter would have to be persisted too.
+///
+/// Split out from [`store_take`] as the pure half (no `HandlerState`), so
+/// `tests/loop_record_takes.rs` can pin the uniqueness invariant against
+/// the real code rather than a re-implementation of it.
+pub fn push_take(
+    group: &mut TakeGroup,
+    slot: TimelineRange,
+    pass_index: u32,
+    content: &TakeContent,
+) -> TakeId {
+    group.slot = slot;
+    let take_id = group
+        .takes
+        .iter()
+        .map(|t| t.id)
+        .max()
+        .map_or(0, |highest| highest + 1);
     group.add_take(Take::new(take_id, pass_index, 0, content.clone()));
     take_id
 }
