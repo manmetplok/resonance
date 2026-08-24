@@ -45,7 +45,7 @@ pub use model::{
     ProjectReference,
     ProjectReferenceMarker, ProjectReferenceSettings, ProjectSend, ProjectSidechainRoute,
     ProjectTrack, SaveCollector,
-    audio_format_from_tag, audio_format_tag, fade_curve_from_tag, fade_curve_tag,
+    audio_format_from_tag, audio_format_tag, clip_audio_file, fade_curve_from_tag, fade_curve_tag,
     send_source_from_tag, send_source_tag,
 };
 

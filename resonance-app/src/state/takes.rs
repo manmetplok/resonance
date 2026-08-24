@@ -9,6 +9,8 @@
 //! app's single source of truth for what the take lanes show. It mirrors
 //! the [`AuxSendState`](super::AuxSendState) projection pattern.
 
+use std::collections::HashSet;
+
 use resonance_audio::types::TrackId;
 use resonance_common::{
     CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
@@ -21,9 +23,49 @@ pub struct TakeGroupState {
     /// its first captured pass and thereafter found by the engine's stable
     /// `group_id`.
     pub groups: Vec<TakeGroup>,
+    /// `(group, take)` pairs whose recorded WAV was absent when the
+    /// project loaded (todo #412).
+    ///
+    /// Only audio takes can be flagged — a MIDI take carries its notes
+    /// inline and cannot go missing. The take itself stays in its group
+    /// and the comp keeps referencing it, exactly as a
+    /// [`PoolAsset`](super::pool::PoolAsset) missing its backing file
+    /// stays in the pool: dropping it would silently punch a hole in the
+    /// comp cover and make a later relink impossible. Held beside the
+    /// groups rather than on `resonance_common::Take` because it is a fact
+    /// about *this machine's filesystem right now*, not about the project
+    /// — it must never be written back to disk.
+    pub missing_takes: HashSet<(TakeGroupId, TakeId)>,
 }
 
 impl TakeGroupState {
+    /// Drop every mirrored group (and its missing-file flags).
+    ///
+    /// Called when a project load wipes the previous project's runtime
+    /// registry: `ClearAll` empties the engine's take-group map without
+    /// echoing a per-group removal, so the mirror has to be emptied
+    /// explicitly or project B inherits project A's groups — and with
+    /// them `clip_ref`s into a different project's `audio/` directory.
+    pub fn clear(&mut self) {
+        self.groups.clear();
+        self.missing_takes.clear();
+    }
+
+    /// Flag `take_id` in `group_id` as having no recorded audio on disk.
+    pub fn mark_missing(&mut self, group_id: TakeGroupId, take_id: TakeId) {
+        self.missing_takes.insert((group_id, take_id));
+    }
+
+    /// True when this take's recorded audio was absent at load time.
+    pub fn is_missing(&self, group_id: TakeGroupId, take_id: TakeId) -> bool {
+        self.missing_takes.contains(&(group_id, take_id))
+    }
+
+    /// True when any mirrored take is missing its recorded audio.
+    pub fn has_missing(&self) -> bool {
+        !self.missing_takes.is_empty()
+    }
+
     /// The group carrying `group_id`, if mirrored.
     pub fn group(&self, group_id: TakeGroupId) -> Option<&TakeGroup> {
         self.groups.iter().find(|g| g.id == group_id)
@@ -53,6 +95,9 @@ impl TakeGroupState {
         captured_at: i64,
         content: TakeContent,
     ) {
+        // A freshly captured take has its WAV on disk by definition, so
+        // clear any missing-file flag a prior load left on this slot.
+        self.missing_takes.remove(&(group_id, take_id));
         let take = Take::new(take_id, pass_index, captured_at, content);
         match self.group_mut(group_id) {
             Some(group) => match group.takes.iter_mut().find(|t| t.id == take_id) {

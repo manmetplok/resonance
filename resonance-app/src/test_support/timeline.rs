@@ -252,4 +252,15 @@ impl Resonance {
     pub fn test_take_groups_mut(&mut self) -> &mut state::TakeGroupState {
         &mut self.take_groups
     }
+
+    /// Test-only: `(group, take)` pairs whose recorded WAV was absent when
+    /// the project loaded (todo #412). Drives
+    /// `tests/io/take_lanes_persistence.rs`, which asserts a take with no
+    /// audio on disk is flagged rather than dropped out of the comp.
+    #[doc(hidden)]
+    pub fn test_missing_takes(&self) -> Vec<(u64, u64)> {
+        let mut pairs: Vec<(u64, u64)> = self.take_groups.missing_takes.iter().copied().collect();
+        pairs.sort_unstable();
+        pairs
+    }
 }
