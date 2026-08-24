@@ -313,17 +313,101 @@ fn active_take_plays_whole_slot() {
 }
 
 #[test]
-fn active_take_of_unknown_id_is_not_resolvable() {
-    // A selection naming a take the group does not hold resolves to no
-    // audio spans at all rather than silently falling back to the comp —
-    // the engine handler refuses such a command, and the table agrees.
+fn active_take_of_unknown_id_falls_through_to_the_comp() {
+    // A selection naming a take the group does not hold is a stale or
+    // corrupt state — the engine handler refuses such a command, so it
+    // cannot arise from a live edit. Since todo #1395 the one shared cover
+    // definition ignores it and resolves the tiers below instead of
+    // silencing the group: an unresolvable solo must not take the part off
+    // the record.
     let mut g = two_take_group();
     g.comp = split_comp();
     g.active_take = Some(42);
     let table = build_comp_table(&groups(g));
-    assert!(table.track_comp(TRACK).is_none());
+    let spans = &table.track_comp(TRACK).expect("comp still resolves").spans;
+    assert_eq!(
+        spans.iter().map(|s| s.clip_id).collect::<Vec<_>>(),
+        vec![A_CLIP, B_CLIP]
+    );
     // The take clips stay governed: they are still under comp control.
     assert!(table.is_governed(A_CLIP));
+}
+
+/// **The user's #1395 ruling, on the audio path.** A comp covering only the
+/// middle of the slot is not one island in a hole: the latest take fills the
+/// gaps either side, so the part is complete from the first promotion.
+///
+/// The lane pins the identical fixture in
+/// `resonance-app/tests/timeline/take_lane_render.rs` — both read
+/// `resonance_common::effective_cover`, so neither can drift alone.
+#[test]
+fn a_partial_comps_gaps_play_the_latest_take() {
+    let mut g = two_take_group();
+    g.comp = Comp {
+        segments: vec![CompSegment {
+            range: TimelineRange::from_bounds(500, 1500),
+            take_id: 0,
+        }],
+    };
+    let table = build_comp_table(&groups(g));
+    let spans = &table.track_comp(TRACK).expect("track has a comp").spans;
+    assert_eq!(
+        spans
+            .iter()
+            .map(|s| (s.range.start, s.range.end(), s.clip_id))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, 500, B_CLIP),
+            (500, 1500, A_CLIP),
+            (1500, SLOT_LEN, B_CLIP),
+        ],
+        "take 1 (the latest pass) covers both gaps"
+    );
+}
+
+/// The cover keeps a promotion and the fallback around it as separate spans
+/// — they *draw* differently — but two spans reading the same clip must not
+/// become a seam here: two equal-power halves of an identical signal sum to
+/// +3 dB, an audible bump at a boundary that is no hand-off at all.
+#[test]
+fn same_clip_neighbours_merge_into_one_span() {
+    let mut g = two_take_group();
+    // Promote the *latest* take over the middle; the fallback either side
+    // resolves to the same clip.
+    g.comp = Comp {
+        segments: vec![CompSegment {
+            range: TimelineRange::from_bounds(500, 1500),
+            take_id: 1,
+        }],
+    };
+    let table = build_comp_table(&groups(g));
+    let spans = &table.track_comp(TRACK).expect("track has a comp").spans;
+    assert_eq!(
+        spans
+            .iter()
+            .map(|s| (s.range.start, s.range.end(), s.clip_id))
+            .collect::<Vec<_>>(),
+        vec![(0, SLOT_LEN, B_CLIP)],
+        "one continuous read of take 1, no interior seam"
+    );
+
+    // ...and it renders flat: a spurious crossfade would show as a bump
+    // around each of the two would-be boundaries.
+    let out = render(
+        &table,
+        &[
+            const_clip(A_CLIP, SLOT_LEN as usize, 0.0),
+            const_clip(B_CLIP, SLOT_LEN as usize, 1.0),
+        ],
+    );
+    let inner = DECLICK as usize..(SLOT_LEN - DECLICK) as usize;
+    for (offset, &v) in out[inner.clone()].iter().enumerate() {
+        let i = offset + inner.start;
+        assert!(
+            (v - 1.0).abs() < 1e-6,
+            "frame {i}: merged span should stay at unity, got {v}"
+        );
+    }
 }
 
 #[test]

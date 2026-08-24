@@ -27,9 +27,11 @@
 //! 1. **Segments are derived from the slot, never trusted from the UI.**
 //!    `AudioCommand::SetTakeComp` performs no validation whatsoever: it
 //!    stores what it is given and renders it. Every comp this module
-//!    sends is built by [`effective_segments`] + the `resonance_common`
-//!    comp helpers, which keep the cover sorted, non-overlapping and
-//!    inside the slot.
+//!    sends starts from
+//!    [`TakeGroup::effective_comp`](resonance_common::TakeGroup::effective_comp)
+//!    — the shared cover definition written out as segments — and is
+//!    edited through the `resonance_common` comp helpers, which keep it
+//!    sorted, non-overlapping and inside the slot.
 //! 2. **A promote never offers a region its take cannot fill.** A take's
 //!    audible extent is its recorded clip's, not the group's slot: a pass
 //!    that punched in late, or was cut short at stop, covers less. Since
@@ -55,11 +57,11 @@
 use iced::Task;
 use resonance_audio::types::AudioCommand;
 use resonance_common::{
-    Comp, CompSegment, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
+    latest_take, Comp, CompSegment, SlotCover, TakeContent, TakeGroup, TakeGroupId, TakeId,
+    TimelineRange,
 };
 
 use crate::message::{Message, TakeMessage};
-use crate::state::takes::effective_segments;
 use crate::Resonance;
 
 /// The mutation a [`TakeMessage`] performs, resolved against current
@@ -159,9 +161,7 @@ fn plan_split(r: &Resonance, group_id: TakeGroupId) -> Option<TakeEdit> {
     if pos <= group.slot.start || pos >= group.slot.end() {
         return None;
     }
-    let mut comp = Comp {
-        segments: effective_segments(group),
-    };
+    let mut comp = group.effective_comp();
     if comp.segments.is_empty() {
         return None; // nothing recorded yet — no cover to cut
     }
@@ -181,10 +181,8 @@ fn plan_promote(
     if target.is_empty() {
         return None;
     }
-    let mut comp = Comp {
-        segments: effective_segments(group),
-    };
-    comp.promote(target, take_id);
+    let mut comp = group.effective_comp();
+    comp.promote(target, take_id, SlotCover::of(group));
     finish_comp_edit(group, comp.segments)
 }
 
@@ -217,6 +215,14 @@ fn plan_delete(r: &Resonance, group_id: TakeGroupId, take_id: TakeId) -> Option<
 /// hear. Editing the comp is therefore taken as "play the comp" and ends
 /// the solo — the same way selecting a comped region exits take-solo in
 /// Logic and Pro Tools.
+///
+/// That is only safe because the cover the caller edited was materialized
+/// from `effective_comp`, which honours the **active take** as its first
+/// tier (todo #1395). Before that, a split taken while take 0 was soloed
+/// materialized the *fallback* take's cover and then dropped the solo: the
+/// user was hearing take 0, hit a gesture that names no take at all, and
+/// came out hearing the latest pass. Seeding from the active take is what
+/// makes solo → split → promote the natural comping flow.
 fn finish_comp_edit(group: &TakeGroup, segments: Vec<CompSegment>) -> Option<TakeEdit> {
     let comp_changed = segments != group.comp.segments;
     let clear_solo = group.active_take.is_some();
@@ -239,41 +245,24 @@ fn finish_comp_edit(group: &TakeGroup, segments: Vec<CompSegment>) -> Option<Tak
 /// renders as silence in the middle of the part, and the deleted take is
 /// the one thing that cannot fill it.
 fn cover_without(group: &TakeGroup, deleted: TakeId) -> Vec<CompSegment> {
-    let kept: Vec<CompSegment> = effective_segments(group)
+    let kept: Vec<CompSegment> = group
+        .effective_comp()
+        .segments
         .into_iter()
         .filter(|seg| seg.take_id != deleted)
         .collect();
 
-    // The survivor that inherits the holes: what the engine's own fallback
-    // would pick from the takes that remain.
+    // The survivor that inherits the holes: the take the shared cover
+    // definition would fall back to once `deleted` is gone.
     let mut survivors = group.clone();
     survivors.takes.retain(|t| t.id != deleted);
-    let Some(filler) = crate::state::takes::fallback_take(&survivors) else {
-        return kept;
-    };
 
     let mut comp = Comp { segments: kept };
-    for gap in gaps(&comp.segments, group.slot) {
-        comp.promote(gap, filler);
-    }
+    comp.seed_cover(SlotCover {
+        slot: group.slot,
+        filler: latest_take(&survivors).map(|t| t.id),
+    });
     comp.segments
-}
-
-/// The stretches of `slot` no segment covers, in order. `segments` is
-/// assumed sorted and non-overlapping, which the comp helpers guarantee.
-fn gaps(segments: &[CompSegment], slot: TimelineRange) -> Vec<TimelineRange> {
-    let mut out = Vec::new();
-    let mut cursor = slot.start;
-    for seg in segments {
-        if seg.range.start > cursor {
-            out.push(TimelineRange::from_bounds(cursor, seg.range.start));
-        }
-        cursor = cursor.max(seg.range.end());
-    }
-    if cursor < slot.end() {
-        out.push(TimelineRange::from_bounds(cursor, slot.end()));
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------

@@ -28,7 +28,9 @@ use resonance_app::project::{load_project, save_project, LoadedProject, ProjectF
 use resonance_app::Resonance;
 use resonance_audio::__test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
-use resonance_common::{Comp, CompSegment, Take, TakeContent, TakeGroup, TakeNote, TimelineRange};
+use resonance_common::{
+    Comp, CompSegment, SlotCover, Take, TakeContent, TakeGroup, TakeNote, TimelineRange,
+};
 
 const TRACK: u64 = 7;
 const OTHER_TRACK: u64 = 8;
@@ -443,7 +445,7 @@ fn a_comp_edit_reverses_through_the_diff_replay() {
     // Promote take 1 across the whole slot and solo take 2, echoed back
     // from the engine exactly as todo #411's handlers drive it.
     let mut comp = Comp::new();
-    comp.promote(SLOT, 1);
+    comp.promote(SLOT, 1, SlotCover::NONE);
     app.test_apply_engine_event(AudioEvent::TakeCompChanged {
         group_id: GROUP,
         segments: comp.segments.clone(),

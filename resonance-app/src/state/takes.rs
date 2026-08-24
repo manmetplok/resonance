@@ -8,6 +8,15 @@
 //! There are no read-getters back into the engine, so this mirror is the
 //! app's single source of truth for what the take lanes show. It mirrors
 //! the [`AuxSendState`](super::AuxSendState) projection pattern.
+//!
+//! What a mirrored group *plays* is not decided here. Since todo #1395 the
+//! resolution — active take → comp segment → latest take — is
+//! [`resonance_common::effective_cover`], shared with the mixer, and comp
+//! editing materializes it through
+//! [`TakeGroup::effective_comp`](resonance_common::TakeGroup::effective_comp).
+//! This module previously carried its own `fallback_take` /
+//! `effective_segments` pair that mirrored the engine by assertion; both are
+//! gone.
 
 use std::collections::HashSet;
 
@@ -15,54 +24,6 @@ use resonance_audio::types::TrackId;
 use resonance_common::{
     CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
 };
-
-/// The take a group plays where its comp names none.
-///
-/// Mirrors the engine's fallback in `mixer::take_comp::resolve_spans`
-/// **exactly**: the last *audio* take in capture order, because that is
-/// what is actually audible for a group whose comp is still empty. Only
-/// when a group holds no audio at all (a MIDI-only instrument lane) does
-/// it fall back to the last take of any kind, so a MIDI lane still has an
-/// addressable cover to comp against.
-///
-/// Getting this wrong would make the first comp edit on a fresh group
-/// *change what is heard* — [`effective_segments`] materializes the
-/// engine's implicit cover before editing it, and that materialization is
-/// only inaudible if it names the same take the engine had chosen.
-pub fn fallback_take(group: &TakeGroup) -> Option<TakeId> {
-    group
-        .takes
-        .iter()
-        .rev()
-        .find(|t| matches!(t.content, TakeContent::Audio { .. }))
-        .or_else(|| group.takes.last())
-        .map(|t| t.id)
-}
-
-/// The group's comp as an explicit, editable cover of its slot.
-///
-/// A group that has never been comped carries **no** segments, but it is
-/// not silent: the engine covers the whole slot with [`fallback_take`].
-/// Comp editing therefore starts by materializing that implicit cover, so
-/// a first split or promote edits what the user is hearing instead of
-/// appearing to do nothing (`Comp::split_comp` on an empty comp is a
-/// no-op, and a promote over an empty comp would leave the rest of the
-/// slot as a real hole).
-///
-/// Returns an empty vector only for a group with no takes at all, which
-/// has nothing to cover the slot with.
-pub fn effective_segments(group: &TakeGroup) -> Vec<CompSegment> {
-    if !group.comp.segments.is_empty() {
-        return group.comp.segments.clone();
-    }
-    match fallback_take(group) {
-        Some(take_id) => vec![CompSegment {
-            range: group.slot,
-            take_id,
-        }],
-        None => Vec::new(),
-    }
-}
 
 /// GUI-side mirror of the engine's take groups.
 #[derive(Debug, Default)]

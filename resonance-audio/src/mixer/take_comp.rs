@@ -37,8 +37,8 @@ use crate::types::{AudioClip, ClipId, FadeCurve, TrackId};
 pub const COMP_XFADE_FRAMES: u64 = 256;
 
 /// One resolved span of a track's comp: the take clip that is audible over
-/// `range`. Adjacent spans always reference distinct clips (the comp helper
-/// merges same-take neighbours), so every internal boundary is a real seam.
+/// `range`. Adjacent spans always reference distinct clips ([`resolve_spans`]
+/// merges same-clip neighbours), so every internal boundary is a real seam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompSpan {
     /// Timeline range, in sample frames, this span covers.
@@ -98,10 +98,9 @@ impl CompRenderTable {
 ///
 /// For each group every recorded *audio* take clip is marked governed (so
 /// no raw pass leaks onto the normal clip path), then the audible spans are
-/// resolved: an active take solos its whole-slot clip; otherwise the comp's
-/// segments map take→clip; failing both, the most recent audio take covers
-/// the slot as a sensible default until the app sets a selection. MIDI
-/// takes carry no audio clip, so MIDI-only groups contribute nothing here.
+/// resolved by [`resolve_spans`] from the one shared cover definition,
+/// [`resonance_common::effective_cover`]. MIDI takes carry no audio clip, so
+/// MIDI-only groups contribute nothing here.
 ///
 /// Runs on the control thread (allocation is fine); the result is published
 /// to the audio thread via `ArcSwap`.
@@ -148,48 +147,38 @@ pub fn build_comp_table(groups: &HashMap<TakeGroupId, TakeGroup>) -> CompRenderT
     }
 }
 
-/// Resolve the audible spans of one group: active take overrides the comp,
-/// the comp maps segment→clip, and an empty selection falls back to the
-/// latest audio take covering the whole slot.
+/// Resolve the audible spans of one group by mapping
+/// [`resonance_common::effective_cover`] take→clip.
+///
+/// The tiering itself — active take → comp segment → latest take — lives in
+/// `resonance-common` and is **not** reimplemented here (todo #1395); this
+/// function is only the audio path's projection of it. A span naming a MIDI
+/// take has no clip and drops out: its notes sound through the instrument, not
+/// through this path.
+///
+/// Adjacent spans resolving to the *same* clip are merged. The cover
+/// deliberately keeps a promoted segment and the fallback either side of it as
+/// separate spans (they draw differently), but leaving them separate here
+/// would put a seam crossfade between two reads of one clip — and two
+/// equal-power halves of an identical signal sum to +3 dB, an audible bump at
+/// a boundary that is not a hand-off at all.
 fn resolve_spans(group: &TakeGroup, clip_of: &HashMap<u64, ClipId>) -> Vec<CompSpan> {
-    // Active take solos its whole-slot clip, overriding the comp.
-    if let Some(active) = group.active_take {
-        return match clip_of.get(&active) {
-            Some(&clip_id) => vec![CompSpan {
-                range: group.slot,
-                clip_id,
-            }],
-            // Active take is a MIDI take (or unknown): nothing on the audio path.
-            None => Vec::new(),
+    let mut spans: Vec<CompSpan> = Vec::new();
+    for span in resonance_common::effective_cover(group) {
+        let Some(&clip_id) = clip_of.get(&span.take_id) else {
+            continue;
         };
-    }
-
-    // Otherwise follow the comp's ordered segments.
-    if !group.comp.segments.is_empty() {
-        return group
-            .comp
-            .segments
-            .iter()
-            .filter_map(|seg| {
-                clip_of.get(&seg.take_id).map(|&clip_id| CompSpan {
-                    range: seg.range,
-                    clip_id,
-                })
-            })
-            .collect();
-    }
-
-    // No selection yet: default to the most recently captured audio take
-    // covering the slot, so a freshly recorded group is audible immediately.
-    for take in group.takes.iter().rev() {
-        if let Some(&clip_id) = clip_of.get(&take.id) {
-            return vec![CompSpan {
-                range: group.slot,
+        match spans.last_mut() {
+            Some(last) if last.clip_id == clip_id && last.range.end() == span.range.start => {
+                last.range.length += span.range.length;
+            }
+            _ => spans.push(CompSpan {
+                range: span.range,
                 clip_id,
-            }];
+            }),
         }
     }
-    Vec::new()
+    spans
 }
 
 /// Mix the comped spans for one track into the de-interleaved track buffers

@@ -10,9 +10,11 @@
 //!   contiguous stacks that never interleave;
 //! * the **effective cover** the lane draws from — `active take → comp
 //!   segment → latest take`, gap-free by construction, so every point of
-//!   the slot maps to exactly one take (its last tier is the *ruled*
-//!   behaviour, which the engine adopts in todo #1395 — see
-//!   `effective_cover`'s doc comment);
+//!   the slot maps to exactly one take. Since todo #1395 that is
+//!   `resonance_common::effective_cover`, the same resolution the mixer
+//!   reads, and `the_engine_and_the_lane_resolve_the_same_cover` re-runs a
+//!   shared fixture through `build_comp_table` so neither side can drift
+//!   alone;
 //! * the **audible extent** — a take does not necessarily fill its lane, so
 //!   the waveform is anchored to the take's clip and the remainder of the
 //!   lane draws a flat "no audio here" line;
@@ -33,6 +35,8 @@
 
 use crate::common;
 
+use std::collections::HashMap;
+
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage, ViewportMessage};
@@ -42,6 +46,7 @@ use resonance_app::view::timeline::takes::{
     audible_extent, effective_cover, silent_ranges, unlit_ranges, CoverSource,
 };
 use resonance_app::{demo, theme, Resonance};
+use resonance_audio::__test_support::build_comp_table;
 use resonance_audio::types::{AudioEvent, FadeCurve};
 use resonance_common::{
     CompSegment, TakeContent, TakeGroup, TakeNote, TimelineRange,
@@ -375,22 +380,16 @@ fn comp_segments_cover_the_slot_gap_free() {
 }
 
 /// A *partial* comp: the promoted span stays a promotion, and the
-/// uncovered remainder falls back to the latest take.
+/// uncovered remainder falls back to the latest take — the user's ruling
+/// that comping is progressive refinement, not assembly from silence.
 ///
-/// **This pins the ruled behaviour, not a mirror of today's engine.** Todo
-/// #409's `resolve_spans` reaches its latest-take tier only when the comp
-/// is *completely empty* — with one segment present it plays that segment
-/// and silence either side. The user has ruled that the latest take fills
-/// the gaps, so that a comp is a complete part from its very first
-/// promotion rather than one island in a hole, and it is this lane's
-/// behaviour that ships. Todo **#1395** moves the tiering into
-/// `resonance-common` as one definition both layers call, which is what
-/// makes the engine agree.
-///
-/// If #1395 changes what "latest" means, this test changes with it — but
-/// do not "fix" it towards `resolve_spans` in the meantime.
+/// **The engine agrees, and this test proves it rather than asserting it.**
+/// Both layers resolve through `resonance_common::effective_cover` since
+/// todo #1395, so `assert_engine_and_lane_agree` re-resolves the very same
+/// group through the mixer's `build_comp_table` and fails if either side
+/// drifts.
 #[test]
-fn partial_comp_fills_its_gaps_with_the_latest_take_pending_1395() {
+fn partial_comp_fills_its_gaps_with_the_latest_take() {
     let mut app = build_app();
     capture_audio_passes(&mut app, 3);
     let (from, to) = (at(&app, 1), at(&app, 3));
@@ -415,6 +414,210 @@ fn partial_comp_fills_its_gaps_with_the_latest_take_pending_1395() {
         ]
     );
     assert_cover_is_a_gap_free_cover(&app);
+    assert_engine_and_lane_agree(&app);
+}
+
+// ---------------------------------------------------------------------
+// Engine / lane agreement (todo #1395)
+// ---------------------------------------------------------------------
+
+/// The mixer's resolved comp spans for `group`, through the real
+/// `build_comp_table` — `(start, end, clip_id)` per span.
+fn engine_spans(group: &TakeGroup) -> Vec<(u64, u64, u64)> {
+    let mut groups = HashMap::new();
+    groups.insert(group.id, group.clone());
+    let table = build_comp_table(&groups);
+    table
+        .track_comp(group.track_id)
+        .map(|tc| {
+            tc.spans
+                .iter()
+                .map(|s| (s.range.start, s.range.end(), s.clip_id))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The lane's cover, projected onto the audio path the way the mixer
+/// projects it: take → recorded clip, MIDI takes dropped (their notes sound
+/// through the instrument, not through a clip), same-clip neighbours merged
+/// into one read.
+///
+/// This projection is the *only* thing the two sides are allowed to differ
+/// by. Both start from `resonance_common::effective_cover`, so any drift in
+/// the tiering, in what "latest" means, or in the gap filling shows up here
+/// as unequal span lists.
+fn lane_spans_on_the_audio_path(group: &TakeGroup) -> Vec<(u64, u64, u64)> {
+    let mut out: Vec<(u64, u64, u64)> = Vec::new();
+    for span in effective_cover(group) {
+        let Some(TakeContent::Audio { clip_ref }) = group.take(span.take_id).map(|t| &t.content)
+        else {
+            continue;
+        };
+        match out.last_mut() {
+            Some(last) if last.2 == *clip_ref && last.1 == span.range.start => {
+                last.1 = span.range.end();
+            }
+            _ => out.push((span.range.start, span.range.end(), *clip_ref)),
+        }
+    }
+    out
+}
+
+/// Re-resolve the mirrored group through *both* implementations and require
+/// the same answer over every region of the slot.
+fn assert_engine_and_lane_agree(app: &Resonance) {
+    let group = group_of(app, GROUP);
+    assert_eq!(
+        engine_spans(group),
+        lane_spans_on_the_audio_path(group),
+        "the mixer and the take lane must resolve the same cover"
+    );
+}
+
+/// The agreement across every state a group can be in, on one fixture.
+///
+/// Before #1395 the two layers diverged the moment a comp had *any* segment
+/// (the mixer played silence in the gaps the lane drew lit), and again as
+/// soon as `takes` was not in capture order (each picked a different
+/// "latest"). This walks a single three-take group through the empty,
+/// partial, full, out-of-order and soloed cases and requires them to agree
+/// on all of them.
+#[test]
+fn the_engine_and_the_lane_resolve_the_same_cover() {
+    let mut app = build_app();
+    capture_audio_passes(&mut app, 3);
+    let slot = slot(&app);
+
+    // 1. Never comped: the latest pass covers the slot.
+    assert_engine_and_lane_agree(&app);
+    assert_eq!(
+        engine_spans(group_of(&app, GROUP)),
+        vec![(slot.start, slot.end(), TAKE_CLIP_BASE + 2)]
+    );
+
+    // 2. One promotion in the middle — the case that used to diverge.
+    let (from, to) = (at(&app, 1), at(&app, 3));
+    set_comp(
+        &mut app,
+        vec![CompSegment {
+            range: TimelineRange::from_bounds(from, to),
+            take_id: 0,
+        }],
+    );
+    assert_engine_and_lane_agree(&app);
+    assert_eq!(
+        engine_spans(group_of(&app, GROUP)),
+        vec![
+            (slot.start, from, TAKE_CLIP_BASE + 2),
+            (from, to, TAKE_CLIP_BASE),
+            (to, slot.end(), TAKE_CLIP_BASE + 2),
+        ],
+        "the mixer plays the latest take either side of the promotion"
+    );
+
+    // 3. A full, gap-free cover: nothing for tier 3 to do.
+    set_comp(
+        &mut app,
+        vec![
+            CompSegment {
+                range: TimelineRange::from_bounds(slot.start, to),
+                take_id: 1,
+            },
+            CompSegment {
+                range: TimelineRange::from_bounds(to, slot.end()),
+                take_id: 0,
+            },
+        ],
+    );
+    assert_engine_and_lane_agree(&app);
+
+    // 4. A leading gap only, with the comp echoed back out of order — the
+    //    mirror adopts what it is handed, and both sides sort defensively.
+    set_comp(
+        &mut app,
+        vec![
+            CompSegment {
+                range: TimelineRange::from_bounds(to, slot.end()),
+                take_id: 0,
+            },
+            CompSegment {
+                range: TimelineRange::from_bounds(from, to),
+                take_id: 1,
+            },
+        ],
+    );
+    assert_engine_and_lane_agree(&app);
+
+    // 5. Soloed: tier 1 overrides the comp on both sides.
+    set_active(&mut app, Some(1));
+    assert_engine_and_lane_agree(&app);
+    assert_eq!(
+        engine_spans(group_of(&app, GROUP)),
+        vec![(slot.start, slot.end(), TAKE_CLIP_BASE + 1)]
+    );
+    set_active(&mut app, None);
+    assert_engine_and_lane_agree(&app);
+}
+
+/// **The "latest take" ruling for a group holding both kinds.** "Latest" is
+/// content-agnostic: the newest pass wins whether it is audio or MIDI. The
+/// engine used to read it as "the last *audio* take in vector order" and
+/// the lane as "the newest take of any kind", which pick different takes as
+/// soon as a group is mixed.
+///
+/// Where the winner is a MIDI take the audio path contributes no spans —
+/// its notes sound through the instrument instead, the same by-design
+/// silence as soloing a MIDI take — and the lane says so by lighting that
+/// take rather than an audio one.
+#[test]
+fn latest_take_is_content_agnostic_in_a_mixed_group() {
+    let mut app = build_app();
+    push_take_clip(&mut app, 0);
+    capture_audio_pass(&mut app, 0);
+    // A later MIDI pass into the same group.
+    app.test_apply_engine_event(AudioEvent::TakeCaptured {
+        group_id: GROUP,
+        take_id: 1,
+        track_id: AUDIO_TRACK,
+        slot: slot(&app),
+        pass_index: 1,
+        content: TakeContent::Midi {
+            notes: vec![TakeNote {
+                note: 60,
+                velocity: 0.8,
+                start_tick: 0,
+                duration_ticks: 240,
+            }],
+        },
+    });
+
+    let cover = effective_cover(group_of(&app, GROUP));
+    assert_eq!(cover.len(), 1);
+    assert_eq!(cover[0].take_id, 1, "the MIDI pass is the latest one");
+    assert_eq!(cover[0].source, CoverSource::LatestFallback);
+
+    assert_engine_and_lane_agree(&app);
+    assert!(
+        engine_spans(group_of(&app, GROUP)).is_empty(),
+        "a MIDI take carries no clip, so the audio path renders nothing"
+    );
+
+    // Promoting the audio take over part of the slot puts it back on the
+    // audio path there, and only there.
+    let (from, to) = (at(&app, 1), at(&app, 3));
+    set_comp(
+        &mut app,
+        vec![CompSegment {
+            range: TimelineRange::from_bounds(from, to),
+            take_id: 0,
+        }],
+    );
+    assert_engine_and_lane_agree(&app);
+    assert_eq!(
+        engine_spans(group_of(&app, GROUP)),
+        vec![(from, to, TAKE_CLIP_BASE)]
+    );
 }
 
 // ---------------------------------------------------------------------
