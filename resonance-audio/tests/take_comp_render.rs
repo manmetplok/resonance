@@ -507,3 +507,159 @@ fn empty_table_renders_the_raw_clips_unchanged() {
     let mid = (SLOT_LEN / 2) as usize;
     assert!((out[mid] - 0.5).abs() < 1e-6, "raw clip level {}", out[mid]);
 }
+
+// ---------------------------------------------------------------------------
+// Spans whose clip does not cover them (ba doc #292 review)
+// ---------------------------------------------------------------------------
+
+/// A clip of constant DC placed at `start` on the timeline, covering
+/// `frames` frames from there — so `[start, start + frames)` is audible and
+/// everything outside it is not.
+fn placed_clip(id: ClipId, start: u64, frames: usize, value: f32) -> AudioClip {
+    let mut c = const_clip(id, frames, value);
+    c.start_sample = start;
+    c
+}
+
+#[test]
+fn punch_in_after_loop_start() {
+    // Cycle-recording after punching in later than the loop start gives
+    // pass 0 a clip that starts inside the slot, while the default cover
+    // resolves to `group.slot` — so the span is wider than its clip.
+    // Reading the clip at the slot start underflowed the clip-relative
+    // frame index: a debug panic on the audio thread, a silent wrap in
+    // release.
+    let g = two_take_group();
+    let table = build_comp_table(&groups(g));
+    let frames = SLOT_LEN as usize;
+    let mut l = vec![0.0f32; frames];
+    let mut r = vec![0.0f32; frames];
+    let tc = table.track_comp(TRACK).expect("track has a comp");
+
+    // Take B (the default cover) punched in 500 frames into the slot.
+    let clips = [
+        placed_clip(A_CLIP, 0, SLOT_LEN as usize, 0.0),
+        placed_clip(B_CLIP, 500, (SLOT_LEN - 500) as usize, 1.0),
+    ];
+    mix_track_comp(tc, &clips, 0, frames, &mut l, &mut r);
+
+    // Nothing before the punch-in point.
+    for (i, &v) in l[..500].iter().enumerate() {
+        assert!(v.abs() < 1e-6, "frame {i} precedes the take, got {v}");
+    }
+    // Full level once past the onset ramp.
+    let open = (500 + DECLICK + 10) as usize;
+    assert!((l[open] - 1.0).abs() < 1e-6, "past the onset ramp, got {}", l[open]);
+}
+
+#[test]
+fn take_shorter_than_its_span_stops_cleanly() {
+    // A take that runs out before its span ends (a pass cut short at stop)
+    // must simply stop. The take's extent is its *visible*, post-trim
+    // duration, so a trimmed tail is silent too — bounding on the raw PCM
+    // buffer instead would play audio the user trimmed away.
+    let g = two_take_group();
+    let table = build_comp_table(&groups(g));
+    let frames = SLOT_LEN as usize;
+    let mut l = vec![0.0f32; frames];
+    let mut r = vec![0.0f32; frames];
+    let tc = table.track_comp(TRACK).expect("track has a comp");
+
+    // 2000 frames of PCM, 800 trimmed off the end → audible over [0, 1200).
+    let mut short = placed_clip(B_CLIP, 0, SLOT_LEN as usize, 1.0);
+    short.trim_end_frames = 800;
+    assert_eq!(short.duration_frames(), 1200, "precondition: post-trim length");
+    let clips = [placed_clip(A_CLIP, 0, SLOT_LEN as usize, 0.0), short];
+    mix_track_comp(tc, &clips, 0, frames, &mut l, &mut r);
+
+    for (i, &v) in l[1200..].iter().enumerate() {
+        assert!(
+            v.abs() < 1e-6,
+            "frame {} is past the take's trimmed end, got {v}",
+            i + 1200
+        );
+    }
+    let open = (DECLICK + 10) as usize;
+    assert!((l[open] - 1.0).abs() < 1e-6, "take body, got {}", l[open]);
+    // The trimmed end is a real edge, so it ramps rather than cutting.
+    assert!(
+        l[1199].abs() < 0.05,
+        "trimmed end must ramp to silence, got {}",
+        l[1199]
+    );
+}
+
+#[test]
+fn onset_and_offset_ramps_land_on_the_real_audio_edges() {
+    // The anti-click ramps must sit on the take's actual first and last
+    // audible frames. Anchoring them on the span instead ran the head ramp
+    // through a region with no samples at all and left the real onset a raw
+    // splice — the click doc #165's DoD forbids.
+    let g = two_take_group();
+    let table = build_comp_table(&groups(g));
+    let frames = SLOT_LEN as usize;
+    let mut l = vec![0.0f32; frames];
+    let mut r = vec![0.0f32; frames];
+    let tc = table.track_comp(TRACK).expect("track has a comp");
+
+    let onset = 500u64;
+    let end = 1500u64;
+    let clips = [
+        placed_clip(A_CLIP, 0, SLOT_LEN as usize, 0.0),
+        placed_clip(B_CLIP, onset, (end - onset) as usize, 1.0),
+    ];
+    mix_track_comp(tc, &clips, 0, frames, &mut l, &mut r);
+
+    // Ramps start from (near) silence at both real edges...
+    assert!(
+        l[onset as usize].abs() < 0.05,
+        "onset must ramp from silence, got {}",
+        l[onset as usize]
+    );
+    assert!(
+        l[(end - 1) as usize].abs() < 0.05,
+        "offset must ramp to silence, got {}",
+        l[(end - 1) as usize]
+    );
+    // ...and no step anywhere: the whole rendered span is click-free.
+    let max_step = l.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(
+        max_step < 0.05,
+        "comp must be click-free across the take's edges; largest step was {max_step}"
+    );
+}
+
+#[test]
+fn partial_take_at_a_seam_ramps_out_instead_of_cutting() {
+    // The interaction the two rules have to agree on: a comped segment
+    // whose take stops before the seam. The outgoing crossfade never
+    // reaches it, so the ramp has to come from the declick at the take's
+    // real end — otherwise the take is cut mid-waveform right where the
+    // comp hands over.
+    let mut g = two_take_group();
+    g.comp = split_comp();
+    let table = build_comp_table(&groups(g));
+    let frames = SLOT_LEN as usize;
+    let mut l = vec![0.0f32; frames];
+    let mut r = vec![0.0f32; frames];
+    let tc = table.track_comp(TRACK).expect("track has a comp");
+
+    // Take A covers only [0, 800) of its [0, 1000) segment; take B covers
+    // its whole segment.
+    let clips = [
+        placed_clip(A_CLIP, 0, 800, 1.0),
+        placed_clip(B_CLIP, 0, SLOT_LEN as usize, 1.0),
+    ];
+    mix_track_comp(tc, &clips, 0, frames, &mut l, &mut r);
+
+    // A is at full level in its body and has ramped away by its real end.
+    assert!((l[400] - 1.0).abs() < 1e-6, "take A body, got {}", l[400]);
+    assert!(l[799].abs() < 0.05, "take A must ramp out at 800, got {}", l[799]);
+    // B still arrives through its own seam crossfade and reaches full level.
+    let b_open = (SEAM + SEAM_HALF + 100) as usize;
+    assert!((l[b_open] - 1.0).abs() < 1e-6, "take B body, got {}", l[b_open]);
+    // No step anywhere, including across the silent gap the short take
+    // leaves between its end and B's fade-in.
+    let max_step = l.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(max_step < 0.05, "seam must stay click-free; largest step {max_step}");
+}

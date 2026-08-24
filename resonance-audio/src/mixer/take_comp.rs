@@ -227,36 +227,70 @@ pub fn mix_track_comp(
     let mut has_audio = false;
 
     for (i, span) in spans.iter().enumerate() {
-        // Crossfade half-widths into the previous / next neighbour. Both
-        // sides of a seam derive the same half from the shorter of the two
-        // spans, so the outgoing and incoming ramps are exact complements.
-        // The comp's outer edges have no neighbour to hand over to and take
-        // the declick ramp instead.
-        let (in_half, in_declick) = if i > 0 {
-            (seam_half(span.range.length, spans[i - 1].range.length), 0)
-        } else {
-            (0, declick_frames(span.range.length))
-        };
-        let (out_half, out_declick) = if i + 1 < spans.len() {
-            (seam_half(span.range.length, spans[i + 1].range.length), 0)
-        } else {
-            (0, declick_frames(span.range.length))
+        let Some(clip) = clips.iter().find(|c| c.id == span.clip_id) else {
+            continue;
         };
 
-        // The span is audible over its range plus the crossfade tails that
-        // reach into each neighbour.
-        let audible_start = span.range.start.saturating_sub(in_half);
-        let audible_end = span.range.end() + out_half;
-        let ov_start = buf_start.max(audible_start);
-        let ov_end = buf_end.min(audible_end);
+        // Crossfade half-widths into the previous / next neighbour. Both
+        // sides of a seam derive the same half from the shorter of the two
+        // SPAN lengths — never from the clipped extent below — so the
+        // outgoing and incoming ramps stay exact complements even when one
+        // of the two takes does not reach the seam.
+        let in_half = if i > 0 {
+            seam_half(span.range.length, spans[i - 1].range.length)
+        } else {
+            0
+        };
+        let out_half = if i + 1 < spans.len() {
+            seam_half(span.range.length, spans[i + 1].range.length)
+        } else {
+            0
+        };
+
+        // The window the span would like to sound over: its range plus the
+        // crossfade tails reaching into each neighbour.
+        let win_start = span.range.start.saturating_sub(in_half);
+        let win_end = span.range.end() + out_half;
+
+        // A span is NOT guaranteed to lie within its take clip. The comp's
+        // active-take and default-cover cases both resolve to the whole
+        // `group.slot`, while a cycle-record pass 0 clip starts at the
+        // punch-in point — later than the slot — and any pass cut short at
+        // stop ends before it. Intersecting with the clip's audible (post-
+        // trim) extent is what keeps the clip-relative index below in
+        // bounds; without it a punch-in underflowed it, panicking the audio
+        // thread in debug and wrapping silently in release (ba doc #292).
+        let clip_start = clip.start_sample;
+        let clip_end = clip_start + clip.duration_frames();
+        let aud_start = win_start.max(clip_start);
+        let aud_end = win_end.min(clip_end);
+        if aud_start >= aud_end {
+            continue;
+        }
+
+        let ov_start = buf_start.max(aud_start);
+        let ov_end = buf_end.min(aud_end);
         if ov_start >= ov_end {
             continue;
         }
 
-        let Some(clip) = clips.iter().find(|c| c.id == span.clip_id) else {
-            continue;
+        // Anti-click ramps, anchored on where audio REALLY starts and stops
+        // rather than on the span. A seam crossfade already takes the
+        // signal to zero at the window edge, so a ramp is needed only where
+        // one does not reach: the comp's outer edges, and any edge where
+        // the clip ran out inside the window.
+        let aud_len = aud_end - aud_start;
+        let head_declick = if in_half > 0 && aud_start == win_start {
+            0
+        } else {
+            declick_frames(aud_len)
         };
-        let clip_start = clip.start_sample;
+        let tail_declick = if out_half > 0 && aud_end == win_end {
+            0
+        } else {
+            declick_frames(aud_len)
+        };
+
         // The retuned cache when the take carries vocal-tuning edits, else
         // the original PCM — the same read the normal clip path makes, so a
         // tuned take comps exactly as it plays (todo #358).
@@ -267,14 +301,13 @@ pub fn mix_track_comp(
             10f32.powf(clip.gain_db / 20.0)
         };
 
-        let fade_in_start = span.range.start.saturating_sub(in_half);
         let fade_out_start = span.range.end().saturating_sub(out_half);
 
         for timeline_frame in ov_start..ov_end {
             let mut coef = gain_lin;
             // Fade in across the seam with the previous span.
             if in_half > 0 && timeline_frame < span.range.start + in_half {
-                let t = (timeline_frame - fade_in_start) as f32 / (in_half * 2) as f32;
+                let t = (timeline_frame - win_start) as f32 / (in_half * 2) as f32;
                 coef *= FadeCurve::EqualPower.coefficient(t);
             }
             // Fade out across the seam with the next span.
@@ -282,19 +315,19 @@ pub fn mix_track_comp(
                 let t = (timeline_frame - fade_out_start) as f32 / (out_half * 2) as f32;
                 coef *= FadeCurve::EqualPower.coefficient(1.0 - t);
             }
-            // Anti-click ramps on the comp's outer edges (no neighbour).
-            if in_declick > 0 && timeline_frame < span.range.start + in_declick {
-                let t = (timeline_frame - span.range.start) as f32 / in_declick as f32;
+            // Anti-click ramps on the take's real onset / offset.
+            if head_declick > 0 && timeline_frame < aud_start + head_declick {
+                let t = (timeline_frame - aud_start) as f32 / head_declick as f32;
                 coef *= FadeCurve::EqualPower.coefficient(t);
             }
-            if out_declick > 0 && timeline_frame + out_declick >= span.range.end() {
-                let t = (span.range.end() - 1).saturating_sub(timeline_frame) as f32
-                    / out_declick as f32;
+            if tail_declick > 0 && timeline_frame + tail_declick >= aud_end {
+                let t = (aud_end - 1).saturating_sub(timeline_frame) as f32 / tail_declick as f32;
                 coef *= FadeCurve::EqualPower.coefficient(t);
             }
 
             // Source frame within the take clip (same mapping as the normal
             // clip path: timeline → clip-relative + non-destructive trim).
+            // `timeline_frame >= aud_start >= clip_start` by construction.
             let clip_frame =
                 (timeline_frame - clip_start) as usize + clip.trim_start_frames as usize;
             let clip_idx = clip_frame * 2;
