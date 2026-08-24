@@ -245,13 +245,13 @@ impl Resonance {
         &self.take_groups.groups
     }
 
-    /// Test-only: mutable access to the take-group mirror, so the comp /
-    /// active-take projections can be exercised ahead of todo #409's
-    /// `TakeCompChanged` / `ActiveTakeChanged` events existing to carry
-    /// them through the real dispatch.
+    /// Test-only: whether `group_id`'s active take mutes the group's
+    /// recorded audio — a MIDI take soloed over audio takes (epic #15).
+    /// Drives `tests/timeline/take_comp_edits.rs`, which pins that the
+    /// state is *reported* rather than left looking like a bug.
     #[doc(hidden)]
-    pub fn test_take_groups_mut(&mut self) -> &mut state::TakeGroupState {
-        &mut self.take_groups
+    pub fn test_active_take_silences_audio(&self, group_id: u64) -> bool {
+        self.take_groups.active_take_silences_audio(group_id)
     }
 
     /// Test-only: `(group, take)` pairs whose recorded WAV was absent when

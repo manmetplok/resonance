@@ -57,6 +57,8 @@ mod markers_overview_ui;
 mod quantize_persistence;
 #[path = "timeline/selection_bar.rs"]
 mod selection_bar;
+#[path = "timeline/take_comp_edits.rs"]
+mod take_comp_edits;
 #[path = "timeline/take_group_mirror.rs"]
 mod take_group_mirror;
 #[path = "timeline/take_lane_render.rs"]

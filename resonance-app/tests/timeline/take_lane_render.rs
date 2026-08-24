@@ -204,16 +204,21 @@ fn capture_midi_passes(app: &mut Resonance, passes: u32) {
     }
 }
 
-/// Replace the group's comp with `segments`. The engine echo that will
-/// carry this (`TakeCompChanged`) is todo #409's, so — exactly as the #410
-/// mirror tests do — the projection is driven directly.
+/// Replace the group's comp with `segments`, through the engine echo that
+/// carries it live (`TakeCompChanged`, routed since todo #411) rather than
+/// by reaching into the projection.
 fn set_comp(app: &mut Resonance, segments: Vec<CompSegment>) {
-    app.test_take_groups_mut().comp_changed(GROUP, segments);
+    app.test_apply_engine_event(AudioEvent::TakeCompChanged {
+        group_id: GROUP,
+        segments,
+    });
 }
 
 fn set_active(app: &mut Resonance, take_id: Option<u64>) {
-    app.test_take_groups_mut()
-        .active_take_changed(GROUP, take_id);
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: GROUP,
+        take_id,
+    });
 }
 
 fn toggle_lane(app: &mut Resonance, track_id: u64) {

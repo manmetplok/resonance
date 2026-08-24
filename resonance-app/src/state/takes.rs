@@ -16,6 +16,54 @@ use resonance_common::{
     CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
 };
 
+/// The take a group plays where its comp names none.
+///
+/// Mirrors the engine's fallback in `mixer::take_comp::resolve_spans`
+/// **exactly**: the last *audio* take in capture order, because that is
+/// what is actually audible for a group whose comp is still empty. Only
+/// when a group holds no audio at all (a MIDI-only instrument lane) does
+/// it fall back to the last take of any kind, so a MIDI lane still has an
+/// addressable cover to comp against.
+///
+/// Getting this wrong would make the first comp edit on a fresh group
+/// *change what is heard* — [`effective_segments`] materializes the
+/// engine's implicit cover before editing it, and that materialization is
+/// only inaudible if it names the same take the engine had chosen.
+pub fn fallback_take(group: &TakeGroup) -> Option<TakeId> {
+    group
+        .takes
+        .iter()
+        .rev()
+        .find(|t| matches!(t.content, TakeContent::Audio { .. }))
+        .or_else(|| group.takes.last())
+        .map(|t| t.id)
+}
+
+/// The group's comp as an explicit, editable cover of its slot.
+///
+/// A group that has never been comped carries **no** segments, but it is
+/// not silent: the engine covers the whole slot with [`fallback_take`].
+/// Comp editing therefore starts by materializing that implicit cover, so
+/// a first split or promote edits what the user is hearing instead of
+/// appearing to do nothing (`Comp::split_comp` on an empty comp is a
+/// no-op, and a promote over an empty comp would leave the rest of the
+/// slot as a real hole).
+///
+/// Returns an empty vector only for a group with no takes at all, which
+/// has nothing to cover the slot with.
+pub fn effective_segments(group: &TakeGroup) -> Vec<CompSegment> {
+    if !group.comp.segments.is_empty() {
+        return group.comp.segments.clone();
+    }
+    match fallback_take(group) {
+        Some(take_id) => vec![CompSegment {
+            range: group.slot,
+            take_id,
+        }],
+        None => Vec::new(),
+    }
+}
+
 /// GUI-side mirror of the engine's take groups.
 #[derive(Debug, Default)]
 pub struct TakeGroupState {
@@ -117,9 +165,10 @@ impl TakeGroupState {
     /// groups are ignored (the capture that creates the group always
     /// precedes any comp change).
     ///
-    /// The engine-side echo is todo #409's; until that variant exists on
-    /// `AudioEvent` nothing in `engine_events` calls this, but the
-    /// projection is the app's and is covered directly by its tests.
+    /// This is the *only* way the mirror's comp is meant to move: the
+    /// update handlers apply an edit through here and send the matching
+    /// `SetTakeComp`, and the engine's `TakeCompChanged` echo re-applies
+    /// the same segments idempotently (todo #411).
     pub fn comp_changed(&mut self, group_id: TakeGroupId, segments: Vec<CompSegment>) {
         if let Some(group) = self.group_mut(group_id) {
             group.comp.segments = segments;
@@ -129,11 +178,55 @@ impl TakeGroupState {
     /// Mirror an `ActiveTakeChanged` event: set (or clear, with `None`) the
     /// take soloed for full-slot playback. Unknown groups are ignored.
     ///
-    /// Pairs with [`comp_changed`](Self::comp_changed) and waits on the
-    /// same todo #409 event variant.
+    /// Pairs with [`comp_changed`](Self::comp_changed); both are routed
+    /// from `engine_events::takes` (todo #411).
     pub fn active_take_changed(&mut self, group_id: TakeGroupId, take_id: Option<TakeId>) {
         if let Some(group) = self.group_mut(group_id) {
             group.active_take = take_id;
         }
+    }
+
+    /// Drop `take_id` from `group_id`, returning whether it was there.
+    ///
+    /// The take's missing-media flag goes with it, so a later group that
+    /// happens to reuse the id does not inherit a stale one. Only the take
+    /// itself is removed — the caller is responsible for pushing a comp
+    /// that no longer references it, because a `CompSegment` naming a
+    /// deleted take renders as a hole.
+    pub fn remove_take(&mut self, group_id: TakeGroupId, take_id: TakeId) -> bool {
+        self.missing_takes.remove(&(group_id, take_id));
+        let Some(group) = self.group_mut(group_id) else {
+            return false;
+        };
+        let Some(idx) = group.takes.iter().position(|t| t.id == take_id) else {
+            return false;
+        };
+        group.takes.remove(idx);
+        if group.active_take == Some(take_id) {
+            group.active_take = None;
+        }
+        true
+    }
+
+    /// True when this group's active take mutes its recorded audio.
+    ///
+    /// Soloing a **MIDI** take resolves to zero audio spans while every
+    /// audio take in the group stays governed (skipped on the ordinary
+    /// clip path), so the lane goes silent on the audio path — by design
+    /// (ba doc #292), but indistinguishable from a bug unless the UI says
+    /// so. Exposed here rather than inferred in the view so the rule lives
+    /// next to the mirror it is a fact about.
+    pub fn active_take_silences_audio(&self, group_id: TakeGroupId) -> bool {
+        let Some(group) = self.group(group_id) else {
+            return false;
+        };
+        let Some(active) = group.active_take.and_then(|id| group.take(id)) else {
+            return false;
+        };
+        matches!(active.content, TakeContent::Midi { .. })
+            && group
+                .takes
+                .iter()
+                .any(|t| matches!(t.content, TakeContent::Audio { .. }))
     }
 }

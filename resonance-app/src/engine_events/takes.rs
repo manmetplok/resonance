@@ -7,14 +7,23 @@
 //! thin, supplying only the take id and wall-clock capture stamp the
 //! event omits.
 //!
-//! The comp / active-take echoes doc #165 also lists for this seam
-//! (`TakeCompChanged` / `ActiveTakeChanged`) now exist on `AudioEvent`
-//! (todo #409). Their projections are already implemented on
-//! `TakeGroupState`, so wiring them up here is a dispatch arm plus a thin
-//! handler apiece — todo #411.
+//! The comp / active-take echoes doc #165 lists for this seam
+//! (`TakeCompChanged` / `ActiveTakeChanged`, todo #409's variants) are
+//! routed here too. They are *confirmations*, not requests: the engine
+//! sends one only after applying the change to what it plays and bounces,
+//! so the mirror adopts them verbatim. Applying an echo that merely
+//! repeats an update handler's optimistic write is a no-op, and an echo
+//! for a group the app has not mirrored is ignored — the capture that
+//! creates a group always precedes any comp change for it.
+//!
+//! Note the asymmetry the app must live with: a `SetActiveTake` naming a
+//! take the engine's group does not hold is dropped with **no** echo at
+//! all (ba doc #292). Silence is therefore not confirmation, which is why
+//! `update::takes` validates a selection before sending it rather than
+//! waiting to be told.
 
 use resonance_audio::types::TrackId;
-use resonance_common::{TakeContent, TakeGroupId, TakeId, TimelineRange};
+use resonance_common::{CompSegment, TakeContent, TakeGroupId, TakeId, TimelineRange};
 
 use crate::Resonance;
 
@@ -39,6 +48,22 @@ pub(super) fn take_captured(
         now_millis(),
         content,
     );
+}
+
+/// `TakeCompChanged` — adopt the comp the engine now plays and bounces,
+/// replacing the group's segments wholesale.
+pub(super) fn comp_changed(r: &mut Resonance, group_id: TakeGroupId, segments: Vec<CompSegment>) {
+    r.take_groups.comp_changed(group_id, segments);
+}
+
+/// `ActiveTakeChanged` — adopt (or clear) the take the engine is soloing
+/// across the group's slot.
+pub(super) fn active_take_changed(
+    r: &mut Resonance,
+    group_id: TakeGroupId,
+    take_id: Option<TakeId>,
+) {
+    r.take_groups.active_take_changed(group_id, take_id);
 }
 
 /// Wall-clock capture time in unix milliseconds, or `0` if the system

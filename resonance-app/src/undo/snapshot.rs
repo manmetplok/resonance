@@ -307,6 +307,12 @@ impl crate::Resonance {
         // fader/knob/transport edits). Drives the engine surgically
         // without tearing down plugin instances.
         if crate::update::try_diff_replay(self, &loaded, &extras) {
+            // The diff replay restores the take-lane *mirror* from the
+            // snapshot but sends the engine nothing, so a comp edit would
+            // reverse on screen and keep playing. Re-assert it here — this
+            // is the path every comp edit takes, since `take_groups` plays
+            // no part in the structural-compatibility test.
+            self.resync_take_comps();
             return;
         }
 
@@ -336,6 +342,43 @@ impl crate::Resonance {
         restore_arrangements(&mut self.compose, &extras.compose_arrangements);
         self.apply_freeze_restore(extras.track_freeze);
         self.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
+        self.resync_take_comps();
+    }
+
+    /// Drive the engine's take groups back to the restored mirror (epic
+    /// #15, todo #411).
+    ///
+    /// Take groups ride the `ProjectFile` snapshot, so both restore paths
+    /// rebuild `TakeGroupState` on their own — but neither sends the
+    /// engine anything, and the engine is what decides which take is
+    /// audible where. Without this an undone comp edit reverses in the
+    /// lane while playback carries on with the comp that was undone.
+    ///
+    /// Each mirrored group is re-asserted with the same two commands a
+    /// live edit uses, so restoring and editing share one code path.
+    /// `SetTakeComp` is sent first: pushing the cover before clearing a
+    /// solo means the group never passes through a state where neither is
+    /// set. Both are idempotent, and both are ignored by the engine for a
+    /// group it does not hold — which is the one thing this cannot fix:
+    /// there is no command that *creates* a group, so a group the engine
+    /// has forgotten (after the slow clear-and-replay path, or after a
+    /// project reload) stays forgotten until todo #1394 lands. Groups the
+    /// engine holds but the snapshot does not are likewise left alone.
+    pub(crate) fn resync_take_comps(&mut self) {
+        let groups: Vec<(u64, Vec<resonance_common::CompSegment>, Option<u64>)> = self
+            .take_groups
+            .groups
+            .iter()
+            .map(|g| (g.id, g.comp.segments.clone(), g.active_take))
+            .collect();
+        for (group_id, segments, take_id) in groups {
+            let _ = self
+                .engine
+                .send(AudioCommand::SetTakeComp { group_id, segments });
+            let _ = self
+                .engine
+                .send(AudioCommand::SetActiveTake { group_id, take_id });
+        }
     }
 
     /// Re-apply snapshotted clip fade/gain to the GUI mirror and re-sync the
