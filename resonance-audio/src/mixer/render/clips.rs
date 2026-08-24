@@ -3,6 +3,7 @@
 //! crossfade, the anti-click edge ramp, and the recorded-playback monitor
 //! gate that decides whether the live input joins them.
 
+use crate::mixer::take_comp::CompRenderTable;
 use crate::types::*;
 
 /// Recorded-playback monitor gate (doc #257): `true` when the track's
@@ -59,12 +60,50 @@ pub fn mix_track_clips(
     track_buf_l: &mut [f32],
     track_buf_r: &mut [f32],
 ) -> bool {
+    mix_track_clips_governed(
+        clips,
+        track_id,
+        playhead,
+        frames,
+        track_buf_l,
+        track_buf_r,
+        &CompRenderTable::default(),
+    )
+}
+
+/// As [`mix_track_clips`], but skips every clip the take-comp table marks
+/// as governed — a recorded take under comp control, which
+/// [`mix_track_comp`](crate::mixer::mix_track_comp) renders instead. Without
+/// this the raw, fully overlapping loop passes would all play at once, on
+/// top of the comp.
+///
+/// Governed clips are also invisible to the automatic same-track crossfade
+/// of the surviving clips: three stacked takes are not three overlapping
+/// clips to be crossfaded, they are alternates of one part.
+///
+/// An empty table is the no-take-groups case and short-circuits every
+/// governance check, so a project without take lanes renders exactly as it
+/// did before.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn mix_track_clips_governed(
+    clips: &[AudioClip],
+    track_id: TrackId,
+    playhead: u64,
+    frames: usize,
+    track_buf_l: &mut [f32],
+    track_buf_r: &mut [f32],
+    take_comp: &CompRenderTable,
+) -> bool {
     let buf_start = playhead;
     let buf_end = playhead + frames as u64;
     let mut has_audio = false;
+    let governed = !take_comp.is_empty();
 
     for clip in clips.iter() {
         if clip.track_id != track_id {
+            continue;
+        }
+        if governed && take_comp.is_governed(clip.id) {
             continue;
         }
 
@@ -82,7 +121,8 @@ pub fn mix_track_clips(
         // Fold the automatic same-track crossfade into the fade lengths:
         // an overlap at the clip's head/tail behaves like a fade of that
         // length, and the explicit fade wins only when it is longer.
-        let (head_xfade, tail_xfade) = clip_crossfade_lengths(clip, clips, clip_frames);
+        let (head_xfade, tail_xfade) =
+            clip_crossfade_lengths(clip, clips, clip_frames, take_comp);
         // Anti-click ramp on both audible edges — see `CLIP_DECLICK_FRAMES`.
         // Whichever of the three is longest shapes the edge, so an explicit
         // fade or a crossfade always subsumes the declick.
@@ -196,13 +236,24 @@ fn clip_fade_gain_coef(
 /// start; the tail length is the span a later-starting clip covers up to
 /// `clip`'s end. Each is capped at the clip's visible duration so a clip
 /// overlapped on both sides cannot fade past its own length.
-fn clip_crossfade_lengths(clip: &AudioClip, clips: &[AudioClip], clip_frames: u64) -> (u64, u64) {
+fn clip_crossfade_lengths(
+    clip: &AudioClip,
+    clips: &[AudioClip],
+    clip_frames: u64,
+    take_comp: &CompRenderTable,
+) -> (u64, u64) {
     let clip_start = clip.start_sample;
     let clip_end = clip_start + clip_frames;
+    let governed = !take_comp.is_empty();
     let mut head = 0u64;
     let mut tail = 0u64;
     for other in clips.iter() {
         if other.id == clip.id || other.track_id != clip.track_id {
+            continue;
+        }
+        // A take clip under comp control never crossfades against the
+        // surviving clips — the comp pass renders it instead.
+        if governed && take_comp.is_governed(other.id) {
             continue;
         }
         let o_start = other.start_sample;

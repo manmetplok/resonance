@@ -20,6 +20,7 @@ use crate::clap_host::{PluginMap, StereoBufMut};
 use crate::engine::AutomationSnapshot;
 use crate::latency::LatencyComp;
 use crate::mixer::automation_apply::apply_plugin_params;
+use crate::mixer::take_comp::CompRenderTable;
 use crate::types::*;
 
 use super::strategy::RenderStrategy;
@@ -59,6 +60,14 @@ pub(crate) struct BlockInputs<'a> {
     /// loaded once for this block).
     pub(crate) aux_sends: &'a [AuxSend],
     pub(crate) sidechain_routes: &'a [SidechainRoute],
+    /// The take-comp playback plan (epic #15, doc #165) — a lock-free
+    /// snapshot the caller loaded once for this block. Names, per track,
+    /// which recorded take is audible over which slice of a loop slot.
+    /// Empty ⇒ no take groups exist and the block renders exactly as it
+    /// did before, so projects without take lanes pay nothing. The live
+    /// callback and the offline bounce load the *same* published table,
+    /// which is what makes a comp bounce the way it plays.
+    pub(crate) take_comp: &'a CompRenderTable,
     /// Timeline frame the block starts on.
     pub(crate) playhead: u64,
     pub(crate) frames: usize,

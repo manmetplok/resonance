@@ -31,7 +31,7 @@ use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer::MidiStash;
 use crate::recording::RecordingState;
 use crate::types::*;
-use resonance_common::{TakeGroupId, TimelineRange};
+use resonance_common::{TakeGroup, TakeGroupId, TimelineRange};
 
 use super::import_queue::ImportQueue;
 use super::midi::MidiHardwareState;
@@ -174,6 +174,14 @@ pub(crate) struct HandlerState {
     pub reference: super::reference::ReferencePlayer,
     /// In-flight cycle-record run, or `None` when not loop-recording.
     pub loop_record_session: Option<LoopRecordSession>,
+    /// Authoritative take groups keyed by id (epic #15, doc #165).
+    /// Populated as cycle-record passes are captured
+    /// (`transport::finalize_loop_record_pass`) and edited by the
+    /// `SetTakeComp` / `SetActiveTake` handlers in
+    /// [`crate::engine::takes`]. Every mutation republishes the flattened
+    /// `SharedState::take_comp` table, which is what keeps comp playback
+    /// and comp bounce in step.
+    pub take_groups: HashMap<TakeGroupId, TakeGroup>,
     /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
     /// engine-thread-local; written by the `SetAutomationLane` /
     /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
@@ -277,6 +285,7 @@ pub(crate) fn engine_thread(
         pending_bounce: None,
         reference: super::reference::ReferencePlayer::new(),
         loop_record_session: None,
+        take_groups: HashMap::new(),
         automation_lanes: automation::AutomationLanes::new(),
         external_instruments: external_instrument::ExternalInstruments::new(),
         pending_latency_ping: None,

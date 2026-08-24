@@ -66,6 +66,12 @@ pub(super) fn render_playing_block(
     // sub-blocks and the master pass so the whole buffer agrees.
     let auto_guard = inputs.automation.load();
 
+    // Snapshot the take-comp playback table once per buffer (wait-free; the
+    // engine thread republishes it on every capture / comp edit /
+    // active-take change). Empty when no take groups exist, so projects
+    // without comps pay nothing.
+    let take_comp_guard = shared.take_comp.load();
+
     let block = BlockInputs {
         channels: inputs.channels,
         tracks: &tracks_guard,
@@ -79,6 +85,7 @@ pub(super) fn render_playing_block(
         active_busses,
         aux_sends: &aux_guard,
         sidechain_routes: &sidechain_guard,
+        take_comp: &take_comp_guard,
         playhead,
         frames,
         latency_comp: &comp_guard,

@@ -1,7 +1,8 @@
 //! Engine → GUI event enum.
 use resonance_common::{
     AudioFormat, AutomationLane, AutomationTarget, BindingId, ControlSource, ExternalInstrument,
-    MidiBinding, MidiTarget, PlaybackSource, TakeContent, TakeGroupId, TimelineRange,
+    CompSegment, MidiBinding, MidiTarget, PlaybackSource, TakeContent, TakeGroupId, TakeId,
+    TimelineRange,
 };
 use resonance_metering::MeterSnapshot;
 
@@ -316,12 +317,32 @@ pub enum AudioEvent {
     /// notes depending on the track type.
     TakeCaptured {
         group_id: TakeGroupId,
+        /// Engine-assigned identifier for this take within its group,
+        /// stable for the life of the record run. The app mirrors it so
+        /// later `SetTakeComp` / `SetActiveTake` commands reference the
+        /// same takes the engine renders.
+        take_id: TakeId,
         track_id: TrackId,
         /// The loop region the take was recorded over, in sample frames.
         slot: TimelineRange,
         /// Zero-based loop pass that produced this take.
         pass_index: u32,
         content: TakeContent,
+    },
+    /// Confirms a `SetTakeComp` was applied to `group_id`. The comp the
+    /// engine now plays and bounces is echoed back, so the app's view of
+    /// the comp is whatever the engine actually renders rather than what
+    /// the app optimistically drew.
+    TakeCompChanged {
+        group_id: TakeGroupId,
+        segments: Vec<CompSegment>,
+    },
+    /// Confirms a `SetActiveTake` was applied to `group_id`. `take_id` is
+    /// the take now soloed for full-slot playback, or `None` when the
+    /// override was cleared and the comp plays again.
+    ActiveTakeChanged {
+        group_id: TakeGroupId,
+        take_id: Option<TakeId>,
     },
     PluginAdded {
         track_id: TrackId,

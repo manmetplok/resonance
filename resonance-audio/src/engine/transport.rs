@@ -160,6 +160,12 @@ pub(crate) fn begin_recording_stream(
         device: Option<String>,
         port: u16,
         mono: bool,
+        /// Whether this track's signal arrives as audio on the input, and
+        /// so needs a recording buffer + WAV writer — see
+        /// [`Track::runs_internal_instrument`]. An armed track whose
+        /// instrument runs in-process still counts as armed (it records a
+        /// MIDI performance) but captures no audio.
+        captures_audio: bool,
     }
     let armed_tracks: Vec<ArmedInfo> = {
         let tracks_guard = ctx.tracks.read();
@@ -171,6 +177,7 @@ pub(crate) fn begin_recording_stream(
                 device: t.input_device_name.load_full().map(|a| (*a).clone()),
                 port: t.input_port(),
                 mono: t.mono(),
+                captures_audio: !t.runs_internal_instrument(),
             })
             .collect()
     };
@@ -238,10 +245,18 @@ pub(crate) fn begin_recording_stream(
     state.rec.input_sample_rate = in_sr;
     state.rec.input_channels = in_ch;
 
-    // Allocate a clip id per armed track and open a WAV writer
-    // targeting its final location in the project's audio dir. Any
-    // failure here unwinds the partially-built state and bails.
-    for info in &armed_tracks {
+    // Allocate a clip id per armed track that actually captures audio and
+    // open a WAV writer targeting its final location in the project's
+    // audio dir. Any failure here unwinds the partially-built state and
+    // bails.
+    //
+    // Tracks whose instrument runs in-process are skipped: they are armed
+    // to record a MIDI performance, and giving them a buffer would write a
+    // WAV of whatever happened to be on the input and — under cycle-record
+    // — file a second, spurious take for every loop pass (ba doc #292).
+    // They stay in `armed_tracks` so the transport still enters recording
+    // and opens the cycle-record session for their MIDI.
+    for info in armed_tracks.iter().filter(|i| i.captures_audio) {
         let clip_id = state.next_clip_id;
         state.next_clip_id += 1;
         match crate::recording::RecordingState::create_track_buf(
@@ -527,16 +542,28 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
         &mut state.next_clip_id,
         reopen,
     );
+    let mut captured_any = false;
     for take in rolled {
         let group_id = loop_record_group_for(state, take.track_id);
+        let content = TakeContent::Audio {
+            clip_ref: take.clip_id,
+        };
+        let take_id = super::takes::store_take(
+            state,
+            group_id,
+            take.track_id,
+            slot,
+            pass_index,
+            &content,
+        );
+        captured_any = true;
         let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
             group_id,
+            take_id,
             track_id: take.track_id,
             slot,
             pass_index,
-            content: TakeContent::Audio {
-                clip_ref: take.clip_id,
-            },
+            content,
         });
     }
 
@@ -544,13 +571,25 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     let midi_takes = super::midi::capture_loop_record_midi_pass(ctx, state, slot.end());
     for (track_id, notes) in midi_takes {
         let group_id = loop_record_group_for(state, track_id);
+        let content = TakeContent::Midi { notes };
+        let take_id =
+            super::takes::store_take(state, group_id, track_id, slot, pass_index, &content);
+        captured_any = true;
         let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
             group_id,
+            take_id,
             track_id,
             slot,
             pass_index,
-            content: TakeContent::Midi { notes },
+            content,
         });
+    }
+
+    // Republish the comp playback table so the pass just captured is
+    // immediately audible — with no comp and no active take yet, the
+    // default cover is the most recent take.
+    if captured_any {
+        super::takes::publish_take_comp(ctx, state);
     }
 
     if reopen {

@@ -2,7 +2,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
+use resonance_common::{
+    BindingId, CompSegment, ControllerMap, MidiBinding, MidiTarget, TakeGroupId, TakeId,
+};
 
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
 
@@ -344,6 +346,28 @@ pub enum AudioCommand {
     /// `AudioEvent::TakeCaptured` per pass. When disabled, a looped
     /// recording keeps the legacy single-clip behaviour.
     SetLoopRecordMode(bool),
+    /// Replace the comp — the ordered, non-overlapping cover of the loop
+    /// slot — of take group `group_id`. The mix graph plays the comped
+    /// cover, switching the source take clip per [`CompSegment`] with a
+    /// short equal-power crossfade at each seam, on both realtime playback
+    /// and offline bounce.
+    ///
+    /// Setting a comp does not clear an active take: an active take still
+    /// overrides the comp until cleared with
+    /// [`AudioCommand::SetActiveTake`]`(_, None)`. Confirmed by
+    /// `AudioEvent::TakeCompChanged`; an unknown group is ignored.
+    SetTakeComp {
+        group_id: TakeGroupId,
+        segments: Vec<CompSegment>,
+    },
+    /// Solo one whole take of group `group_id` for full-slot playback,
+    /// overriding the comp — or clear the override with `None` so the comp
+    /// plays again. Confirmed by `AudioEvent::ActiveTakeChanged`; an unknown
+    /// group, or a take id the group does not hold, is ignored.
+    SetActiveTake {
+        group_id: TakeGroupId,
+        take_id: Option<TakeId>,
+    },
     SavePluginState {
         instance_id: PluginInstanceId,
     },
