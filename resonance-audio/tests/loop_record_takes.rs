@@ -350,10 +350,12 @@ fn saved_group(id: TakeGroupId, track_id: u64, takes: u64) -> TakeGroup {
 fn restoring_seeds_every_saved_group_with_its_comp() {
     let mut store = HashMap::new();
     let mut next = 1u64;
+    let mut next_clip = 1u64;
 
     restore_take_groups_in_place(
         &mut store,
         &mut next,
+        &mut next_clip,
         vec![saved_group(1, 7, 3), saved_group(2, 8, 2)],
     );
 
@@ -379,10 +381,12 @@ fn restoring_seeds_every_saved_group_with_its_comp() {
 fn restoring_reserves_group_ids_past_the_highest_saved_one() {
     let mut store = HashMap::new();
     let mut next = 1u64;
+    let mut next_clip = 1u64;
 
     restore_take_groups_in_place(
         &mut store,
         &mut next,
+        &mut next_clip,
         vec![saved_group(1, 7, 2), saved_group(9, 8, 1), saved_group(4, 9, 1)],
     );
 
@@ -399,8 +403,14 @@ fn restoring_reserves_group_ids_past_the_highest_saved_one() {
 fn restoring_never_lowers_the_group_allocator() {
     let mut store = HashMap::new();
     let mut next = 12u64;
+    let mut next_clip = 1u64;
 
-    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 1)]);
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 1)],
+    );
 
     assert_eq!(next, 12, "a low restored id must not rewind the allocator");
 }
@@ -413,10 +423,21 @@ fn restoring_never_lowers_the_group_allocator() {
 fn restoring_replaces_the_previous_projects_groups() {
     let mut store = HashMap::new();
     let mut next = 1u64;
+    let mut next_clip = 1u64;
 
-    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 3)]);
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 3)],
+    );
     // Project B holds one group, with a different id and a different track.
-    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(5, 8, 1)]);
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(5, 8, 1)],
+    );
 
     assert_eq!(store.len(), 1, "project A's group must not linger");
     assert!(store.contains_key(&5));
@@ -434,9 +455,15 @@ fn restoring_replaces_the_previous_projects_groups() {
 fn restoring_an_empty_project_clears_the_store() {
     let mut store = HashMap::new();
     let mut next = 1u64;
+    let mut next_clip = 1u64;
 
-    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 2)]);
-    restore_take_groups_in_place(&mut store, &mut next, Vec::new());
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 2)],
+    );
+    restore_take_groups_in_place(&mut store, &mut next, &mut next_clip, Vec::new());
 
     assert!(store.is_empty(), "a take-lane-free project must empty the store");
     assert_eq!(next, 2, "clearing the store does not rewind the allocator");
@@ -450,9 +477,15 @@ fn restoring_an_empty_project_clears_the_store() {
 fn a_further_take_on_a_restored_group_gets_a_fresh_id() {
     let mut store = HashMap::new();
     let mut next = 1u64;
+    let mut next_clip = 1u64;
     let slot = TimelineRange::new(0, 48_000);
 
-    restore_take_groups_in_place(&mut store, &mut next, vec![saved_group(1, 7, 3)]);
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 3)],
+    );
 
     let group = store.get_mut(&1).expect("restored group");
     let saved_ids: Vec<_> = group.takes.iter().map(|t| t.id).collect();
@@ -465,4 +498,195 @@ fn a_further_take_on_a_restored_group_gets_a_fresh_id() {
     for id in saved_ids {
         assert!(group.take(id).is_some(), "restored take {id} must survive");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Reserving clip ids past a loaded project's take clip_refs (todo #1393)
+// ---------------------------------------------------------------------------
+//
+// An audio take owns `audio/clip_{clip_ref}.wav` just as much as a timeline
+// clip does, but nothing reserved the id: `ClearAll` resets `next_clip_id`
+// to 1 and only `LoadClipFromWav` (and its MIDI twin) pushes it back up —
+// paths a take clip never takes, since `roll_audio_pass` hands the take
+// straight to `store_take`. The restore is where the engine learns a loaded
+// project's `clip_ref`s, so it is where they get reserved.
+//
+// These assert the *allocator*, not that a recording succeeds: the bug is
+// invisible until a WAV is clobbered, and a recording that overwrites a
+// take's file succeeds just fine.
+
+/// A saved group of `takes` MIDI takes — the shape an instrument track's
+/// cycle-record run persists. Notes inline, no clip and no file.
+fn saved_midi_group(id: TakeGroupId, track_id: u64, takes: u64) -> TakeGroup {
+    let slot = TimelineRange::new(0, 48_000);
+    let mut group = TakeGroup::new(id, track_id, slot);
+    for i in 0..takes {
+        push_take(
+            &mut group,
+            slot,
+            i as u32,
+            &TakeContent::Midi {
+                notes: vec![resonance_common::TakeNote {
+                    note: 60 + i as u8,
+                    velocity: 0.8,
+                    start_tick: 0,
+                    duration_ticks: 480,
+                }],
+            },
+        );
+    }
+    group
+}
+
+/// The reported bug, in allocator terms: a project whose timeline clips
+/// stop at 5 but whose takes hold `clip_ref` 100..102 must not reopen with
+/// `next_clip_id = 6`. It did, and the next recording or import wrote
+/// `audio/clip_100.wav` — the file a restored take was still playing.
+#[test]
+fn restoring_reserves_clip_ids_past_the_highest_take_clip_ref() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+
+    // Where a load leaves the clip allocator before the takes arrive:
+    // `ClearAll` reset it to 1 and the timeline clips (ids 1..=5) each
+    // bumped it through `LoadClipFromWav`.
+    let mut next_clip = 6u64;
+
+    // `saved_group` numbers its takes' clips `id * 100 + pass`, so group 1
+    // holds 100..102 — well past anything on the timeline.
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 3)],
+    );
+
+    assert_eq!(
+        next_clip, 103,
+        "the clip allocator must clear every restored take's clip_ref"
+    );
+
+    // Spelled out as the acceptance case: the id the engine hands the next
+    // recording (`state.next_clip_id`, then `+= 1`) collides with no take.
+    let issued = next_clip;
+    let held: Vec<u64> = store
+        .values()
+        .flat_map(|g| g.takes.iter())
+        .filter_map(|t| match t.content {
+            TakeContent::Audio { clip_ref } => Some(clip_ref),
+            TakeContent::Midi { .. } => None,
+        })
+        .collect();
+    assert_eq!(held, vec![100, 101, 102], "precondition: high take clip_refs");
+    assert!(
+        !held.contains(&issued),
+        "the next clip id ({issued}) must not name a WAV a take still plays"
+    );
+}
+
+/// The bump clears the highest `clip_ref` anywhere in the project, not
+/// merely the last group's or the last take's — the groups arrive in
+/// whatever order the file lists them.
+#[test]
+fn restoring_reserves_past_the_highest_clip_ref_in_any_group() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+    let mut next_clip = 1u64;
+
+    // Group 9 holds the highest clip_refs (900, 901) but is not last.
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 2), saved_group(9, 8, 2), saved_group(4, 9, 1)],
+    );
+
+    assert_eq!(
+        next_clip, 902,
+        "reserving from the last group visited leaves earlier groups' clips exposed"
+    );
+}
+
+/// The clip bump only ever raises, exactly like the group bump. A
+/// low-numbered project loaded into a session that has already recorded
+/// must not drag the allocator back onto ids that session issued — those
+/// WAVs are on disk and referenced too.
+#[test]
+fn restoring_never_lowers_the_clip_allocator() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+    let mut next_clip = 500u64;
+
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 3)],
+    );
+
+    assert_eq!(
+        next_clip, 500,
+        "a restored clip_ref below the allocator must not rewind it"
+    );
+}
+
+/// A take-lane-free project (and File > New) leaves the allocator where it
+/// was; the restore reserves what it is given and invents nothing.
+#[test]
+fn restoring_an_empty_project_leaves_the_clip_allocator_alone() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+    let mut next_clip = 6u64;
+
+    restore_take_groups_in_place(&mut store, &mut next, &mut next_clip, Vec::new());
+
+    assert_eq!(next_clip, 6, "nothing restored, nothing to reserve");
+}
+
+/// **MIDI takes need no reservation.** `TakeContent::Midi` carries its
+/// notes inline — it names no clip and writes no WAV, and the MIDI half of
+/// `finalize_loop_record_pass` never touches `next_clip_id`. Pinned rather
+/// than assumed, because the audio and MIDI capture paths sit side by side
+/// and only one of them owns a file.
+#[test]
+fn a_midi_only_project_reserves_no_clip_ids() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+    let mut next_clip = 6u64;
+
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_midi_group(1, 7, 3), saved_midi_group(2, 8, 2)],
+    );
+
+    assert_eq!(store.len(), 2, "precondition: the MIDI groups did restore");
+    assert_eq!(
+        next_clip, 6,
+        "a MIDI take owns no clip id, so it must not consume one"
+    );
+    assert_eq!(next, 3, "group ids are still reserved for MIDI lanes");
+}
+
+/// A track armed for both — or a project mixing audio and instrument lanes
+/// — reserves off the audio takes and steps over the MIDI ones without
+/// tripping.
+#[test]
+fn a_mixed_project_reserves_off_its_audio_takes_only() {
+    let mut store = HashMap::new();
+    let mut next = 1u64;
+    let mut next_clip = 1u64;
+
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_midi_group(1, 7, 2), saved_group(3, 8, 2)],
+    );
+
+    assert_eq!(
+        next_clip, 302,
+        "the audio group's clip_refs (300, 301) still have to be cleared"
+    );
 }
