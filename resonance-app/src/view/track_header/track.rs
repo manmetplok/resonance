@@ -221,10 +221,14 @@ pub(crate) fn view_track_header(
             row![
                 crate::view::controls::collapse_caret(take_lane_expanded),
                 Space::new().width(2),
-                text(format!("{take_count} takes"))
-                    .size(9)
-                    .font(theme::MONO_FONT)
-                    .color(theme::TEXT_3),
+                text(if take_count == 1 {
+                    "1 take".to_string()
+                } else {
+                    format!("{take_count} takes")
+                })
+                .size(9)
+                .font(theme::MONO_FONT)
+                .color(theme::TEXT_3),
                 Space::new().width(6),
             ]
             .align_y(alignment::Vertical::Center),

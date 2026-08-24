@@ -548,6 +548,11 @@ impl<'a> TimelineCanvas<'a> {
             for take in &group.takes {
                 take.id.hash(&mut take_h);
                 take.pass_index.hash(&mut take_h);
+                // `captured_at` is the key `effective_cover` sorts on to
+                // pick the latest take, so two groups differing only in
+                // capture order resolve to different covers and must not
+                // share a fingerprint.
+                take.captured_at.hash(&mut take_h);
                 match &take.content {
                     resonance_common::TakeContent::Audio { clip_ref } => {
                         0u8.hash(&mut take_h);
@@ -569,6 +574,21 @@ impl<'a> TimelineCanvas<'a> {
                 seg.range.hash(&mut take_h);
             }
         }
+        // Takes whose recorded WAV was absent at load (todo #412) draw the
+        // hatched missing-media card instead of a waveform, so relinking
+        // one has to repaint. Order-independent fold: a `HashSet` has no
+        // stable iteration order.
+        let missing_fold = self
+            .take_groups
+            .missing_takes
+            .iter()
+            .fold(self.take_groups.missing_takes.len() as u64, |acc, (g, t)| {
+                acc ^ g
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .rotate_left(17)
+                    .wrapping_add(*t)
+            });
+        missing_fold.hash(&mut take_h);
         let takes_hash = take_h.finish();
 
         // Order-independent fold over the take-lane-expanded set, with the

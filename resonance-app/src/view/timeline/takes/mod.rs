@@ -25,6 +25,6 @@ mod draw;
 pub mod geometry;
 
 pub use geometry::{
-    comp_ribbon_band, effective_cover, take_card_band, take_label, unlit_ranges, CoverSource,
-    CoverSpan,
+    audible_extent, comp_ribbon_band, effective_cover, silent_ranges, take_card_band, take_label,
+    unlit_ranges, CoverSource, CoverSpan,
 };

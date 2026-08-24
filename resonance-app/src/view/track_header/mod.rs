@@ -206,6 +206,9 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         for t in &g.takes {
             t.id.hash(&mut h);
             t.pass_index.hash(&mut h);
+            // The role chip comes from `effective_cover`, which picks the
+            // latest take by `captured_at` — so it belongs in the key too.
+            t.captured_at.hash(&mut h);
         }
         for seg in &g.comp.segments {
             seg.take_id.hash(&mut h);

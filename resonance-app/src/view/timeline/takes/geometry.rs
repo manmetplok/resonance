@@ -38,13 +38,36 @@ pub struct CoverSpan {
 /// The take that plays over each part of `group`'s slot — an ordered,
 /// gap-free cover, so every point of the slot maps to exactly one take.
 ///
-/// Mirrors the engine's resolution order (design doc #165 / todo #409's
-/// `build_comp_table`): **active take → comp segment → latest take**. The
-/// fallback matters: a group whose comp is still empty is not silent, it
-/// plays its newest pass, and a lane that drew it as "nothing promoted"
-/// would be lying about what the user hears. Spans carry their
-/// [`CoverSource`] so the ribbon can distinguish a deliberate promotion
-/// from that fallback.
+/// Resolution order (design doc #165): **active take → comp segment →
+/// latest take**. The last tier matters: a group whose comp is still empty
+/// is not silent, it plays its newest pass, and a lane that drew that as
+/// "nothing promoted" would be lying about what the user hears. Spans carry
+/// their [`CoverSource`] so the ribbon can distinguish a deliberate
+/// promotion from that fallback.
+///
+/// # PROVISIONAL — superseded by todo #1395
+///
+/// This is **not** currently a mirror of the engine, and the difference is
+/// visible the moment a comp has any segment at all. Todo #409's
+/// `take_comp::resolve_spans` reaches its latest-take tier only when
+/// `comp.segments` is *completely empty*; with one segment present it emits
+/// that segment alone and plays **silence** either side of it. This
+/// function fills those gaps unconditionally. "Latest" also differs: the
+/// engine takes the last *audio* take in vector order, this takes
+/// `max_by_key((captured_at, pass_index, id))` across all takes.
+///
+/// The user has ruled on the semantics, and it is the behaviour here that
+/// ships: **the latest take fills the gaps** — promote one phrase and you
+/// hear the most recent pass everywhere else, so a comp is a complete part
+/// from its first gesture rather than a hole with one island in it. The
+/// engine is what changes.
+///
+/// Todo **#1395** lands that as a single shared definition in
+/// `resonance-common` (a `Comp::promote` that seeds a full cover, one
+/// `latest_take`, one cover resolution) which both this lane and the mixer
+/// call. Until then this function is the app's own reading — do not "fix"
+/// it towards `resolve_spans`, and do not build a second copy of the
+/// tiering anywhere else.
 ///
 /// Returns an empty vector for an empty slot or a group with no takes.
 /// Segments outside the slot are ignored, and a segment overhanging an edge
@@ -66,10 +89,11 @@ pub fn effective_cover(group: &TakeGroup) -> Vec<CoverSpan> {
     }
 
     // Fallback take for anything the comp leaves uncovered: the most
-    // recent pass, matching the engine's "latest take" tier. `captured_at`
-    // is the primary key (it is what "latest" means), with `pass_index`
-    // and id as deterministic tie-breaks for takes captured inside the same
-    // millisecond.
+    // recent pass. `captured_at` is the primary key (it is what "latest"
+    // means), with `pass_index` and id as deterministic tie-breaks for
+    // takes captured inside the same millisecond. See the PROVISIONAL note
+    // above — the engine picks its latest differently, and #1395 collapses
+    // the two into one shared definition.
     let Some(latest) = group
         .takes
         .iter()
@@ -142,6 +166,49 @@ pub fn unlit_ranges(cover: &[CoverSpan], slot: TimelineRange, take_id: TakeId) -
     }
     if cursor < slot.end() {
         out.push(TimelineRange::from_bounds(cursor, slot.end()));
+    }
+    out
+}
+
+/// Where a take actually carries audio inside its group's `slot`: the
+/// intersection of the slot with its recorded clip's extent, or `None` when
+/// the two do not overlap at all.
+///
+/// A take does **not** necessarily fill its lane. `finalize_loop_record_pass`
+/// starts pass 0's clip at the punch-in point rather than at the loop start,
+/// and any pass cut short at stop ends before the slot does — so the clip's
+/// `[start, start + length)` can sit strictly inside the slot at either end.
+/// Todo #409 made the engine intersect exactly this way before reading a
+/// take (`take_comp::mix_track_comp`); the lane has to draw the same
+/// intersection or a punched-in take renders as a full-width, stretched
+/// waveform that claims audio where the engine plays none.
+///
+/// `clip_start` / `clip_len` are the clip's *audible* (post-trim) extent —
+/// `ClipState::start_sample` and `ClipState::duration_samples`.
+pub fn audible_extent(
+    slot: TimelineRange,
+    clip_start: u64,
+    clip_len: u64,
+) -> Option<TimelineRange> {
+    let start = slot.start.max(clip_start);
+    let end = slot.end().min(clip_start.saturating_add(clip_len));
+    (end > start).then(|| TimelineRange::from_bounds(start, end))
+}
+
+/// The sub-ranges of `slot` that `audible` leaves uncovered — where a take
+/// row shows the "no audio here" flat line instead of a waveform. `None`
+/// means the take carries nothing anywhere in the slot, so the whole slot is
+/// the remainder.
+pub fn silent_ranges(slot: TimelineRange, audible: Option<TimelineRange>) -> Vec<TimelineRange> {
+    let Some(audible) = audible else {
+        return if slot.is_empty() { Vec::new() } else { vec![slot] };
+    };
+    let mut out = Vec::new();
+    if audible.start > slot.start {
+        out.push(TimelineRange::from_bounds(slot.start, audible.start));
+    }
+    if audible.end() < slot.end() {
+        out.push(TimelineRange::from_bounds(audible.end(), slot.end()));
     }
     out
 }

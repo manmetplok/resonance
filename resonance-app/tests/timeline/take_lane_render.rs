@@ -8,16 +8,22 @@
 //!   lane no matter how many record runs produced it (the ruling behind
 //!   todo #1392); a track recorded over two different loop regions gets two
 //!   contiguous stacks that never interleave;
-//! * the **effective cover** the lane draws from — the engine's resolution
-//!   order `active take → comp segment → latest take`, which is gap-free by
-//!   construction, so every point of the slot maps to exactly one take;
+//! * the **effective cover** the lane draws from — `active take → comp
+//!   segment → latest take`, gap-free by construction, so every point of
+//!   the slot maps to exactly one take (its last tier is the *ruled*
+//!   behaviour, which the engine adopts in todo #1395 — see
+//!   `effective_cover`'s doc comment);
+//! * the **audible extent** — a take does not necessarily fill its lane, so
+//!   the waveform is anchored to the take's clip and the remainder of the
+//!   lane draws a flat "no audio here" line;
 //! * the expand / collapse affordance and the arrange rows it adds;
 //! * the canvas cache fingerprint reacting to captures, comp edits, active
 //!   take changes and the fold toggle;
-//! * six golden snapshots, each pinning a *distinct* state: a folded lane's
-//!   ribbon, the expanded stack under a two-take comp, an active (soloed)
-//!   take, an empty comp falling back to the latest pass, a MIDI stack, and
-//!   the missing-`clip_ref` degradation.
+//! * seven golden snapshots, each pinning a *distinct* state: a folded
+//!   lane's ribbon, the expanded stack under a two-take comp, an active
+//!   (soloed) take, an empty comp falling back to the latest pass, a punched
+//!   -in take shorter than its lane, a MIDI stack, and the
+//!   missing-`clip_ref` degradation.
 
 use crate::common;
 
@@ -26,7 +32,9 @@ use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage, ViewportMessage};
 use resonance_app::state::{ClipState, ViewMode};
 use resonance_app::view::arrange_layout::ArrangeRowKind;
-use resonance_app::view::timeline::takes::{effective_cover, unlit_ranges, CoverSource};
+use resonance_app::view::timeline::takes::{
+    audible_extent, effective_cover, silent_ranges, unlit_ranges, CoverSource,
+};
 use resonance_app::{demo, theme, Resonance};
 use resonance_audio::types::{AudioEvent, FadeCurve};
 use resonance_common::{
@@ -93,14 +101,25 @@ fn at(app: &Resonance, seconds: u64) -> u64 {
     slot(app).start + seconds * app.sample_rate as u64
 }
 
-/// Push the recorded clip an audio take references. Each take gets a
-/// visibly different waveform (a different number of swells) so the stacked
-/// cards can never be confused for one another in a golden.
-fn push_take_clip(app: &mut Resonance, pass_index: u32) {
-    let sr = app.sample_rate as u64;
-    let peaks: Vec<(f32, f32)> = (0..256)
+/// Push the recorded clip an audio take references, spanning `extent` of
+/// the timeline.
+///
+/// The clip is anchored at a real timeline position, exactly as
+/// `finalize_loop_record_pass` writes it: pass 0 starts at the punch-in
+/// point and a pass cut short at stop ends before its slot does, so a take
+/// clip is *not* interchangeable with its slot. The peak table is sized to
+/// the clip's own length, since the lane indexes peaks by clip frame rather
+/// than by card fraction.
+///
+/// Each take gets a visibly different waveform (a different number of
+/// swells) so the stacked cards can never be confused for one another in a
+/// golden.
+fn push_take_clip_over(app: &mut Resonance, pass_index: u32, extent: TimelineRange) {
+    let peak_count =
+        (extent.length as usize).div_ceil(resonance_audio::types::WAVEFORM_PEAK_FRAMES);
+    let peaks: Vec<(f32, f32)> = (0..peak_count)
         .map(|i| {
-            let t = i as f32 / 256.0;
+            let t = i as f32 / peak_count.max(1) as f32;
             // Deterministic, no trig-on-float-input drift: a triangular
             // envelope repeated `pass_index + 2` times.
             let cycles = (pass_index + 2) as f32;
@@ -112,10 +131,10 @@ fn push_take_clip(app: &mut Resonance, pass_index: u32) {
     app.test_push_clip(ClipState {
         id: TAKE_CLIP_BASE + u64::from(pass_index),
         track_id: RECORDING_TRACK,
-        start_sample: 0,
-        duration_samples: 5 * sr,
+        start_sample: extent.start,
+        duration_samples: extent.length,
         name: format!("take {pass_index}"),
-        total_frames: 5 * sr,
+        total_frames: extent.length,
         trim_start_frames: 0,
         trim_end_frames: 0,
         fade_in_frames: 0,
@@ -129,22 +148,35 @@ fn push_take_clip(app: &mut Resonance, pass_index: u32) {
     });
 }
 
+/// A take clip filling its whole slot — the ordinary cycle-record pass.
+fn push_take_clip(app: &mut Resonance, pass_index: u32) {
+    push_take_clip_over(app, pass_index, slot(app));
+}
+
 /// Capture `passes` audio loop passes into `GROUP` through the real engine
-/// dispatch, backing each with a resolvable clip.
+/// dispatch, backing each with a resolvable clip that fills the slot.
 fn capture_audio_passes(app: &mut Resonance, passes: u32) {
-    let slot = slot(app);
     for pass_index in 0..passes {
         push_take_clip(app, pass_index);
-        app.test_apply_engine_event(AudioEvent::TakeCaptured {
-            group_id: GROUP,
-            track_id: AUDIO_TRACK,
-            slot,
-            pass_index,
-            content: TakeContent::Audio {
-                clip_ref: TAKE_CLIP_BASE + u64::from(pass_index),
-            },
-        });
+        capture_audio_pass(app, pass_index);
     }
+}
+
+/// Drive one `TakeCaptured` for `pass_index` through the real dispatch. The
+/// engine assigns take ids per group (#409); mirroring `pass_index` keeps
+/// the ids readable in assertions.
+fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
+    let slot = slot(app);
+    app.test_apply_engine_event(AudioEvent::TakeCaptured {
+        group_id: GROUP,
+        take_id: u64::from(pass_index),
+        track_id: AUDIO_TRACK,
+        slot,
+        pass_index,
+        content: TakeContent::Audio {
+            clip_ref: TAKE_CLIP_BASE + u64::from(pass_index),
+        },
+    });
 }
 
 /// Capture `passes` MIDI loop passes into `GROUP` on the instrument track.
@@ -163,6 +195,7 @@ fn capture_midi_passes(app: &mut Resonance, passes: u32) {
             .collect();
         app.test_apply_engine_event(AudioEvent::TakeCaptured {
             group_id: GROUP,
+            take_id: u64::from(pass_index),
             track_id: MIDI_TRACK,
             slot,
             pass_index,
@@ -225,18 +258,9 @@ fn passes_from_separate_record_runs_stack_into_one_lane() {
     capture_audio_passes(&mut app, 3);
     // ...transport stopped here, and the user hit record again over the
     // same loop region. Post-#1392 the engine reuses the group id.
-    let slot = slot(&app);
     for pass_index in 3..5 {
         push_take_clip(&mut app, pass_index);
-        app.test_apply_engine_event(AudioEvent::TakeCaptured {
-            group_id: GROUP,
-            track_id: AUDIO_TRACK,
-            slot,
-            pass_index,
-            content: TakeContent::Audio {
-                clip_ref: TAKE_CLIP_BASE + u64::from(pass_index),
-            },
-        });
+        capture_audio_pass(&mut app, pass_index);
     }
     toggle_lane(&mut app, AUDIO_TRACK);
 
@@ -266,6 +290,7 @@ fn two_slots_on_one_track_give_two_contiguous_stacks() {
         for pass_index in 0..2u32 {
             app.test_apply_engine_event(AudioEvent::TakeCaptured {
                 group_id,
+                take_id: u64::from(pass_index),
                 track_id: AUDIO_TRACK,
                 slot,
                 pass_index,
@@ -338,12 +363,23 @@ fn comp_segments_cover_the_slot_gap_free() {
     assert_cover_is_a_gap_free_cover(&app);
 }
 
-/// A *partial* comp is the interesting case: the promoted span stays a
-/// promotion, and the uncovered remainder falls back to the latest take —
-/// the lane must not draw a hole where the engine will happily play
-/// something.
+/// A *partial* comp: the promoted span stays a promotion, and the
+/// uncovered remainder falls back to the latest take.
+///
+/// **This pins the ruled behaviour, not a mirror of today's engine.** Todo
+/// #409's `resolve_spans` reaches its latest-take tier only when the comp
+/// is *completely empty* — with one segment present it plays that segment
+/// and silence either side. The user has ruled that the latest take fills
+/// the gaps, so that a comp is a complete part from its very first
+/// promotion rather than one island in a hole, and it is this lane's
+/// behaviour that ships. Todo **#1395** moves the tiering into
+/// `resonance-common` as one definition both layers call, which is what
+/// makes the engine agree.
+///
+/// If #1395 changes what "latest" means, this test changes with it — but
+/// do not "fix" it towards `resolve_spans` in the meantime.
 #[test]
-fn partial_comp_fills_its_gaps_with_the_latest_take() {
+fn partial_comp_fills_its_gaps_with_the_latest_take_pending_1395() {
     let mut app = build_app();
     capture_audio_passes(&mut app, 3);
     let (from, to) = (at(&app, 1), at(&app, 3));
@@ -368,6 +404,120 @@ fn partial_comp_fills_its_gaps_with_the_latest_take() {
         ]
     );
     assert_cover_is_a_gap_free_cover(&app);
+}
+
+// ---------------------------------------------------------------------
+// Audible extent — a take does not necessarily fill its lane
+// ---------------------------------------------------------------------
+
+/// A pass that punched in late, or was cut short at stop, carries audio
+/// over only part of its slot. The lane must draw the intersection, so the
+/// waveform stays anchored where the audio really is instead of being
+/// stretched across the whole lane.
+///
+/// This is the same intersection todo #409 made `mix_track_comp` take
+/// before reading a take clip; drawing a different one would claim audio
+/// where the engine renders silence.
+#[test]
+fn a_takes_audible_extent_is_its_clip_intersected_with_the_slot() {
+    let app = build_app();
+    let slot = slot(&app);
+    let sr = app.sample_rate as u64;
+
+    // Punched in one second after the loop start, running to the slot end.
+    assert_eq!(
+        audible_extent(slot, slot.start + sr, 4 * sr),
+        Some(TimelineRange::from_bounds(slot.start + sr, slot.end())),
+        "a punch-in take starts where its clip does, not where the lane does"
+    );
+    // Cut short at stop, one second before the slot ends.
+    assert_eq!(
+        audible_extent(slot, slot.start, 4 * sr),
+        Some(TimelineRange::from_bounds(slot.start, slot.end() - sr)),
+    );
+    // A clip overhanging both ends is clamped back to the lane.
+    assert_eq!(
+        audible_extent(slot, 0, 20 * sr),
+        Some(slot),
+        "the lane bounds what can be drawn"
+    );
+    // No overlap at all: nothing to draw.
+    assert_eq!(audible_extent(slot, slot.end() + sr, sr), None);
+    assert_eq!(audible_extent(slot, 0, sr), None);
+}
+
+/// `silent_ranges` is the complement of the audible extent within the slot
+/// — where the row draws its flat "no audio here" line.
+#[test]
+fn silent_ranges_are_the_remainder_of_the_lane() {
+    let app = build_app();
+    let slot = slot(&app);
+    let sr = app.sample_rate as u64;
+
+    let punched_in = audible_extent(slot, slot.start + sr, 4 * sr);
+    assert_eq!(
+        silent_ranges(slot, punched_in),
+        vec![TimelineRange::from_bounds(slot.start, slot.start + sr)],
+        "the lane leads in silent up to the punch-in"
+    );
+
+    let cut_short = audible_extent(slot, slot.start, 4 * sr);
+    assert_eq!(
+        silent_ranges(slot, cut_short),
+        vec![TimelineRange::from_bounds(slot.end() - sr, slot.end())],
+    );
+
+    assert!(
+        silent_ranges(slot, Some(slot)).is_empty(),
+        "a take filling its lane has no remainder"
+    );
+    assert_eq!(
+        silent_ranges(slot, None),
+        vec![slot],
+        "a take with no audio anywhere is silent across the whole lane"
+    );
+}
+
+/// The audible extent is a *drawing* fact, not a comp fact: promoting a
+/// take over a stretch it never recorded still puts that take in the cover
+/// (the engine renders silence there, and the lane shows a lit lane with
+/// the flat line under it). The two must not be conflated.
+#[test]
+fn a_short_take_can_still_be_comped_across_the_whole_slot() {
+    let mut app = build_app();
+    let sr = app.sample_rate as u64;
+    let slot = slot(&app);
+    push_take_clip_over(
+        &mut app,
+        0,
+        TimelineRange::from_bounds(slot.start + sr, slot.end()),
+    );
+    capture_audio_pass(&mut app, 0);
+    set_comp(
+        &mut app,
+        vec![CompSegment {
+            range: slot,
+            take_id: 0,
+        }],
+    );
+
+    let cover = effective_cover(group_of(&app, GROUP));
+    assert_eq!(cover.len(), 1);
+    assert_eq!(cover[0].range, slot, "the comp still addresses the whole slot");
+    assert!(
+        unlit_ranges(&cover, slot, 0).is_empty(),
+        "nothing is scrimmed: the comp selects this take throughout"
+    );
+    // ...while only part of the lane can actually sound.
+    let clip = app
+        .test_clips()
+        .iter()
+        .find(|c| c.id == TAKE_CLIP_BASE)
+        .expect("take clip");
+    assert_eq!(
+        audible_extent(slot, clip.start_sample, clip.duration_samples),
+        Some(TimelineRange::from_bounds(slot.start + sr, slot.end())),
+    );
 }
 
 /// The active take overrides the comp entirely — one span, whole slot,
@@ -696,6 +846,46 @@ fn empty_comp_snapshot() {
     snapshot_to(&app, "tests/snapshots/take_lane_empty_comp.png");
 }
 
+/// **A take shorter than its lane.** Pass 0 punched in a second after the
+/// loop start; pass 1 ran the whole slot. The comp promotes pass 0 across
+/// the *entire* slot, which is a real state the engine renders as silence
+/// over that first second — so the golden must show T1's waveform anchored
+/// where its audio starts, a flat "no audio" line before it under a fully
+/// lit lane, and the untouched pass 1 scrimmed below. Rendering this as a
+/// full-width stretched waveform (the pre-review behaviour) would claim
+/// audio the engine never plays.
+#[test]
+fn punched_in_take_snapshot() {
+    let mut app = build_app();
+    let sr = app.sample_rate as u64;
+    let slot = slot(&app);
+    push_take_clip_over(
+        &mut app,
+        0,
+        TimelineRange::from_bounds(slot.start + sr, slot.end()),
+    );
+    capture_audio_pass(&mut app, 0);
+    push_take_clip(&mut app, 1);
+    capture_audio_pass(&mut app, 1);
+    set_comp(
+        &mut app,
+        vec![CompSegment {
+            range: slot,
+            take_id: 0,
+        }],
+    );
+    toggle_lane(&mut app, AUDIO_TRACK);
+    assert_eq!(take_rows(&app).len(), 2);
+    // The state under test: lit throughout, audible only after the punch-in.
+    let cover = effective_cover(group_of(&app, GROUP));
+    assert!(unlit_ranges(&cover, slot, 0).is_empty());
+    assert_eq!(
+        silent_ranges(slot, audible_extent(slot, slot.start + sr, 4 * sr)),
+        vec![TimelineRange::from_bounds(slot.start, slot.start + sr)],
+    );
+    snapshot_to(&app, "tests/snapshots/take_lane_punched_in_take.png");
+}
+
 /// **MIDI takes.** The instrument track's stack draws note blocks instead
 /// of waveforms, in the lavender MIDI language. The comp promotes T2 over
 /// the first half and T1 over the second, so the two lit regions sit on
@@ -736,18 +926,11 @@ fn missing_media_snapshot() {
     let mut app = build_app();
     let slot = slot(&app);
     push_take_clip(&mut app, 0);
-    app.test_apply_engine_event(AudioEvent::TakeCaptured {
-        group_id: GROUP,
-        track_id: AUDIO_TRACK,
-        slot,
-        pass_index: 0,
-        content: TakeContent::Audio {
-            clip_ref: TAKE_CLIP_BASE,
-        },
-    });
+    capture_audio_pass(&mut app, 0);
     // No `push_take_clip` for this one: the recording is gone.
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id: GROUP,
+        take_id: 1,
         track_id: AUDIO_TRACK,
         slot,
         pass_index: 1,

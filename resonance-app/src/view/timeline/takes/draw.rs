@@ -31,7 +31,8 @@ use crate::view::arrange_layout::ArrangeRowLayout;
 
 use super::super::TimelineCanvas;
 use super::geometry::{
-    comp_ribbon_band, effective_cover, take_card_band, take_label, unlit_ranges, CoverSource,
+    audible_extent, comp_ribbon_band, effective_cover, silent_ranges, take_card_band, take_label,
+    unlit_ranges, CoverSource,
 };
 
 /// Minimum span width, in px, that still gets its `T{n}` label. Narrower
@@ -217,21 +218,75 @@ impl TimelineCanvas<'_> {
     }
 
     /// One take's card: content silhouette, comp lighting, edge and tag.
+    ///
+    /// `slot_rect` is the lane the take occupies. The card itself is drawn
+    /// over the take's **audible extent** inside that lane, which for an
+    /// audio take is its clip's real span (see
+    /// [`audible_extent`]) — a pass that punched in late, or was cut short
+    /// at stop, gets a shorter card and a "no audio" flat line over the
+    /// remainder, rather than a full-width waveform stretched to fit.
     fn draw_take_card(
         &self,
         frame: &mut canvas::Frame,
         group: &TakeGroup,
         take: &resonance_common::Take,
         cover: &[super::geometry::CoverSpan],
-        card: Rectangle,
+        slot_rect: Rectangle,
     ) {
-        let (x, y, w, h) = (card.x, card.y, card.width, card.height);
+        let (y, h) = (slot_rect.y, slot_rect.height);
         let is_active = group.active_take == Some(take.id);
         let clip = match &take.content {
             TakeContent::Audio { clip_ref } => self.take_clip(*clip_ref),
             TakeContent::Midi { .. } => None,
         };
-        let missing = matches!(take.content, TakeContent::Audio { .. }) && clip.is_none();
+        // An audio take is "missing" when its recording is not on this
+        // machine — either the app never mirrored a clip for it, or the
+        // project load flagged the WAV as absent (todo #412's
+        // `missing_takes`, which keeps the take in the comp rather than
+        // silently punching a hole in the cover).
+        let missing = matches!(take.content, TakeContent::Audio { .. })
+            && (clip.is_none() || self.take_groups.is_missing(group.id, take.id));
+
+        // Where this take really carries audio. A MIDI take has no clip to
+        // intersect with — its notes are its extent — and a take whose
+        // media is missing keeps its full lane so the degradation is
+        // visible across the whole span the comp may use.
+        let audible = match (&take.content, clip, missing) {
+            (TakeContent::Audio { .. }, Some(clip), false) => audible_extent(
+                group.slot,
+                clip.start_sample,
+                clip.duration_samples,
+            ),
+            _ => Some(group.slot),
+        };
+
+        // ---- "No audio here" ----
+        // The parts of the lane the take does not reach. Drawn before the
+        // card so the card's rounded edge sits on top of the recess.
+        for range in silent_ranges(group.slot, audible) {
+            if let Some((x0, x1)) = self.sub_span(range, slot_rect) {
+                frame.fill_rectangle(
+                    Point::new(x0, y),
+                    Size::new(x1 - x0, h),
+                    Color {
+                        a: 0.35,
+                        ..theme::BG_0
+                    },
+                );
+            }
+        }
+
+        // A take whose clip does not overlap its own slot at all (or whose
+        // overlap is sub-pixel) has no card: the flat line is the whole
+        // story.
+        let card_span = audible.and_then(|a| self.sub_span(a, slot_rect));
+        let Some((x0, x1)) = card_span else {
+            self.draw_silence_rule(frame, group.slot, slot_rect, None);
+            self.draw_take_tag(frame, take, is_active, slot_rect.x, y);
+            return;
+        };
+        let audible = audible.expect("card_span is Some only when audible is");
+        let (x, w) = (x0, x1 - x0);
 
         // ---- Body: audio warm / MIDI lavender / missing-media pink ----
         let path = canvas::Path::rounded_rectangle(
@@ -257,36 +312,45 @@ impl TimelineCanvas<'_> {
             },
         );
 
-        match &take.content {
-            TakeContent::Audio { .. } => match clip {
-                Some(clip) => self.draw_take_waveform(frame, clip, x, y, w, h),
-                // The degenerate case the design calls out: the take's
-                // recorded clip is gone (relink pending, project moved).
-                // Hatch + a `BAD` label, never a silently empty card that
-                // would read as "nothing was recorded here".
-                None => {
-                    draw_hatch(frame, x, y, w, h);
-                    frame.fill_text(canvas::Text {
-                        content: "media missing".to_string(),
-                        position: Point::new(x + 26.0, y + h * 0.5 - 5.0),
-                        color: theme::BAD,
-                        size: 9.0.into(),
-                        ..canvas::Text::default()
-                    });
+        match (&take.content, missing) {
+            // The degenerate case the design calls out: the take's
+            // recorded clip is gone (relink pending, project moved, or
+            // #412 flagged the WAV absent at load). Hatch + a `BAD` label,
+            // never a silently empty card that would read as "nothing was
+            // recorded here".
+            (TakeContent::Audio { .. }, true) => {
+                draw_hatch(frame, x, y, w, h);
+                frame.fill_text(canvas::Text {
+                    content: "media missing".to_string(),
+                    position: Point::new(x + 26.0, y + h * 0.5 - 5.0),
+                    color: theme::BAD,
+                    size: 9.0.into(),
+                    ..canvas::Text::default()
+                });
+            }
+            (TakeContent::Audio { .. }, false) => {
+                if let Some(clip) = clip {
+                    self.draw_take_waveform(frame, clip, audible, x, y, w, h);
                 }
-            },
-            TakeContent::Midi { notes } => {
+            }
+            (TakeContent::Midi { notes }, _) => {
                 self.draw_take_notes(frame, notes, group.slot, x, y, w, h)
             }
         }
 
         // ---- Comp lighting ----
+        // The comp addresses the whole **slot**, not just the part of it
+        // this take can fill, so the lighting spans `slot_rect`: a segment
+        // promoted over a stretch where the take has no audio is a real
+        // state (the engine renders silence there) and the lane has to show
+        // it — lit lane, flat line under it.
+        //
         // Scrim everything this take is not audible over...
         for range in unlit_ranges(cover, group.slot, take.id) {
-            if let Some((x0, x1)) = self.sub_span(range, card) {
+            if let Some((sx0, sx1)) = self.sub_span(range, slot_rect) {
                 frame.fill_rectangle(
-                    Point::new(x0, y),
-                    Size::new(x1 - x0, h),
+                    Point::new(sx0, y),
+                    Size::new(sx1 - sx0, h),
                     Color {
                         a: 0.55,
                         ..theme::BG_0
@@ -297,13 +361,17 @@ impl TimelineCanvas<'_> {
         // ...and mark what it *is* audible over, in the same language the
         // ribbon uses, so the two read as one statement.
         for span in cover.iter().filter(|s| s.take_id == take.id) {
-            let Some((x0, x1)) = self.sub_span(span.range, card) else {
+            let Some((sx0, sx1)) = self.sub_span(span.range, slot_rect) else {
                 continue;
             };
             let (wash, rule) = lit_colors(span.source);
-            frame.fill_rectangle(Point::new(x0, y), Size::new(x1 - x0, h), wash);
-            frame.fill_rectangle(Point::new(x0, y), Size::new(x1 - x0, 2.0), rule);
+            frame.fill_rectangle(Point::new(sx0, y), Size::new(sx1 - sx0, h), wash);
+            frame.fill_rectangle(Point::new(sx0, y), Size::new(sx1 - sx0, 2.0), rule);
         }
+
+        // The flat line rides on top of the lighting so a lit-but-silent
+        // stretch still reads as silent.
+        self.draw_silence_rule(frame, group.slot, slot_rect, Some(audible));
 
         // ---- Edge ----
         // An active (soloed) take is ringed in warm amber — the palette's
@@ -316,7 +384,20 @@ impl TimelineCanvas<'_> {
                 .with_color(if is_active { theme::WARM } else { theme::LINE }),
         );
 
-        // ---- Take tag, top-left inside the card ----
+        // Tag at the take's own start, not the lane's, so a punch-in reads
+        // as "this take begins here".
+        self.draw_take_tag(frame, take, is_active, x, y);
+    }
+
+    /// The `T{n}` tag in a take card's top-left corner.
+    fn draw_take_tag(
+        &self,
+        frame: &mut canvas::Frame,
+        take: &resonance_common::Take,
+        is_active: bool,
+        x: f32,
+        y: f32,
+    ) {
         let mut tag = take_label(take.pass_index);
         if is_active {
             tag.push_str(" · SOLO");
@@ -328,6 +409,36 @@ impl TimelineCanvas<'_> {
             size: 9.0.into(),
             ..canvas::Text::default()
         });
+    }
+
+    /// The flat "no audio here" rule across the parts of the lane a take
+    /// does not reach — the zero-signal line a waveform lane draws when
+    /// there is nothing to draw. Needs no label: next to a waveform it is
+    /// unambiguous at any width.
+    fn draw_silence_rule(
+        &self,
+        frame: &mut canvas::Frame,
+        slot: TimelineRange,
+        slot_rect: Rectangle,
+        audible: Option<TimelineRange>,
+    ) {
+        for range in silent_ranges(slot, audible) {
+            let Some((x0, x1)) = self.sub_span(range, slot_rect) else {
+                continue;
+            };
+            // `TEXT_3` rather than a border token: this line has to stay
+            // legible over the *lit* wash too — a comp can promote a take
+            // across a stretch it never recorded, and that is exactly the
+            // case the line exists to disclose.
+            frame.fill_rectangle(
+                Point::new(x0, slot_rect.y + slot_rect.height * 0.5 - 0.5),
+                Size::new(x1 - x0, 1.0),
+                Color {
+                    a: 0.8,
+                    ..theme::TEXT_3
+                },
+            );
+        }
     }
 
     /// A sub-range of the slot as `(x0, x1)` clamped to `card`, or `None`
@@ -363,14 +474,25 @@ impl TimelineCanvas<'_> {
         self.clips.iter().find(|c| c.id == clip_ref)
     }
 
-    /// Take waveform: the referenced clip's peaks stretched across the
-    /// card. The card *is* the whole take, so the mapping is peak-index →
-    /// card fraction rather than the timeline-anchored mapping
-    /// `draw_clip_waveform` uses for a placed clip.
+    /// Take waveform, **anchored to the timeline** rather than stretched to
+    /// the card.
+    ///
+    /// Each pixel column resolves the frame it sits over, converts that to
+    /// a position inside the clip (`frame - clip.start_sample`, plus the
+    /// clip's trim), and reads the peak there — the same indexing
+    /// `draw_clip_waveform` uses for a placed clip. Mapping card-fraction →
+    /// peak-fraction instead would time-stretch every take that does not
+    /// exactly fill its slot: a pass that punched in a second late would
+    /// draw its audio a second early, and slower than it plays.
+    ///
+    /// `audible` is the timeline range the card covers, so column 0 of the
+    /// card is frame `audible.start`.
+    #[allow(clippy::too_many_arguments)]
     fn draw_take_waveform(
         &self,
         frame: &mut canvas::Frame,
         clip: &crate::state::ClipState,
+        audible: TimelineRange,
         x: f32,
         y: f32,
         w: f32,
@@ -386,13 +508,24 @@ impl TimelineCanvas<'_> {
             ..theme::WARM
         };
         let peaks = &clip.waveform_peaks;
+        let peak_frames = resonance_audio::types::WAVEFORM_PEAK_FRAMES as f64;
+        // Frames per pixel column at the current zoom.
+        let frames_per_px = self.sample_rate as f64 / self.zoom.max(f32::EPSILON) as f64;
+        // Where the card's first column sits inside the clip's own frames,
+        // including any trim the clip carries.
+        let head_frames =
+            audible.start.saturating_sub(clip.start_sample) + clip.trim_start_frames;
+
         // One bar per pixel column, clamped to the visible part of the card
         // so a long take off the left edge costs nothing.
         let start_px = (-x).max(0.0);
         let mut px = start_px;
         while px < w {
-            let idx = ((px / w) * peaks.len() as f32) as usize;
-            let Some((min_val, max_val)) = peaks.get(idx.min(peaks.len() - 1)).copied() else {
+            let clip_frame = head_frames as f64 + px as f64 * frames_per_px;
+            let idx = (clip_frame / peak_frames) as usize;
+            let Some((min_val, max_val)) = peaks.get(idx).copied() else {
+                // Ran past the end of the peak table: the rest of the card
+                // has no audio to show.
                 break;
             };
             let top = center - max_val.clamp(-1.0, 1.0) * half;
