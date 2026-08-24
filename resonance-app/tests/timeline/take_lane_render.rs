@@ -19,11 +19,17 @@
 //! * the expand / collapse affordance and the arrange rows it adds;
 //! * the canvas cache fingerprint reacting to captures, comp edits, active
 //!   take changes and the fold toggle;
-//! * seven golden snapshots, each pinning a *distinct* state: a folded
+//! * eight golden snapshots, each pinning a *distinct state* — though not
+//!   necessarily distinct pixels, see
+//!   [`a_flagged_take_degrades_even_though_its_clip_resolves`]: a folded
 //!   lane's ribbon, the expanded stack under a two-take comp, an active
 //!   (soloed) take, an empty comp falling back to the latest pass, a punched
-//!   -in take shorter than its lane, a MIDI stack, and the
-//!   missing-`clip_ref` degradation.
+//!   -in take shorter than its lane, a MIDI stack, and the two routes into
+//!   the missing-media degradation (an unresolvable `clip_ref`, and todo
+//!   #412's flag on a take whose clip still resolves).
+//!
+//! The comping *gestures* that sit on this surface are todo #414, covered
+//! in the sibling `take_lane_input` module.
 
 use crate::common;
 
@@ -764,6 +770,65 @@ fn fingerprint_tracks_captures_comp_edits_and_the_fold() {
         comped,
         "folding back restores the original fingerprint"
     );
+
+    // The `missing_takes` fold, the last of the hashed inputs. A take
+    // flagged at load time draws the hatched degradation instead of a
+    // waveform, so relinking one has to repaint — and the flag is held
+    // beside the groups rather than on the take, which is exactly why it
+    // needs its own term in the hash.
+    app.test_mark_take_missing(GROUP, 1);
+    assert_ne!(
+        app.test_timeline_fingerprint(),
+        comped,
+        "a take whose recording went missing repaints its card"
+    );
+}
+
+/// The other route into the missing-media state, and the one
+/// `missing_media_snapshot` cannot reach: todo #412's `missing_takes`
+/// flag on a take whose `clip_ref` still *resolves*.
+///
+/// A project load keeps a take whose WAV is absent and flags it rather
+/// than dropping it (dropping would leave a `CompSegment` pointing at a
+/// take id that no longer exists). The mirror can therefore hold a
+/// perfectly good `ClipState` for a take the lane must still degrade — so
+/// the card cannot key off the clip lookup alone.
+///
+/// # `take_lane_flagged_missing.png` is byte-identical to
+/// # `take_lane_missing_media.png`, and that is the point
+///
+/// The two goldens depict the same pixels because the two routes into
+/// "this take has no audio on this machine" — an unresolvable `clip_ref`
+/// and todo #412's `missing_takes` flag — **must** degrade identically:
+/// a user cannot be expected to know which of the two befell their take,
+/// and a difference would imply one is more recoverable than the other.
+/// It is not a copy-paste mistake, and the pair is still discriminating:
+/// `take_is_missing` ORs the two conditions, so dropping either arm
+/// leaves the other golden matching and this one showing a plain
+/// waveform. Deleting this test because "a golden already covers that
+/// image" would silently uncover the flag arm.
+#[test]
+fn a_flagged_take_degrades_even_though_its_clip_resolves() {
+    let mut app = build_app();
+    capture_audio_passes(&mut app, 2);
+    let clip_present = |app: &Resonance| {
+        app.test_clips()
+            .iter()
+            .any(|c| c.id == TAKE_CLIP_BASE + 1)
+    };
+    assert!(clip_present(&app), "the take's clip is mirrored...");
+    assert_eq!(app.test_missing_takes(), Vec::<(u64, u64)>::new());
+
+    app.test_mark_take_missing(GROUP, 1);
+    assert!(clip_present(&app), "...and stays mirrored while flagged");
+    assert_eq!(app.test_missing_takes(), vec![(GROUP, 1)]);
+    toggle_lane(&mut app, AUDIO_TRACK);
+    // T2 is flagged but T1 is not, so the golden shows the two treatments
+    // side by side — and T2 is *also* the take the empty comp falls back
+    // to, which is what makes hiding the degradation unacceptable.
+    let cover = effective_cover(group_of(&app, GROUP));
+    assert_eq!((cover[0].take_id, cover[0].source), (1, CoverSource::LatestFallback));
+    snapshot_to(&app, "tests/snapshots/take_lane_flagged_missing.png");
 }
 
 // ---------------------------------------------------------------------

@@ -19,7 +19,7 @@ use crate::message::*;
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
 use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
-use self::input::{BreakpointDrag, ClipInteraction, MarkerDrag, TempoDrag};
+use self::input::{BreakpointDrag, ClipInteraction, MarkerDrag, TakePromoteDrag, TempoDrag};
 
 use resonance_audio::types::{ClipId, TempoMap, TrackId};
 use resonance_common::AutomationTarget;
@@ -315,6 +315,10 @@ pub struct TimelineState {
     pub(super) selected_breakpoint: Option<(AutomationTarget, usize)>,
     /// Last breakpoint press, for double-click (curve-kind toggle) detection.
     pub(super) last_breakpoint_click: Option<(Instant, AutomationTarget, usize)>,
+    /// In-flight comping gesture on a take card (epic #15, todo #414).
+    /// Opened by the press, resolved by the release into either a solo
+    /// (click) or a promote (drag) — see [`TakePromoteDrag`].
+    pub(super) take_promote_drag: Option<TakePromoteDrag>,
     /// Active arrangement-marker drag (start move or region-edge resize).
     pub(super) marker_drag: Option<MarkerDrag>,
     /// Most recent click on a marker flag, for double-click (rename) detection.
@@ -699,7 +703,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         // Cache invalidation: re-runs the body only when our fingerprint
         // changes. Pure hover/sibling redraws hit the cached geometry.
@@ -717,7 +721,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             self.draw_into(frame, bounds);
         });
         let mut overlay = canvas::Frame::new(renderer, bounds.size());
-        self.draw_overlay_into(&mut overlay, bounds);
+        self.draw_overlay_into(&mut overlay, bounds, state, cursor);
         vec![cached, overlay.into_geometry()]
     }
 }
@@ -1085,7 +1089,13 @@ impl<'a> TimelineCanvas<'a> {
     /// playback / recording: the playhead line + tab, and the per-track
     /// recording overlay. Called from `Program::draw` on a fresh
     /// uncached `Frame` so these don't trigger cache invalidation.
-    fn draw_overlay_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
+    fn draw_overlay_into(
+        &self,
+        frame: &mut canvas::Frame,
+        bounds: Rectangle,
+        state: &TimelineState,
+        cursor: mouse::Cursor,
+    ) {
         let ruler_height = theme::RULER_HEIGHT;
         let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
@@ -1170,6 +1180,19 @@ impl<'a> TimelineCanvas<'a> {
         if let Some(drag) = self.drag {
             self.draw_drag_placement(frame, bounds, drag);
         }
+
+        // Take-lane comping affordances (epic #15, todo #414): the
+        // in-flight promote's preview band and the hover captions that
+        // say what a gesture is about to do. Uncached on purpose — they
+        // follow the pointer, while everything todo #413 draws in a take
+        // lane follows nothing and stays in the cached layer.
+        self.draw_take_interaction(
+            frame,
+            &layout,
+            bounds,
+            state.take_promote_drag.as_ref(),
+            cursor,
+        );
 
         // The ruler-height local is unused if neither overlay fires;
         // keep it so future overlay additions (e.g. selection brushes)
