@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use resonance_common::{
-    BindingId, CompSegment, ControllerMap, MidiBinding, MidiTarget, TakeGroupId, TakeId,
+    BindingId, CompSegment, ControllerMap, MidiBinding, MidiTarget, TakeGroup, TakeGroupId, TakeId,
 };
 
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
@@ -367,6 +367,46 @@ pub enum AudioCommand {
     SetActiveTake {
         group_id: TakeGroupId,
         take_id: Option<TakeId>,
+    },
+    /// Replace the engine's take-group store **wholesale** with `groups`,
+    /// republish the comp playback table, and raise the take-group id
+    /// allocator above every restored id.
+    ///
+    /// This is how a saved project's take lanes get back into the engine
+    /// (ba todo #1394). Take groups are born in the engine — cycle
+    /// recording calls `store_take` as each pass rolls — but a project
+    /// load has no capture to be born from, and until this command
+    /// existed nothing else wrote the store: the app restored its own
+    /// mirror, drew the lanes, and the engine rendered **silence** for a
+    /// comp the user could see. Doc #165 requires a comp to persist
+    /// across save/load, on playback *and* on bounce; both read the same
+    /// published table, so republishing here is what makes a loaded comp
+    /// audible without touching the transport.
+    ///
+    /// **Wholesale, not additive.** The two senders — a disk load and an
+    /// undo/redo diff replay — each rebuild the app-side mirror from
+    /// scratch and send the result, so replacing keeps engine and app
+    /// mirror identical by construction. Merging instead would resurrect
+    /// takes an undo had just deleted.
+    ///
+    /// **The allocator.** `next_take_group_id` is engine-thread-local and
+    /// starts at 1 each session; `loop_record_group_for` is its only
+    /// consumer. Without the high-water bump the first cycle-record run
+    /// after a load re-issued group id 1, and since `push_take` allocates
+    /// take ids *from the group*, that run's first take took id 0 —
+    /// silently replacing a restored take in the app's
+    /// `(group_id, take_id)`-keyed mirror. Same treatment clip ids get
+    /// from [`AudioCommand::LoadClipFromWav`] and pool assets from
+    /// [`AudioCommand::ReserveAssetIds`]. Take ids inside a restored
+    /// group need no reservation of their own: `push_take` derives them
+    /// from the group's own contents, so they are correct the moment the
+    /// group is present.
+    ///
+    /// Deliberately silent — no echo. The sender is restoring state it
+    /// already holds, so an echo would only invite it to re-apply its own
+    /// input, exactly as [`AudioCommand::ReserveAssetIds`] does.
+    RestoreTakeGroups {
+        groups: Vec<TakeGroup>,
     },
     SavePluginState {
         instance_id: PluginInstanceId,

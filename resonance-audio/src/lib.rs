@@ -94,6 +94,12 @@ pub mod __test_support {
     /// group" against the real code — including the case where one pass
     /// emits twice for the same track.
     pub use crate::engine::takes::push_take;
+    /// The project-load rehydration of the engine's take-group store, and
+    /// the take-group id high-water bump that goes with it (epic #15, ba
+    /// todo #1394). Pure over the map + counter, so
+    /// `tests/loop_record_takes.rs` can pin "a restored group is never
+    /// re-issued to a later cycle-record run" against the real code.
+    pub use crate::engine::takes::restore_take_groups_in_place;
     /// The "crossfade or land immediately" rule every bypass handler
     /// shares — see `tests/plugin_bypass.rs`.
     pub use crate::engine::plugins::apply_bypass_request;

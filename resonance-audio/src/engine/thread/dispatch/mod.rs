@@ -16,7 +16,7 @@
 //! | [`midi_map`]            | MIDI learn & hardware controller mapping      |
 //! | [`reference`]           | Reference track A/B comparison               |
 //! | [`peaks`]               | Peak meter polling                            |
-//! | [`takes`]               | Take-lane comp edits & active-take selection  |
+//! | [`takes`]               | Take-lane comp edits, solo, project restore   |
 
 mod audition;
 mod bounce;
@@ -69,10 +69,10 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::SetLoopRange { .. }
         | AudioCommand::SetLoopRecordMode(..) => transport::dispatch_transport(ctx, state, cmd),
 
-        // Take lanes: comp edits + active-take selection
-        AudioCommand::SetTakeComp { .. } | AudioCommand::SetActiveTake { .. } => {
-            takes::dispatch_takes(ctx, state, cmd)
-        }
+        // Take lanes: comp edits, active-take selection, project-load restore
+        AudioCommand::SetTakeComp { .. }
+        | AudioCommand::SetActiveTake { .. }
+        | AudioCommand::RestoreTakeGroups { .. } => takes::dispatch_takes(ctx, state, cmd),
 
         // Audio clips + automation + project
         AudioCommand::ImportClip { .. }
