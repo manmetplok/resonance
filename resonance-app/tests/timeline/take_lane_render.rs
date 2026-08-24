@@ -19,11 +19,17 @@
 //! * the expand / collapse affordance and the arrange rows it adds;
 //! * the canvas cache fingerprint reacting to captures, comp edits, active
 //!   take changes and the fold toggle;
-//! * seven golden snapshots, each pinning a *distinct* state: a folded
+//! * eight golden snapshots, each pinning a *distinct state* — though not
+//!   necessarily distinct pixels, see
+//!   [`a_flagged_take_degrades_even_though_its_clip_resolves`]: a folded
 //!   lane's ribbon, the expanded stack under a two-take comp, an active
 //!   (soloed) take, an empty comp falling back to the latest pass, a punched
-//!   -in take shorter than its lane, a MIDI stack, and the
-//!   missing-`clip_ref` degradation.
+//!   -in take shorter than its lane, a MIDI stack, and the two routes into
+//!   the missing-media degradation (an unresolvable `clip_ref`, and todo
+//!   #412's flag on a take whose clip still resolves).
+//!
+//! The comping *gestures* that sit on this surface are todo #414, covered
+//! in the sibling `take_lane_input` module.
 
 use crate::common;
 
