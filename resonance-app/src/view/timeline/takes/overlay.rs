@@ -24,14 +24,13 @@
 //! * **A comp edit ends the take solo.** Deliberate, and it matches Logic
 //!   and Pro Tools — but the undo label is only `"split comp"`, so
 //!   nothing says so. The caption does.
-//! * **A split taken while a take is soloed can change what you hear.**
-//!   `state::takes::effective_segments` mirrors the engine's comp tiers 2
-//!   and 3 but not tier 1, so a split materializes the *fallback* take's
-//!   cover and then clears the solo: the user was hearing take 0, used a
-//!   gesture that names no take at all, and now hears the latest take.
-//!   Todo **#1395** fixes it by seeding the cover from the active take.
-//!   Until then the split affordance says out loud that the audible take
-//!   may change, so the gesture never *looks* safe while a solo is up.
+//!   Ending the solo does **not** change what is audible: since todo #1395
+//!   a comp edit materializes `TakeGroup::effective_comp`, which honours
+//!   the active take, so the cut cover is the soloed take's. The split
+//!   affordance used to carry a second, redder line warning that the take
+//!   you hear could change with it — that was true only while the app
+//!   mirrored comp tiers 2 and 3 and not tier 1, and it is gone with the
+//!   divergence.
 //!
 //! Plus the one #413 could not reach: a **MIDI take soloed over audio
 //! takes** silences the audio path by design
@@ -259,18 +258,6 @@ impl TimelineCanvas<'_> {
             ));
         }
         lines.extend(self.solo_ends_notes(group));
-        // Pending todo **#1395** a split materializes the *fallback*
-        // take's cover rather than the soloed one's, so the take you are
-        // listening to can change under a gesture that names no take.
-        // Never let the gesture look safe while a solo is up. The ticket
-        // number stays in this comment: the user needs the consequence,
-        // not the bookkeeping. When #1395 lands, delete this note.
-        if has_cut && group.active_take.is_some() {
-            lines.push((
-                "the take you hear may change with it".to_string(),
-                theme::BAD,
-            ));
-        }
         self.draw_hint(frame, bounds, pos, &lines);
     }
 

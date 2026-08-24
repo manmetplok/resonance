@@ -21,9 +21,10 @@
 //!   before dispatch so it spends no undo entry and bumps no revision — so
 //!   the affordance has to say "not here" *before* the press. The cursor
 //!   is that channel and it is asserted here.
-//! * **A comp edit ends the take solo**, and — until todo #1395 — a split
-//!   taken under a solo can change which take is audible. The gesture is
-//!   built so neither is a surprise.
+//! * **A comp edit ends the take solo.** Deliberate, and nothing in the
+//!   undo label says so, so the caption does. It no longer *also* warns
+//!   that the audible take may change: since todo #1395 a split
+//!   materializes the soloed take's cover, so it does not.
 //!
 //! It also pins what the take lane does **not** take. This todo moved the
 //! take-lane hit test ahead of the automation breakpoint dots and the
@@ -1350,12 +1351,17 @@ fn promoted_comp_snapshot() {
     snapshot(&app, "tests/snapshots/take_lane_promoted_comp.png");
 }
 
-/// **Split under a solo — the warning.** T1 is soloed and the playhead
-/// sits at 4 s, inside the slot. Hovering the comp ribbon draws the warm
-/// cut tick at the playhead and the caption that carries the two things
-/// nothing else in the UI says: the split ends the solo, and until todo
-/// #1395 the take you hear can change with it (the split materializes the
-/// *fallback* take's cover, not the soloed one's).
+/// **Split under a solo.** T1 is soloed and the playhead sits at 4 s,
+/// inside the slot. Hovering the comp ribbon draws the warm cut tick at
+/// the playhead and the caption that carries the one thing nothing else in
+/// the UI says: the split ends the solo.
+///
+/// It used to carry a second, `BAD` line — "the take you hear may change
+/// with it" — because the app materialized the *fallback* take's cover
+/// rather than the soloed one's. Todo #1395 removed that divergence
+/// (`update::takes` now starts from `TakeGroup::effective_comp`, which
+/// honours the active take), so the warning would now be false and the
+/// golden is re-blessed one line shorter.
 #[test]
 fn split_under_a_solo_snapshot() {
     let mut app = build_app();
