@@ -22,7 +22,7 @@ use resonance_common::{
     CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
 };
 
-use crate::types::{AudioEvent, TrackId};
+use crate::types::{AudioEvent, ClipId, TrackId};
 
 use super::thread::{HandlerCtx, HandlerState};
 
@@ -85,43 +85,70 @@ pub fn push_take(
 }
 
 /// Replace `take_groups` wholesale with `groups`, raising `next_group_id`
-/// above every restored group id. The pure half of
-/// [`handle_restore_take_groups`] — no `HandlerState`, no publish — so
-/// `tests/loop_record_takes.rs` can pin the store/allocator contract
-/// against the real code.
+/// above every restored group id **and** `next_clip_id` above every audio
+/// take's `clip_ref`. The pure half of [`handle_restore_take_groups`] — no
+/// `HandlerState`, no publish — so `tests/loop_record_takes.rs` can pin the
+/// store/allocator contract against the real code.
 ///
-/// Two invariants live here:
+/// Three invariants live here:
 ///
 /// - **Replace, don't merge.** Both senders rebuild the app-side mirror
 ///   from scratch before sending, so replacing keeps the two identical;
 ///   merging would resurrect takes an undo had just deleted.
-/// - **The allocator only ever rises.** Taking `max` rather than assigning
+/// - **Both allocators only ever rise.** Taking `max` rather than assigning
 ///   means a restore can never hand a *later* cycle-record run an id that
 ///   an earlier one in the same session already used — which a plain
 ///   `= highest + 1` would do when a project holding one group is loaded
 ///   on top of a session that had already recorded several.
+/// - **An audio take's `clip_ref` is a reservation, not just a reference**
+///   (ba todo #1393). `ClearAll` resets `next_clip_id` to 1 on every
+///   project load, and the only paths that push it back past a restored id
+///   are `LoadClipFromWav` and its MIDI twin — which *timeline* clips take
+///   and take clips never do (`roll_audio_pass` writes `audio/clip_N.wav`
+///   and hands the take straight to [`store_take`]). So a project whose
+///   takes hold `clip_ref` 100..102 while its timeline clips stop at 5
+///   reopened with `next_clip_id = 6`, and the next recording or import
+///   **overwrote `audio/clip_100.wav`** — the take then silently played the
+///   new material. Same shape as the media pool's `ReserveAssetIds` (ba doc
+///   #276 BUG 2), reserved here rather than through a second command
+///   because this is the one path that already carries every restored
+///   `clip_ref`, so it cannot go out of step with what was restored.
 ///
-/// Take ids need no reservation: [`push_take`] derives them from the
+/// MIDI takes need nothing analogous: `TakeContent::Midi` carries its notes
+/// inline and names no clip and no file, so it consumes no id from either
+/// allocator (`finalize_loop_record_pass`'s MIDI half never touches
+/// `next_clip_id`).
+///
+/// Take ids need no reservation either: [`push_take`] derives them from the
 /// group's own takes, so a restored group allocates correctly the moment
 /// it is present.
 pub fn restore_take_groups_in_place(
     take_groups: &mut std::collections::HashMap<TakeGroupId, TakeGroup>,
     next_group_id: &mut TakeGroupId,
+    next_clip_id: &mut ClipId,
     groups: Vec<TakeGroup>,
 ) {
     take_groups.clear();
     for group in groups {
         *next_group_id = (*next_group_id).max(group.id + 1);
+        for take in &group.takes {
+            if let TakeContent::Audio { clip_ref } = take.content {
+                *next_clip_id = (*next_clip_id).max(clip_ref + 1);
+            }
+        }
         take_groups.insert(group.id, group);
     }
 }
 
 /// Rehydrate the take-group store from a loaded project (or an undo
-/// snapshot) and republish the comp table, so a restored comp plays and
-/// bounces without waiting for a transport change (ba todo #1394).
+/// snapshot), reserve the ids the restored takes hold, and republish the
+/// comp table, so a restored comp plays and bounces without waiting for a
+/// transport change (ba todo #1394, #1393).
 ///
 /// Silent by design: the app is the sender *and* the mirror here, so there
-/// is nothing to tell it that it did not just say.
+/// is nothing to tell it that it did not just say. That is also why the
+/// clip-id reservation rides along on this command rather than echoing
+/// anything back — a freshly loaded project must not come up dirty.
 pub(crate) fn handle_restore_take_groups(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -130,6 +157,7 @@ pub(crate) fn handle_restore_take_groups(
     restore_take_groups_in_place(
         &mut state.take_groups,
         &mut state.next_take_group_id,
+        &mut state.next_clip_id,
         groups,
     );
     publish_take_comp(ctx, state);
