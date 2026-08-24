@@ -58,11 +58,15 @@ fn app_at(dir: &Path) -> Resonance {
 }
 
 /// Mirror one finished cycle-record pass the way the live app gets there:
-/// the engine emits `TakeCaptured`, the app folds it into its lanes. The
-/// take's id is the pass index (see `engine_events::takes::take_id_for`).
+/// the engine emits `TakeCaptured`, the app folds it into its lanes.
+///
+/// The take id is now assigned by the engine and carried on the event
+/// (todo #409 replaced the app-side `take_id_for` derivation); mirroring
+/// `pass_index` into it keeps this suite's existing id expectations.
 fn capture_audio_pass(app: &mut Resonance, group_id: u64, pass_index: u32, clip_ref: u64) {
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id,
+        take_id: u64::from(pass_index),
         track_id: TRACK,
         slot: SLOT,
         pass_index,
@@ -73,6 +77,7 @@ fn capture_audio_pass(app: &mut Resonance, group_id: u64, pass_index: u32, clip_
 fn capture_midi_pass(app: &mut Resonance, group_id: u64, pass_index: u32, note: u8) {
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id,
+        take_id: u64::from(pass_index),
         track_id: OTHER_TRACK,
         slot: SLOT,
         pass_index,

@@ -137,10 +137,11 @@ impl Resonance {
             .iter()
             .filter(|t| t.sub_track.is_none())
             .collect();
-        crate::view::arrange_layout::ArrangeRowLayout::build(
+        crate::view::arrange_layout::ArrangeRowLayout::build_with_takes(
             &sorted,
             &self.track_groups,
             &self.arrange_automation_rows(),
+            &self.arrange_take_rows(),
         )
     }
 
@@ -262,5 +263,16 @@ impl Resonance {
         let mut pairs: Vec<(u64, u64)> = self.take_groups.missing_takes.iter().copied().collect();
         pairs.sort_unstable();
         pairs
+    }
+
+    /// Test-only: whether a track's take lane is currently unfolded into
+    /// stacked take sub-rows (epic #15). Driven by
+    /// `UiMessage::ToggleTakeLane`; read by the take-lane render tests to
+    /// assert the caret's state without scraping the widget tree.
+    #[doc(hidden)]
+    pub fn test_take_lane_expanded(&self, track_id: resonance_audio::types::TrackId) -> bool {
+        self.interaction
+            .take_lane_expanded_tracks
+            .contains(&track_id)
     }
 }

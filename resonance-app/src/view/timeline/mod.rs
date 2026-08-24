@@ -31,6 +31,7 @@ pub mod input;
 pub mod placement;
 pub mod scrollbar;
 pub mod snap;
+pub mod takes;
 
 // Snap helpers are external public API for this canvas — re-export them
 // from the snap submodule so existing call sites keep working.
@@ -102,6 +103,16 @@ pub struct TimelineCanvas<'a> {
     /// [`ArrangeRowLayout`] as the header column and hit-testing.
     /// Rendering of the sub-rows themselves lands in todo #1097.
     pub automation_expanded_tracks: &'a std::collections::HashSet<TrackId>,
+    /// App-side mirror of the engine's cycle-record take groups (epic #15,
+    /// doc #165). Every group draws a comp ribbon on its track's lane —
+    /// expanded or not — and, when the track's take lane is expanded, a
+    /// stack of take cards in dedicated sub-rows. Empty => no take lanes.
+    pub take_groups: &'a crate::state::TakeGroupState,
+    /// Tracks whose take lanes are expanded into stacked take sub-rows
+    /// (`ClipInteractionState::take_lane_expanded_tracks`), threaded in so
+    /// the canvas builds the same take-aware [`ArrangeRowLayout`] as the
+    /// header column.
+    pub take_lane_expanded_tracks: &'a std::collections::HashSet<TrackId>,
 }
 
 impl TimelineCanvas<'_> {
@@ -262,7 +273,17 @@ impl TimelineCanvas<'_> {
             &sorted,
             self.automation_expanded_tracks,
         );
-        ArrangeRowLayout::build(&sorted, self.track_groups, &automation_rows)
+        let take_rows = crate::view::arrange_layout::ArrangeTakeRows::collect(
+            self.take_groups,
+            &sorted,
+            self.take_lane_expanded_tracks,
+        );
+        ArrangeRowLayout::build_with_takes(
+            &sorted,
+            self.track_groups,
+            &automation_rows,
+            &take_rows,
+        )
     }
 }
 
@@ -391,6 +412,17 @@ pub struct TimelineFingerprint {
     /// toggle must repaint the canvas — without this the cached geometry
     /// goes stale the moment the caret is clicked.
     pub automation_expanded_hash: u64,
+    /// Hash of every take group's identity, slot, takes and comp cover
+    /// (epic #15). Repaints the cached layer when a pass is captured, the
+    /// comp is edited, or the active take changes — all of which reshape
+    /// both the ribbon and the stacked cards. Nothing in the take lane is
+    /// playhead-driven, so the whole feature stays inside the cached pass.
+    pub takes_hash: u64,
+    /// Order-independent hash of the take-lane-expanded track set.
+    /// Expanding a lane inserts sub-rows and shifts every row below it, so
+    /// the toggle must repaint (same discipline as
+    /// `automation_expanded_hash`).
+    pub take_expanded_hash: u64,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -501,6 +533,74 @@ impl<'a> TimelineCanvas<'a> {
                 acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
             });
 
+        // Take groups are an ordered Vec, so a plain sequential hash is
+        // enough — but hash the *content* (slot, every take's id / pass /
+        // content shape, the comp cover and the active take), not just the
+        // count: a comp edit or an active-take change leaves the group
+        // count untouched and would otherwise leave a stale ribbon.
+        let mut take_h = std::collections::hash_map::DefaultHasher::new();
+        self.take_groups.groups.len().hash(&mut take_h);
+        for group in &self.take_groups.groups {
+            group.id.hash(&mut take_h);
+            group.track_id.hash(&mut take_h);
+            group.slot.hash(&mut take_h);
+            group.active_take.hash(&mut take_h);
+            for take in &group.takes {
+                take.id.hash(&mut take_h);
+                take.pass_index.hash(&mut take_h);
+                // `captured_at` is the key `effective_cover` sorts on to
+                // pick the latest take, so two groups differing only in
+                // capture order resolve to different covers and must not
+                // share a fingerprint.
+                take.captured_at.hash(&mut take_h);
+                match &take.content {
+                    resonance_common::TakeContent::Audio { clip_ref } => {
+                        0u8.hash(&mut take_h);
+                        clip_ref.hash(&mut take_h);
+                    }
+                    resonance_common::TakeContent::Midi { notes } => {
+                        1u8.hash(&mut take_h);
+                        notes.len().hash(&mut take_h);
+                        for n in notes {
+                            n.note.hash(&mut take_h);
+                            n.start_tick.hash(&mut take_h);
+                            n.duration_ticks.hash(&mut take_h);
+                        }
+                    }
+                }
+            }
+            for seg in &group.comp.segments {
+                seg.take_id.hash(&mut take_h);
+                seg.range.hash(&mut take_h);
+            }
+        }
+        // Takes whose recorded WAV was absent at load (todo #412) draw the
+        // hatched missing-media card instead of a waveform, so relinking
+        // one has to repaint. Order-independent fold: a `HashSet` has no
+        // stable iteration order.
+        let missing_fold = self
+            .take_groups
+            .missing_takes
+            .iter()
+            .fold(self.take_groups.missing_takes.len() as u64, |acc, (g, t)| {
+                acc ^ g
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .rotate_left(17)
+                    .wrapping_add(*t)
+            });
+        missing_fold.hash(&mut take_h);
+        let takes_hash = take_h.finish();
+
+        // Order-independent fold over the take-lane-expanded set, with the
+        // count folded in so the empty set can never collide with a set
+        // whose ids XOR to zero.
+        let take_expanded_hash = self
+            .take_lane_expanded_tracks
+            .iter()
+            .fold(self.take_lane_expanded_tracks.len() as u64, |acc, id| {
+                acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            });
+
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -538,6 +638,8 @@ impl<'a> TimelineCanvas<'a> {
             clips_hash,
             frozen_hash,
             automation_expanded_hash,
+            takes_hash,
+            take_expanded_hash,
         }
     }
 }
@@ -766,6 +868,23 @@ impl<'a> TimelineCanvas<'a> {
                             theme::LINE_2,
                         );
                     }
+                    // Take sub-row (epic #15): the same recessed substrate
+                    // as an automation lane row, so both stacks read as
+                    // detail hanging off their track. The take card itself
+                    // is drawn by `draw_take_rows` below, after the clips.
+                    // Zebra parity deliberately doesn't advance.
+                    ArrangeRowKind::TakeRow { .. } => {
+                        frame.fill_rectangle(
+                            Point::new(0.0, y),
+                            Size::new(bounds.width, row.height),
+                            theme::BG_2,
+                        );
+                        frame.fill_rectangle(
+                            Point::new(0.0, y + row.height - 1.0),
+                            Size::new(bounds.width, 1.0),
+                            theme::LINE_2,
+                        );
+                    }
                 }
             }
 
@@ -826,6 +945,14 @@ impl<'a> TimelineCanvas<'a> {
             // Drawn over the clips so the envelope reads on top of them; the
             // live playhead value rides the uncached overlay pass below.
             self.draw_automation_lanes(frame, &layout, header_height, y_off, bounds);
+
+            // Take lanes (epic #15, doc #165). The comp ribbon rides the
+            // track's own lane so a *folded* take lane still shows which
+            // take is audible where; the stacked take cards fill the
+            // dedicated sub-rows an expanded lane adds. Both live in this
+            // cached pass — nothing in a take lane follows the playhead.
+            self.draw_take_comp_ribbons(frame, &layout, header_height, y_off, bounds);
+            self.draw_take_rows(frame, &layout, header_height, y_off, bounds);
 
             // Lane-area portion of the loop in/out markers — the dim
             // overlays. The vertical loop lines, amber range fill, and

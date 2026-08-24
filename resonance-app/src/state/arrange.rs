@@ -17,7 +17,9 @@
 use resonance_audio::types::TrackId;
 
 use crate::state::TrackState;
-use crate::view::arrange_layout::{ArrangeAutomationRows, ArrangeRowKind, ArrangeRowLayout};
+use crate::view::arrange_layout::{
+    ArrangeAutomationRows, ArrangeRowKind, ArrangeRowLayout, ArrangeTakeRows,
+};
 use crate::{theme, Resonance};
 
 impl Resonance {
@@ -72,14 +74,29 @@ impl Resonance {
         )
     }
 
-    /// Build the shared arrange-row layout (group-header rows + track rows
-    /// + expanded automation sub-rows, collapse-aware) from the live
-    /// registry + group + automation state.
+    /// The take-lane inputs to the shared arrange-row layout (epic #15,
+    /// doc #165): each arrange track's `(group, take)` rows from the live
+    /// take-group mirror, plus the transient expanded-track set. Shared by
+    /// every layout build site so the canvas and header column always agree
+    /// on the take sub-rows.
+    pub(crate) fn arrange_take_rows(&self) -> ArrangeTakeRows {
+        ArrangeTakeRows::collect(
+            &self.take_groups,
+            &self.arrange_sorted_tracks(),
+            &self.interaction.take_lane_expanded_tracks,
+        )
+    }
+
+    /// Build the shared arrange-row layout — group-header rows, track rows,
+    /// expanded automation sub-rows and expanded take sub-rows,
+    /// collapse-aware — from the live registry, group, automation and take
+    /// state.
     pub(crate) fn arrange_row_layout(&self) -> ArrangeRowLayout {
-        ArrangeRowLayout::build(
+        ArrangeRowLayout::build_with_takes(
             &self.arrange_sorted_tracks(),
             &self.track_groups,
             &self.arrange_automation_rows(),
+            &self.arrange_take_rows(),
         )
     }
 
@@ -107,6 +124,11 @@ impl Resonance {
             // original lane (confirmed with the dedicated lane-row editing
             // surface, todo #1097: lane rows carry envelopes, not clips).
             ArrangeRowKind::AutomationLane { .. } => None,
+            // Nor is a take sub-row: a take is an alternate recording of
+            // the slot, not a lane a clip can be dropped onto. Comping
+            // gestures on these rows are todo #414's and go through the
+            // canvas's own hit-testing, not this clip-drop path.
+            ArrangeRowKind::TakeRow { .. } => None,
         }
     }
 }
