@@ -25,21 +25,38 @@
 //!   taken under a solo can change which take is audible. The gesture is
 //!   built so neither is a surprise.
 //!
-//! Four goldens, each pinning a state no other golden in the epic reaches:
-//! the promote drag mid-flight, the promoted comp it lands, the split
-//! affordance while a take is soloed, and the refused split.
+//! It also pins what the take lane does **not** take. This todo moved the
+//! take-lane hit test ahead of the automation breakpoint dots and the
+//! clips, to match the draw order. Every other clip and automation input
+//! test in the suite runs with an empty `take_groups` and so never reaches
+//! those branches at all — the reorder would be invisible to them. See
+//! "The press order" below, which asserts the clip and the dots still
+//! behave, and pins the one band the ribbon claims from the clip body so
+//! that widening it later is a visible decision.
+//!
+//! Six goldens, each pinning a state no other golden in the epic reaches:
+//! the promote drag mid-flight, the promoted comp it lands, a promote that
+//! runs across a stretch the take never recorded, the split affordance
+//! while a take is soloed, the refused split, and a MIDI take soloed over
+//! audio takes.
 
 use crate::common;
 
 use iced::{Point, Size};
 use iced_test::simulator::Simulator;
-use resonance_app::message::{Message, TakeMessage, TransportMessage, UiMessage, ViewportMessage};
+use resonance_app::message::{
+    AutomationMessage, ClipMessage, Message, TakeMessage, TransportMessage, UiMessage,
+    ViewportMessage,
+};
 use resonance_app::state::{ClipState, ViewMode};
+use resonance_app::view::timeline::automation::{
+    automation_band, value_to_y, BREAKPOINT_HIT_RADIUS,
+};
 use resonance_app::view::timeline::takes::effective_cover;
 use resonance_app::view::timeline::TimelineState;
 use resonance_app::{demo, theme, Resonance};
 use resonance_audio::types::{AudioEvent, FadeCurve};
-use resonance_common::{TakeContent, TakeGroup, TakeNote, TimelineRange};
+use resonance_common::{AutomationTarget, CurveKind, TakeContent, TakeGroup, TakeNote, TimelineRange};
 
 const WINDOW: (f32, f32) = (1440.0, 900.0);
 
@@ -928,6 +945,314 @@ fn the_take_lane_announces_its_gestures_through_the_cursor() {
 }
 
 // ---------------------------------------------------------------------
+// The press order — what the take lane does NOT take
+// ---------------------------------------------------------------------
+//
+// This todo moved the take-lane hit test ahead of the automation
+// breakpoint dots *and* the clips in both `handle_press` and
+// `hover_interaction`, because that is the draw order: the comp ribbon is
+// painted after both, overlaps the bottom of the clip body
+// (`CLIP_LANE_INSET` 10 px vs the ribbon starting `TAKE_COMP_RIBBON_HEIGHT
+// + 3` px above the row's bottom edge) and reaches into the pick radius of
+// a breakpoint pinned at value 0.
+//
+// Every *other* clip and automation input test in the suite runs with an
+// empty `take_groups`, so none of them reach the new branches at all — the
+// reorder is invisible to them. These cases exist so that a change to what
+// the ribbon claims is a visible decision rather than an accident.
+
+/// A track carrying all three surfaces at once over the same stretch of
+/// timeline: an audio clip, an automation lane whose first point sits at
+/// value **0.0** (the lowest a dot can go, i.e. the closest one can get to
+/// the ribbon), and a take group. Only here do the three compete.
+fn build_crowded_lane() -> Resonance {
+    let mut app = build_app();
+    let slot = slot(&app);
+    // A clip spanning exactly the slot, so clip and ribbon share every x
+    // under test and only the y can decide between them.
+    app.test_push_clip(ClipState {
+        id: CROWDED_CLIP,
+        track_id: AUDIO_TRACK,
+        start_sample: slot.start,
+        duration_samples: slot.length,
+        name: "crowded".to_string(),
+        total_frames: slot.length,
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::default(),
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::default(),
+        gain_db: 0.0,
+        waveform_peaks: vec![(-0.5, 0.5); 64],
+        vocal_tuning: None,
+        asset_ref: None,
+    });
+    // Two gain breakpoints at value 0: one inside the slot (where the take
+    // lane now competes) and one well past its end (where it must not).
+    for frame in [at(&app, 2), slot.end() + 3 * app.sample_rate as u64] {
+        let _ = app.update(Message::Automation(AutomationMessage::AddBreakpoint {
+            target: AutomationTarget::TrackGain(AUDIO_TRACK),
+            time_frames: frame,
+            value: 0.0,
+            curve: CurveKind::Linear,
+        }));
+    }
+    capture_audio_passes(&mut app, 2);
+    toggle_lane(&mut app, AUDIO_TRACK);
+    let cut = at(&app, 2);
+    seek(&mut app, cut);
+    app
+}
+
+const CROWDED_CLIP: u64 = 9_100;
+
+/// Canvas-space `(top, height)` of the comp ribbon band on `AUDIO_TRACK`.
+fn ribbon_band(app: &Resonance) -> (f32, f32) {
+    let layout = app.test_arrange_row_layout();
+    let (top, h) = layout.track_row_rect(AUDIO_TRACK).expect("track row");
+    resonance_app::view::timeline::takes::comp_ribbon_band(
+        app.test_arrange_header_offset() + top,
+        h,
+    )
+}
+
+/// Canvas-space y of a breakpoint dot at `value` in `AUDIO_TRACK`'s
+/// in-track overlay band.
+fn overlay_dot_y(app: &Resonance, value: f32) -> f32 {
+    let layout = app.test_arrange_row_layout();
+    let (top, h) = layout.track_row_rect(AUDIO_TRACK).expect("track row");
+    let (band_top, band_height) =
+        automation_band(app.test_arrange_header_offset() + top, h);
+    value_to_y(value, band_top, band_height)
+}
+
+/// The clip body above the ribbon is untouched: same x, a few pixels
+/// higher, and the press is a clip drag exactly as it was before the
+/// reorder.
+#[test]
+fn a_clip_press_above_the_ribbon_still_starts_a_clip_drag() {
+    let app = build_crowded_lane();
+    let mut state = TimelineState::default();
+    let x = x_of(&app, at(&app, 3));
+    let (band_top, _) = ribbon_band(&app);
+
+    let msg = press(&app, &mut state, x, band_top - 2.0).expect("publishes");
+    assert!(
+        matches!(
+            msg,
+            Message::Clip(ClipMessage::StartClipDrag {
+                clip_id: CROWDED_CLIP,
+                ..
+            })
+        ),
+        "two pixels above the ribbon is still the clip, got {msg:?}"
+    );
+    // ...and two pixels lower is the ribbon.
+    let mut state = TimelineState::default();
+    let msg = press(&app, &mut state, x, band_top + 2.0).expect("publishes");
+    assert!(
+        matches!(
+            msg,
+            Message::Take(TakeMessage::SplitCompAtPlayhead { group_id: GROUP })
+        ),
+        "got {msg:?}"
+    );
+}
+
+/// The exact band the ribbon claims from the clip, pinned.
+///
+/// The clip body runs `CLIP_LANE_INSET` in from both row edges; the ribbon
+/// starts `TAKE_COMP_RIBBON_HEIGHT + 3` above the bottom one. Their overlap
+/// is the whole cost of the reorder, and it is asserted to be exactly the
+/// band the ribbon is *drawn* over — no pick-radius slack, no rounding.
+/// Widening it later will fail here, which is the point.
+#[test]
+fn the_ribbon_claims_exactly_the_band_it_draws() {
+    let app = build_crowded_lane();
+    let x = x_of(&app, at(&app, 3));
+    let (band_top, band_height) = ribbon_band(&app);
+    let layout = app.test_arrange_row_layout();
+    let (row_top, row_h) = layout.track_row_rect(AUDIO_TRACK).expect("track row");
+    let row_y = app.test_arrange_header_offset() + row_top;
+    let clip_top = row_y + theme::CLIP_LANE_INSET;
+    let clip_bottom = row_y + row_h - theme::CLIP_LANE_INSET;
+
+    // Walk the clip's whole vertical extent and record where the verb
+    // flips. Half-pixel steps so an off-by-one boundary cannot hide.
+    let mut first_take_y: Option<f32> = None;
+    let mut y = clip_top;
+    while y <= clip_bottom {
+        let mut state = TimelineState::default();
+        match press(&app, &mut state, x, y) {
+            Some(Message::Take(_)) => {
+                first_take_y.get_or_insert(y);
+            }
+            Some(Message::Clip(_)) => assert!(
+                first_take_y.is_none(),
+                "the clip must not come back below the ribbon's top edge (y {y})"
+            ),
+            other => panic!("unexpected verb at y {y}: {other:?}"),
+        }
+        y += 0.5;
+    }
+
+    let boundary = first_take_y.expect("the ribbon claims some of the clip body");
+    assert!(
+        (boundary - band_top).abs() <= 0.5,
+        "the ribbon claims from its own drawn top edge {band_top}, not {boundary}"
+    );
+    assert!(
+        band_top + band_height > clip_bottom,
+        "the claimed band runs to the bottom of the clip body and past it"
+    );
+}
+
+/// A breakpoint pinned at value 0 — the lowest a dot can sit — stays
+/// reachable over the top of its pick column, and the part of that column
+/// the ribbon claims is claimed *only* inside the slot, and *only* when the
+/// track has take groups at all.
+#[test]
+fn a_value_zero_breakpoint_survives_the_reorder() {
+    let app = build_crowded_lane();
+    let dot_y = overlay_dot_y(&app, 0.0);
+    let (band_top, _) = ribbon_band(&app);
+    let dot_x = x_of(&app, at(&app, 2));
+    let gain = AutomationTarget::TrackGain(AUDIO_TRACK);
+
+    // The dot itself sits above the ribbon and is hit as it always was.
+    assert!(dot_y < band_top, "the dot is drawn above the ribbon band");
+    let mut state = TimelineState::default();
+    let msg = press(&app, &mut state, dot_x, dot_y).expect("publishes");
+    assert!(
+        matches!(
+            &msg,
+            Message::Automation(AutomationMessage::StartBreakpointDrag { target, .. })
+                if *target == gain
+        ),
+        "got {msg:?}"
+    );
+
+    // The lower reach of its pick radius is inside the ribbon and now goes
+    // to the split. Asserting the *same* press on an otherwise identical
+    // app with no take group proves the region was genuinely taken, rather
+    // than never having belonged to the dot.
+    let stolen_y = band_top + 2.0;
+    assert!(
+        stolen_y < dot_y + BREAKPOINT_HIT_RADIUS,
+        "the point under test is inside the dot's pick radius"
+    );
+    let mut state = TimelineState::default();
+    let msg = press(&app, &mut state, dot_x, stolen_y).expect("publishes");
+    assert!(
+        matches!(msg, Message::Take(TakeMessage::SplitCompAtPlayhead { .. })),
+        "inside the slot the ribbon takes it, got {msg:?}"
+    );
+
+    let no_takes = build_app_with_only_the_breakpoints();
+    let mut state = TimelineState::default();
+    let msg = press(&no_takes, &mut state, dot_x, stolen_y).expect("publishes");
+    assert!(
+        matches!(
+            &msg,
+            Message::Automation(AutomationMessage::StartBreakpointDrag { target, .. })
+                if *target == gain
+        ),
+        "with no take group the dot keeps its whole pick radius, got {msg:?}"
+    );
+}
+
+/// ...and the claim is x-scoped to the slot: the second dot, three seconds
+/// past the slot's end, keeps its full pick radius on a track that *does*
+/// carry a take lane.
+#[test]
+fn a_breakpoint_outside_the_slot_keeps_its_whole_pick_radius() {
+    let app = build_crowded_lane();
+    let (band_top, _) = ribbon_band(&app);
+    let outside_x = x_of(&app, slot(&app).end() + 3 * app.sample_rate as u64);
+    let mut state = TimelineState::default();
+
+    assert_eq!(
+        app.test_comp_ribbon_at(outside_x, band_top + 2.0),
+        None,
+        "the lane carries no comp out here"
+    );
+    let msg = press(&app, &mut state, outside_x, band_top + 2.0).expect("publishes");
+    assert!(
+        matches!(
+            &msg,
+            Message::Automation(AutomationMessage::StartBreakpointDrag { target, .. })
+                if *target == AutomationTarget::TrackGain(AUDIO_TRACK)
+        ),
+        "got {msg:?}"
+    );
+}
+
+/// The same crowded lane through `hover_interaction`, which was re-ordered
+/// to match: the cursor must promise exactly the verb the press performs,
+/// or the affordance lies.
+#[test]
+fn the_cursor_agrees_with_the_reordered_press() {
+    use iced::mouse::Interaction;
+    let app = build_crowded_lane();
+    let state = TimelineState::default();
+    let x = x_of(&app, at(&app, 3));
+    let (band_top, _) = ribbon_band(&app);
+
+    assert_eq!(
+        app.test_timeline_cursor(&state, x, band_top - 2.0),
+        Interaction::Grab,
+        "clip body: grab, as before the reorder"
+    );
+    assert_eq!(
+        app.test_timeline_cursor(&state, x, band_top + 2.0),
+        Interaction::ResizingHorizontally,
+        "ribbon: the split, matching the press"
+    );
+    assert_eq!(
+        app.test_timeline_cursor(&state, x_of(&app, at(&app, 2)), overlay_dot_y(&app, 0.0)),
+        Interaction::Grab,
+        "the value-0 dot still hovers as grabbable"
+    );
+}
+
+/// The crowded fixture minus the takes: same clip, same two breakpoints,
+/// no take group. Stands in for "the app before this todo" so the stolen
+/// band can be shown to be a *change* rather than a coincidence.
+fn build_app_with_only_the_breakpoints() -> Resonance {
+    let mut app = build_app();
+    let slot = slot(&app);
+    app.test_push_clip(ClipState {
+        id: CROWDED_CLIP,
+        track_id: AUDIO_TRACK,
+        start_sample: slot.start,
+        duration_samples: slot.length,
+        name: "crowded".to_string(),
+        total_frames: slot.length,
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::default(),
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::default(),
+        gain_db: 0.0,
+        waveform_peaks: vec![(-0.5, 0.5); 64],
+        vocal_tuning: None,
+        asset_ref: None,
+    });
+    for frame in [at(&app, 2), slot.end() + 3 * app.sample_rate as u64] {
+        let _ = app.update(Message::Automation(AutomationMessage::AddBreakpoint {
+            target: AutomationTarget::TrackGain(AUDIO_TRACK),
+            time_frames: frame,
+            value: 0.0,
+            curve: CurveKind::Linear,
+        }));
+    }
+    assert!(app.test_take_groups().is_empty());
+    app
+}
+
+// ---------------------------------------------------------------------
 // Golden snapshots
 // ---------------------------------------------------------------------
 
@@ -1063,6 +1388,86 @@ fn refused_split_snapshot() {
     let x = x_of(&app, at(&app, 3));
     assert!(!app.test_take_lane_expanded(MIDI_TRACK));
     snapshot_hovering(&app, (x, y), "tests/snapshots/take_lane_refused_split.png");
+}
+
+/// **A MIDI take soloed over audio takes.** An armed instrument track
+/// records both paths, so one group can hold an audio pass and a MIDI
+/// pass. Soloing the MIDI one resolves to zero audio spans while the
+/// group's audio takes stay governed — the lane goes silent on the audio
+/// path, by design (ba doc #292) and indistinguishable from a bug unless
+/// something says so.
+///
+/// Hovering the soloed card is the only place `midi_solo_note` and
+/// `draw_take_card_hint` are depicted: the caption's first line is the
+/// card's verb list in `TEXT_2`, the second is the `BAD` consequence.
+/// Without this golden the wording and its contrast are unreviewable —
+/// which is exactly how a caption ends up unreadable over the lane.
+#[test]
+fn midi_solo_silences_audio_snapshot() {
+    let mut app = build_app();
+    let slot = slot(&app);
+    push_take_clip_over(&mut app, 0, slot);
+    capture_audio_pass(&mut app, 0);
+    capture_midi_pass(&mut app, 1);
+    set_active(&mut app, Some(1));
+    toggle_lane(&mut app, AUDIO_TRACK);
+    assert!(
+        app.test_active_take_silences_audio(GROUP),
+        "the state under test — a MIDI solo muting the group's audio"
+    );
+
+    // Hover T2's own card: `soloed` is true there, which is what reaches
+    // the MIDI note.
+    let y = take_card_y(&app, 1);
+    let x = x_of(&app, at(&app, 1));
+    assert_eq!(
+        app.test_take_card_at(x, y).map(|h| h.1),
+        Some(1),
+        "the cursor really is over the soloed MIDI take's card"
+    );
+    snapshot_hovering(&app, (x, y), "tests/snapshots/take_lane_midi_solo_hint.png");
+}
+
+/// **Promoting across silence.** Pass 0 punched in a second into the slot,
+/// so its card starts at 3 s; the drag runs from the slot start at 2 s to
+/// 6 s. The 2 s..3 s lead-in is inside the promoted range and outside the
+/// take's audio, which is legal — `update::takes` keeps only what the take
+/// can fill — but a segment over a stretch its take never recorded is a
+/// real state the engine renders as silence.
+///
+/// The golden pins the disclosure: `BAD` centre-line rules over the silent
+/// part of the preview band, and the `BAD` caption line under the promote
+/// range. The preview band itself still spans the whole drag, because the
+/// gesture really does address the whole slot — the silence marking is a
+/// warning, not a clamp, and the two must not be conflated.
+#[test]
+fn promote_across_silence_snapshot() {
+    let mut app = build_app();
+    let sr = app.sample_rate as u64;
+    let slot = slot(&app);
+    push_take_clip_over(
+        &mut app,
+        0,
+        TimelineRange::from_bounds(slot.start + sr, slot.end()),
+    );
+    capture_audio_pass(&mut app, 0);
+    push_take_clip_over(&mut app, 1, slot);
+    capture_audio_pass(&mut app, 1);
+    toggle_lane(&mut app, AUDIO_TRACK);
+
+    let y = take_card_y(&app, 0);
+    let (from, to) = (x_of(&app, slot.start), x_of(&app, at(&app, 4)));
+    let mut ui = Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view());
+    ui.point_at(Point::new(from + CANVAS_ORIGIN.0, y + CANVAS_ORIGIN.1));
+    let _ = ui.simulate([left_press()]);
+    ui.point_at(Point::new(to + CANVAS_ORIGIN.0, y + CANVAS_ORIGIN.1));
+    let _ = ui.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+        position: Point::new(to + CANVAS_ORIGIN.0, y + CANVAS_ORIGIN.1),
+    })]);
+    let snap = ui
+        .snapshot(&theme::resonance_theme())
+        .expect("snapshot should render");
+    common::assert_golden(&snap, "tests/snapshots/take_lane_promote_across_silence.png");
 }
 
 fn drain(

@@ -787,6 +787,20 @@ fn fingerprint_tracks_captures_comp_edits_and_the_fold() {
 /// take id that no longer exists). The mirror can therefore hold a
 /// perfectly good `ClipState` for a take the lane must still degrade — so
 /// the card cannot key off the clip lookup alone.
+///
+/// # `take_lane_flagged_missing.png` is byte-identical to
+/// # `take_lane_missing_media.png`, and that is the point
+///
+/// The two goldens depict the same pixels because the two routes into
+/// "this take has no audio on this machine" — an unresolvable `clip_ref`
+/// and todo #412's `missing_takes` flag — **must** degrade identically:
+/// a user cannot be expected to know which of the two befell their take,
+/// and a difference would imply one is more recoverable than the other.
+/// It is not a copy-paste mistake, and the pair is still discriminating:
+/// `take_is_missing` ORs the two conditions, so dropping either arm
+/// leaves the other golden matching and this one showing a plain
+/// waveform. Deleting this test because "a golden already covers that
+/// image" would silently uncover the flag arm.
 #[test]
 fn a_flagged_take_degrades_even_though_its_clip_resolves() {
     let mut app = build_app();
