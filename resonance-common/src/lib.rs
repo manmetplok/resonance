@@ -46,8 +46,8 @@ pub use denormal::flush_denormals;
 pub use group_identity::{GroupColor, GroupIdentityColor};
 pub use scan::scan_directory;
 pub use take::{
-    ClipId, Comp, CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TakeNote,
-    TimelineRange,
+    effective_cover, latest_take, ClipId, Comp, CompSegment, CoverSource, CoverSpan, SlotCover,
+    Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TakeNote, TimelineRange,
 };
 pub use track_group::{MACRO_LEVEL_UNITY, TrackGroup};
 pub use wav::{

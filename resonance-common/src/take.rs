@@ -12,6 +12,28 @@
 //! comping helpers ([`Comp::promote`], [`Comp::split_comp`], …) are the single
 //! source of truth for editing that cover, so the engine's playback/bounce path
 //! and the app's UI never disagree about which take is audible where.
+//!
+//! # One definition of the cover (todo #1395)
+//!
+//! What a group *sounds like* is resolved in exactly one place —
+//! [`effective_cover`] — and both layers call it: the mixer's
+//! `take_comp::resolve_spans` maps its spans to take clips, and the timeline's
+//! take lane draws them. Its three tiers are
+//!
+//! 1. an [`active_take`](TakeGroup::active_take) solos the whole slot,
+//!    overriding the comp;
+//! 2. otherwise each [`CompSegment`] plays its take over its range;
+//! 3. **anything the comp leaves uncovered plays [`latest_take`]** — the
+//!    user's 2026-08-24 ruling. Comping is progressive refinement, not
+//!    assembly from silence: promote one phrase of take 2 into bar 2 of a
+//!    four-bar loop and bars 1, 3 and 4 keep playing the most recent pass, so
+//!    the part is complete from the very first gesture.
+//!
+//! Tier 3 is a safety net rather than the normal path, because
+//! [`Comp::promote`] takes a [`SlotCover`] and seeds the remainder of the slot
+//! before it edits: a comp that has been promoted into is a gap-free cover *by
+//! construction*, which is what makes the "ordered, gap-free cover" above an
+//! invariant instead of an aspiration.
 
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +155,43 @@ pub struct CompSegment {
     pub take_id: TakeId,
 }
 
+/// What a [`Comp`] is a cover *of*: the slot it has to fill end to end, and
+/// the take that fills whatever the user has not explicitly promoted.
+///
+/// [`Comp::promote`] takes one so a promote cannot leave a hole behind. Build
+/// it with [`SlotCover::of`] for a real group; [`SlotCover::NONE`] seeds
+/// nothing, for callers assembling a comp span by span rather than editing a
+/// group's cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotCover {
+    /// The range the comp must cover with no gaps.
+    pub slot: TimelineRange,
+    /// The take that fills anything the comp does not name. `None` when the
+    /// group holds no takes at all, in which case nothing can be seeded.
+    pub filler: Option<TakeId>,
+}
+
+impl SlotCover {
+    /// The cover context of `group`: its slot, filled by [`latest_take`].
+    pub fn of(group: &TakeGroup) -> Self {
+        Self {
+            slot: group.slot,
+            filler: latest_take(group).map(|take| take.id),
+        }
+    }
+
+    /// A context that seeds nothing, so [`Comp::promote`] performs bare
+    /// segment surgery. The degenerate value — an empty slot has no gaps to
+    /// fill — not an opt-out: a comp edited through this is not a cover.
+    pub const NONE: Self = Self {
+        slot: TimelineRange {
+            start: 0,
+            length: 0,
+        },
+        filler: None,
+    };
+}
+
 /// The composite ("comp") assembled from segments of a group's takes.
 ///
 /// `segments` is kept sorted ascending by `range.start` and non-overlapping;
@@ -181,15 +240,71 @@ impl Comp {
         );
     }
 
+    /// Fills every stretch of `cover.slot` this comp does not already cover
+    /// with `cover.filler`, leaving existing segments untouched.
+    ///
+    /// This is tier 3 of [`effective_cover`] made explicit: the group is
+    /// *already* playing the filler take over those gaps, so writing them into
+    /// the comp changes nothing audible — it only makes the cover editable.
+    /// A [`SlotCover`] with no filler, or an empty slot, is a no-op.
+    pub fn seed_cover(&mut self, cover: SlotCover) {
+        let Some(filler) = cover.filler else {
+            return;
+        };
+        if cover.slot.is_empty() {
+            return;
+        }
+
+        let mut next = self.segments.clone();
+        next.sort_by_key(|seg| seg.range.start);
+
+        let mut gaps: Vec<TimelineRange> = Vec::new();
+        let mut cursor = cover.slot.start;
+        for seg in &next {
+            if seg.range.end() <= cover.slot.start {
+                continue;
+            }
+            if seg.range.start >= cover.slot.end() {
+                break;
+            }
+            if seg.range.start > cursor {
+                gaps.push(TimelineRange::from_bounds(cursor, seg.range.start));
+            }
+            cursor = cursor.max(seg.range.end());
+        }
+        if cursor < cover.slot.end() {
+            gaps.push(TimelineRange::from_bounds(cursor, cover.slot.end()));
+        }
+        if gaps.is_empty() {
+            return;
+        }
+
+        next.extend(gaps.into_iter().map(|range| CompSegment {
+            range,
+            take_id: filler,
+        }));
+        next.sort_by_key(|seg| seg.range.start);
+        self.segments = merge_adjacent(next);
+    }
+
     /// Promotes `take_id` across `range`, replacing any overlapping coverage.
     ///
-    /// Existing segments are trimmed (or split, when `range` lands inside one)
-    /// around `range`, the new segment is inserted, and adjacent segments
-    /// referencing the same take are merged. An empty `range` is a no-op.
-    pub fn promote(&mut self, range: TimelineRange, take_id: TakeId) {
+    /// The remainder of `cover`'s slot is [seeded](Self::seed_cover) first, so
+    /// the result is a genuine gap-free cover rather than an island in a hole
+    /// — the user's ruling that the latest take fills the gaps, made true by
+    /// construction (todo #1395). Pass [`SlotCover::NONE`] for bare segment
+    /// surgery on a comp that is not a cover of anything.
+    ///
+    /// Existing segments are then trimmed (or split, when `range` lands inside
+    /// one) around `range`, the new segment is inserted, and adjacent segments
+    /// referencing the same take are merged. An empty `range` is a no-op —
+    /// including the seeding, since a promote that changes nothing must not
+    /// rewrite the comp.
+    pub fn promote(&mut self, range: TimelineRange, take_id: TakeId, cover: SlotCover) {
         if range.is_empty() {
             return;
         }
+        self.seed_cover(cover);
 
         let mut next: Vec<CompSegment> = Vec::with_capacity(self.segments.len() + 2);
         for seg in &self.segments {
@@ -301,4 +416,171 @@ impl TakeGroup {
     pub fn is_full_cover(&self) -> bool {
         self.comp.is_full_cover(self.slot)
     }
+
+    /// This group's [`effective_cover`] as an explicit [`Comp`] — what the
+    /// group is audibly playing right now, written out as editable segments.
+    ///
+    /// Comp editing starts here. A group that has never been comped carries
+    /// **no** segments yet is not silent, and one with an
+    /// [`active_take`](Self::active_take) plays that take regardless of what
+    /// its segments say; materializing the cover first is what makes a first
+    /// split or promote edit *what the user is hearing* instead of appearing
+    /// to do nothing (or silently swapping the audible take out from under a
+    /// solo — the #1395 tier-1 case).
+    ///
+    /// Adjacent spans naming the same take are merged, so the result satisfies
+    /// the same invariants the comp helpers maintain. Empty only for a group
+    /// with no takes, or an empty slot.
+    pub fn effective_comp(&self) -> Comp {
+        let segments = effective_cover(self)
+            .into_iter()
+            .map(|span| CompSegment {
+                range: span.range,
+                take_id: span.take_id,
+            })
+            .collect();
+        Comp {
+            segments: merge_adjacent(segments),
+        }
+    }
+}
+
+/// The take a group plays wherever its comp names none: **the most recently
+/// captured pass**, by `(captured_at, pass_index, id)`.
+///
+/// # MIDI takes are candidates (the #1395 ruling)
+///
+/// "Latest" is deliberately content-agnostic. The engine used to read it as
+/// "the last *audio* take in vector order" and the take lane as "the newest
+/// take of any kind", which pick different takes the moment a group holds both
+/// kinds — and a lane that lights T3 while the mixer plays T4 is the exact
+/// divergence this function exists to remove. Excluding MIDI would also
+/// contradict the ruling itself: the user asked to hear *the most recent pass*
+/// over the gaps, and on an instrument track that pass is a MIDI take.
+///
+/// The audio path is unaffected by the choice in the ordinary case, because
+/// capture is per-track and a track records audio *or* MIDI, never both. Where
+/// a group does hold both, a MIDI take resolving over the gaps contributes no
+/// *audio* spans — the notes play through the instrument instead — which is
+/// the same by-design behaviour as soloing a MIDI take
+/// (`TakeGroupState::active_take_silences_audio`).
+///
+/// `captured_at` is the primary key rather than vector order, which is not
+/// guaranteed to be capture order once a project has been saved, reloaded and
+/// restored; `pass_index` and `id` are deterministic tie-breaks for passes
+/// captured inside the same millisecond.
+pub fn latest_take(group: &TakeGroup) -> Option<&Take> {
+    group
+        .takes
+        .iter()
+        .max_by_key(|take| (take.captured_at, take.pass_index, take.id))
+}
+
+/// How a span of a group's slot came to be covered by its take. Callers that
+/// present the comp draw the three differently, so "I chose this" never reads
+/// the same as "this is what you get by default".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverSource {
+    /// The take is soloed for the whole slot ([`TakeGroup::active_take`]),
+    /// overriding the comp entirely.
+    ActiveTake,
+    /// An explicit [`CompSegment`] the user promoted.
+    CompSegment,
+    /// The comp covers no part of this span, so it plays [`latest_take`].
+    LatestFallback,
+}
+
+/// One span of a group's slot, the take audible over it, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoverSpan {
+    /// The stretch of timeline this span covers.
+    pub range: TimelineRange,
+    /// The take audible over `range`.
+    pub take_id: TakeId,
+    /// Which tier of the resolution put it there.
+    pub source: CoverSource,
+}
+
+/// The take that plays over each part of `group`'s slot — an ordered, gap-free
+/// cover, so every point of the slot maps to exactly one take.
+///
+/// **The single definition of what a take group sounds like** (todo #1395).
+/// The mixer resolves its render spans from this and the take lane draws from
+/// it, so the two cannot disagree about which take is audible where. See the
+/// module header for the three tiers and the ruling behind the last one.
+///
+/// Spans carry their [`CoverSource`], because a caller that *draws* the cover
+/// has to distinguish a deliberate promotion from a fallback even though both
+/// are equally audible. Adjacent spans may therefore name the same take with
+/// different sources; a caller that only cares about the audible take (the
+/// mixer) merges them.
+///
+/// Returns an empty vector for an empty slot or a group with no takes.
+/// Segments naming a take the group does not hold are skipped, segments
+/// outside the slot are ignored, and one overhanging an edge is clamped to it
+/// — a mirror adopting whatever the engine echoed must not be able to produce
+/// a backwards or out-of-slot span. An `active_take` the group does not hold
+/// is likewise ignored rather than silencing the group; the tiers below it
+/// still describe something audible.
+pub fn effective_cover(group: &TakeGroup) -> Vec<CoverSpan> {
+    if group.slot.is_empty() || group.takes.is_empty() {
+        return Vec::new();
+    }
+
+    // Tier 1: the whole-slot solo override wins outright.
+    if let Some(active) = group.active_take {
+        if group.take(active).is_some() {
+            return vec![CoverSpan {
+                range: group.slot,
+                take_id: active,
+                source: CoverSource::ActiveTake,
+            }];
+        }
+    }
+
+    let Some(latest) = latest_take(group).map(|take| take.id) else {
+        return Vec::new();
+    };
+
+    // The model's helpers keep `segments` sorted, but a mirror adopts what it
+    // is handed wholesale, so sort defensively rather than trusting it.
+    let mut segments = group.comp.segments.clone();
+    segments.sort_by_key(|seg| seg.range.start);
+
+    let mut spans: Vec<CoverSpan> = Vec::new();
+    let mut cursor = group.slot.start;
+    for seg in segments {
+        // Tier 2: an explicit promotion, clamped into the slot and to
+        // whatever is left of it.
+        if group.take(seg.take_id).is_none() {
+            continue;
+        }
+        let start = seg.range.start.max(cursor);
+        let end = seg.range.end().min(group.slot.end());
+        if end <= start {
+            continue;
+        }
+        // Tier 3: the gap before it plays the most recent pass.
+        if start > cursor {
+            spans.push(CoverSpan {
+                range: TimelineRange::from_bounds(cursor, start),
+                take_id: latest,
+                source: CoverSource::LatestFallback,
+            });
+        }
+        spans.push(CoverSpan {
+            range: TimelineRange::from_bounds(start, end),
+            take_id: seg.take_id,
+            source: CoverSource::CompSegment,
+        });
+        cursor = end;
+    }
+    if cursor < group.slot.end() {
+        spans.push(CoverSpan {
+            range: TimelineRange::from_bounds(cursor, group.slot.end()),
+            take_id: latest,
+            source: CoverSource::LatestFallback,
+        });
+    }
+    spans
 }

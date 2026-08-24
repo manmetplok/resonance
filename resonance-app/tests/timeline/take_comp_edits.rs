@@ -20,6 +20,11 @@
 //!   selection the group cannot honour is refused before it is sent.
 //! - A MIDI take soloed on a group that also holds audio silences the
 //!   audio path; that is by design and is reported rather than hidden.
+//!
+//! Todo **#1395** added one more: every edit starts from
+//! `TakeGroup::effective_comp`, the shared cover definition, so
+//! materializing the cover before editing it is inaudible in *all* three
+//! tiers — including under a solo, which the app used not to mirror.
 
 use resonance_app::message::{Message, TakeMessage, TransportMessage};
 use resonance_app::state::ClipState;
@@ -479,6 +484,67 @@ fn a_comp_edit_ends_the_take_solo() {
     let cmds = drain(&rx);
     assert_eq!(active_take_commands(&cmds), vec![None]);
     assert!(last_comp_command(&cmds).is_some());
+}
+
+/// **Ending the solo must not change what is heard** (todo #1395).
+///
+/// A split names no take at all. Take 0 is soloed, so take 0 is what is
+/// playing; the cover materialized before the cut therefore has to be take
+/// 0's, not the group's latest pass. Before #1395 `effective_segments`
+/// mirrored the comp tiers and *not* the active take, so the user heard
+/// take 0, hit "split", and came out hearing take 1 — under an undo label
+/// that only said `"split comp"`.
+///
+/// Clearing the solo itself stays correct (it matches Logic / Pro Tools);
+/// what changes is that the comp left behind is a faithful record of what
+/// the solo was playing.
+#[test]
+fn splitting_while_soloing_keeps_the_soloed_take_audible() {
+    let (mut app, rx) = app_with_takes(3);
+    send(
+        &mut app,
+        TakeMessage::SetActiveTake {
+            group_id: GROUP,
+            take_id: Some(0),
+        },
+    );
+    drain(&rx);
+
+    seek(&mut app, MID);
+    send(&mut app, TakeMessage::SplitCompAtPlayhead { group_id: GROUP });
+
+    assert_eq!(
+        comp(&app),
+        vec![(SLOT.start, MID, 0), (MID, SLOT.end(), 0)],
+        "the cut cover is the soloed take's, either side of the playhead"
+    );
+    let cmds = drain(&rx);
+    assert_eq!(
+        last_comp_command(&cmds).map(|segs| segs
+            .iter()
+            .map(|s| (s.range.start, s.range.end(), s.take_id))
+            .collect::<Vec<_>>()),
+        Some(vec![(SLOT.start, MID, 0), (MID, SLOT.end(), 0)]),
+        "and the engine is told the same thing"
+    );
+    assert_eq!(active_take_commands(&cmds), vec![None]);
+    assert_eq!(app.test_take_groups()[0].active_take, None);
+}
+
+/// A split with **no** solo up still materializes the latest-take cover —
+/// the other half of the same rule, and what makes tier 3 the only thing a
+/// fresh group needs.
+#[test]
+fn splitting_without_a_solo_cuts_the_latest_takes_cover() {
+    let (mut app, _rx) = app_with_takes(3);
+    seek(&mut app, MID);
+    send(&mut app, TakeMessage::SplitCompAtPlayhead { group_id: GROUP });
+
+    assert_eq!(
+        comp(&app),
+        vec![(SLOT.start, MID, 2), (MID, SLOT.end(), 2)],
+        "take 2 is the most recent pass"
+    );
 }
 
 #[test]
