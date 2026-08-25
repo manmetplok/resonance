@@ -460,8 +460,12 @@ impl crate::Resonance {
     /// the handler applies — so the gate and the edit can never disagree
     /// about what "changes nothing" means. It covers an unknown group or
     /// take, a solo that is already current, a split off the slot or on an
-    /// existing boundary, a promote clamped away to nothing, and deleting
-    /// a group's last take.
+    /// existing boundary, and a promote clamped away to nothing.
+    ///
+    /// Deleting a group's **last** take used to be refused here too. Since
+    /// ba todo #1401 it removes the lane instead — the engine grew the
+    /// commands for it (todo #1397) — so the only deletion this gate still
+    /// drops is one naming a group or take that is not there.
     fn take_edit_is_refused(&self, message: &crate::message::Message) -> bool {
         let crate::message::Message::Take(m) = message else {
             return false;

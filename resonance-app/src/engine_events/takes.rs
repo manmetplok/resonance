@@ -103,10 +103,11 @@ pub(super) fn active_take_changed(
     r.take_groups.active_take_changed(group_id, take_id);
 }
 
-/// `TakeRemoved` — drop the take the engine has removed. The re-covered
-/// comp and a cleared solo arrive as ordinary `TakeCompChanged` /
-/// `ActiveTakeChanged` echoes right behind this one, so there is nothing
-/// else to do here.
+/// `TakeRemoved` — drop the take the engine has removed, re-covering the
+/// slot exactly as the engine did: `TakeGroupState::remove_take` runs the
+/// shared `TakeGroup::remove_take` (ba todo #1401). The `TakeCompChanged` /
+/// `ActiveTakeChanged` echoes right behind this one then re-apply the same
+/// values, so there is nothing left for this handler to do.
 ///
 /// Idempotent, like the other echoes: `update::takes` removes the take from
 /// the mirror optimistically when it sends the command, so this normally

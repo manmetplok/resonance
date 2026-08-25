@@ -1237,10 +1237,16 @@ pub enum TakeMessage {
     /// Remove `take_id` from the lane and re-cover the slot from the takes
     /// that remain.
     ///
-    /// Refused for a group's **last** take: the engine has no take-removal
-    /// command, and a group left with an empty comp falls back to playing
-    /// its most recent pass — so "deleted" would still be audible. Tracked
-    /// as a follow-up (see the module docs of `update::takes`).
+    /// **A group's last take removes the lane** (ba todo #1401): an empty
+    /// group keeps its slot forever, has nothing to comp or draw, and an
+    /// empty comp is exactly the state in which the cover falls back to
+    /// the most recent pass — the take just deleted. Refused only when the
+    /// group or the take is not there.
+    ///
+    /// Sent to the engine as `RemoveTake` / `RemoveTakeGroup` rather than
+    /// as a comp edit, because only the engine can park the take's
+    /// recording out of the render — an un-parked one plays raw, at full
+    /// gain, on the ordinary clip path.
     DeleteTake {
         group_id: TakeGroupId,
         take_id: TakeId,
