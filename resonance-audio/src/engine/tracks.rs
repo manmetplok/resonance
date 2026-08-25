@@ -458,7 +458,7 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // project that never had them; keeping the park across a load would
     // only hold the previous project's WAV mappings open.
     state.take_groups.clear();
-    state.orphaned_take_clips.clear();
+    state.take_clip_park.clear();
     super::takes::publish_take_comp(ctx, state);
 
     // Reset ID counters

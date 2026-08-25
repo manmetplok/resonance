@@ -2001,3 +2001,276 @@ fn a_take_left_removed_stays_parked_across_a_restore() {
     );
     assert_eq!(engine.parked_clip_ids(), vec![100], "it stays parked");
 }
+
+// ---------------------------------------------------------------------------
+// A removal racing a take-clip load (ba todo #1403)
+// ---------------------------------------------------------------------------
+//
+// #1397 makes a removal silent by lifting the take's recording *out of*
+// `ctx.clips`. #1402 makes a project load put it there **asynchronously** —
+// `handle_load_take_clip_from_wav` only submits to a worker pool, and the
+// `AudioClip` arrives some milliseconds later. A `RemoveTake` handled inside
+// that window used to find nothing to park and park nothing, and the worker
+// then published a recording no comp table governs: it plays raw, at full
+// gain, on the ordinary clip path, on top of the comp. That is #1397's
+// "deleting a take makes it louder" returning through a timing window rather
+// than a logic error, and doc #292 records it at peak 1.25 against 1.0.
+//
+// The fix interlocks the removal with the worker's *binding* duplicate check
+// — the one inside `clips.write()` — rather than with the advisory
+// submit-time early return, which by definition cannot see a load already in
+// flight. `park_take_clip` leaves a **claim** in the shared take-clip park
+// when the clip is not in the list yet, under that same write lock, and the
+// worker delivers into the park instead of into the render's input.
+//
+// The two orderings are tested apart: the one below is the real race, and
+// carries a fixture check so it can never pass by quietly winning the race it
+// meant to lose; the one after it constructs the same state deterministically.
+
+/// A real, decodable stereo WAV of constant `level`, `frames` long, at
+/// `audio/clip_{clip_id}.wav`.
+fn write_dc_take_wav(
+    dir: &std::path::Path,
+    clip_id: u64,
+    level: f32,
+    frames: usize,
+) -> std::path::PathBuf {
+    let audio = dir.join("audio");
+    std::fs::create_dir_all(&audio).expect("create audio dir");
+    let path = audio.join(format!("clip_{clip_id}.wav"));
+    resonance_audio::transcode_to_wav(&path, &vec![level; frames * 2], 48_000)
+        .expect("write take wav");
+    path
+}
+
+fn take_clip_load(clip_id: u64, path: std::path::PathBuf) -> resonance_audio::types::AudioCommand {
+    resonance_audio::types::AudioCommand::LoadTakeClipFromWav {
+        clip_id,
+        track_id: 7,
+        start_sample: 0,
+        path,
+        name: format!("Take {clip_id}"),
+    }
+}
+
+/// A lane of two audio takes over `[0, 48_000)`: take 0 names `first`, take
+/// 1 names `second` — the newer pass, and therefore what the un-comped
+/// cover falls back to.
+fn two_audio_take_group(first: u64, second: u64) -> TakeGroup {
+    let slot = TimelineRange::new(0, 48_000);
+    let mut group = TakeGroup::new(1, 7, slot);
+    push_take(&mut group, slot, &TakeContent::Audio { clip_ref: first });
+    push_take(&mut group, slot, &TakeContent::Audio { clip_ref: second });
+    group
+}
+
+fn peak(out: &[f32]) -> f32 {
+    out.iter().fold(0.0f32, |acc, s| acc.max(s.abs()))
+}
+
+/// Spin until every submitted load has landed *somewhere* — the clip list
+/// or the park — so the assertions that follow read a settled engine.
+///
+/// Deliberately counts both, so a broken interlock (which lands the clip in
+/// the list) finishes just as fast as a working one and the test fails on
+/// its assertions rather than on a timeout.
+fn settle(engine: &resonance_audio::__test_support::EngineHandlerHarness, landed: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline
+        && engine.clip_ids().len() + engine.parked_clip_ids().len() < landed
+    {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // A short grace period on top, so a second, wrong publish has time to
+    // show up rather than landing after the assertions have read the list.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+}
+
+/// **The race.** A `RemoveTake` dispatched while the take's recording is
+/// still on its way in from a load worker parks that recording anyway, and
+/// the lane plays only its survivor.
+///
+/// This is the real ordering, exactly as a project load produces it:
+/// `RestoreTakeGroups`, then one `LoadTakeClipFromWav` per take, then a
+/// right-click on a take card the instant the lane is drawn — with nothing
+/// waited on in between.
+#[test]
+fn a_removal_racing_the_take_clip_load_still_parks_the_recording() {
+    let dir = make_tempdir("removal-vs-load-race");
+    // Take 0's recording is a long one on purpose: its load has to still be
+    // in flight when the removal lands. The fixture check below turns a lost
+    // race into a failure rather than a vacuous pass.
+    let removed = write_dc_take_wav(&dir, 100, 1.0, 240_000);
+    let survivor = write_dc_take_wav(&dir, 101, 0.25, 48_000);
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
+    engine.replay_take_lane_command(&take_clip_load(100, removed));
+    engine.replay_take_lane_command(&take_clip_load(101, survivor));
+
+    assert!(
+        !engine.clip_ids().contains(&100),
+        "fixture check: take 0's load must still be in flight when the \
+         removal lands, or this case proves nothing — clips={:?}",
+        engine.clip_ids()
+    );
+
+    engine.remove_take(1, 0);
+
+    settle(&engine, 2);
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![101],
+        "the removed take's recording must not reach the render's input, \
+         however late its load lands — parked={:?}",
+        engine.parked_clip_ids()
+    );
+    assert_eq!(
+        engine.parked_clip_ids(),
+        vec![100],
+        "and it is parked rather than dropped: the undo has to bring the \
+         audio back"
+    );
+
+    let out = engine.render_track(7, 0, 4_096);
+    assert!(
+        (out[2_048] - 0.25).abs() < 1e-6,
+        "the surviving pass covers the slot, got {}",
+        out[2_048]
+    );
+    assert!(
+        peak(&out) <= 0.25 + 1e-4,
+        "peak {} is above the 0.25 the survivor plays — the removed take's \
+         recording is summing onto the comp un-governed",
+        peak(&out)
+    );
+}
+
+/// The same interlock, reached deterministically: a load that lands *after*
+/// its take was removed is delivered to the park, never to the render.
+///
+/// No race at all here — the removal happens with nothing loaded, which is
+/// precisely the state the race leaves behind — so this case pins the
+/// mechanism on every machine and every schedule, while the one above pins
+/// that the real ordering reaches it.
+#[test]
+fn a_take_clip_load_landing_after_its_take_was_removed_goes_to_the_park() {
+    let dir = make_tempdir("load-after-removal");
+    let removed = write_dc_take_wav(&dir, 100, 1.0, 48_000);
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
+
+    engine.remove_take(1, 0);
+    assert!(
+        engine.parked_clip_ids().is_empty(),
+        "precondition: there is no recording to park yet — that is the point"
+    );
+
+    engine.replay_take_lane_command(&take_clip_load(100, removed));
+    settle(&engine, 1);
+
+    assert_eq!(
+        engine.clip_ids(),
+        Vec::<u64>::new(),
+        "a load for a take that is already gone must not enter the clip list"
+    );
+    assert_eq!(engine.parked_clip_ids(), vec![100], "it lands in the park");
+
+    let out = engine.render_track(7, 0, 4_096);
+    assert!(
+        peak(&out) < 1e-4,
+        "nothing may play: take 1's recording was never loaded and take 0 \
+         was removed — peak {}",
+        peak(&out)
+    );
+}
+
+/// Undoing a removal that raced the load brings the recording back
+/// **audibly**, with no second load.
+///
+/// This is why the worker *delivers* into the park rather than dropping the
+/// clip on the floor. Dropping would be enough to make the removal silent —
+/// and would leave the undo restoring a card with no audio under it, which
+/// is the failure #1397 ruling 4 exists to prevent.
+#[test]
+fn undoing_a_removal_that_raced_the_load_restores_the_audio() {
+    let dir = make_tempdir("undo-raced-removal");
+    let removed = write_dc_take_wav(&dir, 100, 1.0, 48_000);
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
+    engine.remove_take(1, 0);
+    engine.replay_take_lane_command(&take_clip_load(100, removed));
+    settle(&engine, 1);
+    assert_eq!(engine.parked_clip_ids(), vec![100], "fixture check: parked");
+
+    // The undo: the app rebuilds its mirror and replays it wholesale.
+    engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
+    // Solo the restored take, so what plays is unambiguously *it* rather
+    // than the cover's latest-pass fallback.
+    engine.set_active_take(1, Some(0));
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "the restore un-parks the recording the worker delivered"
+    );
+    assert!(engine.parked_clip_ids().is_empty(), "and empties the park");
+
+    let out = engine.render_track(7, 0, 4_096);
+    assert!(
+        (out[2_048] - 1.0).abs() < 1e-6,
+        "the restored take must be audible, not a silent card, got {}",
+        out[2_048]
+    );
+}
+
+/// A park claim does not outlive the project that made it, and an ordinary
+/// timeline clip is never swallowed by one.
+///
+/// The claim is on the clip *id*, the worker's interlock is unconditional
+/// (so no future caller can route a load around it), and `ClearAll` resets
+/// `next_clip_id` to 1 — which is the whole hazard: ids **are** reused
+/// across projects. A claim left standing would divert the next project's
+/// clip 100 into the park, and a timeline clip would go missing from the
+/// arrangement with no echo to the app. `ClearAll` therefore empties the
+/// park, claims included.
+///
+/// Driven through `LoadClipFromWav` rather than the take load because that
+/// is where the hazard lives: on the take path a restore always precedes
+/// the load and would drop the claim on its own.
+#[test]
+fn a_park_claim_does_not_outlive_its_project() {
+    let dir = make_tempdir("claim-vs-clear-all");
+    let wav = write_dc_take_wav(&dir, 100, 1.0, 48_000);
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
+    // Take 0 is removed with its recording still in flight: a claim on 100
+    // and no recording behind it.
+    engine.remove_take(1, 0);
+
+    engine.clear_all();
+    engine.drain_events();
+
+    // The next project's *timeline* clip happens to take id 100 — which it
+    // will, because `ClearAll` put the allocator back to 1.
+    engine.load_clip_from_wav(100, 7, 0, wav, "Timeline clip".into());
+    settle(&engine, 1);
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "a claim from the previous project must not swallow this one's clip"
+    );
+    assert!(engine.parked_clip_ids().is_empty());
+    assert!(
+        engine.drain_events().iter().any(|e| matches!(
+            e,
+            resonance_audio::types::AudioEvent::ClipImported { clip_id: 100, .. }
+        )),
+        "and the app must still be told the clip arrived"
+    );
+}

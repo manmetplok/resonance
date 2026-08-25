@@ -191,7 +191,15 @@ pub(crate) struct HandlerState {
     /// restored take to be audible as well as visible. Session-local, like
     /// the id allocators beside it: `ClearAll` empties it, and a project
     /// reload starts from an empty park with the orphaned WAV left on disk.
-    pub orphaned_take_clips: HashMap<ClipId, AudioClip>,
+    ///
+    /// Behind an `Arc` — the only field here that is not purely
+    /// engine-thread-local — because the clip-load worker has to be able to
+    /// see it (ba todo #1403): a removal racing a `LoadTakeClipFromWav`
+    /// that is still in flight parks a *claim*, and the worker delivers the
+    /// finished clip into the park rather than into the render's input.
+    /// [`TakeClipPark`](crate::engine::take_park::TakeClipPark) states the
+    /// locking contract that keeps the two in step.
+    pub take_clip_park: Arc<crate::engine::take_park::TakeClipPark>,
     /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
     /// engine-thread-local; written by the `SetAutomationLane` /
     /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
@@ -272,7 +280,7 @@ impl HandlerState {
             reference: super::reference::ReferencePlayer::new(),
             loop_record_session: None,
             take_groups: HashMap::new(),
-            orphaned_take_clips: HashMap::new(),
+            take_clip_park: Arc::new(crate::engine::take_park::TakeClipPark::default()),
             automation_lanes: automation::AutomationLanes::new(),
             external_instruments: external_instrument::ExternalInstruments::new(),
             pending_latency_ping: None,
