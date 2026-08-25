@@ -64,7 +64,13 @@ pub struct TakeGroupState {
     ///
     /// **This is a cache, and the one piece of this mirror that outlives a
     /// snapshot rebuild** — see [`clear_for_snapshot`](Self::clear_for_snapshot).
-    pub peaks: HashMap<(TakeGroupId, TakeId), TakePeaks>,
+    ///
+    /// **Private, unlike its neighbours.** Every read has to prove which
+    /// recording it is asking about, and a `pub` field would let a caller
+    /// take the table without proving anything —
+    /// [`peaks`](Self::peaks) and [`has_peaks`](Self::has_peaks) are the
+    /// only ways in, and both compare the `clip_ref`.
+    peaks: HashMap<(TakeGroupId, TakeId), TakePeaks>,
 }
 
 /// A take's cached waveform, and the recording it was read from.

@@ -195,22 +195,6 @@ pub(crate) fn replay_take_groups(
             if !present_clips.iter().any(|(id, _, _)| *id == clip_ref) {
                 present_clips.push((clip_ref, group.track_id, take.extent.start));
             }
-                Err(reason) => {
-                    // Loud, because the take is otherwise indistinguishable
-                    // from one that simply recorded silence.
-                    eprintln!(
-                        "project load: take {} of group {} has no usable recorded \
-                         audio ({reason}) — kept in the lane so the comp stays intact",
-                        take.id, group.id
-                    );
-                    // Drop any table read from this recording before it
-                    // went: the take hatches now, and if the file comes
-                    // back the next history step re-reads it rather than
-                    // trusting a cache entry for a file that vanished.
-                    r.take_groups.forget_peaks(group.id, take.id);
-                    r.take_groups.mark_missing(group.id, take.id);
-                }
-            }
         }
     }
 

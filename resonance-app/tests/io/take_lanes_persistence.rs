@@ -534,6 +534,63 @@ fn an_undo_re_reads_no_take_recording() {
     );
 }
 
+/// **A reused take id does not inherit the previous recording's
+/// waveform** (ba todo #1400).
+///
+/// The peak cache survives a diff-replay rebuild so an undo costs no WAV
+/// reads, and it is keyed `(group, take)` — which names a *slot in the
+/// mirror*, not a recording. The engine's `push_take` allocates
+/// `take_id = max(existing) + 1`, a per-group ordinal, while
+/// `next_clip_id` only ever rises. So undoing a capture and recording
+/// again returns the same take id carrying a **different** `clip_ref`,
+/// and a later undo can restore the earlier snapshot with no capture echo
+/// to refresh the table.
+///
+/// That is the sequence below. Without the `clip_ref` compare in
+/// `has_peaks` / `peaks`, the restored take draws the *replacement's*
+/// waveform: a lane confidently showing audio that is not the take's,
+/// which is the class of bug this whole todo exists to remove.
+#[test]
+fn a_reused_take_id_does_not_inherit_the_previous_recordings_waveform() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = authored_project(dir.path());
+
+    // The state to come back to: take 2 names recording 102.
+    let with_102 = app.test_snapshot_for_undo();
+    let peaks_102 = app.test_take_peaks(GROUP, 2).to_vec();
+    assert!(!peaks_102.is_empty());
+
+    // Undo-then-record-again, as the engine produces it: the same take id
+    // returns naming a different recording. Deliberately a different
+    // length *and* amplitude from `write_take_wav`'s, so the two tables
+    // cannot be confused for one another.
+    crate::common::write_take_wav(dir.path(), 103, 48_000, 24_000, |_| 0.25);
+    capture_audio_pass(&mut app, GROUP, 2, 103);
+
+    let peaks_103 = app.test_take_peaks(GROUP, 2).to_vec();
+    assert_ne!(
+        peaks_103, peaks_102,
+        "precondition: the replacement's waveform is distinguishable"
+    );
+
+    // Now undo back to the snapshot that names 102. The cache still holds
+    // 103's table under (GROUP, 2).
+    app.test_begin_restore_from_snapshot(with_102);
+
+    assert_eq!(
+        app.test_take_groups()[0].takes[2].content,
+        TakeContent::Audio { clip_ref: 102 },
+        "precondition: the restored take names the original recording"
+    );
+    assert_eq!(
+        app.test_take_peaks(GROUP, 2),
+        peaks_102.as_slice(),
+        "the lane draws recording 102 — the take's own audio, re-read \
+         because the cached table belonged to 103"
+    );
+    assert!(app.test_missing_takes().is_empty());
+}
+
 /// The half the cache must **not** swallow: a take whose WAV disappears
 /// mid-session is still flagged on the next history step.
 ///
