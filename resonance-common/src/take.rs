@@ -200,13 +200,23 @@ impl Take {
     /// For an audio take it duplicates a fact the *engine* can derive from
     /// the clip — but the **app never holds a take's clip**. A cycle-record
     /// pass reaches the app only through `AudioEvent::TakeCaptured` (no
-    /// `RecordingFinished` is emitted for it), and a project load restores
-    /// take groups without materialising their clips, because a take clip
-    /// is not a timeline clip. So a field carried on the capture event
-    /// alone would be authoritative on one path and absent on the other,
-    /// which is worse than no field: the consumer could not tell which it
-    /// had. Persisting it on the take makes the two paths identical, and
-    /// costs two `u64`s per pass.
+    /// `RecordingFinished` is emitted for it), and a project load
+    /// materialises a take's clip in the **engine** without ever mirroring
+    /// it app-side, because a take clip is not a timeline clip and must
+    /// never enter `Resonance::clips` (ba todo #1396). So a field carried
+    /// on the capture event alone would be authoritative on one path and
+    /// absent on the other, which is worse than no field: the consumer
+    /// could not tell which it had. Persisting it on the take makes the two
+    /// paths identical, and costs two `u64`s per pass.
+    ///
+    /// It also turned out to be what makes the reload *possible*. The
+    /// engine has to put each restored take clip back at the origin capture
+    /// gave it — `mix_track_comp` intersects every span with the clip's
+    /// own `[start_sample, +duration_frames())` — and this field is the
+    /// only persisted record of that origin, since
+    /// `RolledAudioTake::extent` is defined as the rolled clip's own
+    /// position. `LoadTakeClipFromWav` reads its `start_sample` straight
+    /// off it (ba todo #1402).
     ///
     /// # MIDI takes
     ///

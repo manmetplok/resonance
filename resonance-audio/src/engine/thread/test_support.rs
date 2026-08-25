@@ -164,6 +164,84 @@ impl EngineHandlerHarness {
         self.shared.take_comp.load_full()
     }
 
+    /// Replay one command from a captured project-load command stream
+    /// through the engine's **real** handler; reports whether this harness
+    /// understood it.
+    ///
+    /// Deliberately partial, and that is the point. A project load emits
+    /// the whole command stream — tracks, plugins, tempo, timeline clips —
+    /// and running all of it headlessly would drag CLAP into a take-lane
+    /// test. Only the take-lane restore is dispatched here, so a test can
+    /// hand over the entire captured stream and end up with an engine
+    /// whose take state was built **by the load alone**, from cold, with no
+    /// capture anywhere in its history. Anything the comp still renders
+    /// then, it renders because the load put it there.
+    pub fn replay_take_lane_command(&mut self, cmd: &AudioCommand) -> bool {
+        match cmd {
+            AudioCommand::RestoreTakeGroups { groups } => {
+                let groups = groups.clone();
+                self.with_ctx(|ctx, state| takes::handle_restore_take_groups(ctx, state, groups));
+                true
+            }
+            AudioCommand::LoadTakeClipFromWav {
+                clip_id,
+                track_id,
+                start_sample,
+                path,
+                name,
+            } => {
+                let (clip_id, track_id, start_sample) = (*clip_id, *track_id, *start_sample);
+                let (path, name) = (path.clone(), name.clone());
+                self.with_ctx(|ctx, state| {
+                    crate::engine::clips::handle_load_take_clip_from_wav(
+                        ctx,
+                        state,
+                        clip_id,
+                        track_id,
+                        start_sample,
+                        path,
+                        name,
+                    )
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Block until the engine's clip list holds `expected` clips, or
+    /// `timeout` elapses; reports whether it got there.
+    ///
+    /// Clip loading is handed to a worker (`ImportQueue`) so the control
+    /// thread never blocks on an mmap, which means "the command was
+    /// dispatched" and "the clip is in the list" are two different moments.
+    /// A test that renders without waiting would race the worker and read
+    /// silence for reasons that have nothing to do with what it asserts.
+    pub fn wait_for_clips(&self, expected: usize, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.clips.read().len() >= expected {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Move the engine's audio clips out of the harness, for handing to a
+    /// renderer.
+    ///
+    /// Draining rather than copying because [`AudioClip`] is deliberately
+    /// not `Clone` (a mapped source is shared through an `Arc`, an in-RAM
+    /// one would be duplicated wholesale). A test that needs to render the
+    /// same restored state twice — live and bounced — rebuilds the harness
+    /// twice, which is also the more honest reload.
+    pub fn take_clips(&mut self) -> Vec<AudioClip> {
+        std::mem::take(&mut *self.clips.write())
+    }
+
     // -- take removal (ba todo #1397) ------------------------------------
 
     /// Push a recorded take's clip into the shared clip list, where
@@ -179,6 +257,12 @@ impl EngineHandlerHarness {
         let mut ids: Vec<ClipId> = self.clips.read().iter().map(|c| c.id).collect();
         ids.sort_unstable();
         ids
+    }
+
+    /// The clip-id allocator's current value — the reservation `#1393` and
+    /// the clip loads both raise.
+    pub fn next_clip_id(&self) -> ClipId {
+        self.state.next_clip_id
     }
 
     /// Clip ids currently parked out of the render because their take was

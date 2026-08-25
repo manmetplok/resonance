@@ -57,6 +57,18 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// keeps its id, and every other segment of the cover keeps playing.
 /// Dropping it would renumber nothing and break everything.
 ///
+/// **The groups are only half of it** (ba todo #1402). `RestoreTakeGroups`
+/// rebuilds the engine's take-group *store*; it does not rebuild the audio
+/// those groups name, and nothing else does either — a take clip enters the
+/// engine only through the capture path, where `roll_audio_pass` pushes the
+/// `AudioClip` straight into the clip list and emits no clip command at
+/// all. So a reloaded project still rendered **silence**: the comp table
+/// resolved its spans to clip ids the engine did not hold. Each take whose
+/// WAV is still on disk therefore gets an
+/// [`AudioCommand::LoadTakeClipFromWav`] as well, sent *after* the restore
+/// so the clip is governed by the published table from the moment it
+/// exists.
+///
 /// **Missing recorded audio.** An audio take names its WAV by `clip_ref`,
 /// resolved against the project directory through
 /// [`clip_audio_file`](crate::project::clip_audio_file). A take whose file
@@ -74,6 +86,11 @@ pub(crate) fn replay_take_groups(
     project: &ProjectFile,
     project_dir: &std::path::Path,
 ) {
+    // The take clips whose audio is still on disk, in restore order, as
+    // `(clip_ref, track_id, start_sample)`. Collected while seeding the
+    // mirror and sent after the group restore — see below.
+    let mut present_clips: Vec<(resonance_audio::types::ClipId, TrackId, u64)> = Vec::new();
+
     for group in &project.take_groups {
         r.take_groups.groups.push(group.clone());
         for take in &group.takes {
@@ -81,7 +98,33 @@ pub(crate) fn replay_take_groups(
                 continue;
             };
             let rel = crate::project::clip_audio_file(clip_ref);
+            // TODO(#1400 merge): this `exists()` stat is being replaced by
+            // `load_take_peaks`, whose `Err` arm already flags the take
+            // missing. The take-clip load below should move into its `Ok`
+            // arm, so one read decides both "can the lane draw it?" and
+            // "should the engine be asked for it?".
+            //
+            // That closes the last inconsistency here. Today an *absent*
+            // WAV degrades quietly and per-take (kept, flagged, drawn as
+            // missing), while a *corrupt* one — present, so it passes this
+            // stat and gets asked for — raises a global error banner from
+            // the load worker while the lane still draws the take as
+            // present and the comp renders its span silent. That is the
+            // same false-presence problem #1400 is fixing on the drawing
+            // path. Routing the send off the same read collapses the
+            // corrupt case into the missing case, with no event needed
+            // back on a deliberately silent command. Not done here because
+            // #1400 is unmerged; whoever lands second wires it, and the
+            // two changes meet in this function anyway.
             if project_dir.join(&rel).exists() {
+                // `extent` is this pass's own `[start, +duration)` on the
+                // timeline — `RolledAudioTake::extent` is defined as the
+                // rolled clip's position — so it is an exact record of
+                // where capture put the clip, including a punched-in pass
+                // 0 that starts later than the slot.
+                if !present_clips.iter().any(|(id, _, _)| *id == clip_ref) {
+                    present_clips.push((clip_ref, group.track_id, take.extent.start));
+                }
                 continue;
             }
             // Loud, because the take is otherwise indistinguishable from
@@ -98,6 +141,42 @@ pub(crate) fn replay_take_groups(
     let _ = r.engine.send(AudioCommand::RestoreTakeGroups {
         groups: r.take_groups.groups.clone(),
     });
+
+    // ...and then the audio those groups name (ba todo #1402). The groups
+    // alone were never enough: a take clip enters the engine *only* on the
+    // capture path, which pushes the `AudioClip` straight into the clip
+    // list, so a reloaded project had `build_comp_table` resolving spans to
+    // clip ids the engine did not hold and the comp rendered silence — on
+    // playback and on bounce alike.
+    //
+    // **After the restore, not before.** The restore publishes the comp
+    // table, which is what marks these clips *governed*; until it does,
+    // any take clip in the engine's list is fair game for the ordinary
+    // clip path, and a lane's overlapping passes would all play at once.
+    // Sending the loads second means a take clip is governed from the
+    // first instant it can exist. It does leave the mirror-image window —
+    // a table naming a clip not yet loaded — but that one is benign
+    // (`mix_track_comp` skips a span whose clip it cannot find) and
+    // unavoidable anyway, because the load itself is asynchronous.
+    //
+    // A take whose WAV is gone is simply not asked for: it stays flagged
+    // and stays in the group, so the rest of the cover keeps playing and
+    // the load does not fail (ba todo #412's keep-and-flag rule). Asking
+    // would only trade a silent span for an error banner.
+    //
+    // MIDI takes carry their notes inline and name no clip, so they
+    // contribute nothing here.
+    for (clip_id, track_id, start_sample) in present_clips {
+        let _ = r.engine.send(AudioCommand::LoadTakeClipFromWav {
+            clip_id,
+            track_id,
+            start_sample,
+            path: project_dir.join(crate::project::clip_audio_file(clip_id)),
+            // The name capture gives a take clip, so a restored one is not
+            // distinguishable from a freshly recorded one anywhere.
+            name: format!("Take {clip_id}"),
+        });
+    }
 }
 
 /// Restore the Performance-mode footer selection (epic #11, todo #312):

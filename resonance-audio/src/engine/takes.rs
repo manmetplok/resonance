@@ -395,17 +395,28 @@ pub fn push_take(
 ///   on top of a session that had already recorded several.
 /// - **An audio take's `clip_ref` is a reservation, not just a reference**
 ///   (ba todo #1393). `ClearAll` resets `next_clip_id` to 1 on every
-///   project load, and the only paths that push it back past a restored id
-///   are `LoadClipFromWav` and its MIDI twin — which *timeline* clips take
-///   and take clips never do (`roll_audio_pass` writes `audio/clip_N.wav`
-///   and hands the take straight to [`store_take_in`]). So a project whose
-///   takes hold `clip_ref` 100..102 while its timeline clips stop at 5
+///   project load, and nothing used to push it back past a restored take's
+///   id: `roll_audio_pass` writes `audio/clip_N.wav` and hands the take
+///   straight to [`store_take_in`], so a take clip took none of the
+///   clip-load paths that do the bump. A project whose takes hold
+///   `clip_ref` 100..102 while its timeline clips stop at 5 therefore
 ///   reopened with `next_clip_id = 6`, and the next recording or import
 ///   **overwrote `audio/clip_100.wav`** — the take then silently played the
 ///   new material. Same shape as the media pool's `ReserveAssetIds` (ba doc
 ///   #276 BUG 2), reserved here rather than through a second command
 ///   because this is the one path that already carries every restored
 ///   `clip_ref`, so it cannot go out of step with what was restored.
+///
+///   Still load-bearing now that a restore also loads the take clips
+///   (`LoadTakeClipFromWav`, ba todo #1402). That load raises the counter
+///   the same way — both take a `max` and neither ever lowers it, so the
+///   two compose in either order, measured by
+///   `the_clip_reservation_and_the_take_clip_load_compose_in_either_order`
+///   rather than assumed. But it is sent **only for a take whose WAV is
+///   still on disk**: a take whose recording has gone missing is kept and
+///   flagged rather than dropped (ba todo #412), and its `clip_ref` must
+///   still be reserved or the next recording would claim the very file the
+///   user might yet restore. This line is all that covers such a take.
 ///
 /// MIDI takes need nothing analogous: `TakeContent::Midi` carries its notes
 /// inline and names no clip and no file, so it consumes no id from either

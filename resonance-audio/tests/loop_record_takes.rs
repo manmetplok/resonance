@@ -1709,3 +1709,295 @@ fn an_unmatched_run_opens_a_new_lane() {
     assert_eq!(next, 6, "and only one");
     assert_eq!(slot, SLOT, "bound to the region it was recorded over");
 }
+
+// ---------------------------------------------------------------------------
+// The clip-id reservation and the take-clip load compose (ba todo #1402/#1393)
+// ---------------------------------------------------------------------------
+//
+// A project load now raises `next_clip_id` from two places: #1393's
+// reservation inside `restore_take_groups_in_place`, and the
+// `max(clip_id + 1)` every clip load does. Both take a `max` and neither
+// ever lowers the counter, so the order they arrive in *should* be moot —
+// which is worth measuring rather than assuming, because getting it wrong
+// re-opens #1393's bug in its nastiest form: the allocator would hand the
+// next recording an id whose WAV a restored take is still playing, and
+// nothing would look wrong until the file was clobbered.
+
+/// A real, decodable stereo WAV at `audio/clip_{clip_id}.wav`.
+fn write_take_clip_wav(dir: &std::path::Path, clip_id: u64) -> std::path::PathBuf {
+    let audio = dir.join("audio");
+    std::fs::create_dir_all(&audio).expect("create audio dir");
+    let path = audio.join(format!("clip_{clip_id}.wav"));
+    resonance_audio::transcode_to_wav(&path, &vec![0.5f32; 2_048], 48_000).expect("write wav");
+    path
+}
+
+/// Drive both real handlers through the engine harness and report where
+/// the clip allocator ends up.
+fn allocator_after(order: &[resonance_audio::types::AudioCommand]) -> u64 {
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    for cmd in order {
+        assert!(
+            engine.replay_take_lane_command(cmd),
+            "harness must understand every command in this fixture"
+        );
+    }
+    assert!(
+        engine.wait_for_clips(1, std::time::Duration::from_secs(5)),
+        "the take clip never loaded"
+    );
+    engine.next_clip_id()
+}
+
+/// Restore-then-load and load-then-restore leave the clip allocator in the
+/// same place, past every restored `clip_ref`.
+#[test]
+fn the_clip_reservation_and_the_take_clip_load_compose_in_either_order() {
+    let dir = make_tempdir("reserve-compose");
+    // `saved_group(1, 7, 3)` holds clip_refs 100..102, so the reservation
+    // has to reach 103 whichever way round the two commands arrive.
+    let path = write_take_clip_wav(&dir, 100);
+
+    let restore = resonance_audio::types::AudioCommand::RestoreTakeGroups {
+        groups: vec![saved_group(1, 7, 3)],
+    };
+    let load = resonance_audio::types::AudioCommand::LoadTakeClipFromWav {
+        clip_id: 100,
+        track_id: 7,
+        start_sample: 0,
+        path,
+        name: "Take 100".into(),
+    };
+
+    let restore_first = allocator_after(&[restore.clone(), load.clone()]);
+    let load_first = allocator_after(&[load, restore]);
+
+    assert_eq!(
+        restore_first, 103,
+        "the reservation must clear every restored clip_ref, and the load \
+         (which only knows about clip 100) must not pull it back down"
+    );
+    assert_eq!(
+        load_first, restore_first,
+        "the two allocator bumps both take a max, so their order is moot"
+    );
+}
+
+/// Two loads for the same take clip issued **back to back**, with no wait
+/// between them, still leave exactly one clip.
+///
+/// This is the case the submit-time early return cannot cover, and the
+/// reason the binding duplicate check lives *inside* the `clips.write()`
+/// block in `submit_clip_load`: the load is asynchronous, so when the
+/// second command is dispatched the first one's worker has not published
+/// yet and the submit-time scan of `ctx.clips` finds nothing. Delete the
+/// lock-scoped check and this yields `[100, 100]` — a duplicated
+/// `AudioClip` doubling that take's level everywhere the comp reads it.
+///
+/// Deliberately distinct from the test below, which waits between loads
+/// and therefore only ever exercises the submit-time optimisation.
+#[test]
+fn two_take_clip_loads_racing_each_other_still_leave_one_clip() {
+    let dir = make_tempdir("load-race");
+    let path = write_take_clip_wav(&dir, 100);
+    let load = resonance_audio::types::AudioCommand::LoadTakeClipFromWav {
+        clip_id: 100,
+        track_id: 7,
+        start_sample: 0,
+        path,
+        name: "Take 100".into(),
+    };
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    // No `wait_for_clips` between these two: the point is that the second
+    // dispatch happens while the first load is still in flight.
+    engine.replay_take_lane_command(&load);
+    engine.replay_take_lane_command(&load);
+
+    assert!(
+        engine.wait_for_clips(1, std::time::Duration::from_secs(5)),
+        "the take clip never loaded at all"
+    );
+    // Let a second worker publish if one is going to.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "two racing loads of one take clip must not both push it"
+    );
+}
+
+/// Loading a take clip the engine already holds is a no-op on the clip
+/// list — it neither duplicates the `AudioClip` nor reloads it.
+///
+/// The restore path fires on the undo/redo diff replay too, where every
+/// take clip is already loaded; a duplicated `AudioClip` would double the
+/// take's level everywhere the comp reads it. (This is also the guard that
+/// keeps a restore from resurrecting a clip that take removal has parked
+/// out of the render's input — see ba todo #1397.)
+#[test]
+fn re_loading_a_take_clip_the_engine_already_holds_is_a_no_op() {
+    let dir = make_tempdir("reload-noop");
+    let path = write_take_clip_wav(&dir, 100);
+    let load = resonance_audio::types::AudioCommand::LoadTakeClipFromWav {
+        clip_id: 100,
+        track_id: 7,
+        start_sample: 0,
+        path,
+        name: "Take 100".into(),
+    };
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.replay_take_lane_command(&load);
+    assert!(
+        engine.wait_for_clips(1, std::time::Duration::from_secs(5)),
+        "first load must land"
+    );
+
+    // Three more times, as repeated undo/redo replays would.
+    for _ in 0..3 {
+        engine.replay_take_lane_command(&load);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "the clip list must still hold exactly one copy of the take clip"
+    );
+    assert_eq!(
+        engine.next_clip_id(),
+        101,
+        "and the allocator still clears it"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Restoring a take clip vs. take removal's park (ba todo #1402 x #1397)
+// ---------------------------------------------------------------------------
+//
+// #1397 makes a removed take's recording *parked*: lifted out of the shared
+// clip list into `HandlerState::orphaned_take_clips`, so it stops sounding
+// without being destroyed (a removal is undoable and the WAV is untouched).
+// #1402 makes a restore *load* take clips from disk. The two meet on the
+// undo path, where a restore both re-claims a take and is followed by a load
+// for it — and the danger is that the take ends up in the clip list twice,
+// once un-parked and once freshly mapped, which would double its level
+// everywhere the comp reads it.
+//
+// This was argued from the ordering when the two were on separate branches;
+// now that both are in the tree it is measured.
+
+/// An in-RAM DC clip, standing in for the recording capture left in the
+/// clip list. Deliberately a different level from what
+/// [`write_take_clip_wav`] puts on disk, so a test can tell "the parked
+/// clip survived" from "the loader re-read the WAV".
+fn memory_clip(id: u64, value: f32) -> resonance_audio::types::AudioClip {
+    resonance_audio::types::AudioClip {
+        id,
+        track_id: 7,
+        start_sample: 0,
+        source: resonance_audio::types::ClipSource::Memory(vec![value; 48_000 * 2]),
+        name: format!("Take {id}"),
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: Default::default(),
+        fade_out_frames: 0,
+        fade_out_curve: Default::default(),
+        gain_db: 0.0,
+        vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
+        tuning_render_cache: None,
+    }
+}
+
+/// A take group holding one audio take that names `clip_ref`.
+fn one_audio_take_group(clip_ref: u64) -> TakeGroup {
+    let slot = TimelineRange::new(0, 48_000);
+    let mut group = TakeGroup::new(1, 7, slot);
+    push_take(&mut group, slot, &TakeContent::Audio { clip_ref });
+    group
+}
+
+/// An undo that brings a removed take back un-parks its recording, and the
+/// take-clip load that follows the restore finds it already there and does
+/// nothing. One clip, not two, and it is the **parked** one — never
+/// re-read from disk.
+#[test]
+fn a_restored_take_clip_does_not_resurrect_the_parked_one() {
+    let dir = make_tempdir("unpark-vs-load");
+    let path = write_take_clip_wav(&dir, 100);
+    let group = one_audio_take_group(100);
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.seed_take_group(group.clone());
+    // The clip capture left behind, distinguishable from anything the
+    // loader would produce: the WAV on disk is DC 0.5, this is DC 1.0.
+    engine.push_clip(memory_clip(100, 1.0));
+    assert_eq!(engine.clip_ids(), vec![100], "precondition: the take is loaded");
+
+    // Remove the take — #1397 parks its recording out of the render.
+    engine.remove_take(1, 0);
+    assert_eq!(engine.clip_ids(), Vec::<u64>::new(), "the removal parks the clip");
+    assert_eq!(engine.parked_clip_ids(), vec![100]);
+
+    // Undo: the restore re-claims the take and un-parks its clip...
+    engine.restore_take_groups(vec![group]);
+    assert_eq!(engine.clip_ids(), vec![100], "the restore un-parks it");
+    assert!(engine.parked_clip_ids().is_empty(), "and the park is emptied");
+
+    // ...and then the load that always follows a restore arrives.
+    engine.replay_take_lane_command(&resonance_audio::types::AudioCommand::LoadTakeClipFromWav {
+        clip_id: 100,
+        track_id: 7,
+        start_sample: 0,
+        path,
+        name: "Take 100".into(),
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "the load must not add a second copy alongside the un-parked one"
+    );
+    // The surviving clip is the parked original (DC 1.0), not a fresh read
+    // of the WAV (DC 0.5) — the load really did nothing at all.
+    let out = engine.render_track(7, 0, 4_096);
+    let body = out[1_024];
+    assert!(
+        (body - 1.0).abs() < 1e-6,
+        "the un-parked recording must be what plays, got {body}"
+    );
+}
+
+/// A take the restore does **not** re-claim stays parked: no load is ever
+/// sent for it, because the app derives its load list from the same
+/// restored groups the engine derives its claim set from.
+#[test]
+fn a_take_left_removed_stays_parked_across_a_restore() {
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.seed_take_group(one_audio_take_group(100));
+    engine.push_clip(memory_clip(100, 1.0));
+    engine.remove_take(1, 0);
+    assert_eq!(engine.parked_clip_ids(), vec![100]);
+
+    // A restore carrying the group *without* that take — the redo of the
+    // removal. Nothing un-parks, and the app sends no load for a take it
+    // is not restoring.
+    let slot = TimelineRange::new(0, 48_000);
+    engine.restore_take_groups(vec![TakeGroup::new(1, 7, slot)]);
+
+    assert_eq!(
+        engine.clip_ids(),
+        Vec::<u64>::new(),
+        "a take that is still removed must not come back"
+    );
+    assert_eq!(engine.parked_clip_ids(), vec![100], "it stays parked");
+}

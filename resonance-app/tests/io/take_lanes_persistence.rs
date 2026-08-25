@@ -695,3 +695,459 @@ fn undoing_a_capture_re_syncs_the_engines_take_groups() {
         "and the surviving take is the first pass"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The restored comp is AUDIBLE, not just present (ba todo #1402)
+// ---------------------------------------------------------------------------
+//
+// `RestoreTakeGroups` (todo #1394) put the take *groups* back into the
+// engine. It did not put their *audio* back: a take clip enters the engine
+// only through the capture path, which pushes the `AudioClip` straight into
+// the clip list, so after a reload `build_comp_table` resolved spans to clip
+// ids the engine no longer held and the comp rendered silence — on playback
+// and on bounce — exactly the bug #1394 was believed to have closed.
+//
+// #1394's own `a_restored_comp_bounces_identically_to_before_the_save`
+// missed it because it simulates the reload at the wrong layer: it serde
+// round-trips the take *group* while the fixture keeps handing the renderer
+// its clips, so the engine never has to have loaded them. These tests take
+// the clips away — the engine below is built from cold and driven by
+// nothing but the commands the project load emitted.
+
+use resonance_audio::__test_support::{
+    build_comp_table, render_take_comp_for_test, EngineHandlerHarness,
+};
+use resonance_audio::transcode_to_wav;
+use resonance_audio::types::{AudioClip, ClipSource, Track};
+
+/// A short slot at a **non-zero** start, so the restored clip's origin is
+/// load-bearing: `mix_track_comp` intersects every span with the clip's
+/// `[start_sample, +duration_frames())`, so a clip restored to the wrong
+/// origin misses the span entirely and renders silence.
+const RSLOT: TimelineRange = TimelineRange {
+    start: 8_000,
+    length: 4_096,
+};
+const A_CLIP: u64 = 200;
+const B_CLIP: u64 = 201;
+/// Distinct DC levels, so "which take is audible where" is readable
+/// straight off the rendered samples.
+const A_LEVEL: f32 = 1.0;
+const B_LEVEL: f32 = 0.25;
+
+/// How far into the slot pass 0 punched in.
+///
+/// **Take 0's extent is deliberately NOT its slot.** Cycle recording gives
+/// pass 0 the punch-in point as its clip start rather than the loop start,
+/// which is the whole reason `Take::extent` is persisted (ba todo #1396) —
+/// so a fixture where every take fills its slot cannot tell
+/// `take.extent.start` apart from `group.slot.start`, and an
+/// implementation that reached for the slot would pass. It is the same
+/// adjacent-same-typed-values trap either way round; the fixture has to
+/// separate them.
+const PUNCH: u64 = 512;
+
+/// The takes this suite's reload fixture is built from: clip id, DC level,
+/// and the extent capture would have recorded — take 0 punched in, take 1
+/// filling its slot.
+fn reload_takes() -> [(u64, f32, TimelineRange); 2] {
+    [
+        (
+            A_CLIP,
+            A_LEVEL,
+            TimelineRange::new(RSLOT.start + PUNCH, RSLOT.length - PUNCH),
+        ),
+        (B_CLIP, B_LEVEL, RSLOT),
+    ]
+}
+
+/// Write a real, decodable DC-valued stereo WAV where a take's `clip_ref`
+/// resolves. Unlike [`write_take_wav`], which only has to satisfy an
+/// existence check, this one is actually mmap'd and rendered.
+///
+/// `frames` is the take's *extent* length, not the slot's: a punched-in
+/// pass recorded fewer frames, and the clip has to be that long or the
+/// engine's `[start_sample, +duration_frames())` intersection would not
+/// match what capture left behind.
+fn write_dc_take_wav(dir: &Path, clip_ref: u64, level: f32, frames: u64) {
+    let audio = dir.join("audio");
+    std::fs::create_dir_all(&audio).expect("create audio dir");
+    let samples = vec![level; frames as usize * 2];
+    transcode_to_wav(
+        &audio.join(format!("clip_{clip_ref}.wav")),
+        &samples,
+        48_000,
+    )
+    .expect("write take wav");
+}
+
+/// Mirror the `AudioClip` a finished cycle-record pass leaves in the
+/// engine's clip list — `RecordingState::roll_audio_pass` builds exactly
+/// this: the rolled clip id, the armed track, the pass's start on the
+/// timeline, no trims, no fades, unity gain.
+///
+/// This is the "before the save" side of the comparison: the engine as
+/// capture leaves it, which is the state a reload has to reproduce.
+fn captured_clip(clip_ref: u64, dir: &Path, extent: TimelineRange) -> AudioClip {
+    let path = dir.join(format!("audio/clip_{clip_ref}.wav"));
+    AudioClip {
+        id: clip_ref,
+        track_id: TRACK,
+        // Where the pass really started — the punch-in point for take 0,
+        // not the slot start.
+        start_sample: extent.start,
+        source: ClipSource::open_wav(&path).expect("open take wav"),
+        name: format!("Take {clip_ref}"),
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: Default::default(),
+        fade_out_frames: 0,
+        fade_out_curve: Default::default(),
+        gain_db: 0.0,
+        vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
+        tuning_render_cache: None,
+    }
+}
+
+/// An app holding two audio takes over [`RSLOT`], each backed by a real
+/// WAV, comped so the first half plays take 0 and the second half take 1.
+///
+/// Take 0 is a **punched-in** pass ([`PUNCH`] frames into the slot); take 1
+/// fills the slot. So the fixture carries one take whose extent differs
+/// from its slot and one whose does not, and a restore that reached for
+/// `group.slot.start` gets take 0 wrong while still getting take 1 right.
+fn comped_project(dir: &Path) -> Resonance {
+    let mut app = app_at(dir);
+    for (pass, (clip_ref, level, extent)) in reload_takes().into_iter().enumerate() {
+        write_dc_take_wav(dir, clip_ref, level, extent.length);
+        app.test_apply_engine_event(AudioEvent::TakeCaptured {
+            group_id: GROUP,
+            take_id: pass as u64,
+            track_id: TRACK,
+            slot: RSLOT,
+            pass_index: pass as u32,
+            // What this pass really recorded over — and, for an audio
+            // take, the record of where capture put its clip.
+            extent,
+            content: TakeContent::Audio { clip_ref },
+        });
+    }
+    app.test_apply_engine_event(AudioEvent::TakeCompChanged {
+        group_id: GROUP,
+        segments: vec![
+            CompSegment {
+                range: TimelineRange::new(RSLOT.start, RSLOT.length / 2),
+                take_id: 0,
+            },
+            CompSegment {
+                range: TimelineRange::new(RSLOT.start + RSLOT.length / 2, RSLOT.length / 2),
+                take_id: 1,
+            },
+        ],
+    });
+    app
+}
+
+/// The commands a real save + reload of `dir`'s project emits, through the
+/// on-disk hop rather than an in-memory hand-off.
+fn commands_from_a_real_reload(dir: &Path, app: &Resonance) -> Vec<AudioCommand> {
+    let file = app.test_build_project_file();
+    save_project(dir, &file, &[], &[]).expect("save project");
+    let loaded = load_project(dir).expect("load project");
+
+    let mut reopened = app_at(dir);
+    let rx = reopened.test_capture_engine();
+    reopened.test_replay_loaded_project_from(loaded);
+    drain(&rx)
+}
+
+/// An engine built **from cold** — no tracks, no clips, no take groups, no
+/// capture in its history — and then driven by `cmds`, of which it obeys
+/// only the take-lane restore.
+///
+/// This is what makes these tests bite where #1394's did not: nothing
+/// hands the renderer a clip. Every clip the comp finds below got there
+/// because the project load told the engine to load it.
+fn engine_rebuilt_by(cmds: &[AudioCommand]) -> EngineHandlerHarness {
+    let mut engine = EngineHandlerHarness::new();
+    for cmd in cmds {
+        engine.replay_take_lane_command(cmd);
+    }
+    engine
+}
+
+/// Render `[RSLOT]` on `TRACK` through the production render block.
+fn render(clips: Vec<AudioClip>, table: &resonance_audio::__test_support::CompRenderTable, live: bool) -> Vec<f32> {
+    let out = render_take_comp_for_test(
+        vec![Track::new(TRACK, "comped".into())],
+        clips,
+        table,
+        RSLOT.start,
+        RSLOT.length as usize,
+        48_000,
+        live,
+    );
+    out.chunks(2).map(|f| f[0]).collect()
+}
+
+/// The comp as it sounded before the save: the engine's take-group store
+/// as capture left it, and the clips capture pushed into the clip list.
+fn render_before_the_save(dir: &Path, app: &Resonance, live: bool) -> Vec<f32> {
+    let groups: std::collections::HashMap<u64, TakeGroup> = app
+        .test_build_project_file()
+        .take_groups
+        .into_iter()
+        .map(|g| (g.id, g))
+        .collect();
+    render(
+        reload_takes()
+            .into_iter()
+            .map(|(clip_ref, _, extent)| captured_clip(clip_ref, dir, extent))
+            .collect(),
+        &build_comp_table(&groups),
+        live,
+    )
+}
+
+/// The comp after a real save + reload, rendered out of an engine that
+/// holds only what the load put there.
+fn render_after_the_reload(cmds: &[AudioCommand], live: bool) -> Vec<f32> {
+    let mut engine = engine_rebuilt_by(cmds);
+    assert!(
+        engine.wait_for_clips(2, std::time::Duration::from_secs(5)),
+        "the reload never got the take clips into the engine — the comp \
+         can only render silence; loaded clip ids: {:?}",
+        engine.clip_ids()
+    );
+    let table = engine.published_comp_table();
+    render(engine.take_clips(), &table, live)
+}
+
+/// **The acceptance test for ba todo #1402.** A comp across two takes
+/// plays and bounces the same after a save + reload as it did before.
+///
+/// Sample-for-sample, out of an engine rebuilt from cold, so losing the
+/// clips (the #1402 bug), the segment order, the slot binding or a clip's
+/// origin all fail here rather than passing on a "something came out"
+/// check.
+#[test]
+fn a_reloaded_comp_still_plays_and_bounces_what_it_did_before_the_save() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = comped_project(dir.path());
+
+    let before_live = render_before_the_save(dir.path(), &app, true);
+    let before_bounce = render_before_the_save(dir.path(), &app, false);
+    assert_eq!(
+        before_live, before_bounce,
+        "the pre-save comp must already play as it bounces, or the \
+         comparison below is measuring the wrong thing"
+    );
+
+    // Not vacuous: the two takes really are distinguishable, and the comp
+    // really does switch between them mid-slot.
+    let a_probe = (RSLOT.length / 4) as usize;
+    let b_probe = (RSLOT.length * 3 / 4) as usize;
+    assert!(
+        (before_live[a_probe] - A_LEVEL).abs() < 1e-6,
+        "first half must be take 0 at {A_LEVEL}, got {}",
+        before_live[a_probe]
+    );
+    assert!(
+        (before_live[b_probe] - B_LEVEL).abs() < 1e-6,
+        "second half must be take 1 at {B_LEVEL}, got {}",
+        before_live[b_probe]
+    );
+
+    // And the punch-in is audible in the render, not just in the metadata:
+    // take 0's clip starts PUNCH frames into the slot, so the comp has
+    // nothing to read before that and renders silence there. A clip
+    // restored at the slot start instead would fill this gap — which is
+    // what makes the sample-for-sample comparison below discriminate
+    // `take.extent.start` from `group.slot.start`.
+    assert!(
+        before_live[..(PUNCH as usize)]
+            .iter()
+            .all(|s| s.abs() < 1e-6),
+        "the punched-in head of the slot must be silent before the take starts"
+    );
+    // Past the take's own anti-click ramp (`CLIP_DECLICK_FRAMES` = 96) and
+    // short of the seam crossfade into take 1.
+    assert!(
+        before_live[(PUNCH + 128) as usize..a_probe]
+            .iter()
+            .all(|s| (s - A_LEVEL).abs() < 1e-6),
+        "and take 0 must be at full level once its clip has begun"
+    );
+
+    let cmds = commands_from_a_real_reload(dir.path(), &app);
+    let after_live = render_after_the_reload(&cmds, true);
+    let after_bounce = render_after_the_reload(&cmds, false);
+
+    assert_eq!(
+        after_live, after_bounce,
+        "a reloaded comp must bounce exactly as it plays"
+    );
+    assert_eq!(
+        after_live, before_live,
+        "a reloaded comp must render sample-for-sample as it did before the save"
+    );
+}
+
+/// The clips must be **governed** after a reload too. They are ordinary
+/// `AudioClip`s in the engine's list, so if the comp table did not claim
+/// them the raw, overlapping passes would all play at once on the normal
+/// clip path, on top of the composite.
+#[test]
+fn reloaded_take_clips_are_governed_so_the_raw_passes_never_double_play() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = comped_project(dir.path());
+    let cmds = commands_from_a_real_reload(dir.path(), &app);
+
+    let engine = engine_rebuilt_by(&cmds);
+    let table = engine.published_comp_table();
+    assert!(
+        table.is_governed(A_CLIP) && table.is_governed(B_CLIP),
+        "both restored take clips must be governed"
+    );
+}
+
+/// The comp table is published **before** the clips are asked for, so a
+/// take clip is governed from the first instant it can exist.
+///
+/// The reverse order leaves a window in which the raw passes are loaded
+/// but unclaimed, and every one of them plays. The window this order does
+/// leave — a table naming a clip not yet loaded — is benign: a span whose
+/// clip is missing is skipped, and the load is asynchronous regardless, so
+/// no send order could close it.
+#[test]
+fn the_restore_publishes_the_comp_table_before_it_asks_for_the_clips() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = comped_project(dir.path());
+    let cmds = commands_from_a_real_reload(dir.path(), &app);
+
+    let restore = cmds
+        .iter()
+        .position(|c| matches!(c, AudioCommand::RestoreTakeGroups { .. }))
+        .expect("the load restores the take groups");
+    let first_load = cmds
+        .iter()
+        .position(|c| matches!(c, AudioCommand::LoadTakeClipFromWav { .. }))
+        .expect("the load asks for the take clips");
+    assert!(
+        restore < first_load,
+        "RestoreTakeGroups must precede the take clip loads"
+    );
+}
+
+/// A take whose WAV is gone is still flagged and still restored, and the
+/// load does not fail: no clip command is sent for it, the group keeps the
+/// take, and every other segment of the cover keeps playing (#412's rule).
+#[test]
+fn a_missing_take_wav_is_flagged_and_asked_for_by_nobody() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = comped_project(dir.path());
+    let file = app.test_build_project_file();
+    save_project(dir.path(), &file, &[], &[]).expect("save project");
+    std::fs::remove_file(dir.path().join(format!("audio/clip_{B_CLIP}.wav")))
+        .expect("remove take wav");
+    let loaded = load_project(dir.path()).expect("load project");
+
+    let mut reopened = app_at(dir.path());
+    let rx = reopened.test_capture_engine();
+    reopened.test_replay_loaded_project_from(loaded);
+    let cmds = drain(&rx);
+
+    let asked_for: Vec<u64> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            AudioCommand::LoadTakeClipFromWav { clip_id, .. } => Some(*clip_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked_for,
+        vec![A_CLIP],
+        "only the take whose audio is still there is asked for"
+    );
+    assert_eq!(
+        reopened.test_missing_takes(),
+        vec![(GROUP, 1)],
+        "and the one that is gone is flagged, not dropped"
+    );
+    assert_eq!(
+        restore_commands(&cmds)[0][0].takes.len(),
+        2,
+        "the flagged take still travels to the engine, so the comp stays intact"
+    );
+}
+
+/// A restored take clip is loaded at the origin capture gave it, taken
+/// from the take's persisted `extent` — not at 0, and not at the slot
+/// start by assumption.
+#[test]
+fn a_restored_take_clip_is_loaded_at_the_origin_capture_gave_it() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = comped_project(dir.path());
+    let cmds = commands_from_a_real_reload(dir.path(), &app);
+
+    let loads: Vec<(u64, u64, u64)> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            AudioCommand::LoadTakeClipFromWav {
+                clip_id,
+                track_id,
+                start_sample,
+                ..
+            } => Some((*clip_id, *track_id, *start_sample)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        loads,
+        vec![
+            // Take 0 punched in, so its clip does NOT start where its slot
+            // does. This is the pair that discriminates: reaching for
+            // `group.slot.start` would give `RSLOT.start` here...
+            (A_CLIP, TRACK, RSLOT.start + PUNCH),
+            // ...while still being right for take 1, which filled its slot.
+            (B_CLIP, TRACK, RSLOT.start),
+        ],
+        "each take clip is restored onto its own track at its extent's start"
+    );
+    assert_ne!(
+        loads[0].2, RSLOT.start,
+        "the punched-in take's origin must differ from its slot's, or this \
+         test cannot tell `take.extent.start` from `group.slot.start`"
+    );
+}
+
+/// Loading a take clip must **not** put it on the timeline. #1396 ruled
+/// that a take clip is not a timeline clip and must never enter
+/// `Resonance::clips`; that is the whole reason this load is a command of
+/// its own rather than `LoadClipFromWav`, whose `ClipImported` echo would
+/// have pushed a `ClipState` for every take.
+#[test]
+fn restoring_take_clips_does_not_put_them_on_the_timeline() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = comped_project(dir.path());
+    let file = app.test_build_project_file();
+    save_project(dir.path(), &file, &[], &[]).expect("save project");
+    let loaded = load_project(dir.path()).expect("load project");
+
+    let reopened = open_into(dir.path(), loaded.file);
+    assert!(
+        reopened.test_clips().is_empty(),
+        "take clips must stay off the timeline; found {:?}",
+        reopened.test_clips().len()
+    );
+    assert!(
+        file.clips.is_empty(),
+        "and they were never in the saved clip list either"
+    );
+}

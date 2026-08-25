@@ -500,6 +500,61 @@ pub enum AudioCommand {
     RestoreTakeGroups {
         groups: Vec<TakeGroup>,
     },
+    /// Put one restored **take** clip's recorded WAV back into the
+    /// engine's clip list on project load (ba todo #1402).
+    ///
+    /// [`AudioCommand::RestoreTakeGroups`] rebuilds the *groups*; this
+    /// rebuilds the audio they name. Both are needed and neither implies
+    /// the other: a take clip enters the engine only through the capture
+    /// path (`roll_audio_pass` pushes the `AudioClip` straight into the
+    /// list and emits no clip command at all), so a reloaded project had
+    /// the comp table resolving to clip ids the engine did not hold, and
+    /// the comp rendered **silence on playback and on bounce** — the very
+    /// failure `RestoreTakeGroups` was added to fix, surviving in its
+    /// other half.
+    ///
+    /// **Why not [`AudioCommand::LoadClipFromWav`].** Same mmap, same
+    /// worker, one decisive difference: that command echoes
+    /// `AudioEvent::ClipImported`, and the app's handler pushes a
+    /// `ClipState` for any clip it does not already know. A take clip is
+    /// not a timeline clip (ba todo #1396) — it must not appear in
+    /// `Resonance::clips`, or it would be drawn on the timeline, saved
+    /// into the project's clip list, and then also play raw on the next
+    /// load. So this command is **silent**, for the same reason
+    /// `RestoreTakeGroups` is: the app is the sender and the mirror, and a
+    /// freshly loaded project must not come up dirty.
+    ///
+    /// **Ordering.** Sent *after* `RestoreTakeGroups`, so a take clip is
+    /// governed by the published comp table from the first instant it
+    /// exists. The reverse order leaves a window in which the raw,
+    /// overlapping passes are ungoverned and all play at once on the
+    /// ordinary clip path. The window this order does leave — a table
+    /// naming a clip not yet loaded — is benign: `mix_track_comp` skips a
+    /// span whose clip it cannot find, and the load is asynchronous
+    /// anyway, so no send order could close it.
+    ///
+    /// **Idempotent.** A clip id already present in the list is left
+    /// alone. The sender also fires on the undo/redo diff replay, where
+    /// the clips are already loaded, and (once take removal lands) a
+    /// restore may have just un-parked this very clip.
+    ///
+    /// `start_sample` is the take's `extent.start`: `RolledAudioTake::extent`
+    /// is defined as the rolled clip's own `[start_sample, +duration)`, so
+    /// the persisted extent is an exact record of where capture placed the
+    /// clip. It matters — `mix_track_comp` intersects every span with
+    /// `clip.start_sample .. + duration_frames()`, so a clip restored to
+    /// the wrong origin reads the wrong audio or none.
+    ///
+    /// Trims and fades are absent because a take clip has none: capture
+    /// writes it whole, and comping trims by choosing spans, not by
+    /// editing the clip.
+    LoadTakeClipFromWav {
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: SamplePos,
+        path: PathBuf,
+        name: String,
+    },
     SavePluginState {
         instance_id: PluginInstanceId,
     },
