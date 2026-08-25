@@ -20,6 +20,14 @@
 //! Both are driven by [`effective_cover`], so the lane always depicts what
 //! the engine will play — including the "comp still empty, so the newest
 //! pass wins" case.
+//!
+//! **Nothing here reads `Resonance::clips`.** A take clip is not a
+//! timeline clip and never enters that mirror (todo #1396), so a take's
+//! *width* comes from its own `extent` and its *waveform* from
+//! `TakeGroupState::peaks`, read off the recording when the app learned of
+//! the take (todo #1400). The lookup that used to stand in for both was
+//! true-for-every-take, which is why every recorded pass drew as hatched
+//! `media missing` until #1400 removed it.
 
 use iced::widget::canvas;
 use iced::{Color, Point, Rectangle, Size};
@@ -220,11 +228,12 @@ impl TimelineCanvas<'_> {
     /// One take's card: content silhouette, comp lighting, edge and tag.
     ///
     /// `slot_rect` is the lane the take occupies. The card itself is drawn
-    /// over the take's **audible extent** inside that lane, which for an
-    /// audio take is its clip's real span (see
-    /// [`audible_extent`]) — a pass that punched in late, or was cut short
-    /// at stop, gets a shorter card and a "no audio" flat line over the
-    /// remainder, rather than a full-width waveform stretched to fit.
+    /// over the take's **audible extent** inside that lane — the stretch
+    /// the pass really recorded, resolved by
+    /// [`take_audible_extent`](Self::take_audible_extent) — so a pass that
+    /// punched in late, or was cut short at stop, gets a shorter card and a
+    /// "no audio" flat line over the remainder, rather than a full-width
+    /// waveform stretched to fit.
     fn draw_take_card(
         &self,
         frame: &mut canvas::Frame,
@@ -235,10 +244,6 @@ impl TimelineCanvas<'_> {
     ) {
         let (y, h) = (slot_rect.y, slot_rect.height);
         let is_active = group.active_take == Some(take.id);
-        let clip = match &take.content {
-            TakeContent::Audio { clip_ref } => self.take_clip(*clip_ref),
-            TakeContent::Midi { .. } => None,
-        };
         let missing = self.take_is_missing(group, take);
         // Where this take really carries audio. Resolved through the shared
         // helper so the comping gestures of todo #414 target exactly what
@@ -313,11 +318,16 @@ impl TimelineCanvas<'_> {
                     ..canvas::Text::default()
                 });
             }
-            (TakeContent::Audio { .. }, false) => {
-                if let Some(clip) = clip {
-                    self.draw_take_waveform(frame, clip, audible, x, y, w, h);
-                }
-            }
+            (TakeContent::Audio { .. }, false) => self.draw_take_waveform(
+                frame,
+                self.take_groups.peaks(group.id, take.id),
+                take.extent.start,
+                audible,
+                x,
+                y,
+                w,
+                h,
+            ),
             (TakeContent::Midi { notes }, _) => {
                 self.draw_take_notes(frame, notes, group.slot, x, y, w, h)
             }
@@ -428,34 +438,39 @@ impl TimelineCanvas<'_> {
 
     /// Is this take's recording absent from this machine?
     ///
-    /// Two ways in: the app never mirrored a clip for the take's
-    /// `clip_ref`, or the project load flagged its WAV as missing (todo
-    /// #412's `missing_takes`, which keeps the take in the comp rather than
+    /// One way in, and it is the one the words mean: the app tried to read
+    /// the take's WAV and could not (todo #412's `missing_takes`, set by
+    /// the project load, which keeps the take in the comp rather than
     /// silently punching a hole in the cover). Only audio takes can be
     /// missing — a MIDI take carries its notes inline.
     ///
-    /// **The first arm is a standing false positive.** A take clip is never
-    /// mirrored into `Resonance::clips` at all — no `RecordingFinished`
-    /// follows one, and a project load restores take groups without their
-    /// clips — so `clip_absent` is true for *every* audio take and every
-    /// freshly recorded pass draws as `media missing`. Todo #1396 took the
-    /// extent off this lookup (it now comes from the take itself), which is
-    /// what makes the card's *width* right; the degradation state and the
-    /// waveform still hang off it, and untangling them means deciding how a
-    /// take's peaks reach the app. Filed as a follow-up rather than fixed
-    /// here, because dropping the arm on its own would leave a fresh take
-    /// with a blank card — the one thing design #153 says a take must never
-    /// have.
-    pub(in crate::view::timeline::takes) fn take_is_missing(
+    /// **This used to OR in a clip lookup, and that arm was a standing
+    /// false positive** (todo #1400). A take clip is never mirrored into
+    /// `Resonance::clips` at all — no `RecordingFinished` follows one, and
+    /// a project load restores take groups without their clips (todo
+    /// #1396) — so `self.take_clip(clip_ref).is_none()` was true for
+    /// *every* audio take and every freshly recorded pass drew as hatched
+    /// `media missing`. What kept the arm alive was that it also fed the
+    /// waveform: dropping it alone would have left a fresh take with a
+    /// blank card, which design #153 forbids. Take peaks now come from the
+    /// recording itself
+    /// ([`load_take_peaks`](crate::project::load_take_peaks)), so the lane
+    /// consults no clip at any point and this is a plain flag lookup.
+    ///
+    /// `pub(crate)` for the test hook
+    /// [`test_take_draws_missing_media`](crate::Resonance::test_take_draws_missing_media):
+    /// the false positive this replaced was invisible to every headless
+    /// assertion in the suite and showed up only in pixels, which the
+    /// verify gate is allowed to skip.
+    pub(crate) fn take_is_missing(
         &self,
         group: &TakeGroup,
         take: &resonance_common::Take,
     ) -> bool {
-        let clip_absent = match &take.content {
-            TakeContent::Audio { clip_ref } => self.take_clip(*clip_ref).is_none(),
-            TakeContent::Midi { .. } => return false,
-        };
-        clip_absent || self.take_groups.is_missing(group.id, take.id)
+        match &take.content {
+            TakeContent::Audio { .. } => self.take_groups.is_missing(group.id, take.id),
+            TakeContent::Midi { .. } => false,
+        }
     }
 
     /// The stretch of `group`'s slot this take actually carries material
@@ -522,37 +537,44 @@ impl TimelineCanvas<'_> {
         Some((x, w))
     }
 
-    /// The mirrored clip an audio take references, if the app still holds
-    /// it. `None` is the missing-media case.
-    fn take_clip(&self, clip_ref: resonance_common::ClipId) -> Option<&crate::state::ClipState> {
-        self.clips.iter().find(|c| c.id == clip_ref)
-    }
-
     /// Take waveform, **anchored to the timeline** rather than stretched to
     /// the card.
     ///
     /// Each pixel column resolves the frame it sits over, converts that to
-    /// a position inside the clip (`frame - clip.start_sample`, plus the
-    /// clip's trim), and reads the peak there — the same indexing
-    /// `draw_clip_waveform` uses for a placed clip. Mapping card-fraction →
-    /// peak-fraction instead would time-stretch every take that does not
-    /// exactly fill its slot: a pass that punched in a second late would
-    /// draw its audio a second early, and slower than it plays.
+    /// a position inside the recording (`frame - recording_start`), and
+    /// reads the peak there — the same indexing `draw_clip_waveform` uses
+    /// for a placed clip, over the same `WAVEFORM_PEAK_FRAMES` buckets.
+    /// Mapping card-fraction → peak-fraction instead would time-stretch
+    /// every take that does not exactly fill its slot: a pass that punched
+    /// in a second late would draw its audio a second early, and slower
+    /// than it plays.
     ///
-    /// `audible` is the timeline range the card covers, so column 0 of the
-    /// card is frame `audible.start`.
+    /// `peaks` is the take's own table, read off its WAV when the app
+    /// learned of the take (todo #1400) — **not** borrowed from a mirrored
+    /// clip, because a take clip never enters `Resonance::clips`.
+    /// `recording_start` is the timeline frame the table's bucket 0 covers,
+    /// i.e. the take's `extent.start`: the engine writes a pass's WAV from
+    /// the punch-in point, so bucket 0 is the first frame recorded and not
+    /// the start of the slot. `audible` is the timeline range the card
+    /// covers, so column 0 of the card is frame `audible.start`.
+    ///
+    /// An empty table draws nothing. That is the honest state for a take
+    /// whose recording the app could not read but which is *not* flagged
+    /// missing — the card, its edge and its tag still say a pass was
+    /// recorded here.
     #[allow(clippy::too_many_arguments)]
     fn draw_take_waveform(
         &self,
         frame: &mut canvas::Frame,
-        clip: &crate::state::ClipState,
+        peaks: &[(f32, f32)],
+        recording_start: u64,
         audible: TimelineRange,
         x: f32,
         y: f32,
         w: f32,
         h: f32,
     ) {
-        if clip.waveform_peaks.is_empty() || w <= 2.0 || h <= 4.0 {
+        if peaks.is_empty() || w <= 2.0 || h <= 4.0 {
             return;
         }
         let center = y + h * 0.5;
@@ -561,14 +583,12 @@ impl TimelineCanvas<'_> {
             a: 0.7,
             ..theme::WARM
         };
-        let peaks = &clip.waveform_peaks;
         let peak_frames = resonance_audio::types::WAVEFORM_PEAK_FRAMES as f64;
         // Frames per pixel column at the current zoom.
         let frames_per_px = self.sample_rate as f64 / self.zoom.max(f32::EPSILON) as f64;
-        // Where the card's first column sits inside the clip's own frames,
-        // including any trim the clip carries.
-        let head_frames =
-            audible.start.saturating_sub(clip.start_sample) + clip.trim_start_frames;
+        // Where the card's first column sits inside the recording's own
+        // frames.
+        let head_frames = audible.start.saturating_sub(recording_start);
 
         // One bar per pixel column, clamped to the visible part of the card
         // so a long take off the left edge costs nothing.

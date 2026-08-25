@@ -134,3 +134,59 @@ pub fn assert_golden(snapshot: &Snapshot, path: &str) {
         .unwrap_or_else(|err| panic!("golden comparison i/o for {path}: {err}"));
     assert!(matched, "snapshot diverged from golden {path}");
 }
+
+/// Write the WAV a cycle-record take's `clip_ref` resolves to, inside
+/// `project_dir` (epic #15, ba todo #1400).
+///
+/// A take's waveform is **derived from this file**: the app reads it on
+/// the `TakeCaptured` echo and again on project load, and the same read
+/// decides whether the lane draws a silhouette or the hatched
+/// `media missing` card. So a take-lane fixture gives its takes a real
+/// recording, exactly as `recording.rs` streams one to
+/// `audio/clip_{id}.wav`. Before #1400 a fixture faked it with a
+/// `ClipState` in `Resonance::clips`, which the running app never
+/// produces for a take — and that fabrication was what stopped every take
+/// drawing as missing media.
+///
+/// The content is authored **by peak bucket** rather than by sample, so a
+/// fixture can pin an exact silhouette: bucket `b` spans
+/// `WAVEFORM_PEAK_FRAMES` frames of which the first two are `-amp(b)` and
+/// `+amp(b)` and the rest are silent, so
+/// [`compute_waveform_peaks`](resonance_audio::types::compute_waveform_peaks)
+/// reduces it to exactly `(-amp(b), amp(b))`. `frames` must leave every
+/// bucket at least two frames (i.e. `frames >= 2` and
+/// `frames % WAVEFORM_PEAK_FRAMES != 1`), or the last bucket's minimum and
+/// maximum collapse together.
+///
+/// 32-bit float stereo at `sample_rate`: the engine's own recording
+/// format, and the only one it will memory-map back.
+#[allow(dead_code)]
+pub fn write_take_wav(
+    project_dir: &std::path::Path,
+    clip_ref: u64,
+    sample_rate: u32,
+    frames: u64,
+    amp: impl Fn(usize) -> f32,
+) {
+    let bucket = resonance_audio::types::WAVEFORM_PEAK_FRAMES as u64;
+    let audio_dir = project_dir.join("audio");
+    std::fs::create_dir_all(&audio_dir).expect("create the project's audio dir");
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let path = audio_dir.join(format!("clip_{clip_ref}.wav"));
+    let mut writer = hound::WavWriter::create(&path, spec).expect("create take wav");
+    for f in 0..frames {
+        let sample = match f % bucket {
+            0 => -amp((f / bucket) as usize),
+            1 => amp((f / bucket) as usize),
+            _ => 0.0,
+        };
+        writer.write_sample(sample).expect("write left");
+        writer.write_sample(sample).expect("write right");
+    }
+    writer.finalize().expect("finalize take wav");
+}

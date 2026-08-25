@@ -18,7 +18,7 @@
 //! `effective_segments` pair that mirrored the engine by assertion; both are
 //! gone.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use resonance_audio::types::TrackId;
 use resonance_common::{
@@ -45,10 +45,25 @@ pub struct TakeGroupState {
     /// about *this machine's filesystem right now*, not about the project
     /// — it must never be written back to disk.
     pub missing_takes: HashSet<(TakeGroupId, TakeId)>,
+    /// Waveform peaks for each audio take, derived from its recording by
+    /// [`load_take_peaks`](crate::project::load_take_peaks) at the moment
+    /// the app learned of the take — a `TakeCaptured` echo, or a project
+    /// load (ba todo #1400).
+    ///
+    /// Keyed like [`missing_takes`](Self::missing_takes) rather than by
+    /// `clip_ref`, so the two travel together: every site that forgets a
+    /// take forgets both, with one key and no clip lookup.
+    ///
+    /// Beside the groups, and for the same reason the missing set is: a
+    /// peak table is a fact about a file on *this* machine, cheap to
+    /// re-derive and never written back to disk. Empty for a MIDI take
+    /// (its notes are its content) and for an audio take whose recording
+    /// could not be read.
+    pub peaks: HashMap<(TakeGroupId, TakeId), Vec<(f32, f32)>>,
 }
 
 impl TakeGroupState {
-    /// Drop every mirrored group (and its missing-file flags).
+    /// Drop every mirrored group (and its missing-file flags and peaks).
     ///
     /// Called when a project load wipes the previous project's runtime
     /// registry: `ClearAll` empties the engine's take-group map without
@@ -58,6 +73,31 @@ impl TakeGroupState {
     pub fn clear(&mut self) {
         self.groups.clear();
         self.missing_takes.clear();
+        self.peaks.clear();
+    }
+
+    /// File the peaks derived from a take's recording.
+    ///
+    /// Replaces any previous table for the key, so a re-delivered capture
+    /// refreshes rather than duplicating.
+    pub fn set_peaks(
+        &mut self,
+        group_id: TakeGroupId,
+        take_id: TakeId,
+        peaks: Vec<(f32, f32)>,
+    ) {
+        self.peaks.insert((group_id, take_id), peaks);
+    }
+
+    /// This take's waveform peaks, or an empty slice when it has none —
+    /// a MIDI take, a recording that could not be read, or a capture the
+    /// app could not resolve a project directory for. Borrows, so the
+    /// draw pass never clones a peak table per frame.
+    pub fn peaks(&self, group_id: TakeGroupId, take_id: TakeId) -> &[(f32, f32)] {
+        self.peaks
+            .get(&(group_id, take_id))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Flag `take_id` in `group_id` as having no recorded audio on disk.
@@ -112,8 +152,12 @@ impl TakeGroupState {
     ) {
         // A freshly captured take has its WAV on disk by definition, so
         // clear any missing-file flag a prior load left on this slot.
+        // Its peaks are filed by the caller, which is the only place that
+        // can read them; drop a stale table here so a re-used id can
+        // never draw the previous take's waveform if that read fails.
         let take_id = take.id;
         self.missing_takes.remove(&(group_id, take_id));
+        self.peaks.remove(&(group_id, take_id));
         match self.group_mut(group_id) {
             Some(group) => match group.takes.iter_mut().find(|t| t.id == take_id) {
                 Some(existing) => *existing = take,
@@ -155,13 +199,14 @@ impl TakeGroupState {
 
     /// Drop `take_id` from `group_id`, returning whether it was there.
     ///
-    /// The take's missing-media flag goes with it, so a later group that
-    /// happens to reuse the id does not inherit a stale one. Only the take
-    /// itself is removed — the caller is responsible for pushing a comp
-    /// that no longer references it, because a `CompSegment` naming a
+    /// The take's missing-media flag and its peak table go with it, so a
+    /// later group that happens to reuse the id inherits neither. Only the
+    /// take itself is removed — the caller is responsible for pushing a
+    /// comp that no longer references it, because a `CompSegment` naming a
     /// deleted take renders as a hole.
     pub fn remove_take(&mut self, group_id: TakeGroupId, take_id: TakeId) -> bool {
         self.missing_takes.remove(&(group_id, take_id));
+        self.peaks.remove(&(group_id, take_id));
         let Some(group) = self.group_mut(group_id) else {
             return false;
         };

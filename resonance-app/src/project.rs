@@ -26,10 +26,12 @@
 /// | [`model`]  | Serde structs, tag converters, format constants |
 /// | [`io`]     | Save / load / autosave / atomic-write / backup |
 /// | [`sections`] | Section-definition and placement structs |
+/// | [`take_audio`] | Reading a cycle-record take's WAV back out of the bundle |
 
 pub mod sections;
 pub mod model;
 pub mod io;
+pub mod take_audio;
 
 // Re-export section types (existing public surface).
 pub use sections::{
@@ -48,6 +50,11 @@ pub use model::{
     audio_format_from_tag, audio_format_tag, clip_audio_file, fade_curve_from_tag, fade_curve_tag,
     send_source_from_tag, send_source_tag,
 };
+
+// Re-export the take-recording reader (epic #15, todo #1400): the take
+// lane's waveform and its missing-media state both come from this one
+// read of the WAV `clip_audio_file` names.
+pub use take_audio::load_take_peaks;
 
 // Re-export I/O: save, load, autosave, atomic-write, and backup helpers.
 pub use io::{
