@@ -51,39 +51,73 @@
 //!    take the group does not hold is dropped by the engine with no echo,
 //!    so the app validates before sending instead of assuming success.
 //!
-//! # One limit, engine-side
+//! # A deletion is a command, not a comp edit (todo #1401)
 //!
-//! * Deleting a group's **last** take is refused. There is no
-//!   take-removal command, and a group whose comp is empty falls back to
-//!   its most recent pass, so the engine would keep playing what the user
-//!   deleted. Lifting this needs an engine-side removal command.
+//! Deleting a take is the one message here that is **not** a `SetTakeComp`.
+//! A take's recording is an ordinary `AudioClip` in the engine's shared
+//! clip list, inaudible only because the published comp table marks it
+//! *governed*; a comp that stops naming the take stops governing its clip,
+//! and the "deleted" pass comes back **louder**, raw on the ordinary clip
+//! path on top of the comp that replaced it (ba doc #292, reproduced at
+//! peak 1.25 against 1.0). Only the engine can park the clip out of the
+//! render's input, so the app sends
+//! [`AudioCommand::RemoveTake`] / [`AudioCommand::RemoveTakeGroup`]
+//! (todo #1397) and lets one command carry the take, the re-covered comp
+//! and a cleared solo together.
+//!
+//! Two consequences:
+//!
+//! * **A group's last take is no longer refused** — it removes the *lane*.
+//!   An empty group would keep its slot forever (todo #1392), draw as
+//!   chrome with nothing to comp, and an empty comp is precisely the state
+//!   in which the cover falls back to the most recent pass — the one just
+//!   deleted.
+//! * **The mirror re-covers through the same shared helper the engine
+//!   uses**, [`TakeGroup::remove_take`], so the lane drawn this frame and
+//!   the comp the engine publishes cannot disagree. The app carries no
+//!   second definition of a removal.
 //!
 //! A restore (undo/redo) is no longer a limit: `RestoreTakeGroups` (todo
 //! #1394) replaces the engine's whole store from the mirror, so it can
 //! create a group the engine never captured and remove one it holds —
 //! which is why `undo::snapshot::resync_take_comps` is gone (todo #1399).
+//! Since todo #1397 that command reconciles the parked recordings in both
+//! directions as well, so it is also the whole undo *and* redo path for a
+//! deletion: an undo un-parks the take's clip and it is audible again, a
+//! redo re-parks it. Nothing else has to be re-asserted after a removal.
 
 use iced::Task;
 use resonance_audio::types::AudioCommand;
-use resonance_common::{
-    latest_take, Comp, CompSegment, SlotCover, TakeGroup, TakeGroupId, TakeId, TimelineRange,
-};
+use resonance_common::{CompSegment, SlotCover, TakeGroup, TakeGroupId, TakeId, TimelineRange};
 
 use crate::message::{Message, TakeMessage};
 use crate::Resonance;
 
 /// The mutation a [`TakeMessage`] performs, resolved against current
-/// state. `None` fields are "leave alone / send nothing".
+/// state.
+///
+/// A comp edit and a removal are different *kinds* of edit rather than
+/// different fields of one, because they reach the engine by different
+/// routes: a comp edit is a value the app computes and pushes, a removal
+/// is a command the engine executes (parking the recording, which the app
+/// cannot do) and echoes back.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TakeEdit {
-    pub group_id: TakeGroupId,
-    /// The comp cover to adopt and push, when the edit changes it.
-    pub comp: Option<Vec<CompSegment>>,
-    /// The active take to adopt and push, when the edit changes it.
-    /// `Some(None)` clears the solo.
-    pub active_take: Option<Option<TakeId>>,
-    /// A take to drop from the mirror before the comp is applied.
-    pub delete_take: Option<TakeId>,
+pub(crate) enum TakeEdit {
+    /// Adopt and push a comp cover and/or an active take on a group that
+    /// survives the edit. `None` means "leave alone / send nothing";
+    /// `active_take: Some(None)` clears the solo.
+    Comp {
+        group_id: TakeGroupId,
+        comp: Option<Vec<CompSegment>>,
+        active_take: Option<Option<TakeId>>,
+    },
+    /// Remove one take from a group that keeps at least one other.
+    RemoveTake {
+        group_id: TakeGroupId,
+        take_id: TakeId,
+    },
+    /// Remove the whole lane, because the take asked for was its last.
+    RemoveGroup { group_id: TakeGroupId },
 }
 
 pub fn handle(r: &mut Resonance, m: TakeMessage) -> Task<Message> {
@@ -114,27 +148,42 @@ pub(crate) fn plan(r: &Resonance, m: &TakeMessage) -> Option<TakeEdit> {
 /// Apply a planned edit: mirror first (so the view is right this frame),
 /// then push the engine commands that make it audible.
 fn apply(r: &mut Resonance, edit: TakeEdit) {
-    let TakeEdit {
-        group_id,
-        comp,
-        active_take,
-        delete_take,
-    } = edit;
-
-    if let Some(take_id) = delete_take {
-        r.take_groups.remove_take(group_id, take_id);
-    }
-    if let Some(segments) = comp {
-        r.take_groups.comp_changed(group_id, segments.clone());
-        let _ = r
-            .engine
-            .send(AudioCommand::SetTakeComp { group_id, segments });
-    }
-    if let Some(take_id) = active_take {
-        r.take_groups.active_take_changed(group_id, take_id);
-        let _ = r
-            .engine
-            .send(AudioCommand::SetActiveTake { group_id, take_id });
+    match edit {
+        TakeEdit::Comp {
+            group_id,
+            comp,
+            active_take,
+        } => {
+            if let Some(segments) = comp {
+                r.take_groups.comp_changed(group_id, segments.clone());
+                let _ = r
+                    .engine
+                    .send(AudioCommand::SetTakeComp { group_id, segments });
+            }
+            if let Some(take_id) = active_take {
+                r.take_groups.active_take_changed(group_id, take_id);
+                let _ = r
+                    .engine
+                    .send(AudioCommand::SetActiveTake { group_id, take_id });
+            }
+        }
+        // One command, not three. `RemoveTake` drops the take, re-covers
+        // the slot from the survivors and clears a solo that named it —
+        // and, decisively, parks the take's recording out of the render's
+        // input, which no comp the app could push does. The mirror runs
+        // the *same* `TakeGroup::remove_take` the handler runs, so the
+        // `TakeRemoved` / `TakeCompChanged` / `ActiveTakeChanged` echoes
+        // behind the command re-apply values the lane already shows.
+        TakeEdit::RemoveTake { group_id, take_id } => {
+            r.take_groups.remove_take(group_id, take_id);
+            let _ = r
+                .engine
+                .send(AudioCommand::RemoveTake { group_id, take_id });
+        }
+        TakeEdit::RemoveGroup { group_id } => {
+            r.take_groups.remove_group(group_id);
+            let _ = r.engine.send(AudioCommand::RemoveTakeGroup { group_id });
+        }
     }
 }
 
@@ -153,11 +202,10 @@ fn plan_active(r: &Resonance, group_id: TakeGroupId, take_id: Option<TakeId>) ->
     if group.active_take == take_id {
         return None;
     }
-    Some(TakeEdit {
+    Some(TakeEdit::Comp {
         group_id,
         comp: None,
         active_take: Some(take_id),
-        delete_take: None,
     })
 }
 
@@ -194,24 +242,29 @@ fn plan_promote(
     finish_comp_edit(group, comp.segments)
 }
 
+/// A deletion is refused only when there is nothing to delete — an unknown
+/// group, or a take the group does not hold.
+///
+/// # Take or lane
+///
+/// **The last take takes the lane with it** (todo #1397, ba doc #292). The
+/// choice is `group.takes.len() == 1`, made here as well as in the engine's
+/// `handle_remove_take` because each side owns a store of groups and each
+/// has to drop the group from its own; the rule itself lives on
+/// [`TakeGroup::remove_take`], which is why neither side re-derives what a
+/// removal *does*.
+///
+/// Sending `RemoveTakeGroup` rather than leaning on the engine's identical
+/// redirect keeps the command the app sends equal to the decision the app
+/// already made when it dropped the lane from the mirror — the echo is
+/// `TakeGroupRemoved` either way.
 fn plan_delete(r: &Resonance, group_id: TakeGroupId, take_id: TakeId) -> Option<TakeEdit> {
     let group = r.take_groups.group(group_id)?;
     group.take(take_id)?;
-    // The last take cannot go: with no takes left the comp is empty, and
-    // an empty comp is exactly the state in which the engine falls back to
-    // playing the most recent pass — the one just deleted. Refusing is the
-    // honest outcome until an engine-side removal command exists.
-    if group.takes.len() < 2 {
-        return None;
-    }
-    let segments = cover_without(group, take_id);
-    Some(TakeEdit {
-        group_id,
-        comp: Some(segments),
-        // The solo goes with the take it named; otherwise it is untouched
-        // (deleting some other take does not end a solo).
-        active_take: (group.active_take == Some(take_id)).then_some(None),
-        delete_take: Some(take_id),
+    Some(if group.takes.len() == 1 {
+        TakeEdit::RemoveGroup { group_id }
+    } else {
+        TakeEdit::RemoveTake { group_id, take_id }
     })
 }
 
@@ -237,40 +290,11 @@ fn finish_comp_edit(group: &TakeGroup, segments: Vec<CompSegment>) -> Option<Tak
     if !comp_changed && !clear_solo {
         return None;
     }
-    Some(TakeEdit {
+    Some(TakeEdit::Comp {
         group_id: group.id,
         comp: comp_changed.then_some(segments),
         active_take: clear_solo.then_some(None),
-        delete_take: None,
     })
-}
-
-/// The cover the slot should have once `deleted` is gone: its segments
-/// removed, and the holes they leave handed to the take the group would
-/// otherwise fall back to.
-///
-/// Leaving the holes would be worse than a wrong guess — a gap in the comp
-/// renders as silence in the middle of the part, and the deleted take is
-/// the one thing that cannot fill it.
-fn cover_without(group: &TakeGroup, deleted: TakeId) -> Vec<CompSegment> {
-    let kept: Vec<CompSegment> = group
-        .effective_comp()
-        .segments
-        .into_iter()
-        .filter(|seg| seg.take_id != deleted)
-        .collect();
-
-    // The survivor that inherits the holes: the take the shared cover
-    // definition would fall back to once `deleted` is gone.
-    let mut survivors = group.clone();
-    survivors.takes.retain(|t| t.id != deleted);
-
-    let mut comp = Comp { segments: kept };
-    comp.seed_cover(SlotCover {
-        slot: group.slot,
-        filler: latest_take(&survivors).map(|t| t.id),
-    });
-    comp.segments
 }
 
 /// The overlap of two ranges, empty when they do not meet.

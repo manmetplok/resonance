@@ -278,25 +278,31 @@ impl TakeGroupState {
 
     /// Drop `take_id` from `group_id`, returning whether it was there.
     ///
-    /// The take's missing-media flag and its peak table go with it, so a
-    /// later group that happens to reuse the id inherits neither. Only the
-    /// take itself is removed — the caller is responsible for pushing a
-    /// comp that no longer references it, because a `CompSegment` naming a
-    /// deleted take renders as a hole.
+    /// **Delegates to [`TakeGroup::remove_take`]** (ba todo #1401) — the
+    /// one definition of a removal, and the very function the engine's
+    /// `RemoveTake` handler runs. So the take, every `CompSegment` naming
+    /// it and a solo that named it all go here in one step, and the cover
+    /// this mirror draws after a deletion is by construction the cover the
+    /// engine publishes. The app used to re-derive that cover itself
+    /// (`update::takes::cover_without`); two implementations of "what the
+    /// slot plays now" is exactly the divergence todo #1395 removed from
+    /// the cover and this removes from the removal.
+    ///
+    /// The take's missing-media flag **and its cached waveform peaks** go
+    /// with it (ba todo #1400), so a later group that happens to reuse the
+    /// id inherits neither.
+    ///
+    /// Removing a group's **last** take is *not* handled here: the group
+    /// goes with it, and dropping a group from the store is
+    /// [`Self::remove_group`]'s job. Callers decide which they are doing —
+    /// `update::takes::plan_delete` does, and so does the engine.
     pub fn remove_take(&mut self, group_id: TakeGroupId, take_id: TakeId) -> bool {
         self.missing_takes.remove(&(group_id, take_id));
         self.peaks.remove(&(group_id, take_id));
         let Some(group) = self.group_mut(group_id) else {
             return false;
         };
-        let Some(idx) = group.takes.iter().position(|t| t.id == take_id) else {
-            return false;
-        };
-        group.takes.remove(idx);
-        if group.active_take == Some(take_id) {
-            group.active_take = None;
-        }
-        true
+        group.remove_take(take_id).is_some()
     }
 
     /// Drop the whole lane `group_id`, returning whether it was there.

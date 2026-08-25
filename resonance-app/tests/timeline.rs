@@ -65,6 +65,8 @@ mod take_group_mirror;
 mod take_lane_input;
 #[path = "timeline/take_lane_render.rs"]
 mod take_lane_render;
+#[path = "timeline/take_removal_audible.rs"]
+mod take_removal_audible;
 #[path = "timeline/test_arrangement_markers.rs"]
 mod test_arrangement_markers;
 #[path = "timeline/timeline_automation_device_lanes.rs"]
