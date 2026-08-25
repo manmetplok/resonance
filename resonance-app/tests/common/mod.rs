@@ -169,15 +169,20 @@ pub fn write_take_wav(
     amp: impl Fn(usize) -> f32,
 ) {
     let bucket = resonance_audio::types::WAVEFORM_PEAK_FRAMES as u64;
-    let audio_dir = project_dir.join("audio");
-    std::fs::create_dir_all(&audio_dir).expect("create the project's audio dir");
+    // Through `clip_audio_file`, never by hand: it is the one definition
+    // of a clip's path inside the bundle (todo #412), and the whole point
+    // of having one is that a fixture cannot drift from the engine that
+    // writes the file or the restore that resolves it.
+    let path = project_dir.join(resonance_app::project::clip_audio_file(clip_ref));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create the project's audio dir");
+    }
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
-    let path = audio_dir.join(format!("clip_{clip_ref}.wav"));
     let mut writer = hound::WavWriter::create(&path, spec).expect("create take wav");
     for f in 0..frames {
         let sample = match f % bucket {

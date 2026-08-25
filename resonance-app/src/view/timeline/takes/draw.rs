@@ -318,9 +318,9 @@ impl TimelineCanvas<'_> {
                     ..canvas::Text::default()
                 });
             }
-            (TakeContent::Audio { .. }, false) => self.draw_take_waveform(
+            (TakeContent::Audio { clip_ref }, false) => self.draw_take_waveform(
                 frame,
-                self.take_groups.peaks(group.id, take.id),
+                self.take_groups.peaks(group.id, take.id, *clip_ref),
                 take.extent.start,
                 audible,
                 x,

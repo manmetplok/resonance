@@ -76,7 +76,9 @@ pub(super) fn take_captured(
         return;
     };
     match crate::project::load_take_peaks(&project_dir, clip_ref) {
-        Ok(peaks) => r.take_groups.set_peaks(group_id, take_id, peaks),
+        Ok(peaks) => r
+            .take_groups
+            .set_peaks(group_id, take_id, clip_ref, peaks),
         Err(reason) => eprintln!(
             "take capture: take {take_id} of group {group_id} was recorded but its \
              audio could not be read back ({reason}) — the lane draws the card \

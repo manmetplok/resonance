@@ -93,6 +93,21 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// survived truncated or in a format the engine cannot map. The engine
 /// memory-maps the very same file to play the take, so a file this read
 /// rejects is one the comp would render silent anyway.
+///
+/// **This is not only the load path.** `apply_take_groups` on the
+/// undo/redo diff-replay path re-runs this function on *every* history
+/// step, including one that touches no take, so the expensive half has to
+/// be skippable — otherwise a hold-to-repeat undo re-mmaps and re-scans
+/// every take WAV in the project (~3.2 ms per recorded minute). A take
+/// whose peaks are already cached for the same `clip_ref` therefore skips
+/// the read.
+///
+/// It does **not** skip the cheap half. The step still `exists()`-checks
+/// the file, which is exactly what this path cost before todo #1400, so
+/// a WAV deleted mid-session still lights the hatch on the next history
+/// step rather than going quiet — the property `apply_take_groups` was
+/// written for. The saving is precisely the mmap and the scan, and
+/// nothing else changes hands.
 pub(crate) fn replay_take_groups(
     r: &mut Resonance,
     project: &ProjectFile,
@@ -120,18 +135,66 @@ pub(crate) fn replay_take_groups(
             // global error banner and the comp rendered its span silent.
             // Routing the send off the same read collapses the corrupt
             // case into the missing case — one file, one verdict.
-            match crate::project::load_take_peaks(project_dir, clip_ref) {
-                Ok(peaks) => {
-                    r.take_groups.set_peaks(group.id, take.id, peaks);
-                    // `extent` is this pass's own `[start, +duration)` on
-                    // the timeline — `RolledAudioTake::extent` is defined
-                    // as the rolled clip's position — so it is an exact
-                    // record of where capture put the clip, including a
-                    // punched-in pass 0 that starts later than the slot.
-                    if !present_clips.iter().any(|(id, _, _)| *id == clip_ref) {
-                        present_clips.push((clip_ref, group.track_id, take.extent.start));
+            let present = project_dir
+                .join(crate::project::clip_audio_file(clip_ref))
+                .exists();
+            let readable = if present && r.take_groups.has_peaks(group.id, take.id, clip_ref) {
+                // Already read this recording in this session, and it is
+                // still there. A recording is immutable, so there is
+                // nothing a re-read could learn — and this read is the
+                // whole diff-replay path's cost. The `exists()` is kept:
+                // it is what this step cost before #1400, and it is what
+                // still catches a WAV deleted mid-session.
+                true
+            } else {
+                match crate::project::load_take_peaks(project_dir, clip_ref) {
+                    Ok(peaks) => {
+                        r.take_groups.set_peaks(group.id, take.id, clip_ref, peaks);
+                        true
+                    }
+                    Err(reason) => {
+                        // Loud, because the take is otherwise
+                        // indistinguishable from one that simply recorded
+                        // silence.
+                        eprintln!(
+                            "project load: take {} of group {} has no usable recorded \
+                             audio ({reason}) — kept in the lane so the comp stays intact",
+                            take.id, group.id
+                        );
+                        // Drop any table read from this recording before
+                        // it went: the take hatches now, and if the file
+                        // comes back the next history step re-reads it
+                        // rather than trusting a cache entry for a file
+                        // that vanished.
+                        r.take_groups.forget_peaks(group.id, take.id);
+                        r.take_groups.mark_missing(group.id, take.id);
+                        false
                     }
                 }
+            };
+            if !readable {
+                continue;
+            }
+            // **The cache skips the read, never the load.** A cache hit
+            // still reaches this push, so the engine is told about every
+            // readable take on every replay. That keeps a cache about
+            // *pixels* from ever deciding what is *audible*: whether the
+            // engine needs this clip is a question only the engine can
+            // answer, and `handle_load_take_clip_from_wav` answers it by
+            // early-returning when the clip is already in its list —
+            // before any mmap or decimation. Skipping the push here would
+            // instead rest on the app correctly predicting the engine's
+            // contents, and would fail silently, as no playback if it were
+            // ever wrong.
+            //
+            // `extent` is this pass's own `[start, +duration)` on the
+            // timeline — `RolledAudioTake::extent` is defined as the
+            // rolled clip's position — so it is an exact record of where
+            // capture put the clip, including a punched-in pass 0 that
+            // starts later than the slot.
+            if !present_clips.iter().any(|(id, _, _)| *id == clip_ref) {
+                present_clips.push((clip_ref, group.track_id, take.extent.start));
+            }
                 Err(reason) => {
                     // Loud, because the take is otherwise indistinguishable
                     // from one that simply recorded silence.
@@ -140,6 +203,11 @@ pub(crate) fn replay_take_groups(
                          audio ({reason}) — kept in the lane so the comp stays intact",
                         take.id, group.id
                     );
+                    // Drop any table read from this recording before it
+                    // went: the take hatches now, and if the file comes
+                    // back the next history step re-reads it rather than
+                    // trusting a cache entry for a file that vanished.
+                    r.take_groups.forget_peaks(group.id, take.id);
                     r.take_groups.mark_missing(group.id, take.id);
                 }
             }

@@ -570,11 +570,24 @@ impl<'a> TimelineCanvas<'a> {
                 // clears it, and hashing 3000 f32 pairs per take on the
                 // fingerprint path would cost more than the repaint it
                 // saves.
-                self.take_groups.peaks(group.id, take.id).len().hash(&mut take_h);
                 match &take.content {
                     resonance_common::TakeContent::Audio { clip_ref } => {
                         0u8.hash(&mut take_h);
                         clip_ref.hash(&mut take_h);
+                        // The waveform the card carries, read off this
+                        // recording (todo #1400). Length rather than
+                        // content: a peak table is derived once, from a
+                        // file, and never edited — every way it can change
+                        // for a fixed `(group, take, clip_ref)` triple
+                        // (capture, re-capture, project load, a failed
+                        // read leaving it absent) changes how many buckets
+                        // it has or drops it, and hashing thousands of f32
+                        // pairs per take on the fingerprint path would
+                        // cost more than the repaint it saves.
+                        self.take_groups
+                            .peaks(group.id, take.id, *clip_ref)
+                            .len()
+                            .hash(&mut take_h);
                     }
                     resonance_common::TakeContent::Midi { notes } => {
                         1u8.hash(&mut take_h);

@@ -474,6 +474,105 @@ fn a_take_whose_wav_is_unreadable_is_flagged_like_a_missing_one() {
     );
 }
 
+/// **An undo re-reads no take recording** (ba todo #1400 review).
+///
+/// `apply_take_groups` rebuilds the take lanes from the target snapshot on
+/// *every* history step — a fader undo included — by clearing the mirror
+/// and re-running `replay_take_groups`. Since #1400 that function reads
+/// each take's WAV rather than stat-ing it, so without a surviving cache
+/// every undo would re-mmap and re-scan every take in the project: ~3.2 ms
+/// per recorded minute, on a hold-to-repeat gesture.
+///
+/// The trick that makes this a real assertion rather than a timing hope:
+/// the recordings are left **in place but corrupted** before the undo.
+/// `exists()` still passes, so this is not measuring the cheap probe — but
+/// any actual read would fail, flag the take and drop its peaks. Both
+/// survive, so no read happened.
+#[test]
+fn an_undo_re_reads_no_take_recording() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = authored_project(dir.path());
+
+    let before = app.test_snapshot_for_undo();
+    let captured: Vec<Vec<(f32, f32)>> = (0..3)
+        .map(|take| app.test_take_peaks(GROUP, take).to_vec())
+        .collect();
+    assert!(
+        captured.iter().all(|p| !p.is_empty()),
+        "precondition: every pass was read at capture"
+    );
+
+    // Something to undo, and deliberately not a take edit — the point is
+    // that a step touching no take still runs this path.
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: GROUP,
+        take_id: Some(2),
+    });
+
+    // Present, so the existence probe passes; unreadable, so a read does
+    // not.
+    for pass in 0..3u64 {
+        std::fs::write(
+            dir.path().join(format!("audio/clip_{}.wav", 100 + pass)),
+            b"not a RIFF file",
+        )
+        .expect("corrupt take wav");
+    }
+
+    app.test_begin_restore_from_snapshot(before);
+
+    for take in 0..3u64 {
+        assert_eq!(
+            app.test_take_peaks(GROUP, take),
+            captured[take as usize].as_slice(),
+            "take {take}'s waveform came from the cache, not from the disk"
+        );
+    }
+    assert!(
+        app.test_missing_takes().is_empty(),
+        "and nothing was re-probed into the missing state"
+    );
+}
+
+/// The half the cache must **not** swallow: a take whose WAV disappears
+/// mid-session is still flagged on the next history step.
+///
+/// `apply_take_groups` has always re-resolved every take against the
+/// filesystem so a deleted recording lights the hatch rather than going
+/// quiet. #1400 skips the *read* for an already-cached take and keeps the
+/// `exists()` — which is exactly what that step cost before #1400 — so the
+/// property survives. The take's stale peaks are dropped with it, so a
+/// restored file is re-read rather than trusted.
+#[test]
+fn a_take_whose_wav_disappears_mid_session_is_flagged_on_the_next_history_step() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = authored_project(dir.path());
+    let before = app.test_snapshot_for_undo();
+    assert!(app.test_missing_takes().is_empty());
+
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: GROUP,
+        take_id: Some(2),
+    });
+    std::fs::remove_file(dir.path().join("audio/clip_101.wav")).expect("remove take wav");
+
+    app.test_begin_restore_from_snapshot(before);
+
+    assert_eq!(
+        app.test_missing_takes(),
+        vec![(GROUP, 1)],
+        "the vanished recording is flagged on the very next step"
+    );
+    assert!(
+        app.test_take_peaks(GROUP, 1).is_empty(),
+        "and its cached waveform goes with it"
+    );
+    assert!(
+        !app.test_take_peaks(GROUP, 0).is_empty(),
+        "its neighbours are untouched, and still un-read"
+    );
+}
+
 /// MIDI takes carry their notes inline, so they can never be missing —
 /// not even in a project directory that has no `audio/` folder at all.
 #[test]

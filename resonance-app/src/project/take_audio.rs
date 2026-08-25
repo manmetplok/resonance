@@ -10,7 +10,26 @@
 //! #1396), so there is no mirrored clip to borrow peaks from.
 //!
 //! Hence this module: the take lane derives its waveform from the file,
-//! app-side, on **both** paths that can produce a take.
+//! app-side, on both paths that can produce a take.
+//!
+//! # Three call sites, not two
+//!
+//! Two of them are the moments the app *learns* of a take —
+//! `engine_events::takes::take_captured` on the `TakeCaptured` echo, and
+//! `replay::restore::replay_take_groups` on a project load. The third is
+//! not: `replay_diff::apply_take_groups` calls `replay_take_groups` again
+//! on **every undo and every redo**, a step that touches no take
+//! included, because that is how the diff replay rebuilds the take mirror
+//! from a snapshot.
+//!
+//! That third site is why `replay_take_groups` short-circuits on an
+//! already-cached recording. Reading unconditionally there put an mmap
+//! plus a full min/max scan of every take in the project on a
+//! hold-to-repeat gesture — measured on this machine at ~3.2 ms per
+//! recorded minute, so ~100 ms per undo step for a session holding half an
+//! hour of takes. A recording is immutable, so the cache never goes
+//! stale; see [`TakePeaks`](crate::state::TakePeaks) for what keeps it
+//! honest when a `(group, take)` key is reused.
 //!
 //! # Why derive rather than be told
 //!
@@ -37,9 +56,9 @@
 //!
 //! [`compute_waveform_peaks`] — the engine's own function, over the same
 //! `WAVEFORM_PEAK_FRAMES` buckets a placed clip uses. That is not
-//! incidental: the take lane indexes peaks by *clip frame* (doc #293), so
-//! the bucket size has to be the one the indexing assumes, and the same
-//! audio dropped on a track draws the identical silhouette.
+//! incidental: the take lane indexes peaks by *recorded frame* (doc
+//! #293), so the bucket size has to be the one the indexing assumes, and
+//! the same audio dropped on a track draws the identical silhouette.
 
 use std::path::Path;
 
@@ -59,7 +78,7 @@ use resonance_common::ClipId;
 /// which memory-maps the very same file to play the take, so they are all
 /// the missing-media state rather than three shades of it. Callers decide
 /// what to do about it: a project load flags the take (todo #412), a
-/// fresh capture does not — see [`crate::engine_events::takes`].
+/// fresh capture does not — see `engine_events::takes::take_captured`.
 pub fn load_take_peaks(
     project_dir: &Path,
     clip_ref: ClipId,

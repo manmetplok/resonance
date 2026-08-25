@@ -338,7 +338,18 @@ impl Resonance {
     /// `tests/timeline/take_lane_render.rs`.
     #[doc(hidden)]
     pub fn test_take_peaks(&self, group_id: u64, take_id: u64) -> &[(f32, f32)] {
-        self.take_groups.peaks(group_id, take_id)
+        let clip_ref = self
+            .take_groups
+            .group(group_id)
+            .and_then(|g| g.take(take_id))
+            .and_then(|t| match t.content {
+                resonance_common::TakeContent::Audio { clip_ref } => Some(clip_ref),
+                resonance_common::TakeContent::Midi { .. } => None,
+            });
+        // A MIDI take names no recording, so it can hold no table — and
+        // an audio take's table only counts when it was read from the
+        // recording that take names (ba todo #1400).
+        clip_ref.map_or(&[][..], |c| self.take_groups.peaks(group_id, take_id, c))
     }
 
     /// Test-only: whether the take lane would draw this take as hatched

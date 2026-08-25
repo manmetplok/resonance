@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 use resonance_audio::types::TrackId;
 use resonance_common::{
-    CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
+    ClipId, CompSegment, Take, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
 };
 
 /// GUI-side mirror of the engine's take groups.
@@ -52,14 +52,36 @@ pub struct TakeGroupState {
     ///
     /// Keyed like [`missing_takes`](Self::missing_takes) rather than by
     /// `clip_ref`, so the two travel together: every site that forgets a
-    /// take forgets both, with one key and no clip lookup.
+    /// take forgets both, with one key and no clip lookup. The `clip_ref`
+    /// the table was read from is stored **beside** it and checked on
+    /// every hit — see [`TakePeaks`].
     ///
     /// Beside the groups, and for the same reason the missing set is: a
     /// peak table is a fact about a file on *this* machine, cheap to
-    /// re-derive and never written back to disk. Empty for a MIDI take
+    /// re-derive and never written back to disk. Absent for a MIDI take
     /// (its notes are its content) and for an audio take whose recording
     /// could not be read.
-    pub peaks: HashMap<(TakeGroupId, TakeId), Vec<(f32, f32)>>,
+    ///
+    /// **This is a cache, and the one piece of this mirror that outlives a
+    /// snapshot rebuild** — see [`clear_for_snapshot`](Self::clear_for_snapshot).
+    pub peaks: HashMap<(TakeGroupId, TakeId), TakePeaks>,
+}
+
+/// A take's cached waveform, and the recording it was read from.
+///
+/// The `clip_ref` is what makes the cache safe to carry across a snapshot
+/// rebuild. `(group, take)` names a *slot in the mirror*, not a recording:
+/// a capture that was undone and re-recorded lands a different pass under
+/// the same pair, and diff replay can then restore the earlier snapshot
+/// with no capture echo to refresh the table. Every read compares the ref,
+/// so a mismatch is a miss and is re-read — the failure mode designed out
+/// here is a lane confidently drawing a waveform that is not the take's.
+#[derive(Debug, Clone)]
+pub struct TakePeaks {
+    /// The `clip_ref` of the recording [`peaks`](Self::peaks) came from.
+    pub clip_ref: ClipId,
+    /// One `(min, max)` pair per `WAVEFORM_PEAK_FRAMES` frames.
+    pub peaks: Vec<(f32, f32)>,
 }
 
 impl TakeGroupState {
@@ -70,13 +92,41 @@ impl TakeGroupState {
     /// echoing a per-group removal, so the mirror has to be emptied
     /// explicitly or project B inherits project A's groups — and with
     /// them `clip_ref`s into a different project's `audio/` directory.
+    ///
+    /// Peaks go too, and must: clip ids are per-project, so project B's
+    /// `clip_ref` 100 names a different WAV from project A's.
     pub fn clear(&mut self) {
         self.groups.clear();
         self.missing_takes.clear();
         self.peaks.clear();
     }
 
-    /// File the peaks derived from a take's recording.
+    /// Empty the mirror for a **rebuild from a snapshot of this same
+    /// session** — the undo/redo diff-replay path — keeping the peak
+    /// cache (ba todo #1400).
+    ///
+    /// Undo and redo rebuild the take lanes from a `ProjectFile` on every
+    /// history step, *including steps that touch no take at all*: a fader
+    /// undo runs this too. Dropping the peaks there would make each step
+    /// re-mmap and re-scan every take WAV in the project — measured at
+    /// ~3.2 ms per recorded minute, so ~100 ms per step for a session
+    /// holding half an hour of takes, on a hold-to-repeat gesture. There
+    /// is nothing to re-read: a recording never changes, and a table that
+    /// does not match the take it is filed under is rejected on read
+    /// ([`TakePeaks`]).
+    ///
+    /// The missing flags are **not** kept, deliberately. They are a claim
+    /// about the filesystem right now, and re-deriving one costs a failed
+    /// `open` rather than a scan — so a take whose WAV was deleted
+    /// mid-session is still re-flagged on the next history step rather
+    /// than going quiet, which is what the old `exists()` probe here was
+    /// for.
+    pub fn clear_for_snapshot(&mut self) {
+        self.groups.clear();
+        self.missing_takes.clear();
+    }
+
+    /// File the peaks read from `clip_ref`'s recording for this take.
     ///
     /// Replaces any previous table for the key, so a re-delivered capture
     /// refreshes rather than duplicating.
@@ -84,20 +134,43 @@ impl TakeGroupState {
         &mut self,
         group_id: TakeGroupId,
         take_id: TakeId,
+        clip_ref: ClipId,
         peaks: Vec<(f32, f32)>,
     ) {
-        self.peaks.insert((group_id, take_id), peaks);
+        self.peaks
+            .insert((group_id, take_id), TakePeaks { clip_ref, peaks });
     }
 
     /// This take's waveform peaks, or an empty slice when it has none —
-    /// a MIDI take, a recording that could not be read, or a capture the
-    /// app could not resolve a project directory for. Borrows, so the
-    /// draw pass never clones a peak table per frame.
-    pub fn peaks(&self, group_id: TakeGroupId, take_id: TakeId) -> &[(f32, f32)] {
+    /// a MIDI take, a recording that could not be read, a capture the app
+    /// could not resolve a project directory for, or a cached table
+    /// belonging to a *different* recording under the same key. Borrows,
+    /// so the draw pass never clones a peak table per frame.
+    pub fn peaks(
+        &self,
+        group_id: TakeGroupId,
+        take_id: TakeId,
+        clip_ref: ClipId,
+    ) -> &[(f32, f32)] {
+        match self.peaks.get(&(group_id, take_id)) {
+            Some(cached) if cached.clip_ref == clip_ref => &cached.peaks,
+            _ => &[],
+        }
+    }
+
+    /// Whether this take's recording has already been read into the cache
+    /// — the check that lets a snapshot rebuild skip the read entirely.
+    pub fn has_peaks(&self, group_id: TakeGroupId, take_id: TakeId, clip_ref: ClipId) -> bool {
         self.peaks
             .get(&(group_id, take_id))
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+            .is_some_and(|cached| cached.clip_ref == clip_ref)
+    }
+
+    /// Drop this take's cached waveform — its recording became
+    /// unreadable, so the table is a memory of a file that is no longer
+    /// there and must not survive as a cache hit.
+    pub fn forget_peaks(&mut self, group_id: TakeGroupId, take_id: TakeId) {
+        self.peaks.remove(&(group_id, take_id));
     }
 
     /// Flag `take_id` in `group_id` as having no recorded audio on disk.
