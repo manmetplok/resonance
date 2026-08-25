@@ -175,6 +175,21 @@ impl TakeGroupState {
         true
     }
 
+    /// Drop the whole lane `group_id`, returning whether it was there.
+    ///
+    /// Mirrors `AudioEvent::TakeGroupRemoved` (ba todo #1397). Every
+    /// missing-media flag the group carried goes with it, for the same
+    /// reason [`Self::remove_take`] drops one take's: a later group reusing
+    /// the id must not inherit a stale flag.
+    pub fn remove_group(&mut self, group_id: TakeGroupId) -> bool {
+        let Some(idx) = self.groups.iter().position(|g| g.id == group_id) else {
+            return false;
+        };
+        self.groups.remove(idx);
+        self.missing_takes.retain(|(gid, _)| *gid != group_id);
+        true
+    }
+
     /// True when this group's active take mutes its recorded audio.
     ///
     /// Soloing a **MIDI** take resolves to zero audio spans while every

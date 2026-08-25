@@ -1389,6 +1389,62 @@ fn a_within_tolerance_join_strands_at_most_the_tolerance() {
     );
 }
 
+/// **The `slot` / `extent` pair, pinned by argument position.**
+///
+/// `store_take_in(store, group_id, track_id, slot, extent, &content)` takes
+/// two adjacent `TimelineRange`s that mean opposite things: `slot` binds a
+/// *newly created* lane, `extent` records what the *pass* captured. Every
+/// other case in this file hands them the same value — a run that filled
+/// the region it cycled over — so transposing them at the
+/// `capture_take_event` call site passed the whole suite. The two punch-in
+/// cases above miss it because they drive `push_take` directly and never
+/// reach `store_take_in`.
+///
+/// Transposed, a lane opened by a punched-in pass would bind to the
+/// punch-in *extent* while the take stored the full slot as its extent —
+/// the reload-side twin of the bug #1396 fixed, since both values persist:
+/// the lane would be narrower than the region it was recorded over, and
+/// `audible_extent` would claim material the pass never captured.
+///
+/// The assertions are on the **store**, deliberately. `TakeCaptured` builds
+/// its `slot` and `extent` fields from the caller's own locals, so the
+/// event looks perfectly correct under the transposition and only the
+/// stored group and take disagree.
+#[test]
+fn a_new_lane_binds_to_the_run_region_while_the_take_stores_its_own_extent() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    // Punched in a quarter of a second late and cut off an eighth early:
+    // strictly inside the run's region, and asymmetric so no swap can
+    // coincide.
+    let recorded = TimelineRange::from_bounds(SLOT.start + 12_000, SLOT.end() - 6_000);
+    assert_ne!(recorded, SLOT, "the fixture must be able to tell them apart");
+
+    let cap = record_pass_over(&mut store, &mut next, TRACK, SLOT, recorded, audio(100));
+
+    let group = &store[&cap.group_id];
+    assert_eq!(
+        group.slot, SLOT,
+        "a new lane binds to the region the run cycled over, never to what \
+         one pass happened to capture inside it"
+    );
+    let take = group.take(cap.take_id).expect("the stored take");
+    assert_eq!(
+        take.extent, recorded,
+        "the take stores what the pass recorded, never its lane's slot"
+    );
+
+    // The echo has to agree with the store, or the app mirrors a lane the
+    // engine does not have.
+    assert_eq!(cap.slot, group.slot);
+    assert_eq!(cap.extent, take.extent);
+
+    // And the pair still resolves the way #1396 specified: the audible
+    // stretch is the recording, not the lane.
+    assert_eq!(take.audible_extent(group.slot), recorded);
+}
+
 /// The other half of "a lane's region never moves", pinned on the writer
 /// itself. `store_take_in` is what used to do `group.slot = slot` on every
 /// take, and it is reachable independently of the resolver — so assert it

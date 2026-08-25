@@ -252,6 +252,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::ActiveTakeChanged { group_id, take_id } => {
             takes::active_take_changed(r, group_id, take_id)
         }
+        // Removal echoes (ba todo #1397). Same shape: the engine has
+        // already dropped the take (or the whole lane) from what it plays,
+        // and the re-covered comp follows as a `TakeCompChanged`.
+        E::TakeRemoved { group_id, take_id } => takes::take_removed(r, group_id, take_id),
+        E::TakeGroupRemoved { group_id } => takes::take_group_removed(r, group_id),
 
         // MIDI clip + note events
         E::MidiClipCreated {

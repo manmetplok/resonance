@@ -551,6 +551,176 @@ fn three_take_group() -> TakeGroup {
     group
 }
 
+// --- TakeGroup::remove_take (ba todo #1397) ------------------------------
+
+/// The headline: the take goes, and so does every segment naming it. A
+/// `CompSegment` pointing at a take the group no longer holds is skipped by
+/// `effective_cover` and plays whatever tier 3 puts there — so a dangling
+/// reference is invisible until it is serialized, and then it outlives the
+/// session.
+#[test]
+fn remove_take_drops_the_take_and_every_segment_naming_it() {
+    let mut group = three_take_group();
+    group.comp = comp_from(&[(0, 100, 0), (100, 300, 1)]);
+
+    let removed = group.remove_take(1).expect("take 1 is in the group");
+
+    assert_eq!(removed.id, 1);
+    assert!(group.take(1).is_none());
+    assert_eq!(group.takes.iter().map(|t| t.id).collect::<Vec<_>>(), [0, 2]);
+    assert!(
+        group.comp.segments.iter().all(|s| s.take_id != 1),
+        "no segment may still name the removed take: {:?}",
+        group.comp.segments
+    );
+}
+
+/// The holes go to the take the cover would *now* fall back to — computed
+/// after the removal, so it is a survivor and never the take just deleted.
+/// That is the same take tier 3 would have chosen for those stretches
+/// anyway, which is what keeps a removal from moving anything audible
+/// except where the removed take used to play.
+#[test]
+fn remove_take_hands_its_holes_to_the_new_latest_take() {
+    let mut group = three_take_group();
+    // Take 2 is the newest pass, and it is comped into the middle.
+    group.comp = comp_from(&[(0, 100, 0), (100, 200, 2), (200, 300, 0)]);
+
+    group.remove_take(2).expect("take 2 is in the group");
+
+    // Take 1 is now the newest pass, so it inherits the hole.
+    assert_eq!(
+        group.comp.segments,
+        vec![seg(0, 100, 0), seg(100, 200, 1), seg(200, 300, 0)]
+    );
+    assert!(group.is_full_cover(), "the slot must still be covered");
+}
+
+/// A removal that reunites two spans of one take merges them, so the comp
+/// keeps the sorted / non-overlapping / merged shape every other helper
+/// maintains.
+#[test]
+fn remove_take_merges_the_neighbours_it_reunites() {
+    let mut group = TakeGroup::new(1, 42, r(0, 300));
+    group.add_take(audio_take(0, 0, 1_000));
+    group.add_take(audio_take(1, 1, 2_000));
+    group.comp = comp_from(&[(0, 100, 1), (100, 200, 0), (200, 300, 1)]);
+
+    group.remove_take(0).expect("take 0 is in the group");
+
+    assert_eq!(group.comp.segments, vec![seg(0, 300, 1)]);
+}
+
+/// A comp left with **no** surviving segments stays empty rather than being
+/// re-seeded. Both states play the survivor over the whole slot, but they
+/// draw differently: seeding would turn the fallback into segments that
+/// read as spans the user promoted, and deleting a take is not a promotion
+/// of the rest.
+#[test]
+fn remove_take_leaves_a_comp_it_emptied_empty() {
+    let mut group = three_take_group();
+    group.comp = comp_from(&[(0, 300, 0)]);
+
+    group.remove_take(0).expect("take 0 is in the group");
+
+    assert!(
+        group.comp.segments.is_empty(),
+        "expected no segments, got {:?}",
+        group.comp.segments
+    );
+    assert_eq!(
+        cover_shape(&effective_cover(&group)),
+        vec![(0, 300, 2, CoverSource::LatestFallback)],
+        "the survivor still covers the slot — as a fallback, not a promotion"
+    );
+}
+
+/// A group that was never comped has nothing to re-cover, and must not
+/// acquire a comp by being deleted from.
+#[test]
+fn remove_take_from_an_uncomped_group_writes_no_segments() {
+    let mut group = three_take_group();
+
+    group.remove_take(2).expect("take 2 is in the group");
+
+    assert!(group.comp.segments.is_empty());
+    assert_eq!(
+        cover_shape(&effective_cover(&group)),
+        vec![(0, 300, 1, CoverSource::LatestFallback)],
+        "the fallback moves to the newest surviving pass"
+    );
+}
+
+/// The solo goes with the take it named. An `active_take` the group does
+/// not hold falls through to the comp rather than silencing the group, so
+/// leaving it would not be fatal — it would just leave a lane drawing a
+/// solo that solos nothing.
+#[test]
+fn remove_take_clears_a_solo_that_named_it() {
+    let mut group = three_take_group();
+    group.active_take = Some(1);
+
+    group.remove_take(1).expect("take 1 is in the group");
+
+    assert_eq!(group.active_take, None);
+}
+
+/// Removing some *other* take does not end a solo.
+#[test]
+fn remove_take_leaves_another_takes_solo_alone() {
+    let mut group = three_take_group();
+    group.active_take = Some(2);
+
+    group.remove_take(0).expect("take 0 is in the group");
+
+    assert_eq!(group.active_take, Some(2));
+}
+
+/// An id the group does not hold changes nothing at all — which is what
+/// makes the engine's `RemoveTake` idempotent rather than destructive when
+/// a stale command arrives.
+#[test]
+fn remove_take_of_an_unknown_id_changes_nothing() {
+    let mut group = three_take_group();
+    group.comp = comp_from(&[(0, 100, 0), (100, 300, 1)]);
+    let before = group.clone();
+
+    assert!(group.remove_take(42).is_none());
+    assert_eq!(group, before);
+}
+
+/// The removed take is handed back, content and all: the engine finds the
+/// recording to park through this return value.
+#[test]
+fn remove_take_returns_the_take_it_removed() {
+    let mut group = three_take_group();
+
+    let removed = group.remove_take(1).expect("take 1 is in the group");
+
+    assert_eq!(removed.content, TakeContent::Audio { clip_ref: 901 });
+    assert_eq!(removed.pass_index, 1);
+}
+
+/// Removing the **last** take leaves a group with nothing to play and
+/// nothing to draw. This is the model's half of the ruling; the engine's
+/// `RemoveTake` drops the group rather than keeping one in this state.
+#[test]
+fn removing_the_last_take_leaves_a_group_that_plays_nothing() {
+    let mut group = TakeGroup::new(1, 42, r(0, 300));
+    group.add_take(audio_take(0, 0, 1_000));
+    group.comp = comp_from(&[(0, 300, 0)]);
+
+    group.remove_take(0).expect("take 0 is in the group");
+
+    assert!(group.takes.is_empty());
+    assert!(group.comp.segments.is_empty());
+    assert!(
+        effective_cover(&group).is_empty(),
+        "a group with no takes resolves to nothing — the deleted pass must \
+         not come back through the latest-take fallback"
+    );
+}
+
 // --- serde round-trip ----------------------------------------------------
 
 #[test]

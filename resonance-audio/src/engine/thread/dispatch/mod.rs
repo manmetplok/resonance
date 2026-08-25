@@ -69,9 +69,12 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::SetLoopRange { .. }
         | AudioCommand::SetLoopRecordMode(..) => transport::dispatch_transport(ctx, state, cmd),
 
-        // Take lanes: comp edits, active-take selection, project-load restore
+        // Take lanes: comp edits, active-take selection, take / lane
+        // removal, project-load restore
         AudioCommand::SetTakeComp { .. }
         | AudioCommand::SetActiveTake { .. }
+        | AudioCommand::RemoveTake { .. }
+        | AudioCommand::RemoveTakeGroup { .. }
         | AudioCommand::RestoreTakeGroups { .. } => takes::dispatch_takes(ctx, state, cmd),
 
         // Audio clips + automation + project

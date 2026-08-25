@@ -356,6 +356,28 @@ pub enum AudioEvent {
         group_id: TakeGroupId,
         take_id: Option<TakeId>,
     },
+    /// Confirms an `AudioCommand::RemoveTake` was applied: `take_id` is
+    /// gone from `group_id`, and so is every comp segment that named it.
+    ///
+    /// The re-covered comp and a cleared solo arrive as the ordinary
+    /// `TakeCompChanged` / `ActiveTakeChanged` echoes right after this
+    /// one, and only when the removal actually moved them — one event per
+    /// fact, so a mirror applies removals with the handlers it already
+    /// has. Emitted only when the group survives; removing a group's last
+    /// take emits [`AudioEvent::TakeGroupRemoved`] instead.
+    TakeRemoved {
+        group_id: TakeGroupId,
+        take_id: TakeId,
+    },
+    /// Confirms take group `group_id` is gone from the engine — every take
+    /// in it, its comp and its slot binding. Sent for
+    /// `AudioCommand::RemoveTakeGroup`, and for an
+    /// `AudioCommand::RemoveTake` that took the group's last take with it.
+    ///
+    /// No comp echo follows: there is no comp left to echo.
+    TakeGroupRemoved {
+        group_id: TakeGroupId,
+    },
     PluginAdded {
         track_id: TrackId,
         instance_id: PluginInstanceId,
