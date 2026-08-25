@@ -735,13 +735,44 @@ const B_CLIP: u64 = 201;
 const A_LEVEL: f32 = 1.0;
 const B_LEVEL: f32 = 0.25;
 
+/// How far into the slot pass 0 punched in.
+///
+/// **Take 0's extent is deliberately NOT its slot.** Cycle recording gives
+/// pass 0 the punch-in point as its clip start rather than the loop start,
+/// which is the whole reason `Take::extent` is persisted (ba todo #1396) —
+/// so a fixture where every take fills its slot cannot tell
+/// `take.extent.start` apart from `group.slot.start`, and an
+/// implementation that reached for the slot would pass. It is the same
+/// adjacent-same-typed-values trap either way round; the fixture has to
+/// separate them.
+const PUNCH: u64 = 512;
+
+/// The takes this suite's reload fixture is built from: clip id, DC level,
+/// and the extent capture would have recorded — take 0 punched in, take 1
+/// filling its slot.
+fn reload_takes() -> [(u64, f32, TimelineRange); 2] {
+    [
+        (
+            A_CLIP,
+            A_LEVEL,
+            TimelineRange::new(RSLOT.start + PUNCH, RSLOT.length - PUNCH),
+        ),
+        (B_CLIP, B_LEVEL, RSLOT),
+    ]
+}
+
 /// Write a real, decodable DC-valued stereo WAV where a take's `clip_ref`
 /// resolves. Unlike [`write_take_wav`], which only has to satisfy an
 /// existence check, this one is actually mmap'd and rendered.
-fn write_dc_take_wav(dir: &Path, clip_ref: u64, level: f32) {
+///
+/// `frames` is the take's *extent* length, not the slot's: a punched-in
+/// pass recorded fewer frames, and the clip has to be that long or the
+/// engine's `[start_sample, +duration_frames())` intersection would not
+/// match what capture left behind.
+fn write_dc_take_wav(dir: &Path, clip_ref: u64, level: f32, frames: u64) {
     let audio = dir.join("audio");
     std::fs::create_dir_all(&audio).expect("create audio dir");
-    let samples = vec![level; RSLOT.length as usize * 2];
+    let samples = vec![level; frames as usize * 2];
     transcode_to_wav(
         &audio.join(format!("clip_{clip_ref}.wav")),
         &samples,
@@ -757,12 +788,14 @@ fn write_dc_take_wav(dir: &Path, clip_ref: u64, level: f32) {
 ///
 /// This is the "before the save" side of the comparison: the engine as
 /// capture leaves it, which is the state a reload has to reproduce.
-fn captured_clip(clip_ref: u64, dir: &Path) -> AudioClip {
+fn captured_clip(clip_ref: u64, dir: &Path, extent: TimelineRange) -> AudioClip {
     let path = dir.join(format!("audio/clip_{clip_ref}.wav"));
     AudioClip {
         id: clip_ref,
         track_id: TRACK,
-        start_sample: RSLOT.start,
+        // Where the pass really started — the punch-in point for take 0,
+        // not the slot start.
+        start_sample: extent.start,
         source: ClipSource::open_wav(&path).expect("open take wav"),
         name: format!("Take {clip_ref}"),
         trim_start_frames: 0,
@@ -784,22 +817,24 @@ fn captured_clip(clip_ref: u64, dir: &Path) -> AudioClip {
 
 /// An app holding two audio takes over [`RSLOT`], each backed by a real
 /// WAV, comped so the first half plays take 0 and the second half take 1.
+///
+/// Take 0 is a **punched-in** pass ([`PUNCH`] frames into the slot); take 1
+/// fills the slot. So the fixture carries one take whose extent differs
+/// from its slot and one whose does not, and a restore that reached for
+/// `group.slot.start` gets take 0 wrong while still getting take 1 right.
 fn comped_project(dir: &Path) -> Resonance {
     let mut app = app_at(dir);
-    for (pass, (clip_ref, level)) in [(A_CLIP, A_LEVEL), (B_CLIP, B_LEVEL)]
-        .into_iter()
-        .enumerate()
-    {
-        write_dc_take_wav(dir, clip_ref, level);
+    for (pass, (clip_ref, level, extent)) in reload_takes().into_iter().enumerate() {
+        write_dc_take_wav(dir, clip_ref, level, extent.length);
         app.test_apply_engine_event(AudioEvent::TakeCaptured {
             group_id: GROUP,
             take_id: pass as u64,
             track_id: TRACK,
             slot: RSLOT,
             pass_index: pass as u32,
-            // Both passes filled the slot, so the extent is the slot —
-            // and it is also the record of where capture put the clip.
-            extent: RSLOT,
+            // What this pass really recorded over — and, for an audio
+            // take, the record of where capture put its clip.
+            extent,
             content: TakeContent::Audio { clip_ref },
         });
     }
@@ -871,7 +906,10 @@ fn render_before_the_save(dir: &Path, app: &Resonance, live: bool) -> Vec<f32> {
         .map(|g| (g.id, g))
         .collect();
     render(
-        vec![captured_clip(A_CLIP, dir), captured_clip(B_CLIP, dir)],
+        reload_takes()
+            .into_iter()
+            .map(|(clip_ref, _, extent)| captured_clip(clip_ref, dir, extent))
+            .collect(),
         &build_comp_table(&groups),
         live,
     )
@@ -924,6 +962,27 @@ fn a_reloaded_comp_still_plays_and_bounces_what_it_did_before_the_save() {
         (before_live[b_probe] - B_LEVEL).abs() < 1e-6,
         "second half must be take 1 at {B_LEVEL}, got {}",
         before_live[b_probe]
+    );
+
+    // And the punch-in is audible in the render, not just in the metadata:
+    // take 0's clip starts PUNCH frames into the slot, so the comp has
+    // nothing to read before that and renders silence there. A clip
+    // restored at the slot start instead would fill this gap — which is
+    // what makes the sample-for-sample comparison below discriminate
+    // `take.extent.start` from `group.slot.start`.
+    assert!(
+        before_live[..(PUNCH as usize)]
+            .iter()
+            .all(|s| s.abs() < 1e-6),
+        "the punched-in head of the slot must be silent before the take starts"
+    );
+    // Past the take's own anti-click ramp (`CLIP_DECLICK_FRAMES` = 96) and
+    // short of the seam crossfade into take 1.
+    assert!(
+        before_live[(PUNCH + 128) as usize..a_probe]
+            .iter()
+            .all(|s| (s - A_LEVEL).abs() < 1e-6),
+        "and take 0 must be at full level once its clip has begun"
     );
 
     let cmds = commands_from_a_real_reload(dir.path(), &app);
@@ -1052,10 +1111,19 @@ fn a_restored_take_clip_is_loaded_at_the_origin_capture_gave_it() {
     assert_eq!(
         loads,
         vec![
-            (A_CLIP, TRACK, RSLOT.start),
-            (B_CLIP, TRACK, RSLOT.start)
+            // Take 0 punched in, so its clip does NOT start where its slot
+            // does. This is the pair that discriminates: reaching for
+            // `group.slot.start` would give `RSLOT.start` here...
+            (A_CLIP, TRACK, RSLOT.start + PUNCH),
+            // ...while still being right for take 1, which filled its slot.
+            (B_CLIP, TRACK, RSLOT.start),
         ],
         "each take clip is restored onto its own track at its extent's start"
+    );
+    assert_ne!(
+        loads[0].2, RSLOT.start,
+        "the punched-in take's origin must differ from its slot's, or this \
+         test cannot tell `take.extent.start` from `group.slot.start`"
     );
 }
 

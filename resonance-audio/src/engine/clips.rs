@@ -742,7 +742,21 @@ fn submit_clip_load(
                     // for a clip whose first load is still in flight (an
                     // undo replay landing on the heels of a project load),
                     // and a duplicated `AudioClip` would double the take's
-                    // level everywhere the comp reads it.
+                    // level everywhere the comp reads it. Pinned by
+                    // `loop_record_takes.rs::two_take_clip_loads_racing_each_other_still_leave_one_clip`,
+                    // which dispatches twice with no wait between — the
+                    // case the submit-time early return cannot see.
+                    //
+                    // **This also changes the timeline path**, which shares
+                    // this worker: a duplicate `LoadClipFromWav` is now
+                    // dropped, and drops its `ClipImported` echo with it.
+                    // Unreachable today — `ClearAll` drains the clip list
+                    // before a project load replays it, and no other caller
+                    // issues two loads for one id — but it is a real
+                    // behaviour change to a path this todo is not about, so
+                    // it is called out rather than left in the diff. If a
+                    // caller ever does need "reload this clip in place",
+                    // it wants an explicit replace, not a second load.
                     let mut clips = clips_arc.write();
                     if clips.iter().any(|c| c.id == clip_id) {
                         return;

@@ -1727,6 +1727,51 @@ fn the_clip_reservation_and_the_take_clip_load_compose_in_either_order() {
     );
 }
 
+/// Two loads for the same take clip issued **back to back**, with no wait
+/// between them, still leave exactly one clip.
+///
+/// This is the case the submit-time early return cannot cover, and the
+/// reason the binding duplicate check lives *inside* the `clips.write()`
+/// block in `submit_clip_load`: the load is asynchronous, so when the
+/// second command is dispatched the first one's worker has not published
+/// yet and the submit-time scan of `ctx.clips` finds nothing. Delete the
+/// lock-scoped check and this yields `[100, 100]` — a duplicated
+/// `AudioClip` doubling that take's level everywhere the comp reads it.
+///
+/// Deliberately distinct from the test below, which waits between loads
+/// and therefore only ever exercises the submit-time optimisation.
+#[test]
+fn two_take_clip_loads_racing_each_other_still_leave_one_clip() {
+    let dir = make_tempdir("load-race");
+    let path = write_take_clip_wav(&dir, 100);
+    let load = resonance_audio::types::AudioCommand::LoadTakeClipFromWav {
+        clip_id: 100,
+        track_id: 7,
+        start_sample: 0,
+        path,
+        name: "Take 100".into(),
+    };
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    // No `wait_for_clips` between these two: the point is that the second
+    // dispatch happens while the first load is still in flight.
+    engine.replay_take_lane_command(&load);
+    engine.replay_take_lane_command(&load);
+
+    assert!(
+        engine.wait_for_clips(1, std::time::Duration::from_secs(5)),
+        "the take clip never loaded at all"
+    );
+    // Let a second worker publish if one is going to.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "two racing loads of one take clip must not both push it"
+    );
+}
+
 /// Loading a take clip the engine already holds is a no-op on the clip
 /// list — it neither duplicates the `AudioClip` nor reloads it.
 ///

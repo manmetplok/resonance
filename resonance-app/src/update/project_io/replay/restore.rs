@@ -98,6 +98,24 @@ pub(crate) fn replay_take_groups(
                 continue;
             };
             let rel = crate::project::clip_audio_file(clip_ref);
+            // TODO(#1400 merge): this `exists()` stat is being replaced by
+            // `load_take_peaks`, whose `Err` arm already flags the take
+            // missing. The take-clip load below should move into its `Ok`
+            // arm, so one read decides both "can the lane draw it?" and
+            // "should the engine be asked for it?".
+            //
+            // That closes the last inconsistency here. Today an *absent*
+            // WAV degrades quietly and per-take (kept, flagged, drawn as
+            // missing), while a *corrupt* one — present, so it passes this
+            // stat and gets asked for — raises a global error banner from
+            // the load worker while the lane still draws the take as
+            // present and the comp renders its span silent. That is the
+            // same false-presence problem #1400 is fixing on the drawing
+            // path. Routing the send off the same read collapses the
+            // corrupt case into the missing case, with no event needed
+            // back on a deliberately silent command. Not done here because
+            // #1400 is unmerged; whoever lands second wires it, and the
+            // two changes meet in this function anyway.
             if project_dir.join(&rel).exists() {
                 // `extent` is this pass's own `[start, +duration)` on the
                 // timeline — `RolledAudioTake::extent` is defined as the
