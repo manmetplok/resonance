@@ -43,16 +43,17 @@
 //!    take the group does not hold is dropped by the engine with no echo,
 //!    so the app validates before sending instead of assuming success.
 //!
-//! # Two limits, both engine-side
+//! # One limit, engine-side
 //!
 //! * Deleting a group's **last** take is refused. There is no
 //!   take-removal command, and a group whose comp is empty falls back to
 //!   its most recent pass, so the engine would keep playing what the user
 //!   deleted. Lifting this needs an engine-side removal command.
-//! * A restore (undo/redo) re-asserts every mirrored group's comp and
-//!   active take onto the engine, but cannot *create* a group the engine
-//!   has never captured — see `undo::snapshot::resync_take_comps` and
-//!   todo #1394.
+//!
+//! A restore (undo/redo) is no longer a limit: `RestoreTakeGroups` (todo
+//! #1394) replaces the engine's whole store from the mirror, so it can
+//! create a group the engine never captured and remove one it holds —
+//! which is why `undo::snapshot::resync_take_comps` is gone (todo #1399).
 
 use iced::Task;
 use resonance_audio::types::AudioCommand;

@@ -31,7 +31,7 @@ use resonance_app::state::ClipState;
 use resonance_app::Resonance;
 use resonance_audio::__test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, FadeCurve, TrackType};
-use resonance_common::{CompSegment, TakeContent, TakeNote, TimelineRange};
+use resonance_common::{CompSegment, TakeContent, TakeGroup, TakeNote, TimelineRange};
 
 const TRACK: u64 = 7;
 const MIDI_TRACK: u64 = 8;
@@ -119,6 +119,39 @@ fn last_comp_command(cmds: &[AudioCommand]) -> Option<Vec<CompSegment>> {
         }
         _ => None,
     })
+}
+
+/// The group under test as the **last** `RestoreTakeGroups` in `cmds`
+/// carried it, or `None` if that command dropped the group (or was never
+/// sent).
+///
+/// This is what an undo/redo tells the engine (ba todo #1394):
+/// `replay_take_groups` replaces the engine's whole store from the
+/// restored mirror. `SetTakeComp` / `SetActiveTake` are the *live edit*
+/// path — #411 re-sent them on restore as well, but that was a strict
+/// subset of the restore command and was removed in ba todo #1399, so
+/// asserting on them here would pin a mechanism instead of the outcome.
+/// Asserting on the restore payload also reaches what the resync never
+/// could: the takes themselves.
+fn restored_group(cmds: &[AudioCommand]) -> Option<TakeGroup> {
+    cmds.iter()
+        .rev()
+        .find_map(|c| match c {
+            AudioCommand::RestoreTakeGroups { groups } => Some(groups.clone()),
+            _ => None,
+        })?
+        .into_iter()
+        .find(|g| g.id == GROUP)
+}
+
+/// A group's comp as `(start, end, take)`, to compare against [`comp`].
+fn segments_of(group: &TakeGroup) -> Vec<(u64, u64, u64)> {
+    group
+        .comp
+        .segments
+        .iter()
+        .map(|s| (s.range.start, s.range.end(), s.take_id))
+        .collect()
 }
 
 fn active_take_commands(cmds: &[AudioCommand]) -> Vec<Option<u64>> {
@@ -729,21 +762,16 @@ fn a_comp_edit_undoes_on_screen_and_in_the_engine() {
         comp(&app).is_empty(),
         "the lane is back to the un-comped state"
     );
-    let sent = last_comp_command(&drain(&rx)).expect("the engine is told about the undo");
+    let sent = restored_group(&drain(&rx)).expect("the engine is told about the undo");
     assert!(
-        sent.is_empty(),
+        sent.comp.segments.is_empty(),
         "and told the comp is empty again, not left rendering the undone edit"
     );
 
     let _ = app.update(Message::Redo);
     assert_eq!(comp(&app), after_edit, "redo re-applies the promote");
-    let sent = last_comp_command(&drain(&rx)).expect("the engine is told about the redo");
-    assert_eq!(
-        sent.iter()
-            .map(|s| (s.range.start, s.range.end(), s.take_id))
-            .collect::<Vec<_>>(),
-        after_edit
-    );
+    let sent = restored_group(&drain(&rx)).expect("the engine is told about the redo");
+    assert_eq!(segments_of(&sent), after_edit);
 }
 
 #[test]
@@ -761,11 +789,8 @@ fn a_take_solo_undoes_through_the_same_path() {
     let _ = app.update(Message::Undo);
 
     assert_eq!(app.test_take_groups()[0].active_take, None);
-    assert_eq!(
-        active_take_commands(&drain(&rx)),
-        vec![None],
-        "the engine stops soloing too"
-    );
+    let sent = restored_group(&drain(&rx)).expect("the engine is told about the undo");
+    assert_eq!(sent.active_take, None, "the engine stops soloing too");
 }
 
 #[test]
@@ -789,17 +814,20 @@ fn a_delete_undoes_the_take_back_into_the_lane() {
         .map(|t| t.id)
         .collect();
     assert_eq!(takes, vec![0, 1, 2], "no take is ever silently lost");
-    // Specifically a comp push, not merely *some* traffic: the diff
-    // replay emits plenty of unrelated commands, so asserting the
-    // receiver is non-empty would pass even with the resync gone.
-    let sent = last_comp_command(&drain(&rx))
-        .expect("the restored lane's comp is re-asserted onto the engine");
+    // Specifically the take-lane push, not merely *some* traffic: the
+    // diff replay emits plenty of unrelated commands, so asserting the
+    // receiver is non-empty would pass with the restore gone.
+    let sent =
+        restored_group(&drain(&rx)).expect("the restored lane is pushed onto the engine");
     assert_eq!(
-        sent.iter()
-            .map(|s| (s.range.start, s.range.end(), s.take_id))
-            .collect::<Vec<_>>(),
+        sent.takes.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "the engine gets the deleted take back too, not just the mirror"
+    );
+    assert_eq!(
+        segments_of(&sent),
         comp(&app),
-        "and it is the cover the lane came back to"
+        "and the cover the lane came back to"
     );
 }
 

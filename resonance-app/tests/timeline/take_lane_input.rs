@@ -1215,6 +1215,28 @@ fn the_cursor_agrees_with_the_reordered_press() {
         Interaction::Grab,
         "the value-0 dot still hovers as grabbable"
     );
+
+    // The contended point, and the only one here that orders take-lane
+    // hover against `breakpoint_hit`: inside the value-0 dot's pick
+    // radius *and* inside the ribbon band. None of the three above
+    // contend — the dot probe sits 2 px above the band, and both ribbon
+    // probes are ~100 px along the x axis from the nearest dot — so
+    // moving take-lane hover below the dots used to leave the whole
+    // suite green. `a_value_zero_breakpoint_survives_the_reorder` pins
+    // the *press* at this exact point as the split; if the cursor
+    // disagreed it would show `Grab` over a click that splits the comp,
+    // which is the affordance lie this test exists to prevent.
+    let dot_x = x_of(&app, at(&app, 2));
+    let stolen_y = band_top + 2.0;
+    assert!(
+        stolen_y < overlay_dot_y(&app, 0.0) + BREAKPOINT_HIT_RADIUS,
+        "precondition: the point is inside the dot's pick radius"
+    );
+    assert_eq!(
+        app.test_timeline_cursor(&state, dot_x, stolen_y),
+        Interaction::ResizingHorizontally,
+        "where the press splits the comp, the cursor must promise the split"
+    );
 }
 
 /// The crowded fixture minus the takes: same clip, same two breakpoints,
