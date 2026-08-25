@@ -689,9 +689,12 @@ fn a_midi_active_take_is_reported_as_silencing_the_groups_audio() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn deleting_a_take_re_covers_the_slot_from_the_survivors() {
+fn deleting_a_take_re_covers_the_slot_from_the_survivors_in_the_mirror() {
     // The deleted take's segments cannot simply be dropped: a gap in the
-    // comp is silence in the middle of the part.
+    // comp is silence in the middle of the part. The re-cover is
+    // `TakeGroup::remove_take`'s, run here on the mirror and again in the
+    // engine's own handler — that the two land on the same segments is
+    // pinned in `take_removal_audible.rs`, which has a real engine.
     let (mut app, rx) = app_with_takes(3);
     send(
         &mut app,
@@ -723,9 +726,26 @@ fn deleting_a_take_re_covers_the_slot_from_the_survivors() {
         vec![(SLOT.start, SLOT.end(), 2)],
         "its half is handed to the survivor the engine would fall back to, and merged"
     );
+    // The re-cover rides the removal command rather than a `SetTakeComp`:
+    // only the engine can park the take's recording out of the render, and
+    // a comp that merely stops naming the take also stops governing its
+    // clip, which would play it raw at full gain (ba doc #292). What that
+    // sounds like is `take_removal_audible.rs`'s business; what is pinned
+    // here is that the app does not fall back to pushing a comp.
+    let cmds = drain(&rx);
     assert!(
-        last_comp_command(&drain(&rx)).is_some(),
-        "the re-cover is pushed, or the engine keeps playing the deleted take"
+        last_comp_command(&cmds).is_none(),
+        "a deletion is not a comp edit: {cmds:?}"
+    );
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::RemoveTake {
+                group_id: GROUP,
+                take_id: 0
+            }
+        )),
+        "the engine is told to remove the take: {cmds:?}"
     );
 }
 
@@ -749,8 +769,12 @@ fn deleting_the_soloed_take_clears_the_solo() {
         },
     );
 
+    // The solo rides the removal command — `RemoveTake` clears it engine
+    // side and echoes `ActiveTakeChanged` — so no separate `SetActiveTake`
+    // is sent. That the engine really does end up un-soloed is
+    // `take_removal_audible.rs`'s case; this one is about the mirror.
     assert_eq!(app.test_take_groups()[0].active_take, None);
-    assert_eq!(active_take_commands(&drain(&rx)), vec![None]);
+    assert!(active_take_commands(&drain(&rx)).is_empty());
 }
 
 #[test]
@@ -778,10 +802,13 @@ fn deleting_a_take_that_is_not_soloed_leaves_the_solo_alone() {
 }
 
 #[test]
-fn a_groups_last_take_cannot_be_deleted() {
-    // There is no engine-side take-removal command, and a group whose comp
-    // is empty falls back to playing its most recent pass — so a "deleted"
-    // last take would keep sounding. Refusing is the honest outcome.
+fn a_groups_last_take_takes_the_lane_with_it() {
+    // A group *is* its takes (doc #165). An emptied one would keep its slot
+    // forever (todo #1392), draw as chrome with nothing to comp, and — an
+    // empty comp being exactly the state in which the cover falls back to
+    // the most recent pass — carry on playing the take just deleted. The
+    // engine grew `RemoveTakeGroup` for this (todo #1397); what it sounds
+    // like is `take_removal_audible.rs`.
     let (mut app, rx) = app_with_takes(1);
 
     send(
@@ -792,7 +819,45 @@ fn a_groups_last_take_cannot_be_deleted() {
         },
     );
 
-    assert_eq!(app.test_take_groups()[0].takes.len(), 1);
+    assert!(
+        app.test_take_groups().is_empty(),
+        "the lane goes with its last take"
+    );
+    let cmds = drain(&rx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, AudioCommand::RemoveTakeGroup { group_id: GROUP })),
+        "and the engine is told, or it keeps playing a lane the user deleted: {cmds:?}"
+    );
+    assert!(
+        app.test_can_undo(),
+        "and it is undoable — no take is ever silently lost"
+    );
+}
+
+#[test]
+fn deleting_a_take_that_is_not_there_is_still_refused() {
+    // The only refusal left: nothing to delete. It must stay a *gate*
+    // refusal rather than a handler early-return, or the phantom undo
+    // entry `take_edit_is_refused` exists to prevent comes back.
+    let (mut app, rx) = app_with_takes(2);
+
+    send(
+        &mut app,
+        TakeMessage::DeleteTake {
+            group_id: GROUP,
+            take_id: 99,
+        },
+    );
+    send(
+        &mut app,
+        TakeMessage::DeleteTake {
+            group_id: 404,
+            take_id: 0,
+        },
+    );
+
+    assert_eq!(app.test_take_groups()[0].takes.len(), 2);
     assert!(drain(&rx).is_empty());
     assert!(!app.test_can_undo());
 }

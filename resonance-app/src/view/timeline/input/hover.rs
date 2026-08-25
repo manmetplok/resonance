@@ -193,10 +193,10 @@ impl TimelineCanvas<'_> {
             return None;
         }
         // A take card: right-click deletes the take, the same convention
-        // the chord lane / MIDI editor / breakpoint dots use. Refused for
-        // a group's *last* take (there is no engine-side take-removal
-        // command yet — ba todo #1397), silently, like every other
-        // impossible comp edit.
+        // the chord lane / MIDI editor / breakpoint dots use. Deleting a
+        // group's *last* take removes the whole lane (ba todo #1401) — the
+        // card the user clicked is the last thing in it, so the stack
+        // disappearing is what they asked for.
         if let Some(hit) = self.take_card_at(pos) {
             state.take_promote_drag = None;
             return captured(Message::Take(TakeMessage::DeleteTake {
