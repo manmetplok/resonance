@@ -302,15 +302,26 @@ impl TakeGroupState {
     /// Drop the whole lane `group_id`, returning whether it was there.
     ///
     /// Mirrors `AudioEvent::TakeGroupRemoved` (ba todo #1397). Every
-    /// missing-media flag the group carried goes with it, for the same
-    /// reason [`Self::remove_take`] drops one take's: a later group reusing
-    /// the id must not inherit a stale flag.
+    /// missing-media flag **and every cached waveform** the group carried
+    /// goes with it, for the same reason [`Self::remove_take`] drops one
+    /// take's: a later group reusing the id must not inherit either.
+    ///
+    /// The peak half was missed when #1397 and #1400 met — #1397 wrote
+    /// this against a state that had no peak map, so it cited
+    /// `remove_take`'s reasoning while doing half of it, and
+    /// [`peaks`](Self::peaks)'s promise that "every site that forgets a
+    /// take forgets both" was false at exactly this one site. It leaked
+    /// rather than corrupted, because a lookup compares the `clip_ref`
+    /// ([`TakePeaks`]) and a reused group id therefore missed instead of
+    /// drawing the orphaned table — but the memory was held for the rest
+    /// of the session, and a promise with one exception is not a promise.
     pub fn remove_group(&mut self, group_id: TakeGroupId) -> bool {
         let Some(idx) = self.groups.iter().position(|g| g.id == group_id) else {
             return false;
         };
         self.groups.remove(idx);
         self.missing_takes.retain(|(gid, _)| *gid != group_id);
+        self.peaks.retain(|(gid, _), _| *gid != group_id);
         true
     }
 

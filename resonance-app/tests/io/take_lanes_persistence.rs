@@ -1393,3 +1393,125 @@ fn restoring_take_clips_does_not_put_them_on_the_timeline() {
         "and they were never in the saved clip list either"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Where #1400 and #1402 met: one read decides both answers
+// ---------------------------------------------------------------------------
+
+/// **A corrupt take WAV is not asked for** — the improvement the merge
+/// exists to make (ba todo #1400 + #1402).
+///
+/// #1402 gated `LoadTakeClipFromWav` on `exists()`; #1400 replaced the
+/// lane's own probe with a real read. Keeping both — the naive merge —
+/// leaves them disagreeing about exactly one kind of file: a WAV that is
+/// present but truncated, or not the engine's 32-bit-float stereo, passes
+/// the stat and fails the read. The take would then be drawn as
+/// `media missing` while the engine was *still* asked to map it, raising a
+/// global error banner from the load worker and rendering the span silent
+/// — false presence on the audio path, which is the same bug #1400 fixed
+/// on the drawing path.
+///
+/// Routing the send off `load_take_peaks`'s `Ok` arm collapses the corrupt
+/// case into the missing case. This fails against a merge that kept both
+/// gates, which is a resolution that otherwise passes everything.
+#[test]
+fn a_corrupt_take_wav_is_flagged_and_never_asked_for() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let app = comped_project(dir.path());
+    let file = app.test_build_project_file();
+    save_project(dir.path(), &file, &[], &[]).expect("save project");
+
+    // Present — so `exists()` passes — but not a WAV the engine can map.
+    std::fs::write(
+        dir.path().join(format!("audio/clip_{B_CLIP}.wav")),
+        b"not a RIFF file",
+    )
+    .expect("corrupt take wav");
+    let loaded = load_project(dir.path()).expect("load project");
+
+    let mut reopened = app_at(dir.path());
+    let rx = reopened.test_capture_engine();
+    reopened.test_replay_loaded_project_from(loaded);
+    let cmds = drain(&rx);
+
+    let asked_for: Vec<u64> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            AudioCommand::LoadTakeClipFromWav { clip_id, .. } => Some(*clip_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked_for,
+        vec![A_CLIP],
+        "the unreadable take is not asked for, exactly as an absent one is not"
+    );
+    assert_eq!(
+        reopened.test_missing_takes(),
+        vec![(GROUP, 1)],
+        "and it is flagged, so the lane says so rather than drawing it as present"
+    );
+    assert_eq!(
+        restore_commands(&cmds)[0][0].takes.len(),
+        2,
+        "still kept in the group, so the comp cover stays intact"
+    );
+}
+
+/// **The peak cache gates pixels, never audio** (ba todo #1400 round 4).
+///
+/// In the merged shape the cache short-circuit sits in the same loop that
+/// decides whether to send `LoadTakeClipFromWav`. Letting a *cache hit*
+/// skip the send would make an app-side cache about waveforms decide what
+/// the engine can play — and it would fail silently, as no playback, if
+/// the app ever mispredicted the engine's clip list.
+///
+/// So the hit skips only the read: every readable take is still offered to
+/// the engine on every replay, and
+/// `engine::clips::handle_load_take_clip_from_wav` decides whether there is
+/// work to do by early-returning when it already holds the clip — before
+/// any mmap or decimation. The dedup lives where the knowledge is.
+///
+/// Corrupting the WAVs first proves the sends are *not* coming from a
+/// re-read: a read here would flag both takes and send nothing.
+#[test]
+fn an_undo_still_offers_every_take_clip_to_the_engine() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = comped_project(dir.path());
+    let before = app.test_snapshot_for_undo();
+    assert!(!app.test_take_peaks(GROUP, 0).is_empty());
+
+    app.test_apply_engine_event(AudioEvent::ActiveTakeChanged {
+        group_id: GROUP,
+        take_id: Some(1),
+    });
+    for (clip_ref, _, _) in reload_takes() {
+        std::fs::write(
+            dir.path().join(format!("audio/clip_{clip_ref}.wav")),
+            b"not a RIFF file",
+        )
+        .expect("corrupt take wav");
+    }
+
+    let rx = app.test_capture_engine();
+    app.test_begin_restore_from_snapshot(before);
+    let cmds = drain(&rx);
+
+    let asked_for: Vec<u64> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            AudioCommand::LoadTakeClipFromWav { clip_id, .. } => Some(*clip_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked_for,
+        vec![A_CLIP, B_CLIP],
+        "every readable take is offered on the undo path too — the engine, \
+         not the peak cache, decides whether it needs the clip"
+    );
+    assert!(
+        app.test_missing_takes().is_empty(),
+        "and no take was re-read, so none was flagged by the corruption"
+    );
+}

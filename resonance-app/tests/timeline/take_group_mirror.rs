@@ -355,3 +355,62 @@ fn cached_peaks_are_served_only_to_the_recording_they_were_read_from() {
     assert!(takes.peaks(GROUP, TAKE + 1, RECORDED).is_empty());
     assert!(takes.peaks(GROUP + 1, TAKE, RECORDED).is_empty());
 }
+
+/// Removing a lane forgets its waveforms too (ba todo #1400 x #1397).
+///
+/// `TakeGroupState::peaks`'s doc promises that "every site that forgets a
+/// take forgets both" — the missing flag and the cached waveform. That was
+/// true at `remove_take` and, for one merge, **false at `remove_group`**:
+/// #1397 wrote that function against a state with no peak map, so it cited
+/// `remove_take`'s reasoning while doing half of it, and every take of a
+/// removed lane orphaned a peak table for the rest of the session.
+///
+/// A leak rather than a corruption, because a lookup compares the
+/// `clip_ref` and a reused group id therefore misses rather than drawing
+/// the orphaned table — but a promise with one exception is not a promise,
+/// and the next reader would have to rediscover which half was true.
+#[test]
+fn removing_a_take_group_forgets_its_cached_waveforms() {
+    use resonance_app::state::TakeGroupState;
+
+    const GROUP: u64 = 3;
+    const OTHER: u64 = 4;
+
+    let mut takes = TakeGroupState::default();
+    takes.set_peaks(GROUP, 0, 100, vec![(-0.5, 0.5)]);
+    takes.set_peaks(GROUP, 1, 101, vec![(-0.25, 0.25)]);
+    takes.set_peaks(OTHER, 0, 200, vec![(-0.75, 0.75)]);
+    takes.mark_missing(GROUP, 1);
+    takes.take_captured(
+        GROUP,
+        7,
+        TimelineRange { start: 0, length: 4_800 },
+        resonance_common::Take::new(
+            0,
+            0,
+            0,
+            TimelineRange { start: 0, length: 4_800 },
+            TakeContent::Audio { clip_ref: 100 },
+        ),
+    );
+
+    assert!(takes.remove_group(GROUP), "the lane was there to remove");
+
+    assert!(
+        takes.peaks(GROUP, 0, 100).is_empty() && takes.peaks(GROUP, 1, 101).is_empty(),
+        "no take of the removed lane keeps a waveform"
+    );
+    assert!(
+        !takes.has_peaks(GROUP, 0, 100),
+        "and a lane that later reuses the id starts from the recording, not a memory"
+    );
+    assert!(
+        !takes.is_missing(GROUP, 1),
+        "the missing flag goes too, as it always did"
+    );
+    assert_eq!(
+        takes.peaks(OTHER, 0, 200),
+        [(-0.75, 0.75)].as_slice(),
+        "and another lane's waveforms are untouched"
+    );
+}
