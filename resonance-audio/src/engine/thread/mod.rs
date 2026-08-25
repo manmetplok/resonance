@@ -92,10 +92,6 @@ pub(crate) struct LoopRecordSession {
     /// Zero-based index of the pass currently being captured. Bumped at
     /// each seam after the completed pass's takes are emitted.
     pub pass_index: u32,
-    /// Stable take-group id per track for this run, allocated lazily the
-    /// first time a track produces a take. Keeps all passes of a track
-    /// folded into a single group on the app side.
-    pub groups: HashMap<TrackId, TakeGroupId>,
 }
 
 /// Mutable engine-thread-local state that persists across command
@@ -119,9 +115,11 @@ pub(crate) struct HandlerState {
     /// External sidechain key routes, one per plugin instance. Mirrored
     /// to the audio thread by `engine::sidechain::publish`.
     pub sidechain_routes: crate::engine::sidechain::SidechainRoutes,
-    /// Monotonic id allocator for cycle-record take groups. One group is
-    /// handed out per armed track per loop-record run (see
-    /// [`LoopRecordSession::groups`]).
+    /// Monotonic id allocator for cycle-record take groups. Consumed only
+    /// by `transport::loop_record_group_for`, and only when a run finds no
+    /// existing lane for its track + loop region: one lane per slot, so
+    /// repeated runs over the same region reuse the group already in
+    /// [`HandlerState::take_groups`] (todo #1392).
     pub next_take_group_id: TakeGroupId,
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,

@@ -136,7 +136,15 @@ pub enum TakeContent {
 pub struct Take {
     /// Unique identifier within the owning [`TakeGroup`].
     pub id: TakeId,
-    /// Zero-based index of the loop pass that produced this take.
+    /// Zero-based ordinal of this take **within its group** — the row it
+    /// occupies in the take lane, and the number its `T1`, `T2`, … label
+    /// is derived from.
+    ///
+    /// It was the loop pass's index while a group was exactly one record
+    /// run. Since todo #1392 a group accumulates takes across runs (and
+    /// across a save/load), and a run's own pass counter restarts at 0 at
+    /// every record press, so the engine allocates this from the group
+    /// instead — one past the highest it already holds.
     pub pass_index: u32,
     /// Capture wall-clock time, in unix milliseconds.
     pub captured_at: i64,

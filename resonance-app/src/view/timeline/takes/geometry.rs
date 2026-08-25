@@ -87,6 +87,12 @@ pub fn take_card_band(row_y: f32, row_height: f32) -> (f32, f32) {
 
 /// Display label for a take: `T1`, `T2`, … from its zero-based
 /// `pass_index`. One-based because musicians count takes from one.
+///
+/// `pass_index` is the take's ordinal **within its lane**, not within the
+/// record run that captured it — a lane accumulates takes across runs
+/// (todo #1392), and the engine allocates the ordinal from the group for
+/// exactly this reason. Were it the run's counter, a lane recorded in two
+/// sittings would read `T1, T1, T2, …`.
 pub fn take_label(pass_index: u32) -> String {
     format!("T{}", pass_index.saturating_add(1))
 }

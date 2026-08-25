@@ -106,6 +106,16 @@ pub mod __test_support {
     /// no audio device and no engine thread. Used by
     /// `tests/loop_record_takes.rs` to pin `ClearAll`'s take-lane reset.
     pub use crate::engine::EngineHandlerHarness;
+    /// The "one lane per slot" lookup a cycle-record run resolves its take
+    /// group through, and the "same slot" predicate behind it (epic #15,
+    /// ba todo #1392). Pure over the store, so
+    /// `tests/loop_record_takes.rs` can pin the reuse ruling — including
+    /// reuse of a group restored from a saved project — against the real
+    /// code.
+    pub use crate::engine::takes::{
+        capture_take_event, resolve_take_group, slots_match, store_take_in, take_group_for_slot,
+        TakeGroupStore, SAME_SLOT_TOLERANCE_FRAMES,
+    };
     /// The "crossfade or land immediately" rule every bypass handler
     /// shares — see `tests/plugin_bypass.rs`.
     pub use crate::engine::plugins::apply_bypass_request;

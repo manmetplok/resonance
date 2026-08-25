@@ -770,7 +770,7 @@ fn partial_take_at_a_seam_ramps_out_instead_of_cutting() {
 // A comp restored from a saved project (todo #1394)
 // ---------------------------------------------------------------------------
 //
-// `store_take` was the only writer of the engine's take-group store, so
+// `store_take_in` was the only writer of the engine's take-group store, so
 // after a reload the store was empty, `build_comp_table` produced an empty
 // table and the comp the user could see rendered nothing — on playback and
 // on bounce alike. These go the whole way: serde round-trip the group the
