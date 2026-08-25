@@ -557,10 +557,37 @@ impl<'a> TimelineCanvas<'a> {
                 // capture order resolve to different covers and must not
                 // share a fingerprint.
                 take.captured_at.hash(&mut take_h);
+                // The take's own recorded span. Since todo #1396 this is
+                // what the card's *width* is, so a card cannot be allowed
+                // to keep a cached geometry from a different extent.
+                take.extent.hash(&mut take_h);
+                // The waveform the card carries, read off the take's WAV
+                // (todo #1400). Length rather than content: a peak table
+                // is derived once, from a file, and never edited — every
+                // way it can change for a fixed `(group, take)` key
+                // (capture, re-capture, project load, a failed read
+                // leaving it empty) changes how many buckets it has or
+                // clears it, and hashing 3000 f32 pairs per take on the
+                // fingerprint path would cost more than the repaint it
+                // saves.
                 match &take.content {
                     resonance_common::TakeContent::Audio { clip_ref } => {
                         0u8.hash(&mut take_h);
                         clip_ref.hash(&mut take_h);
+                        // The waveform the card carries, read off this
+                        // recording (todo #1400). Length rather than
+                        // content: a peak table is derived once, from a
+                        // file, and never edited — every way it can change
+                        // for a fixed `(group, take, clip_ref)` triple
+                        // (capture, re-capture, project load, a failed
+                        // read leaving it absent) changes how many buckets
+                        // it has or drops it, and hashing thousands of f32
+                        // pairs per take on the fingerprint path would
+                        // cost more than the repaint it saves.
+                        self.take_groups
+                            .peaks(group.id, take.id, *clip_ref)
+                            .len()
+                            .hash(&mut take_h);
                     }
                     resonance_common::TakeContent::Midi { notes } => {
                         1u8.hash(&mut take_h);

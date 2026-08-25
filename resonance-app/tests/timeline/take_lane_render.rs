@@ -16,19 +16,22 @@
 //!   shared fixture through `build_comp_table` so neither side can drift
 //!   alone;
 //! * the **audible extent** — a take does not necessarily fill its lane, so
-//!   the waveform is anchored to the take's clip and the remainder of the
-//!   lane draws a flat "no audio here" line;
+//!   the waveform is anchored to the take's own recorded span (todo #1396)
+//!   and the remainder of the lane draws a flat "no audio here" line;
+//! * **where the waveform comes from** — the take's WAV in the project's
+//!   `audio/` directory, read once when the app learns of the take (todo
+//!   #1400). Nothing here fabricates a `ClipState`: a take clip never
+//!   enters `Resonance::clips`, and the lookup that pretended otherwise
+//!   made *every* take draw as `media missing`;
 //! * the expand / collapse affordance and the arrange rows it adds;
 //! * the canvas cache fingerprint reacting to captures, comp edits, active
 //!   take changes and the fold toggle;
-//! * eight golden snapshots, each pinning a *distinct state* — though not
-//!   necessarily distinct pixels, see
-//!   [`a_flagged_take_degrades_even_though_its_clip_resolves`]: a folded
+//! * eight golden snapshots, each pinning a distinct state: a folded
 //!   lane's ribbon, the expanded stack under a two-take comp, an active
-//!   (soloed) take, an empty comp falling back to the latest pass, a punched
-//!   -in take shorter than its lane, a MIDI stack, and the two routes into
-//!   the missing-media degradation (an unresolvable `clip_ref`, and todo
-//!   #412's flag on a take whose clip still resolves).
+//!   (soloed) take, an empty comp falling back to the latest pass, a
+//!   punched-in take shorter than its lane, a MIDI stack, a flagged take's
+//!   `media missing` hatch, and a take whose recording could not be read —
+//!   which is a quiet card, *not* the hatch.
 //!
 //! The comping *gestures* that sit on this surface are todo #414, covered
 //! in the sibling `take_lane_input` module.
@@ -40,15 +43,16 @@ use std::collections::HashMap;
 use iced::Size;
 use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, UiMessage, ViewportMessage};
-use resonance_app::state::{ClipState, ViewMode};
+use resonance_app::state::ViewMode;
 use resonance_app::view::arrange_layout::ArrangeRowKind;
 use resonance_app::view::timeline::takes::{
     effective_cover, silent_ranges, unlit_ranges, CoverSource,
 };
 use resonance_app::{demo, theme, Resonance};
 use resonance_audio::__test_support::build_comp_table;
-use resonance_audio::types::{AudioEvent, FadeCurve};
+use resonance_audio::types::AudioEvent;
 use resonance_common::{CompSegment, Take, TakeContent, TakeGroup, TakeNote, TimelineRange};
+use tempfile::TempDir;
 
 /// Window size matches the app's default & minimum window per the design
 /// guidelines.
@@ -62,11 +66,16 @@ const MIDI_TRACK: u64 = 2;
 const GROUP: u64 = 77;
 
 /// Base clip id for the recorded take clips. A take's `clip_ref` names a
-/// *recording*, not a placed arrangement clip, so these live on a track id
-/// the arrange view doesn't render — they must feed the take waveform
-/// without also drawing clip cards on the lane.
+/// *recording* — a WAV in the project's `audio/` directory — not a placed
+/// arrangement clip, so nothing here ever reaches `Resonance::clips` and
+/// no clip card is drawn on the lane.
 const TAKE_CLIP_BASE: u64 = 5_000;
-const RECORDING_TRACK: u64 = 0;
+
+/// Project-directory name, and therefore the session title the transport
+/// bar draws into every golden here. Fixed rather than the temp dir's own
+/// random name, and equal to the string the bar shows for a session with
+/// no path at all — so gaining a project directory changed no pixels.
+const PROJECT_NAME: &str = "Untitled";
 
 fn sim_settings() -> iced::Settings {
     let mut fonts: Vec<std::borrow::Cow<'static, [u8]>> = Vec::new();
@@ -83,8 +92,25 @@ fn sim_settings() -> iced::Settings {
 
 /// Demo session in the Arrange view, viewport reported so the header column
 /// virtualizes exactly as it does live.
-fn build_app() -> Resonance {
+///
+/// Anchored at a temporary project directory, because a take's waveform is
+/// read out of `<project>/audio/clip_{clip_ref}.wav` (todo #1400). The
+/// returned [`TempDir`] must be kept alive for the test's duration — drop
+/// it and the recordings vanish under the app.
+///
+/// The project directory is a **fixed-name** child of the temp dir, not
+/// the temp dir itself: the transport bar titles the session from
+/// `project_path.file_stem()`, and a `tempfile` name is random, so using
+/// it directly would put a different string in every golden.
+/// [`PROJECT_NAME`] is the same string the bar shows for a session with no
+/// path at all, which is what these goldens were blessed against — the
+/// fixture gained a project directory, and deliberately not a new title.
+fn build_app() -> (Resonance, TempDir) {
+    let dir = tempfile::tempdir().expect("temp project dir");
+    let project = dir.path().join(PROJECT_NAME);
+    std::fs::create_dir_all(&project).expect("create project dir");
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_project_path(project);
     demo::seed_demo_content(&mut app);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
@@ -94,7 +120,7 @@ fn build_app() -> Resonance {
         2000.0,
         WINDOW.1 * 4.0,
     )));
-    app
+    (app, dir)
 }
 
 /// The slot every fixture records over: 2 s in, 5 s long. At the default
@@ -110,63 +136,57 @@ fn at(app: &Resonance, seconds: u64) -> u64 {
     slot(app).start + seconds * app.sample_rate as u64
 }
 
-/// Push the recorded clip an audio take references, spanning `extent` of
-/// the timeline.
+/// Write the recording an audio take references, as long as `extent`.
 ///
-/// The clip is anchored at a real timeline position, exactly as
-/// `finalize_loop_record_pass` writes it: pass 0 starts at the punch-in
-/// point and a pass cut short at stop ends before its slot does, so a take
-/// clip is *not* interchangeable with its slot. The peak table is sized to
-/// the clip's own length, since the lane indexes peaks by clip frame rather
-/// than by card fraction.
+/// This is the file `recording.rs` streams a pass into, at the name
+/// `clip_audio_file` derives from the take's `clip_ref`, and it is the
+/// **only** source of a take's waveform (todo #1400): a take clip never
+/// enters `Resonance::clips`, so there is nothing to fabricate there
+/// instead. It is written before the `TakeCaptured` echo for the same
+/// reason the engine finalizes it before emitting one — the app reads it
+/// as it folds the event.
+///
+/// Its length is the take's own, not the slot's, since the lane indexes
+/// peaks by recorded frame rather than by card fraction.
 ///
 /// Each take gets a visibly different waveform (a different number of
 /// swells) so the stacked cards can never be confused for one another in a
 /// golden.
-fn push_take_clip_over(app: &mut Resonance, pass_index: u32, extent: TimelineRange) {
+fn write_take_recording(
+    app: &Resonance,
+    dir: &TempDir,
+    pass_index: u32,
+    extent: TimelineRange,
+) {
     let peak_count =
         (extent.length as usize).div_ceil(resonance_audio::types::WAVEFORM_PEAK_FRAMES);
-    let peaks: Vec<(f32, f32)> = (0..peak_count)
-        .map(|i| {
+    common::write_take_wav(
+        &dir.path().join(PROJECT_NAME),
+        TAKE_CLIP_BASE + u64::from(pass_index),
+        app.sample_rate,
+        extent.length,
+        |i| {
             let t = i as f32 / peak_count.max(1) as f32;
             // Deterministic, no trig-on-float-input drift: a triangular
             // envelope repeated `pass_index + 2` times.
             let cycles = (pass_index + 2) as f32;
             let phase = (t * cycles).fract();
-            let amp = 0.25 + 0.65 * (1.0 - (phase - 0.5).abs() * 2.0);
-            (-amp, amp)
-        })
-        .collect();
-    app.test_push_clip(ClipState {
-        id: TAKE_CLIP_BASE + u64::from(pass_index),
-        track_id: RECORDING_TRACK,
-        start_sample: extent.start,
-        duration_samples: extent.length,
-        name: format!("take {pass_index}"),
-        total_frames: extent.length,
-        trim_start_frames: 0,
-        trim_end_frames: 0,
-        fade_in_frames: 0,
-        fade_in_curve: FadeCurve::default(),
-        fade_out_frames: 0,
-        fade_out_curve: FadeCurve::default(),
-        gain_db: 0.0,
-        waveform_peaks: peaks,
-        vocal_tuning: None,
-        asset_ref: None,
-    });
+            0.25 + 0.65 * (1.0 - (phase - 0.5).abs() * 2.0)
+        },
+    );
 }
 
-/// A take clip filling its whole slot — the ordinary cycle-record pass.
-fn push_take_clip(app: &mut Resonance, pass_index: u32) {
-    push_take_clip_over(app, pass_index, slot(app));
+/// A take recording filling its whole slot — the ordinary cycle-record
+/// pass.
+fn write_take_recording_for_slot(app: &Resonance, dir: &TempDir, pass_index: u32) {
+    write_take_recording(app, dir, pass_index, slot(app));
 }
 
 /// Capture `passes` audio loop passes into `GROUP` through the real engine
-/// dispatch, backing each with a resolvable clip that fills the slot.
-fn capture_audio_passes(app: &mut Resonance, passes: u32) {
+/// dispatch, each with a real recording on disk that fills the slot.
+fn capture_audio_passes(app: &mut Resonance, dir: &TempDir, passes: u32) {
     for pass_index in 0..passes {
-        push_take_clip(app, pass_index);
+        write_take_recording_for_slot(app, dir, pass_index);
         capture_audio_pass(app, pass_index);
     }
 }
@@ -183,9 +203,9 @@ fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
 ///
 /// The event's `extent` is the app's **only** account of that (todo #1396):
 /// no `RecordingFinished` follows a take clip, so nothing the app holds can
-/// be consulted instead. `push_take_clip_over` mirrors a matching clip for
-/// the waveform, but the lane and the promote clamp both resolve the extent
-/// from the take, not from that clip.
+/// be consulted instead. `write_take_recording` puts the matching audio on
+/// disk for the waveform, but the lane and the promote clamp both resolve
+/// the extent from the take — nothing measures the file.
 fn capture_audio_pass_over(app: &mut Resonance, pass_index: u32, extent: TimelineRange) {
     let slot = slot(app);
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
@@ -293,12 +313,12 @@ fn group_of(app: &Resonance, id: u64) -> &TakeGroup {
 /// reuse the group. Nothing here assumes a group maps to one record run.
 #[test]
 fn passes_from_separate_record_runs_stack_into_one_lane() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     // ...transport stopped here, and the user hit record again over the
     // same loop region. Post-#1392 the engine reuses the group id.
     for pass_index in 3..5 {
-        push_take_clip(&mut app, pass_index);
+        write_take_recording_for_slot(&app, &dir, pass_index);
         capture_audio_pass(&mut app, pass_index);
     }
     toggle_lane(&mut app, AUDIO_TRACK);
@@ -320,7 +340,7 @@ fn passes_from_separate_record_runs_stack_into_one_lane() {
 /// interleave with another's.
 #[test]
 fn two_slots_on_one_track_give_two_contiguous_stacks() {
-    let mut app = build_app();
+    let (mut app, _dir) = build_app();
     let sr = app.sample_rate as u64;
     let late = TimelineRange::new(20 * sr, 4 * sr);
     // Seed the *later* slot first, so ordering can only come from the slot
@@ -356,8 +376,8 @@ fn two_slots_on_one_track_give_two_contiguous_stacks() {
 /// fallback rather than as a promotion the user made.
 #[test]
 fn empty_comp_falls_back_to_the_latest_take() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let cover = effective_cover(group_of(&app, GROUP));
 
     assert_eq!(cover.len(), 1);
@@ -371,8 +391,8 @@ fn empty_comp_falls_back_to_the_latest_take() {
 /// point of the slot maps to exactly one take.
 #[test]
 fn comp_segments_cover_the_slot_gap_free() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let slot = slot(&app);
     let split = at(&app, 2);
     set_comp(
@@ -414,8 +434,8 @@ fn comp_segments_cover_the_slot_gap_free() {
 /// drifts.
 #[test]
 fn partial_comp_fills_its_gaps_with_the_latest_take() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let (from, to) = (at(&app, 1), at(&app, 3));
     set_comp(
         &mut app,
@@ -509,8 +529,8 @@ fn assert_engine_and_lane_agree(app: &Resonance) {
 /// on all of them.
 #[test]
 fn the_engine_and_the_lane_resolve_the_same_cover() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let slot = slot(&app);
 
     // 1. Never comped: the latest pass covers the slot.
@@ -596,8 +616,8 @@ fn the_engine_and_the_lane_resolve_the_same_cover() {
 /// take rather than an audio one.
 #[test]
 fn latest_take_is_content_agnostic_in_a_mixed_group() {
-    let mut app = build_app();
-    push_take_clip(&mut app, 0);
+    let (mut app, dir) = build_app();
+    write_take_recording_for_slot(&app, &dir, 0);
     capture_audio_pass(&mut app, 0);
     // A later MIDI pass into the same group.
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
@@ -659,7 +679,7 @@ fn latest_take_is_content_agnostic_in_a_mixed_group() {
 /// where the engine renders silence.
 #[test]
 fn a_takes_audible_extent_is_its_clip_intersected_with_the_slot() {
-    let app = build_app();
+    let (app, _dir) = build_app();
     let slot = slot(&app);
     let sr = app.sample_rate as u64;
 
@@ -692,7 +712,7 @@ fn a_takes_audible_extent_is_its_clip_intersected_with_the_slot() {
 /// — where the row draws its flat "no audio here" line.
 #[test]
 fn silent_ranges_are_the_remainder_of_the_lane() {
-    let app = build_app();
+    let (app, _dir) = build_app();
     let slot = slot(&app);
     let sr = app.sample_rate as u64;
 
@@ -726,11 +746,11 @@ fn silent_ranges_are_the_remainder_of_the_lane() {
 /// the flat line under it). The two must not be conflated.
 #[test]
 fn a_short_take_can_still_be_comped_across_the_whole_slot() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
     let punched = TimelineRange::from_bounds(slot.start + sr, slot.end());
-    push_take_clip_over(&mut app, 0, punched);
+    write_take_recording(&app, &dir, 0, punched);
     capture_audio_pass_over(&mut app, 0, punched);
     set_comp(
         &mut app,
@@ -763,8 +783,8 @@ fn a_short_take_can_still_be_comped_across_the_whole_slot() {
 /// instead of the lavender comp one.
 #[test]
 fn active_take_overrides_the_comp() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let whole = slot(&app);
     set_comp(
         &mut app,
@@ -792,8 +812,8 @@ fn active_take_overrides_the_comp() {
 /// lit rather than scrimmed away.
 #[test]
 fn a_single_take_covers_its_whole_slot() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 1);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 1);
     let group = group_of(&app, GROUP);
     let cover = effective_cover(group);
     assert_eq!(cover.len(), 1);
@@ -808,8 +828,8 @@ fn a_single_take_covers_its_whole_slot() {
 /// slot — the scrim the card draws over everything the comp doesn't use.
 #[test]
 fn unlit_ranges_complement_a_takes_spans() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let slot = slot(&app);
     let split = at(&app, 2);
     set_comp(
@@ -869,8 +889,8 @@ fn assert_cover_is_a_gap_free_cover(app: &Resonance) {
 /// is unaffected, which is what makes a folded take folder still readable.
 #[test]
 fn toggling_the_lane_adds_and_removes_the_take_rows() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
 
     assert!(!app.test_take_lane_expanded(AUDIO_TRACK));
     assert!(take_rows(&app).is_empty(), "folded by default");
@@ -902,8 +922,8 @@ fn toggling_the_lane_adds_and_removes_the_take_rows() {
 /// automation row.
 #[test]
 fn take_rows_are_not_clip_drop_targets() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
 
     let layout = app.test_arrange_row_layout();
@@ -926,8 +946,8 @@ fn take_rows_are_not_clip_drop_targets() {
 /// track row nor its take sub-rows — the stack vanishes with its track.
 #[test]
 fn collapsed_track_group_hides_the_take_rows() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
     assert_eq!(take_rows(&app).len(), 3);
 
@@ -957,10 +977,10 @@ fn collapsed_track_group_hides_the_take_rows() {
 /// repaint key leaks in.
 #[test]
 fn fingerprint_tracks_captures_comp_edits_and_the_fold() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let empty = app.test_timeline_fingerprint();
 
-    capture_audio_passes(&mut app, 3);
+    capture_audio_passes(&mut app, &dir, 3);
     let captured = app.test_timeline_fingerprint();
     assert_ne!(empty, captured, "a captured pass repaints the ribbon");
 
@@ -1009,53 +1029,161 @@ fn fingerprint_tracks_captures_comp_edits_and_the_fold() {
         comped,
         "a take whose recording went missing repaints its card"
     );
+
+    // Two further inputs are hashed and **not** asserted here, because no
+    // sequence of app events reaches either on its own: `Take::extent`
+    // (todo #1396, the card's width) is immutable after capture, and the
+    // peak table (todo #1400, the card's waveform) is filed by the same
+    // update that mirrors the take. Both change only *with* a take, whose
+    // id / `captured_at` already move the hash. They are in the fold
+    // because the rule is that the hash covers everything the draw pass
+    // reads — a term whose absence is unobservable today is one that bites
+    // the first time a relink or an extent edit lands, and the assertion
+    // to add then is right here.
 }
 
-/// The other route into the missing-media state, and the one
-/// `missing_media_snapshot` cannot reach: todo #412's `missing_takes`
-/// flag on a take whose `clip_ref` still *resolves*.
+// ---------------------------------------------------------------------
+// Missing media — and the states that are not it (todo #1400)
+// ---------------------------------------------------------------------
+
+/// The headline of todo #1400: **the ordinary case is the ordinary card.**
 ///
-/// A project load keeps a take whose WAV is absent and flags it rather
-/// than dropping it (dropping would leave a `CompSegment` pointing at a
-/// take id that no longer exists). The mirror can therefore hold a
-/// perfectly good `ClipState` for a take the lane must still degrade — so
-/// the card cannot key off the clip lookup alone.
+/// A pass is captured, its WAV is on disk (the engine finalizes it at the
+/// loop seam before emitting the event), and the lane draws a take card
+/// with the recording's own waveform in it. Until #1400 this drew hatched
+/// `media missing`, because `take_is_missing` ORed in
+/// `self.take_clip(clip_ref).is_none()` and a take clip never enters
+/// `Resonance::clips` at all (todo #1396) — so the lookup missed for every
+/// audio take ever recorded.
 ///
-/// # `take_lane_flagged_missing.png` is byte-identical to
-/// # `take_lane_missing_media.png`, and that is the point
-///
-/// The two goldens depict the same pixels because the two routes into
-/// "this take has no audio on this machine" — an unresolvable `clip_ref`
-/// and todo #412's `missing_takes` flag — **must** degrade identically:
-/// a user cannot be expected to know which of the two befell their take,
-/// and a difference would imply one is more recoverable than the other.
-/// It is not a copy-paste mistake, and the pair is still discriminating:
-/// `take_is_missing` ORs the two conditions, so dropping either arm
-/// leaves the other golden matching and this one showing a plain
-/// waveform. Deleting this test because "a golden already covers that
-/// image" would silently uncover the flag arm.
+/// Deliberately headless. The regression was visible only in pixels, and
+/// the verify gate may skip goldens (`RESONANCE_SKIP_GOLDENS=1`), so the
+/// guard has to be an assertion: it asks the *draw pass's* predicate
+/// through [`Resonance::test_take_draws_missing_media`], not the flag
+/// behind it, because it was precisely the two disagreeing that was the
+/// bug.
 #[test]
-fn a_flagged_take_degrades_even_though_its_clip_resolves() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
-    let clip_present = |app: &Resonance| {
-        app.test_clips()
-            .iter()
-            .any(|c| c.id == TAKE_CLIP_BASE + 1)
-    };
-    assert!(clip_present(&app), "the take's clip is mirrored...");
-    assert_eq!(app.test_missing_takes(), Vec::<(u64, u64)>::new());
+fn a_freshly_captured_take_is_not_media_missing() {
+    let (mut app, dir) = build_app();
+    write_take_recording_for_slot(&app, &dir, 0);
+    capture_audio_pass(&mut app, 0);
+
+    assert!(
+        !app.test_take_draws_missing_media(GROUP, 0),
+        "a take recorded seconds ago is not missing media"
+    );
+    assert!(
+        app.test_missing_takes().is_empty(),
+        "and nothing flagged it"
+    );
+    assert!(
+        !app.test_clips().iter().any(|c| c.id == TAKE_CLIP_BASE),
+        "no take clip entered r.clips — the lane consults none (todo #1396)"
+    );
+}
+
+/// Where the waveform comes from now: the recording itself.
+///
+/// One peak bucket per `WAVEFORM_PEAK_FRAMES` frames of the WAV, read on
+/// the capture echo. Pinning the *values* — not just "non-empty" — is what
+/// stops a future change quietly substituting a placeholder silhouette and
+/// still passing: the amplitudes here are the ones `write_take_recording`
+/// authored into the file.
+#[test]
+fn a_takes_waveform_is_read_from_its_recording() {
+    let (mut app, dir) = build_app();
+    let extent = slot(&app);
+    write_take_recording_for_slot(&app, &dir, 0);
+    capture_audio_pass(&mut app, 0);
+
+    let peaks = app.test_take_peaks(GROUP, 0);
+    let expected_buckets =
+        (extent.length as usize).div_ceil(resonance_audio::types::WAVEFORM_PEAK_FRAMES);
+    assert_eq!(
+        peaks.len(),
+        expected_buckets,
+        "one bucket per WAVEFORM_PEAK_FRAMES frames of the recording"
+    );
+    // Bucket 0 of pass 0: t = 0, so the triangular envelope is at its
+    // trough, 0.25.
+    let (lo, hi) = peaks[0];
+    assert!(
+        (hi - 0.25).abs() < 1e-6 && (lo + 0.25).abs() < 1e-6,
+        "bucket 0 is the envelope the WAV carries, got ({lo}, {hi})"
+    );
+    // A MIDI take carries its notes inline and has no recording to read.
+    // Re-delivering take 0 as a MIDI pass therefore *drops* the audio
+    // table rather than leaving it to draw under the note blocks — the
+    // stale-peak eviction in `TakeGroupState::take_captured`.
+    capture_midi_passes(&mut app, 1);
+    assert!(
+        app.test_take_peaks(GROUP, 0).is_empty(),
+        "a take that is no longer audio keeps no waveform"
+    );
+}
+
+/// **A recording the app cannot read is not, by itself, missing media.**
+///
+/// The capture path reads the WAV to get the waveform; when that read
+/// fails it files no peaks — and deliberately does *not* raise todo #412's
+/// flag. That flag means "the recording this project references is not on
+/// this machine", a verdict a project *load* is entitled to reach; a pass
+/// the engine has just recorded and will happily play from its own mapped
+/// copy is not that. Reporting it as `media missing` is the exact bug
+/// #1400 removed, so the degradation is a card with no silhouette, drawn
+/// in [`an_unreadable_recording_snapshot`].
+///
+/// Fold the two back together and this fails while every other take-lane
+/// case still passes.
+#[test]
+fn a_capture_whose_recording_cannot_be_read_is_not_flagged() {
+    let (mut app, _dir) = build_app();
+    // No `write_take_recording_for_slot`: nothing was ever written at the
+    // name this take's `clip_ref` resolves to.
+    capture_audio_pass(&mut app, 0);
+
+    assert!(
+        app.test_take_peaks(GROUP, 0).is_empty(),
+        "there was nothing to read"
+    );
+    assert!(
+        app.test_missing_takes().is_empty(),
+        "a failed read on the capture path flags nothing"
+    );
+    assert!(
+        !app.test_take_draws_missing_media(GROUP, 0),
+        "so the card is quiet, not hatched"
+    );
+}
+
+/// A **flagged** take does hatch, whatever else is true of it.
+///
+/// This is the load-path verdict (todo #412): the project references a
+/// recording this machine cannot produce, the take stays in the comp
+/// rather than being dropped — dropping would leave a `CompSegment`
+/// pointing at a take id that no longer exists — and the lane must say so.
+/// Since #1400 it is the *only* route into the hatch, which is why the
+/// assertion is here and not implied by a golden.
+#[test]
+fn a_flagged_take_draws_as_missing_media() {
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
+    assert!(!app.test_take_draws_missing_media(GROUP, 1));
 
     app.test_mark_take_missing(GROUP, 1);
-    assert!(clip_present(&app), "...and stays mirrored while flagged");
     assert_eq!(app.test_missing_takes(), vec![(GROUP, 1)]);
-    toggle_lane(&mut app, AUDIO_TRACK);
-    // T2 is flagged but T1 is not, so the golden shows the two treatments
-    // side by side — and T2 is *also* the take the empty comp falls back
-    // to, which is what makes hiding the degradation unacceptable.
-    let cover = effective_cover(group_of(&app, GROUP));
-    assert_eq!((cover[0].take_id, cover[0].source), (1, CoverSource::LatestFallback));
-    snapshot_to(&app, "tests/snapshots/take_lane_flagged_missing.png");
+    assert!(
+        app.test_take_draws_missing_media(GROUP, 1),
+        "the flag alone reaches the degradation"
+    );
+    assert!(
+        !app.test_take_draws_missing_media(GROUP, 0),
+        "and only the flagged take"
+    );
+    assert!(
+        !app.test_take_peaks(GROUP, 1).is_empty(),
+        "its peaks are not dropped — a relink must be able to restore the card"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -1073,8 +1201,8 @@ fn snapshot_to(app: &Resonance, path: &str) {
 
 /// The two-take comp used by the collapsed / expanded pair, so the two
 /// goldens differ *only* in the fold state.
-fn seed_two_take_comp(app: &mut Resonance) {
-    capture_audio_passes(app, 3);
+fn seed_two_take_comp(app: &mut Resonance, dir: &TempDir) {
+    capture_audio_passes(app, dir, 3);
     let slot = slot(app);
     let split = at(app, 2);
     set_comp(
@@ -1098,8 +1226,8 @@ fn seed_two_take_comp(app: &mut Resonance) {
 /// labelled T1 / T3) plus the `▸ 3 takes` caret in the header.
 #[test]
 fn folded_lane_ribbon_snapshot() {
-    let mut app = build_app();
-    seed_two_take_comp(&mut app);
+    let (mut app, dir) = build_app();
+    seed_two_take_comp(&mut app, &dir);
     assert!(!app.test_take_lane_expanded(AUDIO_TRACK));
     snapshot_to(&app, "tests/snapshots/take_lane_folded_ribbon.png");
 }
@@ -1109,8 +1237,8 @@ fn folded_lane_ribbon_snapshot() {
 /// remaining three, T2 scrimmed end to end because the comp never uses it.
 #[test]
 fn expanded_stack_snapshot() {
-    let mut app = build_app();
-    seed_two_take_comp(&mut app);
+    let (mut app, dir) = build_app();
+    seed_two_take_comp(&mut app, &dir);
     toggle_lane(&mut app, AUDIO_TRACK);
     assert_eq!(take_rows(&app).len(), 3);
     snapshot_to(&app, "tests/snapshots/take_lane_expanded_stack.png");
@@ -1122,8 +1250,8 @@ fn expanded_stack_snapshot() {
 /// and T3 go dark despite still being in the comp.
 #[test]
 fn active_take_snapshot() {
-    let mut app = build_app();
-    seed_two_take_comp(&mut app);
+    let (mut app, dir) = build_app();
+    seed_two_take_comp(&mut app, &dir);
     set_active(&mut app, Some(1));
     toggle_lane(&mut app, AUDIO_TRACK);
     snapshot_to(&app, "tests/snapshots/take_lane_active_take.png");
@@ -1135,8 +1263,8 @@ fn active_take_snapshot() {
 /// this", with T1 and T2 scrimmed.
 #[test]
 fn empty_comp_snapshot() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
     let cover = effective_cover(group_of(&app, GROUP));
     assert_eq!(cover[0].source, CoverSource::LatestFallback);
@@ -1153,13 +1281,13 @@ fn empty_comp_snapshot() {
 /// audio the engine never plays.
 #[test]
 fn punched_in_take_snapshot() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
     let punched = TimelineRange::from_bounds(slot.start + sr, slot.end());
-    push_take_clip_over(&mut app, 0, punched);
+    write_take_recording(&app, &dir, 0, punched);
     capture_audio_pass_over(&mut app, 0, punched);
-    push_take_clip(&mut app, 1);
+    write_take_recording_for_slot(&app, &dir, 1);
     capture_audio_pass(&mut app, 1);
     set_comp(
         &mut app,
@@ -1186,7 +1314,7 @@ fn punched_in_take_snapshot() {
 /// different rows and read as a comp path through the stack.
 #[test]
 fn midi_takes_snapshot() {
-    let mut app = build_app();
+    let (mut app, _dir) = build_app();
     capture_midi_passes(&mut app, 3);
     let slot = slot(&app);
     let split = at(&app, 2);
@@ -1208,32 +1336,83 @@ fn midi_takes_snapshot() {
     snapshot_to(&app, "tests/snapshots/take_lane_midi_takes.png");
 }
 
-/// **Missing media.** Two audio takes; the second one's `clip_ref` names a
-/// clip the app no longer holds. Its card degrades to the hatched
-/// unsupported surface with a `media missing` label rather than rendering
-/// as an empty (and therefore silently wrong) take — and, because the comp
-/// is empty, it is also the take the engine would fall back to, so the
-/// broken one is the *lit* one. That is the whole point of drawing the
-/// degradation instead of hiding it.
+/// **Missing media.** Two audio takes; the second is one a project load
+/// flagged, because the recording it references is not on this machine.
+/// Its card degrades to the hatched unsupported surface with a
+/// `media missing` label rather than rendering as an empty (and therefore
+/// silently wrong) take — and, because the comp is empty, it is also the
+/// take the engine would fall back to, so the broken one is the *lit* one.
+/// That is the whole point of drawing the degradation instead of hiding
+/// it.
+///
+/// The flag is the route because since todo #1400 it is the **only** one.
+/// The lane used to reach the same pixels a second way — a `clip_ref` that
+/// resolved to no mirrored `ClipState` — and that arm was a standing false
+/// positive rather than a route: it fired for every audio take, including
+/// the healthy one in this very fixture. See
+/// [`a_capture_whose_recording_cannot_be_read_is_not_flagged`] for the
+/// state that used to be conflated with this one.
 #[test]
 fn missing_media_snapshot() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let slot = slot(&app);
-    push_take_clip(&mut app, 0);
+    write_take_recording_for_slot(&app, &dir, 0);
     capture_audio_pass(&mut app, 0);
-    // No `push_take_clip` for this one: the recording is gone.
+    // The second pass's recording never made it to this machine. It keeps
+    // its extent — the pass filled its slot; what is gone is the WAV.
+    write_take_recording_for_slot(&app, &dir, 1);
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id: GROUP,
         take_id: 1,
         track_id: AUDIO_TRACK,
         slot,
         pass_index: 1,
-        // The pass filled its slot; what is gone is the WAV, not the
-        // recording's extent.
         extent: slot,
-        content: TakeContent::Audio { clip_ref: 999_999 },
+        content: TakeContent::Audio {
+            clip_ref: TAKE_CLIP_BASE + 1,
+        },
     });
+    app.test_mark_take_missing(GROUP, 1);
     toggle_lane(&mut app, AUDIO_TRACK);
     assert_eq!(take_rows(&app).len(), 2);
     snapshot_to(&app, "tests/snapshots/take_lane_missing_media.png");
+}
+
+/// **A capture whose recording could not be read** — the state that used
+/// to be indistinguishable from missing media, and is now visibly not it.
+///
+/// T1 recorded normally; T2's WAV was never written, so the app has no
+/// waveform for it and did not flag it either
+/// ([`a_capture_whose_recording_cannot_be_read_is_not_flagged`]). Its card
+/// keeps its body, its edge, its `T2` tag and its comp lighting — a pass
+/// *was* recorded here and the engine will play it — and simply carries no
+/// silhouette. Set against `take_lane_missing_media.png`, which hatches
+/// the same row: this is a lane that cannot show you something, not one
+/// reporting that your audio is gone.
+///
+/// Replaces `take_lane_flagged_missing.png`, whose whole claim was that
+/// two routes into the hatch degrade identically. There is one route now,
+/// so a second image of it would pin nothing.
+#[test]
+fn an_unreadable_recording_snapshot() {
+    let (mut app, dir) = build_app();
+    let slot = slot(&app);
+    write_take_recording_for_slot(&app, &dir, 0);
+    capture_audio_pass(&mut app, 0);
+    // No recording written for pass 1.
+    app.test_apply_engine_event(AudioEvent::TakeCaptured {
+        group_id: GROUP,
+        take_id: 1,
+        track_id: AUDIO_TRACK,
+        slot,
+        pass_index: 1,
+        extent: slot,
+        content: TakeContent::Audio {
+            clip_ref: TAKE_CLIP_BASE + 1,
+        },
+    });
+    toggle_lane(&mut app, AUDIO_TRACK);
+    assert!(app.test_take_peaks(GROUP, 1).is_empty());
+    assert!(!app.test_take_draws_missing_media(GROUP, 1));
+    snapshot_to(&app, "tests/snapshots/take_lane_unreadable_recording.png");
 }

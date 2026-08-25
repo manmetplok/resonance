@@ -327,6 +327,54 @@ impl Resonance {
         pairs
     }
 
+    /// Test-only: the waveform peaks the app derived from a take's
+    /// recording (ba todo #1400), or an empty slice when it has none.
+    ///
+    /// This is what makes the take lane's waveform a *fact about the
+    /// recording on disk* rather than a fabrication: before #1400 a test
+    /// gave a take a silhouette by pushing a `ClipState` the running app
+    /// never produces, and the same fabrication was what stopped every
+    /// take drawing as `media missing`. Drives
+    /// `tests/timeline/take_lane_render.rs`.
+    #[doc(hidden)]
+    pub fn test_take_peaks(&self, group_id: u64, take_id: u64) -> &[(f32, f32)] {
+        let clip_ref = self
+            .take_groups
+            .group(group_id)
+            .and_then(|g| g.take(take_id))
+            .and_then(|t| match t.content {
+                resonance_common::TakeContent::Audio { clip_ref } => Some(clip_ref),
+                resonance_common::TakeContent::Midi { .. } => None,
+            });
+        // A MIDI take names no recording, so it can hold no table — and
+        // an audio take's table only counts when it was read from the
+        // recording that take names (ba todo #1400).
+        clip_ref.map_or(&[][..], |c| self.take_groups.peaks(group_id, take_id, c))
+    }
+
+    /// Test-only: whether the take lane would draw this take as hatched
+    /// `media missing` (ba todo #1400).
+    ///
+    /// The draw pass's own predicate, not the flag behind it. Before
+    /// #1400 the two disagreed for *every* audio take — the lane ORed in
+    /// a clip lookup that could never resolve — and no headless
+    /// assertion in the suite could see it, because the divergence
+    /// existed only in pixels and the verify gate is allowed to skip
+    /// goldens. Anything asserting "this take is fine" has to ask the
+    /// question the card asks.
+    #[doc(hidden)]
+    pub fn test_take_draws_missing_media(&self, group_id: u64, take_id: u64) -> bool {
+        let canvas = self.timeline_canvas_data();
+        let group = canvas
+            .take_groups
+            .group(group_id)
+            .unwrap_or_else(|| panic!("no mirrored take group {group_id}"));
+        let take = group
+            .take(take_id)
+            .unwrap_or_else(|| panic!("no take {take_id} in group {group_id}"));
+        canvas.take_is_missing(group, take)
+    }
+
     /// Test-only: flag a take's recorded WAV as absent from this machine,
     /// the state a project load reaches through `restore_pool` (todo
     /// #412). Standing in for the load so a render / fingerprint test can

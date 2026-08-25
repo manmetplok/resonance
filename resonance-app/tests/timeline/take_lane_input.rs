@@ -58,6 +58,7 @@ use resonance_app::view::timeline::TimelineState;
 use resonance_app::{demo, theme, Resonance};
 use resonance_audio::types::{AudioEvent, FadeCurve};
 use resonance_common::{AutomationTarget, CurveKind, TakeContent, TakeGroup, TakeNote, TimelineRange};
+use tempfile::TempDir;
 
 const WINDOW: (f32, f32) = (1440.0, 900.0);
 
@@ -67,7 +68,9 @@ const AUDIO_TRACK: u64 = 5;
 const MIDI_TRACK: u64 = 2;
 const GROUP: u64 = 77;
 const TAKE_CLIP_BASE: u64 = 5_000;
-const RECORDING_TRACK: u64 = 0;
+/// Project-directory name, and therefore the title the transport bar
+/// draws into every golden here. Fixed so the goldens are reproducible.
+const PROJECT_NAME: &str = "resonance-take-input-test";
 
 /// Window-space origin of the timeline canvas inside the Arrange page, at
 /// [`WINDOW`]: the track-header column to its left, the transport bar and
@@ -94,11 +97,26 @@ fn sim_settings() -> iced::Settings {
     }
 }
 
-fn build_app() -> Resonance {
+/// Demo session in the Arrange view, anchored at a temporary project
+/// directory: a take's waveform is read out of
+/// `<project>/audio/clip_{clip_ref}.wav` (todo #1400), so the fixtures
+/// need somewhere real to write recordings. The returned [`TempDir`] must
+/// outlive the app.
+///
+/// The directory is a fixed-name child of the temp dir. The transport bar
+/// titles the session from `project_path.file_stem()`, so a random
+/// `tempfile` name would put a different string in every golden;
+/// [`PROJECT_NAME`] is the one these were blessed against, back when the
+/// fixture pointed at a hard-coded path under `/tmp` (which was also not
+/// hermetic — two runs of this binary shared it).
+fn build_app() -> (Resonance, TempDir) {
+    let dir = tempfile::tempdir().expect("temp project dir");
+    let project = dir.path().join(PROJECT_NAME);
+    std::fs::create_dir_all(&project).expect("create project dir");
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     demo::seed_demo_content(&mut app);
     app.test_set_active_project(true);
-    app.test_set_project_path(std::path::PathBuf::from("/tmp/resonance-take-input-test"));
+    app.test_set_project_path(project);
     let _ = app.update(Message::Viewport(ViewportMessage::ViewportWidth(
         WINDOW.0 - theme::TRACK_HEADER_WIDTH,
     )));
@@ -107,7 +125,7 @@ fn build_app() -> Resonance {
         2000.0,
         WINDOW.1 * 4.0,
     )));
-    app
+    (app, dir)
 }
 
 /// The slot every fixture records over: 2 s in, 5 s long — canvas
@@ -131,36 +149,30 @@ fn x_of(app: &Resonance, sample: u64) -> f32 {
 // Fixtures
 // ---------------------------------------------------------------------
 
-fn push_take_clip_over(app: &mut Resonance, pass_index: u32, extent: TimelineRange) {
+/// Write the recording a take's `clip_ref` names, `extent` long — the
+/// file `recording.rs` streams a pass into and the only place the lane's
+/// waveform can come from (todo #1400). The same envelope
+/// `take_lane_render` authors, so the two suites' goldens agree.
+fn write_take_recording(
+    app: &Resonance,
+    dir: &TempDir,
+    pass_index: u32,
+    extent: TimelineRange,
+) {
     let peak_count =
         (extent.length as usize).div_ceil(resonance_audio::types::WAVEFORM_PEAK_FRAMES);
-    let peaks: Vec<(f32, f32)> = (0..peak_count)
-        .map(|i| {
+    common::write_take_wav(
+        &dir.path().join(PROJECT_NAME),
+        TAKE_CLIP_BASE + u64::from(pass_index),
+        app.sample_rate,
+        extent.length,
+        |i| {
             let t = i as f32 / peak_count.max(1) as f32;
             let cycles = (pass_index + 2) as f32;
             let phase = (t * cycles).fract();
-            let amp = 0.25 + 0.65 * (1.0 - (phase - 0.5).abs() * 2.0);
-            (-amp, amp)
-        })
-        .collect();
-    app.test_push_clip(ClipState {
-        id: TAKE_CLIP_BASE + u64::from(pass_index),
-        track_id: RECORDING_TRACK,
-        start_sample: extent.start,
-        duration_samples: extent.length,
-        name: format!("take {pass_index}"),
-        total_frames: extent.length,
-        trim_start_frames: 0,
-        trim_end_frames: 0,
-        fade_in_frames: 0,
-        fade_in_curve: FadeCurve::default(),
-        fade_out_frames: 0,
-        fade_out_curve: FadeCurve::default(),
-        gain_db: 0.0,
-        waveform_peaks: peaks,
-        vocal_tuning: None,
-        asset_ref: None,
-    });
+            0.25 + 0.65 * (1.0 - (phase - 0.5).abs() * 2.0)
+        },
+    );
 }
 
 fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
@@ -169,8 +181,8 @@ fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
 
 /// One captured pass that recorded only `extent` of its slot. The event is
 /// the app's sole account of that (todo #1396) — a take clip never reaches
-/// `Resonance::clips`, so mirroring one with `push_take_clip_over` supplies
-/// the waveform and nothing else.
+/// `Resonance::clips`, so the recording `write_take_recording` puts on
+/// disk supplies the waveform and nothing else.
 fn capture_audio_pass_over(app: &mut Resonance, pass_index: u32, extent: TimelineRange) {
     let slot = slot(app);
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
@@ -186,11 +198,11 @@ fn capture_audio_pass_over(app: &mut Resonance, pass_index: u32, extent: Timelin
     });
 }
 
-/// `passes` audio takes, each backed by a clip filling the whole slot.
-fn capture_audio_passes(app: &mut Resonance, passes: u32) {
+/// `passes` audio takes, each with a recording filling the whole slot.
+fn capture_audio_passes(app: &mut Resonance, dir: &TempDir, passes: u32) {
     for pass_index in 0..passes {
         let slot = slot(app);
-        push_take_clip_over(app, pass_index, slot);
+        write_take_recording(app, dir, pass_index, slot);
         capture_audio_pass(app, pass_index);
     }
 }
@@ -333,11 +345,12 @@ fn click(app: &Resonance, state: &mut TimelineState, x: f32, y: f32) -> Option<M
 /// punched-in take would be un-comp-able.
 #[test]
 fn a_press_on_a_punched_in_takes_silent_lead_in_still_hits_the_take() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
-    push_take_clip_over(
-        &mut app,
+    write_take_recording(
+        &app,
+        &dir,
         0,
         TimelineRange::from_bounds(slot.start + sr, slot.end()),
     );
@@ -362,8 +375,8 @@ fn a_press_on_a_punched_in_takes_silent_lead_in_still_hits_the_take() {
 /// selecting the owning track.
 #[test]
 fn the_take_rows_chrome_is_not_part_of_the_card() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     toggle_lane(&mut app, AUDIO_TRACK);
 
     let layout = app.test_arrange_row_layout();
@@ -392,8 +405,8 @@ fn the_take_rows_chrome_is_not_part_of_the_card() {
 /// sub-row extends across the whole canvas, but the take does not.
 #[test]
 fn a_press_beyond_the_slot_is_not_a_take_hit() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     toggle_lane(&mut app, AUDIO_TRACK);
     let y = take_card_y(&app, 0);
 
@@ -407,8 +420,8 @@ fn a_press_beyond_the_slot_is_not_a_take_hit() {
 /// here". It resolves only inside its own group's slot.
 #[test]
 fn the_comp_ribbon_is_hittable_folded_and_expanded() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     let y = ribbon_y(&app, AUDIO_TRACK);
     let inside = x_of(&app, at(&app, 2));
 
@@ -437,8 +450,8 @@ fn the_comp_ribbon_is_hittable_folded_and_expanded() {
 /// the engine command are what is asserted, not just the message.
 #[test]
 fn clicking_a_take_card_solos_it_and_clicking_again_releases_it() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
     let rx = app.test_capture_engine();
     let mut state = TimelineState::default();
@@ -489,8 +502,8 @@ fn clicking_a_take_card_solos_it_and_clicking_again_releases_it() {
 /// it cannot drift out of step with an engine echo.
 #[test]
 fn clicking_another_card_moves_the_solo() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
     set_active(&mut app, Some(0));
     let mut state = TimelineState::default();
@@ -525,8 +538,8 @@ fn clicking_another_card_moves_the_solo() {
 /// it.
 #[test]
 fn dragging_across_a_take_promotes_exactly_that_span() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
     let rx = app.test_capture_engine();
     let mut state = TimelineState::default();
@@ -580,8 +593,8 @@ fn dragging_across_a_take_promotes_exactly_that_span() {
 /// comping right-to-left works exactly like left-to-right.
 #[test]
 fn a_backwards_drag_promotes_the_same_span() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     toggle_lane(&mut app, AUDIO_TRACK);
     let mut state = TimelineState::default();
 
@@ -606,8 +619,8 @@ fn a_backwards_drag_promotes_the_same_span() {
 /// resulting comp inside the slot.
 #[test]
 fn a_drag_past_the_slot_emits_the_raw_range_and_the_reducer_clamps_it() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     toggle_lane(&mut app, AUDIO_TRACK);
     let mut state = TimelineState::default();
 
@@ -644,8 +657,8 @@ fn a_drag_past_the_slot_emits_the_raw_range_and_the_reducer_clamps_it() {
 /// promote a few-millisecond sliver into the comp.
 #[test]
 fn a_sweep_inside_the_slop_threshold_is_still_a_click() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     toggle_lane(&mut app, AUDIO_TRACK);
     let mut state = TimelineState::default();
 
@@ -669,14 +682,14 @@ fn a_sweep_inside_the_slop_threshold_is_still_a_click() {
 /// silent lead-in promotes only the part it can actually fill.
 #[test]
 fn promoting_a_punched_in_takes_lead_in_is_clamped_to_its_audio() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
     let punch_in = slot.start + sr;
     let punched = TimelineRange::from_bounds(punch_in, slot.end());
-    push_take_clip_over(&mut app, 0, punched);
+    write_take_recording(&app, &dir, 0, punched);
     capture_audio_pass_over(&mut app, 0, punched);
-    push_take_clip_over(&mut app, 1, slot);
+    write_take_recording(&app, &dir, 1, slot);
     capture_audio_pass(&mut app, 1);
     toggle_lane(&mut app, AUDIO_TRACK);
     let mut state = TimelineState::default();
@@ -719,8 +732,8 @@ fn promoting_a_punched_in_takes_lead_in_is_clamped_to_its_audio() {
 /// creating the boundary a promote is made against.
 #[test]
 fn clicking_the_comp_ribbon_splits_at_the_playhead() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let cut = at(&app, 2);
     seek(&mut app, cut);
     let mut state = TimelineState::default();
@@ -757,8 +770,8 @@ fn clicking_the_comp_ribbon_splits_at_the_playhead() {
 /// user — `NotAllowed` over the ribbon rather than a click into the void.
 #[test]
 fn a_split_with_the_playhead_outside_the_slot_is_flagged_by_the_cursor() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let state = TimelineState::default();
     let (x, y) = (x_of(&app, at(&app, 2)), ribbon_y(&app, AUDIO_TRACK));
 
@@ -784,8 +797,8 @@ fn a_split_with_the_playhead_outside_the_slot_is_flagged_by_the_cursor() {
 /// which is exactly why the UI cannot use the undo history as a receipt.
 #[test]
 fn a_refused_split_changes_nothing_and_spends_no_undo_entry() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let past_end = slot(&app).end() + app.sample_rate as u64;
     seek(&mut app, past_end);
     let could_undo = app.test_can_undo();
@@ -813,8 +826,8 @@ fn a_refused_split_changes_nothing_and_spends_no_undo_entry() {
 /// so the round-trip is pinned here.
 #[test]
 fn a_split_under_a_solo_ends_the_solo() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     set_active(&mut app, Some(0));
     let cut = at(&app, 2);
     seek(&mut app, cut);
@@ -846,8 +859,8 @@ fn a_split_under_a_solo_ends_the_solo() {
 /// silence in the middle of the part.
 #[test]
 fn right_clicking_a_take_card_deletes_it_and_re_covers_the_slot() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
     let mut state = TimelineState::default();
 
@@ -897,9 +910,9 @@ fn right_clicking_a_take_card_deletes_it_and_re_covers_the_slot() {
 /// affordance pass does.
 #[test]
 fn a_midi_take_soloed_over_audio_reports_that_it_silences_the_audio() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let slot = slot(&app);
-    push_take_clip_over(&mut app, 0, slot);
+    write_take_recording(&app, &dir, 0, slot);
     capture_audio_pass(&mut app, 0);
     capture_midi_pass(&mut app, 1);
     // Both takes landed in one group even though the second is MIDI:
@@ -926,8 +939,8 @@ fn a_midi_take_soloed_over_audio_reports_that_it_silences_the_audio() {
 #[test]
 fn the_take_lane_announces_its_gestures_through_the_cursor() {
     use iced::mouse::Interaction;
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     toggle_lane(&mut app, AUDIO_TRACK);
     let cut = at(&app, 2);
     seek(&mut app, cut);
@@ -977,8 +990,8 @@ fn the_take_lane_announces_its_gestures_through_the_cursor() {
 /// timeline: an audio clip, an automation lane whose first point sits at
 /// value **0.0** (the lowest a dot can go, i.e. the closest one can get to
 /// the ribbon), and a take group. Only here do the three compete.
-fn build_crowded_lane() -> Resonance {
-    let mut app = build_app();
+fn build_crowded_lane() -> (Resonance, TempDir) {
+    let (mut app, dir) = build_app();
     let slot = slot(&app);
     // A clip spanning exactly the slot, so clip and ribbon share every x
     // under test and only the y can decide between them.
@@ -1010,11 +1023,11 @@ fn build_crowded_lane() -> Resonance {
             curve: CurveKind::Linear,
         }));
     }
-    capture_audio_passes(&mut app, 2);
+    capture_audio_passes(&mut app, &dir, 2);
     toggle_lane(&mut app, AUDIO_TRACK);
     let cut = at(&app, 2);
     seek(&mut app, cut);
-    app
+    (app, dir)
 }
 
 const CROWDED_CLIP: u64 = 9_100;
@@ -1044,7 +1057,7 @@ fn overlay_dot_y(app: &Resonance, value: f32) -> f32 {
 /// reorder.
 #[test]
 fn a_clip_press_above_the_ribbon_still_starts_a_clip_drag() {
-    let app = build_crowded_lane();
+    let (app, _dir) = build_crowded_lane();
     let mut state = TimelineState::default();
     let x = x_of(&app, at(&app, 3));
     let (band_top, _) = ribbon_band(&app);
@@ -1081,7 +1094,7 @@ fn a_clip_press_above_the_ribbon_still_starts_a_clip_drag() {
 /// Widening it later will fail here, which is the point.
 #[test]
 fn the_ribbon_claims_exactly_the_band_it_draws() {
-    let app = build_crowded_lane();
+    let (app, _dir) = build_crowded_lane();
     let x = x_of(&app, at(&app, 3));
     let (band_top, band_height) = ribbon_band(&app);
     let layout = app.test_arrange_row_layout();
@@ -1126,7 +1139,7 @@ fn the_ribbon_claims_exactly_the_band_it_draws() {
 /// track has take groups at all.
 #[test]
 fn a_value_zero_breakpoint_survives_the_reorder() {
-    let app = build_crowded_lane();
+    let (app, _dir) = build_crowded_lane();
     let dot_y = overlay_dot_y(&app, 0.0);
     let (band_top, _) = ribbon_band(&app);
     let dot_x = x_of(&app, at(&app, 2));
@@ -1161,7 +1174,7 @@ fn a_value_zero_breakpoint_survives_the_reorder() {
         "inside the slot the ribbon takes it, got {msg:?}"
     );
 
-    let no_takes = build_app_with_only_the_breakpoints();
+    let (no_takes, _no_takes_dir) = build_app_with_only_the_breakpoints();
     let mut state = TimelineState::default();
     let msg = press(&no_takes, &mut state, dot_x, stolen_y).expect("publishes");
     assert!(
@@ -1179,7 +1192,7 @@ fn a_value_zero_breakpoint_survives_the_reorder() {
 /// carry a take lane.
 #[test]
 fn a_breakpoint_outside_the_slot_keeps_its_whole_pick_radius() {
-    let app = build_crowded_lane();
+    let (app, _dir) = build_crowded_lane();
     let (band_top, _) = ribbon_band(&app);
     let outside_x = x_of(&app, slot(&app).end() + 3 * app.sample_rate as u64);
     let mut state = TimelineState::default();
@@ -1206,7 +1219,7 @@ fn a_breakpoint_outside_the_slot_keeps_its_whole_pick_radius() {
 #[test]
 fn the_cursor_agrees_with_the_reordered_press() {
     use iced::mouse::Interaction;
-    let app = build_crowded_lane();
+    let (app, _dir) = build_crowded_lane();
     let state = TimelineState::default();
     let x = x_of(&app, at(&app, 3));
     let (band_top, _) = ribbon_band(&app);
@@ -1253,8 +1266,8 @@ fn the_cursor_agrees_with_the_reordered_press() {
 /// The crowded fixture minus the takes: same clip, same two breakpoints,
 /// no take group. Stands in for "the app before this todo" so the stolen
 /// band can be shown to be a *change* rather than a coincidence.
-fn build_app_with_only_the_breakpoints() -> Resonance {
-    let mut app = build_app();
+fn build_app_with_only_the_breakpoints() -> (Resonance, TempDir) {
+    let (mut app, dir) = build_app();
     let slot = slot(&app);
     app.test_push_clip(ClipState {
         id: CROWDED_CLIP,
@@ -1283,7 +1296,7 @@ fn build_app_with_only_the_breakpoints() -> Resonance {
         }));
     }
     assert!(app.test_take_groups().is_empty());
-    app
+    (app, dir)
 }
 
 // ---------------------------------------------------------------------
@@ -1297,8 +1310,8 @@ fn build_app_with_only_the_breakpoints() -> Resonance {
 /// by rendering nothing.
 #[test]
 fn the_canvas_origin_constants_still_hold() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 2);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 2);
     let y = ribbon_y(&app, AUDIO_TRACK);
     let x = x_of(&app, at(&app, 2));
 
@@ -1341,8 +1354,8 @@ fn snapshot(app: &Resonance, path: &str) {
 /// what the release will do (the edit itself reports nothing).
 #[test]
 fn promote_drag_snapshot() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
 
     let y = take_card_y(&app, 0);
@@ -1367,8 +1380,8 @@ fn promote_drag_snapshot() {
 /// comp was injected as an engine echo — this one is what a gesture built.
 #[test]
 fn promoted_comp_snapshot() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     toggle_lane(&mut app, AUDIO_TRACK);
     let mut state = TimelineState::default();
     let msg = sweep(
@@ -1397,8 +1410,8 @@ fn promoted_comp_snapshot() {
 /// golden is re-blessed one line shorter.
 #[test]
 fn split_under_a_solo_snapshot() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     set_active(&mut app, Some(0));
     let cut = at(&app, 2);
     seek(&mut app, cut);
@@ -1417,8 +1430,8 @@ fn split_under_a_solo_snapshot() {
 /// silent by design.
 #[test]
 fn refused_split_snapshot() {
-    let mut app = build_app();
-    capture_audio_passes(&mut app, 3);
+    let (mut app, dir) = build_app();
+    capture_audio_passes(&mut app, &dir, 3);
     let past_end = slot(&app).end() + 2 * app.sample_rate as u64;
     seek(&mut app, past_end);
     toggle_lane(&mut app, AUDIO_TRACK);
@@ -1443,9 +1456,9 @@ fn refused_split_snapshot() {
 /// which is exactly how a caption ends up unreadable over the lane.
 #[test]
 fn midi_solo_silences_audio_snapshot() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let slot = slot(&app);
-    push_take_clip_over(&mut app, 0, slot);
+    write_take_recording(&app, &dir, 0, slot);
     capture_audio_pass(&mut app, 0);
     capture_midi_pass(&mut app, 1);
     set_active(&mut app, Some(1));
@@ -1481,13 +1494,13 @@ fn midi_solo_silences_audio_snapshot() {
 /// warning, not a clamp, and the two must not be conflated.
 #[test]
 fn promote_across_silence_snapshot() {
-    let mut app = build_app();
+    let (mut app, dir) = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
     let punched = TimelineRange::from_bounds(slot.start + sr, slot.end());
-    push_take_clip_over(&mut app, 0, punched);
+    write_take_recording(&app, &dir, 0, punched);
     capture_audio_pass_over(&mut app, 0, punched);
-    push_take_clip_over(&mut app, 1, slot);
+    write_take_recording(&app, &dir, 1, slot);
     capture_audio_pass(&mut app, 1);
     toggle_lane(&mut app, AUDIO_TRACK);
 

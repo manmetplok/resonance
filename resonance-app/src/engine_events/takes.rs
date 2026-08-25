@@ -28,12 +28,29 @@ use resonance_common::{CompSegment, Take, TakeContent, TakeGroupId, TakeId, Time
 use crate::Resonance;
 
 /// `TakeCaptured` — append the finished loop pass as a take, creating the
-/// take group on the first pass.
+/// take group on the first pass, and read the pass's waveform off disk.
 ///
 /// `extent` is carried straight onto the [`Take`], not re-derived: it is
 /// what the pass really recorded over (todo #1396), and the app has no
 /// second source for it — a take clip never enters `Resonance::clips`, on
 /// this path or on the project-load one.
+///
+/// The peaks are read from the WAV the engine has just finished writing
+/// (todo #1400): `close_pass_writer` finalizes the file at the loop seam
+/// *before* this event is emitted, so by the time the app folds it the
+/// recording is on disk and complete. Reading it here rather than being
+/// told is what makes this path and the project-load one identical — see
+/// [`crate::project::take_audio`] for the argument.
+///
+/// **A failed read does not flag the take.** Todo #412's `missing_takes`
+/// means "the recording this project references is not on this machine",
+/// which is a question about a project you are *opening*; a pass you just
+/// recorded has the engine's word that it exists, and the engine will play
+/// it from its own mapped copy whatever the app manages to read. Shouting
+/// `media missing` at the end of a good take is precisely the bug #1400
+/// exists to remove, so the honest degradation here is a card with no
+/// waveform in it — plus a line on stderr, because a take whose file the
+/// app cannot open the instant it was written is worth knowing about.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn take_captured(
     r: &mut Resonance,
@@ -45,8 +62,29 @@ pub(super) fn take_captured(
     extent: TimelineRange,
     content: TakeContent,
 ) {
+    let clip_ref = match content {
+        TakeContent::Audio { clip_ref } => Some(clip_ref),
+        TakeContent::Midi { .. } => None,
+    };
     let take = Take::new(take_id, pass_index, now_millis(), extent, content);
     r.take_groups.take_captured(group_id, track_id, slot, take);
+
+    // Only an audio take has a recording to read, and only a project with
+    // a directory has somewhere to read it from — recording streams into
+    // that directory, so in the running app it is always set here.
+    let (Some(clip_ref), Some(project_dir)) = (clip_ref, r.io.project_path.clone()) else {
+        return;
+    };
+    match crate::project::load_take_peaks(&project_dir, clip_ref) {
+        Ok(peaks) => r
+            .take_groups
+            .set_peaks(group_id, take_id, clip_ref, peaks),
+        Err(reason) => eprintln!(
+            "take capture: take {take_id} of group {group_id} was recorded but its \
+             audio could not be read back ({reason}) — the lane draws the card \
+             without a waveform"
+        ),
+    }
 }
 
 /// `TakeCompChanged` — adopt the comp the engine now plays and bounces,
