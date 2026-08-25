@@ -72,7 +72,8 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         // Take lanes: comp edits, active-take selection, project-load restore
         AudioCommand::SetTakeComp { .. }
         | AudioCommand::SetActiveTake { .. }
-        | AudioCommand::RestoreTakeGroups { .. } => takes::dispatch_takes(ctx, state, cmd),
+        | AudioCommand::RestoreTakeGroups { .. }
+        | AudioCommand::LoadTakeClipFromWav { .. } => takes::dispatch_takes(ctx, state, cmd),
 
         // Audio clips + automation + project
         AudioCommand::ImportClip { .. }
