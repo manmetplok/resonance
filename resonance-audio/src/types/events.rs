@@ -327,6 +327,18 @@ pub enum AudioEvent {
         slot: TimelineRange,
         /// Zero-based loop pass that produced this take.
         pass_index: u32,
+        /// What this pass **actually** recorded over, which is not always
+        /// its `slot`: pass 0's clip starts at the punch-in point, and a
+        /// pass cut short at transport stop ends before the loop end. The
+        /// app has no other way to learn it — no `RecordingFinished` is
+        /// emitted for a take clip, so the clip never reaches the app's
+        /// mirror — and it is stored on
+        /// [`resonance_common::Take`] so the project-load path reports the
+        /// same fact rather than leaving the app to guess (ba todo #1396).
+        ///
+        /// For a MIDI take this is the slot; see
+        /// [`resonance_common::Take::audible_extent`].
+        extent: TimelineRange,
         content: TakeContent,
     },
     /// Confirms a `SetTakeComp` was applied to `group_id`. The comp the

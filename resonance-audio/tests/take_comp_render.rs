@@ -73,8 +73,20 @@ const B_CLIP: ClipId = 101;
 fn two_take_group() -> TakeGroup {
     let slot = TimelineRange::new(0, SLOT_LEN);
     let mut g = TakeGroup::new(1, TRACK, slot);
-    g.add_take(Take::new(0, 0, 0, TakeContent::Audio { clip_ref: A_CLIP }));
-    g.add_take(Take::new(1, 1, 0, TakeContent::Audio { clip_ref: B_CLIP }));
+    g.add_take(Take::new(
+        0,
+        0,
+        0,
+        slot,
+        TakeContent::Audio { clip_ref: A_CLIP },
+    ));
+    g.add_take(Take::new(
+        1,
+        1,
+        0,
+        slot,
+        TakeContent::Audio { clip_ref: B_CLIP },
+    ));
     g
 }
 
@@ -439,7 +451,13 @@ fn midi_only_group_contributes_no_audio_spans() {
     // track comp (the audio path stays silent for it).
     let slot = TimelineRange::new(0, SLOT_LEN);
     let mut g = TakeGroup::new(1, TRACK, slot);
-    g.add_take(Take::new(0, 0, 0, TakeContent::Midi { notes: Vec::new() }));
+    g.add_take(Take::new(
+        0,
+        0,
+        0,
+        slot,
+        TakeContent::Midi { notes: Vec::new() },
+    ));
     let table = build_comp_table(&groups(g));
     assert!(table.is_empty());
     assert!(table.track_comp(TRACK).is_none());

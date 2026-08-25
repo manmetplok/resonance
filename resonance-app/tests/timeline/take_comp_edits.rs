@@ -27,10 +27,9 @@
 //! tiers — including under a solo, which the app used not to mirror.
 
 use resonance_app::message::{Message, TakeMessage, TransportMessage};
-use resonance_app::state::ClipState;
 use resonance_app::Resonance;
 use resonance_audio::__test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, FadeCurve, TrackType};
+use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
 use resonance_common::{CompSegment, TakeContent, TakeGroup, TakeNote, TimelineRange};
 
 const TRACK: u64 = 7;
@@ -68,6 +67,31 @@ fn capture(app: &mut Resonance, take_id: u64, pass_index: u32) {
         track_id: TRACK,
         slot: SLOT,
         pass_index,
+        // Filled its slot, the ordinary pass. `capture_over` is the
+        // punched-in variant (todo #1396).
+        extent: SLOT,
+        content: TakeContent::Audio {
+            clip_ref: 5_000 + take_id,
+        },
+    });
+}
+
+/// One captured audio pass that recorded only `extent` of its slot: a
+/// punch-in, or a pass cut short at transport stop.
+///
+/// The engine reports the extent on the event (todo #1396) and the mirror
+/// keeps it on the take. That is the app's *only* account of it: no
+/// `RecordingFinished` follows a take clip, so nothing is ever pushed into
+/// `Resonance::clips` for one and there is nothing else for the promote
+/// clamp to consult.
+fn capture_over(app: &mut Resonance, take_id: u64, pass_index: u32, extent: TimelineRange) {
+    app.test_apply_engine_event(AudioEvent::TakeCaptured {
+        group_id: GROUP,
+        take_id,
+        track_id: TRACK,
+        slot: SLOT,
+        pass_index,
+        extent,
         content: TakeContent::Audio {
             clip_ref: 5_000 + take_id,
         },
@@ -165,28 +189,6 @@ fn active_take_commands(cmds: &[AudioCommand]) -> Vec<Option<u64>> {
         .collect()
 }
 
-/// A clip the app knows about, standing in for a recorded take's audio.
-fn take_clip(clip_ref: u64, start: u64, len: u64) -> ClipState {
-    ClipState {
-        id: clip_ref,
-        track_id: TRACK,
-        start_sample: start,
-        duration_samples: len,
-        name: format!("Take {clip_ref}"),
-        total_frames: len,
-        trim_start_frames: 0,
-        trim_end_frames: 0,
-        fade_in_frames: 0,
-        fade_in_curve: FadeCurve::default(),
-        fade_out_frames: 0,
-        fade_out_curve: FadeCurve::default(),
-        gain_db: 0.0,
-        waveform_peaks: Vec::new(),
-        vocal_tuning: None,
-        asset_ref: None,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Promote
 // ---------------------------------------------------------------------------
@@ -231,13 +233,29 @@ fn a_first_promote_materializes_the_engines_default_cover_around_it() {
 
 #[test]
 fn promote_is_clamped_to_the_takes_own_recorded_audio() {
-    // Pass 0 punched in late, so its clip starts after the slot does. The
+    // Pass 0 punched in late, so it recorded only the tail of its slot. The
     // engine does not sanitise segment ranges, and a segment over a region
     // its take cannot fill renders as silence (ba doc #292) — so the
     // request is trimmed to what take 0 actually recorded.
+    //
+    // **The clamp works off the event, not off a clip.** Before todo #1396
+    // this case could only be reached by faking a `ClipState` the running
+    // app never produces for a take, so the clamp was correct and never
+    // bit in the real recording flow. The assertion below that
+    // `test_clips` is empty is what keeps that from creeping back.
     let (mut app, rx) = app_with_takes(2);
     let punch_in = SLOT.start + 40_000;
-    app.test_push_clip(take_clip(5_000, punch_in, SLOT.end() - punch_in));
+    capture_over(
+        &mut app,
+        0,
+        0,
+        TimelineRange::from_bounds(punch_in, SLOT.end()),
+    );
+    drain(&rx);
+    assert!(
+        app.test_clips().is_empty(),
+        "a take clip never reaches the app's clip mirror"
+    );
 
     send(
         &mut app,
@@ -256,12 +274,45 @@ fn promote_is_clamped_to_the_takes_own_recorded_audio() {
     assert!(last_comp_command(&drain(&rx)).is_some());
 }
 
+/// The extent survives a save/load as well as a capture. A restored take
+/// carries what it recorded, so the clamp is exactly as sharp on a reopened
+/// project as on a freshly recorded one — the property that made the extent
+/// belong on `Take` rather than on the event alone (todo #1396).
+#[test]
+fn a_restored_takes_extent_clamps_a_promote_just_as_a_captured_ones_does() {
+    let (mut app, rx) = capturing_app();
+    let punch_in = SLOT.start + 40_000;
+    capture_over(
+        &mut app,
+        0,
+        0,
+        TimelineRange::from_bounds(punch_in, SLOT.end()),
+    );
+    capture(&mut app, 1, 1);
+    drain(&rx);
+
+    // Round-trip the group through serde, as the project file does.
+    let json = serde_json::to_string(&app.test_take_groups()[0]).expect("serialize");
+    let restored: TakeGroup = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(
+        restored.take(0).expect("take 0").audible_extent(SLOT),
+        TimelineRange::from_bounds(punch_in, SLOT.end()),
+        "the extent is persisted, so a reloaded take is not blind"
+    );
+}
+
 #[test]
 fn a_promote_entirely_outside_the_takes_audio_is_refused() {
     // Nothing survives the clamp, so there is no edit — and therefore no
     // command, no undo entry and no dirty flag.
     let (mut app, rx) = app_with_takes(2);
-    app.test_push_clip(take_clip(5_000, SLOT.start + 100_000, 20_000));
+    capture_over(
+        &mut app,
+        0,
+        0,
+        TimelineRange::new(SLOT.start + 100_000, 20_000),
+    );
+    drain(&rx);
     app.test_set_dirty(false);
 
     send(
@@ -281,10 +332,18 @@ fn a_promote_entirely_outside_the_takes_audio_is_refused() {
 
 #[test]
 fn a_promote_is_clipped_to_the_slot_even_when_the_take_is_unbounded() {
-    // The app has no clip for this take, so its extent is unknown and
-    // falls back to the slot — a request reaching outside must still not
-    // put a segment outside the group's slot.
-    let (mut app, _rx) = app_with_takes(2);
+    // A pass whose recording overhangs its slot at both ends — the engine
+    // clamps a take clip to the slot before reading it, and so does the
+    // comp: a request reaching outside must still not put a segment
+    // outside the group's slot.
+    let (mut app, rx) = app_with_takes(2);
+    capture_over(
+        &mut app,
+        0,
+        0,
+        TimelineRange::from_bounds(0, SLOT.end() + 500_000),
+    );
+    drain(&rx);
 
     send(
         &mut app,
@@ -592,6 +651,7 @@ fn a_midi_active_take_is_reported_as_silencing_the_groups_audio() {
         track_id: TRACK,
         slot: SLOT,
         pass_index: 2,
+        extent: SLOT,
         content: TakeContent::Midi {
             notes: vec![TakeNote {
                 note: 60,

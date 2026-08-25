@@ -26,12 +26,21 @@ fn comp_from(promotions: &[(u64, u64, u64)]) -> Comp {
     comp
 }
 
+/// Wider than every slot in this file, so the cover tests below are about
+/// *which* take is selected and never about whether it has material there
+/// — that is [`Take::audible_extent`]'s own concern, tested on its own.
+const WHOLE: TimelineRange = TimelineRange {
+    start: 0,
+    length: 1_000_000,
+};
+
 /// An audio take captured at `captured_at` with pass index `pass_index`.
 fn audio_take(id: u64, pass_index: u32, captured_at: i64) -> Take {
     Take::new(
         id,
         pass_index,
         captured_at,
+        WHOLE,
         TakeContent::Audio { clip_ref: 900 + id },
     )
 }
@@ -42,6 +51,7 @@ fn midi_take(id: u64, pass_index: u32, captured_at: i64) -> Take {
         id,
         pass_index,
         captured_at,
+        WHOLE,
         TakeContent::Midi {
             notes: vec![TakeNote {
                 note: 60,
@@ -227,11 +237,18 @@ fn take_group_lookup_and_full_cover() {
     assert!(group.active_take.is_none());
     assert!(!group.is_full_cover());
 
-    group.add_take(Take::new(10, 0, 1_000, TakeContent::Audio { clip_ref: 555 }));
+    group.add_take(Take::new(
+        10,
+        0,
+        1_000,
+        r(0, 200),
+        TakeContent::Audio { clip_ref: 555 },
+    ));
     group.add_take(Take::new(
         11,
         1,
         2_000,
+        r(0, 200),
         TakeContent::Midi {
             notes: vec![TakeNote {
                 note: 60,
@@ -539,11 +556,18 @@ fn three_take_group() -> TakeGroup {
 #[test]
 fn take_group_serde_round_trips() {
     let mut group = TakeGroup::new(7, 3, r(0, 240));
-    group.add_take(Take::new(1, 0, 111, TakeContent::Audio { clip_ref: 9 }));
+    group.add_take(Take::new(
+        1,
+        0,
+        111,
+        r(30, 240),
+        TakeContent::Audio { clip_ref: 9 },
+    ));
     group.add_take(Take::new(
         2,
         1,
         222,
+        r(0, 240),
         TakeContent::Midi {
             notes: vec![
                 TakeNote {
@@ -568,4 +592,107 @@ fn take_group_serde_round_trips() {
     let json = serde_json::to_string(&group).unwrap();
     let back: TakeGroup = serde_json::from_str(&json).unwrap();
     assert_eq!(group, back);
+}
+
+// --- a take's audible extent (todo #1396) --------------------------------
+//
+// The cover says *which* take plays over a stretch of the slot. These say
+// whether that take has anything there — a separate question, and the one
+// the app was guessing at until the engine started reporting the extent.
+
+#[test]
+fn a_take_that_fills_its_slot_is_audible_across_all_of_it() {
+    let slot = r(1_000, 5_000);
+    let take = Take::new(0, 0, 0, slot, TakeContent::Audio { clip_ref: 1 });
+    assert_eq!(take.audible_extent(slot), slot);
+}
+
+#[test]
+fn a_punched_in_take_is_audible_only_from_where_it_started() {
+    let slot = r(1_000, 5_000);
+    // Record armed a second into the loop; ran to the loop end.
+    let take = Take::new(0, 0, 0, r(2_000, 5_000), TakeContent::Audio { clip_ref: 1 });
+    assert_eq!(take.audible_extent(slot), r(2_000, 5_000));
+}
+
+#[test]
+fn a_take_cut_short_at_stop_is_audible_only_to_where_it_stopped() {
+    let slot = r(1_000, 5_000);
+    let take = Take::new(0, 0, 0, r(1_000, 3_500), TakeContent::Audio { clip_ref: 1 });
+    assert_eq!(take.audible_extent(slot), r(1_000, 3_500));
+}
+
+/// The slot bounds what can sound: a recording overhanging either edge is
+/// clamped back, never allowed to imply coverage outside the group's own
+/// region. This is the same clamp the mixer takes before reading a take
+/// clip (todo #409), so the lane and the render agree.
+#[test]
+fn a_recording_overhanging_its_slot_is_clamped_back_to_it() {
+    let slot = r(1_000, 5_000);
+    let take = Take::new(0, 0, 0, r(0, 9_000), TakeContent::Audio { clip_ref: 1 });
+    assert_eq!(take.audible_extent(slot), slot);
+}
+
+/// No overlap at all — a take filed under a slot it does not reach — is an
+/// empty extent rather than a backwards range or a panic. A mirror adopts
+/// whatever it is handed, so this has to be total.
+#[test]
+fn a_take_that_does_not_meet_its_slot_is_audible_nowhere() {
+    let slot = r(1_000, 5_000);
+    let after = Take::new(
+        0,
+        0,
+        0,
+        r(9_000, 10_000),
+        TakeContent::Audio { clip_ref: 1 },
+    );
+    let before = Take::new(1, 0, 0, r(0, 500), TakeContent::Audio { clip_ref: 2 });
+    assert!(after.audible_extent(slot).is_empty());
+    assert!(before.audible_extent(slot).is_empty());
+}
+
+/// **A MIDI take's extent is its whole slot.** Its notes are its content;
+/// silence inside it is a rest, not a hole, so there is nothing to clamp
+/// away and a promote over a bar it played nothing in is a legitimate edit.
+/// The engine files the slot for every MIDI pass, and this is the property
+/// that relies on.
+#[test]
+fn a_midi_takes_extent_is_its_whole_slot() {
+    let slot = r(1_000, 5_000);
+    let take = Take::new(
+        0,
+        0,
+        0,
+        slot,
+        TakeContent::Midi {
+            notes: vec![TakeNote {
+                note: 60,
+                velocity: 0.8,
+                // One short note near the end: the notes' own span is not
+                // the extent.
+                start_tick: 400,
+                duration_ticks: 40,
+            }],
+        },
+    );
+    assert_eq!(take.audible_extent(slot), slot);
+}
+
+/// The extent survives serde, which is the whole reason it lives on `Take`
+/// rather than on `AudioEvent::TakeCaptured` alone: a project load hands
+/// the app takes it never saw captured, and a field present on one path and
+/// absent on the other cannot be told apart from a take that really did
+/// fill its slot.
+#[test]
+fn a_takes_extent_round_trips_through_serde() {
+    let take = Take::new(
+        3,
+        1,
+        1_700_000_000_000,
+        r(2_000, 3_000),
+        TakeContent::Audio { clip_ref: 77 },
+    );
+    let back: Take = serde_json::from_str(&serde_json::to_string(&take).unwrap()).unwrap();
+    assert_eq!(back.extent, r(2_000, 3_000));
+    assert_eq!(back, take);
 }

@@ -93,21 +93,21 @@ impl TakeGroupState {
     /// second pass folds into the same group rather than starting a new
     /// one. A take whose id already exists in the group replaces it,
     /// keeping the mirror idempotent if an event is re-delivered.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// The caller hands over a fully-formed [`Take`] — including the
+    /// `extent` the engine reported and the wall-clock stamp the event
+    /// omits — rather than a widening list of scalars.
     pub fn take_captured(
         &mut self,
         group_id: TakeGroupId,
-        take_id: TakeId,
         track_id: TrackId,
         slot: TimelineRange,
-        pass_index: u32,
-        captured_at: i64,
-        content: TakeContent,
+        take: Take,
     ) {
         // A freshly captured take has its WAV on disk by definition, so
         // clear any missing-file flag a prior load left on this slot.
+        let take_id = take.id;
         self.missing_takes.remove(&(group_id, take_id));
-        let take = Take::new(take_id, pass_index, captured_at, content);
         match self.group_mut(group_id) {
             Some(group) => match group.takes.iter_mut().find(|t| t.id == take_id) {
                 Some(existing) => *existing = take,

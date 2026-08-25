@@ -164,6 +164,14 @@ fn push_take_clip_over(app: &mut Resonance, pass_index: u32, extent: TimelineRan
 }
 
 fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
+    capture_audio_pass_over(app, pass_index, slot(app));
+}
+
+/// One captured pass that recorded only `extent` of its slot. The event is
+/// the app's sole account of that (todo #1396) — a take clip never reaches
+/// `Resonance::clips`, so mirroring one with `push_take_clip_over` supplies
+/// the waveform and nothing else.
+fn capture_audio_pass_over(app: &mut Resonance, pass_index: u32, extent: TimelineRange) {
     let slot = slot(app);
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id: GROUP,
@@ -171,6 +179,7 @@ fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
         track_id: AUDIO_TRACK,
         slot,
         pass_index,
+        extent,
         content: TakeContent::Audio {
             clip_ref: TAKE_CLIP_BASE + u64::from(pass_index),
         },
@@ -202,6 +211,7 @@ fn capture_midi_pass(app: &mut Resonance, pass_index: u32) {
         track_id: MIDI_TRACK,
         slot,
         pass_index,
+        extent: slot,
         content: TakeContent::Midi { notes },
     });
 }
@@ -663,8 +673,9 @@ fn promoting_a_punched_in_takes_lead_in_is_clamped_to_its_audio() {
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
     let punch_in = slot.start + sr;
-    push_take_clip_over(&mut app, 0, TimelineRange::from_bounds(punch_in, slot.end()));
-    capture_audio_pass(&mut app, 0);
+    let punched = TimelineRange::from_bounds(punch_in, slot.end());
+    push_take_clip_over(&mut app, 0, punched);
+    capture_audio_pass_over(&mut app, 0, punched);
     push_take_clip_over(&mut app, 1, slot);
     capture_audio_pass(&mut app, 1);
     toggle_lane(&mut app, AUDIO_TRACK);
@@ -1473,12 +1484,9 @@ fn promote_across_silence_snapshot() {
     let mut app = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
-    push_take_clip_over(
-        &mut app,
-        0,
-        TimelineRange::from_bounds(slot.start + sr, slot.end()),
-    );
-    capture_audio_pass(&mut app, 0);
+    let punched = TimelineRange::from_bounds(slot.start + sr, slot.end());
+    push_take_clip_over(&mut app, 0, punched);
+    capture_audio_pass_over(&mut app, 0, punched);
     push_take_clip_over(&mut app, 1, slot);
     capture_audio_pass(&mut app, 1);
     toggle_lane(&mut app, AUDIO_TRACK);

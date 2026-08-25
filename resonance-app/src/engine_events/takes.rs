@@ -23,12 +23,17 @@
 //! waiting to be told.
 
 use resonance_audio::types::TrackId;
-use resonance_common::{CompSegment, TakeContent, TakeGroupId, TakeId, TimelineRange};
+use resonance_common::{CompSegment, Take, TakeContent, TakeGroupId, TakeId, TimelineRange};
 
 use crate::Resonance;
 
 /// `TakeCaptured` — append the finished loop pass as a take, creating the
 /// take group on the first pass.
+///
+/// `extent` is carried straight onto the [`Take`], not re-derived: it is
+/// what the pass really recorded over (todo #1396), and the app has no
+/// second source for it — a take clip never enters `Resonance::clips`, on
+/// this path or on the project-load one.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn take_captured(
     r: &mut Resonance,
@@ -37,17 +42,11 @@ pub(super) fn take_captured(
     track_id: TrackId,
     slot: TimelineRange,
     pass_index: u32,
+    extent: TimelineRange,
     content: TakeContent,
 ) {
-    r.take_groups.take_captured(
-        group_id,
-        take_id,
-        track_id,
-        slot,
-        pass_index,
-        now_millis(),
-        content,
-    );
+    let take = Take::new(take_id, pass_index, now_millis(), extent, content);
+    r.take_groups.take_captured(group_id, track_id, slot, take);
 }
 
 /// `TakeCompChanged` — adopt the comp the engine now plays and bounces,

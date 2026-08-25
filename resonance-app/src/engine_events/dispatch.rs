@@ -228,16 +228,22 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             waveform_peaks,
         ),
         // Cycle-record take capture (epic #15). The engine emits one
-        // `TakeCaptured` per loop pass with its take-group/slot id; the
-        // recorded clips themselves arrive via `RecordingFinished`.
+        // `TakeCaptured` per loop pass with its take-group/slot id. This
+        // is the *only* news the app gets about a take: no
+        // `RecordingFinished` is emitted for a take clip, so the clip never
+        // reaches `Resonance::clips` and `extent` is the app's sole account
+        // of what the pass actually recorded (todo #1396).
         E::TakeCaptured {
             group_id,
             take_id,
             track_id,
             slot,
             pass_index,
+            extent,
             content,
-        } => takes::take_captured(r, group_id, take_id, track_id, slot, pass_index, content),
+        } => takes::take_captured(
+            r, group_id, take_id, track_id, slot, pass_index, extent, content,
+        ),
         // Comp / active-take echoes (epic #15, todo #411). The engine has
         // already applied these to what it plays and bounces, so the
         // mirror adopts them verbatim — including when they merely confirm

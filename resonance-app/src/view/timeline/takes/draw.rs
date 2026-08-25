@@ -31,8 +31,8 @@ use crate::view::arrange_layout::ArrangeRowLayout;
 
 use super::super::TimelineCanvas;
 use super::geometry::{
-    audible_extent, comp_ribbon_band, effective_cover, silent_ranges, take_card_band, take_label,
-    unlit_ranges, CoverSource,
+    comp_ribbon_band, effective_cover, silent_ranges, take_card_band, take_label, unlit_ranges,
+    CoverSource,
 };
 
 /// Minimum span width, in px, that still gets its `T{n}` label. Narrower
@@ -433,6 +433,19 @@ impl TimelineCanvas<'_> {
     /// #412's `missing_takes`, which keeps the take in the comp rather than
     /// silently punching a hole in the cover). Only audio takes can be
     /// missing — a MIDI take carries its notes inline.
+    ///
+    /// **The first arm is a standing false positive.** A take clip is never
+    /// mirrored into `Resonance::clips` at all — no `RecordingFinished`
+    /// follows one, and a project load restores take groups without their
+    /// clips — so `clip_absent` is true for *every* audio take and every
+    /// freshly recorded pass draws as `media missing`. Todo #1396 took the
+    /// extent off this lookup (it now comes from the take itself), which is
+    /// what makes the card's *width* right; the degradation state and the
+    /// waveform still hang off it, and untangling them means deciding how a
+    /// take's peaks reach the app. Filed as a follow-up rather than fixed
+    /// here, because dropping the arm on its own would leave a fresh take
+    /// with a blank card — the one thing design #153 says a take must never
+    /// have.
     pub(in crate::view::timeline::takes) fn take_is_missing(
         &self,
         group: &TakeGroup,
@@ -445,27 +458,33 @@ impl TimelineCanvas<'_> {
         clip_absent || self.take_groups.is_missing(group.id, take.id)
     }
 
-    /// The stretch of `group`'s slot this take actually carries audio over
-    /// — its clip's extent intersected with the slot — or `None` when the
-    /// two do not meet at all.
+    /// The stretch of `group`'s slot this take actually carries material
+    /// over, or `None` when the two do not meet at all.
     ///
-    /// A MIDI take has no clip to intersect with (its notes are its
-    /// extent), and a take whose media is missing keeps its full lane so
-    /// the degradation stays visible across the whole span the comp may
-    /// use. Shared with the interaction pass so a promote preview marks
-    /// silence exactly where the card draws its flat line.
+    /// Resolved from the take's own
+    /// [`extent`](resonance_common::Take::extent) — the engine's account of
+    /// what the pass recorded, carried on `TakeCaptured` and persisted with
+    /// the project (todo #1396) — and **not** from a clip lookup. A take
+    /// clip never enters `Resonance::clips` (no `RecordingFinished` is
+    /// emitted for one, and a project load restores take groups without
+    /// materialising their clips), so the old lookup fell back to the slot
+    /// for every take in the normal recording flow and drew a punched-in
+    /// pass full width.
+    ///
+    /// A missing recording is *not* widened back out to the slot: the
+    /// extent is a fact about what was recorded, independent of whether
+    /// the WAV is on this machine, so the hatch marks exactly the stretch
+    /// whose audio is gone and the flat line covers the rest.
+    ///
+    /// Shared with the interaction pass so a promote preview marks silence
+    /// exactly where the card draws its flat line.
     pub(in crate::view::timeline::takes) fn take_audible_extent(
         &self,
         group: &TakeGroup,
         take: &resonance_common::Take,
     ) -> Option<TimelineRange> {
-        match &take.content {
-            TakeContent::Audio { clip_ref } if !self.take_is_missing(group, take) => {
-                let clip = self.take_clip(*clip_ref)?;
-                audible_extent(group.slot, clip.start_sample, clip.duration_samples)
-            }
-            _ => Some(group.slot),
-        }
+        let audible = take.audible_extent(group.slot);
+        (!audible.is_empty()).then_some(audible)
     }
 
     /// A sub-range of the slot as `(x0, x1)` clamped to `card`, or `None`
