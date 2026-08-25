@@ -453,7 +453,12 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // the stale comp played in their place. A project that *does* carry
     // take lanes then replaces this via `RestoreTakeGroups`; one that
     // doesn't (and File > New) is left correctly empty.
+    // The parked recordings of removed takes go with them (ba todo #1397).
+    // The clip list has just been drained, so nothing un-parks into a
+    // project that never had them; keeping the park across a load would
+    // only hold the previous project's WAV mappings open.
     state.take_groups.clear();
+    state.orphaned_take_clips.clear();
     super::takes::publish_take_comp(ctx, state);
 
     // Reset ID counters

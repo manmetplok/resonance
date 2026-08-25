@@ -220,13 +220,21 @@ impl Take {
     ///
     /// # MIDI takes
     ///
-    /// A MIDI take's extent is its **whole slot**. Its notes are its
-    /// content and there is no medium that can be short: silence inside a
-    /// MIDI take is a rest, not a hole, and the engine plays the take's
-    /// notes and nothing else wherever the comp selects it. Clamping a
-    /// MIDI promote to the notes' own span would refuse a legitimate edit
-    /// (promoting a bar of rest out of take 3) without preventing any
-    /// silence, because the rest *is* the material.
+    /// A MIDI take's extent is **the whole region the run cycled over**.
+    /// Its notes are its content and there is no medium that can be short:
+    /// silence inside a MIDI take is a rest, not a hole, and the engine
+    /// plays the take's notes and nothing else wherever the comp selects
+    /// it. Clamping a MIDI promote to the notes' own span would refuse a
+    /// legitimate edit (promoting a bar of rest out of take 3) without
+    /// preventing any silence, because the rest *is* the material.
+    ///
+    /// Note "the run's region", not "the group's slot": since todo #1392 a
+    /// run joins an existing lane whose slot may sit up to the engine's
+    /// same-slot tolerance away, and the extent stored is the run's own
+    /// measurement either way (`engine::transport::finalize_loop_record_pass`).
+    /// This method is what reconciles the two — the intersection below is
+    /// the whole reason a nudged run cannot claim material outside the lane
+    /// it joined.
     pub fn audible_extent(&self, slot: TimelineRange) -> TimelineRange {
         TimelineRange::from_bounds(
             self.extent.start.max(slot.start),
@@ -504,6 +512,56 @@ impl TakeGroup {
     /// True when the comp contiguously covers this group's slot.
     pub fn is_full_cover(&self) -> bool {
         self.comp.is_full_cover(self.slot)
+    }
+
+    /// Remove take `id` and re-cover the slot from the takes that remain,
+    /// returning the take that was removed (`None` when the group does not
+    /// hold it).
+    ///
+    /// **One definition of a removal**, for the same reason [`effective_cover`]
+    /// is one definition of the cover (todo #1395): the engine's
+    /// `AudioCommand::RemoveTake` and any app-side mirror have to agree about
+    /// what a group looks like afterwards, and three things have to go at once
+    /// or the disagreement is audible.
+    ///
+    /// - **The take.**
+    /// - **Every [`CompSegment`] naming it.** A segment pointing at a take the
+    ///   group no longer holds is skipped by [`effective_cover`] and plays
+    ///   whatever tier 3 puts there — so a dangling reference is invisible
+    ///   until something serializes it, and then it outlives the session. The
+    ///   holes those segments leave go to the take the cover would *now* fall
+    ///   back to, which is the take tier 3 would have chosen for them anyway:
+    ///   nothing audible moves except where the removed take used to play.
+    /// - **The solo**, when it named the removed take. An `active_take` the
+    ///   group does not hold falls through to the comp rather than silencing
+    ///   the group, so leaving it would not be fatal — but it would leave the
+    ///   lane drawing a solo that is not soloing anything.
+    ///
+    /// A comp that ends up with **no** surviving segments is left empty rather
+    /// than re-seeded. Empty and fully-seeded are equally audible (tier 3
+    /// covers the slot with the same take either way), but they draw
+    /// differently: seeding would turn the survivor's fallback into segments
+    /// that read as spans the user promoted. Deleting a take is not a
+    /// promotion of the rest.
+    ///
+    /// Removing the **last** take leaves a group with nothing to play and no
+    /// way to draw itself. A caller owning a store of groups should drop the
+    /// group instead — which is what `AudioCommand::RemoveTake` does.
+    pub fn remove_take(&mut self, id: TakeId) -> Option<Take> {
+        let idx = self.takes.iter().position(|take| take.id == id)?;
+        let removed = self.takes.remove(idx);
+        if self.active_take == Some(id) {
+            self.active_take = None;
+        }
+
+        // Computed *after* the take is gone, so the filler is the survivor
+        // the cover now falls back to rather than the one it used to.
+        let cover = SlotCover::of(self);
+        self.comp.segments.retain(|seg| seg.take_id != id);
+        if !self.comp.segments.is_empty() {
+            self.comp.seed_cover(cover);
+        }
+        Some(removed)
     }
 
     /// This group's [`effective_cover`] as an explicit [`Comp`] — what the

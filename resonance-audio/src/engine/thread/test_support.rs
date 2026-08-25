@@ -19,7 +19,7 @@ use indexmap::IndexMap;
 use parking_lot::{Mutex, RwLock};
 use ringbuf::traits::Split;
 
-use resonance_common::{TakeGroup, TakeGroupId};
+use resonance_common::{CompSegment, TakeGroup, TakeGroupId, TakeId};
 
 use crate::clap_host::PluginMap;
 use crate::engine::{automation::AutomationSnapshot, takes, tracks, SharedState};
@@ -45,9 +45,9 @@ pub struct EngineHandlerHarness {
     automation: Arc<arc_swap::ArcSwap<AutomationSnapshot>>,
     monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
     event_tx: Sender<AudioEvent>,
-    /// Held only so `event_tx` never reports disconnected; nothing drains
-    /// it yet.
-    _event_rx: Receiver<AudioEvent>,
+    /// Keeps `event_tx` connected, and lets a test read the echoes a
+    /// handler emitted ([`EngineHandlerHarness::drain_events`]).
+    event_rx: Receiver<AudioEvent>,
     cmd_tx_retry: Sender<AudioCommand>,
     /// Held only so `cmd_tx_retry` never reports disconnected; nothing
     /// drains it.
@@ -68,7 +68,7 @@ impl EngineHandlerHarness {
     /// Unlike the real thread this adds no default track — a handler
     /// test says what it needs.
     pub fn new() -> Self {
-        let (event_tx, _event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
         let (cmd_tx_retry, _cmd_rx_retry) = crossbeam_channel::unbounded::<AudioCommand>();
         let (live_midi_tx, _) = crossbeam_channel::unbounded();
         let (live_control_tx, _) = crossbeam_channel::unbounded();
@@ -95,7 +95,7 @@ impl EngineHandlerHarness {
             )),
             monitor_prod: Arc::new(Mutex::new(prod)),
             event_tx,
-            _event_rx,
+            event_rx,
             cmd_tx_retry,
             _cmd_rx_retry,
             state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
@@ -242,7 +242,17 @@ impl EngineHandlerHarness {
         std::mem::take(&mut *self.clips.write())
     }
 
-    /// Ids currently in the engine's clip list, ascending.
+    // -- take removal (ba todo #1397) ------------------------------------
+
+    /// Push a recorded take's clip into the shared clip list, where
+    /// `roll_audio_pass` puts it as a cycle-record pass rolls. A take group
+    /// on its own proves nothing about audibility: the clip is what plays.
+    pub fn push_clip(&mut self, clip: AudioClip) {
+        self.clips.write().push(clip);
+    }
+
+    /// Clip ids in the shared clip list — the render's actual input —
+    /// ascending.
     pub fn clip_ids(&self) -> Vec<ClipId> {
         let mut ids: Vec<ClipId> = self.clips.read().iter().map(|c| c.id).collect();
         ids.sort_unstable();
@@ -253,5 +263,74 @@ impl EngineHandlerHarness {
     /// the clip loads both raise.
     pub fn next_clip_id(&self) -> ClipId {
         self.state.next_clip_id
+    }
+
+    /// Clip ids currently parked out of the render because their take was
+    /// removed, ascending.
+    pub fn parked_clip_ids(&self) -> Vec<ClipId> {
+        let mut ids: Vec<ClipId> = self.state.orphaned_take_clips.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// A group in the authoritative store, for asserting on its takes,
+    /// comp and active take.
+    pub fn take_group(&self, group_id: TakeGroupId) -> Option<&TakeGroup> {
+        self.state.take_groups.get(&group_id)
+    }
+
+    /// Run the real `AudioCommand::SetTakeComp` handler.
+    pub fn set_take_comp(&mut self, group_id: TakeGroupId, segments: Vec<CompSegment>) {
+        self.with_ctx(|ctx, state| takes::handle_set_take_comp(ctx, state, group_id, segments));
+    }
+
+    /// Run the real `AudioCommand::SetActiveTake` handler.
+    pub fn set_active_take(&mut self, group_id: TakeGroupId, take_id: Option<TakeId>) {
+        self.with_ctx(|ctx, state| takes::handle_set_active_take(ctx, state, group_id, take_id));
+    }
+
+    /// Run the real `AudioCommand::RemoveTake` handler.
+    pub fn remove_take(&mut self, group_id: TakeGroupId, take_id: TakeId) {
+        self.with_ctx(|ctx, state| takes::handle_remove_take(ctx, state, group_id, take_id));
+    }
+
+    /// Run the real `AudioCommand::RemoveTakeGroup` handler.
+    pub fn remove_take_group(&mut self, group_id: TakeGroupId) {
+        self.with_ctx(|ctx, state| takes::handle_remove_take_group(ctx, state, group_id));
+    }
+
+    /// Run the real `AudioCommand::RestoreTakeGroups` handler — the whole
+    /// undo/redo path for a take-lane edit.
+    pub fn restore_take_groups(&mut self, groups: Vec<TakeGroup>) {
+        self.with_ctx(|ctx, state| takes::handle_restore_take_groups(ctx, state, groups));
+    }
+
+    /// Every echo the handlers have emitted since the last drain.
+    pub fn drain_events(&mut self) -> Vec<AudioEvent> {
+        self.event_rx.try_iter().collect()
+    }
+
+    /// Render one block of `track_id` through the **real** `render_block`,
+    /// from the engine's own clip list and published comp table, and return
+    /// the left channel.
+    ///
+    /// This is the only way to ask what a take-lane command actually did to
+    /// what the user hears: the clip phase skips governed clips, the comp
+    /// phase renders the resolved spans, and a take that has fallen out of
+    /// both shows up here as silence — or, if a removal forgot to park its
+    /// recording, as a raw pass playing at full gain.
+    pub fn render_track(&self, track_id: TrackId, playhead: u64, frames: usize) -> Vec<f32> {
+        let table = self.published_comp_table();
+        let clips = self.clips.read();
+        let out = crate::mixer::render_take_comp_borrowed_for_test(
+            vec![Track::new(track_id, "harness".into())],
+            &clips,
+            &table,
+            playhead,
+            frames,
+            48_000,
+            false,
+        );
+        out.chunks(2).map(|frame| frame[0]).collect()
     }
 }

@@ -65,6 +65,26 @@ pub(super) fn active_take_changed(
     r.take_groups.active_take_changed(group_id, take_id);
 }
 
+/// `TakeRemoved` — drop the take the engine has removed. The re-covered
+/// comp and a cleared solo arrive as ordinary `TakeCompChanged` /
+/// `ActiveTakeChanged` echoes right behind this one, so there is nothing
+/// else to do here.
+///
+/// Idempotent, like the other echoes: `update::takes` removes the take from
+/// the mirror optimistically when it sends the command, so this normally
+/// confirms a removal that already happened.
+pub(super) fn take_removed(r: &mut Resonance, group_id: TakeGroupId, take_id: TakeId) {
+    r.take_groups.remove_take(group_id, take_id);
+}
+
+/// `TakeGroupRemoved` — drop the whole lane. Sent for a `RemoveTakeGroup`
+/// and for the `RemoveTake` that took a group's last take with it, which is
+/// the case the app cannot infer: it asked to remove one take and the lane
+/// went with it (ba todo #1397).
+pub(super) fn take_group_removed(r: &mut Resonance, group_id: TakeGroupId) {
+    r.take_groups.remove_group(group_id);
+}
+
 /// Wall-clock capture time in unix milliseconds, or `0` if the system
 /// clock is before the epoch. The `TakeCaptured` event omits a timestamp,
 /// so the app stamps each take as it mirrors it.

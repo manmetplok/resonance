@@ -65,8 +65,8 @@ pub use take_comp::{
     build_comp_table, mix_track_comp, CompRenderTable, CompSpan, TrackComp, COMP_XFADE_FRAMES,
 };
 pub use test_support::{
-    render_aux_for_test, render_aux_with_comp_for_test, render_take_comp_for_test,
-    MixAudioHarness, RenderBenchHarness,
+    render_aux_for_test, render_aux_with_comp_for_test, render_take_comp_borrowed_for_test,
+    render_take_comp_for_test, MixAudioHarness, RenderBenchHarness,
 };
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;

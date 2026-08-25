@@ -368,6 +368,74 @@ pub enum AudioCommand {
         group_id: TakeGroupId,
         take_id: Option<TakeId>,
     },
+    /// Remove take `take_id` from take group `group_id`: drop the take,
+    /// re-cover the slot from the takes that remain, park the take's
+    /// recording so it stops sounding, and republish the comp table.
+    ///
+    /// Confirmed by `AudioEvent::TakeRemoved`, followed by
+    /// `TakeCompChanged` / `ActiveTakeChanged` when the removal moved
+    /// either. An unknown group, or a take the group does not hold, is
+    /// ignored (the handlers' standing missing-lookup convention).
+    ///
+    /// **The comp re-covers; it is never left dangling.** The removal
+    /// itself is `TakeGroup::remove_take` in `resonance-common` — one
+    /// definition shared with anything mirroring the group, exactly as
+    /// `effective_cover` is one definition of what a group sounds like
+    /// (ba todo #1395). Segments naming the removed take are dropped and
+    /// the holes handed to the take the cover now falls back to, so the
+    /// only stretch of the slot that changes is the one the removed take
+    /// used to play.
+    ///
+    /// **Removing the last take removes the group** (ba todo #1397). Three
+    /// reasons, and the first is a trap: with no takes left the comp is
+    /// empty, and an empty comp is exactly the state in which the cover
+    /// falls back to *the most recent pass* — the take just deleted. A
+    /// group with no takes resolves to no spans today, but leaving the
+    /// hazard guarded by one early return in `effective_cover` is how it
+    /// comes back. Second, a group *is* its takes (doc #165): an empty
+    /// lane is chrome the user cannot record into or comp. Third, an
+    /// empty group keeps its slot — which never moves once bound (ba todo
+    /// #1392) — so the next cycle-record run over that region would join
+    /// the lane the user had just deleted instead of starting a new one.
+    /// The echo in that case is `TakeGroupRemoved`, not `TakeRemoved`.
+    ///
+    /// **The WAV survives — by decision, not by accident.** The handler
+    /// holds `HandlerState`, so `project_dir` is right there and unlinking
+    /// `audio/clip_N.wav` would be two lines. It must not, because
+    /// deleting a user's recording is irreversible and the removal is not:
+    /// an undo restores the take through
+    /// [`AudioCommand::RestoreTakeGroups`] carrying the same `clip_ref`,
+    /// so a deleted file would make undo silently lossy. The clip is
+    /// *parked* instead — moved out of the shared clip list, which is what
+    /// stops it playing, and kept in memory so the undo is instant. The id
+    /// cannot be re-issued while the file lives, because `next_clip_id`
+    /// only ever rises within a session and is reserved past every
+    /// restored `clip_ref` (ba todo #1393). Reclaiming orphaned audio is a
+    /// project-level operation the user asks for, not something a command
+    /// on the audio path does behind their back.
+    RemoveTake {
+        group_id: TakeGroupId,
+        take_id: TakeId,
+    },
+    /// Remove take group `group_id` outright: the lane, every take in it,
+    /// and its comp. Confirmed by `AudioEvent::TakeGroupRemoved`; an
+    /// unknown group is ignored.
+    ///
+    /// Every audio take in the group is parked exactly as
+    /// [`AudioCommand::RemoveTake`] parks one, so no recording is deleted
+    /// and an undo restores the whole lane.
+    ///
+    /// Parking is what makes the removal *inaudible*, and it is the whole
+    /// reason this is a command rather than a comp edit. A take's
+    /// recording is an ordinary [`AudioClip`](crate::types::AudioClip) in
+    /// the shared clip list; it stays silent only because the comp table
+    /// marks it *governed* and the clip phase skips it. Drop the group
+    /// without parking and every take in it stops being governed — so
+    /// deleting a lane would play all of its passes at once, on top of
+    /// each other, at full gain.
+    RemoveTakeGroup {
+        group_id: TakeGroupId,
+    },
     /// Replace the engine's take-group store **wholesale** with `groups`,
     /// republish the comp playback table, and raise both the take-group id
     /// allocator and the clip id allocator above every id the restored
@@ -389,6 +457,17 @@ pub enum AudioCommand {
     /// scratch and send the result, so replacing keeps engine and app
     /// mirror identical by construction. Merging instead would resurrect
     /// takes an undo had just deleted.
+    ///
+    /// **Wholesale covers the recordings too** (ba todo #1397). The store
+    /// is not the only thing a removal touched: [`AudioCommand::RemoveTake`]
+    /// parks the take's clip out of the shared clip list, so restoring
+    /// must un-park every recording the incoming groups claim — otherwise
+    /// undoing a deletion brings the take back on screen and leaves it
+    /// silent. It must also park every take clip the incoming groups
+    /// *stop* claiming, which is what a redo of a deletion looks like on
+    /// this path: without it the clip would be left registered and
+    /// un-governed, and the redone deletion would play the take at full
+    /// gain on the ordinary clip path.
     ///
     /// **Restored groups are reused, not shadowed.** Since todo #1392 a
     /// cycle-record run resolves its group by looking up the store for a

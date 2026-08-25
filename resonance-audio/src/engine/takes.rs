@@ -1,5 +1,5 @@
 //! Take groups on the engine control thread: the authoritative
-//! `TakeGroup` store, the two comp-editing command handlers, and the
+//! `TakeGroup` store, the comp-editing / removal command handlers, and the
 //! flatten-and-publish step that makes a comp audible (epic #15, doc #165,
 //! todo #409).
 //!
@@ -7,10 +7,20 @@
 //! see a loop pass finish: `transport::finalize_loop_record_pass` calls
 //! [`capture_take_event`] as each pass rolls, so the group exists before
 //! the app has heard about it. The app then edits the comp through
-//! `AudioCommand::SetTakeComp` / `SetActiveTake` and is told what stuck via
-//! the `TakeCompChanged` / `ActiveTakeChanged` echoes — the one-way
-//! command/event boundary of doc #105, with no read-getter on
-//! `AudioEngine`.
+//! `AudioCommand::SetTakeComp` / `SetActiveTake`, removes takes and lanes
+//! through `RemoveTake` / `RemoveTakeGroup`, and is told what stuck via the
+//! `TakeCompChanged` / `ActiveTakeChanged` / `TakeRemoved` /
+//! `TakeGroupRemoved` echoes — the one-way command/event boundary of doc
+//! #105, with no read-getter on `AudioEngine`.
+//!
+//! # Two stores, not one (ba todo #1397)
+//!
+//! A take group is a model object, but a take's *recording* is an ordinary
+//! [`AudioClip`](crate::types::AudioClip) in the shared clip list, silent
+//! only because the published table marks it governed. So every handler
+//! that changes which takes exist has to move the matching clips too:
+//! [`park_take_clip`] on the way out, [`unpark_take_clip`] on the way back.
+//! Changing the store alone would make a deleted take *louder* than it was.
 //!
 //! Everything here runs on the control thread and may allocate. The audio
 //! thread only ever reads the flattened [`CompRenderTable`] that
@@ -434,10 +444,86 @@ pub fn restore_take_groups_in_place(
     }
 }
 
+/// Every audio take clip the groups in `store` currently claim.
+///
+/// The engine cannot tell a take's recording from a timeline clip by
+/// looking at the shared clip list — both are plain
+/// [`AudioClip`](crate::types::AudioClip)s — so this is how
+/// [`handle_restore_take_groups`] knows which clips a restore is
+/// responsible for parking or un-parking.
+fn claimed_take_clips(store: &std::collections::HashMap<TakeGroupId, TakeGroup>) -> Vec<ClipId> {
+    store
+        .values()
+        .flat_map(|group| &group.takes)
+        .filter_map(|take| match take.content {
+            TakeContent::Audio { clip_ref } => Some(clip_ref),
+            TakeContent::Midi { .. } => None,
+        })
+        .collect()
+}
+
+/// Move a removed take's recording out of the shared clip list and into
+/// the engine-thread-local park, so it stops sounding without being
+/// destroyed (ba todo #1397).
+///
+/// **This is what makes a removal silent.** A take's recording is an
+/// ordinary [`AudioClip`](crate::types::AudioClip) in `ctx.clips` — the
+/// pass's own `roll_audio_pass` pushes it there as it rolls — and it stays
+/// inaudible only because
+/// [`publish_take_comp`]'s table marks it *governed*, which makes the clip
+/// phase skip it. Drop the take from its group and the clip stops being
+/// governed, so a "deleted" take would come back **louder**: playing raw on
+/// the ordinary clip path, on top of the comp. Parking removes it from the
+/// render's input entirely, which no skip list can be forgotten out of.
+///
+/// It is a park rather than a delete because a removal is undoable:
+/// holding the mapped clip means the `RestoreTakeGroups` an undo sends can
+/// put the take straight back, audible, with no file to re-open. The WAV
+/// is deliberately left on disk as well — `state.project_dir` makes
+/// deleting it perfectly possible here, and
+/// [`AudioCommand::RemoveTake`](crate::types::AudioCommand::RemoveTake)
+/// says why it must not happen.
+///
+/// A no-op for a MIDI take (its notes are inline, it names no clip) and for
+/// a clip some surviving group still claims — the store is consulted rather
+/// than assumed, so a clip two groups somehow shared cannot be parked out
+/// from under the one still using it.
+fn park_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) {
+    if claimed_take_clips(&state.take_groups).contains(&clip_ref) {
+        return;
+    }
+    let mut clips = ctx.clips.write();
+    let Some(pos) = clips.iter().position(|clip| clip.id == clip_ref) else {
+        return;
+    };
+    let clip = clips.remove(pos);
+    drop(clips);
+    state.orphaned_take_clips.insert(clip_ref, clip);
+}
+
+/// Put a parked recording back into the shared clip list, so a take a
+/// restore brings back is audible again and not merely visible. A no-op
+/// when the clip was never parked.
+fn unpark_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) {
+    if let Some(clip) = state.orphaned_take_clips.remove(&clip_ref) {
+        ctx.clips.write().push(clip);
+    }
+}
+
 /// Rehydrate the take-group store from a loaded project (or an undo
-/// snapshot), reserve the ids the restored takes hold, and republish the
-/// comp table, so a restored comp plays and bounces without waiting for a
-/// transport change (ba todo #1394, #1393).
+/// snapshot), reserve the ids the restored takes hold, reconcile the parked
+/// recordings against what the incoming groups claim, and republish the
+/// comp table — so a restored comp plays and bounces without waiting for a
+/// transport change (ba todo #1394, #1393, #1397).
+///
+/// The reconciliation runs both ways, because this one command is the whole
+/// undo *and* redo path for a take removal (ba todo #1397):
+///
+/// - every take clip the incoming groups claim is **un-parked**, or undoing
+///   a deletion would restore the take to the lane and leave it silent;
+/// - every take clip the outgoing groups claimed and the incoming ones do
+///   not is **parked**, or redoing a deletion would leave the recording
+///   registered and un-governed, and play it raw on the ordinary clip path.
 ///
 /// Silent by design: the app is the sender *and* the mirror here, so there
 /// is nothing to tell it that it did not just say. That is also why the
@@ -448,13 +534,111 @@ pub(crate) fn handle_restore_take_groups(
     state: &mut HandlerState,
     groups: Vec<TakeGroup>,
 ) {
+    let claimed_before = claimed_take_clips(&state.take_groups);
+
     restore_take_groups_in_place(
         &mut state.take_groups,
         &mut state.next_take_group_id,
         &mut state.next_clip_id,
         groups,
     );
+
+    for clip_ref in claimed_take_clips(&state.take_groups) {
+        unpark_take_clip(ctx, state, clip_ref);
+    }
+    // `park_take_clip` consults the *restored* store, so a clip the incoming
+    // groups still claim is skipped and only the genuinely dropped ones park.
+    for clip_ref in claimed_before {
+        park_take_clip(ctx, state, clip_ref);
+    }
+
     publish_take_comp(ctx, state);
+}
+
+/// Remove one take from a group, re-cover the slot from the takes that
+/// remain, park the removed take's recording, and echo what changed
+/// (ba todo #1397).
+///
+/// Removing a group's **last** take removes the group instead — the
+/// reasoning is on
+/// [`AudioCommand::RemoveTake`](crate::types::AudioCommand::RemoveTake),
+/// and the short version is that an empty comp is exactly the state in
+/// which the cover falls back to the most recent pass, which is the take
+/// just deleted.
+///
+/// An unknown group, or a take the group does not hold, is ignored: the
+/// handlers' standing missing-lookup convention, and an already-removed
+/// take makes the command idempotent rather than destructive.
+pub(crate) fn handle_remove_take(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    group_id: TakeGroupId,
+    take_id: TakeId,
+) {
+    let Some(group) = state.take_groups.get(&group_id) else {
+        return;
+    };
+    if group.take(take_id).is_none() {
+        return;
+    }
+    if group.takes.len() == 1 {
+        handle_remove_take_group(ctx, state, group_id);
+        return;
+    }
+
+    let group = state
+        .take_groups
+        .get_mut(&group_id)
+        .expect("group looked up above");
+    let comp_before = group.comp.segments.clone();
+    let solo_before = group.active_take;
+    // The one shared definition of a removal (`resonance-common`): the take,
+    // every segment naming it, and a solo that named it, all in one step.
+    let removed = group.remove_take(take_id).expect("take looked up above");
+    let segments = group.comp.segments.clone();
+    let comp_changed = segments != comp_before;
+    let solo = group.active_take;
+
+    if let TakeContent::Audio { clip_ref } = removed.content {
+        park_take_clip(ctx, state, clip_ref);
+    }
+    publish_take_comp(ctx, state);
+
+    let _ = ctx
+        .event_tx
+        .send(AudioEvent::TakeRemoved { group_id, take_id });
+    if comp_changed {
+        let _ = ctx
+            .event_tx
+            .send(AudioEvent::TakeCompChanged { group_id, segments });
+    }
+    if solo != solo_before {
+        let _ = ctx.event_tx.send(AudioEvent::ActiveTakeChanged {
+            group_id,
+            take_id: solo,
+        });
+    }
+}
+
+/// Remove a whole take group: the lane, its takes and its comp. Every audio
+/// take is parked, so nothing it held can leak onto the ordinary clip path
+/// once the comp table stops governing it, and an undo can bring the lane
+/// back audible. An unknown group is ignored.
+pub(crate) fn handle_remove_take_group(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    group_id: TakeGroupId,
+) {
+    let Some(group) = state.take_groups.remove(&group_id) else {
+        return;
+    };
+    for take in &group.takes {
+        if let TakeContent::Audio { clip_ref } = take.content {
+            park_take_clip(ctx, state, clip_ref);
+        }
+    }
+    publish_take_comp(ctx, state);
+    let _ = ctx.event_tx.send(AudioEvent::TakeGroupRemoved { group_id });
 }
 
 /// Flatten the authoritative take groups into the audio-thread-visible

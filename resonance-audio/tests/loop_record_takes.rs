@@ -1389,6 +1389,62 @@ fn a_within_tolerance_join_strands_at_most_the_tolerance() {
     );
 }
 
+/// **The `slot` / `extent` pair, pinned by argument position.**
+///
+/// `store_take_in(store, group_id, track_id, slot, extent, &content)` takes
+/// two adjacent `TimelineRange`s that mean opposite things: `slot` binds a
+/// *newly created* lane, `extent` records what the *pass* captured. Every
+/// other case in this file hands them the same value — a run that filled
+/// the region it cycled over — so transposing them at the
+/// `capture_take_event` call site passed the whole suite. The two punch-in
+/// cases above miss it because they drive `push_take` directly and never
+/// reach `store_take_in`.
+///
+/// Transposed, a lane opened by a punched-in pass would bind to the
+/// punch-in *extent* while the take stored the full slot as its extent —
+/// the reload-side twin of the bug #1396 fixed, since both values persist:
+/// the lane would be narrower than the region it was recorded over, and
+/// `audible_extent` would claim material the pass never captured.
+///
+/// The assertions are on the **store**, deliberately. `TakeCaptured` builds
+/// its `slot` and `extent` fields from the caller's own locals, so the
+/// event looks perfectly correct under the transposition and only the
+/// stored group and take disagree.
+#[test]
+fn a_new_lane_binds_to_the_run_region_while_the_take_stores_its_own_extent() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    // Punched in a quarter of a second late and cut off an eighth early:
+    // strictly inside the run's region, and asymmetric so no swap can
+    // coincide.
+    let recorded = TimelineRange::from_bounds(SLOT.start + 12_000, SLOT.end() - 6_000);
+    assert_ne!(recorded, SLOT, "the fixture must be able to tell them apart");
+
+    let cap = record_pass_over(&mut store, &mut next, TRACK, SLOT, recorded, audio(100));
+
+    let group = &store[&cap.group_id];
+    assert_eq!(
+        group.slot, SLOT,
+        "a new lane binds to the region the run cycled over, never to what \
+         one pass happened to capture inside it"
+    );
+    let take = group.take(cap.take_id).expect("the stored take");
+    assert_eq!(
+        take.extent, recorded,
+        "the take stores what the pass recorded, never its lane's slot"
+    );
+
+    // The echo has to agree with the store, or the app mirrors a lane the
+    // engine does not have.
+    assert_eq!(cap.slot, group.slot);
+    assert_eq!(cap.extent, take.extent);
+
+    // And the pair still resolves the way #1396 specified: the audible
+    // stretch is the recording, not the lane.
+    assert_eq!(take.audible_extent(group.slot), recorded);
+}
+
 /// The other half of "a lane's region never moves", pinned on the writer
 /// itself. `store_take_in` is what used to do `group.slot = slot` on every
 /// take, and it is reachable independently of the resolver — so assert it
@@ -1815,4 +1871,133 @@ fn re_loading_a_take_clip_the_engine_already_holds_is_a_no_op() {
         101,
         "and the allocator still clears it"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Restoring a take clip vs. take removal's park (ba todo #1402 x #1397)
+// ---------------------------------------------------------------------------
+//
+// #1397 makes a removed take's recording *parked*: lifted out of the shared
+// clip list into `HandlerState::orphaned_take_clips`, so it stops sounding
+// without being destroyed (a removal is undoable and the WAV is untouched).
+// #1402 makes a restore *load* take clips from disk. The two meet on the
+// undo path, where a restore both re-claims a take and is followed by a load
+// for it — and the danger is that the take ends up in the clip list twice,
+// once un-parked and once freshly mapped, which would double its level
+// everywhere the comp reads it.
+//
+// This was argued from the ordering when the two were on separate branches;
+// now that both are in the tree it is measured.
+
+/// An in-RAM DC clip, standing in for the recording capture left in the
+/// clip list. Deliberately a different level from what
+/// [`write_take_clip_wav`] puts on disk, so a test can tell "the parked
+/// clip survived" from "the loader re-read the WAV".
+fn memory_clip(id: u64, value: f32) -> resonance_audio::types::AudioClip {
+    resonance_audio::types::AudioClip {
+        id,
+        track_id: 7,
+        start_sample: 0,
+        source: resonance_audio::types::ClipSource::Memory(vec![value; 48_000 * 2]),
+        name: format!("Take {id}"),
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: Default::default(),
+        fade_out_frames: 0,
+        fade_out_curve: Default::default(),
+        gain_db: 0.0,
+        vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: Default::default(),
+        warp_markers: Vec::new(),
+        tuning_render_cache: None,
+    }
+}
+
+/// A take group holding one audio take that names `clip_ref`.
+fn one_audio_take_group(clip_ref: u64) -> TakeGroup {
+    let slot = TimelineRange::new(0, 48_000);
+    let mut group = TakeGroup::new(1, 7, slot);
+    push_take(&mut group, slot, &TakeContent::Audio { clip_ref });
+    group
+}
+
+/// An undo that brings a removed take back un-parks its recording, and the
+/// take-clip load that follows the restore finds it already there and does
+/// nothing. One clip, not two, and it is the **parked** one — never
+/// re-read from disk.
+#[test]
+fn a_restored_take_clip_does_not_resurrect_the_parked_one() {
+    let dir = make_tempdir("unpark-vs-load");
+    let path = write_take_clip_wav(&dir, 100);
+    let group = one_audio_take_group(100);
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.seed_take_group(group.clone());
+    // The clip capture left behind, distinguishable from anything the
+    // loader would produce: the WAV on disk is DC 0.5, this is DC 1.0.
+    engine.push_clip(memory_clip(100, 1.0));
+    assert_eq!(engine.clip_ids(), vec![100], "precondition: the take is loaded");
+
+    // Remove the take — #1397 parks its recording out of the render.
+    engine.remove_take(1, 0);
+    assert_eq!(engine.clip_ids(), Vec::<u64>::new(), "the removal parks the clip");
+    assert_eq!(engine.parked_clip_ids(), vec![100]);
+
+    // Undo: the restore re-claims the take and un-parks its clip...
+    engine.restore_take_groups(vec![group]);
+    assert_eq!(engine.clip_ids(), vec![100], "the restore un-parks it");
+    assert!(engine.parked_clip_ids().is_empty(), "and the park is emptied");
+
+    // ...and then the load that always follows a restore arrives.
+    engine.replay_take_lane_command(&resonance_audio::types::AudioCommand::LoadTakeClipFromWav {
+        clip_id: 100,
+        track_id: 7,
+        start_sample: 0,
+        path,
+        name: "Take 100".into(),
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "the load must not add a second copy alongside the un-parked one"
+    );
+    // The surviving clip is the parked original (DC 1.0), not a fresh read
+    // of the WAV (DC 0.5) — the load really did nothing at all.
+    let out = engine.render_track(7, 0, 4_096);
+    let body = out[1_024];
+    assert!(
+        (body - 1.0).abs() < 1e-6,
+        "the un-parked recording must be what plays, got {body}"
+    );
+}
+
+/// A take the restore does **not** re-claim stays parked: no load is ever
+/// sent for it, because the app derives its load list from the same
+/// restored groups the engine derives its claim set from.
+#[test]
+fn a_take_left_removed_stays_parked_across_a_restore() {
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.seed_take_group(one_audio_take_group(100));
+    engine.push_clip(memory_clip(100, 1.0));
+    engine.remove_take(1, 0);
+    assert_eq!(engine.parked_clip_ids(), vec![100]);
+
+    // A restore carrying the group *without* that take — the redo of the
+    // removal. Nothing un-parks, and the app sends no load for a take it
+    // is not restoring.
+    let slot = TimelineRange::new(0, 48_000);
+    engine.restore_take_groups(vec![TakeGroup::new(1, 7, slot)]);
+
+    assert_eq!(
+        engine.clip_ids(),
+        Vec::<u64>::new(),
+        "a take that is still removed must not come back"
+    );
+    assert_eq!(engine.parked_clip_ids(), vec![100], "it stays parked");
 }
