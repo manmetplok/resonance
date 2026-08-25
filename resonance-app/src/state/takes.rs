@@ -88,11 +88,17 @@ impl TakeGroupState {
     /// Mirror a `TakeCaptured` event: append the finished loop pass as a
     /// take, creating the group on the first pass.
     ///
-    /// `group_id` is the engine's stable per-track-per-run key — it stands
-    /// in for the track + loop `slot` the run records over (doc #165), so a
-    /// second pass folds into the same group rather than starting a new
-    /// one. A take whose id already exists in the group replaces it,
-    /// keeping the mirror idempotent if an event is re-delivered.
+    /// `group_id` is the engine's stable key for a **track + loop slot**
+    /// (doc #165) — one lane per slot, for as many record runs as the user
+    /// presses over it (todo #1392), so a second pass *and* a second run
+    /// both fold into the same group rather than starting a new one. A
+    /// take whose id already exists in the group replaces it, keeping the
+    /// mirror idempotent if an event is re-delivered.
+    ///
+    /// A take's `pass_index` is likewise group-relative, not run-relative:
+    /// it is the take's ordinal within its lane, which is what makes the
+    /// lane sort and label correctly (`T1`, `T2`, …) across a stop and a
+    /// reload.
     ///
     /// The caller hands over a fully-formed [`Take`] — including the
     /// `extent` the engine reported and the wall-clock stamp the event

@@ -33,7 +33,7 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// them.
 ///
 /// **The engine is told, once, at the end** (ba todo #1394). Take groups
-/// are born in the engine — cycle recording calls `store_take` per pass —
+/// are born in the engine — cycle recording calls `capture_take_event` per pass —
 /// but a project load has no capture to be born from, so until
 /// `AudioCommand::RestoreTakeGroups` existed the engine held no groups
 /// after a reload: the lanes were drawn and the comp rendered **silence**,

@@ -73,6 +73,14 @@ fn two_takes_in_one_pass_are_both_retained() {
     // #292). The mirror keys on `take_id`, not `pass_index`, so both are
     // kept; while the id was derived app-side from `pass_index` the second
     // silently replaced the first.
+    //
+    // The two events below deliberately *share* a `pass_index`, which the
+    // engine no longer emits for this shape: since todo #1392 the ordinal
+    // is allocated from the group, so the audio and MIDI halves of one
+    // pass come through as 0 and 1. That is the point of feeding the
+    // collision by hand — the mirror must key on the id whatever ordinal
+    // policy the engine happens to run, and this is the only place that
+    // stays true if the policy changes again.
     let mut app = Resonance::new_for_test().0;
 
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
@@ -101,8 +109,8 @@ fn two_takes_in_one_pass_are_both_retained() {
         vec![0, 1],
         "the takes are addressable by their engine-assigned ids"
     );
-    // Both came from the same pass; `pass_index` alone cannot tell them
-    // apart, which is exactly why it is not the identity.
+    // The fabricated ordinals collide; `pass_index` alone cannot tell
+    // these two apart, which is exactly why it is not the identity.
     assert!(g.takes.iter().all(|t| t.pass_index == 0));
 }
 

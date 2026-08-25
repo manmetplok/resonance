@@ -369,12 +369,13 @@ pub enum AudioCommand {
         take_id: Option<TakeId>,
     },
     /// Replace the engine's take-group store **wholesale** with `groups`,
-    /// republish the comp playback table, and raise the take-group id
-    /// allocator above every restored id.
+    /// republish the comp playback table, and raise both the take-group id
+    /// allocator and the clip id allocator above every id the restored
+    /// groups already hold.
     ///
     /// This is how a saved project's take lanes get back into the engine
     /// (ba todo #1394). Take groups are born in the engine — cycle
-    /// recording calls `store_take` as each pass rolls — but a project
+    /// recording calls `capture_take_event` as each pass rolls — but a project
     /// load has no capture to be born from, and until this command
     /// existed nothing else wrote the store: the app restored its own
     /// mirror, drew the lanes, and the engine rendered **silence** for a
@@ -389,14 +390,26 @@ pub enum AudioCommand {
     /// mirror identical by construction. Merging instead would resurrect
     /// takes an undo had just deleted.
     ///
-    /// **The allocator.** `next_take_group_id` is engine-thread-local and
-    /// starts at 1 each session; `loop_record_group_for` is its only
-    /// consumer. Without the high-water bump the first cycle-record run
-    /// after a load re-issued group id 1, and since `push_take` allocates
-    /// take ids *from the group*, that run's first take took id 0 —
-    /// silently replacing a restored take in the app's
-    /// `(group_id, take_id)`-keyed mirror. Same treatment clip ids get
-    /// from [`AudioCommand::LoadClipFromWav`] and pool assets from
+    /// **Restored groups are reused, not shadowed.** Since todo #1392 a
+    /// cycle-record run resolves its group by looking up the store for a
+    /// lane on the same track over the same loop region, so a pass
+    /// recorded after a load joins the *restored* lane rather than
+    /// starting a second one beside it — one lane per slot, across a save
+    /// as well as across a stop.
+    ///
+    /// **The allocators — two of them.** `next_take_group_id` is
+    /// engine-thread-local and starts at 1 each session;
+    /// `loop_record_group_for` is its only consumer, and only for a run
+    /// that matches no existing lane. Without the high-water bump the
+    /// first cycle-record run after a load re-issued group id 1, and since
+    /// `push_take` allocates take ids *from the group*, that run's first
+    /// take took id 0 — silently replacing a restored take in the app's
+    /// `(group_id, take_id)`-keyed mirror. `next_clip_id` gets the same
+    /// treatment here (ba todo #1393): an audio take's `clip_ref` owns
+    /// `audio/clip_N.wav`, and take clips never travel the
+    /// [`AudioCommand::LoadClipFromWav`] path that would otherwise reserve
+    /// it, so without the bump the next recording or import **overwrote a
+    /// restored take's WAV**. Pool assets get it from
     /// [`AudioCommand::ReserveAssetIds`]. Take ids inside a restored
     /// group need no reservation of their own: `push_take` derives them
     /// from the group's own contents, so they are correct the moment the

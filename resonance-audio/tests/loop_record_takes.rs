@@ -232,10 +232,8 @@ fn a_punched_in_pass_reports_the_extent_it_recorded_not_its_slot() {
 
     // Filed onto the take, it is what every consumer resolves against.
     let mut group = TakeGroup::new(1, 7, slot);
-    let take_id = push_take(
+    let (take_id, _) = push_take(
         &mut group,
-        slot,
-        0,
         extent,
         &TakeContent::Audio {
             clip_ref: rolled[0].clip_id,
@@ -284,10 +282,8 @@ fn a_pass_cut_short_at_stop_reports_the_shorter_extent() {
 
     let extent = rolled[0].extent();
     let mut group = TakeGroup::new(1, 7, slot);
-    let take_id = push_take(
+    let (take_id, _) = push_take(
         &mut group,
-        slot,
-        0,
         extent,
         &TakeContent::Audio {
             clip_ref: rolled[0].clip_id,
@@ -326,14 +322,8 @@ fn two_captures_in_one_pass_get_distinct_take_ids() {
 
     // Pass 0 emits twice for the same track: the audio roll, then the MIDI
     // capture — the exact sequence `finalize_loop_record_pass` produces.
-    let audio_id = push_take(&mut group, slot, 0, slot, &TakeContent::Audio { clip_ref: 100 });
-    let midi_id = push_take(
-        &mut group,
-        slot,
-        0,
-        slot,
-        &TakeContent::Midi { notes: Vec::new() },
-    );
+    let (audio_id, _) = push_take(&mut group, slot, &TakeContent::Audio { clip_ref: 100 });
+    let (midi_id, _) = push_take(&mut group, slot, &TakeContent::Midi { notes: Vec::new() });
 
     assert_ne!(
         audio_id, midi_id,
@@ -357,24 +347,19 @@ fn take_ids_stay_unique_across_passes() {
 
     let mut ids = Vec::new();
     for pass in 0..3u32 {
-        ids.push(push_take(
-            &mut group,
-            slot,
-            pass,
-            slot,
-            &TakeContent::Audio {
-                clip_ref: 100 + u64::from(pass),
-            },
-        ));
-        // Pass 1 also yields a MIDI take, as a dual-armed track would.
-        if pass == 1 {
-            ids.push(push_take(
+        ids.push(
+            push_take(
                 &mut group,
                 slot,
-                pass,
-                slot,
-                &TakeContent::Midi { notes: Vec::new() },
-            ));
+                &TakeContent::Audio {
+                    clip_ref: 100 + u64::from(pass),
+                },
+            )
+            .0,
+        );
+        // Pass 1 also yields a MIDI take, as a dual-armed track would.
+        if pass == 1 {
+            ids.push(push_take(&mut group, slot, &TakeContent::Midi { notes: Vec::new() }).0);
         }
     }
 
@@ -446,7 +431,7 @@ fn vocal_tracks_still_capture_audio() {
 // Rehydrating the store from a saved project (todo #1394, doc #292)
 // ---------------------------------------------------------------------------
 //
-// `store_take` was the only writer of `HandlerState::take_groups`, so a
+// `store_take_in` was the only writer of `HandlerState::take_groups`, so a
 // project load left the engine holding no groups at all: the app drew the
 // lanes and the engine rendered silence. These pin the store + allocator
 // contract of the restore, which is the pure half of the new
@@ -454,8 +439,15 @@ fn vocal_tracks_still_capture_audio() {
 
 use std::collections::HashMap;
 
-use resonance_audio::__test_support::{push_take, restore_take_groups_in_place};
-use resonance_common::{Comp, CompSegment, TakeContent, TakeGroup, TakeGroupId, TimelineRange};
+use resonance_audio::__test_support::{
+    build_comp_table, capture_take_event, push_take, resolve_take_group,
+    restore_take_groups_in_place, slots_match, store_take_in, take_group_for_slot, TakeGroupStore,
+    SAME_SLOT_TOLERANCE_FRAMES,
+};
+use resonance_audio::types::AudioEvent;
+use resonance_common::{
+    Comp, CompSegment, TakeContent, TakeGroup, TakeGroupId, TakeId, TimelineRange,
+};
 
 /// A saved group with `takes` audio takes and a comp that names the last
 /// of them — the shape a comped cycle-record run persists.
@@ -465,8 +457,6 @@ fn saved_group(id: TakeGroupId, track_id: u64, takes: u64) -> TakeGroup {
     for i in 0..takes {
         push_take(
             &mut group,
-            slot,
-            i as u32,
             slot,
             &TakeContent::Audio {
                 clip_ref: id * 100 + i,
@@ -617,7 +607,6 @@ fn a_further_take_on_a_restored_group_gets_a_fresh_id() {
     let mut store = HashMap::new();
     let mut next = 1u64;
     let mut next_clip = 1u64;
-    let slot = TimelineRange::new(0, 48_000);
 
     restore_take_groups_in_place(
         &mut store,
@@ -630,9 +619,14 @@ fn a_further_take_on_a_restored_group_gets_a_fresh_id() {
     let saved_ids: Vec<_> = group.takes.iter().map(|t| t.id).collect();
     assert_eq!(saved_ids, vec![0, 1, 2], "precondition: three saved takes");
 
-    let fresh = push_take(group, slot, 3, slot, &TakeContent::Audio { clip_ref: 999 });
+    let slot = TimelineRange::new(0, 48_000);
+    let (fresh, ordinal) = push_take(group, slot, &TakeContent::Audio { clip_ref: 999 });
 
     assert_eq!(fresh, 3, "the id continues the restored group's own sequence");
+    assert_eq!(
+        ordinal, 3,
+        "so does the ordinal the lane stacks and labels by"
+    );
     assert_eq!(group.takes.len(), 4, "no restored take is overwritten");
     for id in saved_ids {
         assert!(group.take(id).is_some(), "restored take {id} must survive");
@@ -647,7 +641,7 @@ fn a_further_take_on_a_restored_group_gets_a_fresh_id() {
 // clip does, but nothing reserved the id: `ClearAll` resets `next_clip_id`
 // to 1 and only `LoadClipFromWav` (and its MIDI twin) pushes it back up —
 // paths a take clip never takes, since `roll_audio_pass` hands the take
-// straight to `store_take`. The restore is where the engine learns a loaded
+// straight to `store_take_in`. The restore is where the engine learns a loaded
 // project's `clip_ref`s, so it is where they get reserved.
 //
 // These assert the *allocator*, not that a recording succeeds: the bug is
@@ -662,8 +656,6 @@ fn saved_midi_group(id: TakeGroupId, track_id: u64, takes: u64) -> TakeGroup {
     for i in 0..takes {
         push_take(
             &mut group,
-            slot,
-            i as u32,
             slot,
             &TakeContent::Midi {
                 notes: vec![resonance_common::TakeNote {
@@ -831,6 +823,7 @@ fn a_mixed_project_reserves_off_its_audio_takes_only() {
     );
 }
 
+
 // ---------------------------------------------------------------------------
 // `ClearAll` resets the take-group state (todo #1394, covered by #1399)
 // ---------------------------------------------------------------------------
@@ -944,8 +937,6 @@ fn a_project_loaded_after_clear_all_keeps_its_reused_clip_ids() {
     push_take(
         &mut group_b,
         TimelineRange::new(0, 48_000),
-        0,
-        TimelineRange::new(0, 48_000),
         &TakeContent::Audio { clip_ref: 102 },
     );
     h.seed_take_group(group_b);
@@ -964,4 +955,701 @@ fn a_project_loaded_after_clear_all_keeps_its_reused_clip_ids() {
         vec![102],
         "clip 102 must play as project B's take, not project A's"
     );
+}
+
+// ---------------------------------------------------------------------------
+// One lane per slot: reusing the take group across record runs
+// (todo #1392, doc #292)
+// ---------------------------------------------------------------------------
+//
+// The ruling: takes accumulate into a single `TakeGroup` for a given track
+// + loop region however many times record is pressed. Three passes, stop,
+// two more over the same region is one lane of five takes — Logic /
+// Pro Tools / Reaper take-folder behaviour — not two lanes.
+//
+// These drive `capture_take_event`, which is the *entire* engine-side
+// capture glue: `finalize_loop_record_pass` calls it once per rolled audio
+// take and once per captured MIDI take and does nothing with the result
+// but send it. So asserting on the `AudioEvent` it returns is asserting on
+// what the transport actually emits — the group id, the take id, the slot
+// and the ordinal all have to come from the *group* rather than the run,
+// and there is no second copy of that assembly to drift out of step.
+//
+// What a *stop* does between two runs is tear down the
+// `LoopRecordSession`. These reproduce that by simply starting the next
+// run: the session carried the pass counter and the group cache, and
+// neither is consulted here any more.
+
+const TRACK: u64 = 7;
+const OTHER_TRACK: u64 = 8;
+/// The loop region both runs cycle over: one second starting at 2 s.
+const SLOT: TimelineRange = TimelineRange {
+    start: 96_000,
+    length: 48_000,
+};
+
+/// What a captured take reports back, unpacked from the `TakeCaptured`
+/// event `capture_take_event` builds. Panics on any other event, so a
+/// capture that stopped announcing itself fails loudly.
+#[derive(Debug, Clone, PartialEq)]
+struct Captured {
+    group_id: TakeGroupId,
+    take_id: TakeId,
+    track_id: u64,
+    slot: TimelineRange,
+    pass_index: u32,
+    extent: TimelineRange,
+    content: TakeContent,
+}
+
+/// Replay one captured pass through the real transport glue, with an
+/// explicit `extent` — what the pass really recorded (todo #1396), which
+/// is a property of the run and not of the lane it lands in.
+fn record_pass_over(
+    store: &mut TakeGroupStore,
+    next_group_id: &mut TakeGroupId,
+    track_id: u64,
+    run_slot: TimelineRange,
+    extent: TimelineRange,
+    content: TakeContent,
+) -> Captured {
+    match capture_take_event(store, next_group_id, track_id, run_slot, extent, content) {
+        AudioEvent::TakeCaptured {
+            group_id,
+            take_id,
+            track_id,
+            slot,
+            pass_index,
+            extent,
+            content,
+        } => Captured {
+            group_id,
+            take_id,
+            track_id,
+            slot,
+            pass_index,
+            extent,
+            content,
+        },
+        other => panic!("a capture must announce itself as TakeCaptured, got {other:?}"),
+    }
+}
+
+/// Replay one captured pass that filled the region it cycled over.
+fn record_pass(
+    store: &mut TakeGroupStore,
+    next_group_id: &mut TakeGroupId,
+    track_id: u64,
+    run_slot: TimelineRange,
+    content: TakeContent,
+) -> Captured {
+    record_pass_over(store, next_group_id, track_id, run_slot, run_slot, content)
+}
+
+/// An audio take's content, tagged by clip id so a later assertion can say
+/// which pass of which run it came from.
+fn audio(clip_ref: u64) -> TakeContent {
+    TakeContent::Audio { clip_ref }
+}
+
+/// Record `passes` passes over `run_slot` as one record run.
+/// `clip_base` tags the run's clips.
+fn record_run(
+    store: &mut TakeGroupStore,
+    next_group_id: &mut TakeGroupId,
+    track_id: u64,
+    run_slot: TimelineRange,
+    passes: u32,
+    clip_base: u64,
+) -> Vec<Captured> {
+    (0..passes)
+        .map(|pass| {
+            record_pass(
+                store,
+                next_group_id,
+                track_id,
+                run_slot,
+                audio(clip_base + u64::from(pass)),
+            )
+        })
+        .collect()
+}
+
+/// The acceptance case. Three passes, stop, two more over the same loop
+/// region on the same track: **one** group holding five takes with five
+/// distinct ids, and no take lost.
+///
+/// The ordinals matter as much as the ids. The *run's* pass counter
+/// restarts at 0 at every record press, and the app both sorts a lane by
+/// `(pass_index, id)` and labels each take `T{pass_index + 1}` — so
+/// emitting the run's counter would stack this lane `0,3,1,4,2` and label
+/// it `T1, T1, T2, T2, T3`. The ordinal is allocated from the group
+/// instead, so the lane reads `T1..T5` in capture order.
+#[test]
+fn two_runs_over_one_region_make_one_lane_of_five_takes() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    let run1 = record_run(&mut store, &mut next, TRACK, SLOT, 3, 100);
+    // -- transport stops here; the loop-record session is gone --
+    let run2 = record_run(&mut store, &mut next, TRACK, SLOT, 2, 200);
+    let all: Vec<_> = run1.iter().chain(&run2).collect();
+
+    assert_eq!(
+        store.len(),
+        1,
+        "the second run must join the lane, not open a second one"
+    );
+    let group_ids: Vec<_> = all.iter().map(|c| c.group_id).collect();
+    assert!(
+        group_ids.windows(2).all(|w| w[0] == w[1]),
+        "every take of both runs belongs to one group: {group_ids:?}"
+    );
+    assert_eq!(next, 2, "only one group id may be consumed by two runs");
+
+    let group = store.values().next().expect("the one lane");
+    assert_eq!(group.takes.len(), 5, "no take may be lost by the reuse");
+
+    assert_eq!(
+        all.iter().map(|c| c.take_id).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4],
+        "five distinct ids, the second run continuing the first's sequence"
+    );
+    assert_eq!(
+        all.iter().map(|c| c.pass_index).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4],
+        "the lane must stack and label T1..T5 in capture order, not restart at the second run"
+    );
+    assert_eq!(
+        group
+            .takes
+            .iter()
+            .map(|t| (t.id, t.pass_index))
+            .collect::<Vec<_>>(),
+        vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)],
+        "the stored takes must agree with what was announced"
+    );
+    assert_eq!(
+        group
+            .takes
+            .iter()
+            .map(|t| match t.content {
+                TakeContent::Audio { clip_ref } => clip_ref,
+                _ => unreachable!("audio takes only"),
+            })
+            .collect::<Vec<_>>(),
+        vec![100, 101, 102, 200, 201],
+        "both runs' recordings are present, in capture order"
+    );
+}
+
+/// A run over a *materially* different region gets its own lane — and this
+/// is the case the matching rule exists to get right, not merely a
+/// symmetry check.
+///
+/// A rule loose enough to accept 4 bars against 7 would fold this take
+/// into the 4-bar lane, which never grows: `build_comp_table` resolves
+/// spans against `group.slot`, so the last three bars would be covered by
+/// nothing, and the clip is governed, so it could not play on the ordinary
+/// clip path either. The take would be silently lost. Here it keeps its
+/// own lane and its own full-length span.
+#[test]
+fn a_longer_loop_gets_its_own_lane_and_plays_in_full() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+    let four_bars = TimelineRange::new(0, 4 * 96_000);
+    let seven_bars = TimelineRange::new(0, 7 * 96_000);
+
+    let first = record_run(&mut store, &mut next, TRACK, four_bars, 2, 100);
+    let longer = record_pass(&mut store, &mut next, TRACK, seven_bars, audio(200));
+
+    assert_ne!(
+        longer.group_id, first[0].group_id,
+        "a region half again as long is not the same slot"
+    );
+    assert_eq!(longer.slot, seven_bars, "the new lane spans what was recorded");
+    assert_eq!(longer.pass_index, 0, "a new lane starts its labels at T1");
+
+    let table = build_comp_table(&store);
+    let spans = &table.track_comp(TRACK).expect("track has a comp").spans;
+    assert!(
+        spans
+            .iter()
+            .any(|s| s.clip_id == 200 && s.range == seven_bars),
+        "the longer take must be audible over its whole region, not clipped \
+         to a shorter lane's slot: {spans:?}"
+    );
+}
+
+/// A run over a different region on the same track still gets its own
+/// lane, and the reuse rule must not collapse the user's sections.
+#[test]
+fn a_run_over_a_different_region_gets_its_own_lane() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    let first = record_run(&mut store, &mut next, TRACK, SLOT, 2, 100);
+    let elsewhere = TimelineRange::new(SLOT.end() + 48_000, SLOT.length);
+    let second = record_run(&mut store, &mut next, TRACK, elsewhere, 1, 200);
+
+    assert_eq!(store.len(), 2, "two regions, two lanes");
+    assert_ne!(
+        first[0].group_id, second[0].group_id,
+        "the lanes must not share a group"
+    );
+    assert_eq!(
+        second[0].slot, elsewhere,
+        "the new lane is bound to the region it was recorded over"
+    );
+}
+
+/// Same region, different track: still its own lane. Groups are per
+/// (track, slot), and two armed tracks in one run each keep their own.
+#[test]
+fn a_run_on_another_track_over_the_same_region_gets_its_own_lane() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    let a = record_run(&mut store, &mut next, TRACK, SLOT, 1, 100);
+    let b = record_run(&mut store, &mut next, OTHER_TRACK, SLOT, 1, 200);
+
+    assert_eq!(store.len(), 2, "one lane per track");
+    assert_ne!(a[0].group_id, b[0].group_id);
+}
+
+/// The MIDI half of a pass resolves to the group the audio half just
+/// created. `finalize_loop_record_pass` runs an audio loop and a MIDI loop
+/// and both call the glue for the same track; with the per-run cache gone,
+/// the store lookup is what keeps them together — and the two takes still
+/// get distinct ids and distinct ordinals.
+#[test]
+fn the_midi_half_of_a_pass_joins_the_group_the_audio_half_created() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    let a = record_pass(&mut store, &mut next, TRACK, SLOT, audio(1));
+    let m = record_pass(
+        &mut store,
+        &mut next,
+        TRACK,
+        SLOT,
+        TakeContent::Midi { notes: Vec::new() },
+    );
+
+    assert_eq!(a.group_id, m.group_id, "one pass, one group");
+    assert_ne!(a.take_id, m.take_id, "two captures, two ids");
+    assert_ne!(a.pass_index, m.pass_index, "two captures, two lane rows");
+    assert_eq!(store.len(), 1);
+    assert_eq!(next, 2, "the MIDI half must not burn a second group id");
+}
+
+/// A comp drawn after the first run still resolves once the second run has
+/// added takes to the same lane — and a segment promoted from a *second*
+/// run take renders alongside one from the first. This is the "the comp
+/// still resolves correctly across takes from both runs" half of the
+/// acceptance, asserted through the real `build_comp_table`.
+#[test]
+fn a_comp_resolves_across_takes_from_both_runs() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    let run1 = record_run(&mut store, &mut next, TRACK, SLOT, 3, 100);
+    let group_id = run1[0].group_id;
+    let mid = SLOT.start + SLOT.length / 2;
+
+    // Comp the first run: first half from take 0, second half from take 2.
+    store.get_mut(&group_id).unwrap().comp = Comp {
+        segments: vec![
+            CompSegment {
+                range: TimelineRange::from_bounds(SLOT.start, mid),
+                take_id: run1[0].take_id,
+            },
+            CompSegment {
+                range: TimelineRange::from_bounds(mid, SLOT.end()),
+                take_id: run1[2].take_id,
+            },
+        ],
+    };
+
+    let run2 = record_run(&mut store, &mut next, TRACK, SLOT, 2, 200);
+
+    // The comp survives the second run untouched.
+    let group = &store[&group_id];
+    assert!(
+        group.comp.is_full_cover(group.slot),
+        "the existing comp must still cover the lane's slot"
+    );
+    let table = build_comp_table(&store);
+    let spans = &table.track_comp(TRACK).expect("track has a comp").spans;
+    assert_eq!(
+        spans.iter().map(|s| s.clip_id).collect::<Vec<_>>(),
+        vec![100, 102],
+        "the comp still names the first run's takes"
+    );
+
+    // Promote the second half to a take from the *second* run.
+    store.get_mut(&group_id).unwrap().comp.segments[1].take_id = run2[0].take_id;
+    let table = build_comp_table(&store);
+    let spans = &table.track_comp(TRACK).expect("track has a comp").spans;
+    assert_eq!(
+        spans.iter().map(|s| s.clip_id).collect::<Vec<_>>(),
+        vec![100, 200],
+        "a promotion may cross runs once they share a lane"
+    );
+    for clip in [100u64, 101, 102, 200, 201] {
+        assert!(
+            table.is_governed(clip),
+            "every take clip in the lane must stay off the raw clip path ({clip})"
+        );
+    }
+}
+
+/// A loop region jittered by a frame joins the same lane **and leaves its
+/// slot where it was**. The lane's region is fixed by the run that created
+/// it; a rebind would drag it onto the new region and leave every
+/// already-drawn `CompSegment` describing positions outside their own slot.
+#[test]
+fn a_jittered_region_joins_the_lane_without_moving_it() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    let run1 = record_run(&mut store, &mut next, TRACK, SLOT, 2, 100);
+    let group_id = run1[0].group_id;
+    store.get_mut(&group_id).unwrap().comp = Comp {
+        segments: vec![CompSegment {
+            range: SLOT,
+            take_id: run1[1].take_id,
+        }],
+    };
+
+    // The loop end lands a single frame out from where it was.
+    let jittered = TimelineRange::from_bounds(SLOT.start, SLOT.end() + 1);
+    let joined = record_pass(&mut store, &mut next, TRACK, jittered, audio(200));
+
+    assert_eq!(joined.group_id, group_id, "a one-frame drift is the same slot");
+    assert_eq!(
+        joined.slot, SLOT,
+        "the take is announced against the lane's own region, not the jittered one"
+    );
+    let group = &store[&group_id];
+    assert_eq!(group.slot, SLOT, "the lane's region must not move");
+    assert!(
+        group.comp.is_full_cover(group.slot),
+        "the comp drawn against the old region must stay valid"
+    );
+    assert!(
+        group
+            .comp
+            .segments
+            .iter()
+            .all(|s| s.range.start >= group.slot.start && s.range.end() <= group.slot.end()),
+        "no comp segment may end up outside its own slot"
+    );
+}
+
+/// What a within-tolerance join actually costs, measured rather than
+/// asserted away. This is the load-bearing half of why the tolerance is
+/// safe to have at all (see `slots_match`): a joining run records its own
+/// `extent`, `Take::audible_extent` intersects that with the lane's slot,
+/// and the surplus — bounded by the tolerance, at each edge — is simply
+/// not covered. That is the same state a punch-in pass or a pass cut off
+/// at stop already produces, by far more frames, and #1396 made it visible
+/// rather than assumed.
+#[test]
+fn a_within_tolerance_join_strands_at_most_the_tolerance() {
+    const TOL: u64 = SAME_SLOT_TOLERANCE_FRAMES;
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+
+    record_run(&mut store, &mut next, TRACK, SLOT, 1, 100);
+    // The loop drifts out by the full tolerance at both ends, and the run
+    // records every frame of the region it cycled over.
+    let drifted = TimelineRange::from_bounds(SLOT.start - TOL, SLOT.end() + TOL);
+    let joined = record_pass_over(&mut store, &mut next, TRACK, drifted, drifted, audio(200));
+
+    let group = &store[&joined.group_id];
+    assert_eq!(group.slot, SLOT, "precondition: it joined and did not move the lane");
+    assert_eq!(
+        joined.extent, drifted,
+        "the take reports what it recorded, not what the lane covers"
+    );
+
+    let take = group.take(joined.take_id).expect("the joined take");
+    let audible = take.audible_extent(group.slot);
+    assert_eq!(
+        audible, SLOT,
+        "the surplus is clamped to the lane rather than mis-placed"
+    );
+    let stranded = (SLOT.start - drifted.start) + (drifted.end() - SLOT.end());
+    assert_eq!(stranded, 2 * TOL, "512 frames, ~10.7 ms across both edges");
+    assert!(
+        stranded <= 2 * SAME_SLOT_TOLERANCE_FRAMES,
+        "and it can never exceed one tolerance per edge — that bound is \
+         the whole reason an absolute tolerance was chosen over a ratio"
+    );
+}
+
+/// The other half of "a lane's region never moves", pinned on the writer
+/// itself. `store_take_in` is what used to do `group.slot = slot` on every
+/// take, and it is reachable independently of the resolver — so assert it
+/// leaves an existing group's slot alone even when handed a different one.
+#[test]
+fn storing_a_take_never_rebinds_an_existing_lane() {
+    let mut store = TakeGroupStore::new();
+    let elsewhere = TimelineRange::new(SLOT.start + 4 * 96_000, 12_000);
+
+    let (first, _) = store_take_in(&mut store, 1, TRACK, SLOT, SLOT, &audio(100));
+    let comp = Comp {
+        segments: vec![CompSegment {
+            range: SLOT,
+            take_id: first,
+        }],
+    };
+    store.get_mut(&1).unwrap().comp = comp.clone();
+
+    // A slot nothing would ever match, handed straight to the writer.
+    let (second, ordinal) =
+        store_take_in(&mut store, 1, TRACK, elsewhere, elsewhere, &audio(200));
+
+    let group = &store[&1];
+    assert_eq!(
+        group.slot, SLOT,
+        "the founding run's region is the lane's region, whatever a later caller passes"
+    );
+    assert_eq!(group.comp, comp, "and the comp drawn against it is untouched");
+    assert_eq!(group.takes.len(), 2, "the take is still filed");
+    assert_eq!((second, ordinal), (1, 1), "and still allocated from the group");
+}
+
+/// A run over a slot whose lane came back from disk joins **that** lane
+/// (todo #1394 restores it; #1392 reuses it), instead of starting a second
+/// one beside it.
+///
+/// This is the first time the restore and the reuse mechanisms fire
+/// together, so it gets a case of its own rather than being assumed from
+/// either side's. Three allocators meet here and all three have to hold at
+/// once:
+///
+/// - the **group** id — the run must consume none, having joined a lane
+///   that already exists (#1394 raised it past the restored ids so a
+///   *non*-matching run could not collide either);
+/// - the **take** id — `push_take` allocates from the group, so the new
+///   take continues the restored sequence instead of replacing take 0
+///   (#409);
+/// - the **clip** id — `restore_take_groups_in_place` reserved past every
+///   restored `clip_ref`, so the WAV this pass writes cannot overwrite a
+///   restored take's (#1393).
+///
+/// The take's lane ordinal continues the restored run too, and the comp
+/// the project saved must still be what plays afterwards.
+#[test]
+fn a_run_over_a_restored_lane_joins_it_rather_than_forking() {
+    let mut store = TakeGroupStore::new();
+    let mut next = 1u64;
+    let mut next_clip = 1u64;
+    let saved_slot = TimelineRange::new(0, 48_000);
+
+    // `saved_group(1, ..)` holds three audio takes on clips 100..102.
+    restore_take_groups_in_place(
+        &mut store,
+        &mut next,
+        &mut next_clip,
+        vec![saved_group(1, 7, 3)],
+    );
+    assert_eq!(next, 2, "precondition: the group allocator cleared the saved id");
+    assert_eq!(next_clip, 103, "precondition: the clip allocator cleared 100..102");
+
+    // Record one more pass over the same region, taking its clip id from
+    // the reserved allocator exactly as `roll_audio_pass` does.
+    let recorded_clip = next_clip;
+    let joined = record_pass(&mut store, &mut next, 7, saved_slot, audio(recorded_clip));
+
+    assert_eq!(joined.group_id, 1, "the pass must join the restored lane");
+    assert_eq!(store.len(), 1, "no second lane over the same slot");
+    assert_eq!(next, 2, "joining a restored lane consumes no group id");
+    assert_eq!(joined.slot, saved_slot);
+
+    let group = &store[&1];
+    assert_eq!(
+        joined.take_id, 3,
+        "the id continues the restored group's sequence"
+    );
+    assert_eq!(
+        joined.pass_index, 3,
+        "and so does the lane row — a reloaded lane reads T1..T4, not T1..T3, T1"
+    );
+    assert_eq!(group.takes.len(), 4, "no restored take is overwritten");
+    for restored in 0..3u64 {
+        assert!(
+            group.take(restored).is_some(),
+            "restored take {restored} must survive the new pass"
+        );
+    }
+    assert_eq!(
+        group
+            .takes
+            .iter()
+            .map(|t| match t.content {
+                TakeContent::Audio { clip_ref } => clip_ref,
+                _ => unreachable!("audio takes only"),
+            })
+            .collect::<Vec<_>>(),
+        vec![100, 101, 102, 103],
+        "the joined take's WAV must not land on a restored take's clip id"
+    );
+
+    // The comp `saved_group` persisted names take 2 (clip 102) and must
+    // still be what plays.
+    let table = build_comp_table(&store);
+    let spans = &table.track_comp(7).expect("track has a comp").spans;
+    assert_eq!(
+        spans.iter().map(|s| s.clip_id).collect::<Vec<_>>(),
+        vec![102],
+        "the restored comp must survive a further record run"
+    );
+    assert!(
+        table.is_governed(recorded_clip),
+        "the newly recorded take joins the lane the comp governs"
+    );
+}
+
+/// The "same slot" predicate itself, case by case. Exact `TimelineRange`
+/// equality would fork a lane on a frame of jitter; anything appreciably
+/// looser accepts a materially different region, and — since the lane
+/// keeps the *first* region — silently drops whatever the new take
+/// recorded outside it. So: both endpoints within one crossfade window.
+#[test]
+fn same_slot_means_both_endpoints_within_one_crossfade() {
+    const TOL: u64 = SAME_SLOT_TOLERANCE_FRAMES;
+    let base = TimelineRange::new(96_000, 48_000);
+
+    let cases: &[(TimelineRange, bool, &str)] = &[
+        (base, true, "identical"),
+        (
+            TimelineRange::new(96_000, 48_001),
+            true,
+            "loop end out by one frame",
+        ),
+        (
+            TimelineRange::new(96_000 - 1, 48_000),
+            true,
+            "loop start back by one frame",
+        ),
+        (
+            TimelineRange::new(96_000 + TOL, 48_000),
+            true,
+            "both endpoints drifted by exactly the tolerance",
+        ),
+        (
+            TimelineRange::new(96_000, 48_000 + TOL),
+            true,
+            "loop end out by exactly the tolerance",
+        ),
+        (
+            TimelineRange::new(96_000, 48_000 + TOL + 1),
+            false,
+            "loop end out by one frame past the tolerance",
+        ),
+        (
+            TimelineRange::new(96_000 - TOL - 1, 48_000 + TOL + 1),
+            false,
+            "loop start back past the tolerance",
+        ),
+        (
+            TimelineRange::new(96_000, 48_000 * 2),
+            false,
+            "loop length doubled",
+        ),
+        (
+            TimelineRange::new(96_000, 24_000),
+            false,
+            "a short loop inside the long one",
+        ),
+        (
+            TimelineRange::new(144_000, 48_000),
+            false,
+            "abutting, sharing no frame",
+        ),
+        (
+            TimelineRange::new(96_000 + 6_000, 48_000),
+            false,
+            "moved by a 16th note at 120 bpm",
+        ),
+    ];
+
+    for (other, expected, why) in cases {
+        assert_eq!(
+            slots_match(base, *other),
+            *expected,
+            "{why}: {other:?} vs {base:?}"
+        );
+        assert_eq!(
+            slots_match(*other, base),
+            *expected,
+            "{why}: the rule must be symmetric"
+        );
+    }
+
+    // Degenerate ranges match only themselves: letting a zero-length
+    // region absorb a run near it would lose the whole take, not an edge.
+    let empty = TimelineRange::new(96_000, 0);
+    assert!(slots_match(empty, empty));
+    assert!(!slots_match(empty, base));
+    assert!(!slots_match(empty, TimelineRange::new(96_001, 0)));
+}
+
+/// When more than one lane matches — which recording cannot produce, but a
+/// saved project can hold — the answer is the same every time: the closest
+/// lane wins, and the lowest id breaks a tie. The store is a `HashMap`, so
+/// iteration order must not be able to decide it.
+#[test]
+fn a_contested_lookup_is_deterministic() {
+    const TOL: u64 = SAME_SLOT_TOLERANCE_FRAMES;
+    let run = TimelineRange::new(96_000, 48_000);
+
+    let mut store = TakeGroupStore::new();
+    // Lane 3 sits one frame off the run; lanes 7 and 2 are both a full
+    // tolerance off, and equally so.
+    for (id, start) in [(3u64, 96_001u64), (7, 96_000 + TOL), (2, 96_000 - TOL)] {
+        store.insert(
+            id,
+            TakeGroup::new(id, TRACK, TimelineRange::new(start, 48_000)),
+        );
+    }
+
+    for _ in 0..200 {
+        assert_eq!(
+            take_group_for_slot(&store, TRACK, run),
+            Some(3),
+            "the closest lane must win every time"
+        );
+    }
+
+    // Drop the closest and the tie between the two equals resolves to the
+    // lower id, again every time.
+    store.remove(&3);
+    for _ in 0..200 {
+        assert_eq!(take_group_for_slot(&store, TRACK, run), Some(2));
+    }
+}
+
+/// No lane, no match — and a lane on another track is never a candidate,
+/// however well its region lines up.
+#[test]
+fn an_unmatched_run_opens_a_new_lane() {
+    let mut store = TakeGroupStore::new();
+    assert_eq!(take_group_for_slot(&store, TRACK, SLOT), None);
+
+    store.insert(1, TakeGroup::new(1, OTHER_TRACK, SLOT));
+    assert_eq!(
+        take_group_for_slot(&store, TRACK, SLOT),
+        None,
+        "an identically-placed lane on another track is not this track's"
+    );
+
+    let mut next = 5u64;
+    let (group_id, slot) = resolve_take_group(&store, &mut next, TRACK, SLOT);
+    assert_eq!(group_id, 5, "a new lane takes the next id");
+    assert_eq!(next, 6, "and only one");
+    assert_eq!(slot, SLOT, "bound to the region it was recorded over");
 }
