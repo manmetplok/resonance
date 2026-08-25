@@ -283,6 +283,34 @@ pub fn render_take_comp_for_test(
     sample_rate: u32,
     live: bool,
 ) -> Vec<f32> {
+    render_take_comp_borrowed_for_test(
+        tracks,
+        &clips,
+        take_comp,
+        playhead,
+        frames,
+        sample_rate,
+        live,
+    )
+}
+
+/// [`render_take_comp_for_test`] over a **borrowed** clip list.
+///
+/// `AudioClip` is deliberately not `Clone`, so the owned entry point above
+/// consumes the clips and can render a given set exactly once. A caller
+/// that holds the clips in shared engine state — `EngineHandlerHarness`,
+/// which renders what the engine would actually play, before and after a
+/// command — needs to render the same list repeatedly instead.
+#[doc(hidden)]
+pub fn render_take_comp_borrowed_for_test(
+    tracks: Vec<Track>,
+    clips: &[AudioClip],
+    take_comp: &crate::mixer::CompRenderTable,
+    playhead: u64,
+    frames: usize,
+    sample_rate: u32,
+    live: bool,
+) -> Vec<f32> {
     let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
     let busses_guard: IndexMap<BusId, Bus> = IndexMap::new();
     let plugins_guard: PluginMap = IndexMap::new();
@@ -339,7 +367,7 @@ pub fn render_take_comp_for_test(
                 channels: 2,
                 tracks: &tracks_guard,
                 busses: &busses_guard,
-                clips: &clips,
+                clips,
                 midi_clips: &midi_clips,
                 plugins: &plugins_guard,
                 tempo_map: &tempo_map,

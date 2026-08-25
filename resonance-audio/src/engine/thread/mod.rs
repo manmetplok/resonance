@@ -181,6 +181,17 @@ pub(crate) struct HandlerState {
     /// `SharedState::take_comp` table, which is what keeps comp playback
     /// and comp bounce in step.
     pub take_groups: HashMap<TakeGroupId, TakeGroup>,
+    /// Recordings of takes that have been removed (`RemoveTake` /
+    /// `RemoveTakeGroup`, ba todo #1397), held out of the shared clip list
+    /// so they cannot sound.
+    ///
+    /// Parked rather than dropped, and never deleted from disk: a removal
+    /// is undoable, and the `RestoreTakeGroups` an undo sends carries the
+    /// take's `clip_ref` back — so the clip has to still be here for the
+    /// restored take to be audible as well as visible. Session-local, like
+    /// the id allocators beside it: `ClearAll` empties it, and a project
+    /// reload starts from an empty park with the orphaned WAV left on disk.
+    pub orphaned_take_clips: HashMap<ClipId, AudioClip>,
     /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
     /// engine-thread-local; written by the `SetAutomationLane` /
     /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
@@ -261,6 +272,7 @@ impl HandlerState {
             reference: super::reference::ReferencePlayer::new(),
             loop_record_session: None,
             take_groups: HashMap::new(),
+            orphaned_take_clips: HashMap::new(),
             automation_lanes: automation::AutomationLanes::new(),
             external_instruments: external_instrument::ExternalInstruments::new(),
             pending_latency_ping: None,
