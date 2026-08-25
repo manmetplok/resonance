@@ -530,6 +530,29 @@ pub struct RolledAudioTake {
     pub waveform_peaks: Vec<(f32, f32)>,
 }
 
+impl RolledAudioTake {
+    /// The stretch of timeline this pass actually recorded over — the
+    /// rolled clip's own `[start_sample, start_sample + duration_samples)`.
+    ///
+    /// **Not the loop slot**, and that is the point. Pass 0's writer starts
+    /// where the user punched in rather than at the loop start, and the
+    /// trailing pass at transport stop ends wherever the user stopped, so
+    /// both are strictly shorter than the region they are filed under.
+    /// `finalize_loop_record_pass` files this onto the take and reports it
+    /// on `AudioEvent::TakeCaptured`, because it is the app's **only**
+    /// account of what a pass recorded: no `RecordingFinished` follows a
+    /// take clip, so the clip never reaches the app's mirror and a
+    /// consumer told only the slot would claim material that does not
+    /// exist (ba todo #1396,
+    /// [`resonance_common::Take::audible_extent`]).
+    ///
+    /// Defined here, on the value the emit site reads, so the capture path
+    /// and `tests/loop_record_takes.rs` cannot describe it differently.
+    pub fn extent(&self) -> resonance_common::TimelineRange {
+        resonance_common::TimelineRange::new(self.start_sample, self.duration_samples)
+    }
+}
+
 /// Close a take's WAV writer at a loop seam WITHOUT flushing the streaming
 /// resampler, so the next pass's writer continues the input stream
 /// seamlessly. Commits the trailing peak bucket and finalizes the writer

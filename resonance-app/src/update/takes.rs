@@ -33,12 +33,20 @@
 //!    edited through the `resonance_common` comp helpers, which keep it
 //!    sorted, non-overlapping and inside the slot.
 //! 2. **A promote never offers a region its take cannot fill.** A take's
-//!    audible extent is its recorded clip's, not the group's slot: a pass
+//!    audible extent is what it recorded, not the group's slot: a pass
 //!    that punched in late, or was cut short at stop, covers less. Since
 //!    todo #409 the renderer clamps such a span to the clip and ramps at
 //!    its real edge rather than panicking — but the uncovered part of the
 //!    segment is still a silent hole in the composite, so
-//!    [`audible_extent`] clamps it away up front.
+//!    [`Take::audible_extent`](resonance_common::Take::audible_extent)
+//!    clamps it away up front.
+//!
+//!    That clamp reads the extent the engine reported on the take itself
+//!    (todo #1396), never a clip lookup: a cycle-record pass reaches the
+//!    app only through `AudioEvent::TakeCaptured` and a project load
+//!    restores take groups without their clips, so a take clip is *never*
+//!    in `Resonance::clips` and a lookup could only ever fall back to the
+//!    slot — which is exactly the blindness this rule exists to avoid.
 //! 3. **A rejected selection is never mirrored.** `SetActiveTake` with a
 //!    take the group does not hold is dropped by the engine with no echo,
 //!    so the app validates before sending instead of assuming success.
@@ -58,8 +66,7 @@
 use iced::Task;
 use resonance_audio::types::AudioCommand;
 use resonance_common::{
-    latest_take, Comp, CompSegment, SlotCover, TakeContent, TakeGroup, TakeGroupId, TakeId,
-    TimelineRange,
+    latest_take, Comp, CompSegment, SlotCover, TakeGroup, TakeGroupId, TakeId, TimelineRange,
 };
 
 use crate::message::{Message, TakeMessage};
@@ -178,7 +185,7 @@ fn plan_promote(
 ) -> Option<TakeEdit> {
     let group = r.take_groups.group(group_id)?;
     let take = group.take(take_id)?;
-    let target = intersect(range, audible_extent(r, group, take));
+    let target = intersect(range, take.audible_extent(group.slot));
     if target.is_empty() {
         return None;
     }
@@ -264,51 +271,6 @@ fn cover_without(group: &TakeGroup, deleted: TakeId) -> Vec<CompSegment> {
         filler: latest_take(&survivors).map(|t| t.id),
     });
     comp.segments
-}
-
-// ---------------------------------------------------------------------------
-// Audible extent
-// ---------------------------------------------------------------------------
-
-/// The stretch of timeline `take` can actually sound over, intersected
-/// with its group's slot.
-///
-/// A take is **not** guaranteed to fill its slot. Cycle recording gives
-/// pass 0 the punch-in point as its clip start, and any pass cut short at
-/// stop ends before the loop end; a later trim shortens it again. The comp
-/// renderer clamps a span to the clip and ramps at its real edge (todo
-/// #409), so an over-long segment is silent rather than fatal — but it is
-/// still a hole, which is why promotes are clamped to this.
-///
-/// **Known limitation.** `AudioEvent::TakeCaptured` carries no extent, and
-/// a cycle-record pass reaches the app *only* through that event — no
-/// `RecordingFinished` is emitted for it — so an audio take's clip is
-/// normally absent from `Resonance::clips` and the true extent is unknown
-/// here. In that case the slot is returned, which is exactly the region
-/// the engine's own default cover uses, so the clamp never *removes*
-/// coverage the engine would have played. It bites whenever the app does
-/// know the clip (a bounced or reloaded take, and every case once the
-/// engine reports the extent). Reported to the architect as a follow-up.
-fn audible_extent(
-    r: &Resonance,
-    group: &TakeGroup,
-    take: &resonance_common::Take,
-) -> TimelineRange {
-    let TakeContent::Audio { clip_ref } = take.content else {
-        // A MIDI take carries its notes inline and contributes nothing to
-        // the audio comp at all; the slot is its full extent.
-        return group.slot;
-    };
-    match r.clips.iter().find(|c| c.id == clip_ref) {
-        Some(clip) => intersect(
-            TimelineRange::from_bounds(
-                clip.start_sample,
-                clip.start_sample + clip.duration_samples,
-            ),
-            group.slot,
-        ),
-        None => group.slot,
-    }
 }
 
 /// The overlap of two ranges, empty when they do not meet.

@@ -548,12 +548,18 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
         let content = TakeContent::Audio {
             clip_ref: take.clip_id,
         };
+        // What this pass really recorded over — the punch-in point for
+        // pass 0, and short of the loop end for a pass cut off at stop.
+        // Reported so the app's promote clamp and take lane stop assuming
+        // every take fills its slot (ba todo #1396).
+        let extent = take.extent();
         let take_id = super::takes::store_take(
             state,
             group_id,
             take.track_id,
             slot,
             pass_index,
+            extent,
             &content,
         );
         captured_any = true;
@@ -563,6 +569,7 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
             track_id: take.track_id,
             slot,
             pass_index,
+            extent,
             content,
         });
     }
@@ -572,8 +579,12 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     for (track_id, notes) in midi_takes {
         let group_id = loop_record_group_for(state, track_id);
         let content = TakeContent::Midi { notes };
+        // A MIDI take's extent is its whole slot: its notes are its
+        // content, silence inside it is a rest rather than a hole, and
+        // there is no medium that can come up short (ba todo #1396, and
+        // `Take::audible_extent`).
         let take_id =
-            super::takes::store_take(state, group_id, track_id, slot, pass_index, &content);
+            super::takes::store_take(state, group_id, track_id, slot, pass_index, slot, &content);
         captured_any = true;
         let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
             group_id,
@@ -581,6 +592,7 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
             track_id,
             slot,
             pass_index,
+            extent: slot,
             content,
         });
     }

@@ -34,6 +34,16 @@
 //! before it edits: a comp that has been promoted into is a gap-free cover *by
 //! construction*, which is what makes the "ordered, gap-free cover" above an
 //! invariant instead of an aspiration.
+//!
+//! # A cover is not a guarantee of audio (todo #1396)
+//!
+//! [`effective_cover`] answers *which take* plays over each part of the slot.
+//! It says nothing about whether that take has any material there — a pass
+//! that punched in late, or was cut short at stop, covers less than its slot.
+//! [`Take::extent`] records what each pass really recorded and
+//! [`Take::audible_extent`] intersects it with the slot; both consumers (the
+//! app's promote clamp and the take lane) resolve it there rather than each
+//! guessing from whatever clip they happen to hold.
 
 use serde::{Deserialize, Serialize};
 
@@ -130,19 +140,80 @@ pub struct Take {
     pub pass_index: u32,
     /// Capture wall-clock time, in unix milliseconds.
     pub captured_at: i64,
+    /// The stretch of timeline this pass actually recorded over, in sample
+    /// frames — **not** its group's slot. See [`Take::audible_extent`] for
+    /// what it means and why it is stored rather than derived.
+    pub extent: TimelineRange,
     /// The recorded content.
     pub content: TakeContent,
 }
 
 impl Take {
     /// Builds a take.
-    pub fn new(id: TakeId, pass_index: u32, captured_at: i64, content: TakeContent) -> Self {
+    ///
+    /// `extent` is required rather than defaulted on purpose: a take whose
+    /// extent is unknown cannot be told apart from one that genuinely
+    /// filled its slot, and every consumer would have to guess (ba todo
+    /// #1396).
+    pub fn new(
+        id: TakeId,
+        pass_index: u32,
+        captured_at: i64,
+        extent: TimelineRange,
+        content: TakeContent,
+    ) -> Self {
         Self {
             id,
             pass_index,
             captured_at,
+            extent,
             content,
         }
+    }
+
+    /// The stretch of `slot` this take can actually sound over: its
+    /// [`extent`](Self::extent) intersected with the slot, empty when the
+    /// two do not meet at all.
+    ///
+    /// # A take does not necessarily fill its lane
+    ///
+    /// Cycle recording gives pass 0 the **punch-in point** as its clip
+    /// start rather than the loop start, and any pass cut short at
+    /// transport stop ends before the slot does — so a take's recorded
+    /// material can sit strictly inside its slot at either end. Everything
+    /// that presents or edits a comp has to know which: the mixer clamps a
+    /// span to the take's clip before reading it (todo #409), a promote
+    /// over a stretch the take never recorded would write a silent hole
+    /// into the composite, and a lane drawing a punched-in take at slot
+    /// width claims audio the engine will not play.
+    ///
+    /// # Why the extent is stored on the take
+    ///
+    /// For an audio take it duplicates a fact the *engine* can derive from
+    /// the clip — but the **app never holds a take's clip**. A cycle-record
+    /// pass reaches the app only through `AudioEvent::TakeCaptured` (no
+    /// `RecordingFinished` is emitted for it), and a project load restores
+    /// take groups without materialising their clips, because a take clip
+    /// is not a timeline clip. So a field carried on the capture event
+    /// alone would be authoritative on one path and absent on the other,
+    /// which is worse than no field: the consumer could not tell which it
+    /// had. Persisting it on the take makes the two paths identical, and
+    /// costs two `u64`s per pass.
+    ///
+    /// # MIDI takes
+    ///
+    /// A MIDI take's extent is its **whole slot**. Its notes are its
+    /// content and there is no medium that can be short: silence inside a
+    /// MIDI take is a rest, not a hole, and the engine plays the take's
+    /// notes and nothing else wherever the comp selects it. Clamping a
+    /// MIDI promote to the notes' own span would refuse a legitimate edit
+    /// (promoting a bar of rest out of take 3) without preventing any
+    /// silence, because the rest *is* the material.
+    pub fn audible_extent(&self, slot: TimelineRange) -> TimelineRange {
+        TimelineRange::from_bounds(
+            self.extent.start.max(slot.start),
+            self.extent.end().min(slot.end()),
+        )
     }
 }
 

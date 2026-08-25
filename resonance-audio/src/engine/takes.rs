@@ -45,6 +45,7 @@ pub(crate) fn store_take(
     track_id: TrackId,
     slot: TimelineRange,
     pass_index: u32,
+    extent: TimelineRange,
     content: &TakeContent,
 ) -> TakeId {
     let group = state
@@ -52,7 +53,7 @@ pub(crate) fn store_take(
         .entry(group_id)
         .or_insert_with(|| TakeGroup::new(group_id, track_id, slot));
     group.slot = slot;
-    push_take(group, slot, pass_index, content)
+    push_take(group, slot, pass_index, extent, content)
 }
 
 /// Append one take to `group`, rebinding it to `slot`, and return the id
@@ -64,6 +65,14 @@ pub(crate) fn store_take(
 /// present — including for a group rehydrated from a saved project, where
 /// a separate counter would have to be persisted too.
 ///
+/// `extent` is what the pass really recorded over —
+/// [`RolledAudioTake::extent`](crate::recording::RolledAudioTake::extent)
+/// for an audio take, the slot for a MIDI one. It is stored on the take
+/// (and so persisted, and so echoed to the app on both the capture and the
+/// restore path) because the app never holds a take's clip and could not
+/// otherwise tell a punched-in pass from one that filled its slot; see
+/// [`resonance_common::Take::audible_extent`] (ba todo #1396).
+///
 /// Split out from [`store_take`] as the pure half (no `HandlerState`), so
 /// `tests/loop_record_takes.rs` can pin the uniqueness invariant against
 /// the real code rather than a re-implementation of it.
@@ -71,6 +80,7 @@ pub fn push_take(
     group: &mut TakeGroup,
     slot: TimelineRange,
     pass_index: u32,
+    extent: TimelineRange,
     content: &TakeContent,
 ) -> TakeId {
     group.slot = slot;
@@ -80,7 +90,7 @@ pub fn push_take(
         .map(|t| t.id)
         .max()
         .map_or(0, |highest| highest + 1);
-    group.add_take(Take::new(take_id, pass_index, 0, content.clone()));
+    group.add_take(Take::new(take_id, pass_index, 0, extent, content.clone()));
     take_id
 }
 

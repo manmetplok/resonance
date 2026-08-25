@@ -73,6 +73,7 @@ fn capture_audio_pass(app: &mut Resonance, group_id: u64, pass_index: u32, clip_
         track_id: TRACK,
         slot: SLOT,
         pass_index,
+        extent: SLOT,
         content: TakeContent::Audio { clip_ref },
     });
 }
@@ -84,6 +85,7 @@ fn capture_midi_pass(app: &mut Resonance, group_id: u64, pass_index: u32, note: 
         track_id: OTHER_TRACK,
         slot: SLOT,
         pass_index,
+        extent: SLOT,
         content: TakeContent::Midi {
             notes: vec![TakeNote {
                 note,
@@ -520,12 +522,14 @@ fn take_groups_round_trip_through_serde_verbatim() {
         0,
         0,
         1_700_000_000_000,
+        TimelineRange::new(12_000, 36_000),
         TakeContent::Audio { clip_ref: 42 },
     ));
     group.add_take(Take::new(
         1,
         1,
         1_700_000_001_000,
+        TimelineRange::new(0, 48_000),
         TakeContent::Midi {
             notes: vec![TakeNote {
                 note: 48,

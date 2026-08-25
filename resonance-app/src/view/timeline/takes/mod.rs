@@ -40,6 +40,6 @@ pub(super) mod input;
 mod overlay;
 
 pub use geometry::{
-    audible_extent, comp_ribbon_band, effective_cover, silent_ranges, take_card_band, take_label,
-    unlit_ranges, CoverSource, CoverSpan,
+    comp_ribbon_band, effective_cover, silent_ranges, take_card_band, take_label, unlit_ranges,
+    CoverSource, CoverSpan,
 };

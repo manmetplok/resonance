@@ -33,6 +33,7 @@ fn captured(group_id: u64, track_id: u64, pass_index: u32) -> AudioEvent {
         track_id,
         slot: SLOT,
         pass_index,
+        extent: SLOT,
         content: TakeContent::Audio {
             clip_ref: 5_000 + u64::from(pass_index),
         },
@@ -80,6 +81,7 @@ fn two_takes_in_one_pass_are_both_retained() {
         track_id: 7,
         slot: SLOT,
         pass_index: 0,
+        extent: SLOT,
         content: TakeContent::Audio { clip_ref: 5_000 },
     });
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
@@ -88,6 +90,7 @@ fn two_takes_in_one_pass_are_both_retained() {
         track_id: 7,
         slot: SLOT,
         pass_index: 0,
+        extent: SLOT,
         content: TakeContent::Midi { notes: Vec::new() },
     });
 
@@ -172,6 +175,7 @@ fn midi_take_content_is_mirrored_verbatim() {
         track_id: 9,
         slot: SLOT,
         pass_index: 0,
+        extent: SLOT,
         content: TakeContent::Midi {
             notes: notes.clone(),
         },
@@ -193,6 +197,7 @@ fn re_delivered_take_replaces_rather_than_duplicates() {
         track_id: 7,
         slot: SLOT,
         pass_index: 0,
+        extent: SLOT,
         content: TakeContent::Audio { clip_ref: 9_999 },
     });
 

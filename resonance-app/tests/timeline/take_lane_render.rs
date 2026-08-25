@@ -43,14 +43,12 @@ use resonance_app::message::{Message, UiMessage, ViewportMessage};
 use resonance_app::state::{ClipState, ViewMode};
 use resonance_app::view::arrange_layout::ArrangeRowKind;
 use resonance_app::view::timeline::takes::{
-    audible_extent, effective_cover, silent_ranges, unlit_ranges, CoverSource,
+    effective_cover, silent_ranges, unlit_ranges, CoverSource,
 };
 use resonance_app::{demo, theme, Resonance};
 use resonance_audio::__test_support::build_comp_table;
 use resonance_audio::types::{AudioEvent, FadeCurve};
-use resonance_common::{
-    CompSegment, TakeContent, TakeGroup, TakeNote, TimelineRange,
-};
+use resonance_common::{CompSegment, Take, TakeContent, TakeGroup, TakeNote, TimelineRange};
 
 /// Window size matches the app's default & minimum window per the design
 /// guidelines.
@@ -177,6 +175,18 @@ fn capture_audio_passes(app: &mut Resonance, passes: u32) {
 /// engine assigns take ids per group (#409); mirroring `pass_index` keeps
 /// the ids readable in assertions.
 fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
+    capture_audio_pass_over(app, pass_index, slot(app));
+}
+
+/// Drive one `TakeCaptured` whose pass recorded only `extent` of the slot —
+/// a punch-in, or a pass cut short at stop.
+///
+/// The event's `extent` is the app's **only** account of that (todo #1396):
+/// no `RecordingFinished` follows a take clip, so nothing the app holds can
+/// be consulted instead. `push_take_clip_over` mirrors a matching clip for
+/// the waveform, but the lane and the promote clamp both resolve the extent
+/// from the take, not from that clip.
+fn capture_audio_pass_over(app: &mut Resonance, pass_index: u32, extent: TimelineRange) {
     let slot = slot(app);
     app.test_apply_engine_event(AudioEvent::TakeCaptured {
         group_id: GROUP,
@@ -184,10 +194,20 @@ fn capture_audio_pass(app: &mut Resonance, pass_index: u32) {
         track_id: AUDIO_TRACK,
         slot,
         pass_index,
+        extent,
         content: TakeContent::Audio {
             clip_ref: TAKE_CLIP_BASE + u64::from(pass_index),
         },
     });
+}
+
+/// The audible extent the lane resolves for a take recorded over `extent`
+/// — the model's own [`Take::audible_extent`], which since todo #1396 is
+/// the single definition the lane, the promote clamp and the engine share.
+fn extent_within(slot: TimelineRange, extent: TimelineRange) -> Option<TimelineRange> {
+    let audible =
+        Take::new(0, 0, 0, extent, TakeContent::Audio { clip_ref: 1 }).audible_extent(slot);
+    (!audible.is_empty()).then_some(audible)
 }
 
 /// Capture `passes` MIDI loop passes into `GROUP` on the instrument track.
@@ -210,6 +230,9 @@ fn capture_midi_passes(app: &mut Resonance, passes: u32) {
             track_id: MIDI_TRACK,
             slot,
             pass_index,
+            // A MIDI take's extent is its whole slot: its notes are its
+            // content and a rest is not a hole (todo #1396).
+            extent: slot,
             content: TakeContent::Midi { notes },
         });
     }
@@ -310,6 +333,7 @@ fn two_slots_on_one_track_give_two_contiguous_stacks() {
                 track_id: AUDIO_TRACK,
                 slot,
                 pass_index,
+                extent: slot,
                 content: TakeContent::Audio { clip_ref: 1 },
             });
         }
@@ -582,6 +606,7 @@ fn latest_take_is_content_agnostic_in_a_mixed_group() {
         track_id: AUDIO_TRACK,
         slot: slot(&app),
         pass_index: 1,
+        extent: slot(&app),
         content: TakeContent::Midi {
             notes: vec![TakeNote {
                 note: 60,
@@ -640,24 +665,27 @@ fn a_takes_audible_extent_is_its_clip_intersected_with_the_slot() {
 
     // Punched in one second after the loop start, running to the slot end.
     assert_eq!(
-        audible_extent(slot, slot.start + sr, 4 * sr),
+        extent_within(slot, TimelineRange::new(slot.start + sr, 4 * sr)),
         Some(TimelineRange::from_bounds(slot.start + sr, slot.end())),
-        "a punch-in take starts where its clip does, not where the lane does"
+        "a punch-in take starts where its recording does, not where the lane does"
     );
     // Cut short at stop, one second before the slot ends.
     assert_eq!(
-        audible_extent(slot, slot.start, 4 * sr),
+        extent_within(slot, TimelineRange::new(slot.start, 4 * sr)),
         Some(TimelineRange::from_bounds(slot.start, slot.end() - sr)),
     );
-    // A clip overhanging both ends is clamped back to the lane.
+    // A recording overhanging both ends is clamped back to the lane.
     assert_eq!(
-        audible_extent(slot, 0, 20 * sr),
+        extent_within(slot, TimelineRange::new(0, 20 * sr)),
         Some(slot),
         "the lane bounds what can be drawn"
     );
     // No overlap at all: nothing to draw.
-    assert_eq!(audible_extent(slot, slot.end() + sr, sr), None);
-    assert_eq!(audible_extent(slot, 0, sr), None);
+    assert_eq!(
+        extent_within(slot, TimelineRange::new(slot.end() + sr, sr)),
+        None
+    );
+    assert_eq!(extent_within(slot, TimelineRange::new(0, sr)), None);
 }
 
 /// `silent_ranges` is the complement of the audible extent within the slot
@@ -668,14 +696,14 @@ fn silent_ranges_are_the_remainder_of_the_lane() {
     let slot = slot(&app);
     let sr = app.sample_rate as u64;
 
-    let punched_in = audible_extent(slot, slot.start + sr, 4 * sr);
+    let punched_in = extent_within(slot, TimelineRange::new(slot.start + sr, 4 * sr));
     assert_eq!(
         silent_ranges(slot, punched_in),
         vec![TimelineRange::from_bounds(slot.start, slot.start + sr)],
         "the lane leads in silent up to the punch-in"
     );
 
-    let cut_short = audible_extent(slot, slot.start, 4 * sr);
+    let cut_short = extent_within(slot, TimelineRange::new(slot.start, 4 * sr));
     assert_eq!(
         silent_ranges(slot, cut_short),
         vec![TimelineRange::from_bounds(slot.end() - sr, slot.end())],
@@ -701,12 +729,9 @@ fn a_short_take_can_still_be_comped_across_the_whole_slot() {
     let mut app = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
-    push_take_clip_over(
-        &mut app,
-        0,
-        TimelineRange::from_bounds(slot.start + sr, slot.end()),
-    );
-    capture_audio_pass(&mut app, 0);
+    let punched = TimelineRange::from_bounds(slot.start + sr, slot.end());
+    push_take_clip_over(&mut app, 0, punched);
+    capture_audio_pass_over(&mut app, 0, punched);
     set_comp(
         &mut app,
         vec![CompSegment {
@@ -722,15 +747,14 @@ fn a_short_take_can_still_be_comped_across_the_whole_slot() {
         unlit_ranges(&cover, slot, 0).is_empty(),
         "nothing is scrimmed: the comp selects this take throughout"
     );
-    // ...while only part of the lane can actually sound.
-    let clip = app
-        .test_clips()
-        .iter()
-        .find(|c| c.id == TAKE_CLIP_BASE)
-        .expect("take clip");
+    // ...while only part of the lane can actually sound — read off the
+    // mirrored take, which is where the extent lives since todo #1396.
     assert_eq!(
-        audible_extent(slot, clip.start_sample, clip.duration_samples),
-        Some(TimelineRange::from_bounds(slot.start + sr, slot.end())),
+        group_of(&app, GROUP)
+            .take(0)
+            .expect("take")
+            .audible_extent(slot),
+        punched,
     );
 }
 
@@ -1132,12 +1156,9 @@ fn punched_in_take_snapshot() {
     let mut app = build_app();
     let sr = app.sample_rate as u64;
     let slot = slot(&app);
-    push_take_clip_over(
-        &mut app,
-        0,
-        TimelineRange::from_bounds(slot.start + sr, slot.end()),
-    );
-    capture_audio_pass(&mut app, 0);
+    let punched = TimelineRange::from_bounds(slot.start + sr, slot.end());
+    push_take_clip_over(&mut app, 0, punched);
+    capture_audio_pass_over(&mut app, 0, punched);
     push_take_clip(&mut app, 1);
     capture_audio_pass(&mut app, 1);
     set_comp(
@@ -1153,7 +1174,7 @@ fn punched_in_take_snapshot() {
     let cover = effective_cover(group_of(&app, GROUP));
     assert!(unlit_ranges(&cover, slot, 0).is_empty());
     assert_eq!(
-        silent_ranges(slot, audible_extent(slot, slot.start + sr, 4 * sr)),
+        silent_ranges(slot, extent_within(slot, TimelineRange::new(slot.start + sr, 4 * sr))),
         vec![TimelineRange::from_bounds(slot.start, slot.start + sr)],
     );
     snapshot_to(&app, "tests/snapshots/take_lane_punched_in_take.png");
@@ -1207,6 +1228,9 @@ fn missing_media_snapshot() {
         track_id: AUDIO_TRACK,
         slot,
         pass_index: 1,
+        // The pass filled its slot; what is gone is the WAV, not the
+        // recording's extent.
+        extent: slot,
         content: TakeContent::Audio { clip_ref: 999_999 },
     });
     toggle_lane(&mut app, AUDIO_TRACK);

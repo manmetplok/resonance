@@ -169,6 +169,141 @@ fn trailing_pass_rolls_without_reopening_and_clears_buffers() {
 }
 
 // ---------------------------------------------------------------------------
+// A take's audible extent (todo #1396)
+// ---------------------------------------------------------------------------
+//
+// `TakeCaptured` is the only news the app gets about a cycle-record pass —
+// no `RecordingFinished` follows a take clip, so nothing the app holds can
+// be consulted instead. If the extent the engine files is the loop slot
+// rather than what the pass really recorded, the app's promote clamp and
+// its take lane both silently claim material that was never recorded, and
+// nothing downstream can tell.
+
+/// A pass that punched in a quarter of the way into the loop records three
+/// quarters of it, and the extent `finalize_loop_record_pass` files must
+/// say so.
+///
+/// Drives the real roll and reads the extent off the very value the emit
+/// site reads it off (`RolledAudioTake::extent`), so the capture path and
+/// this test cannot drift apart. Filing `slot` instead — the pre-#1396
+/// behaviour, and the tempting one, since `slot` is right there at the emit
+/// site — fails both assertions below.
+#[test]
+fn a_punched_in_pass_reports_the_extent_it_recorded_not_its_slot() {
+    use resonance_audio::__test_support::push_take;
+    use resonance_common::{TakeContent, TakeGroup, TimelineRange};
+
+    let project_dir = make_tempdir("punch-in-extent");
+    let audio_dir = project_dir.join("audio");
+    let sr = 48_000u32;
+    let loop_frames = 48_000u64;
+    let slot = TimelineRange::new(96_000, loop_frames);
+    // Record started a quarter of the way through the loop region.
+    let punch_in = slot.start + loop_frames / 4;
+    let recorded = loop_frames - loop_frames / 4;
+
+    let mut rec = RecordingState::new(sr);
+    let ring: HeapRb<f32> = HeapRb::new((loop_frames as usize) * 2 * 2);
+    let (mut prod, cons) = ring.split();
+    rec.ring_consumer = Some(cons);
+    rec.input_channels = 2;
+    rec.input_sample_rate = sr;
+    rec.start_sample = punch_in;
+
+    let buf = RecordingState::create_track_buf(&project_dir, 7, 1, sr, sr, 0, false).unwrap();
+    rec.buffers.insert(7, buf);
+
+    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut next_clip_id = 2u64;
+
+    // Pass 0's writer starts at the punch-in, exactly as
+    // `finalize_loop_record_pass` positions it.
+    push_ramp(&mut prod, 0, recorded);
+    let rolled = rec.roll_audio_pass(sr, punch_in, &clips, &audio_dir, &mut next_clip_id, true);
+    assert_eq!(rolled.len(), 1, "one armed track, one take");
+
+    let extent = rolled[0].extent();
+    assert_eq!(
+        extent,
+        TimelineRange::new(punch_in, recorded),
+        "the extent is the rolled clip's own span"
+    );
+    assert_ne!(extent, slot, "and it is emphatically not the slot");
+
+    // Filed onto the take, it is what every consumer resolves against.
+    let mut group = TakeGroup::new(1, 7, slot);
+    let take_id = push_take(
+        &mut group,
+        slot,
+        0,
+        extent,
+        &TakeContent::Audio {
+            clip_ref: rolled[0].clip_id,
+        },
+    );
+    let audible = group.take(take_id).expect("take").audible_extent(slot);
+    assert_eq!(audible.start, punch_in, "silent up to the punch-in");
+    assert_eq!(audible.end(), slot.end(), "and audible to the loop end");
+    assert!(audible.length < slot.length, "strictly inside its slot");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+/// The other short pass: stopped mid-loop, so the trailing roll ends before
+/// the slot does.
+#[test]
+fn a_pass_cut_short_at_stop_reports_the_shorter_extent() {
+    use resonance_audio::__test_support::push_take;
+    use resonance_common::{TakeContent, TakeGroup, TimelineRange};
+
+    let project_dir = make_tempdir("cut-short-extent");
+    let audio_dir = project_dir.join("audio");
+    let sr = 48_000u32;
+    let loop_frames = 48_000u64;
+    let slot = TimelineRange::new(0, loop_frames);
+    let recorded = loop_frames / 2;
+
+    let mut rec = RecordingState::new(sr);
+    let ring: HeapRb<f32> = HeapRb::new((loop_frames as usize) * 2 * 2);
+    let (mut prod, cons) = ring.split();
+    rec.ring_consumer = Some(cons);
+    rec.input_channels = 2;
+    rec.input_sample_rate = sr;
+    rec.start_sample = 0;
+
+    let buf = RecordingState::create_track_buf(&project_dir, 7, 1, sr, sr, 0, false).unwrap();
+    rec.buffers.insert(7, buf);
+
+    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut next_clip_id = 2u64;
+
+    push_ramp(&mut prod, 0, recorded);
+    drop(prod); // the input stream closes at stop
+    let rolled = rec.roll_audio_pass(sr, slot.start, &clips, &audio_dir, &mut next_clip_id, false);
+    assert_eq!(rolled.len(), 1);
+
+    let extent = rolled[0].extent();
+    let mut group = TakeGroup::new(1, 7, slot);
+    let take_id = push_take(
+        &mut group,
+        slot,
+        0,
+        extent,
+        &TakeContent::Audio {
+            clip_ref: rolled[0].clip_id,
+        },
+    );
+    let audible = group.take(take_id).expect("take").audible_extent(slot);
+    assert_eq!(audible.start, slot.start, "it starts where the loop does...");
+    assert!(
+        audible.end() < slot.end(),
+        "...and stops where the user did, not where the loop would have: {audible:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+// ---------------------------------------------------------------------------
 // Take-id allocation and the audio/MIDI capture split (todo #409, doc #292)
 // ---------------------------------------------------------------------------
 
@@ -191,11 +326,12 @@ fn two_captures_in_one_pass_get_distinct_take_ids() {
 
     // Pass 0 emits twice for the same track: the audio roll, then the MIDI
     // capture — the exact sequence `finalize_loop_record_pass` produces.
-    let audio_id = push_take(&mut group, slot, 0, &TakeContent::Audio { clip_ref: 100 });
+    let audio_id = push_take(&mut group, slot, 0, slot, &TakeContent::Audio { clip_ref: 100 });
     let midi_id = push_take(
         &mut group,
         slot,
         0,
+        slot,
         &TakeContent::Midi { notes: Vec::new() },
     );
 
@@ -225,6 +361,7 @@ fn take_ids_stay_unique_across_passes() {
             &mut group,
             slot,
             pass,
+            slot,
             &TakeContent::Audio {
                 clip_ref: 100 + u64::from(pass),
             },
@@ -235,6 +372,7 @@ fn take_ids_stay_unique_across_passes() {
                 &mut group,
                 slot,
                 pass,
+                slot,
                 &TakeContent::Midi { notes: Vec::new() },
             ));
         }
@@ -329,6 +467,7 @@ fn saved_group(id: TakeGroupId, track_id: u64, takes: u64) -> TakeGroup {
             &mut group,
             slot,
             i as u32,
+            slot,
             &TakeContent::Audio {
                 clip_ref: id * 100 + i,
             },
@@ -491,7 +630,7 @@ fn a_further_take_on_a_restored_group_gets_a_fresh_id() {
     let saved_ids: Vec<_> = group.takes.iter().map(|t| t.id).collect();
     assert_eq!(saved_ids, vec![0, 1, 2], "precondition: three saved takes");
 
-    let fresh = push_take(group, slot, 3, &TakeContent::Audio { clip_ref: 999 });
+    let fresh = push_take(group, slot, 3, slot, &TakeContent::Audio { clip_ref: 999 });
 
     assert_eq!(fresh, 3, "the id continues the restored group's own sequence");
     assert_eq!(group.takes.len(), 4, "no restored take is overwritten");
@@ -525,6 +664,7 @@ fn saved_midi_group(id: TakeGroupId, track_id: u64, takes: u64) -> TakeGroup {
             &mut group,
             slot,
             i as u32,
+            slot,
             &TakeContent::Midi {
                 notes: vec![resonance_common::TakeNote {
                     note: 60 + i as u8,
@@ -805,6 +945,7 @@ fn a_project_loaded_after_clear_all_keeps_its_reused_clip_ids() {
         &mut group_b,
         TimelineRange::new(0, 48_000),
         0,
+        TimelineRange::new(0, 48_000),
         &TakeContent::Audio { clip_ref: 102 },
     );
     h.seed_take_group(group_b);

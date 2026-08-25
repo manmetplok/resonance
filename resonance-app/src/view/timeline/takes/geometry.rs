@@ -45,30 +45,11 @@ pub fn unlit_ranges(cover: &[CoverSpan], slot: TimelineRange, take_id: TakeId) -
     out
 }
 
-/// Where a take actually carries audio inside its group's `slot`: the
-/// intersection of the slot with its recorded clip's extent, or `None` when
-/// the two do not overlap at all.
-///
-/// A take does **not** necessarily fill its lane. `finalize_loop_record_pass`
-/// starts pass 0's clip at the punch-in point rather than at the loop start,
-/// and any pass cut short at stop ends before the slot does — so the clip's
-/// `[start, start + length)` can sit strictly inside the slot at either end.
-/// Todo #409 made the engine intersect exactly this way before reading a
-/// take (`take_comp::mix_track_comp`); the lane has to draw the same
-/// intersection or a punched-in take renders as a full-width, stretched
-/// waveform that claims audio where the engine plays none.
-///
-/// `clip_start` / `clip_len` are the clip's *audible* (post-trim) extent —
-/// `ClipState::start_sample` and `ClipState::duration_samples`.
-pub fn audible_extent(
-    slot: TimelineRange,
-    clip_start: u64,
-    clip_len: u64,
-) -> Option<TimelineRange> {
-    let start = slot.start.max(clip_start);
-    let end = slot.end().min(clip_start.saturating_add(clip_len));
-    (end > start).then(|| TimelineRange::from_bounds(start, end))
-}
+// The take-vs-slot intersection this module used to own now lives on the
+// model as `resonance_common::Take::audible_extent`, resolved from the
+// extent the engine reports (todo #1396) rather than from a clip lookup
+// the app can never satisfy for a take. `TakeLaneDraw::take_audible_extent`
+// is the lane's entry point to it.
 
 /// The sub-ranges of `slot` that `audible` leaves uncovered — where a take
 /// row shows the "no audio here" flat line instead of a waveform. `None`
