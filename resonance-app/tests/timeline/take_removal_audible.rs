@@ -652,15 +652,29 @@ fn undoing_a_single_take_removal_restores_its_audio() {
 }
 
 // ---------------------------------------------------------------------------
-// A known-open defect this todo makes reachable (see the follow-up in ba)
+// The removal x take-clip-load race (ba todo #1403)
 // ---------------------------------------------------------------------------
 
-/// **`#[ignore]`d because it fails: it reproduces an open engine-side
-/// defect, not a regression in this todo.** Un-ignore it when the fix
-/// lands; it is written to go green on the fix and on nothing else.
+/// Frames of DC written for the recording of the take this case deletes.
+///
+/// Far longer than the slot on purpose. The window this case has to land
+/// inside is "the load has been submitted and has not published yet", and
+/// the worker's cost is the mmap pre-touch plus an O(n) peak decimation
+/// over exactly this many frames. Written at the slot's own 2 000 frames —
+/// which is what every other case here uses — the worker beat the
+/// `DeleteTake` dispatch on **2 runs in 10** measured against the unfixed
+/// engine, and on those runs there was no race to lose and the case went
+/// green with the defect still present. A test that only sometimes
+/// provokes the condition it names is worse than no test, so the window is
+/// pinned rather than inherited: 20/20 red against the unfixed engine,
+/// 20/20 green against the fixed one.
+const RACED_TAKE_FRAMES: usize = 240_000;
+
+/// **Deleting a take whose recording is still being loaded parks it
+/// anyway** — the take-clip-load race, ba todo #1403.
 ///
 /// ```text
-/// cargo test -p resonance-app --test timeline -- --ignored take_clip_load
+/// cargo test -p resonance-app --test timeline -- take_clip_load
 /// ```
 ///
 /// # The race
@@ -673,13 +687,14 @@ fn undoing_a_single_take_removal_restores_its_audio() {
 ///
 /// `park_take_clip` is what makes a removal silent, and it works by taking
 /// the clip *out of* `ctx.clips`. A `RemoveTake` handled while the load is
-/// still in flight therefore finds nothing to park and parks nothing — and
-/// the worker then publishes an `AudioClip` that no comp table governs,
-/// because the take it belonged to is gone. It plays raw, at full gain, on
-/// the ordinary clip path, on top of the comp: the exact "deleting a take
-/// makes it **louder**" shape ba doc #292 records at peak 1.25 against 1.0.
+/// still in flight therefore found nothing to park and parked nothing —
+/// and the worker then published an `AudioClip` that no comp table
+/// governs, because the take it belonged to is gone. It played raw, at
+/// full gain, on the ordinary clip path, on top of the comp: the exact
+/// "deleting a take makes it **louder**" shape ba doc #292 records at peak
+/// 1.25 in the engine and 1.5 here.
 ///
-/// # Why the app cannot fix it, and this is filed rather than worked around
+/// # Why the app could not fix it
 ///
 /// The obvious app-side answer — refuse a removal while a load is
 /// outstanding — cannot be written, because **the app has no way to know
@@ -692,10 +707,23 @@ fn undoing_a_single_take_removal_restores_its_audio() {
 /// either. A heuristic time window would refuse legitimate gestures and
 /// still miss slow ones.
 ///
-/// The fix has to be where the knowledge is: the publish step in
-/// `submit_clip_load` has to be able to see that the take was removed
-/// (a tombstone the park leaves, or a claim check shared with the worker).
-/// That is `resonance-audio`, and it is filed there.
+/// And a gate on the *gesture* would not have been enough even with a
+/// signal to hang it on: `handle_restore_take_groups` parks through the
+/// same `park_take_clip` for every clip the outgoing groups claimed, so a
+/// **redo** of a deletion loses the same race with no `DeleteTake` message
+/// anywhere in the app.
+///
+/// # Where the fix went (ba todo #1403)
+///
+/// Where the knowledge is: the publish step inside `submit_clip_load`,
+/// beside the duplicate check that already binds because it runs under the
+/// worker's own `clips.write()`. `park_take_clip` now leaves a **claim**
+/// in a shared take-clip park when the recording is not in the list yet,
+/// under that same write lock, and the worker delivers the finished clip
+/// into the park instead of into the render's input — so it is parked
+/// rather than dropped, and the undo of a raced removal is as instant as
+/// any other. The engine-side cases are in
+/// `resonance-audio/tests/loop_record_takes.rs`.
 ///
 /// # Why this test is here rather than in the engine's suite
 ///
@@ -706,7 +734,6 @@ fn undoing_a_single_take_removal_restores_its_audio() {
 /// waited on in between. That is not a contrived interleaving; it is a
 /// user right-clicking a take card as soon as they can see it.
 #[test]
-#[ignore = "reproduces an open engine-side defect: a removal racing a take-clip load parks nothing"]
 fn a_removal_racing_a_take_clip_load_leaves_the_take_audible() {
     let dir = std::env::temp_dir().join(format!(
         "resonance-take-removal-race-{}",
@@ -718,7 +745,10 @@ fn a_removal_racing_a_take_clip_load_leaves_the_take_audible() {
     std::fs::create_dir_all(&dir).expect("create project dir");
 
     // An authored project: two audio takes over one slot, each backed by a
-    // real DC-valued WAV, saved to disk.
+    // real DC-valued WAV, saved to disk. Take 0 — the one this case deletes
+    // — gets a long recording, so its load is still running when the
+    // deletion lands (see `RACED_TAKE_FRAMES`). It covers the slot either
+    // way; only the loading cost differs.
     let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(dir.clone());
@@ -727,9 +757,14 @@ fn a_removal_racing_a_take_clip_load_leaves_the_take_audible() {
     std::fs::create_dir_all(&audio_dir).expect("create audio dir");
     for take_id in 0..2u64 {
         let level = LEVELS[take_id as usize];
+        let frames = if take_id == 0 {
+            RACED_TAKE_FRAMES
+        } else {
+            SLOT.length as usize
+        };
         resonance_audio::transcode_to_wav(
             &audio_dir.join(format!("clip_{}.wav", clip_ref_of(take_id))),
-            &vec![level; SLOT.length as usize * 2],
+            &vec![level; frames * 2],
             48_000,
         )
         .expect("write take wav");
@@ -770,6 +805,15 @@ fn a_removal_racing_a_take_clip_load_leaves_the_take_audible() {
         h.replay_take_lane_command(cmd);
     }
 
+    // The window has to be open, or this case proves nothing. Asserting it
+    // turns a lost race into a loud failure instead of a quiet pass.
+    assert!(
+        !h.clip_ids().contains(&clip_ref_of(0)),
+        "fixture check: take 0's load must still be in flight when the \
+         deletion lands — clips={:?}",
+        h.clip_ids()
+    );
+
     // The user right-clicks take 0's card the instant the lane is drawn.
     // Nothing is waited on: the workers are still reading their WAVs, and
     // this is the whole point.
@@ -783,24 +827,44 @@ fn a_removal_racing_a_take_clip_load_leaves_the_take_audible() {
         },
     );
 
-    // Now let the loads land.
-    assert!(
-        h.wait_for_clips(1, std::time::Duration::from_secs(5)),
-        "the take clips never loaded at all"
-    );
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Now let both loads land — wherever they land. Counting the park as
+    // well as the clip list means a broken engine settles just as fast as a
+    // fixed one, so this fails on its assertions rather than on a timeout.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline
+        && h.clip_ids().len() + h.parked_clip_ids().len() < 2
+    {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // A grace period on top, so a second, wrong publish has time to show up
+    // rather than landing after the assertions have read the list.
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     let out = h.render_track(TRACK, SLOT.start, SLOT.length as usize);
     // The audible assertion first — it is the one that states the defect.
     // Take 1 is the only survivor, so nothing may exceed its level; the
     // leaked pass sums on top of it.
     assert_nothing_louder_than(&out, LEVELS[1], "a removal that raced the take-clip load");
-    // And the mechanism, as a diagnostic for whoever fixes it.
+    // ...and the survivor is genuinely playing, so "nothing is louder"
+    // cannot be satisfied by a lane that renders silence.
+    assert_plays(
+        &out,
+        DECLICK + 100,
+        LEVELS[1],
+        "the surviving pass covers the slot",
+    );
+    // And the mechanism underneath it.
     assert!(
         !h.clip_ids().contains(&clip_ref_of(0)),
         "the removed take's recording is back in the render's input, un-parked \
          and ungoverned: clips={:?} parked={:?}",
         h.clip_ids(),
+        h.parked_clip_ids()
+    );
+    assert!(
+        h.parked_clip_ids().contains(&clip_ref_of(0)),
+        "the recording the load delivered has to be *parked*, not dropped — \
+         the undo of this deletion has to bring the audio back: parked={:?}",
         h.parked_clip_ids()
     );
 

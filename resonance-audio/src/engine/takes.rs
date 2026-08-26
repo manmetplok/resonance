@@ -488,25 +488,46 @@ fn claimed_take_clips(store: &std::collections::HashMap<TakeGroupId, TakeGroup>)
 /// a clip some surviving group still claims — the store is consulted rather
 /// than assumed, so a clip two groups somehow shared cannot be parked out
 /// from under the one still using it.
+///
+/// **A clip the list does not hold is claimed rather than skipped**
+/// (ba todo #1403). Since ba todo #1402 a project load *loads* a take's
+/// recording, asynchronously: for the first few milliseconds of a restored
+/// take's life its `clip_ref` names a clip that is on its way in from a
+/// worker and is in no list yet. Returning early there is what made a
+/// removal inside that window park nothing and let the worker publish an
+/// ungoverned recording — audible at full gain on top of the comp. The
+/// claim is taken under the same `ctx.clips` write lock the worker's
+/// publish takes, so the two orderings are the only two there are: either
+/// this finds the clip and parks it, or the worker finds the claim and
+/// delivers into the park. See
+/// [`TakeClipPark`](crate::engine::take_park::TakeClipPark).
 fn park_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) {
     if claimed_take_clips(&state.take_groups).contains(&clip_ref) {
         return;
     }
+    // Held across both branches: the clip list and the park have to move
+    // together, or the window this closes re-opens.
     let mut clips = ctx.clips.write();
-    let Some(pos) = clips.iter().position(|clip| clip.id == clip_ref) else {
-        return;
-    };
-    let clip = clips.remove(pos);
-    drop(clips);
-    state.orphaned_take_clips.insert(clip_ref, clip);
+    match clips.iter().position(|clip| clip.id == clip_ref) {
+        Some(pos) => state.take_clip_park.hold(clips.remove(pos)),
+        None => state.take_clip_park.claim(clip_ref),
+    }
 }
 
 /// Put a parked recording back into the shared clip list, so a take a
-/// restore brings back is audible again and not merely visible. A no-op
-/// when the clip was never parked.
+/// restore brings back is audible again and not merely visible.
+///
+/// A no-op when the clip was never parked. When the park held only a
+/// *claim* — the removal raced the take's load and the load has not landed
+/// yet (ba todo #1403) — dropping the claim is the whole restore: the
+/// in-flight load then lands in the clip list exactly as it would have had
+/// the removal never happened.
 fn unpark_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) {
-    if let Some(clip) = state.orphaned_take_clips.remove(&clip_ref) {
-        ctx.clips.write().push(clip);
+    // The clip lock first, always: the load worker takes it before the
+    // park's, and one order is what keeps the two from deadlocking.
+    let mut clips = ctx.clips.write();
+    if let Some(clip) = state.take_clip_park.release(clip_ref) {
+        clips.push(clip);
     }
 }
 

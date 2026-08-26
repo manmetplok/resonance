@@ -700,6 +700,9 @@ fn submit_clip_load(
     let clips_arc = Arc::clone(ctx.clips);
     let thread_event_tx = ctx.event_tx.clone();
     let engine_rate = ctx.sample_rate;
+    // The take-clip park, so the publish below can see a removal that
+    // happened while this load was in flight (ba todo #1403).
+    let park = Arc::clone(&state.take_clip_park);
 
     let submit_result = state.imports.submit(move || {
         // `open_wav_at_rate` resamples to the engine rate when the
@@ -761,6 +764,23 @@ fn submit_clip_load(
                     if clips.iter().any(|c| c.id == clip_id) {
                         return;
                     }
+                    // The removal interlock, and the second thing this
+                    // lock binds (ba todo #1403). `park_take_clip` makes a
+                    // take removal silent by lifting the recording *out of*
+                    // this list — which parks nothing when the recording is
+                    // still in flight, i.e. exactly here. It therefore
+                    // leaves a claim instead, taken under this same lock,
+                    // and the finished clip goes to the park rather than to
+                    // the render's input: an ungoverned take clip is the
+                    // "deleting a take makes it louder" bug (ba doc #292).
+                    //
+                    // Unconditional, not gated on `echo`: only take clips
+                    // are ever parked, so this is a no-op on the timeline
+                    // path, and leaving it unconditional means no future
+                    // caller can route a load around it.
+                    let Some(clip) = park.deliver(clip) else {
+                        return;
+                    };
                     clips.push(clip);
                 }
                 if echo == ClipLoadEcho::Timeline {

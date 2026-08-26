@@ -96,6 +96,7 @@ pub(crate) mod plugins;
 pub(crate) mod reference;
 pub(crate) mod sidechain;
 pub(crate) mod scan;
+pub(crate) mod take_park;
 pub(crate) mod takes;
 mod thread;
 pub use thread::test_support::EngineHandlerHarness;

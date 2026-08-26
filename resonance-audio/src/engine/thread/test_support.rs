@@ -209,6 +209,37 @@ impl EngineHandlerHarness {
         }
     }
 
+    /// Run the real `AudioCommand::LoadClipFromWav` handler — the
+    /// **timeline** clip load, which shares `submit_clip_load`'s worker
+    /// with the take-clip load beside it.
+    ///
+    /// Here so a test can check that the take-clip park (ba todo #1403)
+    /// stays out of the ordinary clip path's way: the park's interlock in
+    /// the worker is deliberately unconditional, so an ordinary load that
+    /// happened to reuse a stale claim's id would vanish.
+    pub fn load_clip_from_wav(
+        &mut self,
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: u64,
+        path: std::path::PathBuf,
+        name: String,
+    ) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::clips::handle_load_clip_from_wav(
+                ctx,
+                state,
+                clip_id,
+                track_id,
+                start_sample,
+                path,
+                name,
+                0,
+                0,
+            )
+        });
+    }
+
     /// Block until the engine's clip list holds `expected` clips, or
     /// `timeout` elapses; reports whether it got there.
     ///
@@ -265,12 +296,16 @@ impl EngineHandlerHarness {
         self.state.next_clip_id
     }
 
-    /// Clip ids currently parked out of the render because their take was
-    /// removed, ascending.
+    /// Clip ids whose *recording* is currently parked out of the render
+    /// because their take was removed, ascending.
+    ///
+    /// A removal that raced the take's still-in-flight load leaves a claim
+    /// rather than a recording (ba todo #1403); the claim is deliberately
+    /// not reported here, so this stays the answer to "what audio did the
+    /// removal take out of the render", and an id shows up the moment the
+    /// worker delivers into the park.
     pub fn parked_clip_ids(&self) -> Vec<ClipId> {
-        let mut ids: Vec<ClipId> = self.state.orphaned_take_clips.keys().copied().collect();
-        ids.sort_unstable();
-        ids
+        self.state.take_clip_park.held_ids()
     }
 
     /// A group in the authoritative store, for asserting on its takes,
