@@ -2188,12 +2188,19 @@ fn a_take_clip_load_landing_after_its_take_was_removed_goes_to_the_park() {
 }
 
 /// Undoing a removal that raced the load brings the recording back
-/// **audibly**, with no second load.
+/// **audibly**, with no second load — the undo arriving **after** the load
+/// delivered into the park.
 ///
 /// This is why the worker *delivers* into the park rather than dropping the
 /// clip on the floor. Dropping would be enough to make the removal silent —
 /// and would leave the undo restoring a card with no audio under it, which
 /// is the failure #1397 ruling 4 exists to prevent.
+///
+/// The other half of the pair — the undo arriving while the claim is still
+/// standing — is
+/// [`undoing_a_removal_before_the_load_lands_restores_the_audio`]. Both
+/// orderings are ordinary gestures and the failure mode is the same silent
+/// card, so neither stands in for the other.
 #[test]
 fn undoing_a_removal_that_raced_the_load_restores_the_audio() {
     let dir = make_tempdir("undo-raced-removal");
@@ -2224,6 +2231,79 @@ fn undoing_a_removal_that_raced_the_load_restores_the_audio() {
         (out[2_048] - 1.0).abs() < 1e-6,
         "the restored take must be audible, not a silent card, got {}",
         out[2_048]
+    );
+}
+
+/// And undoing it **before** the load lands restores the audio too: the
+/// in-flight recording goes to the clip list, as it would have had the
+/// removal never happened.
+///
+/// Delete a take while its recording is still loading, then hit undo before
+/// the worker publishes — an ordinary gesture inside the very window this
+/// whole section exists for. What has to happen is that the restore drops
+/// the standing **claim**, not merely that it finds no recording to give
+/// back: a claim left in place would divert the finished clip into the park
+/// a moment later and the take would come back as a visible card with no
+/// audio under it, for the rest of the session. Same ruling-4 failure as
+/// the case above, reached from the other side of the delivery — and
+/// `release` returning `None` for a claim is not enough on its own, so the
+/// two cases are not interchangeable.
+#[test]
+fn undoing_a_removal_before_the_load_lands_restores_the_audio() {
+    let dir = make_tempdir("undo-before-load-lands");
+    // Long, so the load cannot land before the removal and the undo do.
+    let removed = write_dc_take_wav(&dir, 100, 1.0, 240_000);
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
+    engine.replay_take_lane_command(&take_clip_load(100, removed));
+    assert!(
+        !engine.clip_ids().contains(&100),
+        "fixture check: the load must still be in flight — clips={:?}",
+        engine.clip_ids()
+    );
+
+    engine.remove_take(1, 0);
+    // The removal has to have left a *claim*, not a parked recording, or
+    // this case is the one above wearing a different name.
+    assert!(
+        engine.parked_clip_ids().is_empty() && !engine.clip_ids().contains(&100),
+        "fixture check: the removal must leave a standing claim — clips={:?} \
+         parked={:?}",
+        engine.clip_ids(),
+        engine.parked_clip_ids()
+    );
+
+    // The undo, dispatched while the claim is still standing.
+    engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
+    // Solo the restored take, so what plays is unambiguously *it* rather
+    // than the cover's latest-pass fallback.
+    engine.set_active_take(1, Some(0));
+
+    settle(&engine, 1);
+
+    // The audible assertion first — it is the one that states the
+    // requirement. A claim the restore failed to drop diverts the finished
+    // recording into the park, and this reads 0.0: the silent card.
+    let out = engine.render_track(7, 0, 4_096);
+    assert!(
+        (out[2_048] - 1.0).abs() < 1e-6,
+        "the restored take must be audible, not a silent card, got {} \
+         (clips={:?} parked={:?})",
+        out[2_048],
+        engine.clip_ids(),
+        engine.parked_clip_ids()
+    );
+    // And the mechanism underneath it.
+    assert_eq!(
+        engine.clip_ids(),
+        vec![100],
+        "the in-flight load must land in the render's input, not in the park"
+    );
+    assert!(
+        engine.parked_clip_ids().is_empty(),
+        "nothing is parked: the take was un-removed before its recording ever \
+         arrived"
     );
 }
 
