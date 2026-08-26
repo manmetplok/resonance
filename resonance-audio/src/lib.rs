@@ -176,8 +176,8 @@ pub mod __test_support {
         TrackComp, COMP_XFADE_FRAMES,
     };
     pub use crate::platform::{
-        choose_assert_rate, force_release_target, needs_reassert, parse_pw_metadata_value,
-        reassert_source_key, CANONICAL_RATE,
+        choose_assert_rate, force_is_redundant, force_release_target, needs_reassert,
+        parse_allowed_rates, parse_pw_metadata_value, reassert_source_key, CANONICAL_RATE,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
