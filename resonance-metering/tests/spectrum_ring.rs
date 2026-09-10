@@ -130,6 +130,58 @@ fn push_slice_cross_thread_visibility() {
 }
 
 #[test]
+fn mixed_push_paths_cross_thread_stress() {
+    use std::sync::Arc;
+
+    // Two real threads hammering a small ring so producer and consumer are
+    // almost always inside the buffer at the same time — the case the
+    // raw-pointer discipline in push/push_slice/pop_into exists for (no
+    // whole-buffer reference may ever be materialised on either side).
+    // The producer alternates the per-sample and bulk paths; the consumer
+    // must still observe the exact monotone stream, gapless and in order.
+    // Bounded: 20_000 samples through a 32-slot ring finishes in well
+    // under a second even with the yields.
+    let ring = Arc::new(SpscRing::new(32));
+    let producer_ring = ring.clone();
+    let total: usize = 20_000;
+    let producer = std::thread::spawn(move || {
+        let mut next = 0usize;
+        let mut chunk = [0.0_f32; 11];
+        while next < total {
+            let pushed = if next % 2 == 0 {
+                // Per-sample path.
+                usize::from(producer_ring.push(next as f32))
+            } else {
+                // Bulk path, deliberately often straddling the wrap.
+                let want = 11.min(total - next);
+                for (i, slot) in chunk.iter_mut().enumerate().take(want) {
+                    *slot = (next + i) as f32;
+                }
+                producer_ring.push_slice(&chunk[..want])
+            };
+            next += pushed;
+            if pushed == 0 {
+                std::thread::yield_now();
+            }
+        }
+    });
+
+    let mut expected = 0usize;
+    let mut dst = [0.0_f32; 13];
+    while expected < total {
+        let n = ring.pop_into(&mut dst);
+        for &v in &dst[..n] {
+            assert_eq!(v, expected as f32, "gap or reorder in consumed stream");
+            expected += 1;
+        }
+        if n == 0 {
+            std::thread::yield_now();
+        }
+    }
+    producer.join().unwrap();
+}
+
+#[test]
 fn wraps_around_zero() {
     let ring = SpscRing::new(8);
     // Fill, drain, fill again — exercises wrap arithmetic.
