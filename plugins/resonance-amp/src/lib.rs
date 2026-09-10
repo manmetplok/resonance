@@ -11,6 +11,7 @@ use resonance_plugin::*;
 // buffer plumbing.
 pub mod dsp;
 mod loader;
+pub mod models;
 pub mod nam;
 pub mod params;
 #[cfg(feature = "editor")]
@@ -189,7 +190,36 @@ impl ResonancePlugin for ResonanceAmp {
             if let Some(model) = self.model_mailbox.take() {
                 self.processor.install_initial_model(model);
             }
+        } else {
+            // No persisted model. Seed the browser from the downloads
+            // directory anyway, so a freshly added amp offers the
+            // profiles the user has already pulled down instead of an
+            // empty ◀/▶ and "(no model loaded)" with no way out but the
+            // file dialog.
+            if let Some(dir) = models::models_dir() {
+                *self.params.file_list.lock() = resonance_common::scan_directory(&dir, "nam");
+            }
         }
+
+        // Baseline the change detector against what the selector ACTUALLY
+        // holds, on every activation and whether or not a model was
+        // restored above.
+        //
+        // `process()` reads any `file_select != last_file_index` as "the
+        // user picked a new model" and loads `file_list[file_select]`.
+        // Leaving the baseline at its `new()` value of -1 (which is what
+        // the empty-path branch used to do) therefore makes the FIRST
+        // `process()` call fire a load request for index 0 — the first
+        // file in the directory — regardless of what is loaded.
+        //
+        // That first call is not where you would look for it either. The
+        // mixer skips the arrangement render while the transport is
+        // stopped, so an effect on an audio track does not process at all
+        // until playback starts or the track is monitored/record-armed:
+        // the spurious load surfaces as "arming the track swapped my amp
+        // model", one user action removed from the activation that
+        // actually queued it.
+        self.last_file_index = self.params.file_select.value();
 
         // Start the persistent loader thread for runtime file_select
         // changes. All subsequent loads go through it — priming and
@@ -259,14 +289,12 @@ impl ResonancePlugin for ResonanceAmp {
             linear_to_db(peaks.out_l),
             linear_to_db(peaks.out_r),
         );
-        // `try_lock` so the audio thread never blocks waiting on the
-        // editor's per-frame `iter_chrono` scan. Dropping a single
-        // block under contention costs at most ~43 ms of scope trace
-        // (one full ring) and only happens while the UI is mid-read;
-        // a blocking lock under the same scenario would stall audio.
-        if let Some(mut scope) = self.viz.scope.try_lock() {
-            scope.push_slice(&self.input_scratch[..copy_n], &left[..copy_n]);
-        }
+        // Lock-free: `scope` is a pair of `AtomicHistoryRing`s, so the
+        // audio thread never blocks on (or skips a push for) the editor's
+        // per-frame `iter_chrono` scan.
+        self.viz
+            .scope
+            .push_slice(&self.input_scratch[..copy_n], &left[..copy_n]);
 
         // Feed the tuner with the dry input (pre-gain, pre-model) so
         // the amp's nonlinear harmonics don't confuse the pitch tracker.

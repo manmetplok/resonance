@@ -1,12 +1,22 @@
 //! Lock-free visualisation state shared between the audio thread and
-//! the editor thread. Mirrors the reverb plugin's `viz.rs` patterns:
-//! per-scalar atomics for cheap/wait-free reads, and a short
-//! `parking_lot::Mutex` around fixed-size ring buffers for trace data.
+//! the editor thread.
+//!
+//! Every cell delegates to the shared bit-punned atomics in
+//! `resonance-metering` — cheap, wait-free, no tearing for a single
+//! scalar or L/R pair. The rolling scope history used to be a
+//! `parking_lot::Mutex`-guarded ring the audio thread only entered via
+//! `try_lock` (dropping a whole block's worth of trace under editor
+//! contention); it is now two of the shared [`AtomicHistoryRing`]s, so the
+//! audio thread never takes a lock at all. The static transfer curve stays
+//! a plain `Mutex<Option<...>>`: it is written once per model load from
+//! the *loader* thread, never the audio thread, so there is no RT-safety
+//! reason to touch it.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use resonance_metering::{AtomicF32, AtomicF32Pair, AtomicHistoryRing};
 
 /// Rolling scope history length in samples. At 48 kHz this covers about
 /// 43 ms — enough to draw several full periods of a low-E guitar note
@@ -20,92 +30,64 @@ pub const CURVE_POINTS: usize = 128;
 /// Two rolling buffers of RMS-per-block values — one for the pre-gain
 /// input and one for the post-model output — so the scope view can
 /// draw a dual-trace oscilloscope.
+///
+/// Backed by two [`AtomicHistoryRing`]s rather than one struct-of-arrays
+/// ring: the shared type pushes one f32 at a time, and the two channels
+/// are always pushed together in lockstep (see [`Self::push_slice`]), so
+/// their cursors never drift apart and [`Self::iter_chrono`] still yields
+/// synchronized (input, output) pairs.
 pub struct ScopeHistory {
-    pub input: [f32; SCOPE_LEN],
-    pub output: [f32; SCOPE_LEN],
-    pub write_pos: usize,
+    input: AtomicHistoryRing<SCOPE_LEN>,
+    output: AtomicHistoryRing<SCOPE_LEN>,
 }
 
 impl ScopeHistory {
     fn new() -> Self {
         Self {
-            input: [0.0; SCOPE_LEN],
-            output: [0.0; SCOPE_LEN],
-            write_pos: 0,
+            input: AtomicHistoryRing::new(0.0),
+            output: AtomicHistoryRing::new(0.0),
         }
     }
 
-    pub fn push(&mut self, input: f32, output: f32) {
-        self.input[self.write_pos] = input;
-        self.output[self.write_pos] = output;
-        self.write_pos = (self.write_pos + 1) % SCOPE_LEN;
-    }
-
-    /// Block-wise push: write two source slices (equal length) into the
-    /// ring, handling wrap once via two `copy_from_slice` calls. Much
-    /// cheaper than calling `push` per sample because the audio thread
-    /// only holds the mutex for the duration of at most two memcpys.
-    pub fn push_slice(&mut self, input: &[f32], output: &[f32]) {
+    /// Push a block's worth of paired dry/wet samples. Wait-free and
+    /// allocation-free — safe to call from the audio thread every block,
+    /// unconditionally (no `try_lock` to fall back on, because there is no
+    /// lock).
+    pub fn push_slice(&self, input: &[f32], output: &[f32]) {
         debug_assert_eq!(input.len(), output.len());
-        let mut n = input.len();
-        // If the caller hands us more than SCOPE_LEN in one shot, only
-        // the tail is retained — the earlier samples would be overwritten
-        // anyway on the next wrap.
-        let (mut src_in, mut src_out) = if n > SCOPE_LEN {
-            let skip = n - SCOPE_LEN;
-            n = SCOPE_LEN;
-            (&input[skip..], &output[skip..])
-        } else {
-            (input, output)
-        };
-
-        let mut pos = self.write_pos;
-        let first = (SCOPE_LEN - pos).min(n);
-        self.input[pos..pos + first].copy_from_slice(&src_in[..first]);
-        self.output[pos..pos + first].copy_from_slice(&src_out[..first]);
-        pos = (pos + first) & (SCOPE_LEN - 1);
-        src_in = &src_in[first..];
-        src_out = &src_out[first..];
-
-        let remaining = n - first;
-        if remaining > 0 {
-            self.input[pos..pos + remaining].copy_from_slice(&src_in[..remaining]);
-            self.output[pos..pos + remaining].copy_from_slice(&src_out[..remaining]);
-            pos = (pos + remaining) & (SCOPE_LEN - 1);
+        for (&i, &o) in input.iter().zip(output.iter()) {
+            self.input.push(i);
+            self.output.push(o);
         }
-        self.write_pos = pos;
     }
 
-    /// Iterate the ring in chronological order (oldest first).
+    /// Iterate the ring in chronological order (oldest first). Wait-free
+    /// consumer; a read pass may straddle one producer push per channel,
+    /// which a scope trace tolerates.
     pub fn iter_chrono(&self) -> impl Iterator<Item = (f32, f32)> + '_ {
-        let start = self.write_pos;
-        (0..SCOPE_LEN).map(move |i| {
-            let idx = (start + i) % SCOPE_LEN;
-            (self.input[idx], self.output[idx])
-        })
+        self.input.iter_chrono().zip(self.output.iter_chrono())
     }
 }
 
 pub struct AmpViz {
     // Peak meters (dBFS).
-    in_l_db: AtomicU32,
-    in_r_db: AtomicU32,
-    out_l_db: AtomicU32,
-    out_r_db: AtomicU32,
+    in_db: AtomicF32Pair,
+    out_db: AtomicF32Pair,
 
     // Tuner state.
     /// Detected pitch in Hz; 0.0 means "no pitch".
-    tuner_hz: AtomicU32,
+    tuner_hz: AtomicF32,
     /// 0.0..1.0 confidence.
-    tuner_confidence: AtomicU32,
+    tuner_confidence: AtomicF32,
 
     /// Native sample rate of the loaded NAM model in Hz; 0.0 = unknown.
-    model_sample_rate: AtomicU32,
+    model_sample_rate: AtomicF32,
     /// Engine sample rate in Hz (set at `initialize`); 0.0 = unknown.
-    engine_sample_rate: AtomicU32,
+    engine_sample_rate: AtomicF32,
 
-    /// Rolling per-block scope history (both traces).
-    pub scope: Mutex<ScopeHistory>,
+    /// Rolling per-block scope history (both traces). Lock-free — see
+    /// [`ScopeHistory`].
+    pub scope: ScopeHistory,
 
     /// Static nonlinear transfer curve: `y = model(x)` sampled on
     /// `x ∈ [-1, 1]`. Recomputed on the loader thread each time a new
@@ -116,75 +98,62 @@ pub struct AmpViz {
 impl AmpViz {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            in_l_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
-            in_r_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
-            out_l_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
-            out_r_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
-            tuner_hz: AtomicU32::new(0.0f32.to_bits()),
-            tuner_confidence: AtomicU32::new(0.0f32.to_bits()),
-            model_sample_rate: AtomicU32::new(0.0f32.to_bits()),
-            engine_sample_rate: AtomicU32::new(0.0f32.to_bits()),
-            scope: Mutex::new(ScopeHistory::new()),
+            in_db: AtomicF32Pair::new(f32::NEG_INFINITY),
+            out_db: AtomicF32Pair::new(f32::NEG_INFINITY),
+            tuner_hz: AtomicF32::new(0.0),
+            tuner_confidence: AtomicF32::new(0.0),
+            model_sample_rate: AtomicF32::new(0.0),
+            engine_sample_rate: AtomicF32::new(0.0),
+            scope: ScopeHistory::new(),
             transfer_curve: Mutex::new(None),
         })
     }
 
     pub fn store_peaks(&self, in_l_db: f32, in_r_db: f32, out_l_db: f32, out_r_db: f32) {
-        self.in_l_db.store(in_l_db.to_bits(), Ordering::Relaxed);
-        self.in_r_db.store(in_r_db.to_bits(), Ordering::Relaxed);
-        self.out_l_db.store(out_l_db.to_bits(), Ordering::Relaxed);
-        self.out_r_db.store(out_r_db.to_bits(), Ordering::Relaxed);
+        self.in_db.store(in_l_db, in_r_db);
+        self.out_db.store(out_l_db, out_r_db);
     }
 
     pub fn read_in_peaks_db(&self) -> (f32, f32) {
-        (
-            f32::from_bits(self.in_l_db.load(Ordering::Relaxed)),
-            f32::from_bits(self.in_r_db.load(Ordering::Relaxed)),
-        )
+        self.in_db.load()
     }
 
     pub fn read_out_peaks_db(&self) -> (f32, f32) {
-        (
-            f32::from_bits(self.out_l_db.load(Ordering::Relaxed)),
-            f32::from_bits(self.out_r_db.load(Ordering::Relaxed)),
-        )
+        self.out_db.load()
     }
 
     pub fn store_tuner(&self, hz: f32, confidence: f32) {
-        self.tuner_hz.store(hz.to_bits(), Ordering::Relaxed);
-        self.tuner_confidence
-            .store(confidence.to_bits(), Ordering::Relaxed);
+        self.tuner_hz.store(hz, Ordering::Relaxed);
+        self.tuner_confidence.store(confidence, Ordering::Relaxed);
     }
 
     /// Clear the tuner (used when no model is loaded or the model is
     /// mid-swap — nothing to show).
     pub fn clear_tuner(&self) {
-        self.tuner_hz.store(0.0f32.to_bits(), Ordering::Relaxed);
-        self.tuner_confidence
-            .store(0.0f32.to_bits(), Ordering::Relaxed);
+        self.tuner_hz.store(0.0, Ordering::Relaxed);
+        self.tuner_confidence.store(0.0, Ordering::Relaxed);
     }
 
     pub fn read_tuner(&self) -> (f32, f32) {
         (
-            f32::from_bits(self.tuner_hz.load(Ordering::Relaxed)),
-            f32::from_bits(self.tuner_confidence.load(Ordering::Relaxed)),
+            self.tuner_hz.load(Ordering::Relaxed),
+            self.tuner_confidence.load(Ordering::Relaxed),
         )
     }
 
     pub fn store_model_sample_rate(&self, hz: f32) {
-        self.model_sample_rate.store(hz.to_bits(), Ordering::Relaxed);
+        self.model_sample_rate.store(hz, Ordering::Relaxed);
     }
 
     pub fn store_engine_sample_rate(&self, hz: f32) {
-        self.engine_sample_rate
-            .store(hz.to_bits(), Ordering::Relaxed);
+        self.engine_sample_rate.store(hz, Ordering::Relaxed);
     }
 
     /// `(model_hz, engine_hz)`; 0.0 means unknown/not set yet.
     pub fn read_sample_rates(&self) -> (f32, f32) {
         (
-            f32::from_bits(self.model_sample_rate.load(Ordering::Relaxed)),
-            f32::from_bits(self.engine_sample_rate.load(Ordering::Relaxed)),
+            self.model_sample_rate.load(Ordering::Relaxed),
+            self.engine_sample_rate.load(Ordering::Relaxed),
         )
     }
 

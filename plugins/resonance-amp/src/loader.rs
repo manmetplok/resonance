@@ -87,19 +87,40 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
         let path = {
             let list = deps.params.file_list.lock();
             if list.is_empty() {
+                // Nothing to index into. Sleep like the no-request case
+                // rather than spinning back to the top of the loop — the
+                // request has already been consumed by the swap above, so
+                // an immediate retry only burns a core.
+                drop(list);
+                std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
             }
             let clamped = (idx as usize).min(list.len() - 1);
             let p = list[clamped].clone();
             drop(list);
-            if let Some(mut mp) = deps.params.model_path.try_lock() {
-                *mp = p.clone();
-            }
+            // A blocking lock, not `try_lock`. This is the loader thread,
+            // not the audio thread, and the only other holders (the file
+            // dialog, `initialize`, the state saver) hold it for a string
+            // clone. Dropping the write on contention left `model_path`
+            // pointing at the PREVIOUS model while a different one played
+            // — and `model_path` is what gets persisted and what
+            // `initialize` re-derives `file_select` from, so a lost write
+            // silently reverts the model on the next activation.
+            *deps.params.model_path.lock() = p.clone();
             p
         };
 
-        match nam::parse::load_model_from_file(&path) {
-            Ok(loaded) => {
+        // The NAM parser is hardened to return `Err` on hostile/corrupt
+        // input rather than panic (see `nam::parse::weights::checked_count`
+        // and the WaveNet bounds validation), but `catch_unwind` is
+        // defense-in-depth: a panic anywhere in parse-and-prime — this
+        // parser, a future one, or the priming/curve-sampling DSP itself —
+        // must not take the whole loader thread down for the rest of the
+        // session. Without this, one bad file means every *subsequent*
+        // model pick silently does nothing, which is much harder to
+        // diagnose than a single failed load.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            nam::parse::load_model_from_file(&path).map(|loaded| {
                 let mut model = loaded.model;
                 note_model_sample_rate(&deps.viz, loaded.sample_rate);
                 // Reset + prime so the audio thread gets a model that's
@@ -120,7 +141,12 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
                 // DC ramp excursion, before handing the model over.
                 model.reset();
                 prime_model(&mut *model, PRIME_SAMPLES);
+                model
+            })
+        }));
 
+        match outcome {
+            Ok(Ok(model)) => {
                 let name = Path::new(&path)
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
@@ -128,11 +154,30 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
                 *deps.model_name.lock() = name;
                 deps.mailbox.post(model);
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 eprintln!("Failed to load NAM model: {e}");
                 *deps.model_name.lock() = format!("Error: {e}");
             }
+            Err(panic) => {
+                let msg = panic_message(&panic);
+                eprintln!("Panic while loading NAM model {}: {msg}", path);
+                *deps.model_name.lock() = format!("Error: {msg}");
+            }
         }
+    }
+}
+
+/// Best-effort text for a `catch_unwind` payload. `panic!` payloads are
+/// almost always `&str` (a string-literal message) or `String` (a
+/// formatted one); anything else surfaces as a generic placeholder rather
+/// than failing to report at all.
+fn panic_message(payload: &(dyn std::any::Any + Send + 'static)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "non-string panic payload".to_string()
     }
 }
 

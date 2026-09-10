@@ -72,8 +72,30 @@ fn slim_bottleneck(p: &LayerArrayParams, new_channels: usize) -> usize {
     if !p.layer1x1.active {
         new_channels
     } else {
-        (p.bottleneck * new_channels / p.channels).max(1)
+        // Widen through u128: both factors are raw parsed fields, so the
+        // usize product could wrap on a hostile file. The quotient is at
+        // most `bottleneck` (new_channels <= channels, per check_targets,
+        // which also guarantees channels >= 1), so it fits back in usize.
+        ((p.bottleneck as u128 * new_channels as u128 / p.channels as u128) as usize).max(1)
     }
+}
+
+/// Compact grouped tensor size `product(dims) / groups + bias`, with
+/// checked arithmetic: the walk runs before any other validation, on raw
+/// parsed fields a hostile file controls — an unchecked product would
+/// wrap in release builds or abort on overflow in debug, and a zero group
+/// count would divide by zero. The count only feeds [`copy_weights`],
+/// which pulls one weight at a time, so a large-but-valid count simply
+/// exhausts the cursor with a clear error.
+fn tensor_count(ctx: &str, dims: &[usize], groups: usize, bias: usize) -> Result<usize, String> {
+    if groups == 0 {
+        return Err(format!("Slimmable WaveNet: {ctx}: groups must be >= 1"));
+    }
+    dims.iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .map(|n| n / groups)
+        .and_then(|n| n.checked_add(bias))
+        .ok_or_else(|| format!("Slimmable WaveNet: {ctx}: weight count overflows"))
 }
 
 /// Derive the sliced sub-model's layer-array config from the full config
@@ -239,9 +261,16 @@ fn extract_film(
     ctx: &str,
 ) -> Result<(), String> {
     let mult = if shift { 2 } else { 1 };
-    let full_out = mult * full_width;
+    let full_out = full_width
+        .checked_mul(mult)
+        .ok_or_else(|| format!("Slimmable WaveNet: {ctx}: FiLM width overflows"))?;
     if full_width == slim_width {
-        return copy_weights(src, cond * full_out / groups.max(1) + full_out, dst, ctx);
+        return copy_weights(
+            src,
+            tensor_count(ctx, &[cond, full_out], groups.max(1), full_out)?,
+            dst,
+            ctx,
+        );
     }
     if groups != 1 {
         return Err(format!(
@@ -333,7 +362,14 @@ pub fn extract_slimmed_weights(
         for l in 0..p.dilations.len() {
             let kernel_size = p.kernel_sizes[l];
             let gated = p.gating_modes[l] != GatingMode::None;
-            let full_bg = if gated { 2 * full_bn } else { full_bn };
+            // slim_bn <= full_bn, so one checked doubling covers both.
+            let full_bg = if gated {
+                full_bn.checked_mul(2).ok_or_else(|| {
+                    format!("Slimmable WaveNet: layer array {arr}: bottleneck overflows")
+                })?
+            } else {
+                full_bn
+            };
             let slim_bg = if gated { 2 * slim_bn } else { slim_bn };
 
             // conv: Conv1D(channels -> B_g, K, bias = true)
@@ -341,7 +377,12 @@ pub fn extract_slimmed_weights(
             if slim_ch == full_ch && slim_bg == full_bg {
                 copy_weights(
                     &mut src,
-                    full_bg * full_ch * kernel_size / p.groups_input + full_bg,
+                    tensor_count(
+                        &conv_ctx,
+                        &[full_bg, full_ch, kernel_size],
+                        p.groups_input,
+                        full_bg,
+                    )?,
                     &mut slim,
                     &conv_ctx,
                 )?;
@@ -361,7 +402,7 @@ pub fn extract_slimmed_weights(
             if slim_bg == full_bg {
                 copy_weights(
                     &mut src,
-                    full_bg * cond / p.groups_input_mixin,
+                    tensor_count(&mixin_ctx, &[full_bg, cond], p.groups_input_mixin, 0)?,
                     &mut slim,
                     &mixin_ctx,
                 )?;
@@ -380,7 +421,7 @@ pub fn extract_slimmed_weights(
                 if slim_ch == full_ch && slim_bn == full_bn {
                     copy_weights(
                         &mut src,
-                        full_ch * full_bn / p.layer1x1.groups + full_ch,
+                        tensor_count(&l1_ctx, &[full_ch, full_bn], p.layer1x1.groups, full_ch)?,
                         &mut slim,
                         &l1_ctx,
                     )?;
@@ -404,7 +445,7 @@ pub fn extract_slimmed_weights(
                 if slim_bn == full_bn {
                     copy_weights(
                         &mut src,
-                        h1_out * full_bn / p.head1x1.groups + h1_out,
+                        tensor_count(&h1_ctx, &[h1_out, full_bn], p.head1x1.groups, h1_out)?,
                         &mut slim,
                         &h1_ctx,
                     )?;
@@ -490,7 +531,12 @@ pub fn extract_slimmed_weights(
             let bias = if p.head_bias { p.head_size } else { 0 };
             copy_weights(
                 &mut src,
-                p.head_size * full_head_out * p.head_kernel_size + bias,
+                tensor_count(
+                    &hr_ctx,
+                    &[p.head_size, full_head_out, p.head_kernel_size],
+                    1,
+                    bias,
+                )?,
                 &mut slim,
                 &hr_ctx,
             )?;

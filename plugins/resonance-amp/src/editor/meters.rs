@@ -3,7 +3,7 @@
 //! drawn dim and output bright so the eye naturally follows the amp's
 //! processed signal.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::AmpViz;
 

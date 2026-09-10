@@ -47,7 +47,7 @@ pub use engine_config::{StackConfig, WaveNetConfig};
 pub use schema::LstmConfig;
 pub use weights::WeightReader;
 
-pub(crate) use weights::build_condition_dsp;
+pub(crate) use weights::{build_condition_dsp, checked_count};
 
 /// Sample rate assumed when a .nam file omits the `sample_rate` field.
 /// Older NAM exporters didn't write it; the NAM convention is that such

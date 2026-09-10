@@ -28,14 +28,7 @@ pub const REDIRECT_PORT: u16 = 47834;
 /// this.
 pub const API_BASE: &str = "https://www.tone3000.com";
 
-/// Subdirectory under the user's data dir where downloaded .nam files
-/// live. The plugin's existing [`resonance_common::scan_directory`]
-/// helper picks them up from here.
-pub const MODEL_SUBDIR: &str = "resonance/amp-models/tone3000";
-
-/// Resolve the per-user directory where downloaded models are stored.
-/// Returns `None` if the platform has no XDG data dir (extremely
-/// unusual, but we don't want to panic on it).
-pub fn models_dir() -> Option<std::path::PathBuf> {
-    dirs::data_dir().map(|d| d.join(MODEL_SUBDIR))
-}
+/// Where downloaded .nam files live. Re-exported rather than declared
+/// here: `initialize()` seeds the model browser from the same directory
+/// and cannot reach anything behind the `editor` feature.
+pub use crate::models::{models_dir, MODEL_SUBDIR};

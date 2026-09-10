@@ -6,7 +6,7 @@
 //! shows a near-linear diagonal, a crunch model bends, and a high-gain
 //! profile flattens at the rails.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::{AmpViz, CURVE_POINTS};
 

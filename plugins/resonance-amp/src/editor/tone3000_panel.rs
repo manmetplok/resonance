@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 use crate::tone3000::client::ArchitectureFilter;

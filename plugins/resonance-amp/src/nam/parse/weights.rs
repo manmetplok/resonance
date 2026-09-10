@@ -25,11 +25,12 @@ impl<'a> WeightReader<'a> {
     }
 
     pub fn read(&mut self, count: usize) -> Result<Vec<f32>, String> {
-        if self.pos + count > self.weights.len() {
+        // `count` is derived from parsed config fields, so compare against
+        // the remainder without arithmetic that a hostile value could wrap.
+        let remaining = self.weights.len() - self.pos;
+        if count > remaining {
             return Err(format!(
-                "Weight underflow: need {} more but only {} remain (at pos {})",
-                count,
-                self.weights.len() - self.pos,
+                "Weight underflow: need {count} more but only {remaining} remain (at pos {})",
                 self.pos
             ));
         }
@@ -41,6 +42,19 @@ impl<'a> WeightReader<'a> {
     pub fn remaining(&self) -> usize {
         self.weights.len() - self.pos
     }
+}
+
+/// Multiply parsed dimension fields into a weight count with checked
+/// arithmetic. Counts like `4 * hidden_size * (input + hidden)` come
+/// straight from file-controlled fields, so a hostile file can wrap the
+/// product past the [`WeightReader::read`] bounds check in release builds
+/// (or abort on overflow in debug); an overflow is reported as the same
+/// kind of typed parse error an impossible shape produces.
+pub(crate) fn checked_count(ctx: &str, factors: &[usize]) -> Result<usize, String> {
+    factors
+        .iter()
+        .try_fold(1usize, |acc, &f| acc.checked_mul(f))
+        .ok_or_else(|| format!("{ctx}: weight count overflows"))
 }
 
 /// Construct a model from its parts, dispatching on the architecture.

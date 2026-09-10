@@ -42,8 +42,14 @@ impl Default for AmpProcessor {
 
 impl AmpProcessor {
     pub fn new() -> Self {
+        // A displaced model is a large heap free (WaveNet/LSTM weight
+        // buffers, potentially MBs); route it to a janitor thread so
+        // `begin_swap`/`next` never run that free inside
+        // `process_block`'s sample loop.
+        let mut models = SwapFader::new(SWAP_FADE_SAMPLES);
+        models.set_retire_sink(SwapFader::spawn_retire_janitor("resonance-amp-janitor"));
         Self {
-            models: SwapFader::new(SWAP_FADE_SAMPLES),
+            models,
             dc_l: DcBlocker::default(),
             dc_r: DcBlocker::default(),
             input_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
