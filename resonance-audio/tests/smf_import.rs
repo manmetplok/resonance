@@ -5,7 +5,8 @@ use midly::num::{u15, u24, u28, u4, u7};
 use midly::{
     Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
 };
-use resonance_audio::midi_io::{parse_midi_file, parse_smf_bytes, SmfFormat};
+use resonance_audio::midi_io::{parse_midi_file, parse_smf_bytes, SignatureEvent, SmfFormat};
+use resonance_audio::types::bar_len_ticks;
 
 /// Serialize an `Smf` made of `(delta, kind)` tracks to bytes. Each track
 /// is terminated with an End-of-Track meta event.
@@ -220,6 +221,188 @@ fn tempo_and_meter_changes_resolve_to_bars() {
     assert!((smf.tempo_points[0].bpm - 120.0).abs() < 0.01);
     assert_eq!(smf.tempo_points[1].bar, 4);
     assert!((smf.tempo_points[1].bpm - 140.0).abs() < 0.01);
+}
+
+#[test]
+fn mid_bar_signature_and_tempo_events_map_to_bars() {
+    // 4/4 from tick 0, then 6/8 declared MID-bar at tick 1000. The change
+    // takes effect at the next bar boundary (tick 1920), so the bar grid
+    // is: bar 0 [0, 1920) in 4/4, bars 1+ are 1440 ticks of 6/8 —
+    // bar 1 [1920, 3360), bar 2 [3360, 4800), bar 3 [4800, 6240).
+    let bytes = encode(
+        Format::Parallel,
+        480,
+        vec![
+            vec![
+                (0, time_sig(4, 2)),    // 4/4 at tick 0
+                (0, tempo(120)),        // tick 0
+                (1000, time_sig(6, 3)), // 6/8 mid-bar
+                (2360, tempo(150)),     // tick 3360, exactly on bar 2's boundary
+                (1640, tempo(140)),     // tick 5000, inside bar 3
+            ],
+            vec![(0, note_on(0, 60, 100)), (6000, note_off(0, 60))],
+        ],
+    );
+
+    let smf = parse_smf_bytes(&bytes).unwrap();
+
+    // A point is filed under the bar CONTAINING its tick (the mid-bar
+    // 6/8 change lands in bar 0), matching the importer's long-standing
+    // bar-numbering; only the bar *grid* snaps the change forward.
+    assert_eq!(smf.signature_events[1].tick, 1000);
+    assert_eq!(smf.signature_points[0].bar, 0);
+    assert_eq!(smf.signature_points[1].bar, 0);
+    assert_eq!(smf.signature_points[1].numerator, 6);
+
+    assert_eq!(smf.tempo_points[0].bar, 0);
+    assert_eq!(smf.tempo_points[1].bar, 2); // tick 3360
+    assert_eq!(smf.tempo_points[2].bar, 3); // tick 5000
+
+    assert_eq!(smf.length_ticks, 6000);
+    assert_eq!(smf.length_bars, 4); // last tick 5999 lives in bar 3
+}
+
+/// The bar-by-bar walk `tick_to_bar` used before it went arithmetic —
+/// kept verbatim as the semantic reference for [`bar_points_match_bar_by_bar_reference`].
+fn reference_tick_to_bar(target: u64, sigs: &[SignatureEvent]) -> u32 {
+    let (mut num, mut den) = (4u8, 4u8);
+    let mut si = 0usize;
+    let mut bar = 0u32;
+    let mut cur = 0u64;
+    while bar < u32::MAX {
+        while let Some(ev) = sigs.get(si) {
+            if ev.tick <= cur {
+                num = ev.numerator;
+                den = ev.denominator;
+                si += 1;
+            } else {
+                break;
+            }
+        }
+        let len = bar_len_ticks(num, den);
+        if len == 0 || target < cur + len {
+            return bar;
+        }
+        cur += len;
+        bar += 1;
+    }
+    bar
+}
+
+#[test]
+fn bar_points_match_bar_by_bar_reference() {
+    // Null test: the importer's direct (span-table) tick→bar mapping must
+    // agree with the original bar-by-bar walk over a sweep of meter maps,
+    // including changes on and off bar boundaries and stacked changes.
+    let mut seed: u64 = 0x9e37_79b9_97f4_a7c5;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+
+    for _ in 0..64 {
+        // Conductor events at PPQ 480 (1:1 engine ticks), sorted by tick.
+        let sig_count = (next() % 6) as usize;
+        let mut sig_ticks: Vec<u32> = (0..sig_count).map(|_| (next() % 100_000) as u32).collect();
+        sig_ticks.sort_unstable();
+        let tempo_count = 1 + (next() % 5) as usize;
+        let mut tempo_ticks: Vec<u32> =
+            (0..tempo_count).map(|_| (next() % 120_000) as u32).collect();
+        tempo_ticks.sort_unstable();
+
+        let mut conductor: Vec<(u32, TrackEventKind<'_>)> = Vec::new();
+        let mut merged: Vec<(u32, TrackEventKind<'_>)> = Vec::new();
+        for &t in &sig_ticks {
+            let numer = 1 + (next() % 12) as u8;
+            let denom_pow = 1 + (next() % 4) as u8; // /2 .. /16
+            merged.push((t, time_sig(numer, denom_pow)));
+        }
+        for &t in &tempo_ticks {
+            merged.push((t, tempo(60 + (next() % 180) as u32)));
+        }
+        merged.sort_by_key(|(t, _)| *t);
+        let mut prev = 0u32;
+        for (t, kind) in merged {
+            conductor.push((t - prev, kind));
+            prev = t;
+        }
+
+        let note_end = 1 + (next() % 200_000) as u32;
+        let bytes = encode(
+            Format::Parallel,
+            480,
+            vec![
+                conductor,
+                vec![(0, note_on(0, 60, 100)), (note_end, note_off(0, 60))],
+            ],
+        );
+
+        let smf = parse_smf_bytes(&bytes).unwrap();
+        for (event, point) in smf.tempo_events.iter().zip(&smf.tempo_points) {
+            assert_eq!(
+                point.bar,
+                reference_tick_to_bar(event.tick, &smf.signature_events),
+                "tempo point diverged from the bar-by-bar walk at tick {}",
+                event.tick
+            );
+        }
+        for (event, point) in smf.signature_events.iter().zip(&smf.signature_points) {
+            assert_eq!(
+                point.bar,
+                reference_tick_to_bar(event.tick, &smf.signature_events),
+                "signature point diverged from the bar-by-bar walk at tick {}",
+                event.tick
+            );
+        }
+        assert_eq!(
+            smf.length_bars,
+            reference_tick_to_bar(smf.length_ticks - 1, &smf.signature_events) + 1,
+            "length_bars diverged for length {}",
+            smf.length_ticks
+        );
+    }
+}
+
+#[test]
+fn hostile_meter_map_parses_in_bounded_time() {
+    // A crafted file that used to freeze the import for hours: PPQ 1
+    // (every raw tick scales x480 into engine ticks), a 1/128 signature
+    // (15-tick bars), and maximum u28 deltas pushing events out to
+    // ~10^11 ticks — billions of bars. Each tempo/signature point used to
+    // walk to its bar one bar at a time, synchronously on the app's
+    // update loop. The mapping is direct arithmetic now; the whole parse
+    // must finish in well under a second (generous wall-clock bound
+    // below, the real cost is microseconds).
+    let huge = 0x0FFF_FFFF; // u28::MAX delta
+    let mut conductor: Vec<(u32, TrackEventKind<'_>)> = vec![(0, time_sig(1, 7))]; // 1/128
+    for i in 0..24 {
+        conductor.push((huge, tempo(60 + i)));
+        conductor.push((huge, time_sig(1, 7)));
+    }
+    let bytes = encode(
+        Format::Parallel,
+        1,
+        vec![
+            conductor,
+            vec![(huge, note_on(0, 60, 100)), (huge, note_off(0, 60))],
+        ],
+    );
+
+    let started = std::time::Instant::now();
+    let smf = parse_smf_bytes(&bytes).unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(smf.tempo_points.len(), 24);
+    assert_eq!(smf.signature_points.len(), 25);
+    // Positions beyond the engine's bar domain saturate at the cap
+    // instead of hanging.
+    assert_eq!(smf.signature_points.last().unwrap().bar, u32::MAX);
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "hostile SMF took {elapsed:?} to parse"
+    );
 }
 
 #[test]

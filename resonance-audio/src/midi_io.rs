@@ -443,43 +443,77 @@ fn scale_tick(raw: u64, src_ppq: u32) -> u64 {
     ((2 * num + den) / (2 * den)) as u64
 }
 
-/// Map an absolute engine tick to its 0-based bar index under the meter
-/// map described by `sigs` (sorted by tick). Signature changes take effect
-/// at the bar boundary at or before their tick.
-fn tick_to_bar(target: u64, sigs: &[SignatureEvent]) -> u32 {
-    let (mut num, mut den) = (4u8, 4u8);
-    let mut si = 0usize;
-    let mut bar = 0u32;
-    let mut cur = 0u64;
-    // Guard against pathological files: bars can't exceed the engine cap.
-    while bar < u32::MAX {
-        while let Some(ev) = sigs.get(si) {
-            if ev.tick <= cur {
-                num = ev.numerator;
-                den = ev.denominator;
-                si += 1;
-            } else {
-                break;
-            }
-        }
-        let len = bar_len_ticks(num, den);
-        if len == 0 || target < cur + len {
-            return bar;
-        }
-        cur += len;
-        bar += 1;
-    }
-    bar
+/// One run of bars sharing a time signature: the absolute engine tick
+/// and 0-based bar at which the run starts, plus its bar length in ticks
+/// (always >= 1, per [`bar_len_ticks`]).
+struct MeterSpan {
+    start_tick: u64,
+    start_bar: u64,
+    bar_len: u64,
 }
 
-/// Number of bars needed to cover `length_ticks` under `sigs` (ceiling).
-fn length_in_bars(length_ticks: u64, sigs: &[SignatureEvent]) -> u32 {
+/// Precompute the meter spans described by `sigs` (sorted by tick). The
+/// first span always starts at tick 0 (4/4 until the first change).
+///
+/// Semantics match the bar-by-bar walk this replaced: a signature change
+/// takes effect at the first bar boundary at or after its tick, and of
+/// several changes landing on the same boundary the last one wins.
+/// Building the table is `O(len(sigs))` and mapping a tick is a binary
+/// search plus one division, so a crafted file whose events sit at
+/// astronomical ticks (tiny signatures x huge deltas) can no longer
+/// stall the import counting billions of bars one at a time.
+fn meter_spans(sigs: &[SignatureEvent]) -> Vec<MeterSpan> {
+    let mut spans = vec![MeterSpan {
+        start_tick: 0,
+        start_bar: 0,
+        bar_len: bar_len_ticks(4, 4),
+    }];
+    for ev in sigs {
+        let last = spans.last().expect("spans start non-empty");
+        // Whole bars of the current span before the first bar boundary
+        // at or after the event's tick. Saturating arithmetic degrades
+        // absurd tick values to "stay in the last span", where the u32
+        // bar cap in `tick_to_bar` takes over.
+        let bars = ev.tick.saturating_sub(last.start_tick).div_ceil(last.bar_len);
+        let start_tick = last
+            .start_tick
+            .saturating_add(bars.saturating_mul(last.bar_len));
+        let start_bar = last.start_bar.saturating_add(bars);
+        let bar_len = bar_len_ticks(ev.numerator, ev.denominator);
+        if bars == 0 {
+            // Same boundary as the previous change: the later event wins.
+            spans.last_mut().expect("spans start non-empty").bar_len = bar_len;
+        } else {
+            spans.push(MeterSpan {
+                start_tick,
+                start_bar,
+                bar_len,
+            });
+        }
+    }
+    spans
+}
+
+/// Map an absolute engine tick to its 0-based bar index under the meter
+/// map described by `spans` (from [`meter_spans`]). Bars are capped at
+/// `u32::MAX`, the engine's bar-index domain.
+fn tick_to_bar(target: u64, spans: &[MeterSpan]) -> u32 {
+    let idx = spans.partition_point(|s| s.start_tick <= target) - 1;
+    let span = &spans[idx];
+    let bar = span
+        .start_bar
+        .saturating_add((target - span.start_tick) / span.bar_len);
+    bar.min(u32::MAX as u64) as u32
+}
+
+/// Number of bars needed to cover `length_ticks` under `spans` (ceiling).
+fn length_in_bars(length_ticks: u64, spans: &[MeterSpan]) -> u32 {
     if length_ticks == 0 {
         return 0;
     }
     // The last content tick lives in bar `tick_to_bar(length-1)`, so the
     // span covers that many bars plus one.
-    tick_to_bar(length_ticks - 1, sigs) + 1
+    tick_to_bar(length_ticks - 1, spans).saturating_add(1)
 }
 
 /// Parse a Standard MIDI File at `path` into a structured [`ImportedSmf`].
@@ -626,20 +660,21 @@ pub fn parse_smf_bytes(bytes: &[u8]) -> Result<ImportedSmf, String> {
         .collect();
     signature_events.sort_by_key(|e| e.tick);
 
-    let length_bars = length_in_bars(length_ticks, &signature_events);
+    let spans = meter_spans(&signature_events);
+    let length_bars = length_in_bars(length_ticks, &spans);
 
     // Derive bar-indexed points ready to splice into a TempoMap.
     let tempo_points: Vec<TempoPoint> = tempo_events
         .iter()
         .map(|e| TempoPoint {
-            bar: tick_to_bar(e.tick, &signature_events),
+            bar: tick_to_bar(e.tick, &spans),
             bpm: e.bpm,
         })
         .collect();
     let signature_points: Vec<SignaturePoint> = signature_events
         .iter()
         .map(|e| SignaturePoint {
-            bar: tick_to_bar(e.tick, &signature_events),
+            bar: tick_to_bar(e.tick, &spans),
             numerator: e.numerator,
             denominator: e.denominator,
         })

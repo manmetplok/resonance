@@ -8,7 +8,7 @@
 //! per-instance state lives on the [`super::ClapInstance`] returned by
 //! [`ClapBundle::create_instance`].
 
-use std::ffi::{CStr, CString};
+use std::ffi::{c_char, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::ptr;
@@ -105,15 +105,13 @@ impl ClapBundle {
             if desc.is_null() {
                 continue;
             }
-            let id = unsafe { CStr::from_ptr((*desc).id) }
-                .to_string_lossy()
-                .to_string();
-            let name = unsafe { CStr::from_ptr((*desc).name) }
-                .to_string_lossy()
-                .to_string();
-            let vendor = unsafe { CStr::from_ptr((*desc).vendor) }
-                .to_string_lossy()
-                .to_string();
+            let Some((id, name, vendor)) =
+                (unsafe { descriptor_strings((*desc).id, (*desc).name, (*desc).vendor) })
+            else {
+                // Mandatory identity fields missing — the descriptor is
+                // unusable, so skip this plugin like a null descriptor.
+                continue;
+            };
 
             // Walk the null-terminated features array looking for "instrument".
             let mut is_instrument = false;
@@ -172,6 +170,22 @@ impl ClapBundle {
     /// not one of ours.
     pub fn factory_presets(&self) -> &[(String, String)] {
         &self.factory_presets
+    }
+
+    /// Test-only doorway to [`descriptor_strings`]: the `bundle` module
+    /// is private, so the helper rides on `ClapBundle` — already
+    /// re-exported through `__test_support` — to stay reachable from
+    /// `tests/clap_ffi_hardening.rs` without widening the module.
+    ///
+    /// # Safety
+    /// Same contract as [`descriptor_strings`].
+    #[doc(hidden)]
+    pub unsafe fn __descriptor_strings_for_test(
+        id: *const c_char,
+        name: *const c_char,
+        vendor: *const c_char,
+    ) -> Option<(String, String, String)> {
+        descriptor_strings(id, name, vendor)
     }
 
     /// Create a plugin instance from this bundle.
@@ -451,6 +465,39 @@ fn plist_executable(plist: &str) -> Option<String> {
     let end = rest[start..].find("</string>")? + start;
     let name = rest[start..end].trim();
     (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Copy the identity strings out of a plugin descriptor's raw fields.
+///
+/// plugin.h marks `id` and `name` as mandatory, but the remaining
+/// descriptor fields are optional and CLAP represents an absent one as
+/// a null pointer — `vendor` is null in the wild often enough that
+/// feeding it to `CStr::from_ptr` unchecked is a real crash, not a
+/// theoretical one. A descriptor missing a mandatory field is unusable:
+/// `None`, and the scanner skips that plugin (mirroring the
+/// null-descriptor skip and the features walk, which already
+/// null-check). A null `vendor` becomes the empty string.
+///
+/// # Safety
+/// Every non-null pointer must reference a NUL-terminated string that
+/// stays valid for the duration of the call — the factory contract for
+/// descriptor fields.
+unsafe fn descriptor_strings(
+    id: *const c_char,
+    name: *const c_char,
+    vendor: *const c_char,
+) -> Option<(String, String, String)> {
+    if id.is_null() || name.is_null() {
+        return None;
+    }
+    let id = CStr::from_ptr(id).to_string_lossy().to_string();
+    let name = CStr::from_ptr(name).to_string_lossy().to_string();
+    let vendor = if vendor.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(vendor).to_string_lossy().to_string()
+    };
+    Some((id, name, vendor))
 }
 
 /// Read the first-party factory-preset bank out of a loaded plugin

@@ -94,9 +94,9 @@ fn clip_tick_window(
 
 /// Collect sample-accurate note events from MIDI clips for a given track and buffer range.
 /// Converts tick-based note positions to absolute sample positions using the tempo map.
-/// `out` must be pre-allocated and is cleared before use. Stops collecting
-/// once `MAX_MIDI_EVENTS_PER_BUFFER` is reached to avoid allocation on the
-/// real-time thread.
+/// `out` must be pre-allocated and is cleared before use. Never grows past
+/// `MAX_MIDI_EVENTS_PER_BUFFER` (no allocation on the real-time thread);
+/// at the cap note-offs take priority over note-ons — see [`push_capped`].
 pub(super) fn collect_midi_events(
     midi_clips: &[MidiClip],
     track_id: TrackId,
@@ -108,6 +108,9 @@ pub(super) fn collect_midi_events(
 ) {
     out.clear();
     let buf_end = playhead + frames as u64;
+    // Note-ons currently in `out`, kept so the cap's eviction path knows
+    // without a scan whether there is anything left to evict.
+    let mut note_ons_queued: usize = 0;
 
     for clip in midi_clips.iter().filter(|c| c.track_id == track_id) {
         let visible_start = clip.trim_start_ticks;
@@ -184,28 +187,30 @@ pub(super) fn collect_midi_events(
 
             // Emit NoteOn if it falls in this buffer
             if note_abs_start >= playhead && note_abs_start < buf_end {
-                if out.len() >= MAX_MIDI_EVENTS_PER_BUFFER {
-                    break;
-                }
-                out.push(PendingNoteEvent {
-                    is_note_on: true,
-                    note: note.note,
-                    velocity: note.velocity,
-                    sample_offset: (note_abs_start - playhead) as u32,
-                });
+                push_capped(
+                    out,
+                    &mut note_ons_queued,
+                    PendingNoteEvent {
+                        is_note_on: true,
+                        note: note.note,
+                        velocity: note.velocity,
+                        sample_offset: (note_abs_start - playhead) as u32,
+                    },
+                );
             }
 
             // Emit NoteOff if it falls in this buffer
             if note_abs_end >= playhead && note_abs_end < buf_end {
-                if out.len() >= MAX_MIDI_EVENTS_PER_BUFFER {
-                    break;
-                }
-                out.push(PendingNoteEvent {
-                    is_note_on: false,
-                    note: note.note,
-                    velocity: 0.0,
-                    sample_offset: (note_abs_end - playhead) as u32,
-                });
+                push_capped(
+                    out,
+                    &mut note_ons_queued,
+                    PendingNoteEvent {
+                        is_note_on: false,
+                        note: note.note,
+                        velocity: 0.0,
+                        sample_offset: (note_abs_end - playhead) as u32,
+                    },
+                );
             }
         }
     }
@@ -214,6 +219,38 @@ pub(super) fn collect_midi_events(
     // stable sort's heap allocation on the audio thread; note-offs are
     // keyed before note-ons so retriggers at the same offset stay paired.
     out.sort_unstable_by_key(|e| (e.sample_offset, e.is_note_on));
+}
+
+/// Append `event` to `out` without ever exceeding
+/// `MAX_MIDI_EVENTS_PER_BUFFER`. Past the cap a note-on is dropped (a
+/// note that never sounds is harmless), while a note-off evicts a queued
+/// note-on to make room — mirroring `MidiStash::stash` — so a voice whose
+/// note-on already reached the plugin in an earlier block still receives
+/// its release instead of sticking. If the buffer holds nothing but
+/// note-offs the incoming one is dropped; its counterpart note-on was
+/// itself dropped or evicted at this cap in the same or an earlier block.
+///
+/// Audio-thread safe: in-place on the pre-allocated buffer, and bounded —
+/// `note_ons` (the count of note-ons currently in `out`, maintained here)
+/// gates the eviction scan, and note-ons past the cap never enter the
+/// buffer, so at most `MAX_MIDI_EVENTS_PER_BUFFER` scans happen per block
+/// however many notes overflow.
+fn push_capped(out: &mut Vec<PendingNoteEvent>, note_ons: &mut usize, event: PendingNoteEvent) {
+    if out.len() < MAX_MIDI_EVENTS_PER_BUFFER {
+        if event.is_note_on {
+            *note_ons += 1;
+        }
+        out.push(event);
+        return;
+    }
+    if event.is_note_on || *note_ons == 0 {
+        return;
+    }
+    if let Some(idx) = out.iter().position(|e| e.is_note_on) {
+        out.remove(idx);
+        out.push(event);
+        *note_ons -= 1;
+    }
 }
 
 /// Public version of collect_midi_events for the bounce path. Exposed
