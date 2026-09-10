@@ -7,4 +7,4 @@
 //! palette now — ba todo #1338 promoted them when the seven effect
 //! editors migrated onto it and needed the same two.
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;

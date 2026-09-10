@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use wayland_plugin_gui::{egui, EditorApp};
+use plugin_gui_core::{egui, EditorApp};
 
 use crate::params::WavetableParams;
 use crate::viz::{VizSnapshot, WavetableVizState};

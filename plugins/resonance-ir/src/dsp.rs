@@ -176,8 +176,13 @@ pub struct IrEngine {
 
 impl IrEngine {
     pub fn new(block_size: usize) -> Self {
+        // A displaced convolver is a large heap free (the partitioned
+        // FDL); route it to a janitor thread so `begin_swap`/`next`
+        // never run that free inside the audio thread's sample loop.
+        let mut fader = SwapFader::new(SWAP_FADE_SAMPLES);
+        fader.set_retire_sink(SwapFader::spawn_retire_janitor("resonance-ir-janitor"));
         Self {
-            fader: SwapFader::new(SWAP_FADE_SAMPLES),
+            fader,
             bypass_delay_l: DelayLine::new(block_size),
             bypass_delay_r: DelayLine::new(block_size),
             block_size,

@@ -8,7 +8,7 @@
 //! delay for TIME, grains per second for GRAINS (ba todo #1322).
 
 use egui::Ui;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::GranularDelayParams;
 use crate::sync::{self, DIVISION_LABELS};

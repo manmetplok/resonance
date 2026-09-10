@@ -21,7 +21,8 @@ pub const REPITCH_TAU_SECONDS: f32 = 0.100;
 
 /// Delay-target changes below this are ignored by the Fade swap
 /// trigger, seconds — keeps host tempo jitter from re-arming fades.
-const TIME_EPSILON_SECONDS: f32 = 1.0e-4;
+/// Shared with the Output-only recirc-tap swap in `feedback.rs`.
+pub(super) const TIME_EPSILON_SECONDS: f32 = 1.0e-4;
 
 /// Once the Repitch slew is within this of the target it snaps,
 /// seconds (sub-sample at any supported rate).
@@ -202,8 +203,9 @@ impl TimeMachine {
     }
 }
 
-/// Samples per Fade leg at `sample_rate` (never zero).
-fn fade_leg_samples(sample_rate: f32) -> u32 {
+/// Samples per Fade leg at `sample_rate` (never zero). Shared with the
+/// Output-only recirc-tap swap in `feedback.rs`.
+pub(super) fn fade_leg_samples(sample_rate: f32) -> u32 {
     ((FADE_LEG_SECONDS * sample_rate) as u32).max(1)
 }
 

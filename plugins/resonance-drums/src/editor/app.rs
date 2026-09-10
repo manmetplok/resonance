@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use resonance_common::registry::InstalledItem;
-use wayland_plugin_gui::{egui, widgets, EditorApp};
+use plugin_gui_core::{egui, widgets, EditorApp};
 
 use crate::download::WorkerHandle;
 use crate::kit;

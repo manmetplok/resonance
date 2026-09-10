@@ -1,6 +1,6 @@
 //! Output oscilloscope reading from the shared viz state.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::theme;
 use crate::viz::SCOPE_FRAMES;

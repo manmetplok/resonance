@@ -1,7 +1,7 @@
 //! ENV / FILTER tab — three envelope cards (Amp / Filter / Mod) on the left
 //! plus a filter panel with type chips and response graph on the right.
 
-use wayland_plugin_gui::{egui, widgets};
+use plugin_gui_core::{egui, widgets};
 
 use crate::editor::theme;
 use crate::editor::viz::{envelope, filter_response};

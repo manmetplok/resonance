@@ -8,7 +8,7 @@
 
 use egui::Ui;
 use resonance_plugin::Param;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::GranularDelayParams;
 use crate::sync::nearest_division;

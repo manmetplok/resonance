@@ -13,7 +13,7 @@
 
 use std::sync::atomic::Ordering;
 
-use wayland_plugin_gui::{egui, widgets};
+use plugin_gui_core::{egui, widgets};
 
 use resonance_plugin::param::Param;
 

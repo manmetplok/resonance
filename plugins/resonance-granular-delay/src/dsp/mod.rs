@@ -152,7 +152,7 @@ impl GranularDsp {
             voice: VoiceStage::new(sample_rate, max_block),
             grains: GrainBank::new(sample_rate, max_block),
             quant: QuantDraw::new(),
-            feedback: FeedbackStage::new(ring_len, max_block),
+            feedback: FeedbackStage::new(ring_len, max_block, sample_rate),
             diffusion: DiffusionStage::new(sample_rate),
         }
     }

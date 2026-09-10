@@ -16,7 +16,7 @@
 //! pins the result so a control cannot drift from its parameter again.
 
 use resonance_plugin::{editor_widgets, Param};
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::IrParams;
 

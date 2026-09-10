@@ -5,7 +5,7 @@
 //! so the morph is visible. A vertical marker shows the post-modulation
 //! live osc position coming from the audio thread.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::display_waves;
 use crate::editor::theme;

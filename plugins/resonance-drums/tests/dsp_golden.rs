@@ -75,6 +75,7 @@
 
 use std::path::PathBuf;
 
+use resonance_dsp_test_support as golden;
 use resonance_drums::drum_map::{
     CRASH_16_EDGE, HIHAT_CLOSED, HIHAT_OPEN, HIHAT_PEDAL, KICK, RIDE_TIP, RIMSHOT, SNARE,
     TOM_HIGH, TOM_LOW, TOM_MID,
@@ -91,14 +92,13 @@ const BLOCK: usize = 256;
 const BLOCKS: usize = 32;
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/dsp_golden.u32")
+    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "dsp_golden.u32")
 }
 
 /// `RESONANCE_BLESS=1` is the workspace-wide convention (CLAUDE.md); the
 /// narrower name blesses only this file inside a wider run.
 fn blessing() -> bool {
-    std::env::var("RESONANCE_BLESS").as_deref() == Ok("1")
-        || std::env::var("RESONANCE_BLESS_DSP_GOLDEN").as_deref() == Ok("1")
+    golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_DSP_GOLDEN"])
 }
 
 /// FNV-1a over a word sequence — folds each block's full seven-port
@@ -403,52 +403,22 @@ fn drums_output_is_bit_exact() {
 
     let path = golden_path();
     if blessing() {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes: Vec<u8> = rendered.iter().flat_map(|w| w.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        eprintln!(
-            "blessed golden: {} words -> {}",
-            rendered.len(),
-            path.display()
-        );
+        golden::bless_words(&path, &rendered);
         return;
     }
 
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+    let want = golden::load_golden_words(&path, rendered.len(), "RESONANCE_BLESS=1");
+    let diff = golden::compare_words(&rendered, &want);
+
+    if let Some((i, got, want)) = diff.first_diff {
         panic!(
-            "missing golden {}: {e}\nregenerate with RESONANCE_BLESS=1",
-            path.display()
-        )
-    });
-    assert_eq!(
-        bytes.len(),
-        rendered.len() * 4,
-        "golden length mismatch — the scenario set changed"
-    );
-
-    let golden = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()));
-
-    let mut diff_count = 0usize;
-    let mut first_diff = None;
-    for (i, (a, b)) in rendered.iter().copied().zip(golden).enumerate() {
-        if a != b {
-            diff_count += 1;
-            if first_diff.is_none() {
-                first_diff = Some((i, a, b));
-            }
-        }
-    }
-
-    if let Some((i, got, want)) = first_diff {
-        panic!(
-            "drum sampler output changed: {diff_count}/{} words differ; first at \
+            "drum sampler output changed: {}/{} words differ; first at \
              word {i} (got {got:#010x}, want {want:#010x}; as f32: {} vs {}).\nA \
              refactor of the sampler must be bit-exact. If the change was \
              intended, re-bless with RESONANCE_BLESS=1.\nA difference confined to \
              the two digest words at the end of a block means a voice moved \
              between output ports without changing the mix.",
+            diff.diff_count,
             rendered.len(),
             f32::from_bits(got),
             f32::from_bits(want),

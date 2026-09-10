@@ -8,4 +8,4 @@
 //! migrating off — see the migration note in `wayland_plugin_gui::theme`.
 //! Only design-system v1 tokens; no per-plugin raw colours.
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;

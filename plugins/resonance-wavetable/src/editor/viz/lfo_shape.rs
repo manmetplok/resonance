@@ -1,6 +1,6 @@
 //! One-cycle LFO shape preview with live phase marker.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::theme;
 

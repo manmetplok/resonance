@@ -5,7 +5,7 @@
 
 use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::Param;
-use wayland_plugin_gui::{egui, widgets};
+use plugin_gui_core::{egui, widgets};
 
 
 use super::app::{peak_of, WavetableEditorApp, WtTab};

@@ -25,7 +25,7 @@
 //! thin binding over the shared `wayland_plugin_gui` kit.
 
 use egui::Ui;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::GranularDelayParams;
 use crate::choice::ChoiceParam;

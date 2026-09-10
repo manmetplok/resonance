@@ -12,7 +12,7 @@
 //! feeding the detector also carries the threshold marker, so the user
 //! can see how far over the line the detector's signal is sitting.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::theme;
 use crate::viz::{DetectorSource, KEY_METER_LABEL};

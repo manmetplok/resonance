@@ -34,7 +34,7 @@ pub mod lfo;
 pub mod mod_matrix;
 pub mod osc;
 
-use wayland_plugin_gui::{egui, widgets};
+use plugin_gui_core::{egui, widgets};
 
 use resonance_plugin::param::{FloatParam, IntParam, Param};
 

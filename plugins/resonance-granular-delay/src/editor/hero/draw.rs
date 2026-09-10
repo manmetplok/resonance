@@ -4,7 +4,7 @@
 //! writes a parameter (ba todo #1265).
 
 use egui::Ui;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::GranularDelayParams;
 use crate::sync::{division_ms, DIVISION_LABELS};

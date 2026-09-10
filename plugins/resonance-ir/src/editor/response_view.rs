@@ -3,7 +3,7 @@
 //! trace: log-frequency X axis, dB Y axis, reference lines at 0 and
 //! every 12 dB.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::{IrViz, RESPONSE_POINTS};
 

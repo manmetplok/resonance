@@ -11,7 +11,7 @@
 //! threshold indicator silently off the plot instead of failing.
 
 use resonance_plugin::FloatParam;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::dsp::transfer_curve_db;
 use crate::editor::theme;

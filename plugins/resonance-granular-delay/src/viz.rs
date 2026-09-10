@@ -33,6 +33,8 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use resonance_metering::{AtomicF32, AtomicF32Array};
+
 /// Fixed number of grain-snapshot slots (matches the audible engine's
 /// pool size, `resonance_dsp::MAX_GRAINS`).
 pub const GRAIN_SLOTS: usize = 64;
@@ -101,11 +103,11 @@ pub fn unpack_grain(bits: u64) -> Option<GrainSnapshot> {
 pub struct GranularViz {
     /// Effective delay-tap position, milliseconds (the Repitch glide /
     /// Fade commit readout, ba todo #1076).
-    delay_ms: AtomicU32,
+    delay_ms: AtomicF32,
     /// Host tempo (0 when the host provides none).
-    bpm: AtomicU32,
+    bpm: AtomicF32,
     /// Tracked fundamental, Hz (0 until the first voiced lock).
-    period_hz: AtomicU32,
+    period_hz: AtomicF32,
     /// 1 while the pitch-synchronous Voice/Mono scheduler is engaged.
     engaged: AtomicU32,
     /// Currently sounding async-cloud grains.
@@ -115,27 +117,27 @@ pub struct GranularViz {
     /// Packed grain-snapshot slots (ba todo #1135; layout in the module
     /// docs). One relaxed `u64` store per slot — tear-free.
     grains: [AtomicU64; GRAIN_SLOTS],
-    /// Coarse absolute-peak bins over the source ring (f32 bits).
-    peaks: [AtomicU32; PEAK_BINS],
+    /// Coarse absolute-peak bins over the source ring.
+    peaks: AtomicF32Array<PEAK_BINS>,
     /// Peak bin currently containing the write head.
     peak_head: AtomicU32,
-    /// Milliseconds of buffer covered by one peak bin (f32 bits).
-    peak_bin_ms: AtomicU32,
+    /// Milliseconds of buffer covered by one peak bin.
+    peak_bin_ms: AtomicF32,
 }
 
 impl GranularViz {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            delay_ms: AtomicU32::new(0.0f32.to_bits()),
-            bpm: AtomicU32::new(0.0f32.to_bits()),
-            period_hz: AtomicU32::new(0.0f32.to_bits()),
+            delay_ms: AtomicF32::new(0.0),
+            bpm: AtomicF32::new(0.0),
+            period_hz: AtomicF32::new(0.0),
             engaged: AtomicU32::new(0),
             active_grains: AtomicU32::new(0),
             psola_voices: AtomicU32::new(0),
             grains: std::array::from_fn(|_| AtomicU64::new(0)),
-            peaks: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
+            peaks: AtomicF32Array::new(0.0),
             peak_head: AtomicU32::new(0),
-            peak_bin_ms: AtomicU32::new(0.0f32.to_bits()),
+            peak_bin_ms: AtomicF32::new(0.0),
         })
     }
 
@@ -149,9 +151,9 @@ impl GranularViz {
         active_grains: usize,
         psola_voices: usize,
     ) {
-        self.delay_ms.store(delay_ms.to_bits(), Ordering::Relaxed);
-        self.bpm.store(bpm.to_bits(), Ordering::Relaxed);
-        self.period_hz.store(period_hz.to_bits(), Ordering::Relaxed);
+        self.delay_ms.store(delay_ms, Ordering::Relaxed);
+        self.bpm.store(bpm, Ordering::Relaxed);
+        self.period_hz.store(period_hz, Ordering::Relaxed);
         self.engaged.store(engaged as u32, Ordering::Relaxed);
         self.active_grains
             .store(active_grains.min(u32::MAX as usize) as u32, Ordering::Relaxed);
@@ -160,15 +162,15 @@ impl GranularViz {
     }
 
     pub fn read_delay_ms(&self) -> f32 {
-        f32::from_bits(self.delay_ms.load(Ordering::Relaxed))
+        self.delay_ms.load(Ordering::Relaxed)
     }
 
     pub fn read_bpm(&self) -> f32 {
-        f32::from_bits(self.bpm.load(Ordering::Relaxed))
+        self.bpm.load(Ordering::Relaxed)
     }
 
     pub fn read_period_hz(&self) -> f32 {
-        f32::from_bits(self.period_hz.load(Ordering::Relaxed))
+        self.period_hz.load(Ordering::Relaxed)
     }
 
     pub fn read_engaged(&self) -> bool {
@@ -205,12 +207,10 @@ impl GranularViz {
     /// absolute peaks indexed by fixed ring position, `head_bin` is the
     /// bin the write head is in and `bin_ms` the buffer time per bin.
     pub fn store_peaks(&self, bins: &[f32; PEAK_BINS], head_bin: usize, bin_ms: f32) {
-        for (slot, &v) in self.peaks.iter().zip(bins.iter()) {
-            slot.store(v.to_bits(), Ordering::Relaxed);
-        }
+        self.peaks.store(bins);
         self.peak_head
             .store((head_bin % PEAK_BINS) as u32, Ordering::Relaxed);
-        self.peak_bin_ms.store(bin_ms.to_bits(), Ordering::Relaxed);
+        self.peak_bin_ms.store(bin_ms, Ordering::Relaxed);
     }
 
     /// Editor-side decode of the grain snapshot (ba todo #1135): fills
@@ -235,8 +235,8 @@ impl GranularViz {
         let head = self.peak_head.load(Ordering::Relaxed) as usize % PEAK_BINS;
         for (i, slot) in out.iter_mut().enumerate() {
             let bin = (head + 1 + i) % PEAK_BINS;
-            *slot = f32::from_bits(self.peaks[bin].load(Ordering::Relaxed));
+            *slot = self.peaks.load_at(bin);
         }
-        f32::from_bits(self.peak_bin_ms.load(Ordering::Relaxed))
+        self.peak_bin_ms.load(Ordering::Relaxed)
     }
 }

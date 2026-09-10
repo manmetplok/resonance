@@ -12,7 +12,7 @@
 //! captions for a cell in this layout ("dry/wet", "Peak/RMS") rather
 //! than facts about the parameter.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::app::CompressorEditorApp;
 

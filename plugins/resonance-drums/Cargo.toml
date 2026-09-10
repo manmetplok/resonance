@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 default = ["editor"]
 editor = [
     "dep:wayland-plugin-gui",
+    "dep:plugin-gui-core",
     "dep:egui",
     "dep:rfd",
     "dep:ureq",
@@ -34,6 +35,7 @@ parking_lot.workspace = true
 
 # Editor dependencies — only pulled in when the `editor` feature is on.
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
 egui = { workspace = true, optional = true }
 rfd = { workspace = true, optional = true }
 
@@ -45,6 +47,7 @@ dirs = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 
 # Per-block DSP benchmark. `harness = false` hands main() to criterion.
 [[bench]]

@@ -156,6 +156,24 @@ impl CompressorDsp {
             return;
         }
 
+        // Self-heal non-finite recursive state before the block runs.
+        // Every envelope here is a one-pole recursion of the shape
+        // `x + (state - x) * coef`, which never leaves NaN once it
+        // holds one — a single bad detector sample (the plugin's own
+        // math at an extreme setting, a host that doesn't scrub, an
+        // upstream Inf) would otherwise mute or garble the track until
+        // reset. Checking at block rate costs the hot path nothing and
+        // bounds recovery to one block.
+        if !(self.gr_db.is_finite() && self.peak_env.is_finite() && self.rms_env.is_finite()) {
+            self.gr_db = 0.0;
+            self.peak_env = 0.0;
+            self.rms_env = 0.0;
+        }
+        if !(self.in_peak.is_finite() && self.out_peak.is_finite()) {
+            self.in_peak = 0.0;
+            self.out_peak = 0.0;
+        }
+
         // --- Snapshot parameters for this block ---
         let threshold = params.threshold.value();
         let ratio = params.ratio.value().max(1.0);
@@ -223,6 +241,19 @@ impl CompressorDsp {
                 None => 0.5 * (l + r),
             };
             let det_sample = self.sc_hpf.process(mono);
+            // A non-finite detector sample reads as silence — the
+            // envelopes below release naturally instead of latching
+            // NaN. The biquad's delay line was just poisoned by that
+            // same sample, so clear it too; the HPF re-settling over a
+            // few samples is nothing next to a latched NaN. Guarded on
+            // the filter OUTPUT so one branch covers both a bad input
+            // sample and delay-line state that was already latched.
+            let det_sample = if det_sample.is_finite() {
+                det_sample
+            } else {
+                self.sc_hpf.reset();
+                0.0
+            };
 
             // Peak envelope: fast attack, exponential decay. The release
             // coefficient is also used for the peak decay here so the

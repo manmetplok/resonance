@@ -1,6 +1,6 @@
 //! OSC tab: wavetable viewer + osc selector + per-osc controls + unison.
 
-use wayland_plugin_gui::{egui, widgets};
+use plugin_gui_core::{egui, widgets};
 
 use crate::editor::display_waves;
 use crate::editor::theme;

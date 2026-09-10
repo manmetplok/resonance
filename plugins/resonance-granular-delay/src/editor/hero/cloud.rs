@@ -3,7 +3,7 @@
 //! cloud itself, painted into the seam the frame leaves between the
 //! backdrop and the heads.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::GranularDelayParams;
 use crate::quantize::{mode_from_index, quantize_transpose, root_from_index, PitchQuantize};

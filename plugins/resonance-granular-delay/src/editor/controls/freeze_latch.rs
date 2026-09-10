@@ -2,7 +2,7 @@
 //! req-5) — a granular-specific composite rather than a generic widget.
 
 use egui::Ui;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::GranularDelayParams;
 

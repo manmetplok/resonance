@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use wayland_plugin_gui::{egui, EditorApp};
+use plugin_gui_core::{egui, EditorApp};
 
 use crate::params::IrParams;
 use crate::viz::IrViz;

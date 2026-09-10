@@ -1,7 +1,7 @@
 //! LFO tab — render LFO 1, 2, 3 each as a card with shape preview and
 //! controls. The selected card gets a brighter LED.
 
-use wayland_plugin_gui::{egui, widgets};
+use plugin_gui_core::{egui, widgets};
 
 use crate::editor::theme;
 use crate::editor::viz::lfo_shape;
