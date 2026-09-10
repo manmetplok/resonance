@@ -14,7 +14,7 @@
 //! dispatched for re-render, and the job covering them only resolves once
 //! all of them have landed.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
+use resonance_app::control_socket::ControlMessage;
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
@@ -24,6 +24,7 @@ use resonance_control::job::{JobStarted, JobState, JobStatus};
 use resonance_control::methods::section as section_proto;
 use resonance_control::methods::vocal as proto;
 use resonance_control::{ErrorKind, Request, Response};
+use crate::common::roundtrip;
 
 const TRACK: u64 = 50;
 const OTHER_TRACK: u64 = 51;
@@ -35,16 +36,6 @@ fn app_with_project() -> Resonance {
         "/tmp/control-vocal-render-all-lanes.rprj",
     ));
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {
@@ -357,4 +348,31 @@ fn an_unrenderable_lane_does_not_block_the_rest() {
         .expect("a track with nothing to render is an error");
     assert_eq!(error.kind(), ErrorKind::InvalidParams);
     assert!(error.message.contains("no notes"), "{}", error.message);
+}
+
+/// The render job belongs to the connection that asked for it, like every
+/// other control job: when that client disconnects mid-render, the job is
+/// reaped with the rest of its jobs instead of surviving ownerless (and
+/// later soaking up a failure that belongs to nobody).
+#[test]
+fn the_render_job_is_owned_by_its_connection_and_reaped_on_disconnect() {
+    let (mut app, _lanes) = three_lane_app();
+    let started: JobStarted = render(&mut app, Some(TRACK), None)
+        .result()
+        .expect("vocal.render starts a job");
+    let job_id = u64::from(started.job_id);
+    assert_eq!(job_state(&mut app, job_id), JobState::Pending);
+
+    // The requesting connection (the roundtrip helper's conn 1) closes
+    // mid-render: its jobs go with it, exactly as the project/save jobs do.
+    let _ = app.update(Message::Control(ControlMessage::Disconnected { conn: 1 }));
+    let response = roundtrip(
+        &mut app,
+        Request::new(99, "job.status", &serde_json::json!({ "job_id": job_id }))
+            .expect("params serialize"),
+    );
+    assert_eq!(
+        response.error.expect("reaped with its connection").kind(),
+        ErrorKind::NotFound
+    );
 }

@@ -14,8 +14,6 @@
 //! instead of competing with it, ids and names that join to
 //! `song.summary`, and one shared range across every entry.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::{TrackState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{
@@ -29,6 +27,7 @@ use resonance_control::methods::meter::{
 use resonance_control::{ErrorKind, Request, Response};
 use resonance_metering::offline::BandShares;
 use serde_json::json;
+use crate::common::roundtrip;
 
 const DRUMS: u64 = 1;
 const KICK: u64 = 2;
@@ -54,16 +53,6 @@ fn app() -> Resonance {
         name: "Drum Bus".to_owned(),
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn request(id: i64, method: &str, params: serde_json::Value) -> Request {

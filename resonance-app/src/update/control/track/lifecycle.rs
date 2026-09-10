@@ -2,7 +2,7 @@
 //! plugin adds (`track.add_instrument` / `add_effect`) that give a fresh
 //! track something to make sound with.
 
-use super::{ack, find_track, not_found_track, reject};
+use super::{ack, find_track, frozen_reject, not_found_track, reject};
 use crate::message::{Message, PluginMessage, TrackMessage};
 use crate::update::control::{run_via_update, success};
 use crate::Resonance;
@@ -156,6 +156,12 @@ fn add_plugin(
     if find_track(app, params.track_id.0).is_none() {
         return not_found_track(request, params.track_id.0);
     }
+    // `AddPluginToTrackWithId` is a frozen-input edit (gates.rs): the
+    // gate would swallow the add, and this handler would still fabricate
+    // a `{slot, occurrence}` reply for a plugin that never landed.
+    if let Some(e) = frozen_reject(app, params.track_id.0) {
+        return reject(request, e);
+    }
     let Some(plugin) = app
         .available_plugins
         .iter()
@@ -193,6 +199,16 @@ fn add_plugin(
             request,
             RpcError::invalid_params(format!(
                 "plugin {:?} is not an instrument; use track.add_effect",
+                params.plugin_id
+            )),
+        );
+    }
+    if matches!(role, PluginRole::Effect) && plugin.is_instrument {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "plugin {:?} is an instrument; an effect slot is handed the track's \
+                 audio and has no notes to play — add it with track.add_instrument",
                 params.plugin_id
             )),
         );

@@ -75,7 +75,18 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::SavePathSelected(Some(path)) => {
-            let path = if path.ends_with(".rproj") {
+            // Case-insensitive: `Song.RPROJ` / `Song.Rproj` already carry
+            // the extension and must not be doubled into
+            // `Song.RPROJ.rproj`. Callers (the control `project.save` /
+            // `save_as` handlers included) may already have normalized
+            // this, but the check is repeated here so this handler stays
+            // correct standalone for its other caller, the rfd save
+            // dialog.
+            let has_rproj_ext = std::path::Path::new(&path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rproj"));
+            let path = if has_rproj_ext {
                 std::path::PathBuf::from(path)
             } else {
                 std::path::PathBuf::from(format!("{path}.rproj"))

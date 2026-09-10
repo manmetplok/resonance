@@ -6,7 +6,7 @@
 //! calls target the first keyable plugin) live in
 //! [`super::super::sidechain`] so they cannot drift apart.
 
-use super::{ack, find_track, instance_for, not_found_track, reject};
+use super::{ack, find_track, frozen_reject, instance_for, not_found_track, reject};
 use crate::message::Message;
 use crate::state::TrackState;
 use crate::update::control::sidechain::{
@@ -86,6 +86,11 @@ pub(super) fn set_sidechain(
     let Some(t) = find_track(app, params.track_id.0).cloned() else {
         return not_found_track(request, params.track_id.0);
     };
+    // Re-keying a detector is a frozen-input edit (`SetPluginSidechain`,
+    // gates.rs); reject rather than ack an edit the gate would swallow.
+    if let Some(e) = frozen_reject(app, t.id) {
+        return reject(request, e);
+    }
 
     let source = match resolve_key_source(
         app,
@@ -131,6 +136,11 @@ pub(super) fn clear_sidechain(
     let Some(t) = find_track(app, params.track_id.0).cloned() else {
         return not_found_track(request, params.track_id.0);
     };
+    // Same frozen-input rule as `set_sidechain`: clearing a key route
+    // dispatches `SetPluginSidechain` too.
+    if let Some(e) = frozen_reject(app, t.id) {
+        return reject(request, e);
+    }
     let instance_id = match resolve_keyed_plugin(
         app,
         &t,

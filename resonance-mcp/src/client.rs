@@ -7,6 +7,13 @@
 //! requests through its update loop anyway); the async [`ControlClient::call`]
 //! wrapper runs it on a blocking thread so the MCP server's tokio runtime
 //! is never blocked.
+//!
+//! Every read and write carries a deadline ([`CallTimeouts`]) so an app
+//! whose update loop has stalled cannot park a call — and with it the
+//! connection mutex, and every later call — forever. A timed-out
+//! connection is dropped, never reused: the next call reconnects on a
+//! fresh stream, so a late reply to the abandoned request can never be
+//! mistaken for the answer to a new one.
 
 use resonance_control::methods::control::{HelloParams, HelloResult};
 use resonance_control::{
@@ -21,6 +28,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Env var overriding the control-socket path (same as the app).
 pub use resonance_control::socket::SOCKET_PATH_ENV;
@@ -30,6 +38,34 @@ pub use resonance_control::socket::SOCKET_PATH_ENV;
 /// so they agree by construction.
 pub use resonance_control::socket::socket_path;
 
+/// Per-call socket deadlines. The defaults suit production; tests
+/// shrink them via [`ControlClient::with_timeouts`].
+#[derive(Debug, Clone, Copy)]
+pub struct CallTimeouts {
+    /// Read deadline for ordinary calls. The app answers within one
+    /// update-loop turn, so two minutes cleanly separates "slow" from
+    /// "stuck".
+    pub read: Duration,
+    /// Read deadline for `job.wait`, the one method that legitimately
+    /// blocks server-side: the app caps a wait at 600 s regardless of
+    /// the requested `timeout_ms` (`JobBoard::MAX_WAIT`), so this must
+    /// exceed that bound plus margin.
+    pub job_wait_read: Duration,
+    /// Write deadline. A write only blocks when the app stops draining
+    /// its receive buffer, and requests are small.
+    pub write: Duration,
+}
+
+impl Default for CallTimeouts {
+    fn default() -> Self {
+        Self {
+            read: Duration::from_secs(120),
+            job_wait_read: Duration::from_secs(630),
+            write: Duration::from_secs(30),
+        }
+    }
+}
+
 /// A failed control call, with enough context to phrase an actionable
 /// tool error for the model.
 #[derive(Debug)]
@@ -38,6 +74,12 @@ pub enum CallError {
     NotRunning { path: PathBuf, source: std::io::Error },
     /// The connection dropped mid-call; the next call reconnects.
     Disconnected { source: std::io::Error },
+    /// The app accepted the request but did not answer within the read
+    /// deadline: it is running but its update loop is stalled. The
+    /// connection is dropped — a late reply on a reused stream would
+    /// desync request/response pairing — and the next call reconnects
+    /// on a fresh stream.
+    Unresponsive { method: String, timeout: Duration },
     /// The `control.hello` handshake was rejected or version-incompatible.
     Handshake { detail: String },
     /// The server answered with a JSON-RPC error.
@@ -62,6 +104,13 @@ impl CallError {
                 "the connection to resonance dropped mid-call ({source}). The app may have quit or \
                  restarted; the next tool call reconnects automatically — verify state with \
                  song_summary before retrying any edit."
+            ),
+            CallError::Unresponsive { method, timeout } => format!(
+                "resonance did not answer {method} within {}s: the app is running but \
+                 unresponsive (its update loop may be stalled). The connection was dropped and \
+                 the next tool call reconnects on a fresh stream — check the app, then verify \
+                 state with song_summary before retrying any edit.",
+                timeout.as_secs()
             ),
             CallError::Handshake { detail } => format!(
                 "the running resonance app is protocol-incompatible with this MCP server: {detail}. \
@@ -116,15 +165,23 @@ pub struct ControlClient {
     path: PathBuf,
     connection: Mutex<Option<Connection>>,
     next_id: AtomicI64,
+    timeouts: CallTimeouts,
 }
 
 impl ControlClient {
     /// A client for the socket at `path`; does not connect yet.
     pub fn new(path: PathBuf) -> Arc<Self> {
+        Self::with_timeouts(path, CallTimeouts::default())
+    }
+
+    /// [`Self::new`] with explicit socket deadlines (tests shrink them
+    /// to keep an unresponsive-app scenario fast).
+    pub fn with_timeouts(path: PathBuf, timeouts: CallTimeouts) -> Arc<Self> {
         Arc::new(Self {
             path,
             connection: Mutex::new(None),
             next_id: AtomicI64::new(1),
+            timeouts,
         })
     }
 
@@ -173,11 +230,13 @@ impl ControlClient {
             *slot = Some(self.connect()?);
         }
         let connection = slot.as_mut().expect("connection just established");
-        match Self::round_trip(connection, self.fresh_id(), method, params) {
+        match self.round_trip(connection, self.fresh_id(), method, params) {
             Ok(value) => Ok(value),
             Err(error) => {
-                // Drop the connection on transport-level failures so the
-                // next call reconnects; RPC errors keep it alive.
+                // Drop the connection on transport-level failures —
+                // including timeouts, whose late reply on a reused
+                // stream would desync request/response pairing — so
+                // the next call reconnects; RPC errors keep it alive.
                 if !matches!(error, CallError::Rpc(_)) {
                     *slot = None;
                 }
@@ -205,6 +264,12 @@ impl ControlClient {
             path: self.path.clone(),
             source,
         })?;
+        // Timeouts are socket options, shared with every `try_clone` of
+        // the stream — setting them here covers the reader half too.
+        stream
+            .set_write_timeout(Some(self.timeouts.write))
+            .and_then(|()| stream.set_read_timeout(Some(self.timeouts.read)))
+            .map_err(|source| CallError::Disconnected { source })?;
         let reader_stream = stream.try_clone().map_err(|source| CallError::Disconnected { source })?;
         let mut connection = Connection {
             reader: MessageReader::from_reader(reader_stream),
@@ -219,18 +284,19 @@ impl ControlClient {
             protocol_version: PROTOCOL_VERSION,
         };
         let hello_params = serde_json::to_value(params).expect("hello params serialize");
-        let value = Self::round_trip(
-            &mut connection,
-            self.fresh_id(),
-            resonance_control::methods::control::HELLO,
-            Some(hello_params),
-        )
-        .map_err(|error| match error {
-            // A rejected handshake is a compatibility problem, not a
-            // generic RPC failure.
-            CallError::Rpc(e) => CallError::Handshake { detail: e.message },
-            other => other,
-        })?;
+        let value = self
+            .round_trip(
+                &mut connection,
+                self.fresh_id(),
+                resonance_control::methods::control::HELLO,
+                Some(hello_params),
+            )
+            .map_err(|error| match error {
+                // A rejected handshake is a compatibility problem, not a
+                // generic RPC failure.
+                CallError::Rpc(e) => CallError::Handshake { detail: e.message },
+                other => other,
+            })?;
         let hello: HelloResult = serde_json::from_value(value).map_err(|e| CallError::Protocol {
             detail: format!("unexpected control.hello result: {e}"),
         })?;
@@ -253,22 +319,55 @@ impl ControlClient {
     }
 
     /// Write one request and read responses until the matching id.
+    ///
+    /// Both directions carry a deadline: hitting it maps to
+    /// [`CallError::Unresponsive`], which [`Self::call_blocking`]
+    /// treats like any transport failure — the connection is dropped
+    /// and never reused.
     fn round_trip(
+        &self,
         connection: &mut Connection,
         id: i64,
         method: &str,
         params: Option<Value>,
     ) -> Result<Value, CallError> {
+        // `job.wait` legitimately blocks server-side (bounded at 600 s
+        // by the app), so it gets the long deadline; everything else
+        // answers within one update-loop turn.
+        let read_timeout = if method == resonance_control::job::WAIT {
+            self.timeouts.job_wait_read
+        } else {
+            self.timeouts.read
+        };
+        // The writer and the reader clone share one socket, so this
+        // reaches the reader half too.
+        connection
+            .writer
+            .set_read_timeout(Some(read_timeout))
+            .map_err(|source| CallError::Disconnected { source })?;
+        let unresponsive = |timeout: Duration| CallError::Unresponsive {
+            method: method.to_owned(),
+            timeout,
+        };
+        let is_timeout = |io: &std::io::Error| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            )
+        };
         let request = Request {
             jsonrpc: resonance_control::rpc::JSONRPC_VERSION.to_owned(),
             id: RequestId::Number(id),
             method: method.to_owned(),
             params,
         };
-        write_message(&mut connection.writer, &request).map_err(|e| CallError::Disconnected {
-            source: match e {
-                resonance_control::FramingError::Io(io) => io,
-                other => std::io::Error::other(other.to_string()),
+        write_message(&mut connection.writer, &request).map_err(|e| match e {
+            resonance_control::FramingError::Io(io) if is_timeout(&io) => {
+                unresponsive(self.timeouts.write)
+            }
+            resonance_control::FramingError::Io(io) => CallError::Disconnected { source: io },
+            other => CallError::Disconnected {
+                source: std::io::Error::other(other.to_string()),
             },
         })?;
         loop {
@@ -276,6 +375,9 @@ impl ControlClient {
                 .reader
                 .read_message()
                 .map_err(|e| match e {
+                    resonance_control::FramingError::Io(io) if is_timeout(&io) => {
+                        unresponsive(read_timeout)
+                    }
                     resonance_control::FramingError::Io(io) => {
                         CallError::Disconnected { source: io }
                     }

@@ -4,14 +4,14 @@
 //! the matching echo after each mutating call — exactly as the engine
 //! would — then assert the mirrored state, undo behaviour, and errors.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::{MidiClipState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioEvent, MidiNote, TrackType};
 use resonance_control::methods::notes::{CreateClipResult, InsertResult};
 use resonance_control::methods::song::NotesView;
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 const SR: u32 = 48_000;
 const TPQ: u64 = 480;
@@ -51,20 +51,6 @@ fn note(pitch: u8, start_beats: u64, dur_beats: u64, vel: f32) -> MidiNote {
         start_tick: start_beats * TPQ,
         duration_ticks: dur_beats * TPQ,
     }
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn notes_of(app: &mut Resonance, clip_id: u64) -> NotesView {
@@ -173,8 +159,9 @@ fn edit_fans_out_pitch_start_duration_velocity() {
         }),
     );
     let ack: MutationAck = response.result().expect("edit succeeds");
-    // Move + resize + velocity = three undoable sub-edits.
-    assert_eq!(ack.revision, before + 3);
+    // Move + resize + velocity fan out internally, but the call is ONE
+    // undoable transaction — one revision bump on the wire.
+    assert_eq!(ack.revision, before + 1);
 
     let cmds: Vec<_> = {
         let mut v = Vec::new();
@@ -209,6 +196,51 @@ fn edit_only_changes_requested_fields() {
     );
     assert!(response.result::<MutationAck>().is_ok());
     assert_eq!(app.revision(), before + 1);
+}
+
+/// The wire contract (doc #265): one mutating call = one revision bump
+/// = one undoable transaction, however many sub-edits the call fans out
+/// into. Before the compound-undo fix a three-field `notes.edit` bumped
+/// the revision three times (a client falsely inferred a concurrent
+/// user edit) and `edit.undo` reverted only a third of the call.
+#[test]
+fn edit_of_three_fields_is_one_atomic_undo_transaction() {
+    let mut app = app_with_clip(vec![note(60, 0, 1, 0.5)]);
+    let before = app.revision();
+
+    let response = call(
+        &mut app,
+        "notes.edit",
+        serde_json::json!({
+            "clip_id": CLIP,
+            "index": 0,
+            "pitch": 67,
+            "duration_beats": 2.0,
+            "velocity": 120
+        }),
+    );
+    let ack: MutationAck = response.result().expect("edit succeeds");
+    assert_eq!(ack.revision, before + 1, "one call, one revision bump");
+    assert_eq!(
+        ack.revision,
+        app.revision(),
+        "the ack carries the post-call revision"
+    );
+
+    // ONE undo restores ALL three fields to their pre-call values.
+    let _ = app.update(Message::Undo);
+    let view = notes_of(&mut app, CLIP);
+    assert_eq!(view.notes.len(), 1);
+    assert_eq!(view.notes[0].pitch, 60, "pitch restored");
+    assert_eq!(view.notes[0].duration_ticks, TPQ, "duration restored");
+    assert_eq!(view.notes[0].velocity, 64, "velocity restored (0.5 * 127)");
+
+    // ONE redo replays the call to its final state.
+    let _ = app.update(Message::Redo);
+    let view = notes_of(&mut app, CLIP);
+    assert_eq!(view.notes[0].pitch, 67);
+    assert_eq!(view.notes[0].duration_ticks, 2 * TPQ);
+    assert_eq!(view.notes[0].velocity, 120);
 }
 
 #[test]
@@ -402,6 +434,67 @@ fn create_clip_in_section_placement() {
     });
     let view = notes_of(&mut app, u64::from(result.clip_id));
     assert_eq!(view.notes.len(), 0);
+}
+
+/// Default-clip-length regression (ba doc #265 fixed defect): the length
+/// must come from the signature IN EFFECT at the clip's own target bar,
+/// not the transport's current signature. A default-length clip dropped
+/// into a 6/8 section of an otherwise-4/4 song must get a 6/8 bar's
+/// worth of ticks (six eighth notes = 1440 ticks), not four quarter
+/// notes (1920 ticks).
+#[test]
+fn create_clip_default_length_follows_the_signature_at_the_target_bar() {
+    let mut app = app();
+    // A meter change to 6/8 at wire bar 5 (0-based bar 4).
+    let response = call(
+        &mut app,
+        "global.add_signature_event",
+        serde_json::json!({ "bar": 5, "numerator": 6, "denominator": 8 }),
+    );
+    assert!(response.result::<MutationAck>().is_ok());
+
+    let rx = app.test_capture_engine();
+    let response = call(
+        &mut app,
+        "notes.create_clip",
+        serde_json::json!({ "track_id": TRACK, "start_bar": 5 }),
+    );
+    assert!(response.result::<CreateClipResult>().is_ok());
+
+    use resonance_audio::types::AudioCommand as C;
+    let duration = rx
+        .try_iter()
+        .find_map(|c| match c {
+            C::LoadMidiClipDirect { duration_ticks, .. } => Some(duration_ticks),
+            _ => None,
+        })
+        .expect("create_clip dispatches LoadMidiClipDirect");
+    // 6/8: six beats of an eighth note each (TPQ/2 ticks), not four
+    // quarter-note beats.
+    assert_eq!(duration, 6 * (TPQ / 2), "default length follows the 6/8 meter at bar 5");
+}
+
+#[test]
+fn create_clip_default_length_in_a_4_4_region_is_unchanged() {
+    let mut app = app();
+    // Same song, but a bar still governed by the initial 4/4 meter.
+    let rx = app.test_capture_engine();
+    let response = call(
+        &mut app,
+        "notes.create_clip",
+        serde_json::json!({ "track_id": TRACK, "start_bar": 1 }),
+    );
+    assert!(response.result::<CreateClipResult>().is_ok());
+
+    use resonance_audio::types::AudioCommand as C;
+    let duration = rx
+        .try_iter()
+        .find_map(|c| match c {
+            C::LoadMidiClipDirect { duration_ticks, .. } => Some(duration_ticks),
+            _ => None,
+        })
+        .expect("create_clip dispatches LoadMidiClipDirect");
+    assert_eq!(duration, 4 * TPQ, "unchanged: one 4/4 bar of default length");
 }
 
 fn section_definition(id: u64, length_bars: u32) -> resonance_app::compose::SectionDefinitionState {

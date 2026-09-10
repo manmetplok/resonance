@@ -11,14 +11,13 @@
 //! app-side at dispatch, and let the (already idempotent) echo be a
 //! no-op.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioEvent, TrackType};
 use resonance_control::methods::bus::CreateResult;
 use resonance_control::methods::song::SongSummary;
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 const TRACK: u64 = 1;
 
@@ -28,20 +27,6 @@ fn app() -> Resonance {
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-bus-commit.rprj"));
     app.test_add_track(TRACK, TrackType::Instrument);
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn create_bus(app: &mut Resonance, name: &str) -> u64 {
@@ -185,4 +170,48 @@ fn a_bus_is_still_a_valid_destination() {
     .expect("an unknown destination bus is still rejected");
     assert_eq!(error.kind(), ErrorKind::NotFound);
     assert!(error.message.contains("bus.create"), "{}", error.message);
+}
+
+// ---------------------------------------------------------------------------
+// Default names pick the smallest free "Bus N", not len()+1
+// ---------------------------------------------------------------------------
+
+#[test]
+fn default_bus_names_do_not_collide_after_a_deletion() {
+    let mut app = app();
+    let first: CreateResult = call(&mut app, "bus.create", serde_json::json!({}))
+        .result()
+        .expect("first default-named bus");
+    let second: CreateResult = call(&mut app, "bus.create", serde_json::json!({}))
+        .result()
+        .expect("second default-named bus");
+
+    let name_of = |app: &mut Resonance, id: u64| -> String {
+        summary(app)
+            .tracks
+            .into_iter()
+            .find(|t| t.id.0 == id)
+            .expect("bus in summary")
+            .name
+    };
+    assert_eq!(name_of(&mut app, first.bus_id.0), "Bus 1");
+    assert_eq!(name_of(&mut app, second.bus_id.0), "Bus 2");
+
+    // Delete "Bus 1"; the next default must reuse the freed name rather
+    // than produce a second "Bus 2" (len()+1 did exactly that).
+    let _: MutationAck = call(
+        &mut app,
+        "bus.delete",
+        serde_json::json!({"bus_id": first.bus_id.0, "confirm": true}),
+    )
+    .result()
+    .expect("confirmed delete succeeds");
+    // Deletion leaves the registry via the engine echo, unlike creation
+    // (which commits synchronously) — apply it like the app would.
+    app.test_apply_engine_event(AudioEvent::BusRemoved { bus_id: first.bus_id.0 });
+
+    let third: CreateResult = call(&mut app, "bus.create", serde_json::json!({}))
+        .result()
+        .expect("third default-named bus");
+    assert_eq!(name_of(&mut app, third.bus_id.0), "Bus 1");
 }

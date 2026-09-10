@@ -86,11 +86,22 @@ fn clip_not_found(app: &Resonance, request: &Request, clip_id: u64) -> (Response
     reject(request, no_midi_clip(clip_id))
 }
 
-/// Beats -> ticks, clamped non-negative.
+/// Beats -> ticks, clamped non-negative and bounded by
+/// [`notes::MAX_BEATS`]. The bound is what keeps the tick arithmetic
+/// honest: an unbounded `start_beat` like `1e15` converts to ~1e18
+/// ticks, and the engine's later `start_tick + duration_ticks` overflows
+/// u64 — a panic in debug, a wrapped (corrupted) note written to the
+/// project's `.mid` on save in release.
 fn beats_to_ticks(beats: f64) -> Result<u64, RpcError> {
     if !beats.is_finite() || beats < 0.0 {
         return Err(RpcError::invalid_params(format!(
             "beat value must be finite and non-negative (got {beats})"
+        )));
+    }
+    if beats > notes::MAX_BEATS {
+        return Err(RpcError::invalid_params(format!(
+            "beat value {beats} is over the {} limit",
+            notes::MAX_BEATS as u64
         )));
     }
     Ok((beats * TPQ).round() as u64)
@@ -241,13 +252,13 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     }
 
     // Fan the multi-field edit out into the matching single-purpose
-    // messages, each an undoable step of its own. Pitch + start share
-    // MoveNote; duration is ResizeNote; velocity is SetNoteVelocity.
-    // Skip a sub-edit when its field is unchanged so the undo history and
-    // engine traffic stay minimal.
+    // messages, grouped into ONE undoable transaction (the wire promises
+    // one revision bump per call, and one edit_undo must take back the
+    // whole call). Pitch + start share MoveNote; duration is ResizeNote;
+    // velocity is SetNoteVelocity. Skip a sub-edit when its field is
+    // unchanged so the engine traffic stays minimal.
     let clip_id = params.clip_id.0;
     let index = params.index;
-    let mut tasks = Vec::new();
 
     // Each dispatched sub-edit is also mirrored into `app.midi_clips`
     // synchronously (Bug 2b) so the change is visible to the next
@@ -257,10 +268,13 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     // exactly as the engine does).
     use crate::engine_events::midi;
 
-    let want_pitch = params.pitch.unwrap_or(existing.note);
-    let want_start = start_tick.unwrap_or(existing.start_tick);
-    if params.pitch.is_some() || start_tick.is_some() {
-        if want_pitch != existing.note || want_start != existing.start_tick {
+    app.with_compound_undo(|app| {
+        let mut tasks = Vec::new();
+        let want_pitch = params.pitch.unwrap_or(existing.note);
+        let want_start = start_tick.unwrap_or(existing.start_tick);
+        if (params.pitch.is_some() || start_tick.is_some())
+            && (want_pitch != existing.note || want_start != existing.start_tick)
+        {
             tasks.push(super::run_via_update(
                 app,
                 Message::MidiEditor(MidiEditorMessage::MoveNote {
@@ -272,36 +286,36 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             ));
             midi::optimistic_move_note(app, clip_id, index, want_start, want_pitch);
         }
-    }
-    if let Some(dur) = duration_ticks {
-        if dur != existing.duration_ticks {
-            tasks.push(super::run_via_update(
-                app,
-                Message::MidiEditor(MidiEditorMessage::ResizeNote {
-                    clip_id,
-                    note_index: index,
-                    new_duration_ticks: dur,
-                }),
-            ));
-            midi::optimistic_resize_note(app, clip_id, index, dur);
+        if let Some(dur) = duration_ticks {
+            if dur != existing.duration_ticks {
+                tasks.push(super::run_via_update(
+                    app,
+                    Message::MidiEditor(MidiEditorMessage::ResizeNote {
+                        clip_id,
+                        note_index: index,
+                        new_duration_ticks: dur,
+                    }),
+                ));
+                midi::optimistic_resize_note(app, clip_id, index, dur);
+            }
         }
-    }
-    if let Some(v) = params.velocity {
-        let want = v as f32 / 127.0;
-        if (want - existing.velocity).abs() > f32::EPSILON {
-            tasks.push(super::run_via_update(
-                app,
-                Message::MidiEditor(MidiEditorMessage::SetNoteVelocity {
-                    clip_id,
-                    note_index: index,
-                    velocity: want,
-                }),
-            ));
-            midi::optimistic_set_velocity(app, clip_id, index, want);
+        if let Some(v) = params.velocity {
+            let want = v as f32 / 127.0;
+            if (want - existing.velocity).abs() > f32::EPSILON {
+                tasks.push(super::run_via_update(
+                    app,
+                    Message::MidiEditor(MidiEditorMessage::SetNoteVelocity {
+                        clip_id,
+                        note_index: index,
+                        velocity: want,
+                    }),
+                ));
+                midi::optimistic_set_velocity(app, clip_id, index, want);
+            }
         }
-    }
 
-    (ack(app, request), Task::batch(tasks))
+        (ack(app, request), Task::batch(tasks))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -398,9 +412,14 @@ fn create_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
                     Err(e) => return reject(request, e),
                 },
                 None => {
-                    def.length_bars as u64
-                        * app.transport.time_sig_num as u64
-                        * resonance_audio::types::TICKS_PER_QUARTER_NOTE
+                    // The signature IN EFFECT at the section's start bar,
+                    // not the transport's current one: a default-length
+                    // clip dropped into a 6/8 section of a 4/4 song must
+                    // get a 6/8 bar's worth of ticks, not four quarter
+                    // notes. `bar_len_ticks_at` already honours both
+                    // halves of the signature (a 6/8 bar is six eighth
+                    // notes, not six quarters).
+                    def.length_bars as u64 * app.tempo_map.bar_len_ticks_at(placement.start_bar)
                 }
             };
             (start, ticks)
@@ -416,10 +435,9 @@ fn create_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
                     Ok(t) => t,
                     Err(e) => return reject(request, e),
                 },
-                None => {
-                    app.transport.time_sig_num as u64
-                        * resonance_audio::types::TICKS_PER_QUARTER_NOTE
-                }
+                // Same fix as above: the signature at the clip's own
+                // target bar, not the transport's current one.
+                None => app.tempo_map.bar_len_ticks_at(bar - 1),
             };
             (start, ticks)
         }
@@ -540,11 +558,39 @@ fn insert_many(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
 /// clip's entire note list, in ONE undoable transaction. Clearing and
 /// rewriting together also sidesteps the highest-index-first ordering
 /// trap of an N-delete loop.
+///
+/// Destructive on a non-empty clip — every existing note is dropped —
+/// so it follows the same confirm convention as `track.delete` /
+/// `section.delete`: without `"confirm": true` it refuses with a summary
+/// of what would be lost. An empty clip loses nothing and needs no
+/// confirmation (the `arrangement.remove_bars` rule: gate on casualties,
+/// not on the method name).
 fn replace_all(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: ReplaceAllParams = match request.params() {
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
+    let Some(clip) = find_clip(app, params.clip_id.0) else {
+        return clip_not_found(app, request, params.clip_id.0);
+    };
+    // Frozen wins over unconfirmed: a `busy` here spares the client a
+    // confirm round-trip on an edit that could not land anyway.
+    if let Some(e) = frozen_reject(app, clip.track_id) {
+        return reject(request, e);
+    }
+    if !params.confirm && !clip.notes.is_empty() {
+        return reject(
+            request,
+            RpcError::needs_confirmation(format!(
+                "replacing all notes of clip {} ({:?} on track {}) drops its {} existing \
+                 note(s); re-send with \"confirm\": true",
+                params.clip_id,
+                clip.name,
+                clip.track_id,
+                clip.notes.len(),
+            )),
+        );
+    }
     bulk_write(app, request, params.clip_id.0, &params.notes, true)
 }
 
@@ -565,6 +611,19 @@ fn bulk_write(
     };
     if let Some(e) = frozen_reject(app, clip.track_id) {
         return reject(request, e);
+    }
+    // The same bound `notes.import_midi` puts on an SMF track: a batch
+    // this size is far past anything musical, and refusing beats spending
+    // minutes rebuilding the engine's note tables for a pathological one.
+    if specs.len() > notes::MAX_BATCH_NOTES {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "the batch carries {} notes, over the {} limit",
+                specs.len(),
+                notes::MAX_BATCH_NOTES
+            )),
+        );
     }
 
     let mut incoming = Vec::with_capacity(specs.len());

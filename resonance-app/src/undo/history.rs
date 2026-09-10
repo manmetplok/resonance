@@ -33,7 +33,25 @@ pub struct UndoHistory {
     coalesce_key: Option<CoalesceKey>,
     /// Label for the snapshot in `pending`, committed with it.
     pending_label: String,
+    /// Where the control layer's atomic compound group stands (one
+    /// revision bump per mutating call). GUI paths never open one.
+    compound: CompoundPhase,
     capacity: usize,
+}
+
+/// Phase of the control layer's compound group: while one is open, the
+/// first recorded edit takes the snapshot ([`CompoundPhase::Open`] ->
+/// [`CompoundPhase::Armed`]) and every later edit is absorbed into that
+/// entry — no snapshot, no history entry, no revision bump.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum CompoundPhase {
+    /// No group open — every edit records individually (the GUI default).
+    #[default]
+    Closed,
+    /// A group is open but nothing has recorded yet.
+    Open,
+    /// The group's opening edit has recorded; absorb the rest.
+    Armed,
 }
 
 impl UndoHistory {
@@ -46,6 +64,7 @@ impl UndoHistory {
             pending: None,
             coalesce_key: None,
             pending_label: String::new(),
+            compound: CompoundPhase::Closed,
             capacity: DEFAULT_HISTORY_CAPACITY,
         }
     }
@@ -83,15 +102,34 @@ impl UndoHistory {
         self.redo_labels.back().map(String::as_str)
     }
 
+    /// Continue an in-progress coalesce run without recording anything
+    /// new. Returns `true` — after clearing the redo stack, exactly as a
+    /// record would — when the last recorded entry was coalesced under
+    /// `key`, so its snapshot (the pre-burst state) already covers this
+    /// edit. Returns `false`, touching nothing, when the run is broken
+    /// and the caller must record with a fresh snapshot.
+    ///
+    /// Split out of [`record_coalesced`](Self::record_coalesced) so
+    /// `record_undo` can check the run *before* building a snapshot:
+    /// `snapshot_for_undo` deep-copies the whole project, and a fader
+    /// drag delivers one coalesced message per slider event.
+    pub fn try_extend_coalesced(&mut self, key: &CoalesceKey) -> bool {
+        if self.coalesce_key.as_ref() == Some(key) && !self.undo.is_empty() {
+            self.redo.clear();
+            self.redo_labels.clear();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Record an entry that can coalesce with subsequent edits to the
     /// same control. If the last recorded entry was also coalesced under
     /// `key`, this call keeps the existing snapshot (which already
     /// represents the pre-burst state) and only clears the redo stack.
     /// Otherwise a new entry is pushed and the key is remembered.
     pub fn record_coalesced(&mut self, snapshot: UndoSnapshot, key: CoalesceKey, label: String) {
-        if self.coalesce_key.as_ref() == Some(&key) && !self.undo.is_empty() {
-            self.redo.clear();
-            self.redo_labels.clear();
+        if self.try_extend_coalesced(&key) {
             return;
         }
         self.undo.push_back(snapshot);
@@ -146,6 +184,13 @@ impl UndoHistory {
     /// Open a transaction. Used at the start of a drag / trim gesture;
     /// the captured snapshot represents the state before the gesture.
     pub fn begin(&mut self, snapshot: UndoSnapshot, label: String) {
+        // A drag gesture cannot start inside a compound group: groups
+        // open and close synchronously within one control dispatch, and
+        // control handlers never dispatch gesture-start messages.
+        debug_assert!(
+            !self.in_compound(),
+            "a Begin/Commit gesture cannot start inside a compound group"
+        );
         self.pending = Some(snapshot);
         self.pending_label = label;
         self.coalesce_key = None;
@@ -160,6 +205,66 @@ impl UndoHistory {
         }
     }
 
+    // -- Compound-group API for multi-dispatch control calls -----------
+    //
+    // The wire contract promises one revision bump per mutating control
+    // call, but several handlers dispatch more than one undoable message
+    // per call (`notes.edit` fans a multi-field change out, `clip.set_fade`
+    // sets two amounts and two shapes, ...). A compound group makes those
+    // dispatches ONE undoable transaction: the first recorded edit inside
+    // the group snapshots the pre-call state and becomes the call's single
+    // history entry; every later edit is absorbed — no snapshot, no entry.
+    // The redo state needs no finalizing because redo is captured lazily:
+    // `try_undo` snapshots the current (post-group) state when the entry
+    // is undone.
+
+    /// Open a compound group. Breaks any in-progress coalesce run, so
+    /// the group's opening edit starts a fresh entry instead of merging
+    /// into a preceding fader burst. Groups do not nest — a group opens
+    /// and closes synchronously within one control dispatch on the
+    /// update loop, so nothing can interleave.
+    pub fn begin_compound(&mut self) {
+        debug_assert!(!self.in_compound(), "compound groups do not nest");
+        self.coalesce_key = None;
+        self.compound = CompoundPhase::Open;
+    }
+
+    /// Close the compound group opened by [`begin_compound`](Self::begin_compound).
+    /// A group that recorded nothing leaves the history untouched.
+    pub fn end_compound(&mut self) {
+        // Nothing inside a group records via the coalesce path (the
+        // opening edit records plain), so no run can leak out of it.
+        debug_assert!(
+            self.coalesce_key.is_none(),
+            "a coalesce run cannot open inside a compound group"
+        );
+        self.compound = CompoundPhase::Closed;
+    }
+
+    /// True while a compound group is open.
+    pub fn in_compound(&self) -> bool {
+        self.compound != CompoundPhase::Closed
+    }
+
+    /// Whether the mutation being classified is absorbed by the open
+    /// compound group. The group's first mutation arms it and returns
+    /// `false` — that one records (and bumps the revision) normally;
+    /// every later call returns `true` and the caller records nothing.
+    /// Always `false` with no group open. Called unconditionally by
+    /// `record_undo` — even when the history itself cannot record — so
+    /// the one-revision-bump-per-call contract holds regardless of
+    /// `can_record_undo`.
+    pub fn absorb_into_compound(&mut self) -> bool {
+        match self.compound {
+            CompoundPhase::Closed => false,
+            CompoundPhase::Open => {
+                self.compound = CompoundPhase::Armed;
+                false
+            }
+            CompoundPhase::Armed => true,
+        }
+    }
+
     /// Drop the entire history. Called when a new project is loaded —
     /// undo history does not cross the load boundary.
     pub fn clear(&mut self) {
@@ -170,6 +275,7 @@ impl UndoHistory {
         self.pending = None;
         self.pending_label = String::new();
         self.coalesce_key = None;
+        self.compound = CompoundPhase::Closed;
     }
 
     fn trim(&mut self) {

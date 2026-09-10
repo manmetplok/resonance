@@ -117,7 +117,13 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
             track_id,
             start_sample,
         } => {
-            place_pooled_asset(r, clip_id, asset_id, track_id, start_sample);
+            // Only the control endpoint sends this message; its handler
+            // fails the placement job when the clip never reaches the
+            // mirror. Surface the reason to the GUI too, so a dropped
+            // placement is never completely silent.
+            if let Err(reason) = place_pooled_asset(r, clip_id, asset_id, track_id, start_sample) {
+                r.error_message = Some(reason);
+            }
         }
     }
     Task::none()
@@ -126,18 +132,24 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
 /// Place an asset already in the pool as a clip, skipping the import
 /// entirely. The asset carries everything a placement needs — its
 /// project-relative WAV, source path, length and thumbnail peaks — so this
-/// is the tail of the import flow with the slow half removed. A missing
-/// asset id is a no-op; the control handler has already rejected that case
-/// and the GUI cannot reach this message at all.
+/// is the tail of the import flow with the slow half removed.
+///
+/// A missing asset id is an `Err`, never a silent no-op: the control
+/// handler pre-checks the pool, but it completes the `clip.place` job
+/// after this dispatch, and a swallowed placement reported as `done`
+/// carries fabricated zero geometry (the defect this signature guards
+/// against). The GUI cannot reach this message at all.
 fn place_pooled_asset(
     r: &mut Resonance,
     clip_id: ClipId,
     asset_id: AssetId,
     track_id: TrackId,
     start_sample: SamplePos,
-) {
+) -> Result<(), String> {
     let Some(asset) = r.pool.asset(asset_id).cloned() else {
-        return;
+        return Err(format!(
+            "asset {asset_id} is no longer in the pool; nothing was placed"
+        ));
     };
     crate::engine_events::pool::place_clip_with_id(
         r,
@@ -150,6 +162,7 @@ fn place_pooled_asset(
         asset.thumbnail_peaks.clone(),
         track_id,
     );
+    Ok(())
 }
 
 /// Open the OS multi-file audio picker. The resolved paths (or an empty

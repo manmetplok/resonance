@@ -149,7 +149,10 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Remove an audio clip from the timeline. The pool asset it played is NOT \
+        description = "Remove an audio clip from the timeline. Destructive, so it follows the \
+                       confirm convention: without confirm: true it is refused with a summary \
+                       of what would be lost (name, track, bar, length) — re-send with \
+                       confirm: true to proceed. The pool asset it played is NOT \
                        removed — it stays importable and its usage_count drops, so the same \
                        sample can be placed again with clip_place without re-importing. \
                        Undoable with edit_undo. Passing a MIDI clip is refused; those are \

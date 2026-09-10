@@ -18,14 +18,14 @@
 //! is `the_whole_limiter_sequence_runs_over_the_control_api_alone` at
 //! the bottom.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin};
 use resonance_control::methods::master::PluginParamsView;
 use resonance_control::methods::track::{AddPluginResult, PluginKind};
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
@@ -52,20 +52,6 @@ fn app() -> Resonance {
         ],
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn add(app: &mut Resonance, plugin_id: &str) -> AddPluginResult {

@@ -101,7 +101,7 @@ voicing you actually chose:
 |---|---|
 | `mcp__resonance__notes_create_clip` | Empty clip in a placement, or at an explicit 1-based `start_bar` |
 | `mcp__resonance__notes_insert_many` | **Prefer this.** One undoable edit for a whole part |
-| `mcp__resonance__notes_replace_all` | Rewrite a clip wholesale; destructive, drops every existing note |
+| `mcp__resonance__notes_replace_all` | Rewrite a clip wholesale; destructive, drops every existing note — refuses on a non-empty clip until `confirm: true` |
 | `mcp__resonance__notes_import_midi` | Bulk material — far cheaper than a JSON note array |
 | `mcp__resonance__notes_insert` | One note. Rarely the right call |
 

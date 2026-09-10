@@ -15,12 +15,11 @@
 //! `control.hello`) and the project-lifecycle methods (`project.*`,
 //! which open/create the project the gate checks for) are exempt.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_control::methods;
-use resonance_control::{ErrorKind, Request, Response};
+use resonance_control::{ErrorKind, Request};
+use crate::common::roundtrip;
 
 /// A fresh app with NO active project (boot state: the startup modal).
 fn app_no_project() -> Resonance {
@@ -28,18 +27,6 @@ fn app_no_project() -> Resonance {
     // `has_active_project` is false — exactly the gated state under test.
     let (app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app
-}
-
-/// Drive one request through the full `update()` path and return the
-/// single reply the handler sent.
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 /// The mutating namespaces: every method here needs an active project.

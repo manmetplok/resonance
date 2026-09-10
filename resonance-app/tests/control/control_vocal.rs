@@ -8,8 +8,6 @@
 //! tests assert the job is registered and that fast validation failures
 //! fail the job synchronously, not that audio lands.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::TrackType;
@@ -19,22 +17,13 @@ use resonance_control::methods::harmony as harmony_proto;
 use resonance_control::methods::section as section_proto;
 use resonance_control::methods::vocal as proto;
 use resonance_control::{ErrorKind, KeyScale, MutationAck, Request, Response};
+use crate::common::roundtrip;
 
 fn app_with_project() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-vocal-test.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {

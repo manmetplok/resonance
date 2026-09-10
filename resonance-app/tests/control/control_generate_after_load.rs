@@ -23,8 +23,6 @@
 //! These tests drive the real control dispatch and the real
 //! save→load replay, because bug 1 only manifests after a load.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_control::ids::{SectionDefinitionId, TrackId as ProtoTrackId};
@@ -32,6 +30,7 @@ use resonance_control::methods::generate::{self as proto, GenerateResult};
 use resonance_control::methods::section as section_proto;
 use resonance_control::methods::song as song_proto;
 use resonance_control::{Request, Response};
+use crate::common::roundtrip;
 
 const DRUMS: u64 = 60;
 
@@ -45,16 +44,6 @@ fn app_with_project() -> Resonance {
     app.test_set_sample_rate(48_000);
     app.test_set_flat_tempo(120.0);
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {

@@ -65,12 +65,22 @@ impl crate::Resonance {
         // transaction commits on gesture end. Unlike the history stack
         // this is not gated on `can_record_undo`: the state mutation
         // happens regardless, and remote clients need to see it.
-        match action {
+        //
+        // Inside a compound group (`with_compound_undo` — the control
+        // API's per-call atomicity) only the group's opening mutation
+        // bumps; the rest are absorbed into it, so a multi-dispatch
+        // control call is one revision on the wire, matching the one
+        // history entry it records below.
+        let absorbed = match action {
             UndoAction::Record | UndoAction::RecordCoalesced(_) | UndoAction::Commit => {
-                self.revision = self.revision.wrapping_add(1);
+                let absorbed = self.undo.absorb_into_compound();
+                if !absorbed {
+                    self.revision = self.revision.wrapping_add(1);
+                }
+                absorbed
             }
-            UndoAction::Begin | UndoAction::Skip => {}
-        }
+            UndoAction::Begin | UndoAction::Skip => false,
+        };
 
         // Skip every history-mutating branch when the app isn't in a
         // state where a snapshot could be restored (no active project,
@@ -80,13 +90,34 @@ impl crate::Resonance {
         if self.can_record_undo() {
             match action {
                 UndoAction::Skip | UndoAction::Commit => {}
+                // Absorbed into the open compound group: its opening
+                // entry already snapshots the pre-call state, so
+                // recording again would split the call across history
+                // entries. Skipping the snapshot build entirely is also
+                // the cheap path — same reasoning as the coalesce check
+                // below.
+                UndoAction::Record | UndoAction::RecordCoalesced(_) if absorbed => {}
                 UndoAction::Record => {
                     let snap = self.snapshot_for_undo();
                     self.undo.record(snap, describe(message));
                 }
-                UndoAction::RecordCoalesced(key) => {
+                UndoAction::RecordCoalesced(_) if self.undo.in_compound() => {
+                    // The group's opening edit records PLAIN, never as a
+                    // coalesce run: a later GUI drag on the same control
+                    // must not merge into this call's entry, and
+                    // `begin_compound` already broke any preceding run.
                     let snap = self.snapshot_for_undo();
-                    self.undo.record_coalesced(snap, key, describe(message));
+                    self.undo.record(snap, describe(message));
+                }
+                UndoAction::RecordCoalesced(key) => {
+                    // Check the coalesce run before building the snapshot:
+                    // a continuing run keeps the run-opening snapshot, so
+                    // building one here would deep-copy the whole project
+                    // once per slider event only to drop it.
+                    if !self.undo.try_extend_coalesced(&key) {
+                        let snap = self.snapshot_for_undo();
+                        self.undo.record_coalesced(snap, key, describe(message));
+                    }
                 }
                 UndoAction::Begin => {
                     let snap = self.snapshot_for_undo();
@@ -96,5 +127,36 @@ impl crate::Resonance {
         }
 
         commit_after
+    }
+
+    /// Run `f` with the undo history in a compound group: every
+    /// undoable dispatch inside `f` lands in ONE history entry — the
+    /// first dispatch snapshots the pre-call state and bumps the
+    /// control revision, the rest are absorbed. This is the control
+    /// API's per-call atomicity (doc #265's revision contract): a
+    /// multi-dispatch handler wraps its dispatches so `edit.undo`
+    /// takes back the whole call, `edit.redo` replays it to its final
+    /// state (redo snapshots lazily at undo time, so it naturally
+    /// captures the state after the last sub-edit), and a remote
+    /// client sees exactly one revision bump for its one call.
+    ///
+    /// Defaults off — GUI paths never open a group, so coalesced drags
+    /// and Begin/Commit gestures are untouched. Groups do not nest
+    /// (debug-asserted): a group opens and closes synchronously within
+    /// a single control dispatch on the update loop, so no other
+    /// message can interleave. A nested `update` triggered by a
+    /// wrapped dispatch is absorbed into the same group — which is
+    /// exactly the atomicity the group exists to provide.
+    ///
+    /// Mid-group failure: when `f` bails out after some dispatches,
+    /// the group still closes and whatever applied stays behind as one
+    /// undoable entry (with its one revision bump); the caller's error
+    /// reply says what happened, and one `edit.undo` takes the partial
+    /// edit back.
+    pub fn with_compound_undo<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.undo.begin_compound();
+        let out = f(self);
+        self.undo.end_compound();
+        out
     }
 }

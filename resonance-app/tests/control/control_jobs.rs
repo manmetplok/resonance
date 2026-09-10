@@ -5,7 +5,7 @@
 //! blocking-wait semantics on the socket side, and retention rules.
 
 use resonance_app::control_jobs::{JobBoard, JobToken, MAX_RETAINED_JOBS};
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
+use resonance_app::control_socket::ControlMessage;
 use resonance_app::message::{Message, ProjectIoMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
@@ -13,22 +13,13 @@ use resonance_control::job::{JobState, JobStatus};
 use resonance_control::{ErrorKind, Request, Response};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::common::roundtrip;
 
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-jobs-test.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn status_request(id: i64, job_id: u64) -> Request {
@@ -286,4 +277,113 @@ fn retention_is_bounded_and_prefers_evicting_fetched_terminal_jobs() {
         board.status(u64::from(first_done.unwrap())).is_none(),
         "oldest terminal jobs get evicted once over the cap"
     );
+}
+
+// ---------------- poison containment ----------------
+
+#[test]
+fn a_reader_thread_panic_does_not_poison_the_board() {
+    let board = Arc::new(JobBoard::default());
+    let id = u64::from(board.start("test", "survives poisoning", None, None).job_id);
+
+    // Panic while holding the table lock on another thread — exactly
+    // what a crashing `job.wait` reader would do. The table is shared
+    // between those reader threads and the main update loop, so the
+    // poison must not cascade into the app.
+    let poisoner = Arc::clone(&board);
+    std::thread::spawn(move || poisoner.panic_holding_table_for_test())
+        .join()
+        .expect_err("the probe thread panics by design");
+
+    // Every later access recovers the lock instead of panicking in turn.
+    board.complete(id, serde_json::json!({ "ok": true }));
+    let status = board.status(id).expect("the table still serves");
+    assert_eq!(status.state, JobState::Done);
+    let waited = board
+        .wait(id, Some(Duration::from_millis(10)))
+        .expect("wait still serves");
+    assert_eq!(waited.state, JobState::Done);
+}
+
+// ---------------- duplicate tokens resolve FIFO ----------------
+
+#[test]
+fn duplicate_live_tokens_resolve_oldest_first() {
+    // Two clients started the same operation, so two live jobs carry an
+    // identical token. Completion events arrive in dispatch order, so
+    // the first completion belongs to the FIRST job — resolving the
+    // newest instead left the older client waiting out the full
+    // `MAX_WAIT` on a job that had in fact finished.
+    let board = JobBoard::default();
+    let first = u64::from(
+        board
+            .start("project.save", "client A", Some(JobToken::ProjectSave), None)
+            .job_id,
+    );
+    let second = u64::from(
+        board
+            .start("project.save", "client B", Some(JobToken::ProjectSave), None)
+            .job_id,
+    );
+
+    assert!(board.complete_token(&JobToken::ProjectSave, serde_json::json!({ "n": 1 })));
+    assert_eq!(board.status(first).unwrap().state, JobState::Done);
+    assert_eq!(
+        board.status(second).unwrap().state,
+        JobState::Pending,
+        "the newer duplicate stays live until its own completion arrives"
+    );
+
+    assert!(board.fail_token(&JobToken::ProjectSave, "disk full"));
+    assert_eq!(board.status(second).unwrap().state, JobState::Error);
+}
+
+// ---------------- overlapping import batches ----------------
+
+#[test]
+fn one_import_event_ticks_only_the_oldest_batch_awaiting_that_path() {
+    // Two overlapping `pool.import` batches name the same source file:
+    // the engine imports it twice and reports twice. Each event must
+    // tick ONE batch — ticking every batch resolved the second batch
+    // `done` off the first batch's event, before its own copy of the
+    // file had imported.
+    let board = JobBoard::default();
+    let path = "/tmp/shared-kick.wav";
+    let first = u64::from(
+        board
+            .start(
+                "pool.import",
+                "batch A",
+                Some(JobToken::PoolImport { paths: vec![path.to_owned()] }),
+                None,
+            )
+            .job_id,
+    );
+    let second = u64::from(
+        board
+            .start(
+                "pool.import",
+                "batch B",
+                Some(JobToken::PoolImport { paths: vec![path.to_owned()] }),
+                None,
+            )
+            .job_id,
+    );
+
+    // First per-file event: exactly the oldest batch finishes.
+    let finished = board.tick_import_path(path, None);
+    assert_eq!(finished, vec![(first, None)]);
+    board.complete(first, serde_json::json!({ "assets": [] }));
+    assert_eq!(
+        board.status(second).unwrap().state,
+        JobState::Pending,
+        "the overlapping batch still awaits its own event"
+    );
+
+    // Second event: now the second batch finishes.
+    let finished = board.tick_import_path(path, None);
+    assert_eq!(finished, vec![(second, None)]);
+
+    // A third event has nobody left to tick.
+    assert!(board.tick_import_path(path, None).is_empty());
 }

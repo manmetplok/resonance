@@ -27,13 +27,44 @@ pub(super) fn set_volume(app: &mut Resonance, request: &Request) -> (Response, T
             )),
         );
     }
-    // Wire is linear gain; the app stores/sends dB. Silence maps to a
-    // deep floor rather than -inf so the fader state stays finite.
+    // Wire is linear gain; the app stores/sends dB. Silence maps to the
+    // app's floor rather than -inf so the fader state stays finite.
     let db = if params.volume <= 0.0 {
-        -80.0
+        mixer::VOLUME_DB_MIN
     } else {
         20.0 * params.volume.log10()
     };
+    // `powf`/`log10` are not exact inverses in f32: the linear image of
+    // +6 dB converts back as 6.000001 dB, and 0.001 as -60.000004 dB.
+    // Snap that conversion noise onto the bound so the documented
+    // endpoints are reachable from the linear form too. 1e-3 dB is a
+    // gain factor of ~1.0001 — conversion noise, not a level.
+    const DB_EPS: f32 = 1e-3;
+    let db = if (db - mixer::VOLUME_DB_MAX).abs() <= DB_EPS {
+        mixer::VOLUME_DB_MAX
+    } else if (db - mixer::VOLUME_DB_MIN).abs() <= DB_EPS {
+        mixer::VOLUME_DB_MIN
+    } else {
+        db
+    };
+    // The same fader as `set_volume_db`, so the same effective range:
+    // out-of-range is rejected rather than clamped (see below).
+    if !(mixer::VOLUME_DB_MIN..=mixer::VOLUME_DB_MAX).contains(&db) {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "volume must be within {}..={} dB — the range the mixer fader spans \
+                 (linear {:.4}..={:.4}; 0 is the {} dB silence floor) — got {} ({} dB)",
+                mixer::VOLUME_DB_MIN,
+                mixer::VOLUME_DB_MAX,
+                crate::util::db_to_gain(mixer::VOLUME_DB_MIN),
+                crate::util::db_to_gain(mixer::VOLUME_DB_MAX),
+                mixer::VOLUME_DB_MIN,
+                params.volume,
+                db
+            )),
+        );
+    }
     let task = run_via_update(
         app,
         Message::Track(TrackMessage::SetTrackVolume(params.track_id.0, db)),

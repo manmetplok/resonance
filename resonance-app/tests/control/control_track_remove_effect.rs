@@ -7,13 +7,13 @@
 //! control API, and the entries carried no chain position at all — a
 //! client could not even describe where a plugin sat.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
 use resonance_control::methods::track::{PluginKind, PluginParamsView};
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Response};
+use crate::common::call;
 
 const TRACK: u64 = 1;
 
@@ -51,20 +51,6 @@ fn app() -> Resonance {
         ],
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 /// Mirror the engine echo that mounts a plugin on the track.

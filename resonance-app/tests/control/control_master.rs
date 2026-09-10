@@ -8,13 +8,13 @@
 //! exactly-one-of unit selection, range rejection, undoability, and the
 //! `busy` answer when no project is open.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin};
 use resonance_control::methods::master::MasterSummary;
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
@@ -22,20 +22,6 @@ fn app() -> Resonance {
     // Undo history only records once the project has a path.
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-master-test.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn summary(app: &mut Resonance) -> MasterSummary {

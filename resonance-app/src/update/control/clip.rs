@@ -298,11 +298,31 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
                     start_sample,
                 }),
             );
-            let result = place_result(app, clip_id, asset_id);
-            app.control.jobs.complete(
-                u64::from(started.job_id),
-                serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
-            );
+            // The dispatch runs synchronously, but not unconditionally:
+            // the pool handler refuses when the asset has vanished, and
+            // the pre-dispatch gates swallow `Pool` messages outright
+            // while a bounce or freeze render is in flight. Completing
+            // the job from `place_result`'s missing-clip fallback would
+            // then report `done` with fabricated geometry (track 0,
+            // sample 0, empty name) — fail it instead, so a no-op can
+            // never be mistaken for success.
+            if find_clip(app, clip_id).is_some() {
+                let result = place_result(app, clip_id, asset_id);
+                app.control.jobs.complete(
+                    u64::from(started.job_id),
+                    serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+                );
+            } else {
+                let error = if app.pool.assets.iter().any(|a| a.id == asset_id) {
+                    format!(
+                        "placed clip {clip_id} not found: the placement was dropped \
+                         before it reached the project; nothing was placed"
+                    )
+                } else {
+                    format!("asset {asset_id} is no longer in the pool; nothing was placed")
+                };
+                app.control.jobs.fail(u64::from(started.job_id), error);
+            }
             (super::success(request, &started), task)
         }
         // Not imported yet: hand it to the same import+place orchestration
@@ -345,6 +365,12 @@ enum Source {
 /// the control module so the async completion hook
 /// (`engine_events::pool`) and the synchronous already-pooled path above
 /// share one definition of the result shape.
+///
+/// The missing-clip fallback (zeroed geometry) exists only so the async
+/// hook cannot panic on a clip deleted in the same tick; a caller
+/// completing a job MUST check the clip is in the mirror first and fail
+/// the job otherwise — `done` with fabricated geometry is exactly the
+/// bug the synchronous path above guards against.
 pub(crate) fn place_result(
     app: &Resonance,
     clip_id: ClipId,
@@ -587,8 +613,28 @@ fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if find_clip(app, params.clip_id.0).is_none() {
+    let Some(clip) = find_clip(app, params.clip_id.0) else {
         return clip_not_found(app, request, params.clip_id.0);
+    };
+    // Destructive, so the same confirm convention as `track.delete` /
+    // `section.delete`: refuse without `"confirm": true`, summarizing
+    // what would be lost.
+    if !params.confirm {
+        let (name, track_id, start_sample, length) = (
+            clip.name.clone(),
+            clip.track_id,
+            clip.start_sample,
+            clip.duration_samples,
+        );
+        let start = super::view_model::song_position(app, start_sample);
+        return reject(
+            request,
+            RpcError::needs_confirmation(format!(
+                "deleting clip {} ({name:?}) removes {length} sample(s) of audio from \
+                 track {track_id} at bar {}; re-send with \"confirm\": true",
+                params.clip_id, start.bar,
+            )),
+        );
     }
     let task = super::run_via_update(
         app,
@@ -681,68 +727,74 @@ fn set_fade(app: &mut Resonance, request: &Request) -> (Response, Task<Message>)
     }
 
     // The app's fade setters take milliseconds (the inspector's unit);
-    // convert once, against the project rate.
+    // convert once, against the project rate. Up to four messages land
+    // here, so they are grouped into ONE undoable transaction: one
+    // revision bump per call on the wire, one edit_undo to take the
+    // whole fade change back.
     let sample_rate = app.sample_rate as f32;
     let ms = |frames: u64| frames as f32 * 1000.0 / sample_rate;
-    let mut tasks = Vec::new();
-    if let Some(frames) = fade_in {
-        tasks.push(super::run_via_update(
-            app,
-            Message::Clip(ClipMessage::SetClipFadeInMs {
-                clip_id,
-                ms: ms(frames),
-            }),
-        ));
-    }
-    if let Some(frames) = fade_out {
-        tasks.push(super::run_via_update(
-            app,
-            Message::Clip(ClipMessage::SetClipFadeOutMs {
-                clip_id,
-                ms: ms(frames),
-            }),
-        ));
-    }
-    if let Some(shape) = params.fade_in_shape {
-        tasks.push(super::run_via_update(
-            app,
-            Message::Clip(ClipMessage::SetClipFadeInCurve {
-                clip_id,
-                curve: fade_curve(shape),
-            }),
-        ));
-    }
-    if let Some(shape) = params.fade_out_shape {
-        tasks.push(super::run_via_update(
-            app,
-            Message::Clip(ClipMessage::SetClipFadeOutCurve {
-                clip_id,
-                curve: fade_curve(shape),
-            }),
-        ));
-    }
+    app.with_compound_undo(|app| {
+        let mut tasks = Vec::new();
+        if let Some(frames) = fade_in {
+            tasks.push(super::run_via_update(
+                app,
+                Message::Clip(ClipMessage::SetClipFadeInMs {
+                    clip_id,
+                    ms: ms(frames),
+                }),
+            ));
+        }
+        if let Some(frames) = fade_out {
+            tasks.push(super::run_via_update(
+                app,
+                Message::Clip(ClipMessage::SetClipFadeOutMs {
+                    clip_id,
+                    ms: ms(frames),
+                }),
+            ));
+        }
+        if let Some(shape) = params.fade_in_shape {
+            tasks.push(super::run_via_update(
+                app,
+                Message::Clip(ClipMessage::SetClipFadeInCurve {
+                    clip_id,
+                    curve: fade_curve(shape),
+                }),
+            ));
+        }
+        if let Some(shape) = params.fade_out_shape {
+            tasks.push(super::run_via_update(
+                app,
+                Message::Clip(ClipMessage::SetClipFadeOutCurve {
+                    clip_id,
+                    curve: fade_curve(shape),
+                }),
+            ));
+        }
 
-    // Report what the mirror ended up with — the app clamps each fade to
-    // the clip's audible length, so the echo is the authority, not the
-    // request.
-    let (fade_in_samples, fade_out_samples, in_curve, out_curve) = match find_clip(app, clip_id) {
-        Some(c) => (
-            c.fade_in_frames,
-            c.fade_out_frames,
-            c.fade_in_curve,
-            c.fade_out_curve,
-        ),
-        None => (0, 0, FadeCurve::default(), FadeCurve::default()),
-    };
-    let result = FadeResult {
-        clip_id: params.clip_id,
-        fade_in_samples,
-        fade_out_samples,
-        fade_in_shape: fade_shape(in_curve),
-        fade_out_shape: fade_shape(out_curve),
-        revision: app.revision(),
-    };
-    (super::success(request, &result), Task::batch(tasks))
+        // Report what the mirror ended up with — the app clamps each fade
+        // to the clip's audible length, so the echo is the authority, not
+        // the request.
+        let (fade_in_samples, fade_out_samples, in_curve, out_curve) =
+            match find_clip(app, clip_id) {
+                Some(c) => (
+                    c.fade_in_frames,
+                    c.fade_out_frames,
+                    c.fade_in_curve,
+                    c.fade_out_curve,
+                ),
+                None => (0, 0, FadeCurve::default(), FadeCurve::default()),
+            };
+        let result = FadeResult {
+            clip_id: params.clip_id,
+            fade_in_samples,
+            fade_out_samples,
+            fade_in_shape: fade_shape(in_curve),
+            fade_out_shape: fade_shape(out_curve),
+            revision: app.revision(),
+        };
+        (super::success(request, &result), Task::batch(tasks))
+    })
 }
 
 fn fade_curve(shape: FadeShape) -> FadeCurve {
@@ -811,12 +863,30 @@ fn resolve_amount(app: &Resonance, spec: &AmountSpec, at_sample: u64) -> Result<
                 "seconds must be finite and non-negative (got {seconds})"
             )));
         }
+        // Bounded so the frame conversion (and everything downstream
+        // adding it to a position) stays inside u64 arithmetic — an
+        // unbounded value would dispatch a nonsense amount that later
+        // overflows, wrapping into a corrupted project on save.
+        if seconds > proto::MAX_SECONDS {
+            return Err(RpcError::invalid_params(format!(
+                "seconds value {seconds} is over the {} limit",
+                proto::MAX_SECONDS as u64
+            )));
+        }
         return Ok((seconds * app.sample_rate as f64).round() as u64);
     }
     let beats = spec.beats.unwrap_or_default();
     if !beats.is_finite() || beats < 0.0 {
         return Err(RpcError::invalid_params(format!(
             "beats must be finite and non-negative (got {beats})"
+        )));
+    }
+    // Same bound the `notes.*` methods put on a beat value, for the same
+    // reason: keep the tick arithmetic inside u64.
+    if beats > resonance_control::methods::notes::MAX_BEATS {
+        return Err(RpcError::invalid_params(format!(
+            "beats value {beats} is over the {} limit",
+            resonance_control::methods::notes::MAX_BEATS as u64
         )));
     }
     let ticks = (beats * resonance_audio::types::TICKS_PER_QUARTER_NOTE as f64).round() as u64;

@@ -17,10 +17,15 @@
 //! | [`clip`] | a track's audio + MIDI clips, clip counts |
 //! | [`lane`] | vocal lanes: clip, note count, articulation, render state |
 //!
-//! The unit conversions the wire protocol fixes (dB -> linear gain,
-//! 0.0..=1.0 velocity -> MIDI 0..=127, the app's `Scale` -> `KeyScale`)
-//! sit here at the root, since every projection above may need them and
-//! none of them owns one.
+//! The unit conversions the wire protocol fixes sit here at the root
+//! (0.0..=1.0 velocity -> MIDI 0..=127, the app's `Scale` -> `KeyScale`),
+//! since every projection above may need them and none of them owns
+//! one. dB -> linear gain is the one exception: it's
+//! `crate::util::db_to_linear`, the unfloored power-law image — the
+//! track/bus summary's `volume` field deliberately reports how far
+//! under the `-60` dB floor a fader sits rather than hard-zeroing it
+//! like [`crate::util::db_to_gain`] (the conversion real audio gain
+//! uses) does.
 //!
 //! Nothing in here mutates or dispatches: every function takes
 //! `&Resonance` and returns a wire type.
@@ -66,11 +71,6 @@ pub(in crate::update::control) fn key_scale(scale: &resonance_music_theory::Scal
         tonic: scale.root.to_string(),
         scale: scale.mode.as_str().to_owned(),
     }
-}
-
-/// dB fader value -> linear gain (protocol convention: 1.0 = unity).
-pub(in crate::update::control) fn db_to_linear(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
 }
 
 /// The app stores velocity as `0.0..=1.0`; the wire uses MIDI `0..=127`.

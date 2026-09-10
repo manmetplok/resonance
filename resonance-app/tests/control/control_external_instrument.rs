@@ -7,8 +7,6 @@
 //! the engine events the real enumeration would deliver, so the tests
 //! run headless.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioEvent, InputDeviceInfo};
@@ -17,6 +15,7 @@ use resonance_control::methods::external::{DevicesView, PlaybackSource, StatusVi
 use resonance_control::methods::song::TracksView;
 use resonance_control::methods::track::AddResult;
 use resonance_control::{ErrorKind, Request, Response, TrackKind};
+use crate::common::{call, roundtrip};
 
 const MIDI_OUT: &str = "Moog Muse MIDI 1";
 const RETURN_IN: &str = "alsa_input.usb-Focusrite_Scarlett";
@@ -44,20 +43,6 @@ fn seed_devices(app: &mut Resonance) {
         }],
         default_name: Some(RETURN_IN.to_owned()),
     });
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn error_kind(response: &Response) -> ErrorKind {
@@ -436,4 +421,84 @@ fn bounce_refuses_a_track_with_no_midi_to_play() {
     // what comes back; with no MIDI it would capture silence.
     let response = call(&mut app, "external.bounce", serde_json::json!({ "track_id": id }));
     assert_eq!(error_kind(&response), ErrorKind::InvalidParams);
+}
+
+/// `external.set_midi_out` with both halves given dispatches two
+/// messages; the wire contract makes them ONE undoable transaction —
+/// one revision bump per call. `set_return` shares the exact wrapper.
+#[test]
+fn set_midi_out_of_device_and_channel_is_one_revision_bump() {
+    let mut app = app();
+    let id = add_external_track(&mut app);
+    let before = app.revision();
+    let entries = app.test_undo_history().test_undo_entries().len();
+
+    call(
+        &mut app,
+        "external.set_midi_out",
+        serde_json::json!({ "track_id": id, "device": MIDI_OUT, "channel": 3 }),
+    )
+    .result::<serde_json::Value>()
+    .expect("set_midi_out succeeds");
+
+    assert_eq!(app.revision(), before + 1, "device + channel are one call");
+    assert_eq!(
+        app.test_undo_history().test_undo_entries().len(),
+        entries + 1,
+        "and one history entry"
+    );
+}
+
+/// `external.bounce` drives the dialog with FIVE dispatches (open, pick
+/// device, mono, port, confirm); the wire contract makes the whole flow
+/// ONE undoable transaction — one revision bump, one history entry.
+#[test]
+fn bounce_is_one_revision_bump_and_one_undo_entry() {
+    let mut app = app();
+    let id = add_external_track(&mut app);
+    // Both halves wired: the bounce classifier requires a MIDI Out and
+    // the handler a return to capture from.
+    call(
+        &mut app,
+        "external.set_midi_out",
+        serde_json::json!({ "track_id": id, "device": MIDI_OUT }),
+    )
+    .result::<serde_json::Value>()
+    .expect("set_midi_out succeeds");
+    call(
+        &mut app,
+        "external.set_return",
+        serde_json::json!({ "track_id": id, "device": RETURN_IN }),
+    )
+    .result::<serde_json::Value>()
+    .expect("set_return succeeds");
+    // Something for the bounce to re-drive the synth with.
+    app.test_push_midi_clip(resonance_app::state::MidiClipState {
+        id: 500,
+        track_id: id,
+        start_sample: 0,
+        duration_ticks: 4 * 480,
+        name: "riff".to_owned(),
+        notes: vec![resonance_audio::types::MidiNote {
+            note: 60,
+            velocity: 0.8,
+            start_tick: 0,
+            duration_ticks: 480,
+        }],
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+    let before = app.revision();
+    let entries = app.test_undo_history().test_undo_entries().len();
+
+    call(&mut app, "external.bounce", serde_json::json!({ "track_id": id }))
+        .result::<serde_json::Value>()
+        .expect("external.bounce starts");
+
+    assert_eq!(app.revision(), before + 1, "five dispatches, one revision bump");
+    assert_eq!(
+        app.test_undo_history().test_undo_entries().len(),
+        entries + 1,
+        "the whole dialog flow is one history entry"
+    );
 }

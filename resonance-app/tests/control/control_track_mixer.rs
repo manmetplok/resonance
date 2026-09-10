@@ -4,34 +4,19 @@
 //! built-in instruments/effects by stable catalog id — asserting engine
 //! commands, undo behaviour, confirmation gating, and error kinds.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
 use resonance_control::methods::song::TracksView;
 use resonance_control::methods::track::AddResult;
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-track-test.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 /// Add a track over the control endpoint and drive the engine echo that
@@ -695,6 +680,45 @@ fn empty_catalog_points_at_the_bundle_step() {
     assert!(!message.contains("bundle.sh"), "{message}");
 }
 
+/// A synth appended to the FX chain is a slot the GUI cannot create and
+/// that renders nothing; `bus.add_effect` and `master.add_effect` have
+/// always refused it, so `track.add_effect` must too — and point at
+/// `track.add_instrument`, which still takes the same id.
+#[test]
+fn add_effect_rejects_an_instrument_and_add_instrument_takes_the_same_id() {
+    let mut app = app();
+    seed_plugins(&mut app);
+    let id = add_track(&mut app, "instrument", None);
+    let rx = app.test_capture_engine();
+    let before = app.revision();
+
+    let error = call(
+        &mut app,
+        "track.add_effect",
+        serde_json::json!({ "track_id": id, "plugin_id": "com.resonance.wavetable" }),
+    )
+    .error
+    .expect("an instrument in the effect chain is rejected");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("track.add_instrument"), "{}", error.message);
+    assert_eq!(app.revision(), before, "a rejected add records nothing");
+    assert!(drain(&rx).is_empty(), "no engine command for a rejected add");
+
+    // The same id through the right verb still lands.
+    let _: MutationAck = call(
+        &mut app,
+        "track.add_instrument",
+        serde_json::json!({ "track_id": id, "plugin_id": "com.resonance.wavetable" }),
+    )
+    .result()
+    .expect("add_instrument takes the same id");
+    assert!(drain(&rx).iter().any(|c| matches!(
+        c,
+        AudioCommand::AddPlugin { clap_plugin_id, .. }
+        if clap_plugin_id == "com.resonance.wavetable"
+    )));
+}
+
 // ---------------- mixer.* ----------------
 
 #[test]
@@ -781,6 +805,80 @@ fn mixer_validates_ranges_and_ids() {
         serde_json::json!({ "track_id": 9999, "volume": 1.0 }),
     );
     assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
+}
+
+/// The linear form is the same fader as `mixer.set_volume_db`, so it
+/// shares the same effective range: `{volume: 1000}` used to dispatch
+/// +60 dB, a level the dB form, `bus.set_volume` and `master.set_volume`
+/// all refuse.
+#[test]
+fn linear_volume_above_the_fader_cap_is_rejected_without_dispatch() {
+    let mut app = app();
+    let id = add_track(&mut app, "instrument", None);
+    let rx = app.test_capture_engine();
+    let before = app.revision();
+
+    for volume in [1000.0f32, 2.0] {
+        let error = call(
+            &mut app,
+            "mixer.set_volume",
+            serde_json::json!({ "track_id": id, "volume": volume }),
+        )
+        .error
+        .unwrap_or_else(|| panic!("linear {volume} should be rejected"));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams, "for linear {volume}");
+        assert!(
+            error.message.contains("1.9953"),
+            "the error must name the linear bound: {}",
+            error.message
+        );
+    }
+    assert_eq!(app.revision(), before, "a rejected set records nothing");
+    assert!(drain(&rx).is_empty(), "no engine command for a rejected set");
+    assert!(tracks_view(&mut app).tracks[0].summary.volume_db.abs() < 1e-6);
+}
+
+/// The exact linear image of the cap is inside the range — `powf` and
+/// `log10` not being exact f32 inverses must not shave the endpoint off
+/// the linear form.
+#[test]
+fn linear_volume_at_the_cap_is_accepted_as_plus_six_db() {
+    let mut app = app();
+    let id = add_track(&mut app, "instrument", None);
+
+    let cap = 10f32.powf(6.0 / 20.0); // the linear image of +6 dB
+    let _: MutationAck = call(
+        &mut app,
+        "mixer.set_volume",
+        serde_json::json!({ "track_id": id, "volume": cap }),
+    )
+    .result()
+    .expect("the fader cap itself is inside the range");
+    let db = tracks_view(&mut app).tracks[0].summary.volume_db;
+    assert!((db - 6.0).abs() < 1e-4, "volume_db {db}");
+}
+
+/// `{volume: 0}` used to store -80 dB, 20 dB below the documented
+/// silence floor; it maps to `VOLUME_DB_MIN` now, the way
+/// `master.set_volume` maps it.
+#[test]
+fn linear_volume_zero_maps_to_the_documented_floor() {
+    let mut app = app();
+    let id = add_track(&mut app, "instrument", None);
+
+    let _: MutationAck = call(
+        &mut app,
+        "mixer.set_volume",
+        serde_json::json!({ "track_id": id, "volume": 0.0 }),
+    )
+    .result()
+    .expect("silence is inside the range");
+    let view = tracks_view(&mut app);
+    let db = view.tracks[0].summary.volume_db;
+    assert!((db - -60.0).abs() < 1e-4, "volume_db {db}");
+    // The view reports the floor's raw linear image, not a hard zero.
+    let linear = view.tracks[0].summary.volume;
+    assert!((linear - 0.001).abs() < 1e-6, "volume {linear}");
 }
 
 // ---------------- track type sanity ----------------

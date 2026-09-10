@@ -14,12 +14,11 @@
 //! assertions; what is pinned here is the widened surface and the two
 //! rules all three arms share (exactly one source; a key port required).
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioEvent, ParamInfo, SendSource, TrackType};
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 const KICK: u64 = 1;
 const BUS: u64 = 10;
@@ -29,20 +28,6 @@ const MASTER_COMP: u64 = 300;
 
 const COMPRESSOR: &str = "com.resonance.compressor";
 const WAVETABLE: &str = "com.resonance.wavetable";
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
-}
 
 fn bus_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str, keyable: bool) {
     app.test_apply_engine_event(AudioEvent::BusPluginAdded {

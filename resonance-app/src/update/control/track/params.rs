@@ -2,7 +2,7 @@
 //! f32-bound tolerance every plugin-param setter in the control API
 //! shares.
 
-use super::{ack, find_track, instance_for, not_found_track, reject};
+use super::{ack, find_track, frozen_reject, instance_for, not_found_track, reject};
 use crate::message::{Message, PluginMessage};
 use crate::update::control::{run_via_update, view_model};
 use crate::Resonance;
@@ -32,6 +32,11 @@ pub(super) fn set_plugin_param(
     let Some(t) = find_track(app, params.track_id.0).cloned() else {
         return not_found_track(request, params.track_id.0);
     };
+    // `SetPluginParam` is a frozen-input edit (gates.rs); reject rather
+    // than ack an edit the gate would swallow.
+    if let Some(e) = frozen_reject(app, t.id) {
+        return reject(request, e);
+    }
 
     // Resolve the plugin: an explicit id, else the track's instrument —
     // the common case for "make this synth sound different".

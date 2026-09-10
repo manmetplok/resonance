@@ -11,8 +11,6 @@ use resonance_app::compose::{
     ChordState, GenerateParams, LaneGeneratorConfig, LaneGeneratorKind, SectionDefinitionState,
 };
 use resonance_app::chord_track::KeyChange;
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::{MidiClipState, PluginSlotState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioEvent, MidiNote, ScannedPlugin, TrackType};
@@ -20,7 +18,8 @@ use resonance_control::methods::song::{
     NotesView, SectionsView, SongSummary, TracksView, VocalView,
 };
 use resonance_control::methods::plugins::PluginCatalog;
-use resonance_control::{ErrorKind, Request, Response};
+use resonance_control::{ErrorKind, Request};
+use crate::common::roundtrip;
 use resonance_music_theory::{
     parse_chord, LyricLine, Mode, MotifSource, PitchClass, Scale, VocalParams,
 };
@@ -34,16 +33,6 @@ const AUDIO_CLIP: u64 = 200;
 
 fn request(id: i64, method: &str, params: serde_json::Value) -> Request {
     Request::new(id, method, &params).expect("params serialize")
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn section_definition(id: u64, name: &str, length_bars: u32) -> SectionDefinitionState {

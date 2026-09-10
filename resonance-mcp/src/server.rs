@@ -36,9 +36,10 @@ lands in the app's undo history like a manual edit).\n\
 Workflow: read before you write — song_summary gives the whole-song overview; song_sections, \
 song_tracks, song_notes and song_vocal drill down. All ids (track_id, clip_id, section_id, \
 placement_id, chord_id) come from those views and stay valid until the entity is deleted. \
-Every mutating result carries a `revision` counter that the app bumps once per committed edit; \
-if it jumps by more than your own calls, the user edited concurrently — re-read before \
-continuing.\n\
+Every mutating result carries a `revision` counter that the app bumps exactly once per \
+mutating call, however many internal edits the call fans out into; if it jumps by more than \
+your own calls, the user edited concurrently — re-read before continuing. One edit_undo takes \
+back one whole call.\n\
 \n\
 Long-running operations (project_*, vocal_render, render_mixdown) run as jobs: \
 the tool waits a bounded time and returns the final job status; if it reports still-running, \

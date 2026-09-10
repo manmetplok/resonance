@@ -37,6 +37,11 @@ mod bus;
 mod chain_presets;
 mod clip;
 mod edit;
+/// The slot-or-(plugin_id, occurrence) effect-addressing state machine,
+/// shared by `track/bus/master.remove_effect` / `move_effect` /
+/// `replace_effect` so the three cannot silently disagree about what a
+/// legal address is (ba doc #275).
+mod effect_addressing;
 mod external;
 mod generate;
 mod global;
@@ -196,7 +201,7 @@ pub fn execute(
         return handled;
     }
     // Vocals (todo #1156): lyrics, pronunciation, and the SVS render job.
-    if let Some(handled) = vocal::try_handle(app, request) {
+    if let Some(handled) = vocal::try_handle(app, conn, request) {
         return handled;
     }
 
@@ -476,6 +481,17 @@ pub(crate) fn mutation_gate_error(app: &Resonance) -> Option<RpcError> {
             "no active project — open or create one first",
         ));
     }
+    offline_render_busy_error(app)
+}
+
+/// `busy` while an offline bounce or a track freeze holds the offline
+/// renderer. Split out of [`mutation_gate_error`] because the
+/// destructive project-lifecycle methods (`project.new` / `project.open`)
+/// run *above* the mutation gate — they must establish a project the
+/// gate otherwise requires — yet still must not swap the project out
+/// from under an in-flight render. They reuse this exact check (and its
+/// wording) so both surfaces refuse identically.
+pub(crate) fn offline_render_busy_error(app: &Resonance) -> Option<RpcError> {
     if app.bounce_in_progress.is_some() {
         return Some(RpcError::busy(
             "an offline bounce is rendering; retry when it finishes",

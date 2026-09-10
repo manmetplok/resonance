@@ -40,6 +40,7 @@ use super::reply::{ack_or_compose_error, no_section_definition, no_track, reject
 
 pub(super) fn try_handle(
     app: &mut Resonance,
+    conn: crate::control_socket::ConnId,
     request: &Request,
 ) -> Option<(Response, Task<Message>)> {
     let handled = match request.method.as_str() {
@@ -47,7 +48,7 @@ pub(super) fn try_handle(
         proto::SET_LINE => set_line(app, request),
         proto::SET_PRONUNCIATION => set_pronunciation(app, request),
         proto::CLEAR_PRONUNCIATION => clear_pronunciation(app, request),
-        proto::RENDER => render(app, request),
+        proto::RENDER => render(app, conn, request),
         proto::GENERATE => generate(app, request),
         _ => return None,
     };
@@ -336,7 +337,11 @@ fn clear_pronunciation(app: &mut Resonance, request: &Request) -> (Response, Tas
 // Render (job)
 // ---------------------------------------------------------------------------
 
-fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+fn render(
+    app: &mut Resonance,
+    conn: crate::control_socket::ConnId,
+    request: &Request,
+) -> (Response, Task<Message>) {
     let params: proto::RenderParams = match request.params() {
         Ok(p) => p,
         Err(e) => return reject(request, e),
@@ -453,14 +458,17 @@ fn render(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     }
 
     // Register the job covering exactly the lanes that dispatched; it
-    // resolves when the last of them reports its audio.
+    // resolves when the last of them reports its audio. Owned by the
+    // requesting connection like every other control job, so a client
+    // that disconnects mid-render doesn't strand a live job (and a
+    // later failure can't be mis-attributed to it).
     let JobStarted { job_id } = app.start_control_job(
         "vocal.render",
         &describe_batch(&started),
         JobToken::VocalRender {
             lanes: started.clone(),
         },
-        None,
+        Some(conn),
     );
 
     // Chained, not batched: each lane's task drives a full SVS pipeline

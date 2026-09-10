@@ -11,13 +11,13 @@
 //! not duplicate the slot, and that the one remaining window (params not
 //! yet reported) is refused with a message that says so.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::track::{AddPluginResult, PluginParamsView};
-use resonance_control::{ErrorKind, Request, Response};
+use resonance_control::ErrorKind;
+use crate::common::call;
 
 const TRACK: u64 = 1;
 
@@ -47,20 +47,6 @@ fn app() -> Resonance {
         ],
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn add_effect(app: &mut Resonance, plugin_id: &str) -> AddPluginResult {

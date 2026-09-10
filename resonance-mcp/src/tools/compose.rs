@@ -196,7 +196,10 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Replace a MIDI clip's ENTIRE note list with the given notes, as one \
-                       undoable edit. Destructive: every existing note in the clip is dropped. \
+                       undoable edit. Destructive: every existing note in the clip is dropped, \
+                       so it follows the confirm convention — on a non-empty clip it is \
+                       refused with the existing note count until you re-send with \
+                       confirm: true (an empty clip loses nothing and needs no confirm). \
                        Use it to rewrite a part wholesale instead of deleting note-by-note. \
                        Returns the index each submitted note landed at, in the order given.",
         annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false),

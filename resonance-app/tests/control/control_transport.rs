@@ -4,13 +4,13 @@
 //! reply echoes, and the undo/revision contract (navigation transient,
 //! musical edits undoable; a GUI Cmd-Z reverts a remote tempo change).
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::AudioCommand;
 use resonance_control::methods::transport::TransportResult;
 use resonance_control::{ErrorKind, Request, Response, TransportState};
+use crate::common::{call, roundtrip};
 
 const SR: u32 = 48_000;
 
@@ -21,23 +21,6 @@ fn app() -> Resonance {
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-transport-test.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(
-        app,
-        Request::new(1, method, &params).expect("params serialize"),
-    )
 }
 
 fn call_no_params(app: &mut Resonance, method: &str) -> Response {

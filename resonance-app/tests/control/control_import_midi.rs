@@ -8,15 +8,14 @@
 //! multi-track refusal, the size/validity rejections, and that the
 //! import is one undoable edit whose result reports what landed.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::midi_io::encode_midi;
 use resonance_audio::types::{MidiNote, TrackType, TICKS_PER_QUARTER_NOTE};
 use resonance_control::methods::notes::ImportMidiResult;
 use resonance_control::methods::song::NotesView;
-use resonance_control::{ErrorKind, Request, Response};
+use resonance_control::ErrorKind;
+use crate::common::call;
 
 const TRACK: u64 = 1;
 const AUDIO_TRACK: u64 = 2;
@@ -30,20 +29,6 @@ fn app() -> Resonance {
     app.test_add_track(TRACK, TrackType::Instrument);
     app.test_add_track(AUDIO_TRACK, TrackType::Audio);
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn note(pitch: u8, start_beat: u64, beats: u64) -> MidiNote {

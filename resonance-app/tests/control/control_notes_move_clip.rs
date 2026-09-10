@@ -3,12 +3,12 @@
 //! correct a clip's start (or re-grid a drifted one) short of deleting
 //! and rebuilding it.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::{MidiClipState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{MidiNote, TrackType};
 use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use crate::common::{call, roundtrip};
 
 const SR: u32 = 48_000;
 const TPQ: u64 = 480;
@@ -38,20 +38,6 @@ fn app_with_clip(start_sample: u64) -> Resonance {
         trim_end_ticks: 0,
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 /// The sample position of a 0-based bar, through the same tempo map the
