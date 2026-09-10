@@ -242,8 +242,19 @@ struct DelayState {
     line_r: DelayLine,
     /// Timeline frame the next `apply` call is expected to start at.
     /// A mismatch (seek, loop wrap, a track that was skipped while
-    /// muted) clears the lines so stale audio doesn't replay.
+    /// muted) invalidates the lines so stale audio doesn't replay.
     next_playhead: Option<u64>,
+    /// Output samples still owed as silence after a discontinuity.
+    /// Invalidation is lazy: eagerly `clear()`ing both lines would
+    /// memset up to [`MAX_COMP_LATENCY`] samples each, per compensated
+    /// track/bus, inside the first callback after every seek — and at
+    /// the seam of every loop pass. Instead a mismatch just arms this
+    /// counter to `delay`: the next `delay` outputs read as 0.0 —
+    /// exactly what taps of a freshly cleared line would return —
+    /// while fresh pushes displace the stale tail in place, so it is
+    /// never read again. Continuous playback keeps this at 0 and the
+    /// per-sample path is unchanged.
+    warmup: usize,
 }
 
 struct TrackComp {
@@ -269,6 +280,7 @@ fn build_comp_map(delays: &[(u64, u64)]) -> HashMap<u64, TrackComp> {
                         line_l: DelayLine::new(delay + 1),
                         line_r: DelayLine::new(delay + 1),
                         next_playhead: None,
+                        warmup: 0,
                     }),
                 },
             )
@@ -290,11 +302,22 @@ fn apply_comp(tc: &TrackComp, left: &mut [f32], right: &mut [f32], playhead: u64
     };
     let frames = left.len().min(right.len());
     if st.next_playhead != Some(playhead) {
-        st.line_l.clear();
-        st.line_r.clear();
+        // Lazy invalidation — see `DelayState::warmup`. No memset here.
+        st.warmup = tc.delay;
     }
     st.next_playhead = Some(playhead + frames as u64);
-    for f in 0..frames {
+    // Warming up after a discontinuity: pushes still land (refilling the
+    // line in place) but the outputs are the zeros a cleared line would
+    // tap. `silent` is 0 on the continuous path, so that loop vanishes.
+    let silent = st.warmup.min(frames);
+    for f in 0..silent {
+        st.line_l.push(left[f]);
+        left[f] = 0.0;
+        st.line_r.push(right[f]);
+        right[f] = 0.0;
+    }
+    st.warmup -= silent;
+    for f in silent..frames {
         st.line_l.push(left[f]);
         left[f] = st.line_l.tap(tc.delay);
         st.line_r.push(right[f]);
@@ -355,6 +378,7 @@ impl LatencyComp {
                     line_l: DelayLine::new(delay + 1),
                     line_r: DelayLine::new(delay + 1),
                     next_playhead: None,
+                    warmup: 0,
                 }),
             }
         });
@@ -456,11 +480,22 @@ impl LatencyComp {
             return false;
         };
         if st.next_playhead != Some(playhead) {
-            st.line_l.clear();
-            st.line_r.clear();
+            // Lazy invalidation — see `DelayState::warmup`. No memset here.
+            st.warmup = tc.delay;
         }
         st.next_playhead = Some(playhead + frames as u64);
-        for f in 0..frames {
+        let silent = st.warmup.min(frames);
+        for f in 0..silent {
+            let idx = f * channels;
+            st.line_l.push(data[idx]);
+            data[idx] = 0.0;
+            if channels >= 2 {
+                st.line_r.push(data[idx + 1]);
+                data[idx + 1] = 0.0;
+            }
+        }
+        st.warmup -= silent;
+        for f in silent..frames {
             let idx = f * channels;
             st.line_l.push(data[idx]);
             data[idx] = st.line_l.tap(tc.delay);

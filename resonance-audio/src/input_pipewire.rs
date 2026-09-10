@@ -426,11 +426,12 @@ fn push_to_ringbufs(user_data: &mut UserData, samples: &[f32], frame_stride: usi
             }
             // Whole frames only — a partial push on overflow would
             // rotate the take's channels forever (finding #17).
-            if crate::mixer::push_recording_frames(prod, samples, frame_stride) {
+            let dropped = crate::mixer::push_recording_frames(prod, samples, frame_stride);
+            if dropped > 0 {
                 user_data
                     .shared
                     .recording_overflow
-                    .store(true, Ordering::Relaxed);
+                    .fetch_add(dropped as u64, Ordering::Relaxed);
             }
         }
     }

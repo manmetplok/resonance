@@ -307,6 +307,20 @@ pub enum AudioEvent {
         /// Downsampled waveform peaks: (min, max) per chunk of frames.
         waveform_peaks: Vec<(f32, f32)>,
     },
+    /// The capture ring overflowed while a recording was rolling:
+    /// `dropped_frames` whole input frames (at the capture device's
+    /// rate) were discarded by the RT input callback before the engine
+    /// control thread could drain them, so the take on disk is missing
+    /// that much audio — time-compressed and desynced from the first
+    /// drop onwards. Emitted at most once per record take (the control
+    /// thread's drain poll latches after reporting, so a sustained
+    /// overflow doesn't flood the queue); the counter and latch are
+    /// reset when the next take starts capturing. `dropped_frames` is
+    /// the count at the moment of emission — a floor on the damage,
+    /// not necessarily the final total.
+    RecordingOverflow {
+        dropped_frames: u64,
+    },
     /// One loop pass of a cycle-record run was captured into a distinct
     /// take. Emitted per armed track at each loop seam (and once more for
     /// the trailing pass when recording stops) while

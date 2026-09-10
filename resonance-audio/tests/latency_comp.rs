@@ -338,6 +338,93 @@ fn apply_resets_on_playhead_discontinuity() {
 }
 
 #[test]
+fn apply_after_seek_matches_an_eagerly_cleared_line() {
+    // The reset on a discontinuity is lazy (no memset on the audio
+    // thread), so pin its contract: after a seek the first `delay`
+    // output samples are exactly 0.0 — what taps of a freshly cleared
+    // line return — and everything after is the post-seek input delayed
+    // by `delay`, bit-exact, with no stale tail. The delay (12)
+    // deliberately exceeds the block size (8) so the silent warmup has
+    // to survive a block boundary.
+    const DELAY: usize = 12;
+    const FRAMES: usize = 8;
+    let comp = LatencyComp::new(DELAY as u64, &[(1, DELAY as u64)], 0, &[]);
+
+    // Pre-seek: distinctive values, so any stale tail would be visible.
+    let mut playhead = 0u64;
+    for b in 0..3usize {
+        let mut l: Vec<f32> = (0..FRAMES).map(|f| 100.0 + (b * FRAMES + f) as f32).collect();
+        let mut r = l.clone();
+        assert!(comp.apply(1, &mut l, &mut r, playhead));
+        playhead += FRAMES as u64;
+    }
+
+    // Seek far away and stream a fresh, known input; collect the output.
+    let input: Vec<f32> = (1..=(4 * FRAMES)).map(|n| n as f32).collect();
+    let mut out: Vec<f32> = Vec::new();
+    let mut playhead = 1_000u64;
+    for block in input.chunks(FRAMES) {
+        let mut l = block.to_vec();
+        let mut r = block.to_vec();
+        assert!(comp.apply(1, &mut l, &mut r, playhead));
+        assert_eq!(l, r, "both channels see the same reset");
+        out.extend_from_slice(&l);
+        playhead += FRAMES as u64;
+    }
+
+    // Ground truth for a freshly cleared DELAY-sample line under the
+    // same pushes: zeros while the line refills, then the input delayed.
+    let expected: Vec<f32> = (0..input.len())
+        .map(|n| if n < DELAY { 0.0 } else { input[n - DELAY] })
+        .collect();
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn loop_wrap_discontinuity_never_replays_stale_audio() {
+    // A loop seam is a playhead mismatch on every single pass; the
+    // reset must hold repeatedly, not just for the first seek.
+    const DELAY: usize = 4;
+    const FRAMES: usize = 16;
+    let comp = LatencyComp::new(DELAY as u64, &[(1, DELAY as u64)], 0, &[]);
+    for pass in 0..5 {
+        let v = (pass + 1) as f32;
+        let mut l = [v; FRAMES];
+        let mut r = [v; FRAMES];
+        // Every pass restarts at frame 0 — a wrap, never continuous.
+        assert!(comp.apply(1, &mut l, &mut r, 0));
+        assert!(
+            l[..DELAY].iter().all(|&s| s == 0.0),
+            "pass {pass}: the seam must start silent"
+        );
+        assert!(
+            l[DELAY..].iter().all(|&s| s == v),
+            "pass {pass}: fresh audio after the seam, not last pass's tail"
+        );
+    }
+}
+
+#[test]
+fn apply_dry_resets_on_playhead_discontinuity() {
+    // Same lazy-reset contract for the shared dry line: a seek owes
+    // `bus_stage` frames of silence, never the pre-seek tail.
+    let comp = LatencyComp::new(0, &[], 4, &[]);
+    let mut data = [1.0f32; 16]; // 8 frames stereo
+    assert!(comp.apply_dry(&mut data, 2, 8, 0));
+    assert!(data[..4 * 2].iter().all(|&s| s == 0.0));
+    assert!(data[4 * 2..].iter().all(|&s| s == 1.0));
+
+    // Seek: the 1.0 tail still inside the line must not replay.
+    let mut data = [0.5f32; 16];
+    assert!(comp.apply_dry(&mut data, 2, 8, 100));
+    assert!(
+        data[..4 * 2].iter().all(|&s| s == 0.0),
+        "stale pre-seek audio leaked through the dry line"
+    );
+    assert!(data[4 * 2..].iter().all(|&s| s == 0.5));
+}
+
+#[test]
 fn delays_match_detects_unchanged_tables() {
     let comp = LatencyComp::new(10, &[(1, 10), (2, 0), (3, 4)], 0, &[]);
     assert!(comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[], 0));

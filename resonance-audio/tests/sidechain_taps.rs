@@ -7,10 +7,37 @@
 //! cycle. These tests pin that, plus the bounded slot allocation that
 //! keeps the audio thread allocation-free.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
 use resonance_audio::types::sidechain::{active_sources, from_bus, from_track, route_source};
 use resonance_audio::types::{
     SendSource, SidechainRoute, SidechainTaps, MAX_SIDECHAIN_SOURCES,
 };
+
+/// Counts this thread's heap allocations so
+/// `begin_block_never_allocates` can prove the per-callback path stays
+/// allocation-free (the module's founding invariant). Thread-local so
+/// concurrently running tests in this binary don't pollute the count.
+struct CountingAllocator;
+
+thread_local! {
+    static THREAD_ALLOCS: Cell<u64> = const { Cell::new(0) };
+}
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        THREAD_ALLOCS.with(|c| c.set(c.get() + 1));
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 const FRAMES: usize = 64;
 
@@ -53,7 +80,7 @@ fn a_disabled_route_resolves_to_nothing() {
 fn distinct_sources_are_deduplicated_and_capped() {
     // Ten plugins all keyed from the same track is one tap, not ten.
     let routes: Vec<_> = (1..=10).map(|p| from_track(p, 10)).collect();
-    assert_eq!(active_sources(&routes), vec![SendSource::Track(10)]);
+    assert_eq!(active_sources(&routes).as_slice(), &[SendSource::Track(10)]);
 
     // More distinct sources than slots: the excess is dropped rather than
     // misrouted onto someone else's buffer.
@@ -61,7 +88,37 @@ fn distinct_sources_are_deduplicated_and_capped() {
     let sources = active_sources(&many);
     assert_eq!(sources.len(), MAX_SIDECHAIN_SOURCES);
     // First-seen order, so which sources survive is deterministic.
-    assert_eq!(sources[0], SendSource::Track(101));
+    assert_eq!(sources.as_slice()[0], SendSource::Track(101));
+}
+
+#[test]
+fn active_sources_keeps_first_seen_order_across_kinds_and_gaps() {
+    // Disabled routes are skipped without claiming an order position;
+    // a track and a bus with the same numeric id stay distinct; and a
+    // duplicate later in the list doesn't reorder its first sighting.
+    let routes = vec![
+        SidechainRoute {
+            plugin: 1,
+            source: SendSource::Track(7),
+            enabled: false,
+        },
+        from_bus(2, 7),
+        from_track(3, 7),
+        from_bus(4, 7), // duplicate of the enabled bus route
+        from_track(5, 9),
+    ];
+    assert_eq!(
+        active_sources(&routes).as_slice(),
+        &[SendSource::Bus(7), SendSource::Track(7), SendSource::Track(9)]
+    );
+    let sources = active_sources(&routes);
+    assert!(sources.contains(SendSource::Track(7)));
+    assert!(!sources.contains(SendSource::Track(8)));
+    assert!(
+        !sources.contains(SendSource::Track(0)),
+        "the fixed array's filler value must not read as a member"
+    );
+    assert_eq!(sources.iter().collect::<Vec<_>>(), sources.as_slice());
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +264,27 @@ fn dropping_a_route_frees_its_slot_for_a_new_source() {
     t.begin_block(&second);
     assert!(!t.is_tapped(SendSource::Track(100)), "old slot not released");
     assert!(t.is_tapped(SendSource::Track(200)), "new source not tapped");
+}
+
+#[test]
+fn begin_block_never_allocates() {
+    // The playing branch calls `begin_block` once per audio callback;
+    // per sidechain.rs "the audio thread never allocates". Exercise the
+    // worst case — a full slot table churning to entirely new sources
+    // every block, routes past the cap included — and require zero heap
+    // allocations on this thread across the calls.
+    let routes_a: Vec<_> = (1..=20).map(|p| from_track(p, p + 100)).collect();
+    let routes_b: Vec<_> = (1..=20).map(|p| from_track(p, p + 200)).collect();
+    let mut t = SidechainTaps::new(FRAMES);
+    t.begin_block(&routes_a);
+
+    let before = THREAD_ALLOCS.with(|c| c.get());
+    for _ in 0..4 {
+        t.begin_block(&routes_b);
+        t.begin_block(&routes_a);
+    }
+    let after = THREAD_ALLOCS.with(|c| c.get());
+    assert_eq!(after, before, "begin_block allocated on the audio-thread path");
 }
 
 #[test]

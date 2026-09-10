@@ -241,6 +241,11 @@ pub(crate) fn begin_recording_stream(
 
     state.rec.start_sample = start_sample;
     state.rec.start_latch_applied = false;
+    // A new record take starts with a clean dropped-frame count and a
+    // re-armed `RecordingOverflow` report.
+    state
+        .rec
+        .begin_overflow_episode(&ctx.shared.recording_overflow);
     state.rec.ring_consumer = Some(cons);
     state.rec.input_sample_rate = in_sr;
     state.rec.input_channels = in_ch;
@@ -327,6 +332,11 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
+        // Last chance to report an overflow the periodic drain poll has
+        // not seen yet (latched — a no-op when it already fired).
+        state
+            .rec
+            .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
         if state.loop_record_session.is_some() {
             // Cycle-record: emit the trailing pass as its own take instead
             // of the legacy single trimmed clip.
@@ -358,6 +368,11 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
+        // Last chance to report an overflow the periodic drain poll has
+        // not seen yet (latched — a no-op when it already fired).
+        state
+            .rec
+            .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
         if state.loop_record_session.is_some() {
             // Cycle-record: emit the trailing pass as its own take instead
             // of the legacy single trimmed clip.
@@ -536,6 +551,18 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     } else {
         slot.start
     };
+
+    // Report any ring overflow that damaged the pass being finalized
+    // (latched — a no-op when the drain poll already fired), then start
+    // the next pass with a clean count: a new take starts clean.
+    state
+        .rec
+        .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
+    if reopen {
+        state
+            .rec
+            .begin_overflow_episode(&ctx.shared.recording_overflow);
+    }
 
     // -- Audio takes --
     let rolled = state.rec.roll_audio_pass(

@@ -873,8 +873,11 @@ fn build_input_stream_cpal(
                     }
                     // Whole frames only — a partial push on overflow
                     // would rotate the take's channels (finding #17).
-                    if crate::mixer::push_recording_frames(prod, data, stride) {
-                        shared.recording_overflow.store(true, Ordering::Relaxed);
+                    let dropped = crate::mixer::push_recording_frames(prod, data, stride);
+                    if dropped > 0 {
+                        shared
+                            .recording_overflow
+                            .fetch_add(dropped as u64, Ordering::Relaxed);
                     }
                 }
             }

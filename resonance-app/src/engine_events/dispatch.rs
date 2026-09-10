@@ -44,6 +44,9 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             transport::input_devices_listed(r, devices, default_name)
         }
         E::RecordingStarted { start_sample } => transport::recording_started(r, start_sample),
+        E::RecordingOverflow { dropped_frames } => {
+            transport::recording_overflow(r, dropped_frames)
+        }
         // I/O latency report (doc #260 finding #13): no UI surface yet —
         // logged for diagnosability until a round-trip readout lands.
         E::IoLatencyReport {
