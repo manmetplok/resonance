@@ -1814,12 +1814,26 @@ fn two_take_clip_loads_racing_each_other_still_leave_one_clip() {
     engine.replay_take_lane_command(&load);
     engine.replay_take_lane_command(&load);
 
+    let wait_start = std::time::Instant::now();
     assert!(
         engine.wait_for_clips(1, std::time::Duration::from_secs(5)),
         "the take clip never loaded at all"
     );
-    // Let a second worker publish if one is going to.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // Let a second worker publish if one is going to. A flat sleep here can
+    // false-pass under load: a buggy-but-slow second worker can miss a
+    // fixed window and land only after the assertion below has already
+    // read the list. There is no flush to wait on instead — the duplicate
+    // check that actually binds lives inside the worker's own
+    // `clips.write()` (see `submit_clip_load`), and this harness has no
+    // handle on the worker pool to drain it deterministically. So the
+    // grace scales with how long the wait above actually took to see the
+    // first publish — a live reading of how loaded this machine is right
+    // now — floored so a fast, idle machine still gets a real window, and
+    // capped so a pathologically slow one doesn't stall the suite.
+    let grace = (wait_start.elapsed() * 5)
+        .max(std::time::Duration::from_millis(200))
+        .min(std::time::Duration::from_secs(5));
+    std::thread::sleep(grace);
 
     assert_eq!(
         engine.clip_ids(),

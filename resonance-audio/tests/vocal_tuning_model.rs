@@ -195,15 +195,36 @@ fn note_blob_geometry_helpers() {
     assert_eq!(note.target_pitch_midi(), 69.0);
 }
 
+/// Regression pin for `TuningScale::to_mode` (resonance-audio now depends on
+/// resonance-music-theory directly, doc #160/todo #358 — see
+/// ARCHITECTURE.md and the dependency comment in Cargo.toml), which
+/// collapsed what used to be two hand-copied interval tables (one on
+/// `TuningScale::intervals`, one implicit in a private `to_mode` map in
+/// `vocal_render.rs`) into a single conversion sourced from
+/// `Mode::intervals`. Every variant is checked two independent ways so a
+/// mis-wired match arm (e.g. `Dorian` mapped to `Phrygian`) fails even
+/// though `to_mode` itself stays an exhaustive match: the variant names must
+/// line up (`Mode::as_str` only differs by the missing space in "harmonic
+/// minor" / "melodic minor"), and `intervals()` must equal the target
+/// `Mode`'s own table, not a copy of it. Adding a `TuningScale` variant
+/// without extending `to_mode` fails to compile (the match is exhaustive);
+/// this test is what catches a variant mapped to the *wrong* `Mode`.
 #[test]
-fn tuning_scale_intervals_match_modes() {
-    assert_eq!(TuningScale::Chromatic.intervals(), None);
-    assert_eq!(TuningScale::Major.intervals(), Some(&[0, 2, 4, 5, 7, 9, 11][..]));
-    assert_eq!(TuningScale::Minor.intervals(), Some(&[0, 2, 3, 5, 7, 8, 10][..]));
-    assert_eq!(
-        TuningScale::HarmonicMinor.intervals(),
-        Some(&[0, 2, 3, 5, 7, 8, 11][..])
-    );
+fn tuning_scale_matches_music_theory_mode_for_every_variant() {
+    for scale in TuningScale::ALL {
+        let mode = scale.to_mode();
+
+        let scale_name = format!("{scale:?}").to_lowercase();
+        let mode_name = mode.as_str().replace(' ', "");
+        assert_eq!(scale_name, mode_name, "{scale:?} maps to the wrong Mode");
+
+        let want = if scale == TuningScale::Chromatic {
+            None
+        } else {
+            Some(mode.intervals())
+        };
+        assert_eq!(scale.intervals(), want, "{scale:?} interval table mismatch");
+    }
 }
 
 #[test]

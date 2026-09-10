@@ -135,8 +135,15 @@ pub struct SharedState {
     /// Toggling it crossfades over a few milliseconds, so a mastering
     /// chain can be A/B-ed mid-playback without a click.
     pub master_fx_bypass: crate::bypass::BypassFade,
-    /// Flag: recording ring buffer overflowed (samples were dropped).
-    pub recording_overflow: AtomicBool,
+    /// Count of whole input frames (at the capture device's rate) the
+    /// capture callbacks discarded because the recording ring was full,
+    /// since the current record take began. The RT producers
+    /// (`platform`, `input_pipewire`) `fetch_add`; the engine control
+    /// thread reads it alongside the recording drain and raises
+    /// `AudioEvent::RecordingOverflow` once per take
+    /// (`RecordingState::poll_overflow`); a new take zeroes it
+    /// (`RecordingState::begin_overflow_episode`).
+    pub recording_overflow: AtomicU64,
     /// Channel count of the currently-active input stream, or 0 when
     /// no stream is open. Used by the mix callback to de-interleave
     /// per-track monitor audio from a multi-channel input device.
@@ -363,7 +370,7 @@ impl Default for SharedState {
             master_peak_l_bits: AtomicU32::new(0),
             master_peak_r_bits: AtomicU32::new(0),
             master_fx_bypass: crate::bypass::BypassFade::new(),
-            recording_overflow: AtomicBool::new(false),
+            recording_overflow: AtomicU64::new(0),
             input_channels: AtomicU16::new(0),
             loop_enabled: AtomicBool::new(false),
             loop_in: AtomicU64::new(0),
@@ -453,43 +460,28 @@ pub fn __reset_engine_disconnect_latch_for_test() {
 }
 
 /// The audio engine.
-#[allow(dead_code)]
 pub struct AudioEngine {
     cmd_tx: Sender<AudioCommand>,
     event_rx: Receiver<AudioEvent>,
     _stream: Option<cpal::Stream>,
     /// Native PipeWire output stream (the default backend). `None` when
     /// running on the cpal fallback (`_stream` is `Some` then) or in
-    /// test constructors. Held so follow-up work can query pw
-    /// time-info / Latency params via
-    /// [`output_pipewire::PipeWireOutputHandle::with_stream`].
+    /// test constructors. Never read (its accessor,
+    /// [`output_pipewire::PipeWireOutputHandle::with_stream`], has no
+    /// caller yet — doc #260 finding #13's follow-up latency/time-info
+    /// work hasn't landed), but it must stay a field: its `Drop` stops
+    /// the PipeWire realtime thread and tears down the stream/listener/
+    /// core, so dropping it early (e.g. at the end of `new()`, where the
+    /// local `pw_output` binding would otherwise fall out of scope)
+    /// would silence output the moment construction finished.
     #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
     pw_output: Option<crate::output_pipewire::PipeWireOutputHandle>,
     /// Join handle for the engine control thread. `Drop` sends a
     /// `ShutDown` command (which breaks the thread's loop, since the
     /// thread's own `cmd_tx_retry` keeps the channel from ever
     /// returning `Disconnected`) and then joins.
     engine_thread: Option<std::thread::JoinHandle<()>>,
-    // Shared state for live stream rebuilding (e.g. buffer size changes)
-    shared: Arc<SharedState>,
-    tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>,
-    busses: Arc<parking_lot::RwLock<IndexMap<BusId, Bus>>>,
-    master: Arc<parking_lot::RwLock<MasterBus>>,
-    clips: Arc<parking_lot::RwLock<Vec<AudioClip>>>,
-    midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>>,
-    plugins:
-        Arc<parking_lot::RwLock<PluginMap>>,
-    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
-    /// Monitor input ring buffer's producer. Wrapped in `Mutex` solely
-    /// so the same `Arc` can be handed to successive input-stream
-    /// builders across device changes — there is only ever one writer
-    /// thread (the cpal/PipeWire input callback) at a time, the engine
-    /// thread never `.lock()`s, and the callback always uses `try_lock`.
-    /// In steady state the CAS is uncontended.
-    monitor_prod: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-    sample_rate: u32,
-    channels: usize,
-    quantum: usize,
     /// Holds the PipeWire graph at the engine's rate for the lifetime
     /// of the engine (`None` when the force was rejected and we follow
     /// the graph instead). Declared last so its `Drop` — which hands
@@ -839,8 +831,6 @@ impl AudioEngine {
         let force_cpal = std::env::var_os("RESONANCE_FORCE_CPAL_OUTPUT").is_some();
         #[cfg(target_os = "linux")]
         let mut pw_output: Option<crate::output_pipewire::PipeWireOutputHandle> = None;
-        #[cfg(target_os = "linux")]
-        let mut out_channels = channels;
         #[cfg(not(target_os = "linux"))]
         let (stream, monitor_prod_raw, used_fixed_buffer) = {
             if force_cpal {
@@ -873,7 +863,6 @@ impl AudioEngine {
                         pw_rate, pw_channels, quantum, sample_rate
                     );
                     pw_output = Some(handle);
-                    out_channels = 2;
                     (None, prod, true)
                 }
                 Err(e) => {
@@ -885,8 +874,6 @@ impl AudioEngine {
                 }
             }
         };
-        #[cfg(target_os = "linux")]
-        let channels = out_channels;
         #[cfg(target_os = "linux")]
         let backend = if pw_output.is_some() { "pipewire" } else { "cpal" };
         #[cfg(not(target_os = "linux"))]
@@ -912,8 +899,7 @@ impl AudioEngine {
             used_fixed_buffer,
         );
 
-        let monitor_prod = Arc::new(parking_lot::Mutex::new(monitor_prod_raw));
-        let monitor_prod_audio = Arc::clone(&monitor_prod);
+        let monitor_prod_audio = Arc::new(parking_lot::Mutex::new(monitor_prod_raw));
 
         if let Some(stream) = &stream {
             stream
@@ -937,21 +923,21 @@ impl AudioEngine {
         let engine_thread = std::thread::Builder::new()
             .name("resonance-engine".into())
             .spawn(move || {
-                thread::engine_thread(
+                thread::engine_thread(thread::EngineThreadParams {
                     cmd_rx,
                     cmd_tx_retry,
                     event_tx,
-                    shared_ctrl,
-                    tracks_ctrl,
-                    busses_ctrl,
-                    master_ctrl,
-                    clips_ctrl,
-                    midi_clips_ctrl,
-                    tempo_ctrl,
-                    plugins_ctrl,
-                    latency_comp_ctrl,
-                    automation_ctrl,
-                    monitor_prod_audio,
+                    shared: shared_ctrl,
+                    tracks_arc: tracks_ctrl,
+                    busses_arc: busses_ctrl,
+                    master_arc: master_ctrl,
+                    clips_arc: clips_ctrl,
+                    midi_clips_arc: midi_clips_ctrl,
+                    tempo_map: tempo_ctrl,
+                    plugins_arc: plugins_ctrl,
+                    latency_comp: latency_comp_ctrl,
+                    automation: automation_ctrl,
+                    monitor_prod: monitor_prod_audio,
                     live_midi_tx,
                     live_midi_fwd_rx,
                     live_control_tx,
@@ -961,7 +947,7 @@ impl AudioEngine {
                     sample_rate,
                     buf_frames,
                     quantum,
-                );
+                });
             })
             .map_err(|e| format!("Failed to spawn engine thread: {}", e))?;
 
@@ -972,18 +958,6 @@ impl AudioEngine {
             #[cfg(target_os = "linux")]
             pw_output,
             engine_thread: Some(engine_thread),
-            shared,
-            tracks,
-            busses,
-            master,
-            clips,
-            midi_clips,
-            plugins,
-            tempo_map,
-            monitor_prod,
-            sample_rate,
-            channels,
-            quantum,
             _graph_force: graph_force,
         })
     }
@@ -1006,6 +980,21 @@ impl AudioEngine {
                 Err(EngineSendError(e.0))
             }
         }
+    }
+
+    /// Whether a `send` has ever observed the engine thread's command
+    /// channel disconnected. Reads the same one-shot latch
+    /// [`report_engine_disconnect_once`] sets, so it goes true the first
+    /// time any `send` call anywhere hits the disconnect branch — not
+    /// just one made through this handle.
+    ///
+    /// A disconnected channel never reconnects (the engine thread is
+    /// gone for good — post-shutdown or a panic), so this is safe to
+    /// poll from a long-lived caller like the app's tick handler to
+    /// latch a one-time "engine stopped responding" banner instead of
+    /// matching on every individual `send`'s `Result`.
+    pub fn is_disconnected(&self) -> bool {
+        ENGINE_DISCONNECT_REPORTED.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Best-effort synchronous shutdown handshake.
@@ -1059,6 +1048,25 @@ impl AudioEngine {
         self.event_rx.try_recv().ok()
     }
 
+    /// Shared body for the test-only constructors below: every field that
+    /// doesn't vary between them (no real device, no engine thread, an
+    /// empty project, a throwaway single-slot monitor ring). Callers pass
+    /// in just the pieces that differ — the command channel ends and the
+    /// event receiver — so a field added to `AudioEngine` needs an
+    /// initializer here plus one in [`AudioEngine::new`], not one in each
+    /// test constructor too.
+    fn for_test_with(cmd_tx: Sender<AudioCommand>, event_rx: Receiver<AudioEvent>) -> Self {
+        Self {
+            cmd_tx,
+            event_rx,
+            _stream: None,
+            #[cfg(target_os = "linux")]
+            pw_output: None,
+            engine_thread: None,
+            _graph_force: None,
+        }
+    }
+
     /// Test-only constructor that builds an `AudioEngine` with no spawned
     /// engine thread, no cpal stream, and a command channel whose receiver
     /// has already been dropped. Calling [`AudioEngine::send`] on the
@@ -1075,34 +1083,7 @@ impl AudioEngine {
         drop(cmd_rx);
         let (_event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
 
-        let shared = Arc::new(SharedState::default());
-
-        // A zero-capacity ringbuf is fine — the test never drives audio
-        // through it.
-        let monitor_ring = ringbuf::HeapRb::<f32>::new(1);
-        let (prod, _cons) = monitor_ring.split();
-
-        Self {
-            cmd_tx,
-            event_rx,
-            _stream: None,
-            #[cfg(target_os = "linux")]
-            pw_output: None,
-            engine_thread: None,
-            shared,
-            tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
-            busses: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
-            master: Arc::new(parking_lot::RwLock::new(MasterBus::new())),
-            clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
-            midi_clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
-            plugins: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
-            tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
-            monitor_prod: Arc::new(parking_lot::Mutex::new(prod)),
-            sample_rate: 48_000,
-            channels: 2,
-            quantum: 128,
-            _graph_force: None,
-        }
+        Self::for_test_with(cmd_tx, event_rx)
     }
 
     /// Test-only constructor that builds an `AudioEngine` with no spawned
@@ -1121,31 +1102,7 @@ impl AudioEngine {
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
         let (_event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
 
-        let shared = Arc::new(SharedState::default());
-        let monitor_ring = ringbuf::HeapRb::<f32>::new(1);
-        let (prod, _cons) = monitor_ring.split();
-
-        let engine = Self {
-            cmd_tx,
-            event_rx,
-            _stream: None,
-            #[cfg(target_os = "linux")]
-            pw_output: None,
-            engine_thread: None,
-            shared,
-            tracks: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
-            busses: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
-            master: Arc::new(parking_lot::RwLock::new(MasterBus::new())),
-            clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
-            midi_clips: Arc::new(parking_lot::RwLock::new(Vec::new())),
-            plugins: Arc::new(parking_lot::RwLock::new(IndexMap::new())),
-            tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
-            monitor_prod: Arc::new(parking_lot::Mutex::new(prod)),
-            sample_rate: 48_000,
-            channels: 2,
-            quantum: 128,
-            _graph_force: None,
-        };
+        let engine = Self::for_test_with(cmd_tx, event_rx);
         (engine, cmd_rx)
     }
 }

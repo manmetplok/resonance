@@ -121,6 +121,14 @@ pub struct Resonance {
     /// never mutates state. See `view::transport_labels`.
     pub(crate) transport_labels: view::transport_labels::TransportLabels,
     pub(crate) error_message: Option<String>,
+    /// Set once the tick handler has surfaced the "engine stopped
+    /// responding" banner for [`resonance_audio::AudioEngine::is_disconnected`]
+    /// (see `update::tick::check_engine_disconnected`). Latches the check
+    /// app-side so a dismissed (or superseded) banner isn't forced back
+    /// onto `error_message` every subsequent tick — the underlying engine
+    /// latch never resets, so without this the message would be
+    /// unclearable.
+    pub(crate) engine_disconnected_banner_shown: bool,
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
     pub(crate) master_level_r: f32,
@@ -720,6 +728,18 @@ impl Resonance {
         (Self::assemble(engine, Host::None), iced::Task::none(), cmd_rx)
     }
 
+    /// An app built around [`AudioEngine::for_test_disconnected`]: every
+    /// `send` on it hits the disconnect branch immediately, as if the
+    /// engine thread had already exited. For tests pinning what the app
+    /// does once the engine is gone — e.g. the tick handler's "stopped
+    /// responding" banner — without needing to actually kill a real
+    /// engine thread mid-test.
+    #[doc(hidden)]
+    pub fn new_for_test_disconnected() -> (Self, iced::Task<Message>) {
+        let engine = AudioEngine::for_test_disconnected();
+        (Self::assemble(engine, Host::None), iced::Task::none())
+    }
+
     /// Build the application state around an already-constructed `engine`.
     ///
     /// Split out of [`Resonance::new`] so [`Resonance::new_for_test`] can share
@@ -780,6 +800,7 @@ impl Resonance {
             view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
             error_message: None,
+            engine_disconnected_banner_shown: false,
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,
             master_level_r: 0.0,

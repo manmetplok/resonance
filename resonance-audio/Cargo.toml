@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 cpal = "0.17"
-symphonia.workspace = true
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
 ringbuf = "0.5"

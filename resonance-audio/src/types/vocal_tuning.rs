@@ -9,17 +9,26 @@
 //! bounce paths (todo #358) read this model live to resynthesise corrected
 //! audio; analysis (todo #357) fills in `contour`/`notes`.
 //!
-//! This module is deliberately self-contained and dependency-free so it is
-//! trivially serializable for project persistence (todo #363) and so the
-//! engine crate need not depend on `resonance-music-theory` just to hold
-//! the data. The scale-snap logic that consumes [`TuningScale`] lives in
-//! `resonance-music-theory`; [`TuningScale::intervals`] mirrors its mode
-//! interval tables so the two stay in lock-step.
+//! This module holds the non-destructive edit *data* — `resonance-audio`
+//! depends on `resonance-music-theory` for the scale-snap math itself
+//! (doc #160, todo #358; see the dependency comment in `Cargo.toml`), but
+//! [`TuningScale`] stays its own enum rather than aliasing
+//! `resonance_music_theory::scale::Mode` directly. `Mode` is
+//! music-theory's general-purpose scale/mode vocabulary, shared with chord
+//! progression and phrase generation, and free to grow for those callers'
+//! needs; `TuningScale` is the small, purpose-built set the vocal-tuning UI
+//! offers and the project-file format (todo #363) will serialize, so it does
+//! not silently reshape when `Mode` gains an entry unrelated to vocal snap.
+//! [`TuningScale::to_mode`] is the *one* place the two are mapped to each
+//! other — [`TuningScale::intervals`] and the render path's scale lookup
+//! both go through it, so there is a single source of truth for the actual
+//! interval tables (`Mode`'s).
 
 /// Musical scale used to snap corrected pitches to in-key scale degrees.
 ///
 /// `Chromatic` performs no scale snapping (every semitone is allowed);
-/// the remaining variants mirror `resonance_music_theory::scale::Mode`.
+/// the remaining variants each map to a `resonance_music_theory::scale::Mode`
+/// of the same name via [`TuningScale::to_mode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TuningScale {
     /// No scale snapping — all twelve semitones are valid targets.
@@ -37,22 +46,52 @@ pub enum TuningScale {
 }
 
 impl TuningScale {
+    /// Every variant, in declaration order — for exhaustive iteration (e.g.
+    /// in tests pinning [`TuningScale::to_mode`] against every entry) since
+    /// the enum itself has no `Iterator` impl to walk.
+    pub const ALL: [TuningScale; 10] = [
+        TuningScale::Chromatic,
+        TuningScale::Major,
+        TuningScale::Minor,
+        TuningScale::Dorian,
+        TuningScale::Phrygian,
+        TuningScale::Lydian,
+        TuningScale::Mixolydian,
+        TuningScale::Locrian,
+        TuningScale::HarmonicMinor,
+        TuningScale::MelodicMinor,
+    ];
+
+    /// The `resonance_music_theory::scale::Mode` this variant corresponds
+    /// to. The one place `TuningScale` and `Mode` are mapped onto each
+    /// other; [`TuningScale::intervals`] and the render path's scale lookup
+    /// (`vocal_render::pitch_ratio_curve`) both go through this instead of
+    /// each keeping their own table or match.
+    pub fn to_mode(self) -> resonance_music_theory::scale::Mode {
+        use resonance_music_theory::scale::Mode;
+        match self {
+            TuningScale::Chromatic => Mode::Chromatic,
+            TuningScale::Major => Mode::Major,
+            TuningScale::Minor => Mode::Minor,
+            TuningScale::Dorian => Mode::Dorian,
+            TuningScale::Phrygian => Mode::Phrygian,
+            TuningScale::Lydian => Mode::Lydian,
+            TuningScale::Mixolydian => Mode::Mixolydian,
+            TuningScale::Locrian => Mode::Locrian,
+            TuningScale::HarmonicMinor => Mode::HarmonicMinor,
+            TuningScale::MelodicMinor => Mode::MelodicMinor,
+        }
+    }
+
     /// Semitone offsets of the scale degrees above the key root, or `None`
-    /// for [`TuningScale::Chromatic`] (which admits every semitone). The
-    /// non-chromatic tables match `resonance_music_theory::scale::Mode`.
+    /// for [`TuningScale::Chromatic`] (which admits every semitone and so
+    /// snaps nothing). Sourced from [`TuningScale::to_mode`]'s
+    /// `Mode::intervals` — there is no separate copy of the tables here.
     pub fn intervals(self) -> Option<&'static [u8]> {
-        Some(match self {
-            TuningScale::Chromatic => return None,
-            TuningScale::Major => &[0, 2, 4, 5, 7, 9, 11],
-            TuningScale::Minor => &[0, 2, 3, 5, 7, 8, 10],
-            TuningScale::Dorian => &[0, 2, 3, 5, 7, 9, 10],
-            TuningScale::Phrygian => &[0, 1, 3, 5, 7, 8, 10],
-            TuningScale::Lydian => &[0, 2, 4, 6, 7, 9, 11],
-            TuningScale::Mixolydian => &[0, 2, 4, 5, 7, 9, 10],
-            TuningScale::Locrian => &[0, 1, 3, 5, 6, 8, 10],
-            TuningScale::HarmonicMinor => &[0, 2, 3, 5, 7, 8, 11],
-            TuningScale::MelodicMinor => &[0, 2, 3, 5, 7, 9, 11],
-        })
+        match self {
+            TuningScale::Chromatic => None,
+            other => Some(other.to_mode().intervals()),
+        }
     }
 }
 

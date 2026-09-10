@@ -10,8 +10,10 @@ The workspace is a deliberate DAG. Every crate has a single responsibility, and 
 resonance-dsp ──┬─► resonance-metering ──► resonance-mastering plugin
                 ├─► resonance-audio ─────► resonance-app
                 └─► (every FX plugin)
-resonance-music-theory ──┬─► resonance-app  (pure theory, no audio/app deps)
-                         └─► resonance-svs ──► resonance-app  (vocal synthesis)
+resonance-music-theory ──┬─► resonance-app                   (pure theory, no audio/app deps)
+                         ├─► resonance-audio                 (vocal-tuning scale-snap only — doc #160/todo #358)
+                         ├─► resonance-svs ──► resonance-app  (vocal synthesis)
+                         └─► resonance-granular-delay plugin (scale-quantized grain pitch)
 resonance-common ──► resonance-audio, every plugin
 resonance-plugin ──┬─► every plugin, resonance-app (UI helpers)
                    └─► wayland-plugin-gui ──► every plugin (editor feature)
@@ -21,7 +23,7 @@ plugin-gui-core ──► wayland-plugin-gui, cocoa-plugin-gui, resonance-plugin
 Hard rules — these are load-bearing for build times, testability, and cognitive load:
 
 - `resonance-music-theory` **does not depend on audio, app, or plugin code**. It is pure music theory: pitch, scale, chord, progression, voicing, generators. It can be built and tested headless. Keep it that way.
-- `resonance-audio` **does not depend on `resonance-music-theory` or `resonance-app`**. The audio engine doesn't know about chords or about Iced messages. If you find yourself wanting to add a music-theory dep to `resonance-audio`, the work belongs in the app layer instead.
+- `resonance-audio` **does not depend on `resonance-app`**, and its one dependency the other direction on `resonance-music-theory` is narrow and sanctioned (doc #160, todo #358): the vocal-tuning render/bounce path (`engine/vocal_render.rs`) uses `resonance_music_theory::scale::{Mode, Scale}` for scale-snap, and `types::TuningScale` is the small, wire-stable enum the vocal-tuning data model and UI use, mapped to `Mode` in one place (`TuningScale::to_mode`). Don't widen this into a general audio/theory coupling — a new use needs its own doc/todo justification, not a ride on this one. The audio engine still doesn't know about Iced messages.
 - `resonance-dsp`, `resonance-metering`, `resonance-common` are framework-agnostic — no Iced, no CLAP, no plugin trait. They're reusable building blocks.
 - `resonance-svs` (singing-voice synthesis) depends only on `resonance-music-theory`. It renders DiffSinger `.ds` segments to audio headless, and ships its own CLI binary so the pipeline can be exercised without booting the app.
 - `plugin-gui-core` is the platform-neutral half of the editor stack: the `EditorApp`/`EditorOptions`/`EditorError` contract, the fleet theme, and the pure egui widget set. No windowing code; builds on every OS.
@@ -54,7 +56,7 @@ Discipline:
 - `dsp.rs` is the pure-DSP boundary. It must be testable without the plugin framework. Plugins ship integration tests in `tests/` that drive `dsp.rs` directly.
 - `params.rs` defines parameters as code, not as a serialized blob. Adding a parameter is a code change, not a config change.
 - The editor is **feature-gated** (`default = ["editor"]`). Headless builds for tests/CI use `--no-default-features` and skip the egui/wayland deps.
-- `editor/theme.rs` is plugin-local. Plugins do not share a theme module — each plugin has its own visual identity.
+- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 11 plugins re-exports the shared design system with `pub use wayland_plugin_gui::theme::lavender::*` (which itself re-exports `plugin-gui-core`'s canonical tokens — see above), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
 
 ## Mastering as the Reference Decomposition
 
@@ -137,17 +139,17 @@ details if promoted to `pub`:
 
 - `recent.rs` — exercises private `insert_pure`, `derive_display_name`, and `MAX_RECENT`.
 - `compose/invariants.rs`, `compose/tests.rs` — section/chord state round-trips that read crate-internal types.
-- `update/project_io/replay.rs` — exercises the private `migrate_auto_name` and `sort_plugins_by_saved_order` helpers.
-- `update/project_io/replay_diff.rs` — exercises private `structurally_compatible`,
-  `id_set_eq`, and `midi_notes_equal` helpers used by the project-diff
-  fast-path. Promoting these to `pub` would leak diff implementation
-  details into the crate's public API.
 
 These are the documented exception, not the rule. Do not add new inline tests
-elsewhere in the workspace (the `undo.rs` inline tests have already migrated to
-`tests/undo_history.rs`; shrink this list when you can, don't grow it). If you
-need to test a private helper in any other crate, make the helper `pub(crate)`
-and write a `tests/<feature>.rs` integration test in that crate instead.
+elsewhere in the workspace (shrink this list when you can, don't grow it) — for
+example, the `update/project_io/replay.rs` and `replay_diff.rs` helpers this
+list used to carry an exception for (`migrate_auto_name`,
+`sort_plugins_by_saved_order`, `structurally_compatible`, `id_set_eq`,
+`midi_notes_equal`) are `pub fn` now, with their inline tests migrated to
+`resonance-app/tests/io/replay.rs` and `replay_diff.rs`; the `undo.rs` inline
+tests likewise moved out, to `tests/timeline/undo_history.rs`. If you need to
+test a private helper in any other crate, make the helper `pub(crate)` and
+write a `tests/<feature>.rs` integration test in that crate instead.
 
 ## Anti-Patterns to Avoid
 

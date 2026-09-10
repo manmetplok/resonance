@@ -22,6 +22,7 @@
 //! sampling is a binary search ([`resonance_common::sample_lane`]).
 
 use resonance_common::{lane_value_to_plugin_param, AutomationTarget, PluginInstanceId};
+use resonance_dsp::db_to_linear;
 
 use crate::clap_host::SyncClapInstance;
 use crate::engine::AutomationSnapshot;
@@ -34,7 +35,7 @@ fn db_to_lin(db: f32) -> f32 {
     if db <= resonance_common::GAIN_MIN_DB {
         0.0
     } else {
-        10f32.powf(db / 20.0)
+        db_to_linear(db)
     }
 }
 

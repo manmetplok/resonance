@@ -118,8 +118,37 @@ fn mono_output_sums_both_channels_with_ramp() {
 
 #[test]
 fn zero_frames_is_a_no_op() {
+    // Truly empty buffers stay empty.
     let mut data: Vec<f32> = Vec::new();
     sum_to_output(&mut data, 2, 0, &[], &[], (1.0, 0.0), (1.0, 0.0));
+    assert!(data.is_empty(), "empty output buffer must stay empty");
+
     let (mut dl, mut dr) = (Vec::new(), Vec::new());
     sum_to_stereo(&mut dl, &mut dr, 0, &[], &[], (1.0, 0.0), (1.0, 0.0));
+    assert!(dl.is_empty(), "empty dst_l must stay empty");
+    assert!(dr.is_empty(), "empty dst_r must stay empty");
+
+    // A `frames` argument of 0 must be a true no-op even when the
+    // destination buffers already hold accumulated state from other
+    // sources this block: nothing may be read from `f == 0` or written.
+    let mut data = vec![0.7f32, -0.3, 0.1, 0.2];
+    let data_before = data.clone();
+    sum_to_output(&mut data, 2, 0, &[], &[], (1.0, 0.0), (1.0, 0.0));
+    assert_eq!(
+        data, data_before,
+        "zero frames must not touch already-accumulated output"
+    );
+
+    let mut dl = vec![0.5f32, -0.5];
+    let mut dr = vec![0.25f32, -0.25];
+    let (dl_before, dr_before) = (dl.clone(), dr.clone());
+    sum_to_stereo(&mut dl, &mut dr, 0, &[], &[], (1.0, 0.0), (1.0, 0.0));
+    assert_eq!(
+        dl, dl_before,
+        "zero frames must not touch already-accumulated dst_l"
+    );
+    assert_eq!(
+        dr, dr_before,
+        "zero frames must not touch already-accumulated dst_r"
+    );
 }

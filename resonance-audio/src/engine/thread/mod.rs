@@ -300,35 +300,72 @@ pub(crate) fn publish_automation_snapshot(
     ctx.automation.store(Arc::new(snapshot));
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn engine_thread(
-    cmd_rx: Receiver<AudioCommand>,
-    cmd_tx_retry: Sender<AudioCommand>,
-    event_tx: Sender<AudioEvent>,
-    shared: Arc<SharedState>,
-    tracks_arc: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses_arc: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master_arc: Arc<RwLock<MasterBus>>,
-    clips_arc: Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
-    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
-    plugins_arc: Arc<RwLock<PluginMap>>,
-    latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
-    automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
-    monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
-    live_midi_tx: Sender<LiveMidiEvent>,
+/// Construction parameters for [`engine_thread`].
+///
+/// A plain positional parameter list here used to run to 22 arguments,
+/// several sharing a type (three `Sender`s, five `Arc<RwLock<…>>>`s) —
+/// nothing stopped two same-typed arguments from being passed in the
+/// wrong order at the call site; the compiler can't catch a transposed
+/// pair when both sides typecheck. Field-name construction makes that
+/// class of mistake impossible: every value is bound to its parameter
+/// name at the call site, not its position. Field names mirror the
+/// removed parameter names 1:1, so a diff against the old signature
+/// reads straight across.
+pub(crate) struct EngineThreadParams {
+    pub cmd_rx: Receiver<AudioCommand>,
+    pub cmd_tx_retry: Sender<AudioCommand>,
+    pub event_tx: Sender<AudioEvent>,
+    pub shared: Arc<SharedState>,
+    pub tracks_arc: Arc<RwLock<IndexMap<TrackId, Track>>>,
+    pub busses_arc: Arc<RwLock<IndexMap<BusId, Bus>>>,
+    pub master_arc: Arc<RwLock<MasterBus>>,
+    pub clips_arc: Arc<RwLock<Vec<AudioClip>>>,
+    pub midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
+    pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    pub plugins_arc: Arc<RwLock<PluginMap>>,
+    pub latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
+    pub automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
+    pub monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
+    pub live_midi_tx: Sender<LiveMidiEvent>,
     // Events already picked up (and instrument-delivered) by the audio
     // callback, forwarded here for recording + MIDI-thru bookkeeping
     // (doc #260 finding #16).
-    live_midi_fwd_rx: Receiver<LiveMidiEvent>,
-    live_control_tx: Sender<LiveControlEvent>,
-    live_control_rx: Receiver<LiveControlEvent>,
-    clock_tx: Sender<MidiClockEvent>,
-    clock_rx: Receiver<MidiClockEvent>,
-    sample_rate: u32,
-    buf_frames: usize,
-    quantum: usize,
-) {
+    pub live_midi_fwd_rx: Receiver<LiveMidiEvent>,
+    pub live_control_tx: Sender<LiveControlEvent>,
+    pub live_control_rx: Receiver<LiveControlEvent>,
+    pub clock_tx: Sender<MidiClockEvent>,
+    pub clock_rx: Receiver<MidiClockEvent>,
+    pub sample_rate: u32,
+    pub buf_frames: usize,
+    pub quantum: usize,
+}
+
+pub(crate) fn engine_thread(params: EngineThreadParams) {
+    let EngineThreadParams {
+        cmd_rx,
+        cmd_tx_retry,
+        event_tx,
+        shared,
+        tracks_arc,
+        busses_arc,
+        master_arc,
+        clips_arc,
+        midi_clips_arc,
+        tempo_map,
+        plugins_arc,
+        latency_comp,
+        automation,
+        monitor_prod,
+        live_midi_tx,
+        live_midi_fwd_rx,
+        live_control_tx,
+        live_control_rx,
+        clock_tx,
+        clock_rx,
+        sample_rate,
+        buf_frames,
+        quantum,
+    } = params;
     let mut state = HandlerState::new(sample_rate, live_midi_tx, live_control_tx, clock_tx);
     let ctx = HandlerCtx {
         shared: &shared,
@@ -510,6 +547,12 @@ pub(crate) fn engine_thread(
         // Drain recording ring buffer into per-track buffers
         if ctx.shared.recording.load(Ordering::Relaxed) {
             state.rec.drain_ring_to_buffers();
+            // One-shot per take: report frames the capture callbacks had
+            // to discard (ring overflow) so a damaged take is flagged
+            // while it is still being recorded.
+            state
+                .rec
+                .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
         }
 
         // Audition preview housekeeping: emit AuditionStopped on a natural
