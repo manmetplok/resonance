@@ -5,4 +5,4 @@
 //! Nothing is added here any more: the EQ's one local colour was a green
 //! `GOOD` of its own, which the shared palette already carries.
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;

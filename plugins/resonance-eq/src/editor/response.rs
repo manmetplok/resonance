@@ -8,8 +8,10 @@
 //! The actual node interaction (hit test, drag, scroll, right-click) lives
 //! in `nodes.rs` — this file only draws.
 
+use std::sync::Arc;
+
 use resonance_dsp::Biquad;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::analyzer::SpectrumSnapshot;
 use crate::band::{BandKind, MAX_STAGES_PER_BAND};
@@ -61,11 +63,11 @@ pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut EqEditorApp) {
     nodes::draw_and_interact(ui, plot, app, &snapshots);
 }
 
-fn take_analyzer_snapshot(app: &EqEditorApp) -> Option<SpectrumSnapshot> {
+fn take_analyzer_snapshot(app: &EqEditorApp) -> Option<Arc<SpectrumSnapshot>> {
     match app.analyzer_mode {
         AnalyzerMode::Off => None,
-        AnalyzerMode::Pre => Some(app.analyzer.pre.lock().clone()),
-        AnalyzerMode::Post => Some(app.analyzer.post.lock().clone()),
+        AnalyzerMode::Pre => app.analyzer.latest_pre(),
+        AnalyzerMode::Post => app.analyzer.latest_post(),
     }
 }
 
@@ -91,13 +93,7 @@ const PINK_REF_HZ: f32 = 1_000.0;
 const SPECTRUM_TOP_EQ_DB: f32 = -2.0;
 
 fn draw_spectrum(painter: &egui::Painter, plot: egui::Rect, snap: &SpectrumSnapshot) {
-    if snap.magnitudes_db.is_empty() || snap.sample_rate <= 0.0 {
-        return;
-    }
-    let bins = &snap.magnitudes_db;
-    let bin_count = bins.len();
-    let sr = snap.sample_rate;
-    let fft_size = bin_count * 2;
+    let bands = &snap.magnitudes_db;
 
     // Pre-compute the y bounds of the spectrum region once so every
     // vertex can interpolate into the same band.
@@ -105,25 +101,19 @@ fn draw_spectrum(painter: &egui::Painter, plot: egui::Rect, snap: &SpectrumSnaps
     let bot_y = plot.bottom();
 
     // Build the top edge of the spectrum at NUM_POINTS log-spaced
-    // frequencies. For each display point we look at the band of FFT
-    // bins that fall inside that point's frequency slice and take the
-    // loudest one, which preserves high-frequency peaks that a single
-    // point-sample would miss while still smoothing away the per-bin
-    // jitter from the windowed FFT. The pink-tilt correction is added
+    // frequencies. The snapshot's 1/6-octave bands span the same
+    // 20 Hz – 20 kHz log axis the plot uses, so a display point at
+    // normalized position `t` sits at fractional band index
+    // `t * NUM_OCTAVE_BINS - 0.5` (band centres at `(i + 0.5) / N`);
+    // linear interpolation in dB between adjacent bands turns the ~60
+    // bars into a smooth curve. The pink-tilt correction is added
     // afterwards so that typical music reads as a roughly flat shape
     // instead of a massive bass bulge.
     let mut top: Vec<egui::Pos2> = Vec::with_capacity(NUM_POINTS);
     for i in 0..NUM_POINTS {
         let t = i as f32 / (NUM_POINTS - 1) as f32;
-        // Frequency band covered by this display point: half a step to
-        // the left and half a step to the right, in log space.
-        let half_step = 0.5 / (NUM_POINTS - 1) as f32;
-        let t_lo = (t - half_step).max(0.0);
-        let t_hi = (t + half_step).min(1.0);
-        let f_lo = MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(t_lo);
-        let f_hi = MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(t_hi);
         let freq = MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(t);
-        let raw_db = max_band_db(bins, bin_count, sr, fft_size, f_lo, f_hi);
+        let raw_db = band_db_at(bands, t);
         let tilt = PINK_TILT_DB_PER_OCT * (freq / PINK_REF_HZ).log2();
         let mag_db = raw_db + tilt;
         let x = plot.left() + freq_to_x(freq, plot.width());
@@ -169,46 +159,17 @@ fn spectrum_y(db: f32, top_y: f32, bot_y: f32) -> f32 {
     bot_y + t * (top_y - bot_y)
 }
 
-/// Return the maximum dB value across every FFT bin whose center
-/// frequency lies within `[f_lo, f_hi]`. Falls back to linear
-/// interpolation when the band is narrower than a single bin (low
-/// frequencies on the log axis) so the transitions between bins look
-/// smooth instead of stepping.
-fn max_band_db(
-    bins: &[f32],
-    bin_count: usize,
-    sr: f32,
-    fft_size: usize,
-    f_lo: f32,
-    f_hi: f32,
-) -> f32 {
-    let bin_width_hz = sr / fft_size as f32;
-    let mut idx_lo = (f_lo / bin_width_hz).floor() as isize;
-    let mut idx_hi = (f_hi / bin_width_hz).ceil() as isize;
-    idx_lo = idx_lo.clamp(0, bin_count as isize - 1);
-    idx_hi = idx_hi.clamp(0, bin_count as isize - 1);
-
-    // Band narrower than one bin: interpolate linearly at the band's
-    // center so adjacent display points don't snap to the same bin.
-    if idx_hi - idx_lo <= 1 {
-        let f_mid = 0.5 * (f_lo + f_hi);
-        let bin_f = f_mid / bin_width_hz;
-        let lo = bin_f.floor() as usize;
-        let hi = (lo + 1).min(bin_count - 1);
-        let frac = (bin_f - lo as f32).clamp(0.0, 1.0);
-        return bins[lo] * (1.0 - frac) + bins[hi] * frac;
-    }
-
-    // Band wider than one bin: take the peak so loud bins dominate the
-    // display rather than getting averaged into invisibility.
-    let mut peak = f32::NEG_INFINITY;
-    for i in idx_lo..=idx_hi {
-        let v = bins[i as usize];
-        if v > peak {
-            peak = v;
-        }
-    }
-    peak
+/// Interpolated 1/6-octave band value at normalized log-frequency
+/// position `t` in `[0, 1]`. The band centres sit at `(i + 0.5) / N` on
+/// the same axis; positions past the outermost centres clamp to the edge
+/// bands.
+fn band_db_at(bands: &[f32], t: f32) -> f32 {
+    let n = bands.len();
+    let pos = (t * n as f32 - 0.5).clamp(0.0, (n - 1) as f32);
+    let lo = pos.floor() as usize;
+    let hi = (lo + 1).min(n - 1);
+    let frac = pos - lo as f32;
+    bands[lo] * (1.0 - frac) + bands[hi] * frac
 }
 
 fn spectrum_fill() -> egui::Color32 {

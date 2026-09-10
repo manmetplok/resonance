@@ -28,10 +28,11 @@
 //! # Tolerance: bit-exact
 //!
 //! The audio path is a cascade of scalar f32 biquads plus a smoothed
-//! gain multiply. The crate's FFT (`analyzer.rs`) feeds the editor's
-//! curve only and never touches the output buffer, so the rendered
-//! audio has no FFT, no runtime SIMD dispatch, no RNG and no clock in
-//! it, and is reproducible. (Bits can only move between machines
+//! gain multiply. The analyzer tap (`analyzer.rs`) only copies a mono
+//! downmix into a lock-free ring for a background FFT worker and never
+//! touches the output buffer, so the rendered audio has no FFT, no
+//! runtime SIMD dispatch, no RNG and no clock in it, and is
+//! reproducible. (Bits can only move between machines
 //! through libm's rounding inside the coefficient formulas — `sin`,
 //! `cos`, `powf` — which is a whole-render ~1e-7 shift, not a localised
 //! difference.)
@@ -44,6 +45,7 @@
 
 use std::path::PathBuf;
 
+use resonance_dsp_test_support as golden;
 use resonance_eq::params::EqParams;
 use resonance_eq::ResonanceEq;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
@@ -56,14 +58,13 @@ const MAX_BLOCK: usize = 256;
 const BLOCKS: usize = 24;
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/dsp_golden.f32")
+    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "dsp_golden.f32")
 }
 
 /// `RESONANCE_BLESS=1` is the workspace-wide convention (CLAUDE.md); the
 /// narrower name blesses only this file inside a wider run.
 fn blessing() -> bool {
-    std::env::var("RESONANCE_BLESS").as_deref() == Ok("1")
-        || std::env::var("RESONANCE_BLESS_DSP_GOLDEN").as_deref() == Ok("1")
+    golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_DSP_GOLDEN"])
 }
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -323,56 +324,25 @@ fn eq_output_is_bit_exact() {
 
     let path = golden_path();
     if blessing() {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes: Vec<u8> = rendered.iter().flat_map(|s| s.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        eprintln!(
-            "blessed golden: {} samples -> {}",
-            rendered.len(),
-            path.display()
-        );
+        golden::bless_f32(&path, &rendered);
         return;
     }
 
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+    let want = golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS=1");
+    let diff = golden::compare_f32(&rendered, &want);
+
+    if let Some((i, got, want)) = diff.first_diff {
         panic!(
-            "missing golden {}: {e}\nregenerate with RESONANCE_BLESS=1",
-            path.display()
-        )
-    });
-    assert_eq!(
-        bytes.len(),
-        rendered.len() * 4,
-        "golden length mismatch — the scenario set changed"
-    );
-
-    let golden = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
-
-    let mut diff_count = 0usize;
-    let mut max_abs = 0.0f32;
-    let mut first_diff = None;
-    for (i, (a, b)) in rendered.iter().zip(golden).enumerate() {
-        if a.to_bits() != b.to_bits() {
-            diff_count += 1;
-            max_abs = max_abs.max((a - b).abs());
-            if first_diff.is_none() {
-                first_diff = Some((i, *a, b));
-            }
-        }
-    }
-
-    if let Some((i, got, want)) = first_diff {
-        panic!(
-            "EQ DSP output changed: {diff_count}/{} samples differ, peak delta \
-             {max_abs:.3e}; first at sample {i} (got {got:?} / {:#010x}, want \
+            "EQ DSP output changed: {}/{} samples differ, peak delta \
+             {:.3e}; first at sample {i} (got {got:?} / {:#010x}, want \
              {want:?} / {:#010x}).\nA refactor of the filter path must be \
              bit-exact. If the change was intended, re-bless with \
              RESONANCE_BLESS=1.\nA peak delta at ~1e-7 spread over most of the \
              render is libm rounding in the coefficient formulas, not a DSP \
              change.",
+            diff.diff_count,
             rendered.len(),
+            diff.max_abs,
             got.to_bits(),
             want.to_bits(),
         );
@@ -432,24 +402,8 @@ fn every_scenario_filters() {
                 }
                 // Best-fit scalar between out and dry; a pure trim
                 // leaves no residual.
-                let dot: f64 = out
-                    .iter()
-                    .zip(&dry)
-                    .map(|(o, d)| (*o as f64) * (*d as f64))
-                    .sum();
-                let den: f64 = dry.iter().map(|d| (*d as f64) * (*d as f64)).sum();
-                let k = dot / den.max(1e-30);
-                let resid: f64 = out
-                    .iter()
-                    .zip(&dry)
-                    .map(|(o, d)| {
-                        let e = *o as f64 - k * *d as f64;
-                        e * e
-                    })
-                    .sum();
-                let energy: f64 = out.iter().map(|o| (*o as f64) * (*o as f64)).sum();
                 assert!(
-                    resid > 0.05 * energy,
+                    golden::residual_fraction(&out, &dry) > 0.05,
                     "scenario `{}` is within 5% of a plain gain change on its \
                      input — its bands are not filtering",
                     s.name

@@ -39,12 +39,23 @@ pub struct ResonanceEq {
     /// `db_to_linear` once when retargeting, so the per-sample path never
     /// pays for a dB→linear conversion.
     output_gain_smoother: Smoother,
-    /// Spectrum snapshots published by the audio thread, read by the editor.
+    /// Spectrum handles published by `initialize`, read by the editor.
     /// Cloned into the editor factory when the host opens the GUI.
     analyzer_state: Arc<AnalyzerState>,
-    /// Audio-thread-owned analyzer processors (pre/post FFT, ring buffers,
-    /// mono mix scratch). `None` until `initialize` has been called.
+    /// Producer side of the spectrum taps: two SPSC rings the audio thread
+    /// pushes into, each drained by its own background FFT worker (see
+    /// `analyzer.rs`). `None` until `initialize` has been called; dropping
+    /// it joins the workers.
     analyzers: Option<StereoAnalyzers>,
+}
+
+impl ResonanceEq {
+    /// Shared spectrum handles the editor reads. Public so the crate's
+    /// integration tests can observe the published spectra the same way
+    /// the editor does.
+    pub fn analyzer_state(&self) -> &Arc<AnalyzerState> {
+        &self.analyzer_state
+    }
 }
 
 impl ResonancePlugin for ResonanceEq {
@@ -87,12 +98,15 @@ impl ResonancePlugin for ResonanceEq {
         self.params.param_at(index)
     }
 
-    fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
+    fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.output_gain_smoother.set_sample_rate(sample_rate);
         self.output_gain_smoother
             .reset(resonance_dsp::db_to_linear(self.params.output_gain.value()));
         self.dsp = Some(EqDsp::new(sample_rate));
-        self.analyzers = Some(StereoAnalyzers::new(sample_rate, max_buffer_size as usize));
+        // Replacing the previous `StereoAnalyzers` (a re-initialize, e.g.
+        // after a sample-rate change) drops it, which joins the old worker
+        // threads before the new ones spawn.
+        self.analyzers = Some(StereoAnalyzers::new(sample_rate, &self.analyzer_state));
         true
     }
 
@@ -100,7 +114,7 @@ impl ResonancePlugin for ResonanceEq {
         if let Some(dsp) = &mut self.dsp {
             dsp.clear_state();
         }
-        if let Some(an) = &mut self.analyzers {
+        if let Some(an) = &self.analyzers {
             an.reset();
         }
     }
@@ -124,10 +138,10 @@ impl ResonancePlugin for ResonanceEq {
         };
 
         // Pre-EQ tap: feed the analyzer with the incoming signal before any
-        // processing touches the buffer. Cheap — `feed_pre` only runs an
-        // FFT every HOP_SIZE accumulated samples.
-        if let Some(an) = &mut self.analyzers {
-            an.feed_pre(left, right, &self.analyzer_state);
+        // processing touches the buffer. Cheap — a mono downmix pushed into
+        // a lock-free ring; the FFT runs on a background worker thread.
+        if let Some(an) = &self.analyzers {
+            an.feed_pre(left, right);
         }
 
         // Refresh coefficients once per block from the live parameter values.
@@ -142,8 +156,8 @@ impl ResonancePlugin for ResonanceEq {
         dsp.process_stereo(left, right, &mut self.output_gain_smoother);
 
         // Post-EQ tap: same buffer, now containing the processed signal.
-        if let Some(an) = &mut self.analyzers {
-            an.feed_post(left, right, &self.analyzer_state);
+        if let Some(an) = &self.analyzers {
+            an.feed_post(left, right);
         }
     }
 

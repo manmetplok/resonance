@@ -16,8 +16,8 @@
 //! only palette now, and since the two differed in colour alone, nothing
 //! else here changed.
 
-use wayland_plugin_gui::egui;
-use wayland_plugin_gui::widgets::{slider, HSlider, SliderStyle};
+use plugin_gui_core::egui;
+use plugin_gui_core::widgets::{slider, HSlider, SliderStyle};
 
 use crate::band::{BandKind, BandSlope};
 use crate::params::NUM_BANDS;
