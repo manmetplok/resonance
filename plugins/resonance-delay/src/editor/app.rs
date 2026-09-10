@@ -9,7 +9,7 @@ use std::sync::Arc;
 use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};
 use resonance_plugin::Param;
-use wayland_plugin_gui::{egui, EditorApp};
+use plugin_gui_core::{egui, EditorApp};
 
 use crate::params::DelayParams;
 use crate::sync::division_label;

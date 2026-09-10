@@ -9,9 +9,9 @@
 //! own. The soft accent, not the accent, because these are 3 px traces
 //! and a 10 pt label.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;
 
 pub const ECHO_L: egui::Color32 = ACCENT_SOFT;
 pub const ECHO_R: egui::Color32 = WARM;
