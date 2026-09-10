@@ -82,7 +82,29 @@ impl crate::Resonance {
             automation_expanded_tracks: &self.interaction.automation_expanded_tracks,
             take_groups: &self.take_groups,
             take_lane_expanded_tracks: &self.interaction.take_lane_expanded_tracks,
+            layout_memo: Default::default(),
+            content_fingerprint_memo: Default::default(),
+            visible_viewport: Default::default(),
         }
+    }
+
+    /// Test-only (view-performance batch): the memoized arrange layout —
+    /// warmed through the same accessor every draw / hover call uses —
+    /// next to an uncached rebuild, so the memo's null test can assert
+    /// they never diverge. Lives here rather than in `test_support`
+    /// because the memo is a `view::timeline` implementation detail.
+    #[doc(hidden)]
+    pub fn test_timeline_layout_memo_pair(
+        &self,
+    ) -> (
+        crate::view::arrange_layout::ArrangeRowLayout,
+        crate::view::arrange_layout::ArrangeRowLayout,
+    ) {
+        let canvas = self.timeline_canvas_data();
+        // Warm the memo through a production consumer first, so the test
+        // exercises the reuse path and not just a first fill.
+        let _ = canvas.content_height_px();
+        (canvas.arrange_layout().clone(), canvas.build_arrange_layout())
     }
 
     pub(crate) fn view_timeline(&self) -> Element<'_, Message> {
@@ -93,11 +115,21 @@ impl crate::Resonance {
         // stable across window resizes and `canvas::Cache` keeps
         // hitting instead of re-rasterizing every paint.
         let content_w = timeline_data.content_width_natural();
+        // The probe cell is shared between the canvas program (which
+        // reads it to cull the cached pass to the visible viewport) and
+        // the `ViewportProbe` wrapper below (which writes the viewport
+        // into it right before every draw) — the `canvas::Program` API
+        // itself never sees the outer `Scrollable`'s viewport.
+        let visible_viewport = timeline_data.visible_viewport.clone();
         let canvas_inner = canvas(timeline_data)
             .width(Length::Fixed(content_w))
             .height(Length::Fill);
-        let canvas_el = iced::widget::Scrollable::with_direction(
+        let canvas_probe = crate::view::timeline::viewport_probe::ViewportProbe::new(
             canvas_inner,
+            visible_viewport,
+        );
+        let canvas_el = iced::widget::Scrollable::with_direction(
+            canvas_probe,
             iced::widget::scrollable::Direction::Horizontal(
                 iced::widget::scrollable::Scrollbar::default(),
             ),

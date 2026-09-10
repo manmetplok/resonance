@@ -38,27 +38,10 @@ use crate::message::*;
 use crate::state::{ExternalInstrumentStatus, MixerInspectorGroup, TrackState};
 use crate::theme;
 use crate::util::format_pan;
-use crate::view::ui_caches::ChoiceList;
-use crate::view::mixer::picks::MidiPickerChoice;
-
-/// Combine the cached MIDI device list with a per-track override entry
-/// for the rare case where the track's configured device is no longer
-/// enumerated by the engine (controller unplugged). Normal path returns
-/// the `Cached` variant — a cheap `Rc` clone with no allocation.
-fn midi_choices_with_override(
-    cached: &std::rc::Rc<[MidiPickerChoice]>,
-    configured: Option<&str>,
-    available: &[resonance_audio::MidiDeviceInfo],
-) -> ChoiceList<MidiPickerChoice> {
-    match configured.filter(|name| !available.iter().any(|d| d.name == *name)) {
-        Some(stale) => {
-            let mut v: Vec<MidiPickerChoice> = cached.iter().cloned().collect();
-            v.push(MidiPickerChoice(Some(stale.to_string())));
-            ChoiceList::Owned(v)
-        }
-        None => ChoiceList::Cached(cached.clone()),
-    }
-}
+// The cached-list-plus-stale-override combinator the io /
+// external-instrument pickers use lives in `ui_caches` now, shared with
+// the Settings overlay's MIDI-clock pickers.
+use crate::view::ui_caches::midi_choices_with_override;
 
 pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     // A selected bus takes the pane. The two selections are mutually

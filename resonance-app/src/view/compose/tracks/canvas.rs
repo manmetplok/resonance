@@ -22,17 +22,43 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let fp = self.fingerprint();
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
+            self.draw_into(frame, bounds);
+        });
+        vec![geometry]
+    }
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        self.update_inner(state, event, bounds, cursor)
+    }
+}
+
+impl<'a> ComposeTrackCanvas<'a> {
+    /// Paint the full lane grid into the cache's frame. Everything here is
+    /// static between content edits; the fingerprint in `draw` decides
+    /// when this runs again.
+    fn draw_into(&self, frame: &mut Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
         if self.section_end <= self.section_start || bounds.width <= 0.0 {
-            return vec![frame.into_geometry()];
+            return;
         }
 
         let tracks = self.sorted_tracks();
@@ -56,7 +82,7 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                     height: row_rect.height,
                 };
                 lane_side::draw_compact(
-                    &mut frame,
+                    frame,
                     side_rect,
                     &track.name,
                     is_selected_for_details,
@@ -93,7 +119,7 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                 };
                 let meta = track_meta_line(track);
                 lane_side::draw(
-                    &mut frame,
+                    frame,
                     side_rect,
                     lane_kind_for(track),
                     &track.name,
@@ -108,8 +134,8 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                     height: row_rect.height,
                 };
 
-                self.draw_grid_background(&mut frame, clip_rect);
-                self.draw_beat_grid(&mut frame, clip_rect);
+                self.draw_grid_background(frame, clip_rect);
+                self.draw_beat_grid(frame, clip_rect);
 
                 let mut has_clip_in_section = false;
                 for clip in self.midi_clips.iter().filter(|c| c.track_id == track.id) {
@@ -117,13 +143,13 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                         has_clip_in_section = true;
                         let clip_start_tick =
                             self.sample_to_section_tick(clip.start_sample);
-                        self.draw_clip_outline(&mut frame, clip_rect, tick_range);
-                        self.draw_notes(&mut frame, clip, clip_rect, clip_start_tick);
+                        self.draw_clip_outline(frame, clip_rect, tick_range);
+                        self.draw_notes(frame, clip, clip_rect, clip_start_tick);
                     }
                 }
 
                 if !has_clip_in_section {
-                    self.draw_add_button(&mut frame, clip_rect);
+                    self.draw_add_button(frame, clip_rect);
                 }
 
                 // Bottom separator between rows
@@ -134,13 +160,11 @@ impl<'a> canvas::Program<Message> for ComposeTrackCanvas<'a> {
                 );
             }
         }
-
-        vec![frame.into_geometry()]
     }
 
-    fn update(
+    fn update_inner(
         &self,
-        state: &mut Self::State,
+        state: &mut ComposeTrackCanvasState,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,

@@ -1,5 +1,13 @@
 //! Per-track channel strip (and the collapsed-parent meters and the
 //! output-destination picker that hangs off each strip).
+//!
+//! Each strip is split into a **live** part — the fader/meter block,
+//! whose `StereoMeterCanvas` levels tick per frame — and a **lazy** body
+//! (head, chips, buttons, plugin chain, automation header, pan) that is
+//! cached across redraws behind `iced::widget::lazy`, keyed on
+//! [`super::strip_fingerprint`]. The 16 ms redraw tick repaints the app
+//! at ~60 Hz; without the split every strip re-ran its `format!`s,
+//! button builds and pick_lists on every frame.
 
 use iced::widget::{button, column, container, mouse_area, pick_list, row, scrollable, text, Space};
 use iced::{alignment, Element, Font, Length};
@@ -18,11 +26,11 @@ use crate::view::knob::pan_knob;
 use super::picks::PluginOwner;
 
 impl crate::Resonance {
-    pub(super) fn view_channel_strip(
-        &self,
-        track: &TrackState,
-        available_plugins: &[ScannedPlugin],
-    ) -> Element<'_, Message> {
+    pub(super) fn view_channel_strip<'a>(
+        &'a self,
+        track: &'a TrackState,
+        available_plugins: &'a [ScannedPlugin],
+    ) -> Element<'a, Message> {
         // Sub-tracks never reach this function — view_mixer skips them
         // in its outer loop and renders them via view_sub_channel_strip
         // (the slimmer variant) inside their parent's cluster instead.
@@ -31,6 +39,150 @@ impl crate::Resonance {
             "view_channel_strip called with a sub-track; use view_sub_channel_strip"
         );
 
+        // Live fader + meter block. `fader_section` embeds the per-tick
+        // `StereoMeterCanvas` levels (and the live automated-gain tint),
+        // so it is built fresh every frame, OUTSIDE the lazy body below:
+        // a lazy subtree captures the levels it was built with and would
+        // freeze the meter — the same live/lazy split as the inspector's
+        // SIGNAL group (ui-work §11.2).
+        let track_id_for_fader = track.id;
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::TrackGain(track.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::TrackGain(track.id),
+            v,
+        ));
+        let fader_block =
+            fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
+                Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
+            });
+
+        // Everything above the fader only changes on user edits and
+        // engine echoes, never per audio tick — lazy-cache it so the
+        // ~60 Hz redraw loop reuses the cached subtree instead of
+        // rebuilding every strip every frame. The fingerprint must hash
+        // everything the body renders (and nothing live) — see
+        // `strip_fingerprint.rs`.
+        let no_instruments_available = available_plugins.is_empty();
+        let fp = super::strip_fingerprint::track_strip_fingerprint(self, track);
+        let body = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+            self.channel_strip_body(track, no_instruments_available)
+        });
+
+        let has_sub_tracks = self
+            .registry
+            .tracks
+            .iter()
+            .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
+        let is_collapsed =
+            has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
+
+        let ext_state = self.external_instruments.get(&track.id);
+        let is_selected = self.interaction.selected_track == Some(track.id);
+        // A configured external device that's gone offline gives the strip a
+        // BAD-pink inset glow so the outage reads at a glance from the mixer
+        // (doc #169, todo #459). The route itself is preserved.
+        let ext_offline = ext_state
+            .map(|e| e.midi_out_offline || e.return_input_offline)
+            .unwrap_or(false);
+        let bg = if track.record_armed {
+            theme::PANEL_ARMED
+        } else {
+            theme::BG_2
+        };
+        let border_color = if track.record_armed || ext_offline {
+            theme::BAD
+        } else if is_selected {
+            theme::ACCENT_LINE
+        } else {
+            theme::LINE_2
+        };
+        let border_w = if is_selected || track.record_armed || ext_offline {
+            1.0
+        } else {
+            0.5
+        };
+
+        let strip_style = move |_theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            border: iced::Border {
+                color: border_color,
+                width: border_w,
+                radius: theme::RADIUS_XL.into(),
+            },
+            ..Default::default()
+        };
+
+        let track_id_for_select = track.id;
+        let strip_height = Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32);
+        if is_collapsed {
+            // Two-column layout: normal controls on the left, compact
+            // subtrack meters on the right. The strip widens by 30px per
+            // sub-track output so a kit with N pads has every meter
+            // visible at a glance instead of crammed into a fixed area.
+            let subtrack_count = self
+                .registry
+                .tracks
+                .iter()
+                .filter(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id))
+                .count() as u32;
+            let right_col_w: f32 = ((subtrack_count.max(1) * 30) + 8) as f32;
+
+            let left_col = column![body, fader_block]
+                .spacing(6)
+                .width(theme::MIXER_STRIP_WIDTH - 20.0)
+                .height(Length::Fill);
+
+            let v_sep = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
+
+            // The sub-track meters are live level readouts — like the
+            // fader block, they render outside the lazy body.
+            let right_col = container(self.view_collapsed_subtrack_meters(track.id))
+                .width(Length::Fixed(right_col_w))
+                .height(Length::Fill)
+                .padding([0, 4]);
+
+            let strip_content = row![left_col, v_sep, right_col]
+                .height(Length::Fill)
+                .padding([12, 10])
+                .width(theme::MIXER_STRIP_WIDTH + right_col_w + 20.0);
+
+            mouse_area(
+                container(strip_content)
+                    .height(strip_height)
+                    .style(strip_style),
+            )
+            .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id_for_select))))
+            .into()
+        } else {
+            let strip_content = column![body, fader_block]
+                .spacing(6)
+                .padding([12, 10])
+                .width(theme::MIXER_STRIP_WIDTH)
+                .height(Length::Fill);
+
+            mouse_area(
+                container(strip_content)
+                    .height(strip_height)
+                    .style(strip_style),
+            )
+            .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id_for_select))))
+            .into()
+        }
+    }
+
+    /// The non-live upper region of a track strip — everything except
+    /// the fader/meter block (and, on a collapsed parent, the sub-track
+    /// meter column). Built inside the strip's `lazy` region, so it
+    /// returns an owned (`'static`) tree and must only read state that
+    /// [`super::strip_fingerprint::track_strip_fingerprint`] hashes.
+    fn channel_strip_body(
+        &self,
+        track: &TrackState,
+        no_instruments_available: bool,
+    ) -> Element<'static, Message> {
         // Parent instrument tracks that have at least one sub-track show
         // a small collapse/expand button next to the name. Clicking it
         // toggles `expanded_sub_track_parents`, which view_mixer reads
@@ -69,7 +221,7 @@ impl crate::Resonance {
             TrackType::Instrument => track.instrument_icon.glyph(),
             TrackType::Vocal => fa::MICROPHONE,
         };
-        let head_glyph: Element<'_, Message> = container(
+        let head_glyph: Element<'static, Message> = container(
             theme::icon(glyph_char)
                 .size(11)
                 .color(theme::ACCENT_SOFT),
@@ -123,7 +275,7 @@ impl crate::Resonance {
                 head_row = head_row.push(offline_flag());
             }
         }
-        let track_name: Element<'_, Message> = container(head_row)
+        let track_name: Element<'static, Message> = container(head_row)
             .width(Length::Fill)
             .padding([6.0, 10.0 + indent_pixels])
             .style(strip_head_bg)
@@ -175,7 +327,7 @@ impl crate::Resonance {
         // when height is unconstrained inside a strip column whose total
         // height is Length::Fill, so we pin a fixed height that fits the
         // 22+21+spacing block.
-        let button_row: Element<'_, Message> = container(
+        let button_row: Element<'static, Message> = container(
             column![
                 container(primary_row).center_x(Length::Fill),
                 container(utility_row).center_x(Length::Fill),
@@ -196,7 +348,7 @@ impl crate::Resonance {
         // pushes the fader off the strip.
         let is_instrument_track = track.track_type == TrackType::Instrument;
 
-        let instrument_section: Option<Element<'_, Message>> =
+        let instrument_section: Option<Element<'static, Message>> =
             if is_instrument_track {
                 if let Some(plugin) = track.plugins.first() {
                     Some(self.view_plugin_slot_row(
@@ -219,7 +371,7 @@ impl crate::Resonance {
                     .text_size(10)
                     .width(Length::Fill);
                     Some(inst_picker.into())
-                } else if available_plugins.is_empty() {
+                } else if no_instruments_available {
                     None
                 } else {
                     Some(text("No instruments").size(9).color(theme::TEXT_DIM).into())
@@ -256,7 +408,6 @@ impl crate::Resonance {
         // +FX picker, input/output pickers, and MIDI routing all live in
         // the Inspector now. The strip stays focused on M/S/●/🎧, the
         // instrument slot pill, pan, and the fader.
-        let _ = available_plugins;
 
         // Per-channel automation lane header: parameter picker + Read
         // toggle (todo #383). Sits above the pan/fader block so the
@@ -283,7 +434,9 @@ impl crate::Resonance {
 
         // Pan knob — vertical drag to change, double-click to reset.
         // Tinted with the live automated pan while a Read-enabled pan
-        // lane drives it during playback.
+        // lane drives it during playback. The tint value is hashed into
+        // the strip fingerprint, so the body rebuilds exactly when it
+        // moves.
         let id = track.id;
         let pan_live = super::automation::live_value(
             &self.automation,
@@ -316,49 +469,10 @@ impl crate::Resonance {
             .push(auto_header)
             .push(pan_row);
 
-        let track_id_for_fader = track.id;
-        let gain_live = super::automation::live_value(
-            &self.automation,
-            resonance_common::AutomationTarget::TrackGain(track.id),
-        )
-        .map(|v| resonance_common::lane_value_to_real(
-            &resonance_common::AutomationTarget::TrackGain(track.id),
-            v,
-        ));
-        let fader_block =
-            fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
-                Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
-            });
-
         // Input device + port + MIDI routing all live in the Inspector
         // now. The strip stays compact: head, button rows, instrument
         // pill, pan, fader. Sub-tracks remain the exception — they
         // still have no routing pickers anywhere.
-
-        let is_selected = self.interaction.selected_track == Some(track.id);
-        // A configured external device that's gone offline gives the strip a
-        // BAD-pink inset glow so the outage reads at a glance from the mixer
-        // (doc #169, todo #459). The route itself is preserved.
-        let ext_offline = ext_state
-            .map(|e| e.midi_out_offline || e.return_input_offline)
-            .unwrap_or(false);
-        let bg = if track.record_armed {
-            theme::PANEL_ARMED
-        } else {
-            theme::BG_2
-        };
-        let border_color = if track.record_armed || ext_offline {
-            theme::BAD
-        } else if is_selected {
-            theme::ACCENT_LINE
-        } else {
-            theme::LINE_2
-        };
-        let border_w = if is_selected || track.record_armed || ext_offline {
-            1.0
-        } else {
-            0.5
-        };
 
         // FX list lives inside a vertical scrollable that absorbs all
         // remaining vertical slack between the buttons/instrument and
@@ -379,90 +493,23 @@ impl crate::Resonance {
         }
         plugin_column = plugin_column.push(fx_scroll);
 
-        let plugin_fill: Element<'_, Message> = container(plugin_column)
+        let plugin_fill: Element<'static, Message> = container(plugin_column)
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
 
-        let strip_style = move |_theme: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(bg)),
-            border: iced::Border {
-                color: border_color,
-                width: border_w,
-                radius: theme::RADIUS_XL.into(),
-            },
-            ..Default::default()
-        };
-
-        let track_id_for_select = track.id;
-        let strip_height = Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32);
-        if is_collapsed {
-            // Two-column layout: normal controls on the left, compact
-            // subtrack meters on the right. The strip widens by 30px per
-            // sub-track output so a kit with N pads has every meter
-            // visible at a glance instead of crammed into a fixed area.
-            let subtrack_count = self
-                .registry
-                .tracks
-                .iter()
-                .filter(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id))
-                .count() as u32;
-            let right_col_w: f32 = ((subtrack_count.max(1) * 30) + 8) as f32;
-
-            let mut left_col = column![track_name]
-                .spacing(6)
-                .width(theme::MIXER_STRIP_WIDTH - 20.0)
-                .height(Length::Fill);
-            if let Some(ext) = ext_state {
-                left_col = left_col.push(ext_summary_chips(track, ext));
-            }
-            let left_col = left_col
-                .push(button_row)
-                .push(plugin_fill)
-                .push(fx_pan_block)
-                .push(fader_block);
-
-            let v_sep = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
-
-            let right_col = container(self.view_collapsed_subtrack_meters(track.id))
-                .width(Length::Fixed(right_col_w))
-                .height(Length::Fill)
-                .padding([0, 4]);
-
-            let strip_content = row![left_col, v_sep, right_col]
-                .height(Length::Fill)
-                .padding([12, 10])
-                .width(theme::MIXER_STRIP_WIDTH + right_col_w + 20.0);
-
-            mouse_area(
-                container(strip_content)
-                    .height(strip_height)
-                    .style(strip_style),
-            )
-            .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id_for_select))))
-            .into()
-        } else {
-            let mut strip_col = column![track_name].spacing(6);
-            if let Some(ext) = ext_state {
-                strip_col = strip_col.push(ext_summary_chips(track, ext));
-            }
-            let strip_content = strip_col
-                .push(button_row)
-                .push(plugin_fill)
-                .push(fx_pan_block)
-                .push(fader_block)
-                .padding([12, 10])
-                .width(theme::MIXER_STRIP_WIDTH)
-                .height(Length::Fill);
-
-            mouse_area(
-                container(strip_content)
-                    .height(strip_height)
-                    .style(strip_style),
-            )
-            .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id_for_select))))
-            .into()
+        let mut body_col = column![track_name]
+            .spacing(6)
+            .width(Length::Fill)
+            .height(Length::Fill);
+        if let Some(ext) = ext_state {
+            body_col = body_col.push(ext_summary_chips(track, ext));
         }
+        body_col
+            .push(button_row)
+            .push(plugin_fill)
+            .push(fx_pan_block)
+            .into()
     }
 
     /// Dedicated narrow strip for an expanded sub-track. Mixer-mod.rs
@@ -483,86 +530,22 @@ impl crate::Resonance {
     ///   record-arm or monitor (sub-tracks are fed from the parent
     ///   plugin's fan-out, never from a hardware input), no FX list,
     ///   no instrument pill, no bounce.
-    pub(super) fn view_sub_channel_strip(
-        &self,
-        track: &TrackState,
-        _available_plugins: &[ScannedPlugin],
-    ) -> Element<'_, Message> {
+    pub(super) fn view_sub_channel_strip<'a>(
+        &'a self,
+        track: &'a TrackState,
+        _available_plugins: &'a [ScannedPlugin],
+    ) -> Element<'a, Message> {
         debug_assert!(
             track.sub_track.is_some(),
             "view_sub_channel_strip called with a non-sub-track"
         );
 
-        // Show the port label (after "→") rather than the full name —
-        // "Drums → Kick" becomes "Kick", which fits comfortably inside
-        // the narrower strip.
-        let short_name = track.name.split(" \u{2192} ").nth(1).unwrap_or(&track.name);
-        let display_name = crate::util::short(short_name, 10);
-        let name_text = container(
-            text(display_name)
-                .size(11)
-                .font(theme::UI_FONT_MEDIUM)
-                .color(theme::TEXT_2)
-                .wrapping(iced::widget::text::Wrapping::None),
-        )
-        .width(Length::Fill)
-        .clip(true);
-
-        let head_row = row![name_text]
-            .spacing(0)
-            .align_y(alignment::Vertical::Center)
-            .height(28);
-        let head: Element<'_, Message> = container(head_row)
-            .width(Length::Fill)
-            .padding([6, 8])
-            .into();
-
-        // M / S / FX-bypass — the three controls that actually apply to
-        // a plugin-fed sub-track. Record-arm and monitor are intentionally
-        // omitted: sub-tracks have no input.
-        let button_row = container(
-            row![
-                mute_button(
-                    track.muted,
-                    Message::Track(TrackMessage::ToggleMute(track.id)),
-                    11
-                ),
-                solo_button(
-                    track.soloed,
-                    Message::Track(TrackMessage::ToggleSolo(track.id)),
-                    11
-                ),
-                fx_bypass_button(
-                    track.fx_bypassed,
-                    Message::Track(TrackMessage::ToggleTrackFxBypass(track.id)),
-                    11,
-                ),
-            ]
-            .spacing(2)
-            .align_y(alignment::Vertical::Center),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill);
-
-        let id = track.id;
-        let pan_ctrl = pan_knob(track.pan, move |v| {
-            Message::Track(TrackMessage::SetTrackPan(id, v))
-        });
-        let pan_label = text(crate::util::format_pan(track.pan))
-            .size(9)
-            .font(Font::MONOSPACE)
-            .color(theme::TEXT_DIM);
-        let pan_block = column![
-            container(pan_ctrl).width(Length::Fill).center_x(Length::Fill),
-            container(pan_label).width(Length::Fill).center_x(Length::Fill),
-        ]
-        .spacing(2)
-        .align_x(alignment::Horizontal::Center);
-
         let track_id_for_fader = track.id;
         // Sub-track strips are slim children fed from the parent plugin's
         // fan-out; they carry no automation lane header. Live gain tint
         // still applies so a Read-enabled lane on the sub-track shows.
+        // Live meter levels tick per frame, so the fader/meter block is
+        // built outside the lazy body below.
         let gain_live = super::automation::live_value(
             &self.automation,
             resonance_common::AutomationTarget::TrackGain(track.id),
@@ -575,6 +558,13 @@ impl crate::Resonance {
             fader_section(track.level_l, track.level_r, track.volume, gain_live, move |v| {
                 Message::Track(TrackMessage::SetTrackVolume(track_id_for_fader, v))
             });
+
+        // The head / M-S-FX buttons / pan block are non-live — cache
+        // them behind `lazy` keyed on the slim sub-strip fingerprint.
+        let fp = super::strip_fingerprint::sub_strip_fingerprint(track);
+        let body_top = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+            sub_channel_strip_body(track)
+        });
 
         let is_selected = self.interaction.selected_track == Some(track.id);
 
@@ -599,12 +589,7 @@ impl crate::Resonance {
         // top a bit so the head label aligns roughly with the parent
         // strip's name row.
         let body = column![
-            head,
-            Space::new().height(6),
-            button_row,
-            Space::new().height(8),
-            pan_block,
-            Space::new().height(Length::Fill),
+            body_top,
             fader_block,
             Space::new().height(6),
         ]
@@ -707,6 +692,95 @@ impl crate::Resonance {
         .into()
     }
 
+}
+
+/// The non-live upper region of a sub-track strip (head + M/S/FX-bypass
+/// buttons + pan block). Built inside the sub-strip's `lazy` region, so
+/// it returns an owned (`'static`) tree and must only read state that
+/// [`super::strip_fingerprint::sub_strip_fingerprint`] hashes.
+fn sub_channel_strip_body(track: &TrackState) -> Element<'static, Message> {
+    // Show the port label (after "→") rather than the full name —
+    // "Drums → Kick" becomes "Kick", which fits comfortably inside
+    // the narrower strip.
+    let short_name = track.name.split(" \u{2192} ").nth(1).unwrap_or(&track.name);
+    let display_name = crate::util::short(short_name, 10);
+    let name_text = container(
+        text(display_name)
+            .size(11)
+            .font(theme::UI_FONT_MEDIUM)
+            .color(theme::TEXT_2)
+            .wrapping(iced::widget::text::Wrapping::None),
+    )
+    .width(Length::Fill)
+    .clip(true);
+
+    let head_row = row![name_text]
+        .spacing(0)
+        .align_y(alignment::Vertical::Center)
+        .height(28);
+    let head: Element<'static, Message> = container(head_row)
+        .width(Length::Fill)
+        .padding([6, 8])
+        .into();
+
+    // M / S / FX-bypass — the three controls that actually apply to
+    // a plugin-fed sub-track. Record-arm and monitor are intentionally
+    // omitted: sub-tracks have no input.
+    let button_row = container(
+        row![
+            mute_button(
+                track.muted,
+                Message::Track(TrackMessage::ToggleMute(track.id)),
+                11
+            ),
+            solo_button(
+                track.soloed,
+                Message::Track(TrackMessage::ToggleSolo(track.id)),
+                11
+            ),
+            fx_bypass_button(
+                track.fx_bypassed,
+                Message::Track(TrackMessage::ToggleTrackFxBypass(track.id)),
+                11,
+            ),
+        ]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Length::Fill)
+    .center_x(Length::Fill);
+
+    let id = track.id;
+    let pan_ctrl = pan_knob(track.pan, move |v| {
+        Message::Track(TrackMessage::SetTrackPan(id, v))
+    });
+    let pan_label = text(crate::util::format_pan(track.pan))
+        .size(9)
+        .font(Font::MONOSPACE)
+        .color(theme::TEXT_DIM);
+    let pan_block = column![
+        container(pan_ctrl).width(Length::Fill).center_x(Length::Fill),
+        container(pan_label).width(Length::Fill).center_x(Length::Fill),
+    ]
+    .spacing(2)
+    .align_x(alignment::Horizontal::Center);
+
+    // The trailing Fill spacer lives INSIDE this lazy body so the body
+    // column is Fill-height like the flat original — a Shrink-height
+    // nested column measures differently under iced's flex layout and
+    // shifted the whole block up in the goldens.
+    column![
+        head,
+        Space::new().height(6),
+        button_row,
+        Space::new().height(8),
+        pan_block,
+        Space::new().height(Length::Fill),
+    ]
+    .spacing(0)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 /// Strip head background — bottom hairline that separates the head from

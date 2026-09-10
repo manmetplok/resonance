@@ -4,10 +4,10 @@
 use iced::widget::{button, column, container, mouse_area, opaque, pick_list, row, stack, text, Space};
 use iced::{alignment, Element, Length};
 
-use resonance_audio::MidiDeviceInfo;
-
 use crate::message::*;
 use crate::theme::{self, fa};
+use crate::view::mixer::picks::MidiPickerChoice;
+use crate::view::ui_caches::midi_choices_with_override;
 use crate::Resonance;
 
 pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
@@ -62,7 +62,16 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         r.midi_clock_send_enabled,
         Message::Ui(UiMessage::ToggleMidiClockSend),
     );
-    let send_choices = midi_choices(&r.midi_output_devices, r.midi_clock_send_device.as_deref());
+    // Option lists come from `UiViewCaches` — the overlay redraws every
+    // tick while open, and rebuilding these Vecs per frame was measured
+    // per-view() work. The cache is rebuilt whenever the engine
+    // re-enumerates MIDI devices; the override covers a configured
+    // device that is currently unplugged.
+    let send_choices = midi_choices_with_override(
+        &r.view_caches.midi_output_choices,
+        r.midi_clock_send_device.as_deref(),
+        &r.midi_output_devices,
+    );
     let send_picker = pick_list(
         send_choices,
         Some(MidiPickerChoice(r.midi_clock_send_device.clone())),
@@ -77,7 +86,11 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         r.midi_clock_recv_enabled,
         Message::Ui(UiMessage::ToggleMidiClockRecv),
     );
-    let recv_choices = midi_choices(&r.midi_input_devices, r.midi_clock_recv_device.as_deref());
+    let recv_choices = midi_choices_with_override(
+        &r.view_caches.midi_input_choices,
+        r.midi_clock_recv_device.as_deref(),
+        &r.midi_input_devices,
+    );
     let recv_picker = pick_list(
         recv_choices,
         Some(MidiPickerChoice(r.midi_clock_recv_device.clone())),
@@ -245,33 +258,4 @@ fn toggle_button<'a>(
     .padding([6, 10])
     .width(Length::Fill)
     .style(|_theme, status| theme::ghost_button_style(status))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MidiPickerChoice(Option<String>);
-
-impl std::fmt::Display for MidiPickerChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            None => f.write_str("(None)"),
-            Some(name) => f.write_str(name),
-        }
-    }
-}
-
-fn midi_choices(
-    available: &[MidiDeviceInfo],
-    configured: Option<&str>,
-) -> Vec<MidiPickerChoice> {
-    let mut choices: Vec<MidiPickerChoice> = Vec::with_capacity(available.len() + 2);
-    choices.push(MidiPickerChoice(None));
-    for d in available {
-        choices.push(MidiPickerChoice(Some(d.name.clone())));
-    }
-    if let Some(name) = configured {
-        if !available.iter().any(|d| d.name == name) {
-            choices.push(MidiPickerChoice(Some(name.to_string())));
-        }
-    }
-    choices
 }

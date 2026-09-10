@@ -25,6 +25,7 @@ use resonance_audio::types::{ClipId, TempoMap, TrackId};
 use resonance_common::AutomationTarget;
 
 pub mod automation;
+pub mod cull;
 pub mod draw;
 pub mod hit_test;
 pub mod input;
@@ -32,6 +33,7 @@ pub mod placement;
 pub mod scrollbar;
 pub mod snap;
 pub mod takes;
+pub(crate) mod viewport_probe;
 
 // Snap helpers are external public API for this canvas — re-export them
 // from the snap submodule so existing call sites keep working.
@@ -113,6 +115,27 @@ pub struct TimelineCanvas<'a> {
     /// the canvas builds the same take-aware [`ArrangeRowLayout`] as the
     /// header column.
     pub take_lane_expanded_tracks: &'a std::collections::HashSet<TrackId>,
+    /// Per-instance memo for [`arrange_layout`](Self::arrange_layout).
+    /// One view build used to run the sort + row build 2-3× per frame
+    /// (cached pass, overlay pass, hover, pointer, `content_height_px`).
+    /// Everything the layout reads is behind the `&'a` borrows above, so
+    /// it cannot change for the lifetime of this instance — any state
+    /// edit rebuilds the view and gets a fresh, empty cell.
+    pub layout_memo: std::cell::OnceCell<ArrangeRowLayout>,
+    /// Per-instance memo for the O(project) content half of
+    /// [`fingerprint`](Self::fingerprint). Same reasoning as
+    /// `layout_memo`: the hashed data is frozen behind `&'a`, so hashing
+    /// it once per view build is exactly as safe as hashing it once per
+    /// rendered frame — and hover / pure-redraw frames stop paying the
+    /// full walk at 60 Hz.
+    pub content_fingerprint_memo: std::cell::OnceCell<TimelineFingerprint>,
+    /// The *visible* part of this canvas, in canvas-local coordinates —
+    /// written by the [`viewport_probe::ViewportProbe`] wrapper right
+    /// before each `Widget::draw`, because the `canvas::Program` API
+    /// never sees the outer `Scrollable`'s viewport. `None` (tests, or
+    /// before the first draw) disables horizontal culling and everything
+    /// is drawn, which is always correct — just slower.
+    pub visible_viewport: std::rc::Rc<std::cell::Cell<Option<Rectangle>>>,
 }
 
 impl TimelineCanvas<'_> {
@@ -266,7 +289,22 @@ impl TimelineCanvas<'_> {
     /// The shared heterogeneous arrange-row layout (group-header rows +
     /// track rows, collapse-aware) for this canvas. Both lane rendering
     /// and clip placement consume it instead of `index * TRACK_HEIGHT`.
-    pub(super) fn arrange_layout(&self) -> ArrangeRowLayout {
+    ///
+    /// Memoized per canvas instance (`layout_memo`): the first caller in
+    /// a view build pays for the sort + row build, every later caller —
+    /// the overlay pass, hover, pointer, `content_height_px` — reuses
+    /// it. The inputs all sit behind this struct's `&'a` borrows, so the
+    /// memo can never go stale within an instance's lifetime.
+    pub fn arrange_layout(&self) -> &ArrangeRowLayout {
+        self.layout_memo.get_or_init(|| self.build_arrange_layout())
+    }
+
+    /// Uncached [`arrange_layout`](Self::arrange_layout) — the actual row
+    /// build. Public only so the memo's null test can compare a fresh
+    /// build against the memoized one; production code goes through the
+    /// memo.
+    #[doc(hidden)]
+    pub fn build_arrange_layout(&self) -> ArrangeRowLayout {
         let sorted = self.visible_tracks_sorted();
         let automation_rows = crate::view::arrange_layout::ArrangeAutomationRows::collect(
             self.automation,
@@ -283,6 +321,45 @@ impl TimelineCanvas<'_> {
             self.track_groups,
             &automation_rows,
             &take_rows,
+        )
+    }
+
+    /// The quantized horizontal cull window for the cached draw pass, in
+    /// canvas-local x pixels. `None` — no probe write yet (tests, first
+    /// use) — means "draw everything". See [`cull`] for the quantization
+    /// and its covering guarantee.
+    pub(crate) fn cull_window(&self) -> Option<(f32, f32)> {
+        self.visible_viewport
+            .get()
+            .map(cull::quantized_window)
+    }
+
+    /// Horizontal pixel span of an audio clip's body, before the small
+    /// per-track group indent (the cull predicate pads for it).
+    pub(crate) fn audio_clip_x_span(&self, clip: &ClipState) -> (f32, f32) {
+        cull::sample_span_x(
+            clip.start_sample,
+            clip.start_sample + clip.duration_samples,
+            self.sample_rate,
+            self.zoom,
+            self.scroll_offset,
+        )
+    }
+
+    /// Horizontal pixel span of a MIDI clip's body (tick length resolved
+    /// through the tempo map, exactly as `draw_midi_clip` does).
+    pub(crate) fn midi_clip_x_span(&self, clip: &MidiClipState) -> (f32, f32) {
+        let end = self.tempo_map.tick_to_abs_sample(
+            clip.start_sample,
+            clip.duration_ticks,
+            self.sample_rate,
+        );
+        cull::sample_span_x(
+            clip.start_sample,
+            end,
+            self.sample_rate,
+            self.zoom,
+            self.scroll_offset,
         )
     }
 }
@@ -427,10 +504,45 @@ pub struct TimelineFingerprint {
     /// the toggle must repaint (same discipline as
     /// `automation_expanded_hash`).
     pub take_expanded_hash: u64,
+    /// Hash of every MIDI clip's geometry + note-minimap content
+    /// (`id, track, start, duration/trim ticks, name`, plus each note's
+    /// pitch and horizontal extent). `update_midi_clip_drag` mutates
+    /// `start_sample` / `track_id` in place mid-drag and the piano roll
+    /// edits `notes` in place, and there is no MIDI drag ghost in the
+    /// uncached overlay pass — so `midi_clips_len` alone left a stale
+    /// arrange render behind. Same discipline as `clips_hash` on the
+    /// audio side. Note velocity is not drawn by the minimap and is
+    /// deliberately excluded (same reasoning as the playhead).
+    pub midi_clips_hash: u64,
+    /// The quantized horizontal cull window the cached pass drew, as the
+    /// f32 bit patterns of its two x endpoints (±∞ = no culling). The
+    /// window is re-derived from the live viewport on every rendered
+    /// frame, so including it here guarantees that scrolling past the
+    /// drawn margin repaints in the same frame that reveals it — see
+    /// [`cull`].
+    pub cull_x0_bits: u32,
+    pub cull_x1_bits: u32,
 }
 
 impl<'a> TimelineCanvas<'a> {
+    /// The full cache fingerprint for this frame: the memoized O(project)
+    /// content hash (`content_fingerprint`, computed at most once per
+    /// view build) plus the per-frame quantized cull window. Only the
+    /// window can change between two draws of the same instance — every
+    /// piece of hashed content sits behind `&'a` borrows.
     pub(crate) fn fingerprint(&self) -> TimelineFingerprint {
+        let mut fp = *self
+            .content_fingerprint_memo
+            .get_or_init(|| self.content_fingerprint());
+        let (x0, x1) = self
+            .cull_window()
+            .unwrap_or((f32::NEG_INFINITY, f32::INFINITY));
+        fp.cull_x0_bits = x0.to_bits();
+        fp.cull_x1_bits = x1.to_bits();
+        fp
+    }
+
+    fn content_fingerprint(&self) -> TimelineFingerprint {
         // Hash the full tempo + signature event content so any
         // *in-place* edit (drag, pick_list change, transport-bar
         // commit) invalidates the cache and the curve / pill markers
@@ -519,12 +631,44 @@ impl<'a> TimelineCanvas<'a> {
         }
         let clips_hash = clip_h.finish();
 
+        // Hash every MIDI clip's geometry + note-minimap content so the
+        // cached layer invalidates on move / trim / rename / note edits.
+        // `update_midi_clip_drag` mutates `start_sample` / `track_id` in
+        // place mid-drag and the piano roll edits `notes` in place, so —
+        // exactly like `clips_hash` above — the count alone would leave a
+        // stale arrange render on screen.
+        let mut midi_h = std::collections::hash_map::DefaultHasher::new();
+        for c in self.midi_clips {
+            c.id.hash(&mut midi_h);
+            c.track_id.hash(&mut midi_h);
+            c.start_sample.hash(&mut midi_h);
+            c.duration_ticks.hash(&mut midi_h);
+            c.trim_start_ticks.hash(&mut midi_h);
+            c.trim_end_ticks.hash(&mut midi_h);
+            c.name.hash(&mut midi_h);
+            // Pitch + horizontal extent are what the note minimap (and
+            // the frozen-render silhouette) read; velocity is not drawn
+            // and is deliberately excluded.
+            c.notes.len().hash(&mut midi_h);
+            for n in &c.notes {
+                n.note.hash(&mut midi_h);
+                n.start_tick.hash(&mut midi_h);
+                n.duration_ticks.hash(&mut midi_h);
+            }
+        }
+        let midi_clips_hash = midi_h.finish();
+
         // XOR-fold the frozen track ids so the hash is independent of the
-        // set's iteration order (a `HashSet` has no stable order).
+        // set's iteration order (a `HashSet` has no stable order). Seeded
+        // with the set's length — the same idiom as the expanded-set
+        // folds below — so the empty set can never collide with a set
+        // whose ids XOR to zero.
         let frozen_hash = self
             .frozen_tracks
             .iter()
-            .fold(0u64, |acc, id| acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            .fold(self.frozen_tracks.len() as u64, |acc, id| {
+                acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            });
 
         // Same order-independent fold for the automation-expanded set
         // (todo #1097): a toggle restructures the arrange rows, so the
@@ -671,6 +815,12 @@ impl<'a> TimelineCanvas<'a> {
             automation_expanded_hash,
             takes_hash,
             take_expanded_hash,
+            midi_clips_hash,
+            // Patched per frame by `fingerprint` from the live viewport;
+            // the memoized content half always carries the no-cull
+            // sentinel.
+            cull_x0_bits: f32::NEG_INFINITY.to_bits(),
+            cull_x1_bits: f32::INFINITY.to_bits(),
         }
     }
 }
@@ -943,8 +1093,17 @@ impl<'a> TimelineCanvas<'a> {
                 }
             }
 
-            // Draw audio clips
+            // Draw audio clips. Horizontally culled to the quantized
+            // visible window (see [`cull`]): the canvas spans the whole
+            // song but only the outer `Scrollable`'s viewport is ever on
+            // screen, and the window is a fingerprint field re-derived on
+            // every rendered frame — so a scroll that would reveal a
+            // skipped clip repaints in the very frame that reveals it.
+            let cull = self.cull_window();
             for clip in self.clips {
+                if !cull::span_may_be_visible(self.audio_clip_x_span(clip), cull) {
+                    continue;
+                }
                 self.draw_clip(
                     frame,
                     clip,
@@ -960,8 +1119,12 @@ impl<'a> TimelineCanvas<'a> {
             // overlap wash + crossing curves sit on top of both clips.
             self.draw_crossfades(frame, &layout, header_height, y_off, bounds.height);
 
-            // Draw MIDI clips
+            // Draw MIDI clips — same horizontal cull as the audio clips
+            // above (the note minimap is the per-clip cost here).
             for clip in self.midi_clips {
+                if !cull::span_may_be_visible(self.midi_clip_x_span(clip), cull) {
+                    continue;
+                }
                 self.draw_midi_clip(
                     frame,
                     clip,

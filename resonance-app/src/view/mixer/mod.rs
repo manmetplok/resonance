@@ -12,6 +12,7 @@ pub(crate) mod picks;
 mod plugin_panel;
 mod reference_panel;
 pub(crate) mod reorder;
+mod strip_fingerprint;
 mod track_strip;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
@@ -229,6 +230,8 @@ impl crate::Resonance {
     /// track strip renders the instrument and the effects as two
     /// sections, and the instrument-floor rule is stated in chain
     /// indices.
+    /// Returns an owned (`'static`) element so the strip bodies can be
+    /// built inside their `lazy` closures and cached across frames.
     fn view_plugin_slot_row(
         &self,
         owner: PluginOwner,
@@ -236,7 +239,7 @@ impl crate::Resonance {
         is_instrument_slot: bool,
         index: usize,
         len: usize,
-    ) -> Element<'_, Message> {
+    ) -> Element<'static, Message> {
         // ASCII ".." suffix (not '…') — this pill's width was tuned
         // around the narrower two-dot tail.
         let missing = plugin.availability.is_missing();

@@ -108,18 +108,119 @@ pub struct ComposeDrumCanvas<'a> {
     pub section_bars: u32,
 }
 
+/// Canvas-local state: just the geometry cache. The drum lane draws no
+/// live overlay (no playhead, no hover), so the whole step grid renders
+/// through a fingerprinted [`canvas::Cache`] and the 16 ms app tick reuses
+/// the tessellated geometry instead of re-building every cell + per-bar
+/// label at ~60 fps.
+#[derive(Debug, Default)]
+pub struct ComposeDrumCanvasState {
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<ComposeDrumFingerprint>,
+}
+
+/// Cheap content fingerprint of everything [`ComposeDrumCanvas`] draws.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComposeDrumFingerprint {
+    track_hash: u64,
+    groups_hash: u64,
+    selected_group_id: Option<u64>,
+    track_selected: bool,
+    spans_hash: u64,
+    section_bars: u32,
+}
+
+impl<'a> ComposeDrumCanvas<'a> {
+    /// Fingerprint the drawn content. Any field change repaints the cache;
+    /// unrelated app-state churn (metering, transport ticks) does not.
+    pub fn fingerprint(&self) -> ComposeDrumFingerprint {
+        use std::hash::{Hash, Hasher};
+        let mut th = std::collections::hash_map::DefaultHasher::new();
+        self.track.name.hash(&mut th);
+        if let Some(slot) = self.track.plugins.first() {
+            slot.plugin_name.hash(&mut th);
+        }
+        let mut gh = std::collections::hash_map::DefaultHasher::new();
+        for g in self.groups {
+            hash_group(&mut gh, g);
+        }
+        let mut sh = std::collections::hash_map::DefaultHasher::new();
+        for span in &self.bar_spans {
+            span.bar_start.hash(&mut sh);
+            span.bar_end.hash(&mut sh);
+            span.pattern_color.hash(&mut sh);
+            span.is_fill.hash(&mut sh);
+            for g in span.pattern_groups {
+                hash_group(&mut sh, g);
+            }
+        }
+        ComposeDrumFingerprint {
+            track_hash: th.finish(),
+            groups_hash: gh.finish(),
+            selected_group_id: self.selected_group_id,
+            track_selected: self.track_selected,
+            spans_hash: sh.finish(),
+            section_bars: self.section_bars,
+        }
+    }
+}
+
+/// Hash every [`DrumGroup`] field the canvas paints: header meta, layout
+/// (grid/cycle/phase), and each pad's name, weight, and step pattern.
+fn hash_group(h: &mut impl std::hash::Hasher, g: &DrumGroup) {
+    use std::hash::Hash;
+    g.id.hash(h);
+    g.name.hash(h);
+    g.color.hash(h);
+    g.grid.hash(h);
+    g.cycle.hash(h);
+    g.phase.hash(h);
+    g.density.to_bits().hash(h);
+    for p in &g.pads {
+        p.name.hash(h);
+        p.weight.hash(h);
+        p.pattern.hash(h);
+    }
+}
+
 impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
-    type State = ();
+    type State = ComposeDrumCanvasState;
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let fp = self.fingerprint();
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
+            self.draw_into(frame, bounds);
+        });
+        vec![geometry]
+    }
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        self.update_inner(event, bounds, cursor)
+    }
+}
+
+impl<'a> ComposeDrumCanvas<'a> {
+    /// Paint the full drum lane into the cache's frame. Everything here is
+    /// static between content edits; the fingerprint in `draw` decides
+    /// when this runs again.
+    fn draw_into(&self, frame: &mut Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG_1);
 
         // Lane side panel — RHYTHM tag, track name, meta line.
@@ -139,7 +240,7 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                 format!("Resonance Drums · {} groups", self.groups.len())
             });
         lane_side::draw(
-            &mut frame,
+            frame,
             side_rect,
             LaneKind::Rhythm,
             &self.track.name,
@@ -162,7 +263,7 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
         let step_area_x = card_rect.x + PAD_LABEL_WIDTH + 8.0;
         let step_area_width = (card_rect.width - PAD_LABEL_WIDTH - 16.0).max(0.0);
         if step_area_width <= 0.0 {
-            return vec![frame.into_geometry()];
+            return;
         }
 
         let section_bars = self.section_bars.max(1);
@@ -254,7 +355,7 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
 
             // Group header row.
             draw_group_head(
-                &mut frame,
+                frame,
                 group,
                 color,
                 focused,
@@ -368,7 +469,7 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
                         // we don't draw a spurious marker at the lane start.
                         if pi == 0 && global_step > 0 && pattern_step == 0 {
                             draw_cycle_restart_marker(
-                                &mut frame,
+                                frame,
                                 cx,
                                 y,
                                 pad_y,
@@ -383,13 +484,10 @@ impl<'a> canvas::Program<Message> for ComposeDrumCanvas<'a> {
 
             y += block_height + GROUP_GAP;
         }
-
-        vec![frame.into_geometry()]
     }
 
-    fn update(
+    fn update_inner(
         &self,
-        _state: &mut Self::State,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,

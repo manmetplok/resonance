@@ -45,3 +45,25 @@ pub fn section_total_ticks(tempo_map: &TempoMap, start_bar: u32, length_bars: u3
 pub fn workspace_width(tempo_map: &TempoMap, start_bar: u32, length_bars: u32) -> f32 {
     NAME_COLUMN_WIDTH + section_total_beats(tempo_map, start_bar, length_bars) as f32 * BEAT_PX_COMPOSE
 }
+
+/// Content hash of everything the Compose canvases read off the tempo map:
+/// the default meter, every tempo event, and every signature event. Feeds
+/// the per-canvas `canvas::Cache` fingerprints — a tempo or signature edit
+/// must repaint bar geometry, while unrelated state churn must not.
+pub fn tempo_map_hash(tempo_map: &TempoMap) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    tempo_map.bpm.to_bits().hash(&mut h);
+    tempo_map.numerator.hash(&mut h);
+    tempo_map.denominator.hash(&mut h);
+    for e in &tempo_map.tempo_points {
+        e.bar.hash(&mut h);
+        e.bpm.to_bits().hash(&mut h);
+    }
+    for e in &tempo_map.signature_points {
+        e.bar.hash(&mut h);
+        e.numerator.hash(&mut h);
+        e.denominator.hash(&mut h);
+    }
+    h.finish()
+}

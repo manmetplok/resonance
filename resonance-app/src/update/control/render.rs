@@ -208,37 +208,61 @@ impl WavGeometry {
 /// walking the chunk list so a non-44-byte header (e.g. an `fmt ` with
 /// extension, or a `fact`/`LIST` chunk before `data`) still parses.
 /// `None` on any malformed / truncated header.
+///
+/// I/O is bounded: this runs on the update thread right after a bounce
+/// (an 80 MB+ file for a few minutes of 24-bit stereo), so it reads only
+/// the 8-byte chunk headers plus the 16 `fmt ` fields and *seeks* past
+/// every chunk body — never the whole file.
 fn read_wav_geometry(path: &Path) -> Option<WavGeometry> {
-    let bytes = std::fs::read(path).ok()?;
-    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+
+    let mut riff = [0u8; 12];
+    file.read_exact(&mut riff).ok()?;
+    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
         return None;
     }
-    let u16_le = |b: &[u8]| u16::from_le_bytes([b[0], b[1]]);
-    let u32_le = |b: &[u8]| u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
 
     let mut sample_rate = None;
     let mut channels = None;
     let mut bits = None;
     let mut data_bytes = None;
 
-    let mut pos = 12; // past "RIFF<size>WAVE"
-    while pos + 8 <= bytes.len() {
-        let id = &bytes[pos..pos + 4];
-        let size = u32_le(&bytes[pos + 4..pos + 8]) as usize;
+    // A rendered WAV is `fmt ` then `data` within a handful of chunks;
+    // the cap only stops a crafted file of millions of empty chunks from
+    // pinning the update thread with seeks.
+    const MAX_CHUNKS: u32 = 1024;
+    let mut walked = 0;
+
+    let mut pos: u64 = 12; // past "RIFF<size>WAVE"
+    while pos + 8 <= file_len && walked < MAX_CHUNKS {
+        walked += 1;
+        file.seek(SeekFrom::Start(pos)).ok()?;
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header).ok()?;
+        let size = u64::from(u32::from_le_bytes([header[4], header[5], header[6], header[7]]));
         let body = pos + 8;
-        match id {
-            b"fmt " if body + 16 <= bytes.len() => {
-                channels = Some(u16_le(&bytes[body + 2..body + 4]));
-                sample_rate = Some(u32_le(&bytes[body + 4..body + 8]));
-                bits = Some(u16_le(&bytes[body + 14..body + 16]));
+        match &header[0..4] {
+            b"fmt " if body + 16 <= file_len => {
+                let mut fmt = [0u8; 16];
+                file.read_exact(&mut fmt).ok()?;
+                channels = Some(u16::from_le_bytes([fmt[2], fmt[3]]));
+                sample_rate = Some(u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]));
+                bits = Some(u16::from_le_bytes([fmt[14], fmt[15]]));
             }
             b"data" => {
                 // The declared size may overrun a still-flushing file;
                 // clamp to what's actually on disk.
-                let available = bytes.len().saturating_sub(body);
-                data_bytes = Some(size.min(available) as u64);
+                data_bytes = Some(size.min(file_len.saturating_sub(body)));
             }
             _ => {}
+        }
+        // Everything wanted is in hand once `data` follows `fmt ` (the
+        // canonical order); don't walk a trailing chunk list for nothing.
+        if sample_rate.is_some() && data_bytes.is_some() {
+            break;
         }
         // Chunks are word-aligned: an odd size is followed by a pad byte.
         pos = body + size + (size & 1);

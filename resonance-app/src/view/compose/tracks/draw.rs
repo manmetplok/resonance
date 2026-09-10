@@ -17,47 +17,22 @@ use super::{
 
 impl<'a> ComposeTrackCanvas<'a> {
     pub(super) fn track_row_rect(&self, index: usize, bounds: Rectangle) -> Rectangle {
-        if self.expanded_track_id.is_none() {
-            // Normal mode: all tracks at full height
-            let y = index as f32 * COMPOSE_TRACK_HEIGHT - self.scroll_offset_y;
-            return Rectangle {
-                x: 0.0,
-                y,
-                width: bounds.width,
-                height: COMPOSE_TRACK_HEIGHT,
-            };
-        }
-
-        // Expanded mode: collapsed strips for non-expanded tracks.
-        // The expanded track itself is not drawn in this canvas (it gets
-        // the separate expanded_editor canvas), so all tracks shown here
-        // are collapsed strips.
-        let tracks = self.sorted_tracks();
-        let mut y: f32 = 0.0;
-        for (i, t) in tracks.iter().enumerate() {
-            let h = if Some(t.id) == self.expanded_track_id {
-                // The expanded track still gets a small strip in this
-                // canvas so the user can double-click to collapse.
-                COLLAPSED_TRACK_HEIGHT
-            } else {
-                COLLAPSED_TRACK_HEIGHT
-            };
-            if i == index {
-                return Rectangle {
-                    x: 0.0,
-                    y: y - self.scroll_offset_y,
-                    width: bounds.width,
-                    height: h,
-                };
-            }
-            y += h;
-        }
-        // Fallback (should not be reached)
+        // Every row shares one height per mode: full lanes normally,
+        // collapsed strips while a track is expanded (the expanded track
+        // itself also keeps a small strip here so the user can
+        // double-click to collapse). Uniform heights mean the rect is a
+        // pure index multiply — callers may invoke this per row without
+        // re-walking the track list.
+        let height = if self.expanded_track_id.is_none() {
+            COMPOSE_TRACK_HEIGHT
+        } else {
+            COLLAPSED_TRACK_HEIGHT
+        };
         Rectangle {
             x: 0.0,
-            y: index as f32 * COLLAPSED_TRACK_HEIGHT - self.scroll_offset_y,
+            y: index as f32 * height - self.scroll_offset_y,
             width: bounds.width,
-            height: COLLAPSED_TRACK_HEIGHT,
+            height,
         }
     }
 

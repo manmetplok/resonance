@@ -160,13 +160,87 @@ pub struct ComposeTrackCanvas<'a> {
     pub expanded_track_id: Option<TrackId>,
 }
 
-/// Canvas-local state for double-click detection.
+/// Canvas-local state: double-click detection plus the geometry cache.
+///
+/// The whole lane grid is static between edits — every element the canvas
+/// paints (rows, beat grid, clip outlines, notes) is derived from app
+/// state, so it renders through a fingerprinted [`canvas::Cache`] and the
+/// 16 ms app tick reuses the tessellated geometry instead of rebuilding
+/// every lane at ~60 fps.
 #[derive(Debug, Default)]
 pub struct ComposeTrackCanvasState {
     pub(super) last_click: Option<(Instant, TrackId)>,
+    pub(super) cache: iced::widget::canvas::Cache,
+    pub(super) cache_fingerprint: std::cell::Cell<ComposeTrackFingerprint>,
+}
+
+/// Cheap content fingerprint of everything [`ComposeTrackCanvas`] draws.
+/// `last_click` is deliberately excluded — it only drives double-click
+/// detection and never changes a pixel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComposeTrackFingerprint {
+    tracks_hash: u64,
+    clips_hash: u64,
+    section_start: u64,
+    section_end: u64,
+    section_length_bars: u32,
+    sample_rate: u32,
+    tempo_hash: u64,
+    start_bar: u32,
+    scroll_y_bits: u32,
+    scale: Option<Scale>,
+    details_track_id: Option<TrackId>,
+    expanded_track_id: Option<TrackId>,
 }
 
 impl<'a> ComposeTrackCanvas<'a> {
+    /// Fingerprint the drawn content. Any field change repaints the cache;
+    /// unrelated app-state churn (metering, transport ticks) does not.
+    pub fn fingerprint(&self) -> ComposeTrackFingerprint {
+        use std::hash::{Hash, Hasher};
+        let mut th = std::collections::hash_map::DefaultHasher::new();
+        for t in self.tracks {
+            // Everything that decides whether/how a row renders: the
+            // instrument filter inputs, sort order, and the side-panel
+            // name + meta line.
+            t.id.hash(&mut th);
+            t.order.hash(&mut th);
+            t.name.hash(&mut th);
+            matches!(t.track_type, TrackType::Instrument).hash(&mut th);
+            t.sub_track.is_some().hash(&mut th);
+            t.instrument_type.hash(&mut th);
+            if let Some(slot) = t.plugins.first() {
+                slot.plugin_name.hash(&mut th);
+            }
+        }
+        let mut ch = std::collections::hash_map::DefaultHasher::new();
+        for c in self.midi_clips {
+            c.track_id.hash(&mut ch);
+            c.start_sample.hash(&mut ch);
+            c.duration_ticks.hash(&mut ch);
+            for n in &c.notes {
+                n.note.hash(&mut ch);
+                n.start_tick.hash(&mut ch);
+                n.duration_ticks.hash(&mut ch);
+                n.velocity.to_bits().hash(&mut ch);
+            }
+        }
+        ComposeTrackFingerprint {
+            tracks_hash: th.finish(),
+            clips_hash: ch.finish(),
+            section_start: self.section_start,
+            section_end: self.section_end,
+            section_length_bars: self.section_length_bars,
+            sample_rate: self.sample_rate,
+            tempo_hash: super::tempo_map_hash(self.tempo_map),
+            start_bar: self.start_bar,
+            scroll_y_bits: self.scroll_offset_y.to_bits(),
+            scale: self.scale,
+            details_track_id: self.details_track_id,
+            expanded_track_id: self.expanded_track_id,
+        }
+    }
+
     pub(super) fn sorted_tracks(&self) -> Vec<&TrackState> {
         // Exclude sub-tracks: they don't accept MIDI (their audio comes
         // from their parent plugin's output port) and would clutter the
