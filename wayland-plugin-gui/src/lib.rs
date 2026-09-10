@@ -48,6 +48,10 @@
 mod editor;
 #[cfg(target_os = "linux")]
 mod egl_context;
+// Pure std, no Wayland dependency — compiled everywhere (only the Linux
+// windowing body uses it, but keeping it unconditional lets the headless
+// watchdog test in `tests/` run on any platform).
+mod join;
 #[cfg(target_os = "linux")]
 mod input;
 #[cfg(target_os = "linux")]
@@ -83,4 +87,12 @@ pub use window_thread::decorations as csd_geometry;
 /// live size through [`Editor::get_size`], never through this type.
 #[doc(hidden)]
 pub use plugin_gui_core::SharedSize;
+
+/// The bounded-join teardown watchdog, exposed for integration tests
+/// only (same rationale as [`csd_geometry`]): the runtime calls it from
+/// `Editor::destroy`/`Drop` so a plugin `ui()` blocked in a modal loop
+/// cannot wedge the host thread; the `tests/` coverage drives it with a
+/// deliberately-stuck plain thread, which needs no Wayland session.
+#[doc(hidden)]
+pub use join::join_with_timeout;
 

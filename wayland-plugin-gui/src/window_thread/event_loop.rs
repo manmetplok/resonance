@@ -251,6 +251,19 @@ impl EditorThread {
                 break;
             }
 
+            // A Quit consumed by that dispatch must never be followed by
+            // another trip into the plugin's `ui()`: once the host has
+            // asked for teardown, re-entering plugin code risks exactly
+            // the block (a modal dialog's nested run loop) that the
+            // handle's bounded destroy-join exists to survive. So bail
+            // here, before the paint below — not only at the `while`
+            // condition. A Quit that arrives while `paint_frame` is
+            // already mid-flight can't be helped from this thread; the
+            // handle's join timeout is the guarantee for that case.
+            if !state.running {
+                break;
+            }
+
             if state.close_requested {
                 app.on_close();
                 state.running = false;
