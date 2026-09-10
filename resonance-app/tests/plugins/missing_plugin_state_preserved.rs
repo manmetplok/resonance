@@ -37,9 +37,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use resonance_app::project::{self, LoadedProject, ProjectFile};
-use resonance_app::state::{PluginSlotState, ViewMode};
+use resonance_app::state::PluginSlotState;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
+use crate::common::app_active_project as app;
 
 const TRACK: u64 = 42;
 const INSTANCE: u64 = 900;
@@ -84,12 +85,6 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
-    app.test_set_active_project(true);
-    app
 }
 
 /// The plugin's parameters as the engine reports them at instantiation —

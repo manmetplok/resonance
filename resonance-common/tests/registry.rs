@@ -61,6 +61,39 @@ fn mark_installed_deduplicates() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn corrupt_registry_file_loads_default_and_is_quarantined() {
+    let dir = std::env::temp_dir().join("resonance_test_registry_corrupt");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("installed.json");
+
+    let original = b"{ this is not valid json at all";
+    std::fs::write(&path, original).unwrap();
+
+    let loaded = load_registry_from(&path);
+    assert!(
+        loaded.items.is_empty(),
+        "a corrupt file loads as the default (empty) registry, not a crash"
+    );
+
+    // The corrupt file must not just vanish: it's preserved so the
+    // user's data can be recovered instead of quietly losing it to the
+    // next save.
+    assert!(
+        !path.exists(),
+        "the corrupt file is moved aside, not left where the loader will find it again"
+    );
+    let corrupt_path = dir.join("installed.json.corrupt");
+    assert!(
+        corrupt_path.exists(),
+        "the original bytes are preserved as a .corrupt sibling"
+    );
+    assert_eq!(std::fs::read(&corrupt_path).unwrap(), original);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn item(name: &str, content_type: ContentType) -> InstalledItem {
     InstalledItem {
         name: name.to_string(),

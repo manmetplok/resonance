@@ -1,4 +1,5 @@
 /// Shared utilities for Resonance plugins.
+pub mod atomic_file;
 pub mod audio_probe;
 pub mod automation;
 mod denormal;
@@ -16,6 +17,7 @@ pub mod take;
 pub mod track_group;
 mod wav;
 
+pub use atomic_file::{atomic_write, quarantine_corrupt};
 pub use automation::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value,
     real_to_lane_value, sample_lane, AutomationLane, AutomationTarget, Breakpoint, BusId,

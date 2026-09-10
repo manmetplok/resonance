@@ -26,7 +26,6 @@
 //! `AuxSendChanged` / `AuxSendRemoved` / `BusAdded` / `BusRoleChanged`
 //! echoes the real engine would emit.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance, SendSlotAffordances};
@@ -34,7 +33,8 @@ use resonance_audio::types::{AudioCommand, AudioEvent, SendSource, TrackType};
 use resonance_control::methods::bus::CreateResult;
 use resonance_control::methods::song::{SendView, TracksView};
 use resonance_control::methods::track::AddSendResult;
-use resonance_control::{MutationAck, Request, Response};
+use resonance_control::{MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 const GUITAR: u64 = 1;
 const KEYS: u64 = 2;
@@ -51,20 +51,6 @@ fn app() -> Resonance {
 // ---------------------------------------------------------------------------
 // Control-socket plumbing — the same round trip an MCP client makes.
 // ---------------------------------------------------------------------------
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
-}
 
 /// Every send `song.tracks` reports for a track — the API's side of the
 /// two-way check.

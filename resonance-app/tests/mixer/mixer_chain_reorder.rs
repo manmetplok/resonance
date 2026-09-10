@@ -14,12 +14,11 @@
 //! that pressing the affordance the GUI hands out lands the same
 //! reorder — one undo step — that the control API reads back.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance, TestChain};
 use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
-use resonance_control::{Request, Response};
+use crate::common::call;
 
 const TRACK: u64 = 1;
 
@@ -48,17 +47,6 @@ fn scanned(short: &str, name: &str, is_instrument: bool) -> ScannedPlugin {
         is_instrument,
         ..Default::default()
     }
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    let request = Request::new(1, method, &params).expect("params serialize");
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 // ---------------------------------------------------------------------------

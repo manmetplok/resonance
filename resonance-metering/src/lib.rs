@@ -10,6 +10,8 @@
 //! - [`SpectrumAnalyzer`] / [`SpectrumHandle`] — background-thread FFT
 //! - [`CorrelationMeter`], [`CrestMeter`], [`PlrMeter`]
 //! - [`MeterSnapshot`] — aggregate for lock-free publication to a UI thread
+//! - [`viz`] — lock-free audio-thread → editor primitives ([`AtomicF32`],
+//!   [`AtomicF32Pair`], [`AtomicF32Array`], [`AtomicHistoryRing`])
 //! - [`offline`] — pure whole-buffer primitives for mix analysis
 //!   ([`band_shares`], [`mono_penalty_db`], [`sample_peak_db`],
 //!   [`clipped_samples`])
@@ -25,6 +27,7 @@ pub mod plr;
 pub mod snapshot;
 pub mod spectrum;
 pub mod true_peak;
+pub mod viz;
 
 pub use atomic_snapshot::AtomicMeterSnapshot;
 pub use correlation::CorrelationMeter;
@@ -39,3 +42,4 @@ pub use plr::{PlrMeter, PlrReadout};
 pub use snapshot::MeterSnapshot;
 pub use spectrum::{SpectrumAnalyzer, SpectrumHandle, SpectrumSnapshot, FFT_SIZE, NUM_OCTAVE_BINS};
 pub use true_peak::TruePeakMeter;
+pub use viz::{AtomicF32, AtomicF32Array, AtomicF32Pair, AtomicHistoryRing};

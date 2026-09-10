@@ -15,8 +15,6 @@
 //!   1. a clip generated for bar N lands at exactly `tempo_map.bar_to_sample(N)`;
 //!   2. save + reload fully repopulates `derived_clips`.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
@@ -25,6 +23,7 @@ use resonance_control::methods::generate::{self as proto, GenerateResult, Genera
 use resonance_control::methods::harmony as harmony_proto;
 use resonance_control::methods::section as section_proto;
 use resonance_control::{KeyScale, Request, Response};
+use crate::common::roundtrip;
 
 // 108 BPM at 48 kHz in 4/4 has a non-integral samples-per-bar:
 // 48000 * 60 / 108 * 4 = 106666.666…
@@ -39,16 +38,6 @@ fn app_with_project() -> Resonance {
     // Flat 108 BPM — non-integral samples-per-bar.
     app.test_set_flat_tempo(BPM);
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {

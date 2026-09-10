@@ -13,19 +13,7 @@
 use resonance_app::message::{MarkerMessage, Message, TransportMessage, UiMessage};
 use resonance_app::state::ArrangementMarker;
 use resonance_app::Resonance;
-
-const SAMPLE_RATE: u32 = 48_000;
-
-/// A fresh app with an active project (so marker / UI messages aren't
-/// swallowed by the startup-modal gate) at a deterministic 120 BPM grid.
-fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new_for_test();
-    app.test_set_active_project(true);
-    app.test_set_sample_rate(SAMPLE_RATE);
-    let _ = app.update(Message::Transport(TransportMessage::SetBpmText("120".into())));
-    let _ = app.update(Message::Transport(TransportMessage::CommitBpm));
-    app
-}
+use crate::common::app_with_tempo_120 as app;
 
 /// Seed three point markers at ascending, on-grid sample positions.
 fn seed_three(app: &mut Resonance) {

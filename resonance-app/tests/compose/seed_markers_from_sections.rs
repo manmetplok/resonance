@@ -8,24 +8,11 @@
 //! markers survive a re-seed, and the undo classification.
 
 use resonance_app::compose::ComposeMessage;
-use resonance_app::message::{MarkerMessage, Message, TransportMessage};
+use resonance_app::message::{MarkerMessage, Message};
 use resonance_app::state::ArrangementMarker;
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
-
-const SAMPLE_RATE: u32 = 48_000;
-
-/// A fresh app with an active project (so Compose / marker messages aren't
-/// swallowed by the startup-modal gate) on a deterministic 120 BPM / 4-4
-/// grid, matching the marker-reducer test fixture.
-fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new_for_test();
-    app.test_set_active_project(true);
-    app.test_set_sample_rate(SAMPLE_RATE);
-    let _ = app.update(Message::Transport(TransportMessage::SetBpmText("120".into())));
-    let _ = app.update(Message::Transport(TransportMessage::CommitBpm));
-    app
-}
+use crate::common::app_with_tempo_120 as app;
 
 /// Create a section definition (and its auto-placement at the first free
 /// bar) with the given name/length/colour, returning its definition id.

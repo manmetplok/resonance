@@ -830,15 +830,31 @@ fn a_removal_racing_a_take_clip_load_leaves_the_take_audible() {
     // Now let both loads land — wherever they land. Counting the park as
     // well as the clip list means a broken engine settles just as fast as a
     // fixed one, so this fails on its assertions rather than on a timeout.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let wait_start = std::time::Instant::now();
+    let deadline = wait_start + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline
         && h.clip_ids().len() + h.parked_clip_ids().len() < 2
     {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     // A grace period on top, so a second, wrong publish has time to show up
-    // rather than landing after the assertions have read the list.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // rather than landing after the assertions have read the list. A flat
+    // sleep here can false-pass under load: a buggy-but-slow worker can
+    // land its stray publish after a fixed window has already closed, and
+    // the busier the machine, the more likely that is. There is no
+    // completion signal to wait on instead — a take-clip load is
+    // deliberately silent (`ClipLoadEcho::SilentTake`, see the doc comment
+    // above this test) and the worker pool that runs it is private to the
+    // engine thread, unreachable from this harness. So the grace scales
+    // with how long the wait above actually took to reach its target —
+    // that elapsed time is itself a live reading of how loaded this
+    // machine is right now — floored so a fast, idle machine still gets a
+    // real window, and capped so a pathologically slow one doesn't stall
+    // the suite.
+    let grace = (wait_start.elapsed() * 5)
+        .max(std::time::Duration::from_millis(200))
+        .min(std::time::Duration::from_secs(5));
+    std::thread::sleep(grace);
 
     let out = h.render_track(TRACK, SLOT.start, SLOT.length as usize);
     // The audible assertion first — it is the one that states the defect.
