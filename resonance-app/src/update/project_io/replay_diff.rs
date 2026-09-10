@@ -1001,6 +1001,9 @@ fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
 /// group id set is guaranteed equal by `structurally_compatible`, but
 /// the per-group contents (membership, collapse state, nesting, macros)
 /// may differ, so the registry is rebuilt wholesale from the snapshot.
+/// `add_group` drops membership edges that would close a nested-group
+/// cycle, so a corrupted `track_groups` array loads with the cycle
+/// broken rather than aborting the flattening walks downstream.
 fn apply_track_groups(r: &mut Resonance, b: &ProjectFile) {
     r.track_groups = crate::state::TrackGroupRegistry::new();
     for tg in &b.track_groups {
