@@ -1,6 +1,6 @@
 //! Rolling true-peak hold trace.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 use crate::viz::MasteringViz;

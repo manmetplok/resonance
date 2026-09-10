@@ -2,7 +2,7 @@
 //! tonal EQ stages. Lays out the four bands as horizontal rows of
 //! knobs, each with enable / type / freq / Q / gain.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::EqStageParams;
 use crate::stages::linear_phase_eq::NUM_BANDS;

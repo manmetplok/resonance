@@ -18,7 +18,7 @@
 
 use std::ops::RangeInclusive;
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::MasteringParams;
 use crate::viz::MasteringViz;

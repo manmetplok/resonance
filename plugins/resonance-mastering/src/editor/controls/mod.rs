@@ -6,7 +6,7 @@
 //! dropdowns for that stage and commits values back to the atomic
 //! plugin params.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::assistant::Genre;
 use crate::params::MasteringParams;

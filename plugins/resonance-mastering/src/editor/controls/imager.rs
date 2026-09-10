@@ -1,6 +1,6 @@
 //! Stereo imager control panel.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::ImagerParams;
 

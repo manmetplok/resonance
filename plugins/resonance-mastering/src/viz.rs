@@ -4,19 +4,23 @@
 //! The aggregate scalar snapshot uses [`arc_swap::ArcSwap`] so the audio
 //! thread can publish a consistent copy of every meter in a single swap,
 //! avoiding torn reads across 12 independent atomics. The two history
-//! rings (LUFS-momentary trace and true-peak trace) use a wait-free SPSC
-//! pattern — `[AtomicU32; N]` for the f32 samples plus an `AtomicUsize`
-//! write index. The audio thread is the sole producer; the editor reads
-//! at its own cadence and tolerates the one-frame skew inherent in the
-//! unsynchronised hand-off.
+//! rings (LUFS-momentary trace and true-peak trace) are the shared
+//! [`resonance_metering::AtomicHistoryRing`] — a wait-free SPSC pattern:
+//! `[AtomicU32; N]` for the f32 samples plus an atomic cursor. The audio
+//! thread is the sole producer; the editor reads at its own cadence and
+//! tolerates the one-frame skew inherent in the unsynchronised hand-off.
+//! (The shared ring's cursor counts total pushes and only grows, rather
+//! than wrapping at `N` the way this module's own ring used to — a purely
+//! internal bookkeeping difference; `new`/`push`/`iter_chrono` behave the
+//! same.)
 //!
 //! The spectrum curve is fetched directly from the metering crate's
 //! [`SpectrumHandle`], which is itself wait-free.
 
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use resonance_metering::{AtomicMeterSnapshot, MeterSnapshot, SpectrumHandle};
+use resonance_metering::{AtomicHistoryRing, AtomicMeterSnapshot, MeterSnapshot, SpectrumHandle};
 
 use crate::assistant::Assistant;
 use crate::stages::multiband::NUM_BANDS;
@@ -27,52 +31,10 @@ pub const LUFS_HISTORY_LEN: usize = 512;
 /// How many true-peak hold samples to keep. ~5 s at 17 Hz.
 pub const TP_HISTORY_LEN: usize = 84;
 
-/// Wait-free SPSC ring of f32 samples. The audio thread writes via
-/// [`push`](Self::push); the editor thread iterates via
-/// [`iter_chrono`](Self::iter_chrono). Each sample is a single aligned
-/// `AtomicU32` load/store so values are never torn; reads may straddle
-/// a single producer update which is acceptable for a meter trace.
-pub struct HistoryRing<const N: usize> {
-    samples: [AtomicU32; N],
-    write_pos: AtomicUsize,
-}
-
-impl<const N: usize> HistoryRing<N> {
-    /// Build a fresh ring pre-filled with `initial`. LUFS traces want
-    /// `-inf` so an empty ring renders as silence; TP traces want the
-    /// floor in dBTP (−120 dB) for the same reason.
-    pub fn new(initial: f32) -> Self {
-        let bits = initial.to_bits();
-        Self {
-            samples: std::array::from_fn(|_| AtomicU32::new(bits)),
-            write_pos: AtomicUsize::new(0),
-        }
-    }
-
-    /// Wait-free producer. Audio-thread safe; no allocation, no locks.
-    pub fn push(&self, v: f32) {
-        let pos = self.write_pos.load(Ordering::Relaxed);
-        self.samples[pos].store(v.to_bits(), Ordering::Relaxed);
-        let next = if pos + 1 == N { 0 } else { pos + 1 };
-        // Release so consumer's Acquire on write_pos observes the sample store.
-        self.write_pos.store(next, Ordering::Release);
-    }
-
-    /// Iterate the ring in chronological order (oldest sample first).
-    /// Wait-free consumer.
-    pub fn iter_chrono(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = self.write_pos.load(Ordering::Acquire);
-        (0..N).map(move |i| {
-            let idx = (start + i) % N;
-            f32::from_bits(self.samples[idx].load(Ordering::Relaxed))
-        })
-    }
-}
-
 /// Alias for the LUFS history ring (initialised to −∞).
-pub type LufsHistoryRing = HistoryRing<LUFS_HISTORY_LEN>;
+pub type LufsHistoryRing = AtomicHistoryRing<LUFS_HISTORY_LEN>;
 /// Alias for the true-peak history ring (initialised to −120 dBTP).
-pub type TpHistoryRing = HistoryRing<TP_HISTORY_LEN>;
+pub type TpHistoryRing = AtomicHistoryRing<TP_HISTORY_LEN>;
 
 /// All visualization state shared with the editor.
 pub struct MasteringViz {

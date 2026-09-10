@@ -9,3 +9,18 @@ pub mod limiter;
 pub mod linear_phase_eq;
 pub mod multiband;
 pub mod saturator;
+
+use resonance_plugin::Smoother;
+
+/// Point a [`Smoother`] at `target` only when the target actually
+/// changed. Calling `set_target` unconditionally every block would
+/// restart a linear ramp from the current value each time, turning the
+/// fixed-length ramp into an asymptotic crawl — and would keep a
+/// converged smoother from ever snapping exactly onto its target.
+/// `last` is the caller's record of the previously requested target.
+pub(crate) fn retarget(smoother: &mut Smoother, last: &mut f32, target: f32) {
+    if *last != target {
+        smoother.set_target(target);
+        *last = target;
+    }
+}

@@ -12,7 +12,7 @@
 //! printed value all come off the parameter — there is no second copy
 //! of those facts here to drift out of sync with the DSP.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::{MultibandBandParams, MultibandParams};
 use crate::stages::multiband::NUM_BANDS;

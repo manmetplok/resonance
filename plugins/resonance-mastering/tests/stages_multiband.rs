@@ -204,3 +204,50 @@ fn oversized_block_matches_chunked_processing_bitwise() {
         );
     }
 }
+
+#[test]
+fn side_only_high_band_content_is_compressed() {
+    // Anti-phase 9 kHz at 0.8 per channel — pure side content, landing
+    // in the top band with the default crossovers. The old per-band
+    // mono-sum detector read this as silence and the band compressor
+    // never engaged; the max-of-channels detector must compress it.
+    let sr = 48_000.0_f32;
+    let latency = Multiband::latency();
+    let block = 512;
+    let n = latency + 24_000;
+    let mut mb = Multiband::new(sr, block);
+    let mut cfg = MultibandConfig {
+        enabled: true,
+        ..MultibandConfig::default()
+    };
+    cfg.bands[3] = BandConfig {
+        enabled: true,
+        threshold_db: -30.0,
+        ratio: 8.0,
+        attack_ms: 1.0,
+        release_ms: 50.0,
+        knee_db: 0.0,
+        ..BandConfig::default()
+    };
+
+    let (mut l, mut r) = sine_stereo(sr, 9_000.0, 0.8, n);
+    for s in r.iter_mut() {
+        *s = -*s;
+    }
+    let mut start = 0;
+    while start < n {
+        let end = (start + block).min(n);
+        let (lh, rh) = (&mut l[start..end], &mut r[start..end]);
+        mb.process_stereo(lh, rh, &cfg);
+        start = end;
+    }
+
+    // 0.8 ≈ −1.94 dBFS is 28 dB over the −30 dB threshold at 8:1 →
+    // ~24.5 dB of steady-state GR; anything close to zero means the
+    // detector cancelled the side content again.
+    let gr = mb.band_gr_db()[3];
+    assert!(gr > 10.0, "top-band GR on side-only content = {gr} dB");
+    let tail = &l[n - 4096..];
+    let peak = tail.iter().copied().map(f32::abs).fold(0.0_f32, f32::max);
+    assert!(peak < 0.3, "side-only 9 kHz settled peak = {peak}");
+}

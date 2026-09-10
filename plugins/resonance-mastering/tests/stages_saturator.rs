@@ -106,3 +106,75 @@ fn asymmetric_saturation_has_no_dc_offset() {
     let mean = tail.iter().sum::<f32>() / tail.len() as f32;
     assert!(mean.abs() < 1e-3, "mean = {mean}");
 }
+
+#[test]
+fn toggle_mid_signal_does_not_click() {
+    // Toggling the saturator off used to hard-switch from the wet
+    // signal (saturated + LF-shelf-boosted) straight to dry in one
+    // sample. The enable crossfade must keep the sample-to-sample
+    // slope in the same class as a steady run.
+    let sr = 48_000.0_f32;
+    let cfg_on = SaturatorConfig {
+        enabled: true,
+        drive_db: 6.0,
+        character: 0.0,
+        mix: 1.0,
+        shaper: Shaper::Smooth,
+    };
+    let cfg_off = SaturatorConfig {
+        enabled: false,
+        ..cfg_on
+    };
+
+    // 60 Hz → 800-sample period, so 100-frame blocks give toggle
+    // boundaries every 45° of the cycle. The wet path phase-shifts
+    // the sine (DC blocker + shelves), so the phase where the wet/dry
+    // step is worst is not obvious a priori — try a whole period of
+    // toggle positions and take the worst.
+    let block = 100;
+    let total = 14_000;
+    let input: Vec<f32> = (0..total)
+        .map(|i| (i as f32 / sr * 60.0 * std::f32::consts::TAU).sin() * 0.9)
+        .collect();
+
+    let render = |toggle_at: Option<usize>| -> Vec<f32> {
+        let mut s = Saturator::new(sr);
+        let mut l = input.clone();
+        let mut r = input.clone();
+        let mut start = 0;
+        while start < total {
+            let end = (start + block).min(total);
+            let cfg = match toggle_at {
+                Some(t) if start >= t => &cfg_off,
+                _ => &cfg_on,
+            };
+            s.process_stereo(&mut l[start..end], &mut r[start..end], cfg);
+            start = end;
+        }
+        l
+    };
+
+    let max_delta = |x: &[f32], around: usize| {
+        x[around - 400..around + 1600]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0_f32, f32::max)
+    };
+
+    let steady = render(None);
+    let mut steady_max = 0.0_f32;
+    let mut toggled_max = 0.0_f32;
+    for k in 0..8 {
+        let toggle = 9800 + k * block;
+        let toggled = render(Some(toggle));
+        steady_max = steady_max.max(max_delta(&steady, toggle));
+        toggled_max = toggled_max.max(max_delta(&toggled, toggle));
+    }
+    // The old hard toggle stepped by the full wet/dry difference at
+    // the worst phase (~0.1 with this drive); the crossfade keeps the
+    // toggled run's worst slope within a factor of the steady run's.
+    assert!(
+        toggled_max < steady_max * 1.5 + 0.01,
+        "toggle stepped {toggled_max} per sample vs {steady_max} steady"
+    );
+}

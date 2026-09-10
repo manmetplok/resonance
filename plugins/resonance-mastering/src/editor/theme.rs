@@ -13,4 +13,4 @@
 //! Its local green `GOOD` is gone the same way: the shared palette
 //! carries one.
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;

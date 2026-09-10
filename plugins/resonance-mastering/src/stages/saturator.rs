@@ -29,6 +29,15 @@
 //! before the low shelf can amplify the offset.
 
 use resonance_dsp::{db_to_linear, Biquad, DcBlocker};
+use resonance_plugin::{Smoother, SmoothingStyle};
+
+use super::retarget;
+
+/// Ramp length for drive/character/mix and the enable crossfade, in
+/// milliseconds. Long enough to spread a full-scale parameter step
+/// over ~480 samples at 48 kHz (no click), short enough to still feel
+/// instant under the knob.
+const RAMP_MS: f32 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shaper {
@@ -87,6 +96,31 @@ pub struct Saturator {
     lf_shelf_r: Biquad,
     dc_l: DcBlocker,
     dc_r: DcBlocker,
+    /// Per-sample smoothers so parameter steps and the enable toggle
+    /// ramp instead of clicking. `*_tgt` mirrors the last requested
+    /// target (see [`retarget`]).
+    drive_sm: Smoother,
+    drive_tgt: f32,
+    character_sm: Smoother,
+    character_tgt: f32,
+    mix_sm: Smoother,
+    mix_tgt: f32,
+    /// Enable crossfade: multiplies the wet mix, ramping 0 ↔ 1 on
+    /// toggles so switching the stage mid-signal fades rather than
+    /// steps.
+    enable_sm: Smoother,
+    enable_tgt: f32,
+    /// Drive-derived values, recomputed only when the smoothed drive
+    /// or the shaper actually changes (NaN forces the first compute).
+    cached_drive_db: f32,
+    cached_shaper: Shaper,
+    drive_lin: f32,
+    inv_drive: f32,
+    /// Has any audio streamed through since construction/reset? An
+    /// enable on the very first block engages instantly (there is no
+    /// audio history to click against); a later enable crossfades in.
+    primed: bool,
+    was_enabled: bool,
 }
 
 impl Saturator {
@@ -99,6 +133,20 @@ impl Saturator {
             lf_shelf_r: Biquad::identity(),
             dc_l: DcBlocker::default(),
             dc_r: DcBlocker::default(),
+            drive_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
+            drive_tgt: f32::NAN,
+            character_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
+            character_tgt: f32::NAN,
+            mix_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
+            mix_tgt: f32::NAN,
+            enable_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
+            enable_tgt: f32::NAN,
+            cached_drive_db: f32::NAN,
+            cached_shaper: Shaper::Smooth,
+            drive_lin: 1.0,
+            inv_drive: 1.0,
+            primed: false,
+            was_enabled: false,
         };
         s.set_sample_rate(sample_rate);
         s
@@ -116,6 +164,10 @@ impl Saturator {
             .set_low_shelf(sample_rate, 100.0, 0.707, 2.0);
         self.lf_shelf_r
             .set_low_shelf(sample_rate, 100.0, 0.707, 2.0);
+        self.drive_sm.set_sample_rate(sample_rate);
+        self.character_sm.set_sample_rate(sample_rate);
+        self.mix_sm.set_sample_rate(sample_rate);
+        self.enable_sm.set_sample_rate(sample_rate);
     }
 
     pub fn reset(&mut self) {
@@ -125,25 +177,85 @@ impl Saturator {
         self.lf_shelf_r.reset();
         self.dc_l.reset();
         self.dc_r.reset();
+        self.drive_sm.reset(0.0);
+        self.drive_tgt = f32::NAN;
+        self.character_sm.reset(0.0);
+        self.character_tgt = f32::NAN;
+        self.mix_sm.reset(0.0);
+        self.mix_tgt = f32::NAN;
+        self.enable_sm.reset(0.0);
+        self.enable_tgt = f32::NAN;
+        self.cached_drive_db = f32::NAN;
+        self.primed = false;
+        self.was_enabled = false;
     }
 
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &SaturatorConfig) {
-        if !cfg.enabled {
-            return;
-        }
-
-        let drive = db_to_linear(cfg.drive_db);
-        let shaper = cfg.shaper;
-        // Peak-normalize: divide by the shaper's value at full drive
-        // so a 1.0-amplitude input pins to ~1.0 regardless of drive.
-        let inv_drive = 1.0 / base_shape(drive, shaper).max(1e-6);
         let character = cfg.character.clamp(0.0, 1.0);
         let mix = cfg.mix.clamp(0.0, 1.0);
 
+        if cfg.enabled && !self.was_enabled {
+            // (Re)engage. The parameter smoothers snap to the current
+            // values — ramping in from whatever they held when the
+            // stage was last audible would be meaningless — and the
+            // filters restart clean, their state from that era being
+            // equally stale; the enable crossfade covers the settling.
+            self.hf_shelf_l.reset();
+            self.hf_shelf_r.reset();
+            self.lf_shelf_l.reset();
+            self.lf_shelf_r.reset();
+            self.dc_l.reset();
+            self.dc_r.reset();
+            self.drive_sm.reset(cfg.drive_db);
+            self.drive_tgt = cfg.drive_db;
+            self.character_sm.reset(character);
+            self.character_tgt = character;
+            self.mix_sm.reset(mix);
+            self.mix_tgt = mix;
+            if !self.primed {
+                // Very first block: engage instantly, there is no
+                // running audio to click against.
+                self.enable_sm.reset(1.0);
+                self.enable_tgt = 1.0;
+            }
+        } else {
+            retarget(&mut self.drive_sm, &mut self.drive_tgt, cfg.drive_db);
+            retarget(&mut self.character_sm, &mut self.character_tgt, character);
+            retarget(&mut self.mix_sm, &mut self.mix_tgt, mix);
+        }
+        let enable_target = if cfg.enabled { 1.0 } else { 0.0 };
+        retarget(&mut self.enable_sm, &mut self.enable_tgt, enable_target);
+        self.was_enabled = cfg.enabled;
+        self.primed = true;
+
+        // Fully faded out: the stage is a wire, bit-identical to a
+        // hard bypass once the disable crossfade has finished.
+        if !cfg.enabled && self.enable_sm.current() == 0.0 {
+            return;
+        }
+
+        let shaper = cfg.shaper;
         let frames = left.len().min(right.len());
         for i in 0..frames {
             let dry_l = left[i];
             let dry_r = right[i];
+
+            // Peak-normalize: divide by the shaper's value at full
+            // drive so a 1.0-amplitude input pins to ~1.0 regardless
+            // of drive. Recomputed only while the drive ramp is live
+            // (or the shaper switched); converged blocks reuse the
+            // cache.
+            let drive_db = self.drive_sm.next();
+            if drive_db != self.cached_drive_db || shaper != self.cached_shaper {
+                self.cached_drive_db = drive_db;
+                self.cached_shaper = shaper;
+                self.drive_lin = db_to_linear(drive_db);
+                self.inv_drive = 1.0 / base_shape(self.drive_lin, shaper).max(1e-6);
+            }
+            let drive = self.drive_lin;
+            let inv_drive = self.inv_drive;
+            let character = self.character_sm.next();
+            let mix = self.mix_sm.next() * self.enable_sm.next();
 
             let l1 = self.hf_shelf_l.process(dry_l);
             let r1 = self.hf_shelf_r.process(dry_r);

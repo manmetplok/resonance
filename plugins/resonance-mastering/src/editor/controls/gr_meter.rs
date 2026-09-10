@@ -10,7 +10,7 @@
 //! the way a gain-reduction meter conventionally does, so "more bar"
 //! means "more compression" at a glance without reading the number.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 

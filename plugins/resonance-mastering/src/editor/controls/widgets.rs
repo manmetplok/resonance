@@ -7,7 +7,7 @@
 pub use resonance_plugin::editor_widgets::{bool_checkbox, float_knob};
 
 use resonance_plugin::{IntParam, Param};
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 /// Standard per-control column width for combo-box layouts.
 pub const COL_WIDTH: f32 = 108.0;
