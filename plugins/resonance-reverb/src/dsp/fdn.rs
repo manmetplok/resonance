@@ -7,7 +7,7 @@
 use resonance_dsp::{DelayLine, Lfo, OnePole};
 
 use super::modulation;
-use super::CHANNELS;
+use super::{CHANNELS, TAP_SLEW_PER_SAMPLE};
 
 /// Maximum FDN channel delay multiplier at the longest channel.
 /// The classic `2^(c/(CHANNELS-1))` spread with `c = CHANNELS-1 = 7`
@@ -29,6 +29,18 @@ pub(super) fn householder_in_place(data: &mut [f32; CHANNELS]) {
 pub(super) struct FdnBank {
     delays: [DelayLine; CHANNELS],
     delay_samples: [usize; CHANNELS],
+    /// Gliding fractional read positions, one per channel. `set_size`
+    /// only moves `delay_samples` (the targets); each position slews
+    /// toward its target by at most `TAP_SLEW_PER_SAMPLE` per sample,
+    /// so a size change is a continuous Doppler-style morph instead of
+    /// a per-block tap relocation (which clicked). At rest a position
+    /// is *exactly* `delay_samples[c] as f32`, so the stationary read
+    /// is bit-identical to the pre-glide integer-length tap.
+    read_pos: [f32; CHANNELS],
+    /// False until the first processed sample. While false the read
+    /// positions snap to their targets, so the first `set_size` after
+    /// construction or `clear` configures instead of gliding.
+    primed: bool,
     damping: [OnePole; CHANNELS],
     lfos: [Lfo; CHANNELS],
     /// Persistent recirculating feedback state, fed back into the
@@ -66,9 +78,16 @@ impl FdnBank {
         // LFOs with staggered phases and randomized rates
         let lfos = modulation::build_fdn_lfos(sample_rate);
 
+        let mut read_pos = [0.0f32; CHANNELS];
+        for (c, pos) in read_pos.iter_mut().enumerate() {
+            *pos = delay_samples[c] as f32;
+        }
+
         Self {
             delays,
             delay_samples,
+            read_pos,
+            primed: false,
             damping,
             lfos,
             feedback: [0.0; CHANNELS],
@@ -80,6 +99,9 @@ impl FdnBank {
     /// Uses the classic `2^(c/(N-1))` channel spread to pack 8 delay
     /// lines into a factor-of-two range so feedback reflections arrive
     /// densely instead of as audibly separated echoes.
+    ///
+    /// These are glide *targets*: the read taps in `process` slew
+    /// toward them per sample instead of relocating.
     pub(super) fn set_size(&mut self, base_samples: f32) {
         for c in 0..CHANNELS {
             let r = c as f32 / (CHANNELS - 1).max(1) as f32;
@@ -123,11 +145,36 @@ impl FdnBank {
         // FDN: read the previous loop's output out of the delay lines
         // and push the new input in. `fdn_output` is what the user
         // hears as the tail.
+        if !self.primed {
+            // First sample after construction/clear: adopt the targets
+            // outright — there is nothing audible to glide from.
+            self.primed = true;
+            for c in 0..CHANNELS {
+                self.read_pos[c] = self.delay_samples[c] as f32;
+            }
+        }
+
         let mut fdn_output = [0.0f32; CHANNELS];
         for c in 0..CHANNELS {
+            // Slew the read position toward its target, snapping when
+            // within one step so a settled tap sits exactly on
+            // `delay_samples[c] as f32`.
+            let target = self.delay_samples[c] as f32;
+            let pos = self.read_pos[c];
+            let pos = if pos == target {
+                pos
+            } else if (target - pos).abs() <= TAP_SLEW_PER_SAMPLE {
+                target
+            } else if target > pos {
+                pos + TAP_SLEW_PER_SAMPLE
+            } else {
+                pos - TAP_SLEW_PER_SAMPLE
+            };
+            self.read_pos[c] = pos;
+
             // Modulated read position
             let mod_offset = self.lfos[c].next() * mod_depth_samples;
-            let delay_f = self.delay_samples[c] as f32 + mod_offset;
+            let delay_f = pos + mod_offset;
             let delay_f = delay_f.max(1.0);
 
             fdn_output[c] = self.delays[c].tap_linear(delay_f);
@@ -186,5 +233,8 @@ impl FdnBank {
         }
         self.feedback = [0.0; CHANNELS];
         self.energy_smoothed = [0.0; CHANNELS];
+        // Next process snaps the read positions to their targets, the
+        // same starting state a fresh bank has.
+        self.primed = false;
     }
 }

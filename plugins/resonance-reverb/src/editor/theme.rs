@@ -9,9 +9,9 @@
 //! The local `apply()` is gone: it only existed to pass `ACCENT_DIM` as
 //! the selection fill, which is what the shared `apply()` uses.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;
 
 /// Filled-polygon colour for the analytic decay envelope in the impulse
 /// view — the shared accent glow (accent at ~25 % alpha).

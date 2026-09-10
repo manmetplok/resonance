@@ -11,7 +11,7 @@
 //! the summed energy going through the Householder reflection — a
 //! visual echo of the feedback matrix at the heart of the reverb.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::FDN_CHANNELS;
 

@@ -18,7 +18,13 @@ use super::er::{EarlyReflections, ER_TAPS};
 use super::fdn::FdnBank;
 use super::{CHANNELS, DIFFUSION_STEPS};
 
-const MAX_PREDELAY_SAMPLES: usize = 48000; // 1 second max pre-delay
+/// Maximum pre-delay in seconds. The delay lines (and the tap clamp)
+/// are sized from this at the *actual* sample rate at construction —
+/// this used to be a hardcoded 48 000 samples, which was only "1
+/// second" at 48 kHz and silently halved the maximum at 96 kHz.
+const MAX_PREDELAY_SECONDS: f32 = 1.0;
+/// Pre-delay tap-move crossfade length, ms (see `set_predelay`).
+const PREDELAY_FADE_MS: f32 = 20.0;
 /// Lower bound of the `size` parameter expressed in ms. Maps to the
 /// shortest "room" feel the user can dial in.
 const MIN_SIZE_MS: f32 = 10.0;
@@ -32,10 +38,29 @@ const MAX_SIZE_MS: f32 = 200.0;
 pub struct ReverbDsp {
     sample_rate: f32,
 
-    // Pre-delay
+    // Pre-delay. The read tap never relocates mid-signal: a change
+    // crossfades from the old tap to the new one (see `set_predelay`).
     predelay_l: DelayLine,
     predelay_r: DelayLine,
+    /// Settled tap length — and the fade *destination* while a fade runs.
     predelay_samples: usize,
+    /// Tap being faded out while a fade runs.
+    predelay_from: usize,
+    /// Remaining crossfade samples; 0 means no fade is running.
+    predelay_fade_left: u32,
+    /// Total crossfade length in samples at this sample rate.
+    predelay_fade_total: u32,
+    /// Newest tap requested while a fade was already running; started
+    /// as the next fade the moment the running one completes.
+    predelay_pending: Option<usize>,
+    /// Last tap length requested — dedupes per-block `set_predelay`.
+    predelay_requested: usize,
+    /// False until the first processed sample. While false a pre-delay
+    /// change snaps (configuring a fresh/reset instance must not fade
+    /// in from a stale tap).
+    predelay_primed: bool,
+    /// `MAX_PREDELAY_SECONDS` at the actual sample rate.
+    max_predelay_samples: usize,
 
     // Diffusion network (4 cascaded steps)
     diffusion: [DiffusionStep; DIFFUSION_STEPS],
@@ -87,11 +112,20 @@ impl ReverbDsp {
             ds
         });
 
+        let max_predelay_samples = (MAX_PREDELAY_SECONDS * sample_rate) as usize;
+
         Self {
             sample_rate,
-            predelay_l: DelayLine::new(MAX_PREDELAY_SAMPLES),
-            predelay_r: DelayLine::new(MAX_PREDELAY_SAMPLES),
+            predelay_l: DelayLine::new(max_predelay_samples),
+            predelay_r: DelayLine::new(max_predelay_samples),
             predelay_samples: 0,
+            predelay_from: 0,
+            predelay_fade_left: 0,
+            predelay_fade_total: ((PREDELAY_FADE_MS * 0.001 * sample_rate) as u32).max(1),
+            predelay_pending: None,
+            predelay_requested: 0,
+            predelay_primed: false,
+            max_predelay_samples,
             diffusion,
             diffusion_ratios,
             fdn: FdnBank::new(sample_rate, MAX_SIZE_MS),
@@ -210,9 +244,37 @@ impl ReverbDsp {
     }
 
     /// Set pre-delay in milliseconds.
+    ///
+    /// The read tap never relocates mid-signal: a change starts a
+    /// linear crossfade from the old tap to the new one over
+    /// `PREDELAY_FADE_MS`. Crossfading (rather than a Doppler glide)
+    /// keeps the pre-delay pitch-stable — a bending tap here would bend
+    /// the *entire* reverb input. The fade is linear, not equal-power:
+    /// during a sweep the two taps are a few ms apart and strongly
+    /// correlated, where an equal-power law would bulge by up to +3 dB
+    /// at the midpoint. A change landing mid-fade is queued (newest
+    /// wins) and started when the running fade completes, so a
+    /// continuous sweep resolves into back-to-back short crossfades.
     pub fn set_predelay(&mut self, ms: f32) {
-        self.predelay_samples =
-            ((ms * 0.001 * self.sample_rate) as usize).min(MAX_PREDELAY_SAMPLES - 1);
+        let samples =
+            ((ms * 0.001 * self.sample_rate) as usize).min(self.max_predelay_samples - 1);
+        if samples == self.predelay_requested {
+            return;
+        }
+        self.predelay_requested = samples;
+        if !self.predelay_primed {
+            // Nothing audible is in flight yet — snap, exactly like the
+            // pre-crossfade code did on activation.
+            self.predelay_samples = samples;
+            self.predelay_fade_left = 0;
+            self.predelay_pending = None;
+        } else if self.predelay_fade_left > 0 {
+            self.predelay_pending = Some(samples);
+        } else if samples != self.predelay_samples {
+            self.predelay_from = self.predelay_samples;
+            self.predelay_samples = samples;
+            self.predelay_fade_left = self.predelay_fade_total;
+        }
     }
 
     /// Set modulation depth (0..1 normalized).
@@ -234,11 +296,35 @@ impl ReverbDsp {
         diffusion_amount: f32,
         width: f32,
     ) -> (f32, f32) {
-        // Pre-delay
-        let dl = self.predelay_l.tap(self.predelay_samples);
-        let dr = self.predelay_r.tap(self.predelay_samples);
+        // Pre-delay. A stationary tap reads exactly as before; while a
+        // crossfade is in flight both taps are read and mixed.
+        let (dl, dr) = if self.predelay_fade_left > 0 {
+            self.predelay_fade_left -= 1;
+            let x = (self.predelay_fade_total - self.predelay_fade_left) as f32
+                / self.predelay_fade_total as f32;
+            let old_l = self.predelay_l.tap(self.predelay_from);
+            let old_r = self.predelay_r.tap(self.predelay_from);
+            let new_l = self.predelay_l.tap(self.predelay_samples);
+            let new_r = self.predelay_r.tap(self.predelay_samples);
+            if self.predelay_fade_left == 0 {
+                if let Some(next) = self.predelay_pending.take() {
+                    if next != self.predelay_samples {
+                        self.predelay_from = self.predelay_samples;
+                        self.predelay_samples = next;
+                        self.predelay_fade_left = self.predelay_fade_total;
+                    }
+                }
+            }
+            (old_l + x * (new_l - old_l), old_r + x * (new_r - old_r))
+        } else {
+            (
+                self.predelay_l.tap(self.predelay_samples),
+                self.predelay_r.tap(self.predelay_samples),
+            )
+        };
         self.predelay_l.push(left);
         self.predelay_r.push(right);
+        self.predelay_primed = true;
 
         // Early reflections: independent parallel multi-tap delay, fed from
         // the same pre-delayed input as the diffusion network.
@@ -321,6 +407,12 @@ impl ReverbDsp {
     pub fn clear(&mut self) {
         self.predelay_l.clear();
         self.predelay_r.clear();
+        // Cancel any fade and land on the newest requested tap, so a
+        // reset instance matches a fresh one that was configured once.
+        self.predelay_fade_left = 0;
+        self.predelay_pending = None;
+        self.predelay_samples = self.predelay_requested;
+        self.predelay_primed = false;
         for step in &mut self.diffusion {
             step.clear();
         }

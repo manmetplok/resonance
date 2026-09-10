@@ -60,6 +60,7 @@ fn dsp_processes_impulse_without_nans() {
 /// in `cargo test -- --nocapture`. Not an assertion — just a window
 /// into what the reverb actually produces for a unit impulse.
 #[test]
+#[ignore = "diagnostic; prints the IR envelope table, asserts nothing"]
 fn debug_impulse_response_envelope() {
     let mut plugin = ResonanceReverb::new();
     plugin.initialize(48_000.0, 4096);
