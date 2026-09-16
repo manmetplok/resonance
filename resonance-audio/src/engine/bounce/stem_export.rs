@@ -187,24 +187,35 @@ pub(crate) fn export_stems_spawn(
     std::thread::Builder::new()
         .name("export-stems".into())
         .spawn(move || {
-            let _offline = super::OfflineRenderGuard::mark(&shared);
-            export_stems(
-                targets,
-                range,
-                out_rate,
-                bit_depth,
-                include_fx_tail,
-                &shared,
-                &cancel_render,
-                &tracks,
-                &busses,
-                &master,
-                &clips,
-                &midi_clips,
-                &plugins,
-                &tempo_map,
-                engine_rate,
-                &event_tx,
+            // Panic supervision: a panicking render must still emit the
+            // path's terminal error event (see `crate::supervise`).
+            let panic_tx = event_tx.clone();
+            crate::supervise::run_supervised(
+                "export-stems",
+                || {
+                    let _offline = super::OfflineRenderGuard::mark(&shared);
+                    export_stems(
+                        targets,
+                        range,
+                        out_rate,
+                        bit_depth,
+                        include_fx_tail,
+                        &shared,
+                        &cancel_render,
+                        &tracks,
+                        &busses,
+                        &master,
+                        &clips,
+                        &midi_clips,
+                        &plugins,
+                        &tempo_map,
+                        engine_rate,
+                        &event_tx,
+                    );
+                },
+                |message| {
+                    let _ = panic_tx.send(AudioEvent::StemExportError(message));
+                },
             );
         })
         .expect("spawn export-stems thread");

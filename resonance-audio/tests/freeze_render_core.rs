@@ -14,7 +14,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{PluginMap, SharedState, to_freeze_cache};
+use resonance_audio::__test_support::{run_supervised, to_freeze_cache, PluginMap, SharedState};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -459,4 +459,138 @@ fn missing_source_track_errors() {
         Err(msg) => assert!(msg.contains("not found"), "got: {msg}"),
         Ok(_) => panic!("freeze of a missing track must error"),
     }
+}
+
+// ---------------------------------------------------------------------
+// Panic supervision on the offline render workers (`run_supervised`).
+//
+// Every offline render spawn site (export, bounce-in-place, freeze,
+// stem export, mix measure) runs its worker body through
+// `run_supervised`, whose `on_panic` emits the SAME terminal error
+// event that path already uses for expected failures. Before that
+// wrapper, a panic anywhere in the offline mixer — third-party CLAP
+// `process()` included — killed the worker thread with no terminal
+// event: the app's progress modal never resolved and a control
+// client's `job_wait` reported "running" until its cap. The render
+// core has no panic-injection seam, so these tests pin the wrapper
+// itself, wired exactly like the freeze spawn site.
+// ---------------------------------------------------------------------
+
+/// A panicking body must be reported through `on_panic` — wired here the
+/// way `to_freeze_cache_spawn` wires it, so the channel receives the
+/// path's own terminal error event carrying the panic payload.
+#[test]
+fn supervised_panic_emits_the_paths_terminal_error_event() {
+    let (tx, rx) = crossbeam_channel::unbounded::<AudioEvent>();
+    let track_id: TrackId = 7;
+
+    run_supervised(
+        "freeze-render",
+        || panic!("plugin exploded mid-process"),
+        |message| {
+            let _ = tx.send(AudioEvent::FreezeError { track_id, message });
+        },
+    );
+
+    match rx
+        .try_recv()
+        .expect("a panicking worker must emit a terminal event")
+    {
+        AudioEvent::FreezeError {
+            track_id: id,
+            message,
+        } => {
+            assert_eq!(id, 7);
+            assert!(
+                message.contains("freeze-render worker panicked"),
+                "message must name the worker: {message}"
+            );
+            assert!(
+                message.contains("plugin exploded mid-process"),
+                "message must carry the panic payload: {message}"
+            );
+        }
+        other => panic!("expected FreezeError, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "exactly one terminal event");
+}
+
+/// A body that completes normally already reported its own outcome —
+/// `on_panic` must stay silent or the app would see two terminal events
+/// for one run.
+#[test]
+fn supervised_success_never_calls_on_panic() {
+    let ran = AtomicBool::new(false);
+    run_supervised(
+        "export",
+        || ran.store(true, Ordering::SeqCst),
+        |message| panic!("on_panic ran for a successful body: {message}"),
+    );
+    assert!(ran.load(Ordering::SeqCst), "body must actually run");
+}
+
+/// Payload formatting: `String` payloads (the `panic!("{}", …)` form)
+/// pass through verbatim; a non-string `panic_any` payload becomes the
+/// documented placeholder instead of being dropped.
+#[test]
+fn supervised_panic_payload_forms_are_reported() {
+    let mut got: Vec<String> = Vec::new();
+
+    run_supervised(
+        "export",
+        || panic!("chunk {} out of range", 3),
+        |message| got.push(message),
+    );
+    run_supervised(
+        "export",
+        || std::panic::panic_any(42_u32),
+        |message| got.push(message),
+    );
+
+    assert_eq!(got.len(), 2);
+    assert!(
+        got[0].contains("chunk 3 out of range"),
+        "String payload must pass through: {}",
+        got[0]
+    );
+    assert!(
+        got[1].contains("non-string panic"),
+        "non-string payload must become the placeholder: {}",
+        got[1]
+    );
+}
+
+/// RAII created inside the body — the `OfflineRenderGuard` every spawn
+/// site takes first — must drop during the unwind, BEFORE `on_panic`
+/// emits the terminal event, so the panic path releases the offline
+/// render slot exactly like the error path does.
+#[test]
+fn supervised_panic_drops_body_raii_before_on_panic() {
+    struct SlotGuard<'a>(&'a AtomicBool);
+    impl Drop for SlotGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+
+    let held = AtomicBool::new(false);
+    let held_at_report = AtomicBool::new(true);
+
+    run_supervised(
+        "freeze-render",
+        || {
+            held.store(true, Ordering::SeqCst);
+            let _guard = SlotGuard(&held);
+            panic!("render died while holding the slot");
+        },
+        |_message| {
+            held_at_report.store(held.load(Ordering::SeqCst), Ordering::SeqCst);
+        },
+    );
+
+    assert!(
+        !held_at_report.load(Ordering::SeqCst),
+        "the body's guard must be dropped before the terminal event is emitted"
+    );
+    assert!(!held.load(Ordering::SeqCst));
 }

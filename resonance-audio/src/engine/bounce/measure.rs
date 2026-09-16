@@ -207,21 +207,38 @@ pub(crate) fn measure_mix_spawn(
     std::thread::Builder::new()
         .name("measure-mix".into())
         .spawn(move || {
-            measure_mix(
-                measure_id,
-                targets,
-                range,
-                source,
-                &shared,
-                &tracks,
-                &busses,
-                &master,
-                &clips,
-                &midi_clips,
-                &plugins,
-                &tempo_map,
-                sample_rate,
-                &event_tx,
+            // Panic supervision: a panicking render must still emit the
+            // path's terminal error event (see `crate::supervise`). The
+            // exclusive `OfflineRenderGuard` is taken inside
+            // `measure_mix` and drops during the unwind, so the panic
+            // path releases the renderer like the error path does.
+            let panic_tx = event_tx.clone();
+            crate::supervise::run_supervised(
+                "measure-mix",
+                || {
+                    measure_mix(
+                        measure_id,
+                        targets,
+                        range,
+                        source,
+                        &shared,
+                        &tracks,
+                        &busses,
+                        &master,
+                        &clips,
+                        &midi_clips,
+                        &plugins,
+                        &tempo_map,
+                        sample_rate,
+                        &event_tx,
+                    );
+                },
+                |message| {
+                    let _ = panic_tx.send(AudioEvent::MixMeasureError {
+                        measure_id,
+                        message,
+                    });
+                },
             );
         })
         .expect("spawn measure-mix thread");

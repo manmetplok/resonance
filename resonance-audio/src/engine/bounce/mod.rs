@@ -219,23 +219,36 @@ pub(crate) fn export_spawn(
     std::thread::Builder::new()
         .name("export".into())
         .spawn(move || {
-            let _offline = OfflineRenderGuard::mark(&shared);
-            run_export(
-                path,
-                &settings,
-                reporter,
-                &shared,
-                &cancel_render,
-                &tracks,
-                &busses,
-                &master,
-                &clips,
-                &midi_clips,
-                &plugins,
-                &tempo_map,
-                &automation,
-                sample_rate,
-                &event_tx,
+            // A panic anywhere in the offline mixer (third-party CLAP
+            // `process()` included) must still resolve the export with a
+            // terminal event, or the app's modal and a control client's
+            // `job_wait` hang forever. Report it through the same
+            // reporter expected failures use; `Io` is the closest
+            // existing kind for "the render died mid-run".
+            let panic_tx = event_tx.clone();
+            crate::supervise::run_supervised(
+                "export",
+                || {
+                    let _offline = OfflineRenderGuard::mark(&shared);
+                    run_export(
+                        path,
+                        &settings,
+                        reporter,
+                        &shared,
+                        &cancel_render,
+                        &tracks,
+                        &busses,
+                        &master,
+                        &clips,
+                        &midi_clips,
+                        &plugins,
+                        &tempo_map,
+                        &automation,
+                        sample_rate,
+                        &event_tx,
+                    );
+                },
+                |message| reporter.error(&panic_tx, ExportErrorKind::Io, message),
             );
         })
         .expect("spawn export thread");
@@ -271,24 +284,35 @@ pub(crate) fn to_audio_clip_spawn(
     std::thread::Builder::new()
         .name("bounce-in-place".into())
         .spawn(move || {
-            let _offline = OfflineRenderGuard::mark(&shared);
-            to_audio_clip(
-                source_track_id,
-                target_track_id,
-                target_clip_id,
-                name,
-                &shared,
-                &cancel_render,
-                &tracks,
-                &busses,
-                &master,
-                &clips,
-                &midi_clips,
-                &plugins,
-                &tempo_map,
-                &automation,
-                sample_rate,
-                &event_tx,
+            // Panic supervision: a panicking render must still emit the
+            // path's terminal error event (see `crate::supervise`).
+            let panic_tx = event_tx.clone();
+            crate::supervise::run_supervised(
+                "bounce-in-place",
+                || {
+                    let _offline = OfflineRenderGuard::mark(&shared);
+                    to_audio_clip(
+                        source_track_id,
+                        target_track_id,
+                        target_clip_id,
+                        name,
+                        &shared,
+                        &cancel_render,
+                        &tracks,
+                        &busses,
+                        &master,
+                        &clips,
+                        &midi_clips,
+                        &plugins,
+                        &tempo_map,
+                        &automation,
+                        sample_rate,
+                        &event_tx,
+                    );
+                },
+                |message| {
+                    let _ = panic_tx.send(AudioEvent::TrackBounceError(message));
+                },
             );
         })
         .expect("spawn bounce-in-place thread");
@@ -323,26 +347,37 @@ pub fn to_freeze_cache_spawn(
     std::thread::Builder::new()
         .name("freeze-render".into())
         .spawn(move || {
-            let _offline = OfflineRenderGuard::mark(&shared);
-            let mut progress = |fraction: f32| {
-                let _ = event_tx.send(AudioEvent::FreezeProgress { track_id, fraction });
-            };
-            let result = to_freeze_cache(
-                track_id,
-                cache_path,
-                &shared,
-                &cancel_render,
-                &tracks,
-                &busses,
-                &master,
-                &clips,
-                &midi_clips,
-                &plugins,
-                &tempo_map,
-                sample_rate,
-                &mut progress,
+            // Panic supervision: a panicking render must still emit the
+            // path's terminal error event (see `crate::supervise`).
+            let panic_tx = event_tx.clone();
+            crate::supervise::run_supervised(
+                "freeze-render",
+                || {
+                    let _offline = OfflineRenderGuard::mark(&shared);
+                    let mut progress = |fraction: f32| {
+                        let _ = event_tx.send(AudioEvent::FreezeProgress { track_id, fraction });
+                    };
+                    let result = to_freeze_cache(
+                        track_id,
+                        cache_path,
+                        &shared,
+                        &cancel_render,
+                        &tracks,
+                        &busses,
+                        &master,
+                        &clips,
+                        &midi_clips,
+                        &plugins,
+                        &tempo_map,
+                        sample_rate,
+                        &mut progress,
+                    );
+                    let _ = event_tx.send(freeze_terminal_event(track_id, result));
+                },
+                |message| {
+                    let _ = panic_tx.send(AudioEvent::FreezeError { track_id, message });
+                },
             );
-            let _ = event_tx.send(freeze_terminal_event(track_id, result));
         })
         .expect("spawn freeze-render thread");
     cancel
