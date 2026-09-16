@@ -355,6 +355,23 @@ fn plugin_edit_target(
 }
 
 impl crate::Resonance {
+    /// True while a control client's OFFLINE measurement job
+    /// (`meter.measure` / `meter.stems` with source `"render"`) is still
+    /// rendering.
+    ///
+    /// An offline measurement holds the offline renderer exclusively
+    /// (`OfflineRenderGuard::try_acquire_exclusive`) and refuses to start
+    /// while a bounce / freeze / export runs — but the file-writing
+    /// renderers `mark()` unconditionally, so the exclusion has to be
+    /// enforced in the app in this direction too: every bounce / freeze /
+    /// export START path checks this and refuses, otherwise two offline
+    /// renderers would drive `process()` / `reset()` on the same live
+    /// CLAP plugin instances concurrently — exactly the corruption the
+    /// guard exists to prevent.
+    pub(crate) fn offline_measure_in_progress(&self) -> bool {
+        self.control.jobs.has_live_offline_measure()
+    }
+
     /// The track owning a MIDI clip, by clip id.
     fn track_of_midi_clip(
         &self,

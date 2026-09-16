@@ -8,7 +8,7 @@
 //! audio to a correct WAV, the source clips are left untouched, and
 //! progress / cooperative cancel behave.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -120,6 +120,7 @@ fn known_track_renders_non_silent_wav() {
         1,
         path.to_string_lossy().into_owned(),
         &state.shared,
+        &AtomicBool::new(false),
         &state.tracks,
         &state.busses,
         &state.master,
@@ -176,6 +177,7 @@ fn freeze_does_not_mutate_source_clips() {
         1,
         path.to_string_lossy().into_owned(),
         &state.shared,
+        &AtomicBool::new(false),
         &state.tracks,
         &state.busses,
         &state.master,
@@ -238,6 +240,7 @@ fn fingerprint_changes_when_notes_change() {
             1,
             path.to_string_lossy().into_owned(),
             &state.shared,
+            &AtomicBool::new(false),
             &state.tracks,
             &state.busses,
             &state.master,
@@ -266,15 +269,17 @@ fn cancel_aborts_and_removes_partial_file() {
     let path = tmp_path("cancel");
     let _ = std::fs::remove_file(&path);
 
-    // The renderer clears any stale cancel flag at start, so cancellation
-    // must arrive mid-render. The progress callback fires inside the
-    // render loop — flip the flag from there and the next chunk's
-    // cooperative check aborts (mirrors the engine thread flipping it).
-    let shared = Arc::clone(&state.shared);
+    // The progress callback fires inside the render loop — flip this
+    // render's own token from there and the next chunk's cooperative
+    // check aborts (mirrors `CancelFreeze` flipping it from the engine
+    // thread via `HandlerState::freeze_cancel`).
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_from_progress = Arc::clone(&cancel);
     let result = to_freeze_cache(
         1,
         path.to_string_lossy().into_owned(),
         &state.shared,
+        &cancel,
         &state.tracks,
         &state.busses,
         &state.master,
@@ -283,7 +288,7 @@ fn cancel_aborts_and_removes_partial_file() {
         &state.plugins,
         &state.tempo_map,
         SR,
-        &mut |_| shared.bounce_cancel.store(true, Ordering::SeqCst),
+        &mut |_| cancel_from_progress.store(true, Ordering::SeqCst),
     );
 
     match result {
@@ -294,8 +299,110 @@ fn cancel_aborts_and_removes_partial_file() {
         Ok(_) => panic!("pre-armed cancel must abort the freeze"),
     }
     assert!(!path.exists(), "cancelled freeze must remove the partial WAV");
-    // The cancel flag is reset so the next freeze starts fresh.
-    assert!(!state.shared.bounce_cancel.load(Ordering::SeqCst));
+}
+
+/// Bug-B regression (cross-cancel): a cancel aimed at a DIFFERENT render's
+/// token must not abort this freeze. With the old shared
+/// `SharedState::bounce_cancel` flag, a `CancelBounce` meant for a
+/// concurrently-running export was polled-and-cleared by whichever render
+/// checked first, aborting the wrong one.
+#[test]
+fn cancelling_another_renders_token_does_not_abort_the_freeze() {
+    let state = state_with_tone_track();
+    let path = tmp_path("cross_cancel");
+    let _ = std::fs::remove_file(&path);
+
+    // Stand-in for a concurrently-running export's own token.
+    let other_render_cancel = Arc::new(AtomicBool::new(false));
+    let flip_other = Arc::clone(&other_render_cancel);
+    let result = to_freeze_cache(
+        1,
+        path.to_string_lossy().into_owned(),
+        &state.shared,
+        &AtomicBool::new(false),
+        &state.tracks,
+        &state.busses,
+        &state.master,
+        &state.clips,
+        &state.midi_clips,
+        &state.plugins,
+        &state.tempo_map,
+        SR,
+        // Mid-render, cancel the OTHER render — this freeze must not care.
+        &mut |_| flip_other.store(true, Ordering::SeqCst),
+    );
+
+    result.expect("a cancel aimed at another render must not abort this freeze");
+    assert!(path.exists(), "the un-cancelled freeze must write its cache");
+    assert!(
+        other_render_cancel.load(Ordering::SeqCst),
+        "the other render's cancel must still be pending, not consumed"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Bug-B regression (lost cancel): a pending cancel must survive another
+/// render starting. The old shared flag was cleared unconditionally at
+/// every renderer's start, so `CancelFreeze` -> new export start -> freeze
+/// poll ran the freeze to completion.
+#[test]
+fn a_pending_cancel_survives_another_render_starting() {
+    let state = state_with_tone_track();
+
+    // A cancel has landed on the in-flight freeze's token…
+    let freeze_cancel = Arc::new(AtomicBool::new(false));
+    freeze_cancel.store(true, Ordering::SeqCst);
+
+    // …then a different render starts (fresh token) and runs to
+    // completion. It must neither consume nor clear the freeze's cancel.
+    let path_other = tmp_path("lost_cancel_other");
+    let _ = std::fs::remove_file(&path_other);
+    to_freeze_cache(
+        1,
+        path_other.to_string_lossy().into_owned(),
+        &state.shared,
+        &AtomicBool::new(false),
+        &state.tracks,
+        &state.busses,
+        &state.master,
+        &state.clips,
+        &state.midi_clips,
+        &state.plugins,
+        &state.tempo_map,
+        SR,
+        &mut |_| {},
+    )
+    .expect("the other render must complete despite the pending cancel");
+    let _ = std::fs::remove_file(&path_other);
+
+    assert!(
+        freeze_cancel.load(Ordering::SeqCst),
+        "another render starting must not clear a pending cancel"
+    );
+
+    // The cancelled freeze's next poll still sees its cancel and aborts.
+    let path = tmp_path("lost_cancel");
+    let _ = std::fs::remove_file(&path);
+    let result = to_freeze_cache(
+        1,
+        path.to_string_lossy().into_owned(),
+        &state.shared,
+        &freeze_cancel,
+        &state.tracks,
+        &state.busses,
+        &state.master,
+        &state.clips,
+        &state.midi_clips,
+        &state.plugins,
+        &state.tempo_map,
+        SR,
+        &mut |_| {},
+    );
+    assert!(
+        result.is_err(),
+        "the render holding the cancelled token must abort"
+    );
+    assert!(!path.exists(), "the aborted freeze must not leave a file");
 }
 
 #[test]
@@ -308,6 +415,7 @@ fn freeze_refuses_while_transport_playing() {
         1,
         path.to_string_lossy().into_owned(),
         &state.shared,
+        &AtomicBool::new(false),
         &state.tracks,
         &state.busses,
         &state.master,
@@ -335,6 +443,7 @@ fn missing_source_track_errors() {
         42,
         path.to_string_lossy().into_owned(),
         &state.shared,
+        &AtomicBool::new(false),
         &state.tracks,
         &state.busses,
         &state.master,

@@ -17,7 +17,7 @@
 //! Plugin-free: tracks carry plain DC audio clips, so the rendered PCM
 //! is known and every assertion is deterministic.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -95,6 +95,29 @@ impl EngineState {
         include_fx_tail: bool,
         event_tx: &Sender<AudioEvent>,
     ) {
+        // A run nobody cancels: fresh token, like every spawned export.
+        self.export_with_cancel(
+            targets,
+            range,
+            out_rate,
+            bit_depth,
+            include_fx_tail,
+            &AtomicBool::new(false),
+            event_tx,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn export_with_cancel(
+        &self,
+        targets: Vec<StemTarget>,
+        range: Option<(SamplePos, SamplePos)>,
+        out_rate: u32,
+        bit_depth: StemBitDepth,
+        include_fx_tail: bool,
+        cancel: &AtomicBool,
+        event_tx: &Sender<AudioEvent>,
+    ) {
         export_stems(
             targets,
             range,
@@ -102,6 +125,7 @@ impl EngineState {
             bit_depth,
             include_fx_tail,
             &self.shared,
+            cancel,
             &self.tracks,
             &self.busses,
             &self.master,
@@ -320,9 +344,9 @@ fn refuses_to_export_while_transport_playing() {
 #[test]
 fn cancel_flag_stops_the_queue_and_reports_finished_stems() {
     let state = two_track_project();
-    // Flag set before the run: the worker polls it at the top of the
-    // first target and stops before rendering anything.
-    state.shared.bounce_cancel.store(true, Ordering::SeqCst);
+    // This run's own token set before it starts: the worker polls it at
+    // the top of the first target and stops before rendering anything.
+    let cancel = AtomicBool::new(true);
     let p1 = tmp_path("cancel_t1");
     let _ = std::fs::remove_file(&p1);
 
@@ -332,7 +356,15 @@ fn cancel_flag_stops_the_queue_and_reports_finished_stems() {
     }];
 
     let (tx, rx) = crossbeam_channel::unbounded::<AudioEvent>();
-    state.export(targets, Some((0, 300)), SR, StemBitDepth::Float32, false, &tx);
+    state.export_with_cancel(
+        targets,
+        Some((0, 300)),
+        SR,
+        StemBitDepth::Float32,
+        false,
+        &cancel,
+        &tx,
+    );
     let events = drain(&rx);
 
     assert!(!p1.exists(), "a cancelled target writes nothing");
@@ -342,9 +374,40 @@ fn cancel_flag_stops_the_queue_and_reports_finished_stems() {
         }
         other => panic!("expected a single StemExportCancelled, got {other:?}"),
     }
-    // The flag is consumed so the next export starts clean.
+}
+
+/// Bug-B regression: a cancel pending on a DIFFERENT render's token (e.g.
+/// `CancelFreeze` fired at a concurrently-running freeze) neither aborts
+/// this stem export nor is consumed by it. The old shared
+/// `SharedState::bounce_cancel` flag failed both ways: whichever render
+/// polled first cleared the flag and aborted itself.
+#[test]
+fn a_freezes_pending_cancel_neither_aborts_nor_is_consumed_by_a_stem_export() {
+    let state = two_track_project();
+    // Stand-in for a concurrent freeze's own token, already cancelled.
+    let freeze_cancel = AtomicBool::new(true);
+    let p1 = tmp_path("cross_cancel_t1");
+    let _ = std::fs::remove_file(&p1);
+
+    let targets = vec![StemTarget {
+        source: StemSource::Track(1),
+        path: p1.to_str().unwrap().to_string(),
+    }];
+
+    let (tx, rx) = crossbeam_channel::unbounded::<AudioEvent>();
+    // The export runs on its OWN fresh token (the default helper), while
+    // the freeze's cancelled token sits untouched next to it.
+    state.export(targets, Some((0, 300)), SR, StemBitDepth::Float32, false, &tx);
+    let events = drain(&rx);
+
+    assert!(p1.exists(), "the export must complete, not absorb the freeze's cancel");
     assert!(
-        !state.shared.bounce_cancel.load(Ordering::SeqCst),
-        "cancel flag is reset after firing"
+        matches!(events.last(), Some(AudioEvent::StemExportComplete { .. })),
+        "expected StemExportComplete, got {events:?}"
     );
+    assert!(
+        freeze_cancel.load(Ordering::SeqCst),
+        "the freeze's pending cancel must survive the export's start and finish"
+    );
+    let _ = std::fs::remove_file(&p1);
 }

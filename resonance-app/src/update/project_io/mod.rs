@@ -43,8 +43,21 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             return dialogs::bounce_dialog();
         }
         ProjectIoMessage::BouncePathSelected(Some(path)) => {
-            r.io.bouncing = true;
-            let _ = r.engine.send(AudioCommand::BounceToWav { path });
+            // An offline control measurement holds the offline renderer
+            // exclusively (`OfflineRenderGuard::try_acquire_exclusive`);
+            // starting a WAV bounce on top of it would drive the same
+            // live plugin instances from two renderers at once. Refuse,
+            // mirroring how `meter.measure` refuses while a bounce runs.
+            // (The control `render.mixdown` path refuses in its own
+            // busy_guard before reaching this message; this covers the
+            // bounce dialog.)
+            if r.offline_measure_in_progress() {
+                r.error_message =
+                    Some("A measurement is in progress; bounce again when it finishes".into());
+            } else {
+                r.io.bouncing = true;
+                let _ = r.engine.send(AudioCommand::BounceToWav { path });
+            }
         }
         ProjectIoMessage::BouncePathSelected(None) => {}
         ProjectIoMessage::SaveProject => {

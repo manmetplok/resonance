@@ -628,6 +628,11 @@ fn source_guard(
     // artefact: the engine's `OfflineRenderGuard` refuses the second
     // outright. A synchronous `busy` says so before a job is registered,
     // instead of handing the caller a job id that is only going to fail.
+    // The exclusion is mutual: while an offline measurement is live,
+    // every bounce / freeze / export START path refuses via
+    // `Resonance::offline_measure_in_progress` (the file-writing
+    // renderers only `mark()` the engine-side guard, so the app has to
+    // enforce this direction).
     if app.control.jobs.has_live_offline_measure() {
         return Some(RpcError::busy("a measurement is already in progress"));
     }

@@ -493,6 +493,15 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
         r.bounce_dialog = Some(dialog);
         return;
     }
+    // A realtime bounce plays the project live while an offline control
+    // measurement is rendering through the same plugin instances — the
+    // same conflict the offline renderers have (see
+    // `offline_measure_in_progress`), so it refuses too.
+    if r.offline_measure_in_progress() {
+        r.error_message = Some("A measurement is in progress; bounce again when it finishes".into());
+        r.bounce_dialog = Some(dialog);
+        return;
+    }
 
     let source_name = source.name.clone();
     let target_track_id = r.registry.allocate_sub_track_id();
@@ -577,6 +586,14 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
     };
     if r.transport.playing {
         r.error_message = Some("Stop transport before bouncing".into());
+        return;
+    }
+    // An offline control measurement holds the offline renderer
+    // exclusively; a bounce on top of it would drive the same live
+    // plugin instances from two renderers at once (mirrors
+    // `meter.measure` refusing while a bounce runs).
+    if r.offline_measure_in_progress() {
+        r.error_message = Some("A measurement is in progress; bounce again when it finishes".into());
         return;
     }
 

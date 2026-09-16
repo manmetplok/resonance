@@ -16,14 +16,15 @@
 //!   write emits [`AudioEvent::StemExportTargetError`] but the already-
 //!   written stems stay on disk and the queue continues, so the app can
 //!   offer "retry remaining".
-//! * Cancel is cooperative *between* targets: the worker polls
-//!   `shared.bounce_cancel` (set by `AudioCommand::CancelStemExport`)
-//!   before each target and stops, leaving finished stems on disk and
-//!   reporting them via [`AudioEvent::StemExportCancelled`].
+//! * Cancel is cooperative *between* targets: the worker polls this
+//!   export's own cancel token (set by `AudioCommand::CancelStemExport`
+//!   via `HandlerState::stem_cancel`) before each target and stops,
+//!   leaving finished stems on disk and reporting them via
+//!   [`AudioEvent::StemExportCancelled`].
 //!
 //! [`AudioCommand::ExportStems`]: crate::types::AudioCommand::ExportStems
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -58,6 +59,7 @@ pub fn export_stems(
     bit_depth: StemBitDepth,
     include_fx_tail: bool,
     shared: &Arc<SharedState>,
+    cancel: &AtomicBool,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
@@ -106,9 +108,9 @@ pub fn export_stems(
 
     for (index, target) in targets.iter().enumerate() {
         // Cooperative cancel between targets — `CancelStemExport` flips
-        // this flag from the engine thread. Stems already written stay.
-        if shared.bounce_cancel.load(Ordering::Relaxed) {
-            shared.bounce_cancel.store(false, Ordering::Relaxed);
+        // this export's own token from the engine thread (never cleared
+        // here: the token dies with this run). Stems already written stay.
+        if cancel.load(Ordering::Relaxed) {
             let _ = event_tx.send(AudioEvent::StemExportCancelled { files: written });
             return;
         }
@@ -158,9 +160,10 @@ pub fn export_stems(
 
 /// Spawn [`export_stems`] on a dedicated worker thread so the engine
 /// dispatch loop stays responsive (rendering N stems can take seconds);
-/// same rationale as [`super::to_wav_spawn`]. The worker polls
-/// `shared.bounce_cancel` between targets, so `CancelStemExport` is
-/// delivered through the dispatch loop while the render runs.
+/// same rationale as [`super::to_wav_spawn`]. Returns this export's
+/// freshly-created cancel token; the worker polls it between targets, so
+/// `CancelStemExport` is delivered through the dispatch loop while the
+/// render runs and can never abort a different render's run.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn export_stems_spawn(
     targets: Vec<StemTarget>,
@@ -178,7 +181,9 @@ pub(crate) fn export_stems_spawn(
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     engine_rate: u32,
     event_tx: Sender<AudioEvent>,
-) {
+) -> Arc<AtomicBool> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_render = Arc::clone(&cancel);
     std::thread::Builder::new()
         .name("export-stems".into())
         .spawn(move || {
@@ -190,6 +195,7 @@ pub(crate) fn export_stems_spawn(
                 bit_depth,
                 include_fx_tail,
                 &shared,
+                &cancel_render,
                 &tracks,
                 &busses,
                 &master,
@@ -202,4 +208,5 @@ pub(crate) fn export_stems_spawn(
             );
         })
         .expect("spawn export-stems thread");
+    cancel
 }

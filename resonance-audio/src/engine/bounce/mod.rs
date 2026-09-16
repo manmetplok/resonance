@@ -19,6 +19,7 @@
 //! per-bus plugin chain and routing. They reset every plugin once at
 //! the start so plugin internal state is deterministic.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -69,7 +70,10 @@ pub(crate) use wav::{run_export, ExportReporter};
 /// [`mark`](Self::mark) always succeeds and just counts (the file-writing
 /// renderers keep their existing behaviour);
 /// [`try_acquire_exclusive`](Self::try_acquire_exclusive) succeeds only
-/// when nothing else is rendering.
+/// when nothing else is rendering. Because `mark` is unconditional, the
+/// reverse exclusion — no bounce / freeze / export starting while a
+/// measurement holds the renderer — is enforced app-side at every render
+/// START path (`Resonance::offline_measure_in_progress`).
 pub(crate) struct OfflineRenderGuard {
     shared: Arc<SharedState>,
 }
@@ -156,11 +160,15 @@ pub fn to_wav(
     // Test-only shim with no automation snapshot to thread; render with an
     // empty one (the automation-aware paths go through `export_spawn`).
     let automation = super::AutomationSnapshot::default();
+    // Direct synchronous call — nothing can cancel it, so hand the
+    // renderer a token nobody else holds.
+    let cancel = AtomicBool::new(false);
     run_export(
         path,
         &crate::types::ExportSettings::default_wav(),
         ExportReporter::Bounce,
         shared,
+        &cancel,
         tracks,
         busses,
         master,
@@ -184,6 +192,11 @@ pub fn to_wav(
 /// events, byte-for-byte the old behaviour); `ExportAudio` uses
 /// [`ExportReporter::Export`] (`Export*` events with the encoded byte
 /// size).
+///
+/// Returns this render's freshly-created cancel token; flipping it to
+/// `true` aborts the render between chunks. The token belongs to this
+/// render alone, so cancelling it can never abort a different render
+/// and a pending cancel can never be cleared by a later render starting.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn export_spawn(
     path: String,
@@ -200,7 +213,9 @@ pub(crate) fn export_spawn(
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
-) {
+) -> Arc<AtomicBool> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_render = Arc::clone(&cancel);
     std::thread::Builder::new()
         .name("export".into())
         .spawn(move || {
@@ -210,6 +225,7 @@ pub(crate) fn export_spawn(
                 &settings,
                 reporter,
                 &shared,
+                &cancel_render,
                 &tracks,
                 &busses,
                 &master,
@@ -223,14 +239,15 @@ pub(crate) fn export_spawn(
             );
         })
         .expect("spawn export thread");
+    cancel
 }
 
 /// Spawn the bounce-in-place render on a dedicated worker thread, same
 /// rationale as [`export_spawn`]: a long render previously blocked the
 /// engine dispatch loop, making `CancelBounce` (and every other
 /// command) undeliverable until the clip finished. The worker observes
-/// `shared.bounce_cancel` between chunks and reports back through
-/// `event_tx`.
+/// the returned per-render cancel token between chunks and reports back
+/// through `event_tx`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn to_audio_clip_spawn(
     source_track_id: TrackId,
@@ -248,7 +265,9 @@ pub(crate) fn to_audio_clip_spawn(
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
-) {
+) -> Arc<AtomicBool> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_render = Arc::clone(&cancel);
     std::thread::Builder::new()
         .name("bounce-in-place".into())
         .spawn(move || {
@@ -259,6 +278,7 @@ pub(crate) fn to_audio_clip_spawn(
                 target_clip_id,
                 name,
                 &shared,
+                &cancel_render,
                 &tracks,
                 &busses,
                 &master,
@@ -272,16 +292,17 @@ pub(crate) fn to_audio_clip_spawn(
             );
         })
         .expect("spawn bounce-in-place thread");
+    cancel
 }
 
 /// Spawn the freeze render on a dedicated worker thread, same rationale as
 /// [`to_wav_spawn`]: the offline render blocks for hundreds of ms and would
 /// otherwise make `AudioCommand::CancelFreeze` (and every other command)
-/// undeliverable until the cache WAV finished. The worker observes
-/// `shared.bounce_cancel` between chunks (flipped by `CancelFreeze`) and
-/// reports back through `event_tx` with the `Freeze*` event family:
-/// `FreezeProgress` while rendering, then exactly one of `FreezeCompleted`,
-/// `FreezeCancelled`, or `FreezeError`.
+/// undeliverable until the cache WAV finished. The worker observes the
+/// returned per-render cancel token between chunks (flipped by
+/// `CancelFreeze`) and reports back through `event_tx` with the `Freeze*`
+/// event family: `FreezeProgress` while rendering, then exactly one of
+/// `FreezeCompleted`, `FreezeCancelled`, or `FreezeError`.
 #[allow(clippy::too_many_arguments)]
 pub fn to_freeze_cache_spawn(
     track_id: TrackId,
@@ -296,7 +317,9 @@ pub fn to_freeze_cache_spawn(
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
-) {
+) -> Arc<AtomicBool> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_render = Arc::clone(&cancel);
     std::thread::Builder::new()
         .name("freeze-render".into())
         .spawn(move || {
@@ -308,6 +331,7 @@ pub fn to_freeze_cache_spawn(
                 track_id,
                 cache_path,
                 &shared,
+                &cancel_render,
                 &tracks,
                 &busses,
                 &master,
@@ -321,4 +345,5 @@ pub fn to_freeze_cache_spawn(
             let _ = event_tx.send(freeze_terminal_event(track_id, result));
         })
         .expect("spawn freeze-render thread");
+    cancel
 }
