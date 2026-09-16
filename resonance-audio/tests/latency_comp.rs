@@ -427,26 +427,71 @@ fn apply_dry_resets_on_playhead_discontinuity() {
 #[test]
 fn delays_match_detects_unchanged_tables() {
     let comp = LatencyComp::new(10, &[(1, 10), (2, 0), (3, 4)], 0, &[]);
-    assert!(comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[], 0));
+    assert!(comp.delays_match(10, &[(1, 10), (2, 0), (3, 4)], 0, &[]));
     // Zero entries are irrelevant — they have no delay line.
-    assert!(comp.delays_match(&[(3, 4), (1, 10)], &[], 0));
-    assert!(!comp.delays_match(&[(1, 10), (3, 5)], &[], 0));
-    assert!(!comp.delays_match(&[(1, 10)], &[], 0));
-    assert!(!comp.delays_match(&[(1, 10), (3, 4), (4, 2)], &[], 0));
+    assert!(comp.delays_match(10, &[(3, 4), (1, 10)], 0, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10), (3, 5)], 0, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10)], 0, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10), (3, 4), (4, 2)], 0, &[]));
+    // A track-stage max change forces a republish even with identical
+    // per-track delays.
+    assert!(!comp.delays_match(12, &[(1, 10), (2, 0), (3, 4)], 0, &[]));
     // Bus-stage changes force a republish too.
-    assert!(!comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[], 5));
-    assert!(!comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[(7, 3)], 0));
+    assert!(!comp.delays_match(10, &[(1, 10), (2, 0), (3, 4)], 5, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10), (2, 0), (3, 4)], 0, &[(7, 3)]));
 
     let with_bus = LatencyComp::new(10, &[(1, 10)], 6, &[(7, 2)]);
-    assert!(with_bus.delays_match(&[(1, 10)], &[(7, 2)], 6));
-    assert!(!with_bus.delays_match(&[(1, 10)], &[(7, 2)], 4));
-    assert!(!with_bus.delays_match(&[(1, 10)], &[(7, 3)], 6));
+    assert!(with_bus.delays_match(10, &[(1, 10)], 6, &[(7, 2)]));
+    assert!(!with_bus.delays_match(10, &[(1, 10)], 4, &[(7, 2)]));
+    assert!(!with_bus.delays_match(10, &[(1, 10)], 6, &[(7, 3)]));
+    assert!(!with_bus.delays_match(8, &[(1, 10)], 6, &[(7, 2)]));
 
     let empty = LatencyComp::empty();
     assert!(empty.is_empty());
-    assert!(empty.delays_match(&[(1, 0), (2, 0)], &[], 0));
-    assert!(!empty.delays_match(&[(1, 1)], &[], 0));
-    assert!(!empty.delays_match(&[], &[], 3));
+    assert!(empty.delays_match(0, &[(1, 0), (2, 0)], 0, &[]));
+    assert!(!empty.delays_match(1, &[(1, 1)], 0, &[]));
+    assert!(!empty.delays_match(0, &[], 3, &[]));
+}
+
+#[test]
+fn delays_match_catches_track_max_change_with_identical_relative_delays() {
+    // Regression (delays_match ignored track_max): in a single-track
+    // project every relative delay is 0 forever — the sole track always
+    // sits at the max. Adding a 2048-sample lookahead limiter therefore
+    // changes no per-track delay entry, and a comparison over the
+    // non-zero delay sets alone would skip the republish, leaving
+    // max_latency == 0 / track_stage() == 0 stale (fader/pan/mute
+    // automation then evaluates ~42.7 ms early at 48k).
+    let empty = LatencyComp::empty();
+    let (track_max, track_delays) = compensation_delays(&[(1, 2048)]);
+    assert_eq!(track_max, 2048);
+    assert!(
+        track_delays.iter().all(|&(_, d)| d == 0),
+        "single track: all relative delays stay 0"
+    );
+    assert!(
+        !empty.delays_match(track_max, &track_delays, 0, &[]),
+        "a track-stage max change must force a republish"
+    );
+
+    let republished = LatencyComp::new(track_max, &track_delays, 0, &[]);
+    assert_eq!(republished.max_latency(), 2048);
+    assert_eq!(republished.track_stage(), 2048);
+    // The republished table matches its own inputs — the suppression
+    // still protects delay-line state on no-op topology edits.
+    assert!(republished.delays_match(track_max, &track_delays, 0, &[]));
+
+    // Same shape: all tracks carrying equal chain latency shift
+    // together, again without moving any relative delay.
+    let (max2, delays2) = compensation_delays(&[(1, 512), (2, 512)]);
+    assert!(delays2.iter().all(|&(_, d)| d == 0));
+    assert!(!republished.delays_match(max2, &delays2, 0, &[]));
+
+    // The max comparison clamps like the constructor does, so a
+    // beyond-limit chain doesn't republish forever.
+    let clamped = LatencyComp::new(MAX_COMP_LATENCY + 500, &[(1, 0)], 0, &[]);
+    assert_eq!(clamped.max_latency(), MAX_COMP_LATENCY);
+    assert!(clamped.delays_match(MAX_COMP_LATENCY + 500, &[(1, 0)], 0, &[]));
 }
 
 #[test]

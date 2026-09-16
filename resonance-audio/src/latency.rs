@@ -424,17 +424,25 @@ impl LatencyComp {
             .unwrap_or(0)
     }
 
-    /// True when the non-zero entries of both stages match this table
-    /// exactly — used by the engine thread to skip republishing (and
-    /// thereby resetting every delay line) on topology edits that don't
-    /// change any compensation amount.
+    /// True when both stage maxima and the non-zero entries of both
+    /// stages match this table exactly — used by the engine thread to
+    /// skip republishing (and thereby resetting every delay line) on
+    /// topology edits that don't change any compensation amount. The
+    /// maxima must be compared too, not just the per-id delays: a
+    /// topology change can shift every chain latency equally (single
+    /// track, all tracks equal, a multi-output parent's instrument),
+    /// leaving all *relative* delays identical while `max_latency` /
+    /// `track_stage()` move — those feed post-PDC automation timing and
+    /// must not go stale. Arguments mirror [`LatencyComp::new`].
     pub fn delays_match(
         &self,
+        track_max: u64,
         track_delays: &[(TrackId, u64)],
-        bus_delays: &[(BusId, u64)],
         bus_max: u64,
+        bus_delays: &[(BusId, u64)],
     ) -> bool {
         self.bus_stage == bus_max.min(MAX_COMP_LATENCY)
+            && self.max_latency == track_max.min(MAX_COMP_LATENCY) + self.bus_stage
             && stage_matches(&self.tracks, track_delays)
             && stage_matches(&self.busses, bus_delays)
     }
