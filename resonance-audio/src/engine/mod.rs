@@ -211,6 +211,20 @@ pub struct SharedState {
     /// cycle by the output process callback; 0 on the cpal fallback
     /// (which cannot report it — part of why it is a fallback).
     pub playback_latency_samples: AtomicU64,
+    /// Latched true by the output backend's error callback when the
+    /// output stream has died under a live engine — the sink vanished
+    /// (USB interface unplugged) or the audio server restarted. The
+    /// engine *thread* survives this, so the app's engine-death check
+    /// (`AudioEngine::is_disconnected`) never fires: the transport
+    /// appears to run and edits still ack while nothing is audible and
+    /// recording captures nothing. The app polls this flag instead
+    /// (via [`AudioEngine::output_stream_lost`]) to raise a persistent
+    /// banner. The native PipeWire backend clears it again when a
+    /// healthy `Streaming` state change follows the error (the graph
+    /// revived the stream); the cpal fallback's error callback reports
+    /// no recovery transition, so on that backend it stays set until
+    /// the app restarts.
+    pub output_stream_lost: AtomicBool,
     /// True from the moment a recording session arms its flags until
     /// the input callback pushes the session's first frames. That push
     /// latches the take's aligned start position into
@@ -385,6 +399,7 @@ impl Default for SharedState {
             master_latency_samples: AtomicU64::new(0),
             capture_latency_samples: AtomicU64::new(0),
             playback_latency_samples: AtomicU64::new(0),
+            output_stream_lost: AtomicBool::new(false),
             recording_start_pending: AtomicBool::new(false),
             recording_start_latch: AtomicU64::new(0),
             reference: reference::ReferenceMonitor::default(),
@@ -458,6 +473,11 @@ pub fn __reset_engine_disconnect_latch_for_test() {
 pub struct AudioEngine {
     cmd_tx: Sender<AudioCommand>,
     event_rx: Receiver<AudioEvent>,
+    /// The engine's shared atomics, kept on the handle so app-facing
+    /// accessors ([`AudioEngine::output_stream_lost`]) can read state
+    /// the output-backend callbacks publish without a command round
+    /// trip through an engine thread that may be busy.
+    shared: Arc<SharedState>,
     _stream: Option<cpal::Stream>,
     /// Native PipeWire output stream (the default backend). `None` when
     /// running on the cpal fallback (`_stream` is `Some` then) or in
@@ -779,6 +799,7 @@ impl AudioEngine {
         let build_cpal = |config: &cpal::StreamConfig| {
             let (mut mix, prod) = make_mixer(false);
             let underrun_limiter = Arc::clone(&underrun_limiter);
+            let shared_err = Arc::clone(&shared);
             let result = device.build_output_stream(
                 config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| mix(data, channels),
@@ -791,6 +812,16 @@ impl AudioEngine {
                         }
                     }
                     other => {
+                        // DeviceNotAvailable / StreamInvalidated / backend
+                        // errors: the stream is dead but the engine thread
+                        // is not, so without this flag the failure is
+                        // invisible to the app (the engine-death banner
+                        // keys off the command channel, which is fine).
+                        // cpal delivers no "recovered" callback, so the
+                        // flag stays set until the app restarts.
+                        shared_err
+                            .output_stream_lost
+                            .store(true, std::sync::atomic::Ordering::Release);
                         eprintln!("Audio stream error: {}", other);
                     }
                 },
@@ -949,6 +980,7 @@ impl AudioEngine {
         Ok(Self {
             cmd_tx,
             event_rx,
+            shared,
             _stream: stream,
             #[cfg(target_os = "linux")]
             pw_output,
@@ -990,6 +1022,33 @@ impl AudioEngine {
     /// matching on every individual `send`'s `Result`.
     pub fn is_disconnected(&self) -> bool {
         ENGINE_DISCONNECT_REPORTED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether the *output stream* is currently lost while the engine
+    /// thread is still alive — the sink vanished (USB interface
+    /// unplugged) or the audio server restarted, so nothing is audible
+    /// and recording captures nothing even though commands still ack.
+    ///
+    /// Distinct from [`AudioEngine::is_disconnected`], which only
+    /// reports the engine *thread* being gone. Published by the output
+    /// backends' error callbacks (`output_pipewire::on_state_changed`
+    /// and the cpal `err_fn`); per-engine rather than process-global,
+    /// and — unlike the disconnect latch — it clears again when the
+    /// PipeWire backend observes the stream come back, so poll it every
+    /// tick rather than latching the first `true`.
+    pub fn output_stream_lost(&self) -> bool {
+        self.shared
+            .output_stream_lost
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Test-only hook: force the output-stream-lost flag so app tests
+    /// can drive the banner logic without a real backend callback.
+    #[doc(hidden)]
+    pub fn __set_output_stream_lost_for_test(&self, lost: bool) {
+        self.shared
+            .output_stream_lost
+            .store(lost, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Best-effort synchronous shutdown handshake.
@@ -1054,6 +1113,7 @@ impl AudioEngine {
         Self {
             cmd_tx,
             event_rx,
+            shared: Arc::new(SharedState::default()),
             _stream: None,
             #[cfg(target_os = "linux")]
             pw_output: None,

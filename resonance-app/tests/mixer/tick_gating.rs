@@ -242,6 +242,22 @@ fn bpm_input_is_rewritten_when_the_tempo_actually_changes() {
 
 // -- Engine-death banner ----------------------------------------------------
 
+/// `AudioEngine::is_disconnected` reads a process-wide latch, so the
+/// test that trips it races every other banner test in this binary
+/// (libtest runs them on parallel threads): a trip landing mid-test
+/// would raise the engine-death banner inside an unrelated app.
+/// Every test that trips or asserts around that latch takes this lock
+/// and resets the latch under it.
+static ENGINE_LATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn engine_latch_guard() -> std::sync::MutexGuard<'static, ()> {
+    let guard = ENGINE_LATCH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    resonance_audio::__test_support::__reset_engine_disconnect_latch_for_test();
+    guard
+}
+
 /// Once the engine's command channel disconnects, every `let _ =
 /// r.engine.send(...)` call site in the app (there are dozens) silently
 /// drops its command — including MCP-driven edits that still ack success
@@ -249,10 +265,9 @@ fn bpm_input_is_rewritten_when_the_tempo_actually_changes() {
 /// standard persistent error banner, and never clear it again on its own.
 #[test]
 fn disconnected_engine_sets_banner_on_next_tick_and_it_persists() {
-    // `AudioEngine::is_disconnected` reads a process-wide one-shot latch;
-    // reset it so this test doesn't depend on whether some earlier test
-    // in the binary already tripped it.
-    resonance_audio::__test_support::__reset_engine_disconnect_latch_for_test();
+    // Serialize against the stream-lost tests and reset the process-wide
+    // latch so this test doesn't depend on prior test ordering.
+    let _guard = engine_latch_guard();
 
     let (mut app, _task) = Resonance::new_for_test_disconnected();
     assert!(
@@ -282,5 +297,98 @@ fn disconnected_engine_sets_banner_on_next_tick_and_it_persists() {
         app.test_error_message(),
         Some(banner.as_str()),
         "the banner must persist across subsequent ticks"
+    );
+}
+
+// -- Output-stream-lost banner ----------------------------------------------
+
+/// When the output *stream* dies (USB interface unplugged, PipeWire
+/// restarted) the engine thread stays alive, so the engine-death check
+/// never fires — the transport appears to run and edits still ack while
+/// nothing is audible. The tick handler must poll the backends'
+/// stream-lost flag into the same persistent banner, and — unlike engine
+/// death — clear it again when the backend reports the stream back.
+#[test]
+fn lost_output_stream_raises_banner_and_recovery_clears_it() {
+    // The engine-death check runs before the stream check and reads a
+    // process-wide latch; hold the lock so the test that trips it can't
+    // bleed a death banner into this app mid-test.
+    let _guard = engine_latch_guard();
+
+    let (mut app, _task) = Resonance::new_for_test();
+    app.test_update(Message::Tick);
+    assert!(
+        app.test_error_message().is_none(),
+        "no banner while the stream is healthy"
+    );
+
+    // The backend callback's job, done by hand: flag the stream lost.
+    app.engine.__set_output_stream_lost_for_test(true);
+    app.test_update(Message::Tick);
+    let banner = app
+        .test_error_message()
+        .expect("Tick must surface the stream-lost banner")
+        .to_string();
+    assert!(
+        banner.contains("output stream lost"),
+        "banner should name the failure, got {banner:?}"
+    );
+    assert!(
+        !banner.contains("engine stopped responding"),
+        "stream loss must be worded distinctly from engine death, got {banner:?}"
+    );
+
+    // Persists while the stream stays lost.
+    for _ in 0..5 {
+        app.test_update(Message::Tick);
+    }
+    assert_eq!(
+        app.test_error_message(),
+        Some(banner.as_str()),
+        "the banner must persist while the stream is still lost"
+    );
+
+    // PipeWire revived the stream (Streaming after Error): banner clears.
+    app.engine.__set_output_stream_lost_for_test(false);
+    app.test_update(Message::Tick);
+    assert!(
+        app.test_error_message().is_none(),
+        "recovery must clear the stream-lost banner"
+    );
+
+    // A second loss re-raises: the app-side flag is a raise tracker, not
+    // a one-shot latch like the engine-death one.
+    app.engine.__set_output_stream_lost_for_test(true);
+    app.test_update(Message::Tick);
+    assert_eq!(
+        app.test_error_message(),
+        Some(banner.as_str()),
+        "a later loss must raise the banner again"
+    );
+}
+
+/// Recovery must clear only the banner this check raised: an unrelated
+/// error that landed on `error_message` while the stream was down (the
+/// app has one error surface) must be left standing.
+#[test]
+fn stream_recovery_leaves_an_unrelated_error_banner_standing() {
+    let _guard = engine_latch_guard();
+
+    let (mut app, _task) = Resonance::new_for_test();
+
+    app.engine.__set_output_stream_lost_for_test(true);
+    app.test_update(Message::Tick);
+    assert!(app.test_error_message().is_some(), "loss raises the banner");
+
+    // An unrelated engine error overwrites the single error surface.
+    app.test_handle_engine_event(AudioEvent::Error("disk full".to_string()));
+    assert_eq!(app.test_error_message(), Some("disk full"));
+
+    app.engine.__set_output_stream_lost_for_test(false);
+    app.test_update(Message::Tick);
+    assert_eq!(
+        app.test_error_message(),
+        Some("disk full"),
+        "recovery must not clear an error it did not raise"
     );
 }
