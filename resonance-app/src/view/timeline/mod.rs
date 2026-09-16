@@ -391,6 +391,17 @@ pub struct TimelineFingerprint {
     /// toggle must repaint the canvas — without this the cached geometry
     /// goes stale the moment the caret is clicked.
     pub automation_expanded_hash: u64,
+    /// Order-independent hash of the track-group registry — per group its
+    /// `(id, ordered_members, nesting_parent, is_collapsed,
+    /// identity_color)` plus the group count. Groups reshape the cached
+    /// layer wholesale: the `ArrangeRowLayout` interleaves 60 px header
+    /// bands and drops a collapsed group's member rows, the band paints
+    /// the identity wash (or the #733 consolidated overview), and every
+    /// row below shifts Y. Without this, `GroupMessage::ToggleCollapse`
+    /// (header caret or canvas double-click) and drag-and-drop membership
+    /// edits leave the canvas drawing pre-toggle geometry until an
+    /// unrelated input happens to invalidate the cache.
+    pub groups_hash: u64,
 }
 
 impl<'a> TimelineCanvas<'a> {
@@ -501,6 +512,23 @@ impl<'a> TimelineCanvas<'a> {
                 acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
             });
 
+        // Same order-independent fold for the track-group registry (its
+        // backing `HashMap` has no stable iteration order): each group's
+        // layout- and paint-driving fields, folded over the group count so
+        // an empty registry can never collide with hashes that XOR to
+        // zero. Macro mute/solo/level are deliberately excluded — they
+        // cascade to the mixer, not to this canvas.
+        let mut groups_hash: u64 = self.track_groups.len() as u64;
+        for group in self.track_groups.get_all_groups() {
+            let mut gh = std::collections::hash_map::DefaultHasher::new();
+            group.id.hash(&mut gh);
+            group.ordered_members.hash(&mut gh);
+            group.nesting_parent.hash(&mut gh);
+            group.is_collapsed.hash(&mut gh);
+            group.identity_color.hash(&mut gh);
+            groups_hash ^= gh.finish();
+        }
+
         TimelineFingerprint {
             clips_len: self.clips.len(),
             midi_clips_len: self.midi_clips.len(),
@@ -538,6 +566,7 @@ impl<'a> TimelineCanvas<'a> {
             clips_hash,
             frozen_hash,
             automation_expanded_hash,
+            groups_hash,
         }
     }
 }
