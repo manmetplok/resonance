@@ -238,19 +238,86 @@ fn socket_job_wait_never_crosses_the_bridge() {
 // ---------------- retention ----------------
 
 #[test]
-fn disconnect_drops_the_connections_jobs() {
+fn disconnect_orphans_live_jobs_and_they_complete_normally() {
+    // The MCP client tears its connection down on ANY transport failure
+    // (a read timeout on an unrelated call included) and then tells the
+    // model to keep polling `job.status` with the same job id. The
+    // operation behind a live job is still running in the app, so the
+    // disconnect must orphan the job, not delete it — deleting it turned
+    // that documented recovery path into `not_found` mid-render.
     let mut app = app();
     let _ = app.update(Message::Control(ControlMessage::Connected { conn: 9 }));
     let started =
         app.start_control_job("project.save", "Save project", JobToken::ProjectSave, Some(9));
     let job_id = u64::from(started.job_id);
-    assert!(app.control_jobs().status(job_id).is_some());
+
+    let _ = app.update(Message::Control(ControlMessage::Disconnected { conn: 9 }));
+
+    // The reconnected client (`roundtrip` speaks as conn 1) still finds
+    // the job, live.
+    let status: JobStatus = roundtrip(&mut app, status_request(1, job_id))
+        .result()
+        .expect("a live job survives its connection");
+    assert_eq!(status.state, JobState::Pending);
+
+    // ... and the orphan completes through the normal update-loop path.
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectSaved(
+        Ok(()),
+        false,
+    )));
+    let status: JobStatus = roundtrip(&mut app, status_request(2, job_id))
+        .result()
+        .expect("status succeeds");
+    assert_eq!(status.state, JobState::Done);
+    assert_eq!(status.progress, Some(1.0));
+}
+
+#[test]
+fn disconnect_drops_the_connections_terminal_jobs() {
+    // Terminal jobs are a different matter: their result was for the
+    // departed client alone, so the disconnect reaps them as before.
+    let mut app = app();
+    let _ = app.update(Message::Control(ControlMessage::Connected { conn: 9 }));
+    let started =
+        app.start_control_job("project.save", "Save project", JobToken::ProjectSave, Some(9));
+    let job_id = u64::from(started.job_id);
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectSaved(
+        Ok(()),
+        false,
+    )));
+    assert_eq!(
+        app.control_jobs().status(job_id).expect("job known").state,
+        JobState::Done
+    );
 
     let _ = app.update(Message::Control(ControlMessage::Disconnected { conn: 9 }));
     let response = roundtrip(&mut app, status_request(1, job_id));
     assert_eq!(
         response.error.expect("dropped with its connection").kind(),
         ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn a_terminal_orphan_is_still_evicted_by_the_retention_cap() {
+    // An orphan must not dodge the LRU bound once it goes terminal, or
+    // flaky connections would grow the table forever.
+    let board = JobBoard::default();
+    let orphan = u64::from(
+        board
+            .start("project.save", "orphan-to-be", None, Some(9))
+            .job_id,
+    );
+    board.on_disconnect(9);
+    board.complete(orphan, serde_json::json!({ "ok": true }));
+
+    for i in 0..(MAX_RETAINED_JOBS + 20) {
+        let id = u64::from(board.start("test", &format!("op {i}"), None, None).job_id);
+        board.complete(id, serde_json::json!(i));
+    }
+    assert!(
+        board.status(orphan).is_none(),
+        "a terminal orphan is prunable like any other terminal job"
     );
 }
 

@@ -350,13 +350,17 @@ fn an_unrenderable_lane_does_not_block_the_rest() {
     assert!(error.message.contains("no notes"), "{}", error.message);
 }
 
-/// The render job belongs to the connection that asked for it, like every
-/// other control job: when that client disconnects mid-render, the job is
-/// reaped with the rest of its jobs instead of surviving ownerless (and
-/// later soaking up a failure that belongs to nobody).
+/// A mid-render disconnect must NOT delete the render job. The renders
+/// keep running in the app whether the socket lives or not, and the MCP
+/// client drops its connection on any transport failure while telling
+/// the model to keep polling `job.status` with the same (global) job id
+/// — so the job survives ownerless and resolves when its lanes land.
+/// (Surviving orphans no longer risk soaking up someone else's failure:
+/// `VocalAudioFailed` is lane-targeted, so an orphan only ever receives
+/// outcomes for lanes it is actually waiting on.)
 #[test]
-fn the_render_job_is_owned_by_its_connection_and_reaped_on_disconnect() {
-    let (mut app, _lanes) = three_lane_app();
+fn the_render_job_survives_a_mid_render_disconnect_and_resolves() {
+    let (mut app, lanes) = three_lane_app();
     let started: JobStarted = render(&mut app, Some(TRACK), None)
         .result()
         .expect("vocal.render starts a job");
@@ -364,15 +368,20 @@ fn the_render_job_is_owned_by_its_connection_and_reaped_on_disconnect() {
     assert_eq!(job_state(&mut app, job_id), JobState::Pending);
 
     // The requesting connection (the roundtrip helper's conn 1) closes
-    // mid-render: its jobs go with it, exactly as the project/save jobs do.
+    // mid-render. The job is orphaned, not reaped: a reconnected client
+    // (job_state also speaks as conn 1, now a fresh session) still finds
+    // it live.
     let _ = app.update(Message::Control(ControlMessage::Disconnected { conn: 1 }));
-    let response = roundtrip(
-        &mut app,
-        Request::new(99, "job.status", &serde_json::json!({ "job_id": job_id }))
-            .expect("params serialize"),
-    );
     assert_eq!(
-        response.error.expect("reaped with its connection").kind(),
-        ErrorKind::NotFound
+        job_state(&mut app, job_id),
+        JobState::Pending,
+        "a live render job must survive its connection for the reconnect-and-poll path"
     );
+
+    // The renders then land lane by lane, and the orphan resolves
+    // exactly as an owned job would.
+    for def in &lanes {
+        app.control_jobs().complete_vocal_lane(*def, TRACK, 0);
+    }
+    assert_eq!(job_state(&mut app, job_id), JobState::Done);
 }
