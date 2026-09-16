@@ -36,6 +36,13 @@ pub(super) struct State {
     pub(super) running: bool,
     pub(super) configured: bool,
     pub(super) needs_redraw: bool,
+    /// `Some(deadline)` while egui has asked for a repaint at a future
+    /// instant (`request_repaint_after` at or beyond the immediate
+    /// threshold — see [`plugin_gui_core::repaint`]). The event loop
+    /// bounds its parking budget on this and converts it into
+    /// `needs_redraw` once due; each painted frame re-plans it from that
+    /// frame's `repaint_delay`.
+    pub(super) repaint_at: Option<Instant>,
     /// `Some(when)` while a `wl_surface.frame()` callback requested at
     /// `when` is still outstanding. Painting is gated on this being
     /// `None`: the compositor tells us when it wants the next frame, so

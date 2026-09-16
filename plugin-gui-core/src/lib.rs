@@ -10,6 +10,7 @@
 //! - [`EditorOptions`] / [`EditorError`] — the `Editor::new` contract.
 //! - [`SharedSize`] — the applied-size feedback cell a runtime publishes into.
 //! - [`theme`] / [`widgets`] — the fleet palette and the pure widget set.
+//! - [`repaint`] — the shared egui repaint-request scheduling decision.
 
 // The module split mirrors the pre-extraction layout in wayland-plugin-gui
 // so the runtimes can keep referring to `app` / `error` / `size` as
@@ -19,6 +20,7 @@ pub mod app;
 #[doc(hidden)]
 pub mod error;
 mod options;
+pub mod repaint;
 #[doc(hidden)]
 pub mod size;
 pub mod theme;

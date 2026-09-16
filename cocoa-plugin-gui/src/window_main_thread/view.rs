@@ -21,13 +21,10 @@ use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMark
 use objc2_app_kit::{NSEvent, NSOpenGLPixelFormat, NSOpenGLView, NSTrackingArea, NSTrackingAreaOptions};
 use objc2_foundation::{NSRect, NSRunLoop, NSRunLoopCommonModes, NSTimer};
 
+use plugin_gui_core::repaint::{plan_repaint, repaint_due, RepaintPlan};
 use plugin_gui_core::{EditorApp, EditorError, SharedSize};
 
 use crate::input::{self, InputState};
-
-/// How soon egui must want a repaint for us to schedule one on the next
-/// display-link tick (same threshold as the Wayland runtime's paint loop).
-const REPAINT_SOON_MS: u64 = 50;
 
 /// The GL-side state built once in [`EditorView::init_gl`].
 struct PaintState {
@@ -59,6 +56,13 @@ pub(super) struct ViewIvars {
     /// Set when egui or input wants a frame; consumed by the display-link
     /// tick, which turns it into `setNeedsDisplay`.
     needs_repaint: Cell<bool>,
+    /// `Some(deadline)` while egui has asked for a repaint at a future
+    /// instant (`request_repaint_after` at or beyond the immediate
+    /// threshold — see [`plugin_gui_core::repaint`]). The 60 Hz tick
+    /// converts it into `needs_repaint` once due; each painted frame
+    /// re-plans it from that frame's `repaint_delay` (the Cocoa analog
+    /// of the Wayland runtime's `State::repaint_at`).
+    repaint_at: Cell<Option<Instant>>,
     /// A user close arrived while a frame (or modal loop) was in flight;
     /// handled on the next tick instead.
     close_requested: Cell<bool>,
@@ -227,6 +231,7 @@ impl EditorView {
             start_time: Instant::now(),
             in_paint: Cell::new(false),
             needs_repaint: Cell::new(true),
+            repaint_at: Cell::new(None),
             close_requested: Cell::new(false),
             on_close_fired: Cell::new(false),
             repaint_timer: RefCell::new(None),
@@ -378,6 +383,13 @@ impl EditorView {
             this.fire_on_close();
             super::destroy(this.ivars().editor_id);
             return;
+        }
+        // A due egui repaint deadline (planned at the end of
+        // `paint_inner`) becomes a repaint request; the timer's 60 Hz
+        // cadence is the polling resolution.
+        if repaint_due(Instant::now(), ivars.repaint_at.get()) {
+            ivars.repaint_at.set(None);
+            ivars.needs_repaint.set(true);
         }
         if ivars.needs_repaint.replace(false) {
             self.setNeedsDisplay(true);
@@ -637,15 +649,25 @@ impl EditorView {
             }
         }
 
-        // If egui wants a repaint soon, schedule one on the next tick.
+        // Schedule the repaint egui asked for. Immediate requests go
+        // out on the next tick (as before); finite longer delays become
+        // a deadline `tick` fires when due — previously anything at or
+        // over 50 ms was silently dropped, freezing low-rate animations
+        // (the drums editor's 10 Hz meter) and egui's ~500 ms caret
+        // blink. Same decision logic as the Wayland runtime.
         let repaint_after = full_output
             .viewport_output
             .values()
             .map(|v| v.repaint_delay)
             .min()
             .unwrap_or(std::time::Duration::from_millis(16));
-        if repaint_after < std::time::Duration::from_millis(REPAINT_SOON_MS) {
-            ivars.needs_repaint.set(true);
+        match plan_repaint(Instant::now(), repaint_after, ivars.repaint_at.get()) {
+            RepaintPlan::Now => {
+                ivars.needs_repaint.set(true);
+                ivars.repaint_at.set(None);
+            }
+            RepaintPlan::At(at) => ivars.repaint_at.set(Some(at)),
+            RepaintPlan::Idle => ivars.repaint_at.set(None),
         }
     }
 }
