@@ -14,7 +14,6 @@
 //! instead of competing with it, ids and names that join to
 //! `song.summary`, and one shared range across every entry.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{FreezeMessage, Message, ProjectIoMessage};
 use resonance_app::state::{FreezeStatus, TrackState, ViewMode};
 use resonance_app::{Resonance};
