@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use plugin_gui_core::repaint::{plan_repaint, RepaintPlan};
 use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::QueueHandle;
 
@@ -125,8 +126,10 @@ pub(super) fn apply_pending_resize(state: &mut State, egl_ctx: &mut EglContext) 
 
 /// Build one egui frame, paint it via `egui_glow`, and swap buffers.
 ///
-/// Returns `Ok(())` on success. `state.needs_redraw` is set to `true` again if
-/// egui requests another repaint within 50 ms.
+/// Returns `Ok(())` on success. An immediate egui repaint request sets
+/// `state.needs_redraw` again; a finite future one is stored as a
+/// `state.repaint_at` deadline the event loop wakes on (see
+/// [`plugin_gui_core::repaint`]).
 pub(super) fn paint_frame(
     state: &mut State,
     app: &mut dyn EditorApp,
@@ -301,15 +304,24 @@ pub(super) fn paint_frame(
 
     egl_ctx.swap_buffers()?;
 
-    // If egui wants a repaint soon, schedule one.
+    // Schedule the repaint egui asked for. Immediate requests redraw as
+    // soon as pacing allows (as before); finite longer delays become a
+    // deadline the event loop wakes on — previously anything at or over
+    // 50 ms was silently dropped, freezing low-rate animations (the
+    // drums editor's 10 Hz meter) and egui's ~500 ms caret blink.
     let repaint_after = full_output
         .viewport_output
         .values()
         .map(|v| v.repaint_delay)
         .min()
         .unwrap_or(Duration::from_millis(16));
-    if repaint_after < Duration::from_millis(50) {
-        state.needs_redraw = true;
+    match plan_repaint(Instant::now(), repaint_after, state.repaint_at) {
+        RepaintPlan::Now => {
+            state.needs_redraw = true;
+            state.repaint_at = None;
+        }
+        RepaintPlan::At(at) => state.repaint_at = Some(at),
+        RepaintPlan::Idle => state.repaint_at = None,
     }
 
     Ok(())

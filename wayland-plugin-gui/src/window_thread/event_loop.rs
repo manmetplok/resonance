@@ -3,6 +3,7 @@
 use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
+use plugin_gui_core::repaint::repaint_due;
 use smithay_client_toolkit::compositor::CompositorState;
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
@@ -161,6 +162,7 @@ impl EditorThread {
             running: true,
             configured: false,
             needs_redraw: true,
+            repaint_at: None,
             frame_callback_pending: None,
             close_requested: false,
             input: InputState::new(),
@@ -233,6 +235,14 @@ impl EditorThread {
         const IDLE_BUDGET: Duration = Duration::from_millis(500);
 
         while state.running {
+            // A due egui repaint deadline (request_repaint_after at or
+            // beyond the immediate threshold, planned in `paint_frame`)
+            // becomes a redraw request here, on the runtime's clock.
+            let now = Instant::now();
+            if repaint_due(now, state.repaint_at) {
+                state.repaint_at = None;
+                state.needs_redraw = true;
+            }
             let timeout = if state.visible && state.needs_redraw {
                 match state.frame_callback_pending {
                     // Waiting on the compositor: park until the callback
@@ -244,7 +254,15 @@ impl EditorThread {
                     None => Duration::ZERO,
                 }
             } else {
-                IDLE_BUDGET
+                // Idle, but never park past a pending repaint deadline —
+                // that is what turns a 10 Hz `request_repaint_after`
+                // animation into actual frames while the mouse is still.
+                match state.repaint_at {
+                    Some(at) => IDLE_BUDGET
+                        .min(at.saturating_duration_since(now))
+                        .max(Duration::from_millis(1)),
+                    None => IDLE_BUDGET,
+                }
             };
             if let Err(e) = event_loop.dispatch(timeout, &mut state) {
                 eprintln!("wayland-plugin-gui: dispatch error: {e}");
