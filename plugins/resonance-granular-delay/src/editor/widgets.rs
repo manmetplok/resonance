@@ -37,8 +37,8 @@
 //! colors).
 
 use egui::Ui;
-use wayland_plugin_gui::egui;
-use wayland_plugin_gui::widgets::{
+use plugin_gui_core::egui;
+use plugin_gui_core::widgets::{
     chip_styled, knob_themed, segmented_styled, Chip, ChipStyle, KnobStyle, SegmentedStyle,
     ThemedKnob,
 };

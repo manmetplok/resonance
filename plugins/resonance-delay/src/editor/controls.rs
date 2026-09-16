@@ -1,4 +1,4 @@
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::widgets::param_knob;
 use crate::params::DelayParams;

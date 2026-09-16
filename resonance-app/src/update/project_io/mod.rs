@@ -43,8 +43,21 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             return dialogs::bounce_dialog();
         }
         ProjectIoMessage::BouncePathSelected(Some(path)) => {
-            r.io.bouncing = true;
-            let _ = r.engine.send(AudioCommand::BounceToWav { path });
+            // An offline control measurement holds the offline renderer
+            // exclusively (`OfflineRenderGuard::try_acquire_exclusive`);
+            // starting a WAV bounce on top of it would drive the same
+            // live plugin instances from two renderers at once. Refuse,
+            // mirroring how `meter.measure` refuses while a bounce runs.
+            // (The control `render.mixdown` path refuses in its own
+            // busy_guard before reaching this message; this covers the
+            // bounce dialog.)
+            if r.offline_measure_in_progress() {
+                r.error_message =
+                    Some("A measurement is in progress; bounce again when it finishes".into());
+            } else {
+                r.io.bouncing = true;
+                let _ = r.engine.send(AudioCommand::BounceToWav { path });
+            }
         }
         ProjectIoMessage::BouncePathSelected(None) => {}
         ProjectIoMessage::SaveProject => {
@@ -75,7 +88,18 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::SavePathSelected(Some(path)) => {
-            let path = if path.ends_with(".rproj") {
+            // Case-insensitive: `Song.RPROJ` / `Song.Rproj` already carry
+            // the extension and must not be doubled into
+            // `Song.RPROJ.rproj`. Callers (the control `project.save` /
+            // `save_as` handlers included) may already have normalized
+            // this, but the check is repeated here so this handler stays
+            // correct standalone for its other caller, the rfd save
+            // dialog.
+            let has_rproj_ext = std::path::Path::new(&path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rproj"));
+            let path = if has_rproj_ext {
                 std::path::PathBuf::from(path)
             } else {
                 std::path::PathBuf::from(format!("{path}.rproj"))

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use resonance_metering::{AtomicF32, AtomicF32Pair};
 
 /// Number of points in the decimated waveform drawn by the editor.
 /// Fixed size so the editor can snapshot into a stack array without
@@ -56,10 +57,8 @@ impl IrSnapshot {
 }
 
 pub struct IrViz {
-    in_l_db: AtomicU32,
-    in_r_db: AtomicU32,
-    out_l_db: AtomicU32,
-    out_r_db: AtomicU32,
+    in_db: AtomicF32Pair,
+    out_db: AtomicF32Pair,
 
     /// Convolution block size the engine is *currently* running, in
     /// samples — which is the latency the plugin imposes right now (ba
@@ -70,7 +69,7 @@ pub struct IrViz {
     active_block: AtomicU32,
     /// Sample rate the engine was last initialized at, so the editor can
     /// turn `active_block` into milliseconds.
-    sample_rate: AtomicU32,
+    sample_rate: AtomicF32,
 
     /// Latest IR snapshot. `None` until the first IR finishes loading.
     snapshot: Mutex<Option<IrSnapshot>>,
@@ -79,12 +78,10 @@ pub struct IrViz {
 impl IrViz {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            in_l_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
-            in_r_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
-            out_l_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
-            out_r_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
+            in_db: AtomicF32Pair::new(f32::NEG_INFINITY),
+            out_db: AtomicF32Pair::new(f32::NEG_INFINITY),
             active_block: AtomicU32::new(0),
-            sample_rate: AtomicU32::new(0.0_f32.to_bits()),
+            sample_rate: AtomicF32::new(0.0),
             snapshot: Mutex::new(None),
         })
     }
@@ -93,8 +90,7 @@ impl IrViz {
     /// at. Called from `initialize()`.
     pub fn store_engine_block(&self, block_size: usize, sample_rate: f32) {
         self.active_block.store(block_size as u32, Ordering::Release);
-        self.sample_rate
-            .store(sample_rate.to_bits(), Ordering::Release);
+        self.sample_rate.store(sample_rate, Ordering::Release);
     }
 
     /// The block size the engine is running and the rate it runs at, or
@@ -102,7 +98,7 @@ impl IrViz {
     /// plugin the host has not activated yet.
     pub fn engine_block(&self) -> Option<(usize, f32)> {
         let block = self.active_block.load(Ordering::Acquire);
-        let sample_rate = f32::from_bits(self.sample_rate.load(Ordering::Acquire));
+        let sample_rate = self.sample_rate.load(Ordering::Acquire);
         if block == 0 || sample_rate.is_nan() || sample_rate <= 0.0 {
             return None;
         }
@@ -110,24 +106,16 @@ impl IrViz {
     }
 
     pub fn store_peaks(&self, in_l_db: f32, in_r_db: f32, out_l_db: f32, out_r_db: f32) {
-        self.in_l_db.store(in_l_db.to_bits(), Ordering::Relaxed);
-        self.in_r_db.store(in_r_db.to_bits(), Ordering::Relaxed);
-        self.out_l_db.store(out_l_db.to_bits(), Ordering::Relaxed);
-        self.out_r_db.store(out_r_db.to_bits(), Ordering::Relaxed);
+        self.in_db.store(in_l_db, in_r_db);
+        self.out_db.store(out_l_db, out_r_db);
     }
 
     pub fn read_in_peaks_db(&self) -> (f32, f32) {
-        (
-            f32::from_bits(self.in_l_db.load(Ordering::Relaxed)),
-            f32::from_bits(self.in_r_db.load(Ordering::Relaxed)),
-        )
+        self.in_db.load()
     }
 
     pub fn read_out_peaks_db(&self) -> (f32, f32) {
-        (
-            f32::from_bits(self.out_l_db.load(Ordering::Relaxed)),
-            f32::from_bits(self.out_r_db.load(Ordering::Relaxed)),
-        )
+        self.out_db.load()
     }
 
     pub fn store_snapshot(&self, snap: IrSnapshot) {

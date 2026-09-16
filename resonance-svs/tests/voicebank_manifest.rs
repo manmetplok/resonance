@@ -510,17 +510,16 @@ fn scan_wires_the_acoustic_embeds_into_curve_support() {
 // Real-bank assertions (env-gated, mirroring smoke.rs).
 // ---------------------------------------------------------------------------
 
-/// Scan an env-named real bank, or `None` (with a skip note) when unset.
-fn real_bank(env: &str) -> Option<VoicebankManifest> {
-    let path = std::env::var_os(env).map(PathBuf::from);
-    let Some(path) = path else {
-        eprintln!("{env} unset; skipping real-voicebank assertion");
-        return None;
-    };
+/// Scan an env-named real bank. Panics with the env var to set when it's unset — these
+/// tests are `#[ignore]`d, so a run that reaches this point asked for the real thing.
+fn real_bank(env: &str) -> VoicebankManifest {
+    let path = std::env::var_os(env)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("set {env} to a real voicebank directory, run with -- --ignored"));
     let m: VoicebankManifest = scan(&path).unwrap_or_else(|e| panic!("scan {env}: {e:#}"));
     m.validate()
         .unwrap_or_else(|e| panic!("validate {env}: {e:#}"));
-    Some(m)
+    m
 }
 
 fn assert_singers(m: &VoicebankManifest, env: &str, expected: usize) {
@@ -534,10 +533,9 @@ fn assert_singers(m: &VoicebankManifest, env: &str, expected: usize) {
 }
 
 #[test]
+#[ignore = "needs a voicebank: set SVS_TIGER_DIR, run with -- --ignored"]
 fn real_tiger_has_seven_singers() {
-    let Some(m) = real_bank("SVS_TIGER_DIR") else {
-        return;
-    };
+    let m = real_bank("SVS_TIGER_DIR");
     assert_singers(&m, "SVS_TIGER_DIR", 7);
     // The data-driven quirks must match TIGER's hardcoded behaviour.
     assert_eq!(m.phoneme_target, PhonemeTarget::Arpabet);
@@ -551,10 +549,9 @@ fn real_tiger_has_seven_singers() {
 }
 
 #[test]
+#[ignore = "needs a voicebank: set SVS_LILIA_DIR, run with -- --ignored"]
 fn real_lilia_is_single_speaker() {
-    let Some(m) = real_bank("SVS_LILIA_DIR") else {
-        return;
-    };
+    let m = real_bank("SVS_LILIA_DIR");
     assert_singers(&m, "SVS_LILIA_DIR", 0);
     assert_eq!(m.phoneme_target, PhonemeTarget::Arpabet);
     assert_eq!(m.substitute_phoneme("v"), "f", "Lilia lacks v -> f");
@@ -565,10 +562,9 @@ fn real_lilia_is_single_speaker() {
 }
 
 #[test]
+#[ignore = "needs a voicebank: set SVS_MEIJI_DIR, run with -- --ignored"]
 fn real_meiji_has_four_singers() {
-    let Some(m) = real_bank("SVS_MEIJI_DIR") else {
-        return;
-    };
+    let m = real_bank("SVS_MEIJI_DIR");
     assert_singers(&m, "SVS_MEIJI_DIR", 4);
     assert_eq!(m.phoneme_target, PhonemeTarget::Arpabet);
     // Universal bucket stays bare with language id 0; English is `en/` / 3.

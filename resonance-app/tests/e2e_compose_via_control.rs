@@ -147,6 +147,7 @@ fn parse_wav(path: &Path) -> (u64, u32, u16) {
 }
 
 #[test]
+#[ignore = "boots the real engine (PipeWire + installed CLAP plugins); run by hand: cargo test -p resonance-app --test e2e_compose_via_control -- --ignored"]
 fn compose_a_song_end_to_end_through_the_control_protocol() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut app = app();

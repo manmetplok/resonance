@@ -4,7 +4,7 @@
 //! held bins, and draws them as filled bars across a log-frequency axis.
 
 use resonance_metering::{SpectrumHandle, NUM_OCTAVE_BINS};
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 

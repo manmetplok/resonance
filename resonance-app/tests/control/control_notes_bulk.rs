@@ -7,7 +7,6 @@
 //! 400 read-after-write round trips. These tests pin down the single
 //! undo step, the reported indices, and read-your-own-writes.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::{MidiClipState, ViewMode};
 use resonance_app::{Resonance};
@@ -15,6 +14,7 @@ use resonance_audio::types::{MidiNote, TrackType};
 use resonance_control::methods::notes::InsertManyResult;
 use resonance_control::methods::song::NotesView;
 use resonance_control::{ErrorKind, Request, Response};
+use crate::common::{call, roundtrip};
 
 const SR: u32 = 48_000;
 const TPQ: u64 = 480;
@@ -48,20 +48,6 @@ fn note(pitch: u8, start_beats: u64, dur_beats: u64) -> MidiNote {
         start_tick: start_beats * TPQ,
         duration_ticks: dur_beats * TPQ,
     }
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn notes_of(app: &mut Resonance) -> NotesView {
@@ -196,6 +182,9 @@ fn replace_all_drops_the_previous_notes_in_one_step() {
         serde_json::json!({
             "clip_id": CLIP,
             "notes": [spec(72, 0.0, 2.0), spec(74, 2.0, 2.0)],
+            // The clip is non-empty, so the destructive rewrite needs the
+            // confirm the refusal tests (control_notes_confirm_caps) pin.
+            "confirm": true,
         }),
     );
     let result: InsertManyResult = response.result().expect("replace_all succeeds");
@@ -217,7 +206,7 @@ fn replace_all_with_an_empty_list_clears_the_clip() {
     let response = call(
         &mut app,
         "notes.replace_all",
-        serde_json::json!({ "clip_id": CLIP, "notes": [] }),
+        serde_json::json!({ "clip_id": CLIP, "notes": [], "confirm": true }),
     );
     let _: InsertManyResult = response.result().expect("replace_all succeeds");
     assert!(notes_of(&mut app).notes.is_empty());

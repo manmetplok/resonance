@@ -55,9 +55,9 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use resonance_dsp::FormantShifter;
 use resonance_music_theory::pitch::PitchClass;
-use resonance_music_theory::scale::{Mode, Scale};
+use resonance_music_theory::scale::Scale;
 
-use crate::types::{AudioClip, TuningScale, VocalTuning};
+use crate::types::{AudioClip, VocalTuning};
 
 /// Rebuild (or clear) the [`AudioClip::tuning_render_cache`] of every clip in
 /// `clips`, so the next render reads correctly-tuned audio. Call once before
@@ -152,7 +152,7 @@ pub fn pitch_ratio_curve(tuning: &VocalTuning, total_frames: usize) -> Vec<f32> 
 
     let scale = Scale::new(
         PitchClass::from_semitone(tuning.global.key),
-        to_mode(tuning.global.scale),
+        tuning.global.scale.to_mode(),
     );
     let global_amount = tuning.global.correction_amount.clamp(0.0, 1.0);
 
@@ -190,23 +190,6 @@ pub fn pitch_ratio_curve(tuning: &VocalTuning, total_frames: usize) -> Vec<f32> 
     }
 
     curve
-}
-
-/// Map the engine's dependency-free [`TuningScale`] onto the music-theory
-/// [`Mode`] whose interval table it mirrors. `Chromatic` disables snapping.
-fn to_mode(scale: TuningScale) -> Mode {
-    match scale {
-        TuningScale::Chromatic => Mode::Chromatic,
-        TuningScale::Major => Mode::Major,
-        TuningScale::Minor => Mode::Minor,
-        TuningScale::Dorian => Mode::Dorian,
-        TuningScale::Phrygian => Mode::Phrygian,
-        TuningScale::Lydian => Mode::Lydian,
-        TuningScale::Mixolydian => Mode::Mixolydian,
-        TuningScale::Locrian => Mode::Locrian,
-        TuningScale::HarmonicMinor => Mode::HarmonicMinor,
-        TuningScale::MelodicMinor => Mode::MelodicMinor,
-    }
 }
 
 /// Sample a note's per-analysis-frame cents-deviation contour at normalised

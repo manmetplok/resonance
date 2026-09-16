@@ -39,8 +39,8 @@ pub const MOVE: &str = "clip.move";
 /// correct while the render played the clip's WHOLE source. Such an edit
 /// is now parked and applied when the clip lands (ba doc #276 BUG 1).
 pub const TRIM: &str = "clip.trim";
-/// `clip.delete` — remove a clip from the timeline ([`DeleteParams`] ->
-/// `MutationAck`).
+/// `clip.delete` — remove a clip from the timeline; destructive,
+/// requires `"confirm": true` ([`DeleteParams`] -> `MutationAck`).
 pub const DELETE: &str = "clip.delete";
 /// `clip.split` — cut one audio clip in two at a timeline position
 /// ([`SplitParams`] -> [`SplitResult`]).
@@ -66,6 +66,12 @@ pub const METHODS: &[&str] = &[PLACE, MOVE, TRIM, SPLIT, DELETE, SET_GAIN, SET_F
 /// `-inf..=MAX_GAIN_DB` are clamped, not rejected.
 pub const MAX_GAIN_DB: f32 = 24.0;
 
+/// Largest `seconds` value an [`AmountSpec`] accepts — the counterpart
+/// of [`crate::methods::notes::MAX_BEATS`] for the absolute units. A
+/// million seconds is over eleven days of audio; a truly huge value
+/// would overflow the sample arithmetic downstream.
+pub const MAX_SECONDS: f64 = 1_000_000.0;
+
 /// A length, given in whichever unit suits the material. Exactly one
 /// field must be set; all of them unset, or more than one, is
 /// `invalid_params`.
@@ -74,6 +80,10 @@ pub const MAX_GAIN_DB: f32 = 24.0;
 /// so it tracks tempo changes the way the grid does. `seconds` and
 /// `samples` are absolute — the right choice for a one-shot or a loop
 /// that was not cut to this project's tempo.
+///
+/// `beats` is capped at [`crate::methods::notes::MAX_BEATS`] and
+/// `seconds` at [`MAX_SECONDS`]; anything larger is rejected as
+/// `invalid_params` rather than dispatched into overflowing arithmetic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AmountSpec {
@@ -270,6 +280,9 @@ pub struct SplitResult {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DeleteParams {
     pub clip_id: ClipId,
+    /// Required (`true`); the error otherwise summarizes what would be lost.
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// Params for `clip.set_gain`.

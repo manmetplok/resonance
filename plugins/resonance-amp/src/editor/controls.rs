@@ -21,7 +21,7 @@
 //! if a call site starts restating what `params.rs` declares.
 
 use resonance_plugin::editor_widgets;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::params::AmpParams;
 

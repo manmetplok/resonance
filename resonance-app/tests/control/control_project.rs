@@ -4,28 +4,14 @@
 //! guard, and job completion through the real update-loop / engine-event
 //! paths.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{Message, ProjectIoMessage};
-use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::AudioEvent;
 use resonance_control::job::{JobStarted, JobState, JobStatus};
 use resonance_control::{ErrorKind, Request, Response};
 use serde_json::json;
-
-fn app() -> Resonance {
-    Resonance::new_for_test_on(ViewMode::Arrange).0
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
+use crate::common::roundtrip;
+use crate::common::app_bare as app;
 
 fn request(id: i64, method: &str, params: serde_json::Value) -> Request {
     Request::new(id, method, &params).expect("params serialize")
@@ -331,6 +317,80 @@ fn saving_over_the_projects_own_path_needs_no_confirm() {
 }
 
 #[test]
+fn save_as_with_an_uppercase_extension_is_not_doubled() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let raw = dir.path().join("Song.RPROJ");
+
+    let mut app = app();
+    app.test_set_active_project(true);
+    let job = started_job(roundtrip(
+        &mut app,
+        request(
+            1,
+            "project.save_as",
+            json!({ "path": raw.display().to_string() }),
+        ),
+    ));
+
+    // `.RPROJ` is already the extension (case-insensitively): the path
+    // is used as-is, not doubled into `Song.RPROJ.rproj`.
+    assert_eq!(app.test_project_path(), Some(raw.as_path()));
+    assert_eq!(job_status(&mut app, job).state, JobState::Pending);
+
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectSaved(
+        Ok(()),
+        false,
+    )));
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Done);
+    let result = status.result.expect("done jobs carry a result");
+    assert_eq!(
+        result["path"].as_str().expect("path echoed"),
+        raw.display().to_string(),
+        "the original casing is preserved, not re-lowercased or doubled"
+    );
+}
+
+#[test]
+fn save_as_with_an_uppercase_extension_overwrite_confirm_targets_the_real_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    // The existing file sits at the un-doubled path; a case-sensitive
+    // bug would append `.rproj` again and check a path that can never
+    // collide, letting a genuine overwrite through unconfirmed.
+    let target = dir.path().join("Song.RPROJ");
+    std::fs::create_dir(&target).expect("existing project dir");
+
+    let mut app = app();
+    app.test_set_active_project(true);
+    app.test_set_project_path(dir.path().join("mine.rproj"));
+
+    let response = roundtrip(
+        &mut app,
+        request(
+            1,
+            "project.save_as",
+            json!({ "path": target.display().to_string() }),
+        ),
+    );
+    assert_eq!(
+        response.error.expect("overwrite guard").kind(),
+        ErrorKind::NeedsConfirmation
+    );
+
+    let response = roundtrip(
+        &mut app,
+        request(
+            2,
+            "project.save_as",
+            json!({ "path": target.display().to_string(), "confirm": true }),
+        ),
+    );
+    let job = started_job(response);
+    assert_eq!(job_status(&mut app, job).state, JobState::Pending);
+    assert_eq!(app.test_project_path(), Some(target.as_path()));
+}
+
+#[test]
 fn save_with_a_missing_parent_directory_is_invalid_params() {
     let mut app = app();
     let response = roundtrip(
@@ -375,6 +435,82 @@ fn a_second_save_while_one_is_in_flight_is_busy() {
             response.error.expect("busy while saving").kind(),
             ErrorKind::Busy,
             "{method} while a save is in flight"
+        );
+    }
+}
+
+#[test]
+fn open_and_new_are_busy_while_an_offline_bounce_renders() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = app();
+    app.test_set_active_project(true);
+
+    // Put a real offline bounce in flight, the way the render tests do:
+    // the engine command fires synchronously on dispatch.
+    let target = dir.path().join("mix.wav").display().to_string();
+    let _ = started_job(roundtrip(
+        &mut app,
+        request(1, "render.mixdown", json!({ "path": target })),
+    ));
+    assert!(app.test_is_bouncing());
+
+    // The destructive lifecycle ops would swap the project out from
+    // under the offline renderer; both must refuse `busy`, before any
+    // path validation.
+    for (id, method, params) in [
+        (
+            2,
+            "project.open",
+            json!({ "path": "/definitely/not/here/song.rproj" }),
+        ),
+        (3, "project.new", json!({})),
+    ] {
+        let response = roundtrip(&mut app, request(id, method, params));
+        assert_eq!(
+            response.error.expect("busy while bouncing").kind(),
+            ErrorKind::Busy,
+            "{method} while a bounce renders"
+        );
+    }
+
+    // Saving is read-only with respect to the render (the GUI allows it
+    // mid-bounce too) and stays available.
+    let save_path = dir.path().join("song.rproj").display().to_string();
+    let job = started_job(roundtrip(
+        &mut app,
+        request(4, "project.save", json!({ "path": save_path })),
+    ));
+    assert_ne!(job_status(&mut app, job).state, JobState::Error);
+}
+
+#[test]
+fn a_pending_template_instantiation_blocks_further_lifecycle_ops() {
+    let mut app = app();
+    // A `project.new` from a *user* template loads the template file
+    // asynchronously; until `TemplateLoaded` lands nothing in `app.io`
+    // records the in-flight window — only the live job does. Model that
+    // window directly: a live `ProjectNew` job with no `pending_load`.
+    let _ = app.start_control_job(
+        "project.new",
+        "New project from user template",
+        resonance_app::control_jobs::JobToken::ProjectNew,
+        None,
+    );
+
+    for (id, method, params) in [
+        (1, "project.new", json!({})),
+        (
+            2,
+            "project.open",
+            json!({ "path": "/definitely/not/here/song.rproj" }),
+        ),
+        (3, "project.save", json!({})),
+    ] {
+        let response = roundtrip(&mut app, request(id, method, params));
+        assert_eq!(
+            response.error.expect("busy while instantiating").kind(),
+            ErrorKind::Busy,
+            "{method} while a template instantiation is pending"
         );
     }
 }

@@ -13,6 +13,7 @@ use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_control::methods::control::{HelloParams, HelloResult};
 use resonance_control::{ErrorKind, MessageReader, Request, Response, PROTOCOL_VERSION};
+use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::time::{Duration, Instant};
 
@@ -141,4 +142,86 @@ fn stale_socket_is_replaced_on_bind() {
 
     drop(server);
     assert!(!path.exists());
+}
+
+/// Spawn a server on `path` with a throwaway bridge/job board, keeping
+/// the bridge receiver alive (dropping it would look like app
+/// shutdown to the accept loop).
+fn spawn_server(
+    path: &std::path::Path,
+) -> (
+    io::Result<control_socket::ControlServer>,
+    UnboundedReceiver<ControlMessage>,
+) {
+    let (tx, rx) = iced::futures::channel::mpsc::unbounded();
+    let jobs = std::sync::Arc::new(resonance_app::control_jobs::JobBoard::default());
+    (control_socket::spawn(path.to_path_buf(), tx, jobs), rx)
+}
+
+#[test]
+fn second_instance_is_refused_while_lock_held() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("control.sock");
+
+    let (winner, _winner_rx) = spawn_server(&path);
+    let winner = winner.expect("first instance binds");
+
+    // A concurrent second instance loses the instance lock and is
+    // refused up front — its unlink can never reach the winner's
+    // freshly bound socket.
+    let (loser, _loser_rx) = spawn_server(&path);
+    let err = loser.expect_err("second instance refused while first serves");
+    assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
+    assert!(
+        err.to_string().contains("another resonance instance"),
+        "loser reports the live instance: {err}"
+    );
+
+    // The winner's socket survived the loser's failed start.
+    assert!(path.exists(), "winner's socket file still published");
+    let _client = UnixStream::connect(&path).expect("winner still accepts");
+
+    // Clean shutdown releases the lock: a successor binds fine.
+    drop(winner);
+    assert!(!path.exists(), "socket removed on clean shutdown");
+    let (successor, _successor_rx) = spawn_server(&path);
+    let successor = successor.expect("lock released on drop, successor binds");
+    drop(successor);
+    assert!(!path.exists());
+}
+
+#[test]
+fn superseded_drop_leaves_successor_socket_alone() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("control.sock");
+
+    let (first, _first_rx) = spawn_server(&path);
+    let first = first.expect("first instance binds");
+
+    // Simulate the first instance being superseded: an external
+    // cleanup (tmpfiles-style) purges both the socket and its lock
+    // file, so a second instance takes a fresh lock and rebinds the
+    // path while the first is still alive.
+    std::fs::remove_file(&path).expect("purge socket file");
+    std::fs::remove_file(dir.path().join("control.sock.lock")).expect("purge lock file");
+    let (second, mut second_rx) = spawn_server(&path);
+    let second = second.expect("second instance rebinds after purge");
+    assert!(path.exists(), "second instance's socket published");
+
+    // Dropping the superseded instance must NOT unpublish the live
+    // server: the path no longer points at the file it bound.
+    drop(first);
+    assert!(
+        path.exists(),
+        "superseded drop left the successor's socket in place"
+    );
+    let _client = UnixStream::connect(&path).expect("successor still accepts");
+    assert!(matches!(
+        next_event(&mut second_rx),
+        ControlMessage::Connected { .. }
+    ));
+
+    // The live owner's own drop still cleans up.
+    drop(second);
+    assert!(!path.exists(), "owner's drop removes its socket");
 }

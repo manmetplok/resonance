@@ -13,13 +13,12 @@
 //! so no test reads or writes the real
 //! `~/.local/share/resonance/plugin-presets`.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin};
 use resonance_control::methods::plugin_preset::{PluginPresetSource, PluginPresetsView};
 use resonance_control::{Request, Response};
+use crate::common::{call, roundtrip};
 
 const COMPRESSOR: &str = "com.resonance.compressor";
 const EQ: &str = "com.resonance.eq";
@@ -100,20 +99,6 @@ fn app(root: &TempRoot) -> Resonance {
         plugins: vec![scanned_compressor(), scanned_eq()],
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 /// The parameter list an engine echo supplies, keyed by the same string

@@ -338,28 +338,160 @@ fn apply_resets_on_playhead_discontinuity() {
 }
 
 #[test]
+fn apply_after_seek_matches_an_eagerly_cleared_line() {
+    // The reset on a discontinuity is lazy (no memset on the audio
+    // thread), so pin its contract: after a seek the first `delay`
+    // output samples are exactly 0.0 — what taps of a freshly cleared
+    // line return — and everything after is the post-seek input delayed
+    // by `delay`, bit-exact, with no stale tail. The delay (12)
+    // deliberately exceeds the block size (8) so the silent warmup has
+    // to survive a block boundary.
+    const DELAY: usize = 12;
+    const FRAMES: usize = 8;
+    let comp = LatencyComp::new(DELAY as u64, &[(1, DELAY as u64)], 0, &[]);
+
+    // Pre-seek: distinctive values, so any stale tail would be visible.
+    let mut playhead = 0u64;
+    for b in 0..3usize {
+        let mut l: Vec<f32> = (0..FRAMES).map(|f| 100.0 + (b * FRAMES + f) as f32).collect();
+        let mut r = l.clone();
+        assert!(comp.apply(1, &mut l, &mut r, playhead));
+        playhead += FRAMES as u64;
+    }
+
+    // Seek far away and stream a fresh, known input; collect the output.
+    let input: Vec<f32> = (1..=(4 * FRAMES)).map(|n| n as f32).collect();
+    let mut out: Vec<f32> = Vec::new();
+    let mut playhead = 1_000u64;
+    for block in input.chunks(FRAMES) {
+        let mut l = block.to_vec();
+        let mut r = block.to_vec();
+        assert!(comp.apply(1, &mut l, &mut r, playhead));
+        assert_eq!(l, r, "both channels see the same reset");
+        out.extend_from_slice(&l);
+        playhead += FRAMES as u64;
+    }
+
+    // Ground truth for a freshly cleared DELAY-sample line under the
+    // same pushes: zeros while the line refills, then the input delayed.
+    let expected: Vec<f32> = (0..input.len())
+        .map(|n| if n < DELAY { 0.0 } else { input[n - DELAY] })
+        .collect();
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn loop_wrap_discontinuity_never_replays_stale_audio() {
+    // A loop seam is a playhead mismatch on every single pass; the
+    // reset must hold repeatedly, not just for the first seek.
+    const DELAY: usize = 4;
+    const FRAMES: usize = 16;
+    let comp = LatencyComp::new(DELAY as u64, &[(1, DELAY as u64)], 0, &[]);
+    for pass in 0..5 {
+        let v = (pass + 1) as f32;
+        let mut l = [v; FRAMES];
+        let mut r = [v; FRAMES];
+        // Every pass restarts at frame 0 — a wrap, never continuous.
+        assert!(comp.apply(1, &mut l, &mut r, 0));
+        assert!(
+            l[..DELAY].iter().all(|&s| s == 0.0),
+            "pass {pass}: the seam must start silent"
+        );
+        assert!(
+            l[DELAY..].iter().all(|&s| s == v),
+            "pass {pass}: fresh audio after the seam, not last pass's tail"
+        );
+    }
+}
+
+#[test]
+fn apply_dry_resets_on_playhead_discontinuity() {
+    // Same lazy-reset contract for the shared dry line: a seek owes
+    // `bus_stage` frames of silence, never the pre-seek tail.
+    let comp = LatencyComp::new(0, &[], 4, &[]);
+    let mut data = [1.0f32; 16]; // 8 frames stereo
+    assert!(comp.apply_dry(&mut data, 2, 8, 0));
+    assert!(data[..4 * 2].iter().all(|&s| s == 0.0));
+    assert!(data[4 * 2..].iter().all(|&s| s == 1.0));
+
+    // Seek: the 1.0 tail still inside the line must not replay.
+    let mut data = [0.5f32; 16];
+    assert!(comp.apply_dry(&mut data, 2, 8, 100));
+    assert!(
+        data[..4 * 2].iter().all(|&s| s == 0.0),
+        "stale pre-seek audio leaked through the dry line"
+    );
+    assert!(data[4 * 2..].iter().all(|&s| s == 0.5));
+}
+
+#[test]
 fn delays_match_detects_unchanged_tables() {
     let comp = LatencyComp::new(10, &[(1, 10), (2, 0), (3, 4)], 0, &[]);
-    assert!(comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[], 0));
+    assert!(comp.delays_match(10, &[(1, 10), (2, 0), (3, 4)], 0, &[]));
     // Zero entries are irrelevant — they have no delay line.
-    assert!(comp.delays_match(&[(3, 4), (1, 10)], &[], 0));
-    assert!(!comp.delays_match(&[(1, 10), (3, 5)], &[], 0));
-    assert!(!comp.delays_match(&[(1, 10)], &[], 0));
-    assert!(!comp.delays_match(&[(1, 10), (3, 4), (4, 2)], &[], 0));
+    assert!(comp.delays_match(10, &[(3, 4), (1, 10)], 0, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10), (3, 5)], 0, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10)], 0, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10), (3, 4), (4, 2)], 0, &[]));
+    // A track-stage max change forces a republish even with identical
+    // per-track delays.
+    assert!(!comp.delays_match(12, &[(1, 10), (2, 0), (3, 4)], 0, &[]));
     // Bus-stage changes force a republish too.
-    assert!(!comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[], 5));
-    assert!(!comp.delays_match(&[(1, 10), (2, 0), (3, 4)], &[(7, 3)], 0));
+    assert!(!comp.delays_match(10, &[(1, 10), (2, 0), (3, 4)], 5, &[]));
+    assert!(!comp.delays_match(10, &[(1, 10), (2, 0), (3, 4)], 0, &[(7, 3)]));
 
     let with_bus = LatencyComp::new(10, &[(1, 10)], 6, &[(7, 2)]);
-    assert!(with_bus.delays_match(&[(1, 10)], &[(7, 2)], 6));
-    assert!(!with_bus.delays_match(&[(1, 10)], &[(7, 2)], 4));
-    assert!(!with_bus.delays_match(&[(1, 10)], &[(7, 3)], 6));
+    assert!(with_bus.delays_match(10, &[(1, 10)], 6, &[(7, 2)]));
+    assert!(!with_bus.delays_match(10, &[(1, 10)], 4, &[(7, 2)]));
+    assert!(!with_bus.delays_match(10, &[(1, 10)], 6, &[(7, 3)]));
+    assert!(!with_bus.delays_match(8, &[(1, 10)], 6, &[(7, 2)]));
 
     let empty = LatencyComp::empty();
     assert!(empty.is_empty());
-    assert!(empty.delays_match(&[(1, 0), (2, 0)], &[], 0));
-    assert!(!empty.delays_match(&[(1, 1)], &[], 0));
-    assert!(!empty.delays_match(&[], &[], 3));
+    assert!(empty.delays_match(0, &[(1, 0), (2, 0)], 0, &[]));
+    assert!(!empty.delays_match(1, &[(1, 1)], 0, &[]));
+    assert!(!empty.delays_match(0, &[], 3, &[]));
+}
+
+#[test]
+fn delays_match_catches_track_max_change_with_identical_relative_delays() {
+    // Regression (delays_match ignored track_max): in a single-track
+    // project every relative delay is 0 forever — the sole track always
+    // sits at the max. Adding a 2048-sample lookahead limiter therefore
+    // changes no per-track delay entry, and a comparison over the
+    // non-zero delay sets alone would skip the republish, leaving
+    // max_latency == 0 / track_stage() == 0 stale (fader/pan/mute
+    // automation then evaluates ~42.7 ms early at 48k).
+    let empty = LatencyComp::empty();
+    let (track_max, track_delays) = compensation_delays(&[(1, 2048)]);
+    assert_eq!(track_max, 2048);
+    assert!(
+        track_delays.iter().all(|&(_, d)| d == 0),
+        "single track: all relative delays stay 0"
+    );
+    assert!(
+        !empty.delays_match(track_max, &track_delays, 0, &[]),
+        "a track-stage max change must force a republish"
+    );
+
+    let republished = LatencyComp::new(track_max, &track_delays, 0, &[]);
+    assert_eq!(republished.max_latency(), 2048);
+    assert_eq!(republished.track_stage(), 2048);
+    // The republished table matches its own inputs — the suppression
+    // still protects delay-line state on no-op topology edits.
+    assert!(republished.delays_match(track_max, &track_delays, 0, &[]));
+
+    // Same shape: all tracks carrying equal chain latency shift
+    // together, again without moving any relative delay.
+    let (max2, delays2) = compensation_delays(&[(1, 512), (2, 512)]);
+    assert!(delays2.iter().all(|&(_, d)| d == 0));
+    assert!(!republished.delays_match(max2, &delays2, 0, &[]));
+
+    // The max comparison clamps like the constructor does, so a
+    // beyond-limit chain doesn't republish forever.
+    let clamped = LatencyComp::new(MAX_COMP_LATENCY + 500, &[(1, 0)], 0, &[]);
+    assert_eq!(clamped.max_latency(), MAX_COMP_LATENCY);
+    assert!(clamped.delays_match(MAX_COMP_LATENCY + 500, &[(1, 0)], 0, &[]));
 }
 
 #[test]

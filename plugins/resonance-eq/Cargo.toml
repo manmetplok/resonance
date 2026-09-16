@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 default = ["editor"]
 editor = [
     "dep:wayland-plugin-gui",
+    "dep:plugin-gui-core",
     "dep:egui",
     # the shared preset bar (ba todo #1358) lives behind this feature
     "resonance-plugin/editor-widgets",
@@ -22,15 +23,20 @@ editor = [
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
+# Spectrum analyzer stack (SPSC ring + background FFT worker). Not gated
+# on `editor`: the audio thread's ring push lives in `process()`, which is
+# compiled in headless builds too — same shape as resonance-mastering.
+resonance-metering = { path = "../../resonance-metering" }
 serde_json.workspace = true
-rustfft.workspace = true
 parking_lot.workspace = true
 
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
 egui = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 
 # Per-block DSP benchmark. `harness = false` hands main() to criterion.
 [[bench]]

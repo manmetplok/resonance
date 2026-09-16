@@ -5,7 +5,7 @@
 
 use std::sync::atomic::Ordering;
 
-use wayland_plugin_gui::{egui, widgets};
+use plugin_gui_core::{egui, widgets};
 
 use crate::kit_loader::KitStatus;
 use crate::rr_display;

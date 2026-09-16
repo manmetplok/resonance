@@ -1,7 +1,8 @@
 //! Engine → GUI event enum.
 use resonance_common::{
     AudioFormat, AutomationLane, AutomationTarget, BindingId, ControlSource, ExternalInstrument,
-    MidiBinding, MidiTarget, PlaybackSource, TakeContent, TakeGroupId, TimelineRange,
+    CompSegment, MidiBinding, MidiTarget, PlaybackSource, TakeContent, TakeGroupId, TakeId,
+    TimelineRange,
 };
 use resonance_metering::MeterSnapshot;
 
@@ -306,6 +307,20 @@ pub enum AudioEvent {
         /// Downsampled waveform peaks: (min, max) per chunk of frames.
         waveform_peaks: Vec<(f32, f32)>,
     },
+    /// The capture ring overflowed while a recording was rolling:
+    /// `dropped_frames` whole input frames (at the capture device's
+    /// rate) were discarded by the RT input callback before the engine
+    /// control thread could drain them, so the take on disk is missing
+    /// that much audio — time-compressed and desynced from the first
+    /// drop onwards. Emitted at most once per record take (the control
+    /// thread's drain poll latches after reporting, so a sustained
+    /// overflow doesn't flood the queue); the counter and latch are
+    /// reset when the next take starts capturing. `dropped_frames` is
+    /// the count at the moment of emission — a floor on the damage,
+    /// not necessarily the final total.
+    RecordingOverflow {
+        dropped_frames: u64,
+    },
     /// One loop pass of a cycle-record run was captured into a distinct
     /// take. Emitted per armed track at each loop seam (and once more for
     /// the trailing pass when recording stops) while
@@ -316,12 +331,66 @@ pub enum AudioEvent {
     /// notes depending on the track type.
     TakeCaptured {
         group_id: TakeGroupId,
+        /// Engine-assigned identifier for this take within its group,
+        /// stable for the life of the record run. The app mirrors it so
+        /// later `SetTakeComp` / `SetActiveTake` commands reference the
+        /// same takes the engine renders.
+        take_id: TakeId,
         track_id: TrackId,
         /// The loop region the take was recorded over, in sample frames.
         slot: TimelineRange,
         /// Zero-based loop pass that produced this take.
         pass_index: u32,
+        /// What this pass **actually** recorded over, which is not always
+        /// its `slot`: pass 0's clip starts at the punch-in point, and a
+        /// pass cut short at transport stop ends before the loop end. The
+        /// app has no other way to learn it — no `RecordingFinished` is
+        /// emitted for a take clip, so the clip never reaches the app's
+        /// mirror — and it is stored on
+        /// [`resonance_common::Take`] so the project-load path reports the
+        /// same fact rather than leaving the app to guess (ba todo #1396).
+        ///
+        /// For a MIDI take this is the slot; see
+        /// [`resonance_common::Take::audible_extent`].
+        extent: TimelineRange,
         content: TakeContent,
+    },
+    /// Confirms a `SetTakeComp` was applied to `group_id`. The comp the
+    /// engine now plays and bounces is echoed back, so the app's view of
+    /// the comp is whatever the engine actually renders rather than what
+    /// the app optimistically drew.
+    TakeCompChanged {
+        group_id: TakeGroupId,
+        segments: Vec<CompSegment>,
+    },
+    /// Confirms a `SetActiveTake` was applied to `group_id`. `take_id` is
+    /// the take now soloed for full-slot playback, or `None` when the
+    /// override was cleared and the comp plays again.
+    ActiveTakeChanged {
+        group_id: TakeGroupId,
+        take_id: Option<TakeId>,
+    },
+    /// Confirms an `AudioCommand::RemoveTake` was applied: `take_id` is
+    /// gone from `group_id`, and so is every comp segment that named it.
+    ///
+    /// The re-covered comp and a cleared solo arrive as the ordinary
+    /// `TakeCompChanged` / `ActiveTakeChanged` echoes right after this
+    /// one, and only when the removal actually moved them — one event per
+    /// fact, so a mirror applies removals with the handlers it already
+    /// has. Emitted only when the group survives; removing a group's last
+    /// take emits [`AudioEvent::TakeGroupRemoved`] instead.
+    TakeRemoved {
+        group_id: TakeGroupId,
+        take_id: TakeId,
+    },
+    /// Confirms take group `group_id` is gone from the engine — every take
+    /// in it, its comp and its slot binding. Sent for
+    /// `AudioCommand::RemoveTakeGroup`, and for an
+    /// `AudioCommand::RemoveTake` that took the group's last take with it.
+    ///
+    /// No comp echo follows: there is no comp left to echo.
+    TakeGroupRemoved {
+        group_id: TakeGroupId,
     },
     PluginAdded {
         track_id: TrackId,

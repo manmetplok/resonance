@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::atomic_file::{atomic_write, quarantine_corrupt};
 use crate::automation::{PluginInstanceId, TrackId};
 
 /// Identifier for a [`MidiBinding`], unique within a [`ControllerMap`] / project.
@@ -280,7 +281,14 @@ pub fn load_controller_maps_from(path: &Path) -> Vec<ControllerMap> {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice::<ControllerMapStore>(&bytes)
             .map(|s| s.maps)
-            .unwrap_or_default(),
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "{} is corrupt ({e}); quarantining and starting from an empty list",
+                    path.display()
+                );
+                quarantine_corrupt(path);
+                Vec::new()
+            }),
         Err(_) => Vec::new(),
     }
 }
@@ -321,6 +329,6 @@ fn write_store(store: &ControllerMapStore, path: &Path) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(store)
         .map_err(|e| format!("serialize controller maps: {e}"))?;
-    std::fs::write(path, json.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))?;
+    atomic_write(path, json.as_bytes())?;
     Ok(())
 }

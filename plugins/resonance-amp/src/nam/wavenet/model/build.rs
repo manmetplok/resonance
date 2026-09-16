@@ -172,6 +172,7 @@ impl WaveNetModel {
         reader: &mut WeightReader,
     ) -> Result<Self, String> {
         validate::validate_config(&config)?;
+        validate::validate_bounds(&config, reader.remaining())?;
 
         // Activation flavor (the ONLY per-file semantic left, ba todo
         // #1116): files expressible in the pre-A2 surface resolve

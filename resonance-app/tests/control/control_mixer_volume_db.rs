@@ -7,13 +7,13 @@
 //! range/finiteness rejections, and that the edit lands in undo history
 //! like a manual fader move.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::TrackType;
 use resonance_control::methods::song::TracksView;
 use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use crate::common::{call, roundtrip};
 
 const TRACK: u64 = 1;
 
@@ -25,20 +25,6 @@ fn app() -> Resonance {
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-volume-db-test.rprj"));
     app.test_add_track(TRACK, TrackType::Instrument);
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn set_db(app: &mut Resonance, track_id: u64, volume_db: f32) -> Response {

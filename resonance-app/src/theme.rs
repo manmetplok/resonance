@@ -416,6 +416,21 @@ pub const GROUP_HEADER_HEIGHT: f32 = 60.0;
 /// stack of parameter lanes reads as detail under the track rather than
 /// competing with full 96 px lanes.
 pub const AUTOMATION_LANE_ROW_HEIGHT: f32 = 44.0;
+/// Arrange-view take-lane sub-row height (epic #15, doc #165). One row per
+/// recorded take, stacked beneath the owning track while its take lane is
+/// expanded. Slimmer than an automation lane row: a take row carries only a
+/// waveform / note silhouette across the group's slot, and a cycle-record
+/// run can easily produce eight of them.
+pub const TAKE_ROW_HEIGHT: f32 = 38.0;
+/// Vertical inset of a take card inside its `TAKE_ROW_HEIGHT` row — the
+/// take-lane counterpart of [`CLIP_LANE_INSET`], tightened so the slim row
+/// still gives the waveform room.
+pub const TAKE_ROW_INSET: f32 = 4.0;
+/// Height of the comp ribbon drawn along the bottom of a track lane that
+/// owns take groups (epic #15). The ribbon is the always-visible summary of
+/// which take is audible where, so it stays on the track row whether the
+/// take lane is expanded or collapsed.
+pub const TAKE_COMP_RIBBON_HEIGHT: f32 = 13.0;
 /// Indent for tracks that are members of a group. Nested group members
 /// use doubled indent to show hierarchy depth at a glance. See the
 /// track-grouping design (doc #200).

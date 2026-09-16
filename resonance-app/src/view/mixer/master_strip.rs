@@ -1,6 +1,12 @@
 //! Master channel strip rendering. No instrument, no input/arm, no
 //! per-channel routing — just the FX chain, the master fader, and the
 //! Bounce-to-WAV button.
+//!
+//! Split like the other strips: the fader/meter block (live per-tick
+//! levels) and the transient Bounce button rebuild every frame, while
+//! the chain/automation body above the fader is cached behind
+//! `iced::widget::lazy`, keyed on
+//! [`super::strip_fingerprint::master_strip_fingerprint`].
 
 use iced::widget::{button, column, container, pick_list, scrollable, text};
 use iced::{Element, Length};
@@ -13,10 +19,69 @@ use crate::view::controls::{fader_section, fx_bypass_button};
 use super::picks::PluginOwner;
 
 impl crate::Resonance {
-    pub(super) fn view_master_strip(
-        &self,
-        available_plugins: &[ScannedPlugin],
-    ) -> Element<'_, Message> {
+    pub(super) fn view_master_strip<'a>(
+        &'a self,
+        available_plugins: &'a [ScannedPlugin],
+    ) -> Element<'a, Message> {
+        let _ = available_plugins;
+
+        // Master automation live gain tint + the fader/meter block. The
+        // per-tick levels render outside the lazy body, like every strip.
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::MasterGain,
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::MasterGain,
+            v,
+        ));
+        let fader_block = fader_section(
+            self.master_level_l,
+            self.master_level_r,
+            self.master_volume,
+            gain_live,
+            |v| Message::Track(TrackMessage::SetMasterVolume(v)),
+        );
+
+        let bounce_btn: Element<'_, Message> = if self.io.bouncing {
+            text("Bouncing...").size(8).color(theme::ACCENT).into()
+        } else {
+            button(text("Bounce").size(8).color(theme::TEXT))
+                .on_press(Message::ProjectIo(ProjectIoMessage::BounceToWav))
+                .style(|_theme, status| theme::small_button_style(status))
+                .padding([2, 8])
+                .into()
+        };
+
+        let bounce_row = container(bounce_btn)
+            .width(Length::Fill)
+            .center_x(Length::Fill);
+
+        // Chain + automation header above the fader — non-live, cached
+        // across redraw ticks.
+        let fp = super::strip_fingerprint::master_strip_fingerprint(self);
+        let body = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+            self.master_strip_body()
+        });
+
+        let strip_content = column![body, fader_block, bounce_row]
+            .spacing(6)
+            .padding([12, 10])
+            .width(theme::MASTER_STRIP_WIDTH)
+            .height(Length::Fill);
+
+        container(strip_content)
+            .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32))
+            .style(theme::card_selected)
+            .into()
+    }
+
+    /// The non-live upper region of the master strip — everything above
+    /// the fader/meter block. Built inside the strip's `lazy` region, so
+    /// it returns an owned (`'static`) tree and must only read state
+    /// that [`super::strip_fingerprint::master_strip_fingerprint`]
+    /// hashes.
+    fn master_strip_body(&self) -> Element<'static, Message> {
         // The design centers an uppercase "MASTER" header.
         let label = container(
             text("MASTER")
@@ -56,8 +121,7 @@ impl crate::Resonance {
         // have at least one non-instrument plugin available. Options
         // come from `view_caches.fx_plugins` (Rc clone is a refcount
         // bump, no per-frame Vec rebuild).
-        let _ = available_plugins;
-        let fx_picker_element: Option<Element<'_, Message>> =
+        let fx_picker_element: Option<Element<'static, Message>> =
             if self.view_caches.fx_plugins.is_empty() {
                 None
             } else {
@@ -102,53 +166,11 @@ impl crate::Resonance {
             &self.master_plugins,
             &[],
         );
-        let gain_live = super::automation::live_value(
-            &self.automation,
-            resonance_common::AutomationTarget::MasterGain,
-        )
-        .map(|v| resonance_common::lane_value_to_real(
-            &resonance_common::AutomationTarget::MasterGain,
-            v,
-        ));
-        let fader_block = fader_section(
-            self.master_level_l,
-            self.master_level_r,
-            self.master_volume,
-            gain_live,
-            |v| Message::Track(TrackMessage::SetMasterVolume(v)),
-        );
 
-        let bounce_btn: Element<'_, Message> = if self.io.bouncing {
-            text("Bouncing...").size(8).color(theme::ACCENT).into()
-        } else {
-            button(text("Bounce").size(8).color(theme::TEXT))
-                .on_press(Message::ProjectIo(ProjectIoMessage::BounceToWav))
-                .style(|_theme, status| theme::small_button_style(status))
-                .padding([2, 8])
-                .into()
-        };
-
-        let bounce_row = container(bounce_btn)
+        column![label, button_row, plugin_fill, fx_block, auto_header]
+            .spacing(6)
             .width(Length::Fill)
-            .center_x(Length::Fill);
-
-        let strip_content = column![
-            label,
-            button_row,
-            plugin_fill,
-            fx_block,
-            auto_header,
-            fader_block,
-            bounce_row,
-        ]
-        .spacing(6)
-        .padding([12, 10])
-        .width(theme::MASTER_STRIP_WIDTH)
-        .height(Length::Fill);
-
-        container(strip_content)
-            .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32))
-            .style(theme::card_selected)
+            .height(Length::Fill)
             .into()
     }
 }

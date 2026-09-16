@@ -4,7 +4,7 @@
 //! drawn as horizontal bars on a log (dBFS) scale. Input is dimmer
 //! than output so the eye naturally tracks the wet signal.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::ReverbViz;
 

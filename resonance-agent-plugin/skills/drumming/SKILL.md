@@ -95,8 +95,10 @@ notes_insert_many     # the whole part, ONE undoable edit
 
 Never build a drum part with repeated `notes_insert` — each call is its own undo
 entry, and a two-bar 16th-note groove is already ~60 notes. Use
-`mcp__resonance__notes_replace_all` to rewrite a clip wholesale, and
-`mcp__resonance__notes_import_midi` when the part runs to thousands of notes.
+`mcp__resonance__notes_replace_all` to rewrite a clip wholesale (destructive:
+on a non-empty clip it refuses with a summary until you pass `confirm: true`),
+and `mcp__resonance__notes_import_midi` when the part runs to thousands of
+notes.
 
 `start_beat` is **0-based and clip-relative**. Bars in the arrangement are
 1-based. Velocity is 1–127.

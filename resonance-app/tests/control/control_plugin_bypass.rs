@@ -14,12 +14,11 @@
 //! for a wire, because a client that retries a request whose reply it
 //! never saw would flip the state back.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioCommand, AudioEvent};
 use resonance_control::methods::track::{AddResult, PluginParamsView};
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck};
+use crate::common::call;
 
 const PLUGIN: &str = "com.resonance.eq";
 const OTHER: &str = "com.resonance.compressor";
@@ -31,20 +30,6 @@ fn app() -> (
     let (mut app, _task, cmd_rx) = Resonance::new_for_test_with_capture();
     app.test_set_active_project(true);
     (app, cmd_rx)
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 /// A bare audio track, created the way a client would.

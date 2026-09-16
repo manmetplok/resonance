@@ -210,6 +210,18 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             // just took may be a blend. Hand the flag back rather than
             // leave it: the next block re-runs the copy against the
             // finished load.
+            //
+            // The Acquire fence is what makes the re-read below *evidence*:
+            // the value loads above are Relaxed, and without the fence
+            // nothing stops them sinking below the generation re-read on a
+            // weakly-ordered CPU (the SeqCst load is an acquire, which only
+            // pins later accesses, not earlier ones) — a bracket the loads
+            // escaped validates nothing. The fence keeps every load above
+            // it above the re-read, and pairs with the Release fence in
+            // `begin_param_publish`: a value load that caught a mid-publish
+            // store forces the re-read to observe that publish's odd
+            // generation (or later), so the mismatch is detected.
+            std::sync::atomic::fence(Ordering::Acquire);
             if self.shared.param_publish_gen() != publish_gen {
                 self.shared.params_dirty.store(true, Ordering::Release);
             }
@@ -274,6 +286,10 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         //    abandoning the push-back is always available and always
         //    correct. That keeps the audio thread wait-free — a fixed
         //    two loads and at most one extra exchange, never a spin.
+        //    Like every seqlock read side, the bracket closes with an
+        //    Acquire fence before the confirming generation re-read, so
+        //    the bracketed accesses cannot sink below it (see the fence
+        //    comments at both re-reads).
         // 3. The store itself is a compare-exchange against the value we
         //    just read, so a load landing in the few instructions
         //    between that read and the exchange makes the exchange fail
@@ -329,6 +345,16 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                         break;
                     }
                     let stored = self.shared.compare_exchange_value(i, shared_v, plugin_v);
+                    // Same rule as the state-load re-sync bracket above: a
+                    // generation bracket only proves anything if nothing it
+                    // brackets can sink below the confirming re-read. The
+                    // Acquire fence pins the Relaxed `get_value` read (and
+                    // the exchange, without leaning on the exchange's own
+                    // SeqCst ordering) above the re-read, and pairs with the
+                    // Release fence in `begin_param_publish` so a slot value
+                    // taken from a mid-publish window forces the re-read to
+                    // see that window's odd generation or later.
+                    std::sync::atomic::fence(Ordering::Acquire);
                     if self.shared.param_publish_gen() != gen_before {
                         // A publication window opened around the exchange.
                         // If the exchange landed it may have landed on a

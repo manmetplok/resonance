@@ -10,6 +10,9 @@
 //! file resolves against that file's own directory (`tests/`), not against
 //! a `tests/<group>/` subdirectory.
 
+#[path = "common/mod.rs"]
+mod common;
+
 #[path = "control/control_arrangement_bars.rs"]
 mod control_arrangement_bars;
 #[path = "control/control_arrangement_global_events.rs"]
@@ -22,6 +25,8 @@ mod control_bus_create_commit;
 mod control_bus_effects;
 #[path = "control/control_chain_presets.rs"]
 mod control_chain_presets;
+#[path = "control/control_clip_confirm_place_guard.rs"]
+mod control_clip_confirm_place_guard;
 #[path = "control/control_clip_place.rs"]
 mod control_clip_place;
 #[path = "control/control_clip_split.rs"]
@@ -58,6 +63,8 @@ mod control_mutation_gate;
 mod control_notes;
 #[path = "control/control_notes_bulk.rs"]
 mod control_notes_bulk;
+#[path = "control/control_notes_confirm_caps.rs"]
+mod control_notes_confirm_caps;
 #[path = "control/control_notes_create_insert_race.rs"]
 mod control_notes_create_insert_race;
 #[path = "control/control_notes_move_clip.rs"]
@@ -82,6 +89,8 @@ mod control_plugins_rescan;
 mod control_project;
 #[path = "control/control_render.rs"]
 mod control_render;
+#[path = "control/control_render_wav_geometry.rs"]
+mod control_render_wav_geometry;
 #[path = "control/control_reply_contract.rs"]
 mod control_reply_contract;
 #[path = "control/control_section_harmony.rs"]
@@ -104,6 +113,8 @@ mod control_track_add_plugin_result;
 mod control_replace_effect;
 #[path = "control/control_track_dispatch.rs"]
 mod control_track_dispatch;
+#[path = "control/control_track_frozen.rs"]
+mod control_track_frozen;
 #[path = "control/control_track_mixer.rs"]
 mod control_track_mixer;
 #[path = "control/control_track_move_effect.rs"]

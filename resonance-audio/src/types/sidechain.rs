@@ -70,14 +70,55 @@ pub fn route_source(routes: &[SidechainRoute], plugin: PluginInstanceId) -> Opti
         .map(|r| r.source)
 }
 
+/// The distinct sources named by the enabled routes: a fixed-capacity,
+/// stack-held set of at most [`MAX_SIDECHAIN_SOURCES`] entries. Built
+/// fresh every block by [`SidechainTaps::begin_block`], so it must not
+/// heap-allocate — the audio thread never allocates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveSources {
+    /// Only the first `len` entries are meaningful; the tail keeps a
+    /// filler value so the array is fully initialized.
+    sources: [SendSource; MAX_SIDECHAIN_SOURCES],
+    len: usize,
+}
+
+impl ActiveSources {
+    /// The collected sources, in first-seen order.
+    pub fn as_slice(&self) -> &[SendSource] {
+        &self.sources[..self.len]
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = SendSource> + '_ {
+        self.as_slice().iter().copied()
+    }
+
+    pub fn contains(&self, source: SendSource) -> bool {
+        self.as_slice().contains(&source)
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
 /// Every distinct source named by an enabled route, in first-seen order,
-/// capped at [`MAX_SIDECHAIN_SOURCES`]. Pure so the slot assignment can
-/// be tested without a mixer.
-pub fn active_sources(routes: &[SidechainRoute]) -> Vec<SendSource> {
-    let mut out: Vec<SendSource> = Vec::new();
+/// capped at [`MAX_SIDECHAIN_SOURCES`]. Allocation-free (the result
+/// lives on the caller's stack) because the playing branch calls this
+/// once per audio callback. Pure so the slot assignment can be tested
+/// without a mixer.
+pub fn active_sources(routes: &[SidechainRoute]) -> ActiveSources {
+    let mut out = ActiveSources {
+        sources: [SendSource::Track(0); MAX_SIDECHAIN_SOURCES],
+        len: 0,
+    };
     for route in routes.iter().filter(|r| r.enabled) {
-        if !out.contains(&route.source) && out.len() < MAX_SIDECHAIN_SOURCES {
-            out.push(route.source);
+        if !out.contains(route.source) && out.len < MAX_SIDECHAIN_SOURCES {
+            out.sources[out.len] = route.source;
+            out.len += 1;
         }
     }
     out
@@ -140,14 +181,14 @@ impl SidechainTaps {
         // Release slots whose source is no longer routed.
         for slot in self.slots.iter_mut() {
             if let Some(src) = slot.source {
-                if !wanted.contains(&src) {
+                if !wanted.contains(src) {
                     slot.source = None;
                     slot.written = [false; 2];
                 }
             }
         }
         // Assign the new ones into free slots.
-        for src in wanted {
+        for src in wanted.iter() {
             if self.slots.iter().any(|s| s.source == Some(src)) {
                 continue;
             }

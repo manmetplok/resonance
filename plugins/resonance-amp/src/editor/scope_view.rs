@@ -8,7 +8,7 @@
 //! signal still fills the viewport. A soft centre-line grid helps
 //! the eye align the waveform.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::{AmpViz, SCOPE_LEN};
 
@@ -38,15 +38,13 @@ pub fn draw(painter: &egui::Painter, rect: egui::Rect, viz: &AmpViz) {
 
     draw_grid(painter, inner);
 
-    // Snapshot the scope ring.
+    // Snapshot the scope ring. Lock-free — `iter_chrono` reads the shared
+    // atomic rings directly.
     let mut input_buf = [0.0f32; SCOPE_LEN];
     let mut output_buf = [0.0f32; SCOPE_LEN];
-    {
-        let scope = viz.scope.lock();
-        for (i, (in_s, out_s)) in scope.iter_chrono().enumerate() {
-            input_buf[i] = in_s;
-            output_buf[i] = out_s;
-        }
+    for (i, (in_s, out_s)) in viz.scope.iter_chrono().enumerate() {
+        input_buf[i] = in_s;
+        output_buf[i] = out_s;
     }
 
     // Auto-gain: fit both traces to ~85% of the panel height, but

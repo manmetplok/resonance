@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_channel::Sender;
 use hound::{SampleFormat, WavSpec, WavWriter};
@@ -94,6 +95,13 @@ pub struct RecordingState {
     /// thread doesn't allocate a fresh `Vec` 60× per second while
     /// recording.
     deint_scratch: Vec<f32>,
+    /// Whether the current take's ring overflow has already been
+    /// reported via `AudioEvent::RecordingOverflow`. Latched by
+    /// [`RecordingState::poll_overflow`] so a sustained overflow emits
+    /// once per take rather than once per drain poll; re-armed by
+    /// [`RecordingState::begin_overflow_episode`] when the next take
+    /// starts capturing.
+    overflow_reported: bool,
 }
 
 /// Shift a finalized take `shift` samples earlier on the timeline: the
@@ -142,7 +150,41 @@ impl RecordingState {
             take_shift_samples: 0,
             start_latch_applied: true,
             deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
+            overflow_reported: false,
         }
+    }
+
+    /// Start a fresh overflow episode: zero the shared dropped-frame
+    /// counter (`SharedState::recording_overflow`) and re-arm the
+    /// one-shot report, so a take never inherits the previous take's
+    /// damage count. Called when a record session opens its capture
+    /// stream and again at each cycle-record seam — a new take starts
+    /// clean.
+    pub fn begin_overflow_episode(&mut self, dropped_frames: &AtomicU64) {
+        dropped_frames.store(0, Ordering::Relaxed);
+        self.overflow_reported = false;
+    }
+
+    /// One-shot overflow report for the current take. If the capture
+    /// callbacks have discarded frames (`dropped_frames` — the shared
+    /// `SharedState::recording_overflow` counter — is nonzero) and it
+    /// has not been reported yet, emit [`AudioEvent::RecordingOverflow`]
+    /// carrying the count so far and latch. The engine loop polls this
+    /// right after every recording drain, so the report reaches the
+    /// user while the damaged take is still being recorded without a
+    /// sustained overflow flooding the event queue.
+    pub fn poll_overflow(&mut self, dropped_frames: &AtomicU64, event_tx: &Sender<AudioEvent>) {
+        if self.overflow_reported {
+            return;
+        }
+        let dropped = dropped_frames.load(Ordering::Relaxed);
+        if dropped == 0 {
+            return;
+        }
+        self.overflow_reported = true;
+        let _ = event_tx.send(AudioEvent::RecordingOverflow {
+            dropped_frames: dropped,
+        });
     }
 
     /// Create a `TrackRecordingBuf` for an armed track: allocates
@@ -528,6 +570,29 @@ pub struct RolledAudioTake {
     pub start_sample: SamplePos,
     pub duration_samples: u64,
     pub waveform_peaks: Vec<(f32, f32)>,
+}
+
+impl RolledAudioTake {
+    /// The stretch of timeline this pass actually recorded over — the
+    /// rolled clip's own `[start_sample, start_sample + duration_samples)`.
+    ///
+    /// **Not the loop slot**, and that is the point. Pass 0's writer starts
+    /// where the user punched in rather than at the loop start, and the
+    /// trailing pass at transport stop ends wherever the user stopped, so
+    /// both are strictly shorter than the region they are filed under.
+    /// `finalize_loop_record_pass` files this onto the take and reports it
+    /// on `AudioEvent::TakeCaptured`, because it is the app's **only**
+    /// account of what a pass recorded: no `RecordingFinished` follows a
+    /// take clip, so the clip never reaches the app's mirror and a
+    /// consumer told only the slot would claim material that does not
+    /// exist (ba todo #1396,
+    /// [`resonance_common::Take::audible_extent`]).
+    ///
+    /// Defined here, on the value the emit site reads, so the capture path
+    /// and `tests/loop_record_takes.rs` cannot describe it differently.
+    pub fn extent(&self) -> resonance_common::TimelineRange {
+        resonance_common::TimelineRange::new(self.start_sample, self.duration_samples)
+    }
 }
 
 /// Close a take's WAV writer at a loop seam WITHOUT flushing the streaming

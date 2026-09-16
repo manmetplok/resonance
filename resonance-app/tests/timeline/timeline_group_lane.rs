@@ -24,12 +24,17 @@
 //! Window size is the app's 1440×900 minimum (per `ux-guidelines.md`).
 //! On first run `matches_image()` writes the goldens under
 //! `tests/snapshots/`; subsequent runs diff against the committed PNGs.
+//!
+//! The suite also pins the canvas cache fingerprint: collapse toggles and
+//! membership edits must move it (the cached geometry layer repaints
+//! instead of holding pre-toggle row positions), and undoing the change
+//! must restore it.
 
 use crate::common;
 
 use iced::Size;
 use iced_test::simulator::Simulator;
-use resonance_app::message::{Message, ViewportMessage};
+use resonance_app::message::{GroupMessage, Message, ViewportMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{demo, theme, Resonance};
 use resonance_common::automation::TrackId;
@@ -143,5 +148,61 @@ fn timeline_group_lane_collapsed_nested_overview() {
     snapshot_to(
         &app,
         "tests/snapshots/timeline_group_lane_collapsed_nested_overview.png",
+    );
+}
+
+// ---------------------------------------------------------------------
+// Cache fingerprint
+// ---------------------------------------------------------------------
+
+/// `GroupMessage::ToggleCollapse` — the header-column caret and the
+/// canvas double-click — must move the canvas fingerprint, so the cached
+/// layer repaints as the consolidated overview and the member rows drop
+/// out; toggling back must restore the original fingerprint (no spurious
+/// repaint keys). Before the `groups_hash` field the toggle flipped only
+/// `is_collapsed`, which no fingerprinted field covered, and the canvas
+/// kept drawing pre-toggle geometry until an unrelated input (scroll,
+/// zoom, selection) happened to invalidate the cache.
+#[test]
+fn fingerprint_changes_on_group_collapse_toggle() {
+    let (mut app, group_id) = build_app_with_group();
+    let expanded = app.test_timeline_fingerprint();
+
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(group_id)));
+    let collapsed = app.test_timeline_fingerprint();
+    assert_ne!(
+        expanded, collapsed,
+        "collapsing a group must invalidate the cached canvas layer"
+    );
+
+    let _ = app.update(Message::Group(GroupMessage::ToggleCollapse(group_id)));
+    assert_eq!(
+        app.test_timeline_fingerprint(),
+        expanded,
+        "expanding back restores the original fingerprint"
+    );
+}
+
+/// Membership edits (the drag-and-drop `DropMembership` path lands in the
+/// registry as add/remove-member) must also move the fingerprint: the
+/// identity wash stops/starts spanning the track's row and every row
+/// below shifts Y.
+#[test]
+fn fingerprint_changes_on_group_membership_change() {
+    let (mut app, group_id) = build_app_with_group();
+    let before = app.test_timeline_fingerprint();
+
+    assert!(app.test_track_groups_mut().remove_member(group_id, 3));
+    let removed = app.test_timeline_fingerprint();
+    assert_ne!(
+        before, removed,
+        "removing a member must invalidate the cached canvas layer"
+    );
+
+    assert!(app.test_track_groups_mut().add_member(group_id, 3));
+    assert_eq!(
+        app.test_timeline_fingerprint(),
+        before,
+        "restoring the membership restores the original fingerprint"
     );
 }

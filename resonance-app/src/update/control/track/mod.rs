@@ -41,7 +41,7 @@ use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::mixer as mixer_methods;
 use resonance_control::methods::track as track_methods;
-use resonance_control::{Request, Response};
+use resonance_control::{Request, Response, RpcError};
 
 /// The reply vocabulary (todo #1258): every family answers with these,
 /// and they are re-exported here so the submodules keep saying
@@ -128,6 +128,21 @@ fn instance_for(
         .map(|p| p.instance_id)
 }
 
+/// A `busy` error when `track_id` is frozen (Frozen or Stale), else
+/// `None`. Plugin-chain edits on a frozen track are swallowed by the
+/// `frozen_input_edit_target` gate in `update()` (which flips the freeze
+/// to Stale and returns `Task::none()`), so acking success there would
+/// falsely report an edit that never happened. The gate still backstops
+/// the non-frozen path; this pre-check just makes the rejection visible
+/// to the remote client — the same rule `notes.*` applies to note edits.
+fn frozen_reject(app: &Resonance, track_id: resonance_audio::types::TrackId) -> Option<RpcError> {
+    app.freeze.status(track_id).is_frozen().then(|| {
+        RpcError::busy(format!(
+            "track {track_id} is frozen; unfreeze it before editing its plugins"
+        ))
+    })
+}
+
 /// `track.set_fx_bypass` — SET, not toggle.
 ///
 /// Closes the audit's inverse parity gap: the mixer strip has had this
@@ -148,7 +163,16 @@ fn set_fx_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         return not_found_track(request, params.track_id.0);
     };
     if t.fx_bypassed == params.bypassed {
+        // Setting the state it is already in dispatches nothing, so it
+        // stays an honest ack even on a frozen track — a client retrying
+        // a request whose reply it never saw must not suddenly be told
+        // "frozen" for a state it already holds.
         return (ack(app, request), Task::none());
+    }
+    // A real change would dispatch `ToggleTrackFxBypass`, which the
+    // frozen-input gate swallows.
+    if let Some(e) = frozen_reject(app, t.id) {
+        return reject(request, e);
     }
     let task = crate::update::control::run_via_update(
         app,
@@ -168,6 +192,11 @@ fn set_plugin_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<
     let Some(t) = find_track(app, params.track_id.0).cloned() else {
         return not_found_track(request, params.track_id.0);
     };
+    // `SetPluginBypass` is a frozen-input edit (gates.rs); reject rather
+    // than ack an edit the gate would swallow.
+    if let Some(e) = frozen_reject(app, t.id) {
+        return reject(request, e);
+    }
     let host = format!("track {}", t.id);
     // Resolved before `run` takes `&mut app`: the default needs the
     // scanned-plugin catalog to know which slot is the instrument, and a

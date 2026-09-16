@@ -5,7 +5,7 @@
 //! history is plotted with the newest sample on the right, oldest on
 //! the left.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::theme;
 use crate::viz::{CompressorViz, HISTORY_LEN};

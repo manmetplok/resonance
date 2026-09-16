@@ -13,6 +13,9 @@
 //!   with the offline bounce path and parameterized by `RenderStrategy`;
 //!   the phases themselves live in [`render`].
 //! - [`track_block`]: live wrapper over `render_core`.
+//! - [`take_comp`]: the comped cover of a take group's loop slot — which
+//!   recorded take is audible where, with an equal-power crossfade at each
+//!   segment seam. Read by `render_core` on both the live and bounce path.
 //! - [`midi_events`]: per-block MIDI tick→sample collection.
 //! - [`midi_stash`]: notes parked while a plugin's mutex is contended.
 //! - [`live_midi`]: hardware-MIDI pickup on the audio thread.
@@ -41,6 +44,7 @@ mod monitor;
 mod recording_push;
 mod render;
 mod render_core;
+mod take_comp;
 mod test_support;
 mod track_block;
 
@@ -57,8 +61,12 @@ pub use monitor::{monitor_catchup_skip, monitor_read_len, MonitorDrain, MONITOR_
 pub use recording_push::{push_recording_frames, whole_frame_push_len};
 pub(crate) use render_core::{render_block, BlockInputs, BlockScratch, RenderStrategy};
 pub use render_core::{mix_track_clips, recorded_monitor_gate, CLIP_DECLICK_FRAMES};
+pub use take_comp::{
+    build_comp_table, mix_track_comp, CompRenderTable, CompSpan, TrackComp, COMP_XFADE_FRAMES,
+};
 pub use test_support::{
-    render_aux_for_test, render_aux_with_comp_for_test, MixAudioHarness, RenderBenchHarness,
+    render_aux_for_test, render_aux_with_comp_for_test, render_take_comp_borrowed_for_test,
+    render_take_comp_for_test, MixAudioHarness, RenderBenchHarness,
 };
 
 pub(crate) use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;

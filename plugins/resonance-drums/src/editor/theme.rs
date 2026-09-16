@@ -3,9 +3,9 @@
 //! per frame from the top-level `ui()` method) plus drums-local aliases
 //! and typography helpers.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;
 
 // The `TEXT` / `DANGER` aliases `download_panel` and a few other older
 // modules use are the shared palette's own legacy names now (ba todo

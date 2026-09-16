@@ -67,6 +67,15 @@ pub fn parse_full_wavenet_config(value: &serde_json::Value) -> Result<WaveNetFul
 impl OldWaveNetConfig {
     pub(super) fn into_config(self) -> Result<WaveNetConfig, String> {
         let activation = ActivationConfig::from_name(&self.activation)?;
+        // Layer counts become dilations 1, 2, ..., 2^(n-1); a hostile
+        // count would overflow the shift below (real models use ~10 per
+        // stack). Counts that pass here but are still absurd fall to the
+        // state-buffer bound at model construction.
+        if let Some(&n) = self.layers.iter().find(|&&n| n >= usize::BITS as usize) {
+            return Err(format!(
+                "WaveNet config: {n} layers in a stack is not supported"
+            ));
+        }
         let dilations: Vec<Vec<usize>> = self
             .layers
             .iter()
@@ -134,6 +143,11 @@ impl OldWaveNetConfig {
 
 // -- Typed A2 config -> engine config ------------------------------------------
 
+/// Cap on legacy head-MLP hidden layers (real exports use 1-2); the count
+/// sizes an allocation directly, so it cannot wait for the weight-derived
+/// bounds at model construction.
+const MAX_HEAD_MLP_LAYERS: usize = 64;
+
 /// Flatten the typed config onto the engine's per-stack shape. Every field
 /// is a straight copy; the only decisions taken here are engine-side
 /// capability limits (which post-stack heads the engine can run) and the
@@ -172,6 +186,14 @@ fn engine_config_from_typed(
             num_layers,
             out_channels,
         }) => {
+            // `num_layers` sizes an allocation straight from a parsed
+            // field; real head MLPs have one or two hidden layers, so a
+            // huge count is a hostile or corrupt file, not a model.
+            if num_layers > MAX_HEAD_MLP_LAYERS {
+                return Err(format!(
+                    "WaveNet config: head num_layers ({num_layers}) exceeds the supported maximum ({MAX_HEAD_MLP_LAYERS})"
+                ));
+            }
             let hidden = if num_layers > 0 {
                 vec![channels; num_layers]
             } else {

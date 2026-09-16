@@ -357,6 +357,20 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | AutomationMessage::SetCurveKind { .. } => UndoAction::Record,
         },
 
+        // Take-lane comping (doc #165, todo #411). Every variant is one
+        // discrete, atomic edit — there is no gesture here; the canvas
+        // drag that *chooses* a promote range is todo #414's and commits
+        // by emitting a single `PromoteTakeSegment`. Take groups ride the
+        // `ProjectFile` snapshot (todo #412), so the generic Record path
+        // reverses a comp edit with no per-message capture; the engine is
+        // driven back by `replay_take_groups`'s `RestoreTakeGroups` on
+        // both restore paths (todo #1394).
+        //
+        // An edit that would change nothing never reaches here: it is
+        // dropped by `take_edit_is_refused` before `record_undo` runs, so
+        // no vacuous entry is recorded.
+        Message::Take(_) => UndoAction::Record,
+
         Message::Clip(c) => match c {
             ClipMessage::StartClipDrag { .. } | ClipMessage::StartClipTrim { .. } => {
                 UndoAction::Begin

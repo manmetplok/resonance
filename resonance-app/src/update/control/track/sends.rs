@@ -101,30 +101,34 @@ pub(super) fn add_send(app: &mut Resonance, request: &Request) -> (Response, Tas
     }
 
     // App-chosen id so the reply carries it; the engine bumps its own
-    // allocator past any hint it receives.
+    // allocator past any hint it receives. Role flag + send creation are
+    // ONE undoable transaction: one revision bump for the call, one
+    // edit_undo to take the whole gesture back.
     let send_id = app.aux.allocate_control_send_id();
-    let role_task = run_via_update(
-        app,
-        Message::Mixer(MixerMessage::SetBusReturnRole(params.to_bus.0, true)),
-    );
-    let send_task = run_via_update(
-        app,
-        Message::Mixer(MixerMessage::AddSendWithId {
-            id: send_id,
-            source,
-            dest: params.to_bus.0,
-            level_db: params.level_db.unwrap_or(0.0),
-            pre_fader: params.pre_fader.unwrap_or(false),
-        }),
-    );
-    let result = track::AddSendResult {
-        send_id: resonance_control::ids::SendId(send_id),
-        revision: app.revision(),
-    };
-    (
-        success(request, &result),
-        Task::batch([role_task, send_task]),
-    )
+    app.with_compound_undo(|app| {
+        let role_task = run_via_update(
+            app,
+            Message::Mixer(MixerMessage::SetBusReturnRole(params.to_bus.0, true)),
+        );
+        let send_task = run_via_update(
+            app,
+            Message::Mixer(MixerMessage::AddSendWithId {
+                id: send_id,
+                source,
+                dest: params.to_bus.0,
+                level_db: params.level_db.unwrap_or(0.0),
+                pre_fader: params.pre_fader.unwrap_or(false),
+            }),
+        );
+        let result = track::AddSendResult {
+            send_id: resonance_control::ids::SendId(send_id),
+            revision: app.revision(),
+        };
+        (
+            success(request, &result),
+            Task::batch([role_task, send_task]),
+        )
+    })
 }
 
 /// `track.set_send` — change level / tap point / enable / destination.
@@ -185,40 +189,44 @@ pub(super) fn set_send(app: &mut Resonance, request: &Request) -> (Response, Tas
     // Each existing message edits one field; the engine treats every one
     // as an upsert on the same send id. Toggles are only dispatched when
     // the state actually needs to flip, so an idempotent set is a no-op.
-    let mut tasks = Vec::new();
-    if let Some(to_bus) = params.to_bus {
-        if send.dest != to_bus.0 {
-            tasks.push(run_via_update(
-                app,
-                Message::Mixer(MixerMessage::SetSendDest(send.id, to_bus.0)),
-            ));
+    // Up to four messages, grouped into ONE undoable transaction: one
+    // revision bump per call, one edit_undo for the whole call.
+    app.with_compound_undo(|app| {
+        let mut tasks = Vec::new();
+        if let Some(to_bus) = params.to_bus {
+            if send.dest != to_bus.0 {
+                tasks.push(run_via_update(
+                    app,
+                    Message::Mixer(MixerMessage::SetSendDest(send.id, to_bus.0)),
+                ));
+            }
         }
-    }
-    if let Some(db) = params.level_db {
-        if send.level_db != db {
-            tasks.push(run_via_update(
-                app,
-                Message::Mixer(MixerMessage::SetSendLevel(send.id, db)),
-            ));
+        if let Some(db) = params.level_db {
+            if send.level_db != db {
+                tasks.push(run_via_update(
+                    app,
+                    Message::Mixer(MixerMessage::SetSendLevel(send.id, db)),
+                ));
+            }
         }
-    }
-    if let Some(pre) = params.pre_fader {
-        if send.pre_fader != pre {
-            tasks.push(run_via_update(
-                app,
-                Message::Mixer(MixerMessage::ToggleSendPreFader(send.id)),
-            ));
+        if let Some(pre) = params.pre_fader {
+            if send.pre_fader != pre {
+                tasks.push(run_via_update(
+                    app,
+                    Message::Mixer(MixerMessage::ToggleSendPreFader(send.id)),
+                ));
+            }
         }
-    }
-    if let Some(enabled) = params.enabled {
-        if send.enabled != enabled {
-            tasks.push(run_via_update(
-                app,
-                Message::Mixer(MixerMessage::ToggleSendEnabled(send.id)),
-            ));
+        if let Some(enabled) = params.enabled {
+            if send.enabled != enabled {
+                tasks.push(run_via_update(
+                    app,
+                    Message::Mixer(MixerMessage::ToggleSendEnabled(send.id)),
+                ));
+            }
         }
-    }
-    (ack(app, request), Task::batch(tasks))
+        (ack(app, request), Task::batch(tasks))
+    })
 }
 
 /// `track.remove_send` — delete a send outright.

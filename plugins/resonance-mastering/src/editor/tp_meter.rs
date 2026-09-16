@@ -1,6 +1,6 @@
 //! Stereo true-peak bars in dBTP with a 0 dBTP ceiling line.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 

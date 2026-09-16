@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use wayland_plugin_gui::widgets::{slider as slider_widget, HSlider, SliderStyle};
-use wayland_plugin_gui::{egui, EditorApp};
+use plugin_gui_core::widgets::{slider as slider_widget, HSlider, SliderStyle};
+use plugin_gui_core::{egui, EditorApp};
 
 use resonance_plugin::preset_ui::preset_bar;
 use resonance_plugin::presets::{PresetBank, PresetEditor, PresetSession};

@@ -70,6 +70,7 @@
 
 use std::path::PathBuf;
 
+use resonance_dsp_test_support as golden;
 use resonance_mastering::params::MasteringParams;
 use resonance_mastering::ResonanceMastering;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
@@ -94,14 +95,13 @@ const MAX_PEAK_DELTA: f32 = 2.0e-4;
 const MAX_RMS_DELTA: f64 = 2.0e-5;
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/dsp_golden.f32")
+    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "dsp_golden.f32")
 }
 
 /// `RESONANCE_BLESS=1` is the workspace-wide convention (CLAUDE.md); the
 /// narrower name blesses only this file inside a wider run.
 fn blessing() -> bool {
-    std::env::var("RESONANCE_BLESS").as_deref() == Ok("1")
-        || std::env::var("RESONANCE_BLESS_DSP_GOLDEN").as_deref() == Ok("1")
+    golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_DSP_GOLDEN"])
 }
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -451,70 +451,36 @@ fn mastering_output_matches_golden() {
 
     let path = golden_path();
     if blessing() {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes: Vec<u8> = rendered.iter().flat_map(|s| s.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        eprintln!(
-            "blessed golden: {} samples -> {}",
-            rendered.len(),
-            path.display()
-        );
+        golden::bless_f32(&path, &rendered);
         return;
     }
 
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
-        panic!(
-            "missing golden {}: {e}\nregenerate with RESONANCE_BLESS=1",
-            path.display()
-        )
-    });
-    assert_eq!(
-        bytes.len(),
-        rendered.len() * 4,
-        "golden length mismatch — the scenario set changed"
-    );
-
-    let golden: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-
-    let mut diff_count = 0usize;
-    let mut max_abs = 0.0f32;
-    let mut first_diff = None;
-    let mut sq_err = 0.0f64;
-    for (i, (a, b)) in rendered.iter().zip(golden.iter()).enumerate() {
-        let d = a - b;
-        sq_err += (d as f64) * (d as f64);
-        if a.to_bits() != b.to_bits() {
-            diff_count += 1;
-            if d.abs() > max_abs {
-                max_abs = d.abs();
-            }
-            if first_diff.is_none() {
-                first_diff = Some((i, *a, *b));
-            }
-        }
-    }
-    let rms_err = (sq_err / rendered.len() as f64).sqrt();
+    let want = golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS=1");
+    let diff = golden::compare_f32(&rendered, &want);
 
     eprintln!(
-        "mastering golden: {diff_count}/{} samples differ | peak delta \
-         {max_abs:.3e} (limit {MAX_PEAK_DELTA:.1e}) | rms delta {rms_err:.3e} \
+        "mastering golden: {}/{} samples differ | peak delta \
+         {:.3e} (limit {MAX_PEAK_DELTA:.1e}) | rms delta {:.3e} \
          (limit {MAX_RMS_DELTA:.1e})",
-        rendered.len()
+        diff.diff_count,
+        rendered.len(),
+        diff.max_abs,
+        diff.rms_err,
     );
 
-    if let Some((i, got, want)) = first_diff {
+    if let Some((i, got, want)) = diff.first_diff {
         assert!(
-            max_abs <= MAX_PEAK_DELTA && rms_err <= MAX_RMS_DELTA,
+            diff.max_abs <= MAX_PEAK_DELTA && diff.rms_err <= MAX_RMS_DELTA,
             "mastering chain output moved beyond the FFT-rounding budget: \
-             {diff_count}/{} samples differ, peak delta {max_abs:.3e} (limit \
-             {MAX_PEAK_DELTA:.1e}), rms delta {rms_err:.3e} (limit \
+             {}/{} samples differ, peak delta {:.3e} (limit \
+             {MAX_PEAK_DELTA:.1e}), rms delta {:.3e} (limit \
              {MAX_RMS_DELTA:.1e}); first at sample {i}: got {got:?}, want \
              {want:?}.\nThis is a real change to the chain, not CPU-dependent \
              FFT rounding. If it was intended, re-bless with RESONANCE_BLESS=1.",
-            rendered.len()
+            diff.diff_count,
+            rendered.len(),
+            diff.max_abs,
+            diff.rms_err,
         );
     }
 }

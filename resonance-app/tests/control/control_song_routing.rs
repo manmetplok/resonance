@@ -7,13 +7,13 @@
 //! name), could not see where a track was routed, and had to convert
 //! every fader out of linear gain to reason about balance.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{Message, TrackMessage};
 use resonance_app::state::{TrackState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioEvent, TrackOutput, TrackType};
 use resonance_control::methods::song::{SongSummary, TracksView};
-use resonance_control::{Request, Response, TrackOutput as WireTrackOutput};
+use resonance_control::{Request, TrackOutput as WireTrackOutput};
+use crate::common::roundtrip;
 
 const PARENT: u64 = 1;
 const KICK: u64 = 2;
@@ -42,16 +42,6 @@ fn app() -> Resonance {
         2,
     ));
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn summary(app: &mut Resonance) -> SongSummary {

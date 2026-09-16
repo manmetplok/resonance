@@ -4,7 +4,7 @@
 //! `TrackGroup` instances and provides methods for managing group state,
 //! membership, and nesting.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use resonance_common::track_group::TrackGroup;
 use resonance_common::group_identity::GroupIdentityColor;
@@ -201,12 +201,66 @@ impl TrackGroupRegistry {
     /// The group's id must not already exist in the registry.
     /// Returns `Some(&TrackGroup)` if the group was added, or `None` if a
     /// group with that id already exists.
+    ///
+    /// Membership edges that would close a nested-group cycle (including
+    /// self-membership) are dropped from the inserted group. Project files
+    /// are ingested group-by-group through this method, so a corrupted
+    /// `track_groups` array loads with the cycle broken instead of driving
+    /// the flattening walks downstream into infinite recursion.
     pub fn add_group(&mut self, group: TrackGroup) -> Option<&TrackGroup> {
         if self.groups.contains_key(&group.id) {
             return None;
         }
-        self.groups.insert(group.id, group.clone());
-        self.groups.get(&group.id)
+        let id = group.id;
+        self.groups.insert(id, group);
+        self.break_membership_cycles(id);
+        self.groups.get(&id)
+    }
+
+    /// Drop any membership edge of `id` whose target reaches back to `id`
+    /// through nested-group membership. Any cycle a single insertion can
+    /// introduce passes through the inserted group, so pruning only its
+    /// outgoing edges keeps the registry acyclic as long as every insert
+    /// runs through [`add_group`](Self::add_group).
+    fn break_membership_cycles(&mut self, id: TrackId) {
+        let Some(group) = self.groups.get(&id) else {
+            return;
+        };
+        let closing: Vec<TrackId> = group
+            .ordered_members
+            .iter()
+            .copied()
+            // Plain-track members can't be on a cycle; skip the walk.
+            .filter(|&m| {
+                m == id || (self.groups.contains_key(&m) && self.reaches_via_members(m, id))
+            })
+            .collect();
+        if closing.is_empty() {
+            return;
+        }
+        if let Some(group) = self.groups.get_mut(&id) {
+            group.ordered_members.retain(|m| !closing.contains(m));
+        }
+    }
+
+    /// Whether `target` is reachable from `from` by following membership
+    /// edges through groups. Iterative with a visited set so it terminates
+    /// on arbitrary (even already-cyclic) registry contents.
+    fn reaches_via_members(&self, from: TrackId, target: TrackId) -> bool {
+        let mut visited = HashSet::new();
+        let mut stack = vec![from];
+        while let Some(current) = stack.pop() {
+            if current == target {
+                return true;
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(group) = self.groups.get(&current) {
+                stack.extend(group.ordered_members.iter().copied());
+            }
+        }
+        false
     }
 
     /// Adds a new group with the given parameters and returns its id.
@@ -480,26 +534,30 @@ impl TrackGroupRegistry {
     /// Returns all member track ids for the given group, including nested
     /// group members (flattened).
     ///
-    /// This recursively collects all tracks that are effectively members of
-    /// the group, including those in nested groups.
+    /// The walk is iterative and expands each group at most once, so it
+    /// terminates even if the registry somehow holds a membership cycle —
+    /// ingestion breaks cycles, but this runs from view code every frame
+    /// and must never be able to recurse forever.
     pub fn get_all_member_ids(&self, group_id: TrackId) -> Vec<TrackId> {
         let mut result = Vec::new();
-        self.collect_all_member_ids(group_id, &mut result);
-        result
-    }
-
-    fn collect_all_member_ids(&self, group_id: TrackId, result: &mut Vec<TrackId>) {
-        if let Some(group) = self.groups.get(&group_id) {
-            for &member_id in &group.ordered_members {
-                // Check if the member is itself a group (nested)
-                if let Some(nested_group) = self.groups.get(&member_id) {
-                    // Recursively collect nested group's members
-                    self.collect_all_member_ids(nested_group.id, result);
-                } else {
-                    result.push(member_id);
+        if !self.groups.contains_key(&group_id) {
+            return result;
+        }
+        let mut expanded = HashSet::new();
+        let mut stack = vec![group_id];
+        while let Some(id) = stack.pop() {
+            if let Some(group) = self.groups.get(&id) {
+                if expanded.insert(id) {
+                    // Reverse push keeps the depth-first member order.
+                    for &member_id in group.ordered_members.iter().rev() {
+                        stack.push(member_id);
+                    }
                 }
+            } else {
+                result.push(id);
             }
         }
+        result
     }
 }
 

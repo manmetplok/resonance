@@ -253,19 +253,23 @@ fn set_midi_out(app: &mut Resonance, request: &Request) -> (Response, Task<Messa
         }
     }
 
-    let mut task = Task::none();
-    if let Some(device) = params.device {
-        task = super::run_via_update(app, Message::ExternalInstrument(Ext::SetMidiOutDevice(id, device)));
-    }
-    if let Some(channel) = params.channel {
-        // App-side channels are 0-based; the wire (like the UI) is 1-based.
-        let task2 = super::run_via_update(
-            app,
-            Message::ExternalInstrument(Ext::SetMidiOutChannel(id, Some(channel - 1))),
-        );
-        task = Task::batch([task, task2]);
-    }
-    (ack(app, request), task)
+    // Device + channel land as ONE undoable transaction: one revision
+    // bump per call, one edit_undo to take the whole route change back.
+    app.with_compound_undo(|app| {
+        let mut task = Task::none();
+        if let Some(device) = params.device {
+            task = super::run_via_update(app, Message::ExternalInstrument(Ext::SetMidiOutDevice(id, device)));
+        }
+        if let Some(channel) = params.channel {
+            // App-side channels are 0-based; the wire (like the UI) is 1-based.
+            let task2 = super::run_via_update(
+                app,
+                Message::ExternalInstrument(Ext::SetMidiOutChannel(id, Some(channel - 1))),
+            );
+            task = Task::batch([task, task2]);
+        }
+        (ack(app, request), task)
+    })
 }
 
 fn set_return(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
@@ -315,15 +319,19 @@ fn set_return(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         }
     }
 
-    let mut task = Task::none();
-    if let Some(device) = params.device {
-        task = super::run_via_update(app, Message::ExternalInstrument(Ext::SetReturnDevice(id, device)));
-    }
-    if let Some(port) = params.port {
-        let task2 = super::run_via_update(app, Message::ExternalInstrument(Ext::SetReturnPort(id, port)));
-        task = Task::batch([task, task2]);
-    }
-    (ack(app, request), task)
+    // Device + port land as ONE undoable transaction, exactly like
+    // `set_midi_out`'s device + channel.
+    app.with_compound_undo(|app| {
+        let mut task = Task::none();
+        if let Some(device) = params.device {
+            task = super::run_via_update(app, Message::ExternalInstrument(Ext::SetReturnDevice(id, device)));
+        }
+        if let Some(port) = params.port {
+            let task2 = super::run_via_update(app, Message::ExternalInstrument(Ext::SetReturnPort(id, port)));
+            task = Task::batch([task, task2]);
+        }
+        (ack(app, request), task)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -563,31 +571,39 @@ fn bounce(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let port = params.port.unwrap_or(track.input_port_index);
     let mono = params.mono.unwrap_or(track.mono);
 
+    // The five dialog-driving dispatches are ONE undoable transaction:
+    // one revision bump for the call, one edit_undo for the whole
+    // gesture. If the flow refuses to open mid-group, the group closes
+    // with whatever the opening dispatch did as its single entry —
+    // that partial state is exactly what the error reply describes,
+    // and one edit_undo takes it back.
     use crate::message::BounceMessage as B;
-    let open = super::run_via_update(app, Message::Track(TrackMessage::BounceInPlace(id)));
-    // `BounceInPlace` routes an external track to the picker dialog; if
-    // it went anywhere else there is nothing to confirm and driving the
-    // rest would be a no-op we'd wrongly report as started.
-    if app.bounce_dialog.is_none() {
-        return reject(
-            request,
-            RpcError::unsupported(format!(
-                "track {id} did not open the realtime bounce flow; it may be frozen or already \
-                 bouncing"
-            )),
+    app.with_compound_undo(|app| {
+        let open = super::run_via_update(app, Message::Track(TrackMessage::BounceInPlace(id)));
+        // `BounceInPlace` routes an external track to the picker dialog; if
+        // it went anywhere else there is nothing to confirm and driving the
+        // rest would be a no-op we'd wrongly report as started.
+        if app.bounce_dialog.is_none() {
+            return reject(
+                request,
+                RpcError::unsupported(format!(
+                    "track {id} did not open the realtime bounce flow; it may be frozen or already \
+                     bouncing"
+                )),
+            );
+        }
+        let pick_device = super::run_via_update(
+            app,
+            Message::Track(TrackMessage::Bounce(B::PickDevice(Some(device)))),
         );
-    }
-    let pick_device = super::run_via_update(
-        app,
-        Message::Track(TrackMessage::Bounce(B::PickDevice(Some(device)))),
-    );
-    let set_mono = super::run_via_update(app, Message::Track(TrackMessage::Bounce(B::SetMono(mono))));
-    // Port last: PickDevice resets it to 0 and SetMono can snap it.
-    let pick_port = super::run_via_update(app, Message::Track(TrackMessage::Bounce(B::PickPort(port))));
-    let confirm = super::run_via_update(app, Message::Track(TrackMessage::Bounce(B::Confirm)));
+        let set_mono = super::run_via_update(app, Message::Track(TrackMessage::Bounce(B::SetMono(mono))));
+        // Port last: PickDevice resets it to 0 and SetMono can snap it.
+        let pick_port = super::run_via_update(app, Message::Track(TrackMessage::Bounce(B::PickPort(port))));
+        let confirm = super::run_via_update(app, Message::Track(TrackMessage::Bounce(B::Confirm)));
 
-    (
-        ack(app, request),
-        Task::batch([open, pick_device, set_mono, pick_port, confirm]),
-    )
+        (
+            ack(app, request),
+            Task::batch([open, pick_device, set_mono, pick_port, confirm]),
+        )
+    })
 }

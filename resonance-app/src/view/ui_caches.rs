@@ -146,6 +146,29 @@ impl UiViewCaches {
     }
 }
 
+/// Combine a cached MIDI device option list with an override entry for
+/// the rare case where the configured device is no longer enumerated by
+/// the engine (controller unplugged). The normal path returns the
+/// `Cached` variant — a cheap `Rc` clone with no allocation.
+///
+/// Shared by the mixer inspector's per-track MIDI pickers and the
+/// Settings overlay's MIDI-clock pickers, so neither surface rebuilds
+/// its option `Vec` per frame.
+pub(crate) fn midi_choices_with_override(
+    cached: &Rc<[MidiPickerChoice]>,
+    configured: Option<&str>,
+    available: &[MidiDeviceInfo],
+) -> ChoiceList<MidiPickerChoice> {
+    match configured.filter(|name| !available.iter().any(|d| d.name == *name)) {
+        Some(stale) => {
+            let mut v: Vec<MidiPickerChoice> = cached.iter().cloned().collect();
+            v.push(MidiPickerChoice(Some(stale.to_string())));
+            ChoiceList::Owned(v)
+        }
+        None => ChoiceList::Cached(cached.clone()),
+    }
+}
+
 /// Borrowed-or-owned wrapper for a `pick_list`'s option slice. The
 /// common path is the `Cached` branch — a refcounted slice cloned from
 /// `UiViewCaches`. The `Owned` branch covers rare cases (a track with

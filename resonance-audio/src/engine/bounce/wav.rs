@@ -13,7 +13,7 @@
 //! which never reads `shared.reference`, so the exported file is always
 //! the processed mix regardless of the live A/B selection.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -214,13 +214,14 @@ enum RenderOutcome {
 /// Render `[render_start, render_stop)` in `BOUNCE_CHUNK` blocks, dropping
 /// the leading `comp_latency` frames of plugin-delay compensation, and
 /// hand each trimmed interleaved-stereo chunk to `on_chunk`. Honours the
-/// cooperative cancel flag and emits `phase` progress. Shared by the
-/// single-pass export, the normalization analyze pass and the apply pass.
+/// render's own cooperative cancel token and emits `phase` progress.
+/// Shared by the single-pass export, the normalization analyze pass and
+/// the apply pass.
 #[allow(clippy::too_many_arguments)]
 fn render_range(
     ctx: &ChunkCtx<'_>,
     scratch: &mut ChunkScratch,
-    shared: &Arc<SharedState>,
+    cancel: &AtomicBool,
     render_start: u64,
     render_stop: u64,
     comp_latency: u64,
@@ -236,8 +237,8 @@ fn render_range(
     while pos < render_stop {
         // Cooperative cancel — checked once per chunk so the UI's modal
         // Cancel button releases the export promptly (chunks are ~tens of
-        // ms each).
-        if shared.bounce_cancel.load(Ordering::Relaxed) {
+        // ms each). The token is this render's own and is never cleared.
+        if cancel.load(Ordering::Relaxed) {
             return RenderOutcome::Cancelled;
         }
         // Tail chunks are padded up to the CLAP activation minimum and
@@ -276,16 +277,15 @@ fn render_range(
 
 /// Drop the partial output file and report a cancel. Shared by every
 /// export pass so a cancel never leaves a half-rendered file behind.
+/// The cancel token is per-render, so there is nothing to clear here.
 fn cancel_cleanup(
     sink: Box<dyn EncoderSink>,
     path: &str,
-    shared: &Arc<SharedState>,
     reporter: ExportReporter,
     event_tx: &Sender<AudioEvent>,
 ) {
     drop(sink);
     let _ = std::fs::remove_file(path);
-    shared.bounce_cancel.store(false, Ordering::Relaxed);
     reporter.error(event_tx, ExportErrorKind::Cancelled, "Bounce cancelled".into());
 }
 
@@ -299,6 +299,7 @@ pub(crate) fn run_export(
     settings: &ExportSettings,
     reporter: ExportReporter,
     shared: &Arc<SharedState>,
+    cancel: &AtomicBool,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
@@ -423,7 +424,7 @@ pub(crate) fn run_export(
         match render_range(
             &ctx,
             &mut scratch,
-            shared,
+            cancel,
             render_start,
             render_stop,
             comp_latency,
@@ -436,7 +437,7 @@ pub(crate) fn run_export(
             },
         ) {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, shared, reporter, event_tx);
+                cancel_cleanup(sink, &path, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -457,7 +458,7 @@ pub(crate) fn run_export(
         let outcome = render_range(
             &ctx,
             &mut scratch,
-            shared,
+            cancel,
             render_start,
             render_stop,
             comp_latency,
@@ -476,7 +477,7 @@ pub(crate) fn run_export(
         );
         match outcome {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, shared, reporter, event_tx);
+                cancel_cleanup(sink, &path, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -507,7 +508,7 @@ pub(crate) fn run_export(
         let outcome = render_range(
             &ctx,
             &mut scratch,
-            shared,
+            cancel,
             render_start,
             render_stop,
             comp_latency,
@@ -521,7 +522,7 @@ pub(crate) fn run_export(
         );
         match outcome {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, shared, reporter, event_tx);
+                cancel_cleanup(sink, &path, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {

@@ -13,6 +13,7 @@
 //! each `AudioCommand` to the appropriate category handler.
 
 mod dispatch;
+pub(crate) mod test_support;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,7 +32,7 @@ use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer::MidiStash;
 use crate::recording::RecordingState;
 use crate::types::*;
-use resonance_common::{TakeGroupId, TimelineRange};
+use resonance_common::{TakeGroup, TakeGroupId, TimelineRange};
 
 use super::import_queue::ImportQueue;
 use super::midi::MidiHardwareState;
@@ -91,10 +92,6 @@ pub(crate) struct LoopRecordSession {
     /// Zero-based index of the pass currently being captured. Bumped at
     /// each seam after the completed pass's takes are emitted.
     pub pass_index: u32,
-    /// Stable take-group id per track for this run, allocated lazily the
-    /// first time a track produces a take. Keeps all passes of a track
-    /// folded into a single group on the app side.
-    pub groups: HashMap<TrackId, TakeGroupId>,
 }
 
 /// Mutable engine-thread-local state that persists across command
@@ -118,9 +115,11 @@ pub(crate) struct HandlerState {
     /// External sidechain key routes, one per plugin instance. Mirrored
     /// to the audio thread by `engine::sidechain::publish`.
     pub sidechain_routes: crate::engine::sidechain::SidechainRoutes,
-    /// Monotonic id allocator for cycle-record take groups. One group is
-    /// handed out per armed track per loop-record run (see
-    /// [`LoopRecordSession::groups`]).
+    /// Monotonic id allocator for cycle-record take groups. Consumed only
+    /// by `transport::loop_record_group_for`, and only when a run finds no
+    /// existing lane for its track + loop region: one lane per slot, so
+    /// repeated runs over the same region reuse the group already in
+    /// [`HandlerState::take_groups`] (todo #1392).
     pub next_take_group_id: TakeGroupId,
     pub rec: RecordingState,
     pub bundles: Vec<ClapBundle>,
@@ -174,6 +173,33 @@ pub(crate) struct HandlerState {
     pub reference: super::reference::ReferencePlayer,
     /// In-flight cycle-record run, or `None` when not loop-recording.
     pub loop_record_session: Option<LoopRecordSession>,
+    /// Authoritative take groups keyed by id (epic #15, doc #165).
+    /// Populated as cycle-record passes are captured
+    /// (`transport::finalize_loop_record_pass`) and edited by the
+    /// `SetTakeComp` / `SetActiveTake` handlers in
+    /// [`crate::engine::takes`]. Every mutation republishes the flattened
+    /// `SharedState::take_comp` table, which is what keeps comp playback
+    /// and comp bounce in step.
+    pub take_groups: HashMap<TakeGroupId, TakeGroup>,
+    /// Recordings of takes that have been removed (`RemoveTake` /
+    /// `RemoveTakeGroup`, ba todo #1397), held out of the shared clip list
+    /// so they cannot sound.
+    ///
+    /// Parked rather than dropped, and never deleted from disk: a removal
+    /// is undoable, and the `RestoreTakeGroups` an undo sends carries the
+    /// take's `clip_ref` back — so the clip has to still be here for the
+    /// restored take to be audible as well as visible. Session-local, like
+    /// the id allocators beside it: `ClearAll` empties it, and a project
+    /// reload starts from an empty park with the orphaned WAV left on disk.
+    ///
+    /// Behind an `Arc` — the only field here that is not purely
+    /// engine-thread-local — because the clip-load worker has to be able to
+    /// see it (ba todo #1403): a removal racing a `LoadTakeClipFromWav`
+    /// that is still in flight parks a *claim*, and the worker delivers the
+    /// finished clip into the park rather than into the render's input.
+    /// [`TakeClipPark`](crate::engine::take_park::TakeClipPark) states the
+    /// locking contract that keeps the two in step.
+    pub take_clip_park: Arc<crate::engine::take_park::TakeClipPark>,
     /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
     /// engine-thread-local; written by the `SetAutomationLane` /
     /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
@@ -210,6 +236,78 @@ pub(crate) struct HandlerState {
     /// [`super::clips::poll_deferred_clip_commands`] on each engine-loop
     /// iteration.
     pub deferred_clip_commands: Vec<super::clips::DeferredClipCommand>,
+    /// Cancel token of the render most recently started by a bounce /
+    /// export command (`BounceToWav` / `ExportAudio` / `BounceTrackToAudio`
+    /// / `BounceTrackRealtimeToAudio`); `CancelBounce` flips it. Every
+    /// render gets a FRESH token at start, so a cancel aimed at one render
+    /// can neither abort a different renderer that happens to poll first
+    /// nor be lost to a later render clearing a shared flag — the two
+    /// failure modes of the old single `SharedState::bounce_cancel` atomic.
+    /// Stays `Some` after the render ends; setting a finished render's
+    /// token is harmless.
+    pub bounce_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Cancel token of the most recently started freeze render
+    /// (`FreezeTrack`); `CancelFreeze` flips it. Same per-render
+    /// semantics as [`Self::bounce_cancel`].
+    pub freeze_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Cancel token of the most recently started stem export
+    /// (`ExportStems`); `CancelStemExport` flips it. Same per-render
+    /// semantics as [`Self::bounce_cancel`].
+    pub stem_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl HandlerState {
+    /// The engine control thread's starting state: every id allocator at
+    /// 1, every store empty, no recording or bounce in flight.
+    ///
+    /// Split out of [`engine_thread`] so the headless harness in
+    /// [`test_support`] starts from the *same* state the real thread
+    /// does. A second, hand-written copy of this field list would drift
+    /// the moment a field gained a non-default starting value, and a
+    /// harness that starts from a state the engine never has proves
+    /// nothing about the engine.
+    pub(crate) fn new(
+        sample_rate: u32,
+        live_midi_tx: Sender<LiveMidiEvent>,
+        live_control_tx: Sender<LiveControlEvent>,
+        clock_tx: Sender<MidiClockEvent>,
+    ) -> Self {
+        Self {
+            next_track_id: 1,
+            next_bus_id: 1,
+            next_clip_id: 1,
+            next_asset_id: 1,
+            next_plugin_id: 1,
+            next_send_id: 1,
+            aux_sends: IndexMap::new(),
+            sidechain_routes: Default::default(),
+            next_take_group_id: 1,
+            rec: RecordingState::new(sample_rate),
+            bundles: Vec::new(),
+            imports: ImportQueue::default(),
+            project_dir: None,
+            midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
+            midi_recording: HashMap::new(),
+            live_note_stash: MidiStash::new(),
+            midi_clock_sender: MidiClockSender::new(),
+            midi_clock_receiver: MidiClockReceiver::new(clock_tx),
+            midi_clock_tempo: ClockTempoTracker::default(),
+            midi_clock_external_running: false,
+            midi_clock_last_emitted_bpm: 0.0,
+            pending_bounce: None,
+            reference: super::reference::ReferencePlayer::new(),
+            loop_record_session: None,
+            take_groups: HashMap::new(),
+            take_clip_park: Arc::new(crate::engine::take_park::TakeClipPark::default()),
+            automation_lanes: automation::AutomationLanes::new(),
+            external_instruments: external_instrument::ExternalInstruments::new(),
+            pending_latency_ping: None,
+            deferred_clip_commands: Vec::new(),
+            bounce_cancel: None,
+            freeze_cancel: None,
+            stem_cancel: None,
+        }
+    }
 }
 
 /// Rebuild the audio-thread automation snapshot from the engine-thread
@@ -223,65 +321,73 @@ pub(crate) fn publish_automation_snapshot(
     ctx.automation.store(Arc::new(snapshot));
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn engine_thread(
-    cmd_rx: Receiver<AudioCommand>,
-    cmd_tx_retry: Sender<AudioCommand>,
-    event_tx: Sender<AudioEvent>,
-    shared: Arc<SharedState>,
-    tracks_arc: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses_arc: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master_arc: Arc<RwLock<MasterBus>>,
-    clips_arc: Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
-    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
-    plugins_arc: Arc<RwLock<PluginMap>>,
-    latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
-    automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
-    monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
-    live_midi_tx: Sender<LiveMidiEvent>,
+/// Construction parameters for [`engine_thread`].
+///
+/// A plain positional parameter list here used to run to 22 arguments,
+/// several sharing a type (three `Sender`s, five `Arc<RwLock<…>>>`s) —
+/// nothing stopped two same-typed arguments from being passed in the
+/// wrong order at the call site; the compiler can't catch a transposed
+/// pair when both sides typecheck. Field-name construction makes that
+/// class of mistake impossible: every value is bound to its parameter
+/// name at the call site, not its position. Field names mirror the
+/// removed parameter names 1:1, so a diff against the old signature
+/// reads straight across.
+pub(crate) struct EngineThreadParams {
+    pub cmd_rx: Receiver<AudioCommand>,
+    pub cmd_tx_retry: Sender<AudioCommand>,
+    pub event_tx: Sender<AudioEvent>,
+    pub shared: Arc<SharedState>,
+    pub tracks_arc: Arc<RwLock<IndexMap<TrackId, Track>>>,
+    pub busses_arc: Arc<RwLock<IndexMap<BusId, Bus>>>,
+    pub master_arc: Arc<RwLock<MasterBus>>,
+    pub clips_arc: Arc<RwLock<Vec<AudioClip>>>,
+    pub midi_clips_arc: Arc<RwLock<Vec<MidiClip>>>,
+    pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    pub plugins_arc: Arc<RwLock<PluginMap>>,
+    pub latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
+    pub automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
+    pub monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
+    pub live_midi_tx: Sender<LiveMidiEvent>,
     // Events already picked up (and instrument-delivered) by the audio
     // callback, forwarded here for recording + MIDI-thru bookkeeping
     // (doc #260 finding #16).
-    live_midi_fwd_rx: Receiver<LiveMidiEvent>,
-    live_control_tx: Sender<LiveControlEvent>,
-    live_control_rx: Receiver<LiveControlEvent>,
-    clock_tx: Sender<MidiClockEvent>,
-    clock_rx: Receiver<MidiClockEvent>,
-    sample_rate: u32,
-    buf_frames: usize,
-    quantum: usize,
-) {
-    let mut state = HandlerState {
-        next_track_id: 1,
-        next_bus_id: 1,
-        next_clip_id: 1,
-        next_asset_id: 1,
-        next_plugin_id: 1,
-        next_send_id: 1,
-        aux_sends: IndexMap::new(),
-        sidechain_routes: Default::default(),
-        next_take_group_id: 1,
-        rec: RecordingState::new(sample_rate),
-        bundles: Vec::new(),
-        imports: ImportQueue::default(),
-        project_dir: None,
-        midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
-        midi_recording: HashMap::new(),
-        live_note_stash: MidiStash::new(),
-        midi_clock_sender: MidiClockSender::new(),
-        midi_clock_receiver: MidiClockReceiver::new(clock_tx),
-        midi_clock_tempo: ClockTempoTracker::default(),
-        midi_clock_external_running: false,
-        midi_clock_last_emitted_bpm: 0.0,
-        pending_bounce: None,
-        reference: super::reference::ReferencePlayer::new(),
-        loop_record_session: None,
-        automation_lanes: automation::AutomationLanes::new(),
-        external_instruments: external_instrument::ExternalInstruments::new(),
-        pending_latency_ping: None,
-        deferred_clip_commands: Vec::new(),
-    };
+    pub live_midi_fwd_rx: Receiver<LiveMidiEvent>,
+    pub live_control_tx: Sender<LiveControlEvent>,
+    pub live_control_rx: Receiver<LiveControlEvent>,
+    pub clock_tx: Sender<MidiClockEvent>,
+    pub clock_rx: Receiver<MidiClockEvent>,
+    pub sample_rate: u32,
+    pub buf_frames: usize,
+    pub quantum: usize,
+}
+
+pub(crate) fn engine_thread(params: EngineThreadParams) {
+    let EngineThreadParams {
+        cmd_rx,
+        cmd_tx_retry,
+        event_tx,
+        shared,
+        tracks_arc,
+        busses_arc,
+        master_arc,
+        clips_arc,
+        midi_clips_arc,
+        tempo_map,
+        plugins_arc,
+        latency_comp,
+        automation,
+        monitor_prod,
+        live_midi_tx,
+        live_midi_fwd_rx,
+        live_control_tx,
+        live_control_rx,
+        clock_tx,
+        clock_rx,
+        sample_rate,
+        buf_frames,
+        quantum,
+    } = params;
+    let mut state = HandlerState::new(sample_rate, live_midi_tx, live_control_tx, clock_tx);
     let ctx = HandlerCtx {
         shared: &shared,
         tracks: &tracks_arc,
@@ -462,6 +568,12 @@ pub(crate) fn engine_thread(
         // Drain recording ring buffer into per-track buffers
         if ctx.shared.recording.load(Ordering::Relaxed) {
             state.rec.drain_ring_to_buffers();
+            // One-shot per take: report frames the capture callbacks had
+            // to discard (ring overflow) so a damaged take is flagged
+            // while it is still being recorded.
+            state
+                .rec
+                .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
         }
 
         // Audition preview housekeeping: emit AuditionStopped on a natural

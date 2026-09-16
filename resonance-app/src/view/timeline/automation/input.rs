@@ -132,7 +132,9 @@ impl TimelineCanvas<'_> {
                     dedicated_row: true,
                 })
             }
-            ArrangeRowKind::GroupHeader(_) => None,
+            // A take sub-row carries alternate recordings, not envelopes —
+            // an automation gesture never resolves there (epic #15).
+            ArrangeRowKind::GroupHeader(_) | ArrangeRowKind::TakeRow { .. } => None,
         }
     }
 

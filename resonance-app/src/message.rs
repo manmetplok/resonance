@@ -21,7 +21,7 @@ use resonance_audio::types::{
     TrackId, TrackOutput,
 };
 use resonance_audio::PoolImportOutcome;
-use resonance_common::{AutomationTarget, CurveKind};
+use resonance_common::{AutomationTarget, CurveKind, TakeGroupId, TakeId, TimelineRange};
 use resonance_music_theory::Scale;
 
 #[derive(Debug, Clone)]
@@ -53,6 +53,7 @@ pub enum Message {
     VocalTuning(VocalTuningMessage),
     Plugin(PluginMessage),
     Automation(AutomationMessage),
+    Take(TakeMessage),
     Viewport(ViewportMessage),
     ProjectIo(ProjectIoMessage),
     Group(GroupMessage),
@@ -1183,6 +1184,75 @@ pub enum AutomationMessage {
     ToggleTrackExpanded(TrackId),
 }
 
+/// Comping edits to a cycle-record take lane (design doc #165, epic #15,
+/// todo #411).
+///
+/// Every variant names the [`TakeGroup`](resonance_common::TakeGroup) it
+/// edits by the engine's `group_id` and resolves to at most one
+/// `SetTakeComp` plus one `SetActiveTake`, applied optimistically to
+/// [`TakeGroupState`](crate::state::TakeGroupState) and confirmed by the
+/// engine's `TakeCompChanged` / `ActiveTakeChanged` echoes. Each is one
+/// atomic undo entry.
+///
+/// A message that would change nothing — an unknown group or take, a
+/// selection that is already current, a promote that lands outside the
+/// chosen take's recorded audio — is refused **before** dispatch by
+/// `Resonance::take_edit_is_refused`, so it spends no undo entry and bumps
+/// no revision (the same rule ba todo #1261 established for a refused
+/// chain reorder).
+///
+/// Expanding / collapsing a lane is deliberately *not* here: it is
+/// transient view state carried by `UiMessage::ToggleTakeLane` (todo
+/// #413), never an undo entry and never persisted.
+#[derive(Debug, Clone)]
+pub enum TakeMessage {
+    /// Solo one take of `group_id` across the whole slot, overriding the
+    /// comp — or clear the override with `None` so the comp plays again.
+    ///
+    /// Refused when the group does not hold `take_id`: the engine drops
+    /// such a command silently and emits **no** echo (ba doc #292), so a
+    /// rejected selection would otherwise leave the mirror asserting a
+    /// solo that never happened.
+    SetActiveTake {
+        group_id: TakeGroupId,
+        take_id: Option<TakeId>,
+    },
+    /// Cut the comp in two at the transport playhead, creating a boundary
+    /// to promote against. Refused unless the playhead lies strictly
+    /// inside the group's slot and inside a segment (a cut on an existing
+    /// boundary changes nothing).
+    SplitCompAtPlayhead { group_id: TakeGroupId },
+    /// Promote `take_id` across `range`, replacing whatever covered it.
+    ///
+    /// `range` is a *request*: it is clamped to the group's slot and to
+    /// the region the take's own recording actually spans before anything
+    /// is sent, and the message is refused if nothing survives. The engine
+    /// does not sanitise segment ranges, and a segment over a region its
+    /// take cannot fill renders as silence inside the composite.
+    PromoteTakeSegment {
+        group_id: TakeGroupId,
+        take_id: TakeId,
+        range: TimelineRange,
+    },
+    /// Remove `take_id` from the lane and re-cover the slot from the takes
+    /// that remain.
+    ///
+    /// **A group's last take removes the lane** (ba todo #1401): an empty
+    /// group keeps its slot forever, has nothing to comp or draw, and an
+    /// empty comp is exactly the state in which the cover falls back to
+    /// the most recent pass — the take just deleted. Refused only when the
+    /// group or the take is not there.
+    ///
+    /// Sent to the engine as `RemoveTake` / `RemoveTakeGroup` rather than
+    /// as a comp edit, because only the engine can park the take's
+    /// recording out of the render — an un-parked one plays raw, at full
+    /// gain, on the ordinary clip path.
+    DeleteTake {
+        group_id: TakeGroupId,
+        take_id: TakeId,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum ViewportMessage {
     ZoomIn,
@@ -1301,6 +1371,11 @@ pub enum UiMessage {
     /// Fold / unfold one of the mixer-inspector groups (SIGNAL /
     /// ROUTING / CHAIN). Runtime UI state only.
     ToggleMixerInspectorGroup(MixerInspectorGroup),
+    /// Fold / unfold a track's take lane — the stack of cycle-recorded
+    /// takes shown beneath it (epic #15, doc #165). Runtime UI state only:
+    /// the takes persist, whether their folder is open does not. The comp
+    /// ribbon on the track lane stays visible either way.
+    ToggleTakeLane(TrackId),
     /// Toggle MIDI clock send (engine acts as clock master).
     ToggleMidiClockSend,
     /// Pick the hardware port for MIDI clock send. `None` clears.

@@ -22,9 +22,12 @@
 use std::collections::{HashMap, HashSet};
 
 use resonance_common::automation::{LaneId, TrackId};
+use resonance_common::{TakeGroupId, TakeId};
 
-use crate::state::{AutomationState, TrackGroupRegistry, TrackState};
-use crate::theme::{AUTOMATION_LANE_ROW_HEIGHT, GROUP_HEADER_HEIGHT, TRACK_HEIGHT};
+use crate::state::{AutomationState, TakeGroupState, TrackGroupRegistry, TrackState};
+use crate::theme::{
+    AUTOMATION_LANE_ROW_HEIGHT, GROUP_HEADER_HEIGHT, TAKE_ROW_HEIGHT, TRACK_HEIGHT,
+};
 use crate::view::timeline::automation::track_lanes_sorted;
 
 /// What a single arrange row represents.
@@ -46,6 +49,21 @@ pub enum ArrangeRowKind {
     /// (see [`ArrangeAutomationRows`]). Rendering/editing of these rows
     /// lands in todos #1097/#1098.
     AutomationLane { track: TrackId, lane: LaneId },
+    /// A slim `TAKE_ROW_HEIGHT` (38 px) take sub-row for one recorded take
+    /// of one of `track`'s take groups (epic #15, doc #165). Emitted
+    /// directly beneath the owning [`Track`](Self::Track) row — take groups
+    /// ordered by slot, takes within a group in capture order — while that
+    /// track's take lane is expanded (see [`ArrangeTakeRows`]).
+    ///
+    /// **One lane per slot**: every take of a group shares that group's
+    /// stack, no matter how many separate record runs produced them. The
+    /// row carries `group` as well as `take` so a track that recorded over
+    /// two different loop regions gets two stacks that never interleave.
+    TakeRow {
+        track: TrackId,
+        group: TakeGroupId,
+        take: TakeId,
+    },
 }
 
 /// One row in the arrange layout: its kind plus the cumulative vertical
@@ -72,7 +90,9 @@ impl ArrangeRow {
     pub fn track_id(&self) -> Option<TrackId> {
         match self.kind {
             ArrangeRowKind::Track(id) => Some(id),
-            ArrangeRowKind::GroupHeader(_) | ArrangeRowKind::AutomationLane { .. } => None,
+            ArrangeRowKind::GroupHeader(_)
+            | ArrangeRowKind::AutomationLane { .. }
+            | ArrangeRowKind::TakeRow { .. } => None,
         }
     }
 
@@ -81,7 +101,9 @@ impl ArrangeRow {
     pub fn group_id(&self) -> Option<TrackId> {
         match self.kind {
             ArrangeRowKind::GroupHeader(id) => Some(id),
-            ArrangeRowKind::Track(_) | ArrangeRowKind::AutomationLane { .. } => None,
+            ArrangeRowKind::Track(_)
+            | ArrangeRowKind::AutomationLane { .. }
+            | ArrangeRowKind::TakeRow { .. } => None,
         }
     }
 }
@@ -141,6 +163,72 @@ impl ArrangeAutomationRows {
     }
 }
 
+/// The take-lane inputs to [`ArrangeRowLayout::build_with_takes`] (epic
+/// #15, doc #165): which `(group, take)` rows each track owns, in display
+/// order, and which tracks currently show them as stacked sub-rows.
+///
+/// The default value (`no takes, nothing expanded`) yields a layout
+/// byte-identical to the pre-take-lane one, which is what every consumer
+/// gets while no track has been cycle-recorded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ArrangeTakeRows {
+    /// Per track, its `(group_id, take_id)` rows in display order: take
+    /// groups sorted by slot start (ties by group id), and within a group
+    /// the takes sorted by `pass_index` (ties by take id) so the stack
+    /// reads oldest-pass-first regardless of event arrival order. Tracks
+    /// without take groups are simply absent.
+    pub takes_by_track: HashMap<TrackId, Vec<(TakeGroupId, TakeId)>>,
+    /// Tracks whose take lanes are expanded. Transient UI state (not
+    /// project data): see `ClipInteractionState::take_lane_expanded_tracks`.
+    pub expanded: HashSet<TrackId>,
+}
+
+impl ArrangeTakeRows {
+    /// Collect the per-track take-row lists from the live
+    /// [`TakeGroupState`] mirror for the given arrange tracks, together
+    /// with the expanded-track set.
+    ///
+    /// A track's groups are **not** merged: each group binds to one loop
+    /// slot, so a track recorded over two different regions gets two
+    /// contiguous stacks. Within a slot every take lands in one stack no
+    /// matter how many record runs produced it — the engine keying that
+    /// makes a second run reuse the group is todo #1392's, and this
+    /// collector inherits it for free because it groups by `group.id`
+    /// alone.
+    pub fn collect(
+        takes: &TakeGroupState,
+        sorted_tracks: &[&TrackState],
+        expanded: &HashSet<TrackId>,
+    ) -> Self {
+        let mut takes_by_track: HashMap<TrackId, Vec<(TakeGroupId, TakeId)>> = HashMap::new();
+        for track in sorted_tracks {
+            let mut groups: Vec<&resonance_common::TakeGroup> = takes
+                .groups
+                .iter()
+                .filter(|g| g.track_id == track.id)
+                .collect();
+            if groups.is_empty() {
+                continue;
+            }
+            groups.sort_by_key(|g| (g.slot.start, g.id));
+            let mut rows: Vec<(TakeGroupId, TakeId)> = Vec::new();
+            for group in groups {
+                let mut takes: Vec<&resonance_common::Take> = group.takes.iter().collect();
+                takes.sort_by_key(|t| (t.pass_index, t.id));
+                rows.extend(takes.into_iter().map(|t| (group.id, t.id)));
+            }
+            if rows.is_empty() {
+                continue;
+            }
+            takes_by_track.insert(track.id, rows);
+        }
+        Self {
+            takes_by_track,
+            expanded: expanded.clone(),
+        }
+    }
+}
+
 /// The ordered, height-aware list of visible arrange rows.
 ///
 /// Built by [`ArrangeRowLayout::build`]; queried via [`rows`](Self::rows),
@@ -186,6 +274,29 @@ impl ArrangeRowLayout {
         groups: &TrackGroupRegistry,
         automation: &ArrangeAutomationRows,
     ) -> Self {
+        Self::build_with_takes(
+            sorted_tracks,
+            groups,
+            automation,
+            &ArrangeTakeRows::default(),
+        )
+    }
+
+    /// [`build`](Self::build) plus the take-lane sub-rows (epic #15, doc
+    /// #165): every track in `takes.expanded` gets one 38 px
+    /// [`ArrangeRowKind::TakeRow`] row per entry of its `takes_by_track`
+    /// list, directly beneath its track row **and beneath any automation
+    /// lane rows**, in list order.
+    ///
+    /// Automation rows come first so the two stacks never interleave: a
+    /// track with both expanded reads as `track · automation lanes · takes`.
+    /// With `ArrangeTakeRows::default()` this is exactly [`build`](Self::build).
+    pub fn build_with_takes(
+        sorted_tracks: &[&TrackState],
+        groups: &TrackGroupRegistry,
+        automation: &ArrangeAutomationRows,
+        takes: &ArrangeTakeRows,
+    ) -> Self {
         let present: HashSet<TrackId> = sorted_tracks.iter().map(|t| t.id).collect();
         let mut builder = Builder {
             rows: Vec::new(),
@@ -194,6 +305,7 @@ impl ArrangeRowLayout {
             present,
             groups,
             automation,
+            takes,
         };
 
         for track in sorted_tracks {
@@ -273,6 +385,24 @@ impl ArrangeRowLayout {
             .map(|row| (row.y_top, row.height))
     }
 
+    /// The `(y_top, height)` rectangle of the take sub-row for `track`'s
+    /// take `take` in group `group`, or `None` when that row is not visible
+    /// — the track's take lane is collapsed, the track itself is hidden
+    /// inside a collapsed group, or the take doesn't belong to it. Sibling
+    /// of [`automation_row_rect`](Self::automation_row_rect) for the take
+    /// lane render surface (epic #15).
+    pub fn take_row_rect(
+        &self,
+        track: TrackId,
+        group: TakeGroupId,
+        take: TakeId,
+    ) -> Option<(f32, f32)> {
+        self.rows
+            .iter()
+            .find(|row| row.kind == ArrangeRowKind::TakeRow { track, group, take })
+            .map(|row| (row.y_top, row.height))
+    }
+
     /// Number of rows in the layout.
     pub fn len(&self) -> usize {
         self.rows.len()
@@ -316,14 +446,17 @@ struct Builder<'a> {
     present: HashSet<TrackId>,
     groups: &'a TrackGroupRegistry,
     automation: &'a ArrangeAutomationRows,
+    takes: &'a ArrangeTakeRows,
 }
 
 impl Builder<'_> {
     /// Push a track's 96 px row, followed — when its automation is
     /// expanded — by one 44 px [`ArrangeRowKind::AutomationLane`] row per
-    /// lane, in the pre-sorted `lanes_by_track` order. Lane rows only
-    /// ever ride along with their track row, so a track hidden inside a
-    /// collapsed group (which never reaches here) hides them too.
+    /// lane, in the pre-sorted `lanes_by_track` order, and then — when its
+    /// take lane is expanded — by one 38 px [`ArrangeRowKind::TakeRow`] per
+    /// recorded take, in the pre-sorted `takes_by_track` order. Sub-rows
+    /// only ever ride along with their track row, so a track hidden inside
+    /// a collapsed group (which never reaches here) hides them too.
     fn push_track(&mut self, id: TrackId) {
         self.rows.push(ArrangeRow {
             kind: ArrangeRowKind::Track(id),
@@ -332,19 +465,36 @@ impl Builder<'_> {
         });
         self.y += TRACK_HEIGHT;
 
-        if !self.automation.expanded.contains(&id) {
-            return;
+        if self.automation.expanded.contains(&id) {
+            if let Some(lanes) = self.automation.lanes_by_track.get(&id) {
+                for &lane in lanes {
+                    self.rows.push(ArrangeRow {
+                        kind: ArrangeRowKind::AutomationLane { track: id, lane },
+                        y_top: self.y,
+                        height: AUTOMATION_LANE_ROW_HEIGHT,
+                    });
+                    self.y += AUTOMATION_LANE_ROW_HEIGHT;
+                }
+            }
         }
-        let Some(lanes) = self.automation.lanes_by_track.get(&id) else {
-            return;
-        };
-        for &lane in lanes {
-            self.rows.push(ArrangeRow {
-                kind: ArrangeRowKind::AutomationLane { track: id, lane },
-                y_top: self.y,
-                height: AUTOMATION_LANE_ROW_HEIGHT,
-            });
-            self.y += AUTOMATION_LANE_ROW_HEIGHT;
+
+        // Take rows come after the automation stack so a track with both
+        // expanded reads top-to-bottom as `track · automation · takes`.
+        if self.takes.expanded.contains(&id) {
+            if let Some(rows) = self.takes.takes_by_track.get(&id) {
+                for &(group, take) in rows {
+                    self.rows.push(ArrangeRow {
+                        kind: ArrangeRowKind::TakeRow {
+                            track: id,
+                            group,
+                            take,
+                        },
+                        y_top: self.y,
+                        height: TAKE_ROW_HEIGHT,
+                    });
+                    self.y += TAKE_ROW_HEIGHT;
+                }
+            }
         }
     }
 

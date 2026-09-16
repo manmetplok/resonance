@@ -572,6 +572,21 @@ pub fn detect_clip_tempo_in_place(
     });
 }
 
+/// What a finished clip load owes the app.
+///
+/// The mmap, the peak decimation and the publish are identical for a
+/// timeline clip and a restored take clip; only this differs, and it is
+/// not cosmetic. `ClipImported` is what makes a clip appear in
+/// `Resonance::clips`, and a take clip must not (ba todo #1396) — see
+/// [`AudioCommand::LoadTakeClipFromWav`](crate::types::AudioCommand::LoadTakeClipFromWav).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClipLoadEcho {
+    /// Emit `AudioEvent::ClipImported`, so the app mirrors a timeline clip.
+    Timeline,
+    /// Emit nothing. The take-group restore is sender and mirror both.
+    SilentTake,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_load_clip_from_wav(
     ctx: &HandlerCtx,
@@ -583,6 +598,77 @@ pub(crate) fn handle_load_clip_from_wav(
     name: String,
     trim_start_frames: u64,
     trim_end_frames: u64,
+) {
+    submit_clip_load(
+        ctx,
+        state,
+        clip_id,
+        track_id,
+        start_sample,
+        path,
+        name,
+        trim_start_frames,
+        trim_end_frames,
+        ClipLoadEcho::Timeline,
+    );
+}
+
+/// Put a restored take clip's recorded WAV back into the engine's clip
+/// list (ba todo #1402): the audio half of a project-load take-lane
+/// restore, whose group half is `RestoreTakeGroups`.
+///
+/// Silent, untrimmed, and idempotent — see
+/// [`AudioCommand::LoadTakeClipFromWav`](crate::types::AudioCommand::LoadTakeClipFromWav)
+/// for why each of those is load-bearing.
+///
+/// The early return here is only an optimisation: it spares the mmap and
+/// the O(n) peak decimation on the undo/redo replay, where every take clip
+/// is already loaded. It cannot be the guarantee, because the load it
+/// guards is asynchronous — two restores in quick succession would both
+/// look at a list the first one's worker has not published into yet. The
+/// binding check is the one in [`submit_clip_load`], under the same write
+/// lock as the push.
+pub(crate) fn handle_load_take_clip_from_wav(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    clip_id: ClipId,
+    track_id: TrackId,
+    start_sample: u64,
+    path: PathBuf,
+    name: String,
+) {
+    if ctx.clips.read().iter().any(|c| c.id == clip_id) {
+        // Still raise the allocator: the reservation must hold whether or
+        // not this particular load had anything left to do.
+        state.next_clip_id = state.next_clip_id.max(clip_id + 1);
+        return;
+    }
+    submit_clip_load(
+        ctx,
+        state,
+        clip_id,
+        track_id,
+        start_sample,
+        path,
+        name,
+        0,
+        0,
+        ClipLoadEcho::SilentTake,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_clip_load(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    clip_id: ClipId,
+    track_id: TrackId,
+    start_sample: u64,
+    path: PathBuf,
+    name: String,
+    trim_start_frames: u64,
+    trim_end_frames: u64,
+    echo: ClipLoadEcho,
 ) {
     // Bump the engine-thread-local id counter immediately so that any
     // subsequent `ImportClip` command issued before the worker thread
@@ -614,6 +700,9 @@ pub(crate) fn handle_load_clip_from_wav(
     let clips_arc = Arc::clone(ctx.clips);
     let thread_event_tx = ctx.event_tx.clone();
     let engine_rate = ctx.sample_rate;
+    // The take-clip park, so the publish below can see a removal that
+    // happened while this load was in flight (ba todo #1403).
+    let park = Arc::clone(&state.take_clip_park);
 
     let submit_result = state.imports.submit(move || {
         // `open_wav_at_rate` resamples to the engine rate when the
@@ -648,15 +737,62 @@ pub(crate) fn handle_load_clip_from_wav(
                     warp_markers: Vec::new(),
                     tuning_render_cache: None,
                 };
-                clips_arc.write().push(clip);
-                let _ = thread_event_tx.send(AudioEvent::ClipImported {
-                    clip_id,
-                    track_id,
-                    start_sample,
-                    duration_samples,
-                    name,
-                    waveform_peaks,
-                });
+                {
+                    // The duplicate check that actually binds, taken under
+                    // the same write lock as the push so an id can never be
+                    // pushed twice by two loads racing each other. The
+                    // take-restore path can genuinely issue a second load
+                    // for a clip whose first load is still in flight (an
+                    // undo replay landing on the heels of a project load),
+                    // and a duplicated `AudioClip` would double the take's
+                    // level everywhere the comp reads it. Pinned by
+                    // `loop_record_takes.rs::two_take_clip_loads_racing_each_other_still_leave_one_clip`,
+                    // which dispatches twice with no wait between — the
+                    // case the submit-time early return cannot see.
+                    //
+                    // **This also changes the timeline path**, which shares
+                    // this worker: a duplicate `LoadClipFromWav` is now
+                    // dropped, and drops its `ClipImported` echo with it.
+                    // Unreachable today — `ClearAll` drains the clip list
+                    // before a project load replays it, and no other caller
+                    // issues two loads for one id — but it is a real
+                    // behaviour change to a path this todo is not about, so
+                    // it is called out rather than left in the diff. If a
+                    // caller ever does need "reload this clip in place",
+                    // it wants an explicit replace, not a second load.
+                    let mut clips = clips_arc.write();
+                    if clips.iter().any(|c| c.id == clip_id) {
+                        return;
+                    }
+                    // The removal interlock, and the second thing this
+                    // lock binds (ba todo #1403). `park_take_clip` makes a
+                    // take removal silent by lifting the recording *out of*
+                    // this list — which parks nothing when the recording is
+                    // still in flight, i.e. exactly here. It therefore
+                    // leaves a claim instead, taken under this same lock,
+                    // and the finished clip goes to the park rather than to
+                    // the render's input: an ungoverned take clip is the
+                    // "deleting a take makes it louder" bug (ba doc #292).
+                    //
+                    // Unconditional, not gated on `echo`: only take clips
+                    // are ever parked, so this is a no-op on the timeline
+                    // path, and leaving it unconditional means no future
+                    // caller can route a load around it.
+                    let Some(clip) = park.deliver(clip) else {
+                        return;
+                    };
+                    clips.push(clip);
+                }
+                if echo == ClipLoadEcho::Timeline {
+                    let _ = thread_event_tx.send(AudioEvent::ClipImported {
+                        clip_id,
+                        track_id,
+                        start_sample,
+                        duration_samples,
+                        name,
+                        waveform_peaks,
+                    });
+                }
             }
             Err(e) => {
                 let _ = thread_event_tx

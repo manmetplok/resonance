@@ -11,7 +11,7 @@
 //!   5. analytic RT60 decay polygon + stroked outline, with a mild
 //!      sinusoidal modulation ripple and a freeze override
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::TAIL_HISTORY_LEN;
 

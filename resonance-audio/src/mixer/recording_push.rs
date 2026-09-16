@@ -17,16 +17,19 @@ pub fn whole_frame_push_len(len: usize, vacant: usize, frame_stride: usize) -> u
 /// Push interleaved capture samples into the recording ring in whole
 /// frames only — like the monitor path — so an overflow can never leave
 /// a partial frame behind and permanently rotate the take's channel
-/// alignment (doc #260 finding #17). Returns true when any samples were
-/// dropped so the caller can raise the overflow flag.
+/// alignment (doc #260 finding #17). Returns the number of frames that
+/// were dropped (0 = everything landed) so the caller can add them to
+/// the shared overflow counter and the damage can be reported
+/// quantitatively (`AudioEvent::RecordingOverflow`).
 #[inline]
 pub fn push_recording_frames(
     prod: &mut ringbuf::HeapProd<f32>,
     samples: &[f32],
     frame_stride: usize,
-) -> bool {
+) -> usize {
     use ringbuf::traits::{Observer, Producer};
-    let take = whole_frame_push_len(samples.len(), prod.vacant_len(), frame_stride.max(1));
+    let stride = frame_stride.max(1);
+    let take = whole_frame_push_len(samples.len(), prod.vacant_len(), stride);
     let _ = prod.push_slice(&samples[..take]);
-    take < samples.len()
+    (samples.len() - take).div_ceil(stride)
 }

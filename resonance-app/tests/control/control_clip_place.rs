@@ -768,6 +768,54 @@ fn sets_fade_lengths_and_shapes() {
     assert_eq!(faded.fade_out_curve, FadeCurve::Exp);
 }
 
+/// One `clip.set_fade` call dispatches up to four messages (two
+/// amounts, two shapes); the wire contract makes them ONE undoable
+/// transaction — one revision bump, and one `edit.undo` restores every
+/// half of the fade change at once.
+#[test]
+fn set_fade_of_amounts_and_shapes_is_one_atomic_undo_transaction() {
+    let mut app = app();
+    let placed = place_at(&mut app, 1);
+    let clip_id = u64::from(placed.clip_id);
+    let before = app.revision();
+
+    let result: FadeResult = call(
+        &mut app,
+        "clip.set_fade",
+        serde_json::json!({
+            "clip_id": clip_id,
+            "fade_in": { "seconds": 0.01 },
+            "fade_out": { "seconds": 0.5 },
+            "fade_in_shape": "linear",
+            "fade_out_shape": "exp",
+        }),
+    )
+    .result()
+    .expect("clip.set_fade succeeds");
+    assert_eq!(result.revision, before + 1, "one call, one revision bump");
+    assert_eq!(
+        result.revision,
+        app.revision(),
+        "the reply carries the post-call revision"
+    );
+
+    // ONE undo restores both amounts AND both shapes.
+    let _ = app.update(Message::Undo);
+    let restored = clip(&app, clip_id);
+    assert_eq!(restored.fade_in_frames, 0, "fade-in amount restored");
+    assert_eq!(restored.fade_out_frames, 0, "fade-out amount restored");
+    assert_eq!(restored.fade_in_curve, FadeCurve::default());
+    assert_eq!(restored.fade_out_curve, FadeCurve::default());
+
+    // ONE redo replays the call to its final state.
+    let _ = app.update(Message::Redo);
+    let redone = clip(&app, clip_id);
+    assert!(redone.fade_in_frames.abs_diff(480) <= 48);
+    assert!(redone.fade_out_frames.abs_diff(24_000) <= 48);
+    assert_eq!(redone.fade_in_curve, FadeCurve::Linear);
+    assert_eq!(redone.fade_out_curve, FadeCurve::Exp);
+}
+
 #[test]
 fn a_shape_can_be_changed_without_touching_lengths() {
     let mut app = app();
@@ -848,7 +896,7 @@ fn deletes_a_clip_and_keeps_its_asset() {
     let _: MutationAck = call(
         &mut app,
         "clip.delete",
-        serde_json::json!({ "clip_id": clip_id }),
+        serde_json::json!({ "clip_id": clip_id, "confirm": true }),
     )
     .result()
     .expect("clip.delete succeeds");

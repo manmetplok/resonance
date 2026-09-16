@@ -24,7 +24,7 @@
 /// (the same reference rational formulas, see `activations.rs`).
 /// Parity pin: `tests/nam_lstm_reference_parity.rs`.
 use super::activations::Activation;
-use super::parse::{LstmConfig, WeightReader};
+use super::parse::{checked_count, LstmConfig, WeightReader};
 use super::{matvec, NamInference};
 
 struct LstmCell {
@@ -75,6 +75,18 @@ impl LstmModel {
         if hs == 0 || config.num_layers == 0 {
             return Err("LSTM config: hidden_size and num_layers must be nonzero".into());
         }
+        // Every cell stores at least a [hidden_size] initial state and
+        // consumes weights per layer, so a dimension beyond the weight
+        // array itself can never be satisfied. Rejecting such (hostile or
+        // corrupt) sizes up front keeps every allocation below bounded by
+        // what the file actually provides.
+        let total = reader.remaining();
+        if hs > total || config.input_size > total || config.num_layers > total {
+            return Err(format!(
+                "LSTM config: dimensions (hidden_size {hs}, input_size {}, num_layers {}) exceed the {total} weights provided",
+                config.input_size, config.num_layers
+            ));
+        }
         let mut layers = Vec::with_capacity(config.num_layers);
 
         for i in 0..config.num_layers {
@@ -83,7 +95,10 @@ impl LstmModel {
             // Reference layout per cell: combined W [4hs, in+hs] row-major,
             // combined bias [4hs], learned initial h [hs], learned initial
             // c [hs] (NAM/lstm.cpp LSTMCell constructor order).
-            let w = reader.read(4 * hs * (layer_input + hs))?;
+            let w = reader.read(checked_count(
+                "LSTM cell weights",
+                &[4, hs, layer_input + hs],
+            )?)?;
             let b = reader.read(4 * hs)?;
             let h0 = reader.read(hs)?;
             let c0 = reader.read(hs)?;

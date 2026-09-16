@@ -69,7 +69,11 @@ mod mixer_strip_external_instrument;
 mod mixer_sub_track_grouping;
 #[path = "mixer/plugin_bypass_persistence.rs"]
 mod plugin_bypass_persistence;
+#[path = "mixer/recording_overflow_banner.rs"]
+mod recording_overflow_banner;
 #[path = "mixer/sidechain_persistence.rs"]
 mod sidechain_persistence;
+#[path = "mixer/tick_gating.rs"]
+mod tick_gating;
 #[path = "mixer/track_group_registry.rs"]
 mod track_group_registry;

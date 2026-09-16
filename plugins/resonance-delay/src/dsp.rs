@@ -140,18 +140,34 @@ impl DelayDsp {
         let filt_l = self.hp_l.process(self.lp_l.process(wet_l));
         let filt_r = self.hp_r.process(self.lp_r.process(wet_r));
 
-        // Saturation on feedback path.
-        let drive_amt = if character == 1 {
-            1.0 + 3.0 * (drive + 0.1)
+        // Saturation on feedback path, normalized to unity small-signal
+        // gain: `tanh(x·d)/d` has slope exactly 1 at x = 0, so the
+        // loop's effective gain is the feedback amount alone and the
+        // drive shapes only the curvature — how hard loud repeats
+        // soften — never the level. (Without the `/d`, loop gain was
+        // feedback × d, so any feedback ≳ 0.7 grew into a saturated
+        // drone instead of decaying; the echo-tap viz's `fb^n` decay is
+        // only honest with the normalization in place.)
+        //
+        // Freeze bypasses the shaper entirely: even normalized,
+        // tanh(x)/x < 1 for any |x| > 0, so repeated passes would
+        // slowly compress and darken the held material. Skipping the
+        // nonlinearity at unity feedback makes the hold exact up to the
+        // tone filters, which stay in the loop deliberately — wide open
+        // they are near-transparent, closed in they dull the frozen
+        // loop the way the tone knobs promise.
+        let (fb_l, fb_r) = if freeze {
+            (filt_l, filt_r)
         } else {
-            1.0 + 3.0 * drive
+            let drive_amt = if character == 1 {
+                1.0 + 3.0 * (drive + 0.1)
+            } else {
+                1.0 + 3.0 * drive
+            };
+            let sat_l = (filt_l * drive_amt).tanh() / drive_amt;
+            let sat_r = (filt_r * drive_amt).tanh() / drive_amt;
+            (sat_l * feedback, sat_r * feedback)
         };
-        let sat_l = (filt_l * drive_amt).tanh();
-        let sat_r = (filt_r * drive_amt).tanh();
-
-        let fb = if freeze { 1.0 } else { feedback };
-        let fb_l = sat_l * fb;
-        let fb_r = sat_r * fb;
 
         match routing {
             1 => {

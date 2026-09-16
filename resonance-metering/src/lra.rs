@@ -14,9 +14,17 @@
 //! 4. Relative-gate at `integrated_abs - 20 LU`.
 //! 5. Report LRA = p95 - p10 of the remaining set.
 //!
-//! We capture a new block roughly every 1 s via the supplied hook. The
-//! percentile step is performed on demand from `lra_lu()` so the audio
-//! thread never sorts.
+//! `lra_lu()` is called from the audio callback once per block (~375 Hz
+//! at 48 kHz / q128 via `ABMeterTap::snapshot`), so it must not allocate
+//! or sort. Instead of keeping the raw block list, the meter maintains a
+//! fixed-size loudness histogram incrementally: each accepted block is an
+//! O(1) bucket increment on push, and the gate + percentiles are read
+//! back from the histogram in O(buckets) with zero allocation. The
+//! relative-gate *reference* stays exact (a running energetic mean of the
+//! absolute-gated mean-squares); only the percentile positions are
+//! quantised, to well under [`HIST_BIN_LU`] — each bucket also tracks the
+//! exact mean loudness of its blocks, so discrete-level material (e.g.
+//! the EBU 3342 step sequences) reads back bit-for-bit.
 
 use crate::lufs::gating::{block_mean_square_to_lufs, ABSOLUTE_GATE_LUFS};
 
@@ -27,69 +35,152 @@ pub const LRA_RELATIVE_GATE_LU: f64 = -20.0;
 /// Hard cap on the number of 1 s blocks we hold before dropping new ones.
 const BLOCK_CAP: usize = 60 * 60; // 60 minutes of 1 s blocks.
 
+/// Histogram floor. Blocks below the absolute gate are never stored, so
+/// the floor coincides with [`ABSOLUTE_GATE_LUFS`].
+const HIST_MIN_LUFS: f64 = ABSOLUTE_GATE_LUFS;
+/// Histogram ceiling; hotter blocks clamp into the top bucket. BS.1770
+/// loudness of a full-scale stereo signal tops out around +2 LUFS, so
+/// +10 leaves headroom for out-of-spec material.
+const HIST_MAX_LUFS: f64 = 10.0;
+/// Bucket width in LU. Percentile quantisation error is bounded by one
+/// bucket per percentile, so worst-case LRA deviation from the exact
+/// sort-based computation is ~2x this.
+const HIST_BIN_LU: f64 = 0.05;
+/// Number of histogram buckets ([-70, +10] LUFS at 0.05 LU).
+const HIST_BINS: usize = ((HIST_MAX_LUFS - HIST_MIN_LUFS) / HIST_BIN_LU) as usize;
+
 /// Streaming LRA tracker.
 pub struct LraMeter {
-    blocks: Vec<f64>, // mean-square per 3 s block (recorded every 1 s)
+    /// Per-bucket count of absolute-gated blocks, bucketed on block LUFS.
+    counts: Box<[u32]>,
+    /// Per-bucket sum of the exact block LUFS values, so a bucket reads
+    /// back as the mean of what actually landed in it rather than its
+    /// midpoint.
+    lufs_sums: Box<[f64]>,
+    /// Running sum of the absolute-gated blocks' mean-squares — the exact
+    /// energetic mean that seeds the relative gate.
+    abs_sum_ms: f64,
+    /// Number of absolute-gated blocks.
+    abs_count: usize,
+    /// Total blocks accepted (including sub-absolute-gate ones), for the
+    /// [`BLOCK_CAP`] session cap.
+    total_blocks: usize,
     dropped: u64,
 }
 
 impl LraMeter {
     pub fn new() -> Self {
         Self {
-            blocks: Vec::with_capacity(BLOCK_CAP),
+            counts: vec![0u32; HIST_BINS].into_boxed_slice(),
+            lufs_sums: vec![0.0f64; HIST_BINS].into_boxed_slice(),
+            abs_sum_ms: 0.0,
+            abs_count: 0,
+            total_blocks: 0,
             dropped: 0,
         }
     }
 
     pub fn reset(&mut self) {
-        self.blocks.clear();
+        self.counts.fill(0);
+        self.lufs_sums.fill(0.0);
+        self.abs_sum_ms = 0.0;
+        self.abs_count = 0;
+        self.total_blocks = 0;
         self.dropped = 0;
     }
 
     /// Record a 3-second short-term mean-square. Intended to be called at
-    /// ~1 Hz from the LUFS meter's host (see `LufsMeter`).
+    /// ~1 Hz from the LUFS meter's host (see `LufsMeter`). O(1), no
+    /// allocation: the absolute gate is applied here and the surviving
+    /// block becomes a bucket increment plus two running sums.
     pub fn push_short_term_mean_square(&mut self, mean_square: f64) {
-        if self.blocks.len() < BLOCK_CAP {
-            self.blocks.push(mean_square);
-        } else {
+        if self.total_blocks >= BLOCK_CAP {
             self.dropped += 1;
+            return;
+        }
+        self.total_blocks += 1;
+        let lufs = block_mean_square_to_lufs(mean_square);
+        if lufs >= ABSOLUTE_GATE_LUFS {
+            self.abs_sum_ms += mean_square;
+            self.abs_count += 1;
+            let bin = bin_index(lufs);
+            self.counts[bin] += 1;
+            self.lufs_sums[bin] += lufs;
         }
     }
 
     /// Compute LRA in LU. Returns 0.0 for an empty / silent session so
     /// the UI has a sane default.
+    ///
+    /// Allocation-free and O([`HIST_BINS`]) — safe to call from the audio
+    /// thread every block. Per EBU 3342 the relative gate threshold is
+    /// `integrated_loudness(abs_gated) - 20 LU`, where the integrated
+    /// loudness is the LUFS of the *mean of mean-squares* — not a
+    /// percentile of the per-block LUFS values.
     pub fn lra_lu(&self) -> f32 {
-        if self.blocks.is_empty() {
+        if self.abs_count == 0 {
             return 0.0;
         }
-        // Absolute gate + accumulate energetic mean for the relative-gate
-        // reference. Per EBU 3342 the relative gate threshold is
-        // `integrated_loudness(abs_gated) - 20 LU`, where the integrated
-        // loudness is the LUFS of the *mean of mean-squares* — not a
-        // percentile of the per-block LUFS values.
-        let mut abs_sum_ms = 0.0_f64;
-        let mut abs_lufs: Vec<f64> = Vec::with_capacity(self.blocks.len());
-        for &ms in &self.blocks {
-            let l = block_mean_square_to_lufs(ms);
-            if l >= ABSOLUTE_GATE_LUFS {
-                abs_sum_ms += ms;
-                abs_lufs.push(l);
-            }
-        }
-        if abs_lufs.is_empty() {
-            return 0.0;
-        }
-        let reference_lufs = block_mean_square_to_lufs(abs_sum_ms / abs_lufs.len() as f64);
+        let reference_lufs = block_mean_square_to_lufs(self.abs_sum_ms / self.abs_count as f64);
         let threshold = reference_lufs + LRA_RELATIVE_GATE_LU;
 
-        let mut gated: Vec<f64> = abs_lufs.into_iter().filter(|&l| l >= threshold).collect();
-        if gated.is_empty() {
+        let mut total = 0.0_f64;
+        for bin in 0..HIST_BINS {
+            total += self.effective_count(bin, threshold);
+        }
+        if total <= 0.0 {
             return 0.0;
         }
-        gated.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let hi = percentile(&gated, 0.95);
-        let lo = percentile(&gated, 0.10);
+        let hi = self.gated_percentile(threshold, total, 0.95);
+        let lo = self.gated_percentile(threshold, total, 0.10);
         (hi - lo) as f32
+    }
+
+    /// How many of `bin`'s blocks survive the relative gate. Whole
+    /// buckets strictly above / below `threshold` count fully / not at
+    /// all; the one bucket the threshold cuts through contributes the
+    /// fraction of its span above the threshold (blocks assumed uniform
+    /// within a bucket).
+    fn effective_count(&self, bin: usize, threshold: f64) -> f64 {
+        let count = self.counts[bin];
+        if count == 0 {
+            return 0.0;
+        }
+        let lo = HIST_MIN_LUFS + bin as f64 * HIST_BIN_LU;
+        let hi = lo + HIST_BIN_LU;
+        if hi <= threshold {
+            return 0.0;
+        }
+        if lo >= threshold {
+            return count as f64;
+        }
+        count as f64 * (hi - threshold) / HIST_BIN_LU
+    }
+
+    /// Percentile of the relative-gated distribution, using the same
+    /// `pct * (n - 1)` rank convention as a sorted-slice percentile. The
+    /// value read back for a rank is its bucket's exact mean loudness
+    /// (clamped to the gate), so quantisation error is bounded by one
+    /// bucket width.
+    fn gated_percentile(&self, threshold: f64, total: f64, pct: f64) -> f64 {
+        let pos = pct * (total - 1.0).max(0.0);
+        let mut cum = 0.0_f64;
+        let mut last = threshold;
+        for bin in 0..HIST_BINS {
+            let count = self.effective_count(bin, threshold);
+            if count <= 0.0 {
+                continue;
+            }
+            let mean = (self.lufs_sums[bin] / self.counts[bin] as f64).max(threshold);
+            if pos < cum + count {
+                return mean;
+            }
+            cum += count;
+            last = mean;
+        }
+        // Float round-off can leave the top rank a hair past the final
+        // cumulative sum; it belongs to the last populated bucket.
+        last
     }
 }
 
@@ -99,18 +190,9 @@ impl Default for LraMeter {
     }
 }
 
-/// Linear-interpolated percentile of a **sorted** slice.
-fn percentile(sorted: &[f64], pct: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    if sorted.len() == 1 {
-        return sorted[0];
-    }
-    let pos = pct * (sorted.len() - 1) as f64;
-    let lo = pos.floor() as usize;
-    let hi = (lo + 1).min(sorted.len() - 1);
-    let frac = pos - lo as f64;
-    sorted[lo] + (sorted[hi] - sorted[lo]) * frac
+/// Histogram bucket for a block loudness, clamping out-of-range values
+/// into the edge buckets.
+fn bin_index(lufs: f64) -> usize {
+    let clamped = lufs.clamp(HIST_MIN_LUFS, HIST_MAX_LUFS);
+    (((clamped - HIST_MIN_LUFS) / HIST_BIN_LU) as usize).min(HIST_BINS - 1)
 }
-

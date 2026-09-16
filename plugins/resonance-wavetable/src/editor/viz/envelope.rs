@@ -5,7 +5,7 @@
 //! accent. If a `live_value` + `live_stage` are provided (from the audio
 //! thread), a dot is drawn at the current position.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::theme;
 

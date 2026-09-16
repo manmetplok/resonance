@@ -11,8 +11,8 @@
 //!   and `migrate_auto_name`.
 //! - `restore.rs`: standalone restore helpers (`restore_performance`,
 //!   `restore_quantize`, `restore_pool`, `restore_references`,
-//!   `restore_drum_patterns`, `restore_tempo_events`) used both here and
-//!   by the diff-based undo replay path.
+//!   `restore_drum_patterns`, `restore_tempo_events`, `replay_take_groups`)
+//!   used both here and by the diff-based undo replay path.
 
 mod entity;
 mod restore;
@@ -27,7 +27,7 @@ use crate::Resonance;
 // Re-export helpers consumed by sibling modules (undo replay, diff replay).
 pub use entity::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use restore::{
-    restore_drum_patterns, restore_performance, restore_pool, restore_quantize,
+    replay_take_groups, restore_drum_patterns, restore_performance, restore_pool, restore_quantize,
     restore_track_groups,
     restore_references, restore_tempo_events,
 };
@@ -109,6 +109,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     restore_quantize(r, project);
     restore_performance(r, project);
     restore_track_groups(r, project);
+    // Cycle-record take lanes (epic #15). Seeds the mirror emptied by
+    // `wipe_registry` and resolves each audio take's recorded WAV against
+    // the project directory, so a take whose file travelled with the
+    // bundle comes back and one that didn't is flagged rather than lost.
+    replay_take_groups(r, project, &loaded.project_dir);
 
     // Parameter-automation lanes (epic #14 / epic #40). Reconcile the
     // engine + app mirror to exactly the saved set: `restore_automation_lanes`
@@ -255,6 +260,18 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // right after this runs (and its snapshot project file carries the same
     // config, so the two agree idempotently).
     r.external_instruments.clear();
+    // Likewise the cycle-record take lanes (epic #15, todo #412). The
+    // mirror is built purely from `TakeCaptured` echoes, and `ClearAll`
+    // empties the engine's take-group map without echoing a removal per
+    // group — so without this, loading project B kept project A's take
+    // lanes, complete with `clip_ref`s naming WAVs in a DIFFERENT
+    // project's `audio/` directory (or none at all). `replay_take_groups`
+    // re-seeds the mirror from the project file afterwards, and only
+    // adds, so this clear is the one thing dropping the old project's.
+    // (`ClearAll` genuinely does empty the engine's map as of ba todo
+    // #1394 — it did not when this comment was first written, which is
+    // how a loaded project inherited the previous one's comp table.)
+    r.take_groups.clear();
 
     // Bump the app-side sub-track id counter past any persisted ids so
     // new sub-tracks allocated after this load don't collide with

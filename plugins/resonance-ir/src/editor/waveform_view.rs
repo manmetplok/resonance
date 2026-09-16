@@ -3,7 +3,7 @@
 //! the centre line — the left channel on top, the right channel
 //! below. For mono IRs the two halves mirror each other exactly.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::IrViz;
 

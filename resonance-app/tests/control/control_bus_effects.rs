@@ -15,14 +15,13 @@
 //! `the_whole_drum_bus_sequence_runs_over_the_control_api_alone` at the
 //! bottom of this file.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
 use resonance_control::methods::bus::PluginParamsView;
 use resonance_control::methods::track::{AddPluginResult, PluginKind};
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck};
+use crate::common::call;
 
 const KICK: u64 = 1;
 const SNARE: u64 = 2;
@@ -62,20 +61,6 @@ fn app() -> Resonance {
         ],
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn create_bus(app: &mut Resonance) -> u64 {

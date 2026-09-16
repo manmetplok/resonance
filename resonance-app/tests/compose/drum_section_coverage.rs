@@ -11,8 +11,6 @@
 //! that fallback for newly created sections) and is tracked separately
 //! by ba todo #1208.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::AudioCommand;
@@ -21,6 +19,7 @@ use resonance_control::methods::generate::{self as proto, GenerateResult};
 use resonance_control::methods::harmony as harmony_proto;
 use resonance_control::methods::section as section_proto;
 use resonance_control::{KeyScale, Request, Response};
+use crate::common::roundtrip;
 
 const SECTION_BARS: u32 = 4;
 /// 4 bars of 4/4 at 480 ticks per quarter.
@@ -31,16 +30,6 @@ fn app_with_project() -> Resonance {
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/drum-coverage.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {

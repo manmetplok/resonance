@@ -24,7 +24,8 @@ pub const MOVE_CLIP: &str = "notes.move_clip";
 /// ([`InsertManyParams`] -> [`InsertManyResult`]).
 pub const INSERT_MANY: &str = "notes.insert_many";
 /// `notes.replace_all` — replace a clip's whole note list as ONE
-/// undoable edit ([`ReplaceAllParams`] -> [`InsertManyResult`]).
+/// undoable edit; destructive on a non-empty clip, requires
+/// `"confirm": true` there ([`ReplaceAllParams`] -> [`InsertManyResult`]).
 pub const REPLACE_ALL: &str = "notes.replace_all";
 
 /// `notes.import_midi` — import a Standard MIDI File
@@ -47,6 +48,18 @@ pub const METHODS: &[&str] = &[
 /// Refused above this rather than truncated — a half-imported part is
 /// worse than a rejected one.
 pub const MAX_MIDI_BYTES: usize = 4 * 1024 * 1024;
+
+/// Most notes one `notes.insert_many` / `notes.replace_all` batch
+/// accepts — the same bound `notes.import_midi` puts on an SMF track.
+/// Refused above this rather than truncated, for the same reason as
+/// [`MAX_MIDI_BYTES`].
+pub const MAX_BATCH_NOTES: usize = 100_000;
+
+/// Largest beat value (position or duration) any `notes.*` method
+/// accepts. A million beats is over two thousand hours at 120 BPM —
+/// far past anything musical — while a truly huge value would overflow
+/// the engine's tick arithmetic and corrupt the note on save.
+pub const MAX_BEATS: f64 = 1_000_000.0;
 
 /// Params for `notes.import_midi`.
 ///
@@ -121,8 +134,9 @@ pub struct InsertParams {
     pub clip_id: ClipId,
     /// MIDI note number (60 = C4).
     pub pitch: u8,
-    /// Clip-relative start beat (0-based).
+    /// Clip-relative start beat (0-based). Capped at [`MAX_BEATS`].
     pub start_beat: f64,
+    /// Capped at [`MAX_BEATS`].
     pub duration_beats: f64,
     /// Defaults to 100.
     #[serde(default = "default_velocity")]
@@ -146,8 +160,9 @@ pub struct InsertResult {
 pub struct NoteSpec {
     /// MIDI note number (60 = C4).
     pub pitch: u8,
-    /// Clip-relative start beat (0-based).
+    /// Clip-relative start beat (0-based). Capped at [`MAX_BEATS`].
     pub start_beat: f64,
+    /// Capped at [`MAX_BEATS`].
     pub duration_beats: f64,
     /// Defaults to 100.
     #[serde(default = "default_velocity")]
@@ -165,20 +180,28 @@ pub struct NoteSpec {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InsertManyParams {
     pub clip_id: ClipId,
+    /// At most [`MAX_BATCH_NOTES`] notes.
     pub notes: Vec<NoteSpec>,
 }
 
 /// Params for `notes.replace_all`: make `notes` the clip's entire note
 /// list, in ONE undoable edit.
 ///
-/// Destructive — every existing note in the clip is dropped. Clearing
-/// and rewriting in one transaction also avoids the highest-index-first
-/// ordering trap of a delete loop.
+/// Destructive — every existing note in the clip is dropped, so a
+/// non-empty clip requires `"confirm": true` (an empty one has nothing
+/// to lose and needs no confirmation). Clearing and rewriting in one
+/// transaction also avoids the highest-index-first ordering trap of a
+/// delete loop.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ReplaceAllParams {
     pub clip_id: ClipId,
+    /// At most [`MAX_BATCH_NOTES`] notes.
     pub notes: Vec<NoteSpec>,
+    /// Required (`true`) when the clip already has notes; the error
+    /// otherwise summarizes what would be dropped.
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 /// Result of `notes.insert_many` / `notes.replace_all`.

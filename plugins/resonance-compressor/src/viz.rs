@@ -2,13 +2,16 @@
 //!
 //! Every cell is bit-punned atomic — instantaneous input/output/GR
 //! values are scalar `AtomicU32`s, and the rolling gain-reduction
-//! history is a fixed-length array of atomic samples plus an atomic
-//! write index. The audio thread never blocks; the UI reader can
+//! history delegates to the shared
+//! [`resonance_metering::AtomicHistoryRing`]. The audio thread never
+//! blocks; the UI reader can
 //! tolerate the (very rare) one-sample straddle at frame boundaries
 //! since this is purely a viz trace.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+
+use resonance_metering::AtomicHistoryRing;
 
 /// Number of samples kept in the GR history ring buffer.
 pub const HISTORY_LEN: usize = 256;
@@ -97,35 +100,24 @@ pub struct CompressorViz {
     pub history: GrHistory,
 }
 
-pub struct GrHistory {
-    samples: [AtomicU32; HISTORY_LEN],
-    write_pos: AtomicUsize,
-}
+/// Thin wrapper over the shared [`AtomicHistoryRing`] so the editor's
+/// `viz.history.iter_chrono()` call sites keep their type.
+pub struct GrHistory(AtomicHistoryRing<HISTORY_LEN>);
 
 impl GrHistory {
     fn new() -> Self {
-        Self {
-            samples: std::array::from_fn(|_| AtomicU32::new(0.0f32.to_bits())),
-            write_pos: AtomicUsize::new(0),
-        }
+        Self(AtomicHistoryRing::new(0.0))
     }
 
     /// Push one sample. Called from the audio thread once per
     /// `HISTORY_STEP_SAMPLES`; wait-free.
     fn push(&self, v: f32) {
-        let pos = self.write_pos.load(Ordering::Relaxed);
-        self.samples[pos].store(v.to_bits(), Ordering::Relaxed);
-        // Release so the consumer's Acquire on write_pos observes the sample store.
-        self.write_pos
-            .store((pos + 1) % HISTORY_LEN, Ordering::Release);
+        self.0.push(v);
     }
 
     /// Iterate the ring in chronological order (oldest first).
     pub fn iter_chrono(&self) -> impl Iterator<Item = f32> + '_ {
-        let start = self.write_pos.load(Ordering::Acquire);
-        (0..HISTORY_LEN).map(move |i| {
-            f32::from_bits(self.samples[(start + i) % HISTORY_LEN].load(Ordering::Relaxed))
-        })
+        self.0.iter_chrono()
     }
 }
 

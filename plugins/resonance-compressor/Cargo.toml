@@ -11,19 +11,22 @@ crate-type = ["cdylib", "lib"]
 # Editor ships by default so the bundled .clap has a GUI.
 # Turn it off (`--no-default-features`) for a headless DSP build.
 default = ["editor"]
-editor = ["dep:wayland-plugin-gui", "dep:egui", "resonance-plugin/editor-widgets"]
+editor = ["dep:wayland-plugin-gui", "dep:plugin-gui-core", "dep:egui", "resonance-plugin/editor-widgets"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
+resonance-metering = { path = "../../resonance-metering" }
 serde_json.workspace = true
 
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
 egui = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 
 # Per-block DSP benchmark. `harness = false` hands main() to criterion.
 [[bench]]

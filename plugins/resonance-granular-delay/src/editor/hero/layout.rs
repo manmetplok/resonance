@@ -6,7 +6,7 @@
 //! without an egui context and what lets the draw, cloud and interact
 //! layers agree on exactly one mapping.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 /// Right-hand pitch-ruler gutter width, px.
 pub(super) const RULER_W: f32 = 54.0;

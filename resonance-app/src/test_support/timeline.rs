@@ -31,6 +31,15 @@ impl Resonance {
         self.viewport.zoom = zoom;
     }
 
+    /// Test-only: the arrange-view zoom (pixels per second). Pairs with
+    /// [`test_set_arrange_zoom`](Self::test_set_arrange_zoom) so a gesture
+    /// test can convert a sample position into the canvas x the pointer
+    /// has to land on without hard-coding the default zoom.
+    #[doc(hidden)]
+    pub fn test_arrange_zoom(&self) -> f32 {
+        self.viewport.zoom
+    }
+
     /// Test-only: read the GUI-side audio clip list. Used by the
     /// engine-event mirroring tests to assert that fade/gain events
     /// land on the matching `ClipState`.
@@ -137,10 +146,11 @@ impl Resonance {
             .iter()
             .filter(|t| t.sub_track.is_none())
             .collect();
-        crate::view::arrange_layout::ArrangeRowLayout::build(
+        crate::view::arrange_layout::ArrangeRowLayout::build_with_takes(
             &sorted,
             &self.track_groups,
             &self.arrange_automation_rows(),
+            &self.arrange_take_rows(),
         )
     }
 
@@ -225,6 +235,59 @@ impl Resonance {
             .map(|hit| (hit.target, hit.index))
     }
 
+    /// Test-only: the take card under a canvas-space position, as
+    /// `(group, take, slot_start, slot_end)` — the comping hit region of
+    /// epic #15 / todo #414.
+    ///
+    /// The slot is returned deliberately: the take **card** is drawn over
+    /// the take's audible extent, but the comp addresses the whole slot,
+    /// so this is what a promote is aimed at. A press over the "no audio
+    /// here" part of a punched-in take's row is a hit, not a miss.
+    #[doc(hidden)]
+    pub fn test_take_card_at(&self, x: f32, y: f32) -> Option<(u64, u64, u64, u64)> {
+        self.timeline_canvas_data()
+            .take_card_at(iced::Point::new(x, y))
+            .map(|hit| (hit.group_id, hit.take_id, hit.slot.start, hit.slot.end()))
+    }
+
+    /// Test-only: the comp-ribbon group under a canvas-space position —
+    /// the split gesture's hit region, present whether the take lane is
+    /// folded or expanded (epic #15, todo #414).
+    #[doc(hidden)]
+    pub fn test_comp_ribbon_at(&self, x: f32, y: f32) -> Option<u64> {
+        self.timeline_canvas_data()
+            .comp_ribbon_at(iced::Point::new(x, y))
+            .map(|hit| hit.group_id)
+    }
+
+    /// Test-only: the mouse cursor the timeline canvas would show at a
+    /// canvas-space position, given `state`. Pins the take lane's
+    /// affordances — `NotAllowed` over a comp ribbon whose split has no
+    /// cut point, `Grab` over a take card (todo #414).
+    #[doc(hidden)]
+    pub fn test_timeline_cursor(
+        &self,
+        state: &crate::view::timeline::TimelineState,
+        x: f32,
+        y: f32,
+    ) -> iced::mouse::Interaction {
+        use iced::widget::canvas::Program as _;
+        let width = if self.viewport.viewport_width > 0.0 {
+            self.viewport.viewport_width
+        } else {
+            1200.0
+        };
+        let height = if self.viewport.viewport_height > 0.0 {
+            self.viewport.viewport_height
+        } else {
+            900.0
+        };
+        let bounds = iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(width, height));
+        let cursor = iced::mouse::Cursor::Available(iced::Point::new(x, y));
+        self.timeline_canvas_data()
+            .mouse_interaction(state, bounds, cursor)
+    }
+
     /// Test-only: the timeline canvas's cache fingerprint for the current
     /// app state. Two states whose fingerprints differ repaint the cached
     /// geometry layer; equal fingerprints reuse it. Pins that transient
@@ -233,5 +296,103 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_timeline_fingerprint(&self) -> crate::view::timeline::TimelineFingerprint {
         self.timeline_canvas_data().fingerprint()
+    }
+
+    /// Test-only: read the mirrored cycle-record take groups (epic #15).
+    /// Drives `tests/timeline/take_group_mirror.rs`, which asserts that
+    /// `TakeCaptured` events alone reconstruct the take lanes — the app
+    /// never reads takes back out of the engine.
+    #[doc(hidden)]
+    pub fn test_take_groups(&self) -> &[resonance_common::TakeGroup] {
+        &self.take_groups.groups
+    }
+
+    /// Test-only: whether `group_id`'s active take mutes the group's
+    /// recorded audio — a MIDI take soloed over audio takes (epic #15).
+    /// Drives `tests/timeline/take_comp_edits.rs`, which pins that the
+    /// state is *reported* rather than left looking like a bug.
+    #[doc(hidden)]
+    pub fn test_active_take_silences_audio(&self, group_id: u64) -> bool {
+        self.take_groups.active_take_silences_audio(group_id)
+    }
+
+    /// Test-only: `(group, take)` pairs whose recorded WAV was absent when
+    /// the project loaded (todo #412). Drives
+    /// `tests/io/take_lanes_persistence.rs`, which asserts a take with no
+    /// audio on disk is flagged rather than dropped out of the comp.
+    #[doc(hidden)]
+    pub fn test_missing_takes(&self) -> Vec<(u64, u64)> {
+        let mut pairs: Vec<(u64, u64)> = self.take_groups.missing_takes.iter().copied().collect();
+        pairs.sort_unstable();
+        pairs
+    }
+
+    /// Test-only: the waveform peaks the app derived from a take's
+    /// recording (ba todo #1400), or an empty slice when it has none.
+    ///
+    /// This is what makes the take lane's waveform a *fact about the
+    /// recording on disk* rather than a fabrication: before #1400 a test
+    /// gave a take a silhouette by pushing a `ClipState` the running app
+    /// never produces, and the same fabrication was what stopped every
+    /// take drawing as `media missing`. Drives
+    /// `tests/timeline/take_lane_render.rs`.
+    #[doc(hidden)]
+    pub fn test_take_peaks(&self, group_id: u64, take_id: u64) -> &[(f32, f32)] {
+        let clip_ref = self
+            .take_groups
+            .group(group_id)
+            .and_then(|g| g.take(take_id))
+            .and_then(|t| match t.content {
+                resonance_common::TakeContent::Audio { clip_ref } => Some(clip_ref),
+                resonance_common::TakeContent::Midi { .. } => None,
+            });
+        // A MIDI take names no recording, so it can hold no table — and
+        // an audio take's table only counts when it was read from the
+        // recording that take names (ba todo #1400).
+        clip_ref.map_or(&[][..], |c| self.take_groups.peaks(group_id, take_id, c))
+    }
+
+    /// Test-only: whether the take lane would draw this take as hatched
+    /// `media missing` (ba todo #1400).
+    ///
+    /// The draw pass's own predicate, not the flag behind it. Before
+    /// #1400 the two disagreed for *every* audio take — the lane ORed in
+    /// a clip lookup that could never resolve — and no headless
+    /// assertion in the suite could see it, because the divergence
+    /// existed only in pixels and the verify gate is allowed to skip
+    /// goldens. Anything asserting "this take is fine" has to ask the
+    /// question the card asks.
+    #[doc(hidden)]
+    pub fn test_take_draws_missing_media(&self, group_id: u64, take_id: u64) -> bool {
+        let canvas = self.timeline_canvas_data();
+        let group = canvas
+            .take_groups
+            .group(group_id)
+            .unwrap_or_else(|| panic!("no mirrored take group {group_id}"));
+        let take = group
+            .take(take_id)
+            .unwrap_or_else(|| panic!("no take {take_id} in group {group_id}"));
+        canvas.take_is_missing(group, take)
+    }
+
+    /// Test-only: flag a take's recorded WAV as absent from this machine,
+    /// the state a project load reaches through `restore_pool` (todo
+    /// #412). Standing in for the load so a render / fingerprint test can
+    /// exercise the flag directly — the *other* route into the missing
+    /// state, an unresolvable `clip_ref`, needs no hook.
+    #[doc(hidden)]
+    pub fn test_mark_take_missing(&mut self, group_id: u64, take_id: u64) {
+        self.take_groups.mark_missing(group_id, take_id);
+    }
+
+    /// Test-only: whether a track's take lane is currently unfolded into
+    /// stacked take sub-rows (epic #15). Driven by
+    /// `UiMessage::ToggleTakeLane`; read by the take-lane render tests to
+    /// assert the caret's state without scraping the widget tree.
+    #[doc(hidden)]
+    pub fn test_take_lane_expanded(&self, track_id: resonance_audio::types::TrackId) -> bool {
+        self.interaction
+            .take_lane_expanded_tracks
+            .contains(&track_id)
     }
 }

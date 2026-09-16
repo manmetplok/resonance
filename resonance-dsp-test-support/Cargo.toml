@@ -1,0 +1,7 @@
+[package]
+name = "resonance-dsp-test-support"
+version = "0.1.0"
+edition = "2021"
+description = "Mechanical plumbing shared by the plugins' DSP golden tests: bless-mode detection, golden-file IO and the sample/word compare loop. Every scenario table, threshold and extra guard stays in its own crate — this crate holds nothing that decides what a golden pins, only how a golden is read, written and diffed (ba todo #1373 follow-up)."
+
+[dependencies]

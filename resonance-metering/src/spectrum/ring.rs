@@ -13,14 +13,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// and exactly one consumer thread may call [`SpscRing::pop_into`] /
 /// [`SpscRing::available`]. Any other concurrent access is unsound.
 pub struct SpscRing {
-    buffer: UnsafeCell<Box<[f32]>>,
+    /// Per-element cells rather than `UnsafeCell<Box<[f32]>>`: deriving the
+    /// base pointer from a `&[UnsafeCell<f32>]` never materialises a
+    /// `&[f32]` / `&mut [f32]` over the shared bytes (a shared reference to
+    /// `UnsafeCell` asserts nothing about its contents), so producer and
+    /// consumer can hold pointers into the same allocation concurrently
+    /// without an aliasing violation. See [`SpscRing::data_ptr`].
+    buffer: Box<[UnsafeCell<f32>]>,
     mask: usize,
     head: AtomicUsize,
     tail: AtomicUsize,
 }
 
-// Safety: SpscRing is designed for cross-thread SPSC use. Access to the
-// UnsafeCell is gated by the SPSC discipline in push / pop_into.
+// Safety: SpscRing is designed for cross-thread SPSC use (`UnsafeCell` is
+// !Sync). Access to the cells is gated by the SPSC discipline in
+// push / push_slice / pop_into: the head/tail indices keep the two threads
+// on disjoint elements, so no element is read and written concurrently.
 unsafe impl Send for SpscRing {}
 unsafe impl Sync for SpscRing {}
 
@@ -31,13 +39,29 @@ impl SpscRing {
             capacity.is_power_of_two() && capacity >= 2,
             "SpscRing capacity must be a power of two >= 2"
         );
-        let buffer = vec![0.0_f32; capacity].into_boxed_slice();
+        let buffer = std::iter::repeat_with(|| UnsafeCell::new(0.0_f32))
+            .take(capacity)
+            .collect();
         Self {
-            buffer: UnsafeCell::new(buffer),
+            buffer,
             mask: capacity - 1,
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
         }
+    }
+
+    /// Base pointer to the sample storage.
+    ///
+    /// Derived through `&[UnsafeCell<f32>]` without ever creating a
+    /// `&[f32]` or `&mut [f32]`: a shared reference to `UnsafeCell`
+    /// carries write permission for the contents and makes no
+    /// no-other-writers claim, so both threads may derive and use this
+    /// pointer concurrently (on disjoint indices). `UnsafeCell<f32>` is
+    /// `repr(transparent)`, so element `i` of the cell slice is the
+    /// `f32` at `.add(i)` of the cast pointer.
+    #[inline]
+    fn data_ptr(&self) -> *mut f32 {
+        self.buffer.as_ptr() as *mut f32
     }
 
     /// Total capacity in samples.
@@ -64,16 +88,15 @@ impl SpscRing {
         if used > self.mask {
             return false;
         }
-        // Safety: producer is the only thread writing to the buffer.
-        // We use raw pointer arithmetic instead of constructing a
-        // `&mut [f32]`, because the consumer may simultaneously hold a
-        // `&[f32]` to a *different* index in the same allocation. Even
-        // though the indices don't overlap, materialising both `&` and
-        // `&mut` to the same allocation through `UnsafeCell::get()` is
-        // a Stacked/Tree Borrows violation that Miri flags.
+        // Safety: producer is the only thread writing to the buffer, and
+        // the head/tail discipline keeps the consumer off this slot until
+        // the Release store below. `data_ptr` yields the base pointer
+        // without materialising a `&mut [f32]` over the shared bytes —
+        // the consumer may be reading a *different* index in the same
+        // allocation right now, and a whole-buffer reference here (even a
+        // transient one) would be an aliasing violation that Miri flags.
         unsafe {
-            let ptr = (*self.buffer.get()).as_mut_ptr();
-            ptr.add(tail & self.mask).write(sample);
+            self.data_ptr().add(tail & self.mask).write(sample);
         }
         self.tail.store(tail.wrapping_add(1), Ordering::Release);
         true
@@ -100,10 +123,10 @@ impl SpscRing {
         // Safety: producer is the only thread writing to the buffer, and
         // the `free` computation above guarantees the `n` slots starting
         // at `tail` are not visible to the consumer until the Release
-        // store below. Raw pointer copies for the same Tree Borrows
-        // reason documented in `push`.
+        // store below. Base pointer via `data_ptr` — never a whole-buffer
+        // reference — for the same aliasing reason documented in `push`.
         unsafe {
-            let ptr = (*self.buffer.get()).as_mut_ptr();
+            let ptr = self.data_ptr();
             let start = tail & self.mask;
             let first = n.min(self.capacity() - start);
             std::ptr::copy_nonoverlapping(samples.as_ptr(), ptr.add(start), first);
@@ -125,14 +148,14 @@ impl SpscRing {
         if n == 0 {
             return 0;
         }
-        // Safety: consumer is the only thread reading from the buffer.
-        // Raw pointer reads here mirror the producer's raw-pointer write
-        // path — see the SAFETY note in `push`. The producer may
-        // concurrently write a disjoint index in the same allocation;
-        // constructing a `&[f32]` here would alias an exclusive write
-        // borrow through Tree Borrows.
+        // Safety: consumer is the only thread reading from the buffer,
+        // and the Acquire load of `tail` above publishes the producer's
+        // writes to the `n` slots being read. Base pointer via `data_ptr`
+        // — see the SAFETY note in `push`: the producer may concurrently
+        // write a disjoint index in the same allocation, so no
+        // whole-buffer `&[f32]` may exist here even transiently.
         unsafe {
-            let ptr = (*self.buffer.get()).as_ptr();
+            let ptr = self.data_ptr();
             for (i, slot) in dst.iter_mut().enumerate().take(n) {
                 *slot = ptr.add(head.wrapping_add(i) & self.mask).read();
             }

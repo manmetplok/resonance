@@ -1,7 +1,7 @@
 //! Stereo IN / OUT peak meters. Structurally identical to the amp
 //! and reverb meters so all three plugins read visually consistent.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::IrViz;
 

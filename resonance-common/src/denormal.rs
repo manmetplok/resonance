@@ -9,12 +9,13 @@ pub fn flush_denormals() {
     // OR in 0x8040 (bit 15 = FTZ, bit 6 = DAZ), and ldmxcsr it back.
     // The stack scratch uses `sub rsp, 4` / `add rsp, 4` around the
     // four bytes we wrote, so the call frame is restored before
-    // returning. `preserves_flags` is correct: no instruction here
-    // modifies arithmetic flags (stmxcsr/ldmxcsr/or-mem are all
-    // flag-preserving on MXCSR loads). The 32-bit variant mirrors
-    // this with `esp`. The whole sequence touches only the SSE
-    // control register and four bytes of red-zone-equivalent stack
-    // scratch, so no caller-observable state changes.
+    // returning. No `preserves_flags`: the `or dword ptr [rsp]` sets
+    // ZF/SF/PF and clears CF/OF like any `or`, so the compiler must
+    // treat RFLAGS as clobbered (the default). The 32-bit variant
+    // mirrors this with `esp`. The whole sequence touches only
+    // RFLAGS, the SSE control register, and four bytes of stack
+    // scratch above the restored stack pointer, so no
+    // caller-observable state changes.
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!(
@@ -23,7 +24,6 @@ pub fn flush_denormals() {
             "or dword ptr [rsp], 0x8040",
             "ldmxcsr [rsp]",
             "add rsp, 4",
-            options(preserves_flags),
         );
     }
     #[cfg(target_arch = "x86")]
@@ -34,7 +34,6 @@ pub fn flush_denormals() {
             "or dword ptr [esp], 0x8040",
             "ldmxcsr [esp]",
             "add esp, 4",
-            options(preserves_flags),
         );
     }
     // SAFETY (aarch64): `mrs ..., fpcr` reads the floating-point

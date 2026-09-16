@@ -9,16 +9,11 @@
 
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{ChordTrackMessage, Message};
-use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_control::methods::control::{HelloParams, HelloResult};
 use resonance_control::rpc::codes;
 use resonance_control::{ErrorKind, Request, Response, PROTOCOL_VERSION};
-
-fn app() -> Resonance {
-    let (app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
-    app
-}
+use crate::common::app_bare as app;
 
 /// An app with an active project and a saved path, so edits are not
 /// gated and undo recording is live.

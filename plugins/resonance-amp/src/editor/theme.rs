@@ -1,5 +1,5 @@
 //! Editor palette — the canonical lavender palette from
-//! `wayland_plugin_gui::theme` so every Resonance plugin reads as part of
+//! `plugin_gui_core::theme` so every Resonance plugin reads as part of
 //! one product (ba todo #1338; the amp was on the older blue `classic`
 //! palette, which is gone).
 //!
@@ -10,9 +10,9 @@
 //! old blue accent, and a scope trace left electric blue over a lavender
 //! window is exactly what "two themes" looked like.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;
 
 /// Oscilloscope: dim trace for the dry input signal — the accent at
 /// alpha 0x70, hand-premultiplied (scale RGB by 112/255).

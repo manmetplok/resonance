@@ -8,7 +8,7 @@
 //! - Right-click: open a context menu to change type / slope / disable.
 //! - Double-click: toggle enabled.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::band::{BandKind, BandSlope};
 use crate::editor::response::{color_for_kind, db_to_y, freq_to_x, x_to_freq, y_to_db};

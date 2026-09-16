@@ -36,6 +36,19 @@ pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
     r.transport.recording_start_sample = start_sample;
 }
 
+/// The capture ring overflowed during the active take: `dropped_frames`
+/// input frames never reached the recording on disk, so the take is
+/// missing audio (time-compressed / desynced from the first drop on).
+/// Surfaced on the standard error banner — before this event existed
+/// the take was silently corrupted with zero indication to the user.
+pub(super) fn recording_overflow(r: &mut Resonance, dropped_frames: u64) {
+    eprintln!("Audio engine: recording overflow — {dropped_frames} input frames dropped");
+    r.error_message = Some(format!(
+        "Recording overflow: {dropped_frames} input frames were dropped — \
+         this take is missing audio and may be out of sync"
+    ));
+}
+
 pub(super) fn bounce_complete(r: &mut Resonance, path: String) {
     r.io.bouncing = false;
     // Resolve a control-initiated `render.mixdown` job (doc #265, todo

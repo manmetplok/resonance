@@ -8,7 +8,7 @@
 //! - Results block (analysis stats) and rationale list
 //! - An Apply button that commits the suggested params
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::assistant::{Assistant, Genre, Target};
 use crate::params::MasteringParams;

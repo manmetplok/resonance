@@ -184,6 +184,50 @@ pub fn parse_pw_metadata_value(stdout: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+/// Read a settings key as the string PipeWire stores, without the
+/// `u32` coercion [`run_pw_metadata`] applies — `clock.allowed-rates`
+/// is a list (`[ 44100, 48000 ]`) and would parse as nothing.
+fn run_pw_metadata_raw(key: &str) -> Option<String> {
+    let stdout = run_command_with_timeout("pw-metadata", &["-n", "settings", "0", key], 2)?;
+    parse_pw_metadata_value(&stdout).map(|v| v.to_string())
+}
+
+/// The rates the graph is permitted to switch between, from
+/// `clock.allowed-rates`. Empty when the key is absent, unreadable, or
+/// lists nothing.
+pub fn parse_allowed_rates(value: &str) -> Vec<u32> {
+    value
+        .trim_matches(|c: char| c == '[' || c == ']' || c.is_whitespace())
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|t| t.trim().parse::<u32>().ok())
+        .collect()
+}
+
+fn pipewire_allowed_rates() -> Vec<u32> {
+    run_pw_metadata_raw("clock.allowed-rates")
+        .map(|v| parse_allowed_rates(&v))
+        .unwrap_or_default()
+}
+
+/// Whether forcing `target` would change anything about the graph.
+///
+/// A graph already running at `target` whose `clock.allowed-rates`
+/// offers nothing else *cannot leave* that rate — it is already
+/// asserted, by the user's own daemon configuration, more firmly than
+/// `clock.force-rate` would assert it. Writing the force at that graph
+/// buys nothing, and it is not free: PipeWire re-negotiates the driver
+/// on every settings write, and the engine writes twice a session — at
+/// startup, and again when the first input stream is built, by which
+/// time the output stream is already running. A dropout for a value
+/// that was not going to change is a bad trade (ba todo #1101).
+///
+/// An empty `allowed` (the key absent or unreadable) is NOT treated as
+/// "cannot switch": that is the no-information case, and the force is
+/// what the todo is for.
+pub fn force_is_redundant(graph_rate: Option<u32>, allowed: &[u32], target: u32) -> bool {
+    graph_rate == Some(target) && !allowed.is_empty() && allowed.iter().all(|r| *r == target)
+}
+
 /// Query PipeWire's graph sample rate via `pw-metadata`.
 ///
 /// Prefers `clock.force-rate` (user override) when non-zero, otherwise
@@ -359,9 +403,20 @@ pub(crate) fn assert_graph_rate(
     device: &cpal::Device,
     direction: DeviceDirection,
 ) -> Option<GraphRateForce> {
-    let target = choose_assert_rate(pipewire_graph_rate(), default_sink_sample_rate(), |rate| {
+    if std::env::var_os("RESONANCE_NO_GRAPH_FORCE").is_some() {
+        eprintln!("audio: RESONANCE_NO_GRAPH_FORCE set — following the graph rate");
+        return None;
+    }
+    let graph_rate = pipewire_graph_rate();
+    let target = choose_assert_rate(graph_rate, default_sink_sample_rate(), |rate| {
         device_supports_rate(device, &direction, rate)
     })?;
+    if force_is_redundant(graph_rate, &pipewire_allowed_rates(), target) {
+        eprintln!(
+            "audio: graph already pinned to {target} Hz by clock.allowed-rates — not forcing"
+        );
+        return None;
+    }
     GraphRateForce::engage(target)
 }
 
@@ -818,8 +873,11 @@ fn build_input_stream_cpal(
                     }
                     // Whole frames only — a partial push on overflow
                     // would rotate the take's channels (finding #17).
-                    if crate::mixer::push_recording_frames(prod, data, stride) {
-                        shared.recording_overflow.store(true, Ordering::Relaxed);
+                    let dropped = crate::mixer::push_recording_frames(prod, data, stride);
+                    if dropped > 0 {
+                        shared
+                            .recording_overflow
+                            .fetch_add(dropped as u64, Ordering::Relaxed);
                     }
                 }
             }

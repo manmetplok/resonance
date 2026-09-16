@@ -4,7 +4,7 @@
 //! small polyline offset horizontally. The currently-selected frame is
 //! highlighted with a vertical bar.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::display_waves;
 use crate::editor::theme;

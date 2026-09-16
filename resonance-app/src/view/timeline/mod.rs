@@ -19,18 +19,21 @@ use crate::message::*;
 use crate::state::{self, ClipState, MidiClipState, TrackState};
 use crate::theme;
 use crate::view::arrange_layout::{ArrangeRowKind, ArrangeRowLayout};
-use self::input::{BreakpointDrag, ClipInteraction, MarkerDrag, TempoDrag};
+use self::input::{BreakpointDrag, ClipInteraction, MarkerDrag, TakePromoteDrag, TempoDrag};
 
 use resonance_audio::types::{ClipId, TempoMap, TrackId};
 use resonance_common::AutomationTarget;
 
 pub mod automation;
+pub mod cull;
 pub mod draw;
 pub mod hit_test;
 pub mod input;
 pub mod placement;
 pub mod scrollbar;
 pub mod snap;
+pub mod takes;
+pub(crate) mod viewport_probe;
 
 // Snap helpers are external public API for this canvas — re-export them
 // from the snap submodule so existing call sites keep working.
@@ -102,6 +105,37 @@ pub struct TimelineCanvas<'a> {
     /// [`ArrangeRowLayout`] as the header column and hit-testing.
     /// Rendering of the sub-rows themselves lands in todo #1097.
     pub automation_expanded_tracks: &'a std::collections::HashSet<TrackId>,
+    /// App-side mirror of the engine's cycle-record take groups (epic #15,
+    /// doc #165). Every group draws a comp ribbon on its track's lane —
+    /// expanded or not — and, when the track's take lane is expanded, a
+    /// stack of take cards in dedicated sub-rows. Empty => no take lanes.
+    pub take_groups: &'a crate::state::TakeGroupState,
+    /// Tracks whose take lanes are expanded into stacked take sub-rows
+    /// (`ClipInteractionState::take_lane_expanded_tracks`), threaded in so
+    /// the canvas builds the same take-aware [`ArrangeRowLayout`] as the
+    /// header column.
+    pub take_lane_expanded_tracks: &'a std::collections::HashSet<TrackId>,
+    /// Per-instance memo for [`arrange_layout`](Self::arrange_layout).
+    /// One view build used to run the sort + row build 2-3× per frame
+    /// (cached pass, overlay pass, hover, pointer, `content_height_px`).
+    /// Everything the layout reads is behind the `&'a` borrows above, so
+    /// it cannot change for the lifetime of this instance — any state
+    /// edit rebuilds the view and gets a fresh, empty cell.
+    pub layout_memo: std::cell::OnceCell<ArrangeRowLayout>,
+    /// Per-instance memo for the O(project) content half of
+    /// [`fingerprint`](Self::fingerprint). Same reasoning as
+    /// `layout_memo`: the hashed data is frozen behind `&'a`, so hashing
+    /// it once per view build is exactly as safe as hashing it once per
+    /// rendered frame — and hover / pure-redraw frames stop paying the
+    /// full walk at 60 Hz.
+    pub content_fingerprint_memo: std::cell::OnceCell<TimelineFingerprint>,
+    /// The *visible* part of this canvas, in canvas-local coordinates —
+    /// written by the [`viewport_probe::ViewportProbe`] wrapper right
+    /// before each `Widget::draw`, because the `canvas::Program` API
+    /// never sees the outer `Scrollable`'s viewport. `None` (tests, or
+    /// before the first draw) disables horizontal culling and everything
+    /// is drawn, which is always correct — just slower.
+    pub visible_viewport: std::rc::Rc<std::cell::Cell<Option<Rectangle>>>,
 }
 
 impl TimelineCanvas<'_> {
@@ -255,14 +289,78 @@ impl TimelineCanvas<'_> {
     /// The shared heterogeneous arrange-row layout (group-header rows +
     /// track rows, collapse-aware) for this canvas. Both lane rendering
     /// and clip placement consume it instead of `index * TRACK_HEIGHT`.
-    pub(super) fn arrange_layout(&self) -> ArrangeRowLayout {
+    ///
+    /// Memoized per canvas instance (`layout_memo`): the first caller in
+    /// a view build pays for the sort + row build, every later caller —
+    /// the overlay pass, hover, pointer, `content_height_px` — reuses
+    /// it. The inputs all sit behind this struct's `&'a` borrows, so the
+    /// memo can never go stale within an instance's lifetime.
+    pub fn arrange_layout(&self) -> &ArrangeRowLayout {
+        self.layout_memo.get_or_init(|| self.build_arrange_layout())
+    }
+
+    /// Uncached [`arrange_layout`](Self::arrange_layout) — the actual row
+    /// build. Public only so the memo's null test can compare a fresh
+    /// build against the memoized one; production code goes through the
+    /// memo.
+    #[doc(hidden)]
+    pub fn build_arrange_layout(&self) -> ArrangeRowLayout {
         let sorted = self.visible_tracks_sorted();
         let automation_rows = crate::view::arrange_layout::ArrangeAutomationRows::collect(
             self.automation,
             &sorted,
             self.automation_expanded_tracks,
         );
-        ArrangeRowLayout::build(&sorted, self.track_groups, &automation_rows)
+        let take_rows = crate::view::arrange_layout::ArrangeTakeRows::collect(
+            self.take_groups,
+            &sorted,
+            self.take_lane_expanded_tracks,
+        );
+        ArrangeRowLayout::build_with_takes(
+            &sorted,
+            self.track_groups,
+            &automation_rows,
+            &take_rows,
+        )
+    }
+
+    /// The quantized horizontal cull window for the cached draw pass, in
+    /// canvas-local x pixels. `None` — no probe write yet (tests, first
+    /// use) — means "draw everything". See [`cull`] for the quantization
+    /// and its covering guarantee.
+    pub(crate) fn cull_window(&self) -> Option<(f32, f32)> {
+        self.visible_viewport
+            .get()
+            .map(cull::quantized_window)
+    }
+
+    /// Horizontal pixel span of an audio clip's body, before the small
+    /// per-track group indent (the cull predicate pads for it).
+    pub(crate) fn audio_clip_x_span(&self, clip: &ClipState) -> (f32, f32) {
+        cull::sample_span_x(
+            clip.start_sample,
+            clip.start_sample + clip.duration_samples,
+            self.sample_rate,
+            self.zoom,
+            self.scroll_offset,
+        )
+    }
+
+    /// Horizontal pixel span of a MIDI clip's body (tick length resolved
+    /// through the tempo map, exactly as `draw_midi_clip` does).
+    pub(crate) fn midi_clip_x_span(&self, clip: &MidiClipState) -> (f32, f32) {
+        let end = self.tempo_map.tick_to_abs_sample(
+            clip.start_sample,
+            clip.duration_ticks,
+            self.sample_rate,
+        );
+        cull::sample_span_x(
+            clip.start_sample,
+            end,
+            self.sample_rate,
+            self.zoom,
+            self.scroll_offset,
+        )
     }
 }
 
@@ -294,6 +392,10 @@ pub struct TimelineState {
     pub(super) selected_breakpoint: Option<(AutomationTarget, usize)>,
     /// Last breakpoint press, for double-click (curve-kind toggle) detection.
     pub(super) last_breakpoint_click: Option<(Instant, AutomationTarget, usize)>,
+    /// In-flight comping gesture on a take card (epic #15, todo #414).
+    /// Opened by the press, resolved by the release into either a solo
+    /// (click) or a promote (drag) — see [`TakePromoteDrag`].
+    pub(super) take_promote_drag: Option<TakePromoteDrag>,
     /// Active arrangement-marker drag (start move or region-edge resize).
     pub(super) marker_drag: Option<MarkerDrag>,
     /// Most recent click on a marker flag, for double-click (rename) detection.
@@ -391,10 +493,67 @@ pub struct TimelineFingerprint {
     /// toggle must repaint the canvas — without this the cached geometry
     /// goes stale the moment the caret is clicked.
     pub automation_expanded_hash: u64,
+    /// Order-independent hash of the track-group registry — per group its
+    /// `(id, ordered_members, nesting_parent, is_collapsed,
+    /// identity_color)` plus the group count. Groups reshape the cached
+    /// layer wholesale: the `ArrangeRowLayout` interleaves 60 px header
+    /// bands and drops a collapsed group's member rows, the band paints
+    /// the identity wash (or the #733 consolidated overview), and every
+    /// row below shifts Y. Without this, `GroupMessage::ToggleCollapse`
+    /// (header caret or canvas double-click) and drag-and-drop membership
+    /// edits leave the canvas drawing pre-toggle geometry until an
+    /// unrelated input happens to invalidate the cache.
+    pub groups_hash: u64,
+    /// Hash of every take group's identity, slot, takes and comp cover
+    /// (epic #15). Repaints the cached layer when a pass is captured, the
+    /// comp is edited, or the active take changes — all of which reshape
+    /// both the ribbon and the stacked cards. Nothing in the take lane is
+    /// playhead-driven, so the whole feature stays inside the cached pass.
+    pub takes_hash: u64,
+    /// Order-independent hash of the take-lane-expanded track set.
+    /// Expanding a lane inserts sub-rows and shifts every row below it, so
+    /// the toggle must repaint (same discipline as
+    /// `automation_expanded_hash`).
+    pub take_expanded_hash: u64,
+    /// Hash of every MIDI clip's geometry + note-minimap content
+    /// (`id, track, start, duration/trim ticks, name`, plus each note's
+    /// pitch and horizontal extent). `update_midi_clip_drag` mutates
+    /// `start_sample` / `track_id` in place mid-drag and the piano roll
+    /// edits `notes` in place, and there is no MIDI drag ghost in the
+    /// uncached overlay pass — so `midi_clips_len` alone left a stale
+    /// arrange render behind. Same discipline as `clips_hash` on the
+    /// audio side. Note velocity is not drawn by the minimap and is
+    /// deliberately excluded (same reasoning as the playhead).
+    pub midi_clips_hash: u64,
+    /// The quantized horizontal cull window the cached pass drew, as the
+    /// f32 bit patterns of its two x endpoints (±∞ = no culling). The
+    /// window is re-derived from the live viewport on every rendered
+    /// frame, so including it here guarantees that scrolling past the
+    /// drawn margin repaints in the same frame that reveals it — see
+    /// [`cull`].
+    pub cull_x0_bits: u32,
+    pub cull_x1_bits: u32,
 }
 
 impl<'a> TimelineCanvas<'a> {
+    /// The full cache fingerprint for this frame: the memoized O(project)
+    /// content hash (`content_fingerprint`, computed at most once per
+    /// view build) plus the per-frame quantized cull window. Only the
+    /// window can change between two draws of the same instance — every
+    /// piece of hashed content sits behind `&'a` borrows.
     pub(crate) fn fingerprint(&self) -> TimelineFingerprint {
+        let mut fp = *self
+            .content_fingerprint_memo
+            .get_or_init(|| self.content_fingerprint());
+        let (x0, x1) = self
+            .cull_window()
+            .unwrap_or((f32::NEG_INFINITY, f32::INFINITY));
+        fp.cull_x0_bits = x0.to_bits();
+        fp.cull_x1_bits = x1.to_bits();
+        fp
+    }
+
+    fn content_fingerprint(&self) -> TimelineFingerprint {
         // Hash the full tempo + signature event content so any
         // *in-place* edit (drag, pick_list change, transport-bar
         // commit) invalidates the cache and the curve / pill markers
@@ -483,12 +642,44 @@ impl<'a> TimelineCanvas<'a> {
         }
         let clips_hash = clip_h.finish();
 
+        // Hash every MIDI clip's geometry + note-minimap content so the
+        // cached layer invalidates on move / trim / rename / note edits.
+        // `update_midi_clip_drag` mutates `start_sample` / `track_id` in
+        // place mid-drag and the piano roll edits `notes` in place, so —
+        // exactly like `clips_hash` above — the count alone would leave a
+        // stale arrange render on screen.
+        let mut midi_h = std::collections::hash_map::DefaultHasher::new();
+        for c in self.midi_clips {
+            c.id.hash(&mut midi_h);
+            c.track_id.hash(&mut midi_h);
+            c.start_sample.hash(&mut midi_h);
+            c.duration_ticks.hash(&mut midi_h);
+            c.trim_start_ticks.hash(&mut midi_h);
+            c.trim_end_ticks.hash(&mut midi_h);
+            c.name.hash(&mut midi_h);
+            // Pitch + horizontal extent are what the note minimap (and
+            // the frozen-render silhouette) read; velocity is not drawn
+            // and is deliberately excluded.
+            c.notes.len().hash(&mut midi_h);
+            for n in &c.notes {
+                n.note.hash(&mut midi_h);
+                n.start_tick.hash(&mut midi_h);
+                n.duration_ticks.hash(&mut midi_h);
+            }
+        }
+        let midi_clips_hash = midi_h.finish();
+
         // XOR-fold the frozen track ids so the hash is independent of the
-        // set's iteration order (a `HashSet` has no stable order).
+        // set's iteration order (a `HashSet` has no stable order). Seeded
+        // with the set's length — the same idiom as the expanded-set
+        // folds below — so the empty set can never collide with a set
+        // whose ids XOR to zero.
         let frozen_hash = self
             .frozen_tracks
             .iter()
-            .fold(0u64, |acc, id| acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            .fold(self.frozen_tracks.len() as u64, |acc, id| {
+                acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            });
 
         // Same order-independent fold for the automation-expanded set
         // (todo #1097): a toggle restructures the arrange rows, so the
@@ -498,6 +689,118 @@ impl<'a> TimelineCanvas<'a> {
             .automation_expanded_tracks
             .iter()
             .fold(self.automation_expanded_tracks.len() as u64, |acc, id| {
+                acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            });
+
+        // Same order-independent fold for the track-group registry (its
+        // backing `HashMap` has no stable iteration order): each group's
+        // layout- and paint-driving fields, folded over the group count so
+        // an empty registry can never collide with hashes that XOR to
+        // zero. Macro mute/solo/level are deliberately excluded — they
+        // cascade to the mixer, not to this canvas.
+        let mut groups_hash: u64 = self.track_groups.len() as u64;
+        for group in self.track_groups.get_all_groups() {
+            let mut gh = std::collections::hash_map::DefaultHasher::new();
+            group.id.hash(&mut gh);
+            group.ordered_members.hash(&mut gh);
+            group.nesting_parent.hash(&mut gh);
+            group.is_collapsed.hash(&mut gh);
+            group.identity_color.hash(&mut gh);
+            groups_hash ^= gh.finish();
+        }
+
+        // Take groups are an ordered Vec, so a plain sequential hash is
+        // enough — but hash the *content* (slot, every take's id / pass /
+        // content shape, the comp cover and the active take), not just the
+        // count: a comp edit or an active-take change leaves the group
+        // count untouched and would otherwise leave a stale ribbon.
+        let mut take_h = std::collections::hash_map::DefaultHasher::new();
+        self.take_groups.groups.len().hash(&mut take_h);
+        for group in &self.take_groups.groups {
+            group.id.hash(&mut take_h);
+            group.track_id.hash(&mut take_h);
+            group.slot.hash(&mut take_h);
+            group.active_take.hash(&mut take_h);
+            for take in &group.takes {
+                take.id.hash(&mut take_h);
+                take.pass_index.hash(&mut take_h);
+                // `captured_at` is the key `effective_cover` sorts on to
+                // pick the latest take, so two groups differing only in
+                // capture order resolve to different covers and must not
+                // share a fingerprint.
+                take.captured_at.hash(&mut take_h);
+                // The take's own recorded span. Since todo #1396 this is
+                // what the card's *width* is, so a card cannot be allowed
+                // to keep a cached geometry from a different extent.
+                take.extent.hash(&mut take_h);
+                // The waveform the card carries, read off the take's WAV
+                // (todo #1400). Length rather than content: a peak table
+                // is derived once, from a file, and never edited — every
+                // way it can change for a fixed `(group, take)` key
+                // (capture, re-capture, project load, a failed read
+                // leaving it empty) changes how many buckets it has or
+                // clears it, and hashing 3000 f32 pairs per take on the
+                // fingerprint path would cost more than the repaint it
+                // saves.
+                match &take.content {
+                    resonance_common::TakeContent::Audio { clip_ref } => {
+                        0u8.hash(&mut take_h);
+                        clip_ref.hash(&mut take_h);
+                        // The waveform the card carries, read off this
+                        // recording (todo #1400). Length rather than
+                        // content: a peak table is derived once, from a
+                        // file, and never edited — every way it can change
+                        // for a fixed `(group, take, clip_ref)` triple
+                        // (capture, re-capture, project load, a failed
+                        // read leaving it absent) changes how many buckets
+                        // it has or drops it, and hashing thousands of f32
+                        // pairs per take on the fingerprint path would
+                        // cost more than the repaint it saves.
+                        self.take_groups
+                            .peaks(group.id, take.id, *clip_ref)
+                            .len()
+                            .hash(&mut take_h);
+                    }
+                    resonance_common::TakeContent::Midi { notes } => {
+                        1u8.hash(&mut take_h);
+                        notes.len().hash(&mut take_h);
+                        for n in notes {
+                            n.note.hash(&mut take_h);
+                            n.start_tick.hash(&mut take_h);
+                            n.duration_ticks.hash(&mut take_h);
+                        }
+                    }
+                }
+            }
+            for seg in &group.comp.segments {
+                seg.take_id.hash(&mut take_h);
+                seg.range.hash(&mut take_h);
+            }
+        }
+        // Takes whose recorded WAV was absent at load (todo #412) draw the
+        // hatched missing-media card instead of a waveform, so relinking
+        // one has to repaint. Order-independent fold: a `HashSet` has no
+        // stable iteration order.
+        let missing_fold = self
+            .take_groups
+            .missing_takes
+            .iter()
+            .fold(self.take_groups.missing_takes.len() as u64, |acc, (g, t)| {
+                acc ^ g
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .rotate_left(17)
+                    .wrapping_add(*t)
+            });
+        missing_fold.hash(&mut take_h);
+        let takes_hash = take_h.finish();
+
+        // Order-independent fold over the take-lane-expanded set, with the
+        // count folded in so the empty set can never collide with a set
+        // whose ids XOR to zero.
+        let take_expanded_hash = self
+            .take_lane_expanded_tracks
+            .iter()
+            .fold(self.take_lane_expanded_tracks.len() as u64, |acc, id| {
                 acc ^ id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
             });
 
@@ -538,6 +841,15 @@ impl<'a> TimelineCanvas<'a> {
             clips_hash,
             frozen_hash,
             automation_expanded_hash,
+            groups_hash,
+            takes_hash,
+            take_expanded_hash,
+            midi_clips_hash,
+            // Patched per frame by `fingerprint` from the live viewport;
+            // the memoized content half always carries the no-cull
+            // sentinel.
+            cull_x0_bits: f32::NEG_INFINITY.to_bits(),
+            cull_x1_bits: f32::INFINITY.to_bits(),
         }
     }
 }
@@ -597,7 +909,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         // Cache invalidation: re-runs the body only when our fingerprint
         // changes. Pure hover/sibling redraws hit the cached geometry.
@@ -615,7 +927,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             self.draw_into(frame, bounds);
         });
         let mut overlay = canvas::Frame::new(renderer, bounds.size());
-        self.draw_overlay_into(&mut overlay, bounds);
+        self.draw_overlay_into(&mut overlay, bounds, state, cursor);
         vec![cached, overlay.into_geometry()]
     }
 }
@@ -766,6 +1078,23 @@ impl<'a> TimelineCanvas<'a> {
                             theme::LINE_2,
                         );
                     }
+                    // Take sub-row (epic #15): the same recessed substrate
+                    // as an automation lane row, so both stacks read as
+                    // detail hanging off their track. The take card itself
+                    // is drawn by `draw_take_rows` below, after the clips.
+                    // Zebra parity deliberately doesn't advance.
+                    ArrangeRowKind::TakeRow { .. } => {
+                        frame.fill_rectangle(
+                            Point::new(0.0, y),
+                            Size::new(bounds.width, row.height),
+                            theme::BG_2,
+                        );
+                        frame.fill_rectangle(
+                            Point::new(0.0, y + row.height - 1.0),
+                            Size::new(bounds.width, 1.0),
+                            theme::LINE_2,
+                        );
+                    }
                 }
             }
 
@@ -793,8 +1122,17 @@ impl<'a> TimelineCanvas<'a> {
                 }
             }
 
-            // Draw audio clips
+            // Draw audio clips. Horizontally culled to the quantized
+            // visible window (see [`cull`]): the canvas spans the whole
+            // song but only the outer `Scrollable`'s viewport is ever on
+            // screen, and the window is a fingerprint field re-derived on
+            // every rendered frame — so a scroll that would reveal a
+            // skipped clip repaints in the very frame that reveals it.
+            let cull = self.cull_window();
             for clip in self.clips {
+                if !cull::span_may_be_visible(self.audio_clip_x_span(clip), cull) {
+                    continue;
+                }
                 self.draw_clip(
                     frame,
                     clip,
@@ -810,8 +1148,12 @@ impl<'a> TimelineCanvas<'a> {
             // overlap wash + crossing curves sit on top of both clips.
             self.draw_crossfades(frame, &layout, header_height, y_off, bounds.height);
 
-            // Draw MIDI clips
+            // Draw MIDI clips — same horizontal cull as the audio clips
+            // above (the note minimap is the per-clip cost here).
             for clip in self.midi_clips {
+                if !cull::span_may_be_visible(self.midi_clip_x_span(clip), cull) {
+                    continue;
+                }
                 self.draw_midi_clip(
                     frame,
                     clip,
@@ -826,6 +1168,14 @@ impl<'a> TimelineCanvas<'a> {
             // Drawn over the clips so the envelope reads on top of them; the
             // live playhead value rides the uncached overlay pass below.
             self.draw_automation_lanes(frame, &layout, header_height, y_off, bounds);
+
+            // Take lanes (epic #15, doc #165). The comp ribbon rides the
+            // track's own lane so a *folded* take lane still shows which
+            // take is audible where; the stacked take cards fill the
+            // dedicated sub-rows an expanded lane adds. Both live in this
+            // cached pass — nothing in a take lane follows the playhead.
+            self.draw_take_comp_ribbons(frame, &layout, header_height, y_off, bounds);
+            self.draw_take_rows(frame, &layout, header_height, y_off, bounds);
 
             // Lane-area portion of the loop in/out markers — the dim
             // overlays. The vertical loop lines, amber range fill, and
@@ -958,7 +1308,13 @@ impl<'a> TimelineCanvas<'a> {
     /// playback / recording: the playhead line + tab, and the per-track
     /// recording overlay. Called from `Program::draw` on a fresh
     /// uncached `Frame` so these don't trigger cache invalidation.
-    fn draw_overlay_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
+    fn draw_overlay_into(
+        &self,
+        frame: &mut canvas::Frame,
+        bounds: Rectangle,
+        state: &TimelineState,
+        cursor: mouse::Cursor,
+    ) {
         let ruler_height = theme::RULER_HEIGHT;
         let header_height = self.fixed_header_height();
         let y_off = self.scroll_offset_y;
@@ -1043,6 +1399,19 @@ impl<'a> TimelineCanvas<'a> {
         if let Some(drag) = self.drag {
             self.draw_drag_placement(frame, bounds, drag);
         }
+
+        // Take-lane comping affordances (epic #15, todo #414): the
+        // in-flight promote's preview band and the hover captions that
+        // say what a gesture is about to do. Uncached on purpose — they
+        // follow the pointer, while everything todo #413 draws in a take
+        // lane follows nothing and stays in the cached layer.
+        self.draw_take_interaction(
+            frame,
+            &layout,
+            bounds,
+            state.take_promote_drag.as_ref(),
+            cursor,
+        );
 
         // The ruler-height local is unused if neither overlay fires;
         // keep it so future overlay additions (e.g. selection brushes)

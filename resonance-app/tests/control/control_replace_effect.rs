@@ -14,15 +14,14 @@
 //! load with a missing plugin -> status reported -> replace -> chain
 //! order preserved.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioEvent, PluginInstanceId, ScannedPlugin, TrackType};
 use resonance_control::methods::track::{
     PluginParamsView, PluginSlotStatus, ReplaceEffectResult, ReplaceOutcome,
 };
-use resonance_control::{ErrorKind, Request, Response};
+use resonance_control::{ErrorKind, MutationAck};
+use crate::common::call;
 
 const TRACK: u64 = 1;
 const BUS: u64 = 5;
@@ -82,17 +81,6 @@ fn slot(instance_id: PluginInstanceId, plugin_id: &str, name: &str) -> PluginSlo
         Vec::new(),
         false,
     )
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    let request = Request::new(1, method, &params).expect("params serialize");
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 /// The engine's refusal for a plugin it could not instantiate.
@@ -400,5 +388,209 @@ fn a_remote_replace_is_undoable() {
         app.revision(),
         before,
         "a real replace records an undoable transaction"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The shared resolver (`update::control::effect_addressing`)
+// ---------------------------------------------------------------------------
+//
+// `track/bus/master.remove_effect` used to each hand-roll their own copy of
+// the slot-or-(plugin_id, occurrence) state machine; now all three call
+// through one `resolve_effect`. `remove_effect` (rather than
+// `replace_effect`, this file's main subject) is the probe verb below
+// because it also refuses the track's instrument, which `replace_effect`
+// deliberately does not.
+//
+// The three surfaces are NOT expected to say the same words — a track
+// names itself `"track 1"`, a bus `"bus 5"`, the master has no id at all —
+// and this test pins those differences too, so a future edit to the
+// shared resolver cannot quietly erase them by "unifying" the wording.
+
+struct Surface {
+    name: &'static str,
+    method: &'static str,
+    /// `("track_id", TRACK)` / `("bus_id", BUS)`, or `None` for master,
+    /// which has no id.
+    id_param: Option<(&'static str, u64)>,
+    /// Fragment of the "neither slot nor plugin_id given" message that
+    /// is THIS surface's own wording for where the chain lives.
+    absent_fragment: &'static str,
+    /// Fragment of the "no such slot" message.
+    slot_oob_fragment: &'static str,
+    /// Fragment of the "no such plugin_id" message.
+    id_unknown_fragment: &'static str,
+}
+
+fn remove_params(surface: &Surface, extra: serde_json::Value) -> serde_json::Value {
+    let mut p = extra;
+    if let Some((key, id)) = surface.id_param {
+        p[key] = serde_json::json!(id);
+    }
+    p
+}
+
+#[test]
+fn all_three_surfaces_share_one_resolver_and_keep_their_own_wording() {
+    let surfaces = [
+        Surface {
+            name: "track",
+            method: "track.remove_effect",
+            id_param: Some(("track_id", TRACK)),
+            absent_fragment: "Track 1 carries",
+            slot_oob_fragment: "track 1 has no plugin at slot 99",
+            // Track predates this module and still lists occurrences
+            // with a colon (`unknown_plugin_on_track`), unlike bus and
+            // master's plain `chain_description` listing — a drift this
+            // refactor preserves rather than unifies.
+            id_unknown_fragment: "carries: [",
+        },
+        Surface {
+            name: "bus",
+            method: "bus.remove_effect",
+            id_param: Some(("bus_id", BUS)),
+            absent_fragment: "Bus 5 carries",
+            slot_oob_fragment: "bus 5 has no plugin at slot 99",
+            id_unknown_fragment: "carries [",
+        },
+        Surface {
+            name: "master",
+            method: "master.remove_effect",
+            id_param: None,
+            absent_fragment: "The master chain is [",
+            slot_oob_fragment: "the master chain has no slot 99",
+            id_unknown_fragment: "the master chain has no plugin",
+        },
+    ];
+
+    for s in &surfaces {
+        let mut app = app();
+        app.test_add_bus(BUS, "Drums");
+        app.test_push_track_plugin(TRACK, slot(EQ, EQ_ID, "Resonance EQ"));
+        app.test_push_track_plugin(TRACK, slot(COMP, COMP_ID, "Resonance Compressor"));
+        app.test_push_bus_plugin(BUS, slot(EQ, EQ_ID, "Resonance EQ"));
+        app.test_push_bus_plugin(BUS, slot(COMP, COMP_ID, "Resonance Compressor"));
+        app.test_push_master_plugin(slot(EQ, EQ_ID, "Resonance EQ"));
+        app.test_push_master_plugin(slot(COMP, COMP_ID, "Resonance Compressor"));
+
+        // Slot form resolves and dispatches a real edit. (The actual
+        // vector shrink is deferred to the engine's `PluginRemoved`
+        // echo, never applied here, so re-addressing the still-intact
+        // chain in the sub-cases below is safe.)
+        let before = app.revision();
+        let _: MutationAck = call(&mut app, s.method, remove_params(s, serde_json::json!({"slot": 0})))
+            .result()
+            .unwrap_or_else(|e| panic!("{}: slot form should resolve: {e:?}", s.name));
+        assert_eq!(
+            app.revision(),
+            before + 1,
+            "{}: slot form dispatches a real edit",
+            s.name
+        );
+
+        // plugin_id + occurrence form resolves the same way.
+        let before = app.revision();
+        let _: MutationAck = call(
+            &mut app,
+            s.method,
+            remove_params(s, serde_json::json!({"plugin_id": COMP_ID, "occurrence": 0})),
+        )
+        .result()
+        .unwrap_or_else(|e| panic!("{}: id+occurrence form should resolve: {e:?}", s.name));
+        assert_eq!(
+            app.revision(),
+            before + 1,
+            "{}: id+occurrence form dispatches a real edit",
+            s.name
+        );
+
+        // Both forms at once: the one string the three DO share.
+        let error = call(
+            &mut app,
+            s.method,
+            remove_params(s, serde_json::json!({"slot": 0, "plugin_id": EQ_ID})),
+        )
+        .error
+        .unwrap_or_else(|| panic!("{}: ambiguous address should be refused", s.name));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams, "{}", s.name);
+        assert!(
+            error.message.contains("OR by plugin_id"),
+            "{}: {}",
+            s.name,
+            error.message
+        );
+
+        // Neither given: refused, but each surface still names its own
+        // host its own way.
+        let error = call(&mut app, s.method, remove_params(s, serde_json::json!({})))
+            .error
+            .unwrap_or_else(|| panic!("{}: absent address should be refused", s.name));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams, "{}", s.name);
+        assert!(
+            error.message.contains(s.absent_fragment),
+            "{}: expected {:?} in {}",
+            s.name,
+            s.absent_fragment,
+            error.message
+        );
+
+        // Out-of-range slot.
+        let error = call(&mut app, s.method, remove_params(s, serde_json::json!({"slot": 99})))
+            .error
+            .unwrap_or_else(|| panic!("{}: out-of-range slot should be refused", s.name));
+        assert_eq!(error.kind(), ErrorKind::NotFound, "{}", s.name);
+        assert!(
+            error.message.contains(s.slot_oob_fragment),
+            "{}: expected {:?} in {}",
+            s.name,
+            s.slot_oob_fragment,
+            error.message
+        );
+
+        // Unknown plugin_id.
+        let error = call(
+            &mut app,
+            s.method,
+            remove_params(s, serde_json::json!({"plugin_id": "com.nope.nothing"})),
+        )
+        .error
+        .unwrap_or_else(|| panic!("{}: unknown plugin id should be refused", s.name));
+        assert_eq!(error.kind(), ErrorKind::NotFound, "{}", s.name);
+        assert!(
+            error.message.contains(s.id_unknown_fragment),
+            "{}: expected {:?} in {}",
+            s.name,
+            s.id_unknown_fragment,
+            error.message
+        );
+    }
+}
+
+/// The instrument-refusal hook only ever fires on track: a bus or master
+/// chain slot is always `PluginKind::Effect` (`bus_plugin_entries` /
+/// `master_plugin_entries` never tag one `Instrument`), so there is no
+/// equivalent call to make on those surfaces — the absence is structural,
+/// not a wording gap the resolver papers over.
+#[test]
+fn only_the_track_surface_can_refuse_an_instrument_slot() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Mixer);
+    app.test_set_active_project(true);
+    app.test_add_track(TRACK, TrackType::Instrument);
+    app.test_apply_engine_event(AudioEvent::PluginsScanned { plugins: catalog() });
+    app.test_push_track_plugin(TRACK, slot(VERB, SYNTH_ID, "Resonance Wavetable"));
+    app.test_push_track_plugin(TRACK, slot(EQ, EQ_ID, "Resonance EQ"));
+
+    let error = call(
+        &mut app,
+        "track.remove_effect",
+        serde_json::json!({"track_id": TRACK, "slot": 0}),
+    )
+    .error
+    .expect("removing the instrument is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(
+        error.message.contains("INSTRUMENT") && error.message.contains("track.replace_effect"),
+        "{}",
+        error.message
     );
 }

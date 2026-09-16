@@ -7,8 +7,9 @@
 //! `SharedState` plumbing stay out of the `tests/` crate:
 //!
 //! - [`render_block`]: one offline block through the render core
-//!   ([`render_aux_for_test`], [`render_aux_with_comp_for_test`]) and the
-//!   live-strategy bench loop ([`RenderBenchHarness`]).
+//!   ([`render_aux_for_test`], [`render_aux_with_comp_for_test`]), the
+//!   take-comp block on either strategy ([`render_take_comp_for_test`]),
+//!   and the live-strategy bench loop ([`RenderBenchHarness`]).
 //! - [`callback`]: the whole audio callback over owned state
 //!   ([`MixAudioHarness`]).
 //!
@@ -19,4 +20,7 @@ mod callback;
 mod render_block;
 
 pub use callback::MixAudioHarness;
-pub use render_block::{render_aux_for_test, render_aux_with_comp_for_test, RenderBenchHarness};
+pub use render_block::{
+    render_aux_for_test, render_aux_with_comp_for_test, render_take_comp_borrowed_for_test,
+    render_take_comp_for_test, RenderBenchHarness,
+};

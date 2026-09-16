@@ -26,14 +26,13 @@
 //! and re-applies them (to the mirror *and* to the engine) when the
 //! instance's `PluginAdded` lands.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
 use resonance_control::ids::TrackId as ProtoTrackId;
 use resonance_control::methods::{mixer as mixer_proto, track as track_proto};
 use resonance_control::{Request, Response};
+use crate::common::roundtrip;
 
 const TRACK: u64 = 80;
 const INSTANCE: u64 = 900;
@@ -48,16 +47,6 @@ fn app_with_project() -> Resonance {
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-plugin-params.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {

@@ -28,6 +28,7 @@
 
 use std::path::PathBuf;
 
+use resonance_dsp_test_support as golden;
 use resonance_granular_delay::params::GranularDelayParams;
 use resonance_granular_delay::viz::{pack_grain, GrainSnapshot, GRAIN_SLOTS, PEAK_BINS};
 use resonance_granular_delay::ResonanceGranularDelay;
@@ -47,7 +48,7 @@ const PRIME_BLOCKS: usize = 48;
 const MAX_BLOCK: usize = 96;
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/dsp_regression.u32")
+    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "dsp_regression.u32")
 }
 
 /// FNV-1a over a word sequence — used to fold each block's published viz
@@ -564,51 +565,21 @@ fn dsp_output_and_viz_are_bit_exact() {
     let rendered = render_all();
     let path = golden_path();
 
-    if std::env::var("RESONANCE_BLESS_GRANULAR_DSP").as_deref() == Ok("1") {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes: Vec<u8> = rendered.iter().flat_map(|w| w.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        eprintln!(
-            "blessed golden: {} words -> {}",
-            rendered.len(),
-            path.display()
-        );
+    if golden::blessed(&["RESONANCE_BLESS_GRANULAR_DSP"]) {
+        golden::bless_words(&path, &rendered);
         return;
     }
 
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+    let want = golden::load_golden_words(&path, rendered.len(), "RESONANCE_BLESS_GRANULAR_DSP=1");
+    let diff = golden::compare_words(&rendered, &want);
+
+    if let Some((i, got, want)) = diff.first_diff {
         panic!(
-            "missing golden {}: {e}\nregenerate with RESONANCE_BLESS_GRANULAR_DSP=1",
-            path.display()
-        )
-    });
-    assert_eq!(
-        bytes.len(),
-        rendered.len() * 4,
-        "golden length mismatch — the scenario set changed"
-    );
-
-    let golden = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()));
-
-    let mut diff_count = 0usize;
-    let mut first_diff = None;
-    for (i, (a, b)) in rendered.iter().copied().zip(golden).enumerate() {
-        if a != b {
-            diff_count += 1;
-            if first_diff.is_none() {
-                first_diff = Some((i, a, b));
-            }
-        }
-    }
-
-    if let Some((i, got, want)) = first_diff {
-        panic!(
-            "granular DSP output changed: {diff_count}/{} words differ; first at word {i} \
+            "granular DSP output changed: {}/{} words differ; first at word {i} \
              (got {got:#010x}, want {want:#010x}; as f32: {} vs {}). A refactor of the DSP \
              path must be bit-exact — if the change was intended, re-bless with \
              RESONANCE_BLESS_GRANULAR_DSP=1.",
+            diff.diff_count,
             rendered.len(),
             f32::from_bits(got),
             f32::from_bits(want),

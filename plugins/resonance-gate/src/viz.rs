@@ -14,8 +14,10 @@
 //! reads at frame rate and tolerates seeing a straddled pair of cells,
 //! since these are status readouts and not a signal path.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
+
+use resonance_metering::AtomicF32;
 
 use crate::dsp::GateState;
 
@@ -44,11 +46,11 @@ pub struct GateViz {
     /// [`GateState::code`] of the state the gate ended that block in.
     state: AtomicU8,
     /// Peak gain reduction across that block, dB (positive = reducing).
-    gr_db: AtomicU32,
+    gr_db: AtomicF32,
     /// Peak detector level across that block, dBFS — post key
     /// substitution and post key high-pass, i.e. the number the
     /// threshold is compared against.
-    detector_db: AtomicU32,
+    detector_db: AtomicF32,
 }
 
 impl GateViz {
@@ -56,8 +58,8 @@ impl GateViz {
         Arc::new(Self {
             key_connected: AtomicBool::new(false),
             state: AtomicU8::new(GateState::Closed.code()),
-            gr_db: AtomicU32::new(0.0f32.to_bits()),
-            detector_db: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
+            gr_db: AtomicF32::new(0.0),
+            detector_db: AtomicF32::new(f32::NEG_INFINITY),
         })
     }
 
@@ -72,9 +74,8 @@ impl GateViz {
     /// call from the audio thread; wait-free.
     pub fn store_block(&self, state: GateState, gr_db: f32, detector_db: f32) {
         self.state.store(state.code(), Ordering::Relaxed);
-        self.gr_db.store(gr_db.to_bits(), Ordering::Relaxed);
-        self.detector_db
-            .store(detector_db.to_bits(), Ordering::Relaxed);
+        self.gr_db.store(gr_db, Ordering::Relaxed);
+        self.detector_db.store(detector_db, Ordering::Relaxed);
     }
 
     /// Back to the state a freshly constructed plugin reports, for
@@ -101,10 +102,10 @@ impl GateViz {
     }
 
     pub fn gr_db(&self) -> f32 {
-        f32::from_bits(self.gr_db.load(Ordering::Relaxed))
+        self.gr_db.load(Ordering::Relaxed)
     }
 
     pub fn detector_db(&self) -> f32 {
-        f32::from_bits(self.detector_db.load(Ordering::Relaxed))
+        self.detector_db.load(Ordering::Relaxed)
     }
 }

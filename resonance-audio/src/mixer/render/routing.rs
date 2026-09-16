@@ -2,22 +2,12 @@
 //! post-fader route (bus summing buffer or straight to master) and the
 //! parallel aux-send taps from a track and from a bus.
 
+use resonance_dsp::db_to_linear;
+
 use crate::mixer::common::{sum_to_output, sum_to_stereo};
 use crate::types::*;
 
 use super::context::{BlockCtx, BlockScratch, BusBufs, GainRamp, OutputTargets};
-
-/// Linear gain for an aux-send level in dB. `0 dB` short-circuits to
-/// unity (the common case for a freshly-created send) so the per-block
-/// tap stays cheap.
-#[inline]
-fn db_to_linear(db: f32) -> f32 {
-    if db == 0.0 {
-        1.0
-    } else {
-        10f32.powf(db / 20.0)
-    }
-}
 
 /// Sum a post-fader stereo signal into its destination: the target bus's
 /// summing buffer, or the interleaved master output.

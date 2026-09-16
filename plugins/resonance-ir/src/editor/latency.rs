@@ -34,7 +34,7 @@
 //! the new mode is already in effect.
 
 use resonance_plugin::Param;
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::latency;
 

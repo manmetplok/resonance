@@ -9,8 +9,6 @@
 //! no test reads or writes the real
 //! `~/.local/share/resonance/plugin-presets`.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioEvent, ParamInfo, ScannedPlugin, TrackType};
@@ -18,6 +16,7 @@ use resonance_control::ids::TrackId as ProtoTrackId;
 use resonance_control::methods::plugin_preset::{PluginPresetSource, PluginPresetsView};
 use resonance_control::methods::track as track_proto;
 use resonance_control::{Request, Response};
+use crate::common::roundtrip;
 
 const TRACK: u64 = 80;
 const INSTANCE: u64 = 900;
@@ -121,16 +120,6 @@ fn app_with_plugin(root: &TempRoot) -> Resonance {
         ),
     );
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {

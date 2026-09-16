@@ -6,8 +6,6 @@
 //! stayed `not_rendered` with no clips. The acceptance case at the
 //! bottom walks the whole GUI-free path.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::TrackType;
@@ -17,6 +15,7 @@ use resonance_control::methods::section as section_proto;
 use resonance_control::methods::song::NotesView;
 use resonance_control::methods::vocal as proto;
 use resonance_control::{ErrorKind, KeyScale, MutationAck, Request, Response};
+use crate::common::roundtrip;
 
 const TRACK: u64 = 60;
 
@@ -25,16 +24,6 @@ fn app_with_project() -> Resonance {
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-vocal-generate.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, request: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request,
-        reply,
-    })));
-    rx.try_recv().expect("every request gets exactly one reply")
 }
 
 fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {
@@ -265,7 +254,7 @@ fn render_sings_the_authored_notes_and_never_rewrites_them() {
     call(
         &mut app,
         "notes.replace_all",
-        &serde_json::json!({ "clip_id": clip, "notes": authored }),
+        &serde_json::json!({ "clip_id": clip, "notes": authored, "confirm": true }),
     )
     .result::<resonance_control::methods::notes::InsertManyResult>()
     .expect("notes.replace_all succeeds");

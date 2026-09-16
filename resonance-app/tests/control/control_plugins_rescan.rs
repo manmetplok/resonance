@@ -12,7 +12,6 @@
 //! leaves running plugins alone, and a bundle that refuses to load is
 //! reported instead of silently missing.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{Message, PluginMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
@@ -22,6 +21,7 @@ use resonance_audio::types::{
 use resonance_control::methods::plugins::PluginCatalog;
 use resonance_control::methods::track::PluginParamsView;
 use resonance_control::{MutationAck, Request, Response};
+use crate::common::{call, roundtrip};
 
 const TRACK: u64 = 1;
 const REVERB: u64 = 20;
@@ -47,20 +47,6 @@ fn app() -> Resonance {
         plugins: vec![scanned("com.resonance.reverb", "Resonance Reverb", false)],
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn catalog(app: &mut Resonance) -> PluginCatalog {

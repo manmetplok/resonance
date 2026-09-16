@@ -3,9 +3,9 @@
 //! like they belong to the same product (ba todo #1338), plus the
 //! gain-reduction meter colours.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;
 
 /// Gain-reduction meter — the shared warm token.
 pub const GR: egui::Color32 = WARM;

@@ -1,6 +1,6 @@
 //! Numeric readout panels for PLR / PSR / Crest / LRA.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 

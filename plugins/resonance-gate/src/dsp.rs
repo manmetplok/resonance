@@ -302,6 +302,17 @@ impl GateDsp {
     ) {
         self.prepare_block(s);
 
+        // Self-heal non-finite recursive state before the block runs.
+        // `step_envelope` and the detector's peak envelope are one-pole
+        // recursions that never leave NaN once they hold one — a single
+        // bad key sample would otherwise wedge the gate until reset.
+        // Checking at block rate costs the hot path nothing and bounds
+        // recovery to one block.
+        if !(self.gr_db.is_finite() && self.det_env.is_finite()) {
+            self.gr_db = 0.0;
+            self.det_env = 0.0;
+        }
+
         let hold_samples = (s.hold_ms * 0.001 * self.sample_rate).max(0.0) as u32;
         let close_threshold = s.threshold_db - s.hysteresis_db.max(0.0);
         let mut peak_gr = 0.0f32;
@@ -317,11 +328,29 @@ impl GateDsp {
                 ),
                 None => (left[i], right[i]),
             };
-            let rectified = self
-                .hpf_l
-                .process(kl)
-                .abs()
-                .max(self.hpf_r.process(kr).abs());
+            // A non-finite key sample reads as detector silence — the
+            // envelope below releases naturally instead of latching
+            // NaN. Guarded per channel on the filter OUTPUT: one branch
+            // covers both a bad input sample and one-pole state that
+            // was already latched, and `max` ignores a one-sided NaN,
+            // so a combined check would let a poisoned filter hide
+            // behind a clean one. The just-poisoned state is cleared so
+            // a single bad sample cannot latch in `prev_out`.
+            let det_l = self.hpf_l.process(kl);
+            let det_l = if det_l.is_finite() {
+                det_l
+            } else {
+                self.hpf_l.reset();
+                0.0
+            };
+            let det_r = self.hpf_r.process(kr);
+            let det_r = if det_r.is_finite() {
+                det_r
+            } else {
+                self.hpf_r.reset();
+                0.0
+            };
+            let rectified = det_l.abs().max(det_r.abs());
             // Peak envelope: instant attack, exponential release. This is
             // what the threshold actually compares against.
             self.det_env = rectified.max(self.det_env * self.det_release_coef);

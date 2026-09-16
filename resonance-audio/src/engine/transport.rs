@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use resonance_common::{TakeContent, TakeGroupId, TimelineRange};
+use resonance_common::{TakeContent, TimelineRange};
 
 use crate::platform;
 use crate::types::*;
@@ -160,6 +160,12 @@ pub(crate) fn begin_recording_stream(
         device: Option<String>,
         port: u16,
         mono: bool,
+        /// Whether this track's signal arrives as audio on the input, and
+        /// so needs a recording buffer + WAV writer — see
+        /// [`Track::runs_internal_instrument`]. An armed track whose
+        /// instrument runs in-process still counts as armed (it records a
+        /// MIDI performance) but captures no audio.
+        captures_audio: bool,
     }
     let armed_tracks: Vec<ArmedInfo> = {
         let tracks_guard = ctx.tracks.read();
@@ -171,6 +177,7 @@ pub(crate) fn begin_recording_stream(
                 device: t.input_device_name.load_full().map(|a| (*a).clone()),
                 port: t.input_port(),
                 mono: t.mono(),
+                captures_audio: !t.runs_internal_instrument(),
             })
             .collect()
     };
@@ -234,14 +241,27 @@ pub(crate) fn begin_recording_stream(
 
     state.rec.start_sample = start_sample;
     state.rec.start_latch_applied = false;
+    // A new record take starts with a clean dropped-frame count and a
+    // re-armed `RecordingOverflow` report.
+    state
+        .rec
+        .begin_overflow_episode(&ctx.shared.recording_overflow);
     state.rec.ring_consumer = Some(cons);
     state.rec.input_sample_rate = in_sr;
     state.rec.input_channels = in_ch;
 
-    // Allocate a clip id per armed track and open a WAV writer
-    // targeting its final location in the project's audio dir. Any
-    // failure here unwinds the partially-built state and bails.
-    for info in &armed_tracks {
+    // Allocate a clip id per armed track that actually captures audio and
+    // open a WAV writer targeting its final location in the project's
+    // audio dir. Any failure here unwinds the partially-built state and
+    // bails.
+    //
+    // Tracks whose instrument runs in-process are skipped: they are armed
+    // to record a MIDI performance, and giving them a buffer would write a
+    // WAV of whatever happened to be on the input and — under cycle-record
+    // — file a second, spurious take for every loop pass (ba doc #292).
+    // They stay in `armed_tracks` so the transport still enters recording
+    // and opens the cycle-record session for their MIDI.
+    for info in armed_tracks.iter().filter(|i| i.captures_audio) {
         let clip_id = state.next_clip_id;
         state.next_clip_id += 1;
         match crate::recording::RecordingState::create_track_buf(
@@ -298,7 +318,6 @@ pub(crate) fn begin_recording_stream(
         Some(LoopRecordSession {
             slot: TimelineRange::from_bounds(state.rec.loop_in, state.rec.loop_out),
             pass_index: 0,
-            groups: std::collections::HashMap::new(),
         })
     } else {
         None
@@ -313,6 +332,11 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
+        // Last chance to report an overflow the periodic drain poll has
+        // not seen yet (latched — a no-op when it already fired).
+        state
+            .rec
+            .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
         if state.loop_record_session.is_some() {
             // Cycle-record: emit the trailing pass as its own take instead
             // of the legacy single trimmed clip.
@@ -344,6 +368,11 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
+        // Last chance to report an overflow the periodic drain poll has
+        // not seen yet (latched — a no-op when it already fired).
+        state
+            .rec
+            .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
         if state.loop_record_session.is_some() {
             // Cycle-record: emit the trailing pass as its own take instead
             // of the legacy single trimmed clip.
@@ -504,6 +533,11 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     let Some(project_dir) = state.project_dir.clone() else {
         return;
     };
+    // `pass_index` here is the *run's* pass counter, which restarts at 0 at
+    // every record press. It is used only to tell the punch-in pass from
+    // the rest, which is exactly what it means. The ordinal a take is
+    // filed and labelled under comes from its group instead, since a group
+    // now spans runs (todo #1392) — see `takes::push_take`.
     let (slot, pass_index) = match state.loop_record_session.as_ref() {
         Some(s) => (s.slot, s.pass_index),
         None => return,
@@ -518,6 +552,18 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
         slot.start
     };
 
+    // Report any ring overflow that damaged the pass being finalized
+    // (latched — a no-op when the drain poll already fired), then start
+    // the next pass with a clean count: a new take starts clean.
+    state
+        .rec
+        .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
+    if reopen {
+        state
+            .rec
+            .begin_overflow_episode(&ctx.shared.recording_overflow);
+    }
+
     // -- Audio takes --
     let rolled = state.rec.roll_audio_pass(
         ctx.sample_rate,
@@ -527,30 +573,42 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
         &mut state.next_clip_id,
         reopen,
     );
+    let mut captured_any = false;
     for take in rolled {
-        let group_id = loop_record_group_for(state, take.track_id);
-        let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
-            group_id,
-            track_id: take.track_id,
-            slot,
-            pass_index,
-            content: TakeContent::Audio {
-                clip_ref: take.clip_id,
-            },
-        });
+        let content = TakeContent::Audio {
+            clip_ref: take.clip_id,
+        };
+        // What this pass really recorded over — the punch-in point for
+        // pass 0, and short of the loop end for a pass cut off at stop.
+        // Reported so the app's promote clamp and take lane stop assuming
+        // every take fills its slot (ba todo #1396). It is the run's own
+        // measurement even when the take joins an existing lane.
+        let extent = take.extent();
+        let _ = ctx
+            .event_tx
+            .send(capture_take(state, take.track_id, slot, extent, content));
+        captured_any = true;
     }
 
     // -- MIDI takes (instrument tracks) --
     let midi_takes = super::midi::capture_loop_record_midi_pass(ctx, state, slot.end());
     for (track_id, notes) in midi_takes {
-        let group_id = loop_record_group_for(state, track_id);
-        let _ = ctx.event_tx.send(AudioEvent::TakeCaptured {
-            group_id,
-            track_id,
-            slot,
-            pass_index,
-            content: TakeContent::Midi { notes },
-        });
+        let content = TakeContent::Midi { notes };
+        // A MIDI take's extent is the whole region the run cycled over:
+        // its notes are its content, silence inside it is a rest rather
+        // than a hole, and there is no medium that can come up short (ba
+        // todo #1396, and `Take::audible_extent`).
+        let _ = ctx
+            .event_tx
+            .send(capture_take(state, track_id, slot, slot, content));
+        captured_any = true;
+    }
+
+    // Republish the comp playback table so the pass just captured is
+    // immediately audible — with no comp and no active take yet, the
+    // default cover is the most recent take.
+    if captured_any {
+        super::takes::publish_take_comp(ctx, state);
     }
 
     if reopen {
@@ -562,17 +620,27 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     }
 }
 
-/// Stable take-group id for `track_id` within the active cycle-record run,
-/// allocated on first use so every pass of a track shares one group.
-fn loop_record_group_for(state: &mut HandlerState, track_id: TrackId) -> TakeGroupId {
-    let next = &mut state.next_take_group_id;
-    let session = state
-        .loop_record_session
-        .as_mut()
-        .expect("loop-record session present");
-    *session.groups.entry(track_id).or_insert_with(|| {
-        let id = *next;
-        *next += 1;
-        id
-    })
+/// File one captured take against the lane it belongs to and return the
+/// `TakeCaptured` event to send. A thin `HandlerState` adapter over
+/// `takes::capture_take_event`, which is where the whole rule lives:
+/// the lookup is against `state.take_groups`, which outlives the record run
+/// and holds groups restored from a saved project, so a second, third or
+/// post-reload run over the same region folds into the lane already there
+/// (todo #1392).
+fn capture_take(
+    state: &mut HandlerState,
+    track_id: TrackId,
+    run_slot: TimelineRange,
+    extent: TimelineRange,
+    content: TakeContent,
+) -> AudioEvent {
+    // Disjoint field borrows: the store is written, the allocator is bumped.
+    super::takes::capture_take_event(
+        &mut state.take_groups,
+        &mut state.next_take_group_id,
+        track_id,
+        run_slot,
+        extent,
+        content,
+    )
 }

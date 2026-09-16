@@ -12,7 +12,7 @@ use crate::Resonance;
 
 use super::{
     automation, aux_sends, clips, freeze, midi, midi_map, plugins, pool, project_io, reference,
-    tracks, transport,
+    takes, tracks, transport,
 };
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
@@ -44,6 +44,9 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             transport::input_devices_listed(r, devices, default_name)
         }
         E::RecordingStarted { start_sample } => transport::recording_started(r, start_sample),
+        E::RecordingOverflow { dropped_frames } => {
+            transport::recording_overflow(r, dropped_frames)
+        }
         // I/O latency report (doc #260 finding #13): no UI surface yet —
         // logged for diagnosability until a round-trip readout lands.
         E::IoLatencyReport {
@@ -228,11 +231,35 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             waveform_peaks,
         ),
         // Cycle-record take capture (epic #15). The engine emits one
-        // `TakeCaptured` per loop pass with its take-group/slot id; the
-        // recorded clips themselves arrive via `RecordingFinished`. GUI
-        // take-lane mirroring/comping is a follow-up todo, so for now we
-        // accept the event without acting — keeping the match exhaustive.
-        E::TakeCaptured { .. } => {}
+        // `TakeCaptured` per loop pass with its take-group/slot id. This
+        // is the *only* news the app gets about a take: no
+        // `RecordingFinished` is emitted for a take clip, so the clip never
+        // reaches `Resonance::clips` and `extent` is the app's sole account
+        // of what the pass actually recorded (todo #1396).
+        E::TakeCaptured {
+            group_id,
+            take_id,
+            track_id,
+            slot,
+            pass_index,
+            extent,
+            content,
+        } => takes::take_captured(
+            r, group_id, take_id, track_id, slot, pass_index, extent, content,
+        ),
+        // Comp / active-take echoes (epic #15, todo #411). The engine has
+        // already applied these to what it plays and bounces, so the
+        // mirror adopts them verbatim — including when they merely confirm
+        // the optimistic update an update handler already made.
+        E::TakeCompChanged { group_id, segments } => takes::comp_changed(r, group_id, segments),
+        E::ActiveTakeChanged { group_id, take_id } => {
+            takes::active_take_changed(r, group_id, take_id)
+        }
+        // Removal echoes (ba todo #1397). Same shape: the engine has
+        // already dropped the take (or the whole lane) from what it plays,
+        // and the re-covered comp follows as a `TakeCompChanged`.
+        E::TakeRemoved { group_id, take_id } => takes::take_removed(r, group_id, take_id),
+        E::TakeGroupRemoved { group_id } => takes::take_group_removed(r, group_id),
 
         // MIDI clip + note events
         E::MidiClipCreated {

@@ -2,7 +2,8 @@
 use crate::message::*;
 use iced::{keyboard, Subscription, Task};
 
-/// Tick interval (ms) for the subscription timer that drains engine events.
+/// Fast (active-state) tick interval (ms) for the subscription timer that
+/// drains engine events; see `tick::tick_interval` for the idle rate.
 pub const TICK_INTERVAL_MS: u64 = 16;
 
 pub mod arrangement;
@@ -33,6 +34,7 @@ pub mod pool;
 pub mod project_io;
 pub mod reference;
 pub mod relink;
+pub mod takes;
 pub mod tempo_reanchor;
 pub mod tick;
 pub mod track;
@@ -138,6 +140,7 @@ impl crate::Resonance {
             Message::VocalTuning(m) => vocal_tuning::handle(self, m),
             Message::Plugin(m) => plugin::handle(self, m),
             Message::Automation(m) => automation::handle(self, m),
+            Message::Take(m) => takes::handle(self, m),
             Message::Viewport(m) => viewport::handle(self, m),
             Message::ProjectIo(m) => project_io::handle(self, m),
             Message::Group(m) => group::handle(self, m),
@@ -166,8 +169,11 @@ impl crate::Resonance {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let tick = iced::time::every(std::time::Duration::from_millis(TICK_INTERVAL_MS))
-            .map(|_| Message::Tick);
+        // Two-rate tick: frame rate while anything animates or a job is
+        // in flight, a slow idle rate otherwise (still draining engine
+        // events). iced diffs subscriptions by state, so the rate follows
+        // `tick::tick_interval` as activity starts/stops.
+        let tick = iced::time::every(tick::tick_interval(self)).map(|_| Message::Tick);
         let keys = keyboard::listen().filter_map(|event| match event {
             keyboard::Event::KeyPressed {
                 key, modifiers, ..

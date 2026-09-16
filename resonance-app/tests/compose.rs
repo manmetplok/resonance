@@ -31,6 +31,8 @@ mod compose_arrangement_strip;
 mod compose_arrangement_strip_labels;
 #[path = "compose/compose_bar_sample_tempo_map.rs"]
 mod compose_bar_sample_tempo_map;
+#[path = "compose/compose_canvas_cache_fingerprints.rs"]
+mod compose_canvas_cache_fingerprints;
 #[path = "compose/compose_derived_clip_ids.rs"]
 mod compose_derived_clip_ids;
 #[path = "compose/compose_drum_arrangement.rs"]

@@ -6,7 +6,7 @@
 //! NAM/wavenet/model.cpp); see the module docs on [`super`] for the layout.
 
 use super::super::super::activations::Activation;
-use super::super::super::parse::{StackConfig, WaveNetConfig, WeightReader};
+use super::super::super::parse::{checked_count, StackConfig, WaveNetConfig, WeightReader};
 use super::super::conv_layer::{Conv1x1, Conv1x1Bias, LayerGating, WaveNetLayer};
 use super::super::film::Film;
 use super::super::head::{DenseLayer, HeadRechannel};
@@ -56,7 +56,10 @@ fn read_film(
     }
     let out_ch = if params.shift { 2 * width } else { width };
     check_groups(ctx, site, cond_ch, out_ch, params.groups)?;
-    let weight = reader.read(out_ch * cond_ch / params.groups)?;
+    // groups divides out_ch (checked above), so the grouped compact count
+    // out_ch * cond_ch / groups can be computed division-first, keeping
+    // the checked product small.
+    let weight = reader.read(checked_count(ctx, &[out_ch / params.groups, cond_ch])?)?;
     let bias = reader.read(out_ch)?;
     Ok(Some(Film {
         weight,
@@ -123,7 +126,10 @@ pub(super) fn read_stack(
     // input_size*channels weights — a 1-to-1 rechannel is a learned
     // conv, not an identity (trainers export its weights even for
     // equal widths).
-    let weight = reader.read(ch * prev_ch)?;
+    let weight = reader.read(checked_count(
+        &format!("WaveNet stack {si} rechannel"),
+        &[ch, prev_ch],
+    )?)?;
     let rechannel = Conv1x1 {
         weight,
         out_ch: ch,
@@ -220,8 +226,8 @@ fn read_layer(
     // concatenated per-group row-major blocks — and for g == 1
     // this is the historical dense [mid_ch x ch] matrix.
     check_groups(&ctx, "conv", ch, mid_ch, g_in)?;
-    let per_tap = mid_ch * ch / g_in;
-    let raw = reader.read(per_tap * ks)?;
+    let per_tap = checked_count(&ctx, &[mid_ch / g_in, ch])?;
+    let raw = reader.read(checked_count(&ctx, &[per_tap, ks])?)?;
     let mut w_conv = Vec::with_capacity(ks);
     for tap in 0..ks {
         let mut w = vec![0.0f32; per_tap];
@@ -239,7 +245,10 @@ fn read_layer(
     // compact concatenated per-group layout — read as-is.
     let w_input_mixin = if stack_cfg.condition_size > 0 {
         check_groups(&ctx, "input_mixin", stack_cfg.condition_size, mid_ch, g_mixin)?;
-        Some(reader.read(mid_ch * stack_cfg.condition_size / g_mixin)?)
+        Some(reader.read(checked_count(
+            &ctx,
+            &[mid_ch / g_mixin, stack_cfg.condition_size],
+        )?)?)
     } else {
         None
     };
@@ -252,7 +261,7 @@ fn read_layer(
     // per-group layout, read as-is.
     let layer1x1 = if l1x1_active {
         check_groups(&ctx, "layer1x1", bottleneck, ch, g_1x1)?;
-        let w = reader.read(ch * bottleneck / g_1x1)?;
+        let w = reader.read(checked_count(&ctx, &[ch / g_1x1, bottleneck])?)?;
         let b = reader.read(ch)?;
         Some(Conv1x1Bias {
             weight: w,
@@ -276,7 +285,7 @@ fn read_layer(
         let h_out = stack_cfg.head1x1.out_channels;
         let h_groups = stack_cfg.head1x1.groups;
         check_groups(&ctx, "head1x1", bottleneck, h_out, h_groups)?;
-        let w = reader.read(h_out * bottleneck / h_groups)?;
+        let w = reader.read(checked_count(&ctx, &[h_out / h_groups, bottleneck])?)?;
         let b = reader.read(h_out)?;
         Some(Conv1x1Bias {
             weight: w,
@@ -415,8 +424,9 @@ fn read_head_rechannel(
     // tap index (`raw[m * hr_ks + tap]`) yields one compact
     // [out x in] matrix per tap; for hr_ks == 1 this is the
     // historical dense 1x1 head rechannel matrix bit-for-bit.
-    let per_tap = hr_out * skip_ch;
-    let raw = reader.read(per_tap * hr_ks)?;
+    let hr_ctx = format!("WaveNet stack {si} head rechannel");
+    let per_tap = checked_count(&hr_ctx, &[hr_out, skip_ch])?;
+    let raw = reader.read(checked_count(&hr_ctx, &[per_tap, hr_ks])?)?;
     let mut hr_taps = Vec::with_capacity(hr_ks);
     for tap in 0..hr_ks {
         let mut w = vec![0.0f32; per_tap];
@@ -460,7 +470,7 @@ pub(super) fn read_head_mlp(
     let mut head_layers = Vec::new();
     let mut prev_size = head_size;
     for &hidden in &config.head {
-        let weight = reader.read(hidden * prev_size)?;
+        let weight = reader.read(checked_count("WaveNet head MLP", &[hidden, prev_size])?)?;
         let bias = reader.read(hidden)?;
         head_layers.push(DenseLayer {
             weight,
@@ -473,7 +483,7 @@ pub(super) fn read_head_mlp(
     }
     // Final output layer (if head has hidden layers)
     if !config.head.is_empty() {
-        let weight = reader.read(head_size * prev_size)?;
+        let weight = reader.read(checked_count("WaveNet head MLP", &[head_size, prev_size])?)?;
         let bias = reader.read(head_size)?;
         head_layers.push(DenseLayer {
             weight,

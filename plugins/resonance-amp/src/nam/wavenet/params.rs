@@ -744,6 +744,10 @@ fn parse_film(
     FilmParams::from_json(non_null(obj, key), ctx, key)
 }
 
+/// Cap on the implied-default `allowed_channels` list, which is allocated
+/// directly from the parsed channel count; see its use below.
+const MAX_DEFAULT_ALLOWED_CHANNELS: usize = 1 << 16;
+
 /// Slimmable packed-weight descriptor. Only `slice_channels_uniform` is
 /// defined; a missing `kwargs.allowed_channels` implies every channel count
 /// from 1 to `channels` (as in the reference).
@@ -770,7 +774,18 @@ fn parse_slimmable(
         .and_then(|k| non_null(k, "allowed_channels"))
     {
         Some(v) => usize_array(v, &format!("{sctx}: kwargs.allowed_channels"))?,
-        None => (1..=channels).collect(),
+        None => {
+            // Materializing 1..=channels for a hostile channel count would
+            // abort on the allocation long before the weight-derived bounds
+            // at model construction can reject it (real models use a few
+            // dozen channels).
+            if channels > MAX_DEFAULT_ALLOWED_CHANNELS {
+                return Err(format!(
+                    "{sctx}: cannot default allowed_channels for {channels} channels"
+                ));
+            }
+            (1..=channels).collect()
+        }
     };
     if allowed_channels.is_empty() {
         return Err(format!("{sctx}: allowed_channels must not be empty"));

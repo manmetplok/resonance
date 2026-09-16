@@ -1,7 +1,7 @@
 //! FX tab — output scope at the top, then a horizontal chain of effect
 //! cards (Chorus / Delay / Distortion) each with their own knobs.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::theme;
 use crate::editor::viz::scope;

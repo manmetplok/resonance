@@ -445,12 +445,29 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     state.reference.clear();
     state.reference.publish(&ctx.shared.reference, true);
 
+    // Drop cycle-record take lanes and publish the now-empty comp table
+    // (epic #15, ba todo #1394). `wipe_registry` on the app side has always
+    // claimed `ClearAll` does this; it did not, so a project loaded on top
+    // of one with take lanes kept the old comp governing clip ids the new
+    // project reuses — those clips vanished from the ordinary clip path and
+    // the stale comp played in their place. A project that *does* carry
+    // take lanes then replaces this via `RestoreTakeGroups`; one that
+    // doesn't (and File > New) is left correctly empty.
+    // The parked recordings of removed takes go with them (ba todo #1397).
+    // The clip list has just been drained, so nothing un-parks into a
+    // project that never had them; keeping the park across a load would
+    // only hold the previous project's WAV mappings open.
+    state.take_groups.clear();
+    state.take_clip_park.clear();
+    super::takes::publish_take_comp(ctx, state);
+
     // Reset ID counters
     state.next_track_id = 1;
     state.next_bus_id = 1;
     state.next_clip_id = 1;
     state.next_plugin_id = 1;
     state.next_send_id = 1;
+    state.next_take_group_id = 1;
 
     let _ = ctx.event_tx.send(AudioEvent::AllCleared);
 }

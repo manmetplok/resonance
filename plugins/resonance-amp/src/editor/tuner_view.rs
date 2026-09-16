@@ -8,7 +8,7 @@
 //!   low or the signal is silent, so ambient noise doesn't pin the
 //!   needle at nonsense.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::viz::AmpViz;
 

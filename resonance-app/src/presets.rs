@@ -10,6 +10,7 @@
 //!
 //! **User presets** are saved to `~/.local/share/resonance/track-presets/`
 //! and can include the full plugin chain with serialized plugin state.
+use resonance_common::{atomic_write, quarantine_corrupt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -213,7 +214,12 @@ pub fn load_user_presets() -> Vec<TrackPreset> {
                 match load_preset_file(&path) {
                     Ok(preset) => presets.push(preset),
                     Err(e) => {
-                        eprintln!("Warning: could not load preset {}: {e}", path.display())
+                        eprintln!(
+                            "Warning: preset {} is corrupt ({e}); quarantining it as \
+                             a .corrupt file rather than overwriting it on the next save",
+                            path.display()
+                        );
+                        quarantine_corrupt(&path);
                     }
                 }
             }
@@ -237,7 +243,7 @@ pub fn save_user_preset(preset: &TrackPreset) -> Result<PathBuf, String> {
     let path = dir.join(format!("{file_name}.json"));
     let json =
         serde_json::to_string_pretty(preset).map_err(|e| format!("Serialize preset: {e}"))?;
-    std::fs::write(&path, json).map_err(|e| format!("Write preset: {e}"))?;
+    atomic_write(&path, json.as_bytes())?;
     Ok(path)
 }
 

@@ -4,8 +4,10 @@
 //! tokens resolved by the existing `ProjectIoMessage` completion arms),
 //! blocking-wait semantics on the socket side, and retention rules.
 
+use resonance_app::compose::messages::VocalAudioReadyData;
+use resonance_app::compose::ComposeMessage;
 use resonance_app::control_jobs::{JobBoard, JobToken, MAX_RETAINED_JOBS};
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
+use resonance_app::control_socket::ControlMessage;
 use resonance_app::message::{Message, ProjectIoMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
@@ -13,22 +15,13 @@ use resonance_control::job::{JobState, JobStatus};
 use resonance_control::{ErrorKind, Request, Response};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::common::roundtrip;
 
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-jobs-test.rprj"));
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn status_request(id: i64, job_id: u64) -> Request {
@@ -286,4 +279,273 @@ fn retention_is_bounded_and_prefers_evicting_fetched_terminal_jobs() {
         board.status(u64::from(first_done.unwrap())).is_none(),
         "oldest terminal jobs get evicted once over the cap"
     );
+}
+
+// ---------------- poison containment ----------------
+
+#[test]
+fn a_reader_thread_panic_does_not_poison_the_board() {
+    let board = Arc::new(JobBoard::default());
+    let id = u64::from(board.start("test", "survives poisoning", None, None).job_id);
+
+    // Panic while holding the table lock on another thread — exactly
+    // what a crashing `job.wait` reader would do. The table is shared
+    // between those reader threads and the main update loop, so the
+    // poison must not cascade into the app.
+    let poisoner = Arc::clone(&board);
+    std::thread::spawn(move || poisoner.panic_holding_table_for_test())
+        .join()
+        .expect_err("the probe thread panics by design");
+
+    // Every later access recovers the lock instead of panicking in turn.
+    board.complete(id, serde_json::json!({ "ok": true }));
+    let status = board.status(id).expect("the table still serves");
+    assert_eq!(status.state, JobState::Done);
+    let waited = board
+        .wait(id, Some(Duration::from_millis(10)))
+        .expect("wait still serves");
+    assert_eq!(waited.state, JobState::Done);
+}
+
+// ---------------- duplicate tokens resolve FIFO ----------------
+
+#[test]
+fn duplicate_live_tokens_resolve_oldest_first() {
+    // Two clients started the same operation, so two live jobs carry an
+    // identical token. Completion events arrive in dispatch order, so
+    // the first completion belongs to the FIRST job — resolving the
+    // newest instead left the older client waiting out the full
+    // `MAX_WAIT` on a job that had in fact finished.
+    let board = JobBoard::default();
+    let first = u64::from(
+        board
+            .start("project.save", "client A", Some(JobToken::ProjectSave), None)
+            .job_id,
+    );
+    let second = u64::from(
+        board
+            .start("project.save", "client B", Some(JobToken::ProjectSave), None)
+            .job_id,
+    );
+
+    assert!(board.complete_token(&JobToken::ProjectSave, serde_json::json!({ "n": 1 })));
+    assert_eq!(board.status(first).unwrap().state, JobState::Done);
+    assert_eq!(
+        board.status(second).unwrap().state,
+        JobState::Pending,
+        "the newer duplicate stays live until its own completion arrives"
+    );
+
+    assert!(board.fail_token(&JobToken::ProjectSave, "disk full"));
+    assert_eq!(board.status(second).unwrap().state, JobState::Error);
+}
+
+// ---------------- overlapping import batches ----------------
+
+#[test]
+fn one_import_event_ticks_only_the_oldest_batch_awaiting_that_path() {
+    // Two overlapping `pool.import` batches name the same source file:
+    // the engine imports it twice and reports twice. Each event must
+    // tick ONE batch — ticking every batch resolved the second batch
+    // `done` off the first batch's event, before its own copy of the
+    // file had imported.
+    let board = JobBoard::default();
+    let path = "/tmp/shared-kick.wav";
+    let first = u64::from(
+        board
+            .start(
+                "pool.import",
+                "batch A",
+                Some(JobToken::PoolImport { paths: vec![path.to_owned()] }),
+                None,
+            )
+            .job_id,
+    );
+    let second = u64::from(
+        board
+            .start(
+                "pool.import",
+                "batch B",
+                Some(JobToken::PoolImport { paths: vec![path.to_owned()] }),
+                None,
+            )
+            .job_id,
+    );
+
+    // First per-file event: exactly the oldest batch finishes.
+    let finished = board.tick_import_path(path, None);
+    assert_eq!(finished, vec![(first, None)]);
+    board.complete(first, serde_json::json!({ "assets": [] }));
+    assert_eq!(
+        board.status(second).unwrap().state,
+        JobState::Pending,
+        "the overlapping batch still awaits its own event"
+    );
+
+    // Second event: now the second batch finishes.
+    let finished = board.tick_import_path(path, None);
+    assert_eq!(finished, vec![(second, None)]);
+
+    // A third event has nobody left to tick.
+    assert!(board.tick_import_path(path, None).is_empty());
+}
+
+// ---------------- superseded vocal renders ----------------
+
+/// One update-loop `job.status` read, for the vocal tests below where
+/// the interesting part is the interleaving, not the wire shape.
+fn job_state(app: &mut Resonance, job_id: u64) -> JobState {
+    roundtrip(app, status_request(99, job_id))
+        .result::<JobStatus>()
+        .expect("job.status succeeds")
+        .state
+}
+
+/// Register a `vocal.render` job covering `lanes`, as the control
+/// endpoint does once its renders have dispatched.
+fn vocal_render_job(app: &mut Resonance, description: &str, lanes: Vec<(u64, u64)>) -> u64 {
+    u64::from(
+        app.start_control_job(
+            "vocal.render",
+            description,
+            JobToken::VocalRender { lanes },
+            None,
+        )
+        .job_id,
+    )
+}
+
+/// The completion the background SVS task dispatches for a finished
+/// render of `(definition_id, track_id)`, carrying the epoch snapshot
+/// the render was queued with. No placements, so the install has no
+/// engine work to do — the epoch check is the part under test.
+fn vocal_audio_ready(definition_id: u64, track_id: u64, render_epoch: u64) -> Message {
+    Message::Compose(ComposeMessage::VocalAudioReady(Box::new(
+        VocalAudioReadyData {
+            definition_id,
+            track_id,
+            wav_path: std::path::PathBuf::from("/tmp/nonexistent-control-jobs-vocal.wav"),
+            placements: Vec::new(),
+            clip_name: "Vocal".to_owned(),
+            trim_start_frames: 0,
+            trim_end_frames: 0,
+            render_epoch,
+        },
+    )))
+}
+
+/// The failure the background SVS task dispatches when a render of
+/// `(definition_id, track_id)` errors.
+fn vocal_audio_failed(
+    definition_id: u64,
+    track_id: u64,
+    render_epoch: u64,
+    error: &str,
+) -> Message {
+    Message::Compose(ComposeMessage::VocalAudioFailed {
+        definition_id,
+        track_id,
+        render_epoch,
+        error: error.to_owned(),
+    })
+}
+
+#[test]
+fn a_superseded_render_resolves_no_job() {
+    // The vocal sibling of the overlapping-import race: J1's render was
+    // still in flight when J2 re-rendered the same lane, bumping its
+    // epoch. J1's audio will be DISCARDED as stale when it arrives, so
+    // its event must resolve nothing — ticking the lane off every batch
+    // before the epoch check let J2 report `done` with a revision while
+    // the install then threw J1's audio away, and a client that waited
+    // on J2 and immediately read the track back saw old/no audio.
+    let (def, track) = (7, 50);
+    let mut app = app();
+
+    app.test_set_vocal_render_epoch(def, track, 1);
+    let j1 = vocal_render_job(&mut app, "client A", vec![(def, track)]);
+    // J2 supersedes: its dispatch bumped the lane's epoch synchronously.
+    app.test_set_vocal_render_epoch(def, track, 2);
+    let j2 = vocal_render_job(&mut app, "client B", vec![(def, track)]);
+
+    let _ = app.update(vocal_audio_ready(def, track, 1));
+    assert_eq!(
+        job_state(&mut app, j2),
+        JobState::Pending,
+        "the second job resolved off the first epoch's (discarded) render"
+    );
+    assert_eq!(
+        job_state(&mut app, j1),
+        JobState::Pending,
+        "a discarded render must not resolve even the job that queued it"
+    );
+
+    // The current render lands: the audio every waiter asked for is now
+    // installed, and there is no further event coming for the lane (the
+    // superseded render's was discarded above) — so BOTH jobs resolve
+    // off the one surviving install.
+    let _ = app.update(vocal_audio_ready(def, track, 2));
+    assert_eq!(job_state(&mut app, j2), JobState::Done);
+    assert_eq!(
+        job_state(&mut app, j1),
+        JobState::Done,
+        "the superseded job resolves off the accepted install, not never"
+    );
+}
+
+#[test]
+fn a_failed_lane_fails_only_the_jobs_waiting_on_it() {
+    // Control job renders lane A; independently (say a GUI regeneration)
+    // lane B renders and FAILS. The failure used to carry no lane
+    // identity and was inferred onto the oldest live vocal-render job —
+    // killing lane A's job over an error it had nothing to do with.
+    let (def_a, track_a) = (7, 50);
+    let (def_b, track_b) = (8, 51);
+    let mut app = app();
+
+    app.test_set_vocal_render_epoch(def_a, track_a, 1);
+    app.test_set_vocal_render_epoch(def_b, track_b, 1);
+    let job_a = vocal_render_job(&mut app, "lane A", vec![(def_a, track_a)]);
+    let job_b = vocal_render_job(&mut app, "lane B", vec![(def_b, track_b)]);
+
+    let _ = app.update(vocal_audio_failed(def_b, track_b, 1, "onnx session exploded"));
+    assert_eq!(
+        job_state(&mut app, job_a),
+        JobState::Pending,
+        "lane B's failure killed a job covering only lane A"
+    );
+    assert_eq!(
+        job_state(&mut app, job_b),
+        JobState::Error,
+        "the job actually waiting on lane B fails"
+    );
+
+    // Lane A's own failure still reaches its job, message intact.
+    let _ = app.update(vocal_audio_failed(def_a, track_a, 1, "voicebank missing"));
+    let status = app.control_jobs().status(job_a).expect("job A known");
+    assert_eq!(status.state, JobState::Error);
+    assert_eq!(status.error.as_deref(), Some("voicebank missing"));
+}
+
+#[test]
+fn a_superseded_renders_failure_fails_nothing() {
+    // The failure-side epoch gate: the lane was re-rendered while the
+    // failing render was in flight, so the newer render's outcome is
+    // what the job gets — a stale failure must not pre-empt it.
+    let (def, track) = (7, 50);
+    let mut app = app();
+
+    app.test_set_vocal_render_epoch(def, track, 2);
+    let job = vocal_render_job(&mut app, "client", vec![(def, track)]);
+
+    let _ = app.update(vocal_audio_failed(def, track, 1, "torn down mid-render"));
+    assert_eq!(
+        job_state(&mut app, job),
+        JobState::Pending,
+        "a superseded render's failure killed the job waiting on the current render"
+    );
+
+    // The current render then succeeds, and the job completes normally.
+    let _ = app.update(vocal_audio_ready(def, track, 2));
+    assert_eq!(job_state(&mut app, job), JobState::Done);
 }

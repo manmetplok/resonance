@@ -65,6 +65,45 @@ pub(super) unsafe extern "C" fn discard_output_event(
 }
 
 // ---------------------------------------------------------------------------
+// Non-finite output scrub
+// ---------------------------------------------------------------------------
+
+/// Zero every non-finite sample (NaN, ±Inf) in `buf`, returning whether
+/// anything was zeroed.
+///
+/// This is the host's ingress guard against a misbehaving plugin: one NaN
+/// re-entering the mix graph latches permanently into every recursive
+/// stage downstream (channel-strip filters, sends, meters, sidechain
+/// detectors, other plugins' feedback state), muting or garbling the
+/// chain until the plugin is reset. Every hosted process call runs its
+/// output through this before the buffer leaves the host layer.
+///
+/// Fast path: sum the block and check the sum — NaN/Inf propagate through
+/// f32 addition and never cancel back to finite (`Inf + -Inf == NaN`), so
+/// a finite sum proves a finite block at one add per sample. The sum of
+/// large-but-finite samples can itself overflow to Inf; that false
+/// positive just falls through to the slow pass, which is authoritative:
+/// it zeroes exactly the samples that are actually non-finite (preserving
+/// finite neighbours) and leaves an all-finite buffer untouched.
+///
+/// Silent by design — no logging here, this runs on the audio thread.
+#[inline]
+fn scrub_non_finite(buf: &mut [f32]) -> bool {
+    let sum: f32 = buf.iter().sum();
+    if sum.is_finite() {
+        return false;
+    }
+    let mut scrubbed = false;
+    for s in buf.iter_mut() {
+        if !s.is_finite() {
+            *s = 0.0;
+            scrubbed = true;
+        }
+    }
+    scrubbed
+}
+
+// ---------------------------------------------------------------------------
 // process / process_multi
 // ---------------------------------------------------------------------------
 
@@ -120,6 +159,17 @@ impl ClapInstance {
         frames: usize,
     ) {
         if !self.active || frames == 0 {
+            return;
+        }
+
+        // No destination buffers: nothing could be produced, and — worse
+        // — for an effect the in-place main *input* below would be built
+        // from the null pointer pair `outputs.first_mut()` falls back
+        // to, handed over as `audio_inputs_count = 1`. A conforming
+        // plugin dereferences a connected input port unconditionally.
+        // No call site passes an empty slice today; this guard keeps the
+        // function safe for any input rather than safe by coincidence.
+        if outputs.is_empty() {
             return;
         }
 
@@ -277,6 +327,16 @@ impl ClapInstance {
 
         if let Some(process_fn) = unsafe { (*self.plugin).process } {
             unsafe { process_fn(self.plugin, &process_data) };
+
+            // Finite scrub at the plugin-output boundary: whatever the
+            // plugin just wrote is about to re-enter the mix graph (track
+            // chains, bus/master sums, sends, sidechain taps, sub-track
+            // fan-out all read these buffers), so this is the one choke
+            // point that guards every path. See `scrub_non_finite`.
+            for port in outputs.iter_mut().take(active_out_count) {
+                scrub_non_finite(&mut port.left[..frames]);
+                scrub_non_finite(&mut port.right[..frames]);
+            }
         }
 
         // Reclaim event buffers for reuse (avoids allocation next call)

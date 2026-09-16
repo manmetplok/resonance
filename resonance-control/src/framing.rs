@@ -3,11 +3,23 @@
 //! Every protocol message is one UTF-8 JSON document terminated by `\n`,
 //! written to a unix stream socket. [`write_message`] frames outgoing
 //! messages; [`MessageReader`] wraps the read half of the stream and
-//! yields parsed envelopes one line at a time.
+//! yields parsed envelopes one line at a time, rejecting any line
+//! longer than [`MAX_FRAME_LEN`] so a misbehaving peer cannot balloon
+//! the read buffer.
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Read, Write};
+
+/// Hard cap on the length of one incoming frame, in bytes (16 MiB).
+///
+/// The largest legitimate frames are bulk note payloads: a
+/// `notes.replace_all` with 100k notes serializes to roughly 10 MB
+/// (~100 bytes per `NoteSpec`), so 16 MiB leaves comfortable headroom
+/// while stopping a runaway or hostile peer from streaming a
+/// newline-free multi-GB "line" that would otherwise grow the read
+/// buffer until the process OOM-aborts.
+pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 
 /// Errors produced while framing or unframing messages.
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +37,14 @@ pub enum FramingError {
         /// The offending line, for diagnostics.
         line: String,
     },
+    /// An incoming line exceeded [`MAX_FRAME_LEN`] before its
+    /// terminating newline was seen. Nothing past the cap has been
+    /// read, so the remainder of the oversized frame is still on the
+    /// wire and the reader is stopped mid-line: the connection is
+    /// poisoned and the caller must drop it, never keep reading (or
+    /// retry) on it.
+    #[error("frame exceeds the {limit}-byte cap; the connection must be dropped")]
+    Oversized { limit: usize },
 }
 
 /// Serialize `message` as a single JSON line (`{...}\n`) and flush.
@@ -51,7 +71,7 @@ where
 #[derive(Debug)]
 pub struct MessageReader<R> {
     inner: R,
-    line: String,
+    line: Vec<u8>,
 }
 
 impl<R: Read> MessageReader<BufReader<R>> {
@@ -66,7 +86,7 @@ impl<R: BufRead> MessageReader<R> {
     pub fn new(inner: R) -> Self {
         Self {
             inner,
-            line: String::new(),
+            line: Vec::new(),
         }
     }
 
@@ -76,25 +96,53 @@ impl<R: BufRead> MessageReader<R> {
     /// are ignored (serde default), so newer peers stay compatible. On
     /// [`FramingError::Invalid`] the connection is still positioned at
     /// the start of the next line, so a server can reply with a parse
-    /// error and keep reading.
+    /// error and keep reading. On [`FramingError::Oversized`] it is
+    /// not — drop the connection (see the variant docs).
     pub fn read_message<T: DeserializeOwned>(&mut self) -> Result<Option<T>, FramingError> {
         loop {
-            self.line.clear();
-            let bytes = self.inner.read_line(&mut self.line)?;
-            if bytes == 0 {
+            if self.read_bounded_line()? == 0 {
                 return Ok(None);
             }
-            let trimmed = self.line.trim();
+            let trimmed = self.line.trim_ascii();
             if trimmed.is_empty() {
                 continue;
             }
-            return match serde_json::from_str(trimmed) {
+            return match serde_json::from_slice(trimmed) {
                 Ok(message) => Ok(Some(message)),
                 Err(source) => Err(FramingError::Invalid {
                     source,
-                    line: trimmed.to_owned(),
+                    line: String::from_utf8_lossy(trimmed).into_owned(),
                 }),
             };
+        }
+    }
+
+    /// Read one `\n`-terminated line into `self.line`, like `read_line`
+    /// but refusing to buffer (or consume) more than [`MAX_FRAME_LEN`]
+    /// payload bytes. Returns the number of bytes read, 0 at EOF; a
+    /// line still unterminated past the cap is
+    /// [`FramingError::Oversized`].
+    fn read_bounded_line(&mut self) -> Result<usize, FramingError> {
+        self.line.clear();
+        loop {
+            // `+ 1` admits the newline of a frame that is exactly at
+            // the cap; any payload byte in its place trips the check
+            // below.
+            let remaining = (MAX_FRAME_LEN + 1 - self.line.len()) as u64;
+            let read = (&mut self.inner)
+                .take(remaining)
+                .read_until(b'\n', &mut self.line)?;
+            // EOF (possibly mid-line, matching `read_line`) or a
+            // complete line.
+            if read == 0 || self.line.last() == Some(&b'\n') {
+                return Ok(self.line.len());
+            }
+            if self.line.len() > MAX_FRAME_LEN {
+                return Err(FramingError::Oversized {
+                    limit: MAX_FRAME_LEN,
+                });
+            }
+            // Short read without a delimiter: keep filling.
         }
     }
 

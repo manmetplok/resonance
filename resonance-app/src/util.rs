@@ -1,12 +1,21 @@
 /// Utility functions for the Resonance application.
 use std::borrow::Cow;
 
+/// Convert dB to linear gain, with no floor — the raw power-law image.
+/// Most call sites want [`db_to_gain`]'s hard floor at silence; this is
+/// for the few (e.g. the control-wire track/bus summary) that report the
+/// floor's raw linear image rather than a hard zero, so a client can see
+/// how far under the floor a fader actually sits.
+pub fn db_to_linear(db: f32) -> f32 {
+    10.0f32.powf(db / 20.0)
+}
+
 /// Convert dB to linear gain. -60 dB or below maps to 0.0 (silence).
 pub fn db_to_gain(db: f32) -> f32 {
     if db <= -60.0 {
         0.0
     } else {
-        10.0f32.powf(db / 20.0)
+        db_to_linear(db)
     }
 }
 

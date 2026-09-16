@@ -317,8 +317,23 @@ pub enum ComposeMessage {
     /// clip on every placement the renderer was launched for. Boxed
     /// because the payload is large (samples vec).
     VocalAudioReady(Box<VocalAudioReadyData>),
-    /// SVS render failed; surface the error to the user.
-    VocalAudioFailed { error: String },
+    /// SVS render failed; surface the error to the user and fail the
+    /// control jobs waiting on the lane. Carries the same lane identity
+    /// + epoch snapshot as [`VocalAudioReadyData`]: without them the
+    /// handler could only guess which `vocal.render` job the failure
+    /// belonged to, and a GUI regeneration of lane B erroring killed a
+    /// control job that covered only lane A.
+    VocalAudioFailed {
+        definition_id: u64,
+        track_id: TrackId,
+        /// Snapshot of the lane's render epoch taken when the render was
+        /// queued (see [`VocalAudioReadyData::render_epoch`]). A failure
+        /// arriving with a stale epoch belongs to a superseded render —
+        /// a newer one is already in flight for the lane — so it fails
+        /// nothing.
+        render_epoch: u64,
+        error: String,
+    },
 }
 
 /// Payload dispatched when the background SVS render finishes. Carries

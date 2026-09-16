@@ -243,7 +243,7 @@ fn priority(target: &AutomationTarget) -> u32 {
 /// The lane a strip's header surfaces for `chan` — the highest-priority
 /// lane whose target belongs to the channel, or `None` when the channel
 /// has no automation.
-fn primary_lane<'a>(
+pub(super) fn primary_lane<'a>(
     automation: &'a AutomationState,
     chan: AutoChan,
     plugins: &[PluginSlotState],

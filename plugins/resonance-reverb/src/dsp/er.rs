@@ -9,6 +9,11 @@ pub(super) const ER_BASE_MAX_MS: f32 = 220.0; // Upper bound for the longest tap
 pub(super) const ER_TIME_MIN: f32 = 0.25; // er_time=0 → 0.25× base
 pub(super) const ER_TIME_MAX: f32 = 2.0; // er_time=1 → 2.0× base
 
+/// Crossfade length for an `er_time` change, ms. The taps never
+/// relocate mid-signal: the whole old tap set fades out while the new
+/// one fades in (see `set_time`).
+const ER_FADE_MS: f32 = 20.0;
+
 /// Parallel multi-tap early reflections. Generates 12 discrete stereo taps
 /// before the diffused tail arrives, giving the reverb its spatial signature.
 pub(super) struct EarlyReflections {
@@ -24,6 +29,21 @@ pub(super) struct EarlyReflections {
     scaled_samples: [(f32, f32); ER_TAPS],
     /// Cached scaled tap times in ms (for the viz).
     pub(super) scaled_ms: [(f32, f32); ER_TAPS],
+    /// Outgoing tap set while a crossfade is running (see `set_time`).
+    fade_from: [(f32, f32); ER_TAPS],
+    /// Remaining crossfade samples; 0 means no fade is running.
+    fade_left: u32,
+    /// Total crossfade length in samples at the current sample rate.
+    fade_total: u32,
+    /// Newest scale requested while a fade was already running; picked
+    /// up as the next fade the moment the running one completes.
+    pending_scale: Option<f32>,
+    /// Last scale requested — dedupes the per-block `set_time` calls.
+    requested_scale: f32,
+    /// False until the first processed sample. While false `set_time`
+    /// snaps (configuring a fresh/reset instance must not fade in from
+    /// a stale tap set).
+    primed: bool,
     /// Current `er_level` applied to the summed output before it joins the wet path.
     level: f32,
     sample_rate: f32,
@@ -70,6 +90,12 @@ impl EarlyReflections {
             time_scale: 1.0,
             scaled_samples: [(0.0, 0.0); ER_TAPS],
             scaled_ms: [(0.0, 0.0); ER_TAPS],
+            fade_from: [(0.0, 0.0); ER_TAPS],
+            fade_left: 0,
+            fade_total: ((ER_FADE_MS * 0.001 * sample_rate) as u32).max(1),
+            pending_scale: None,
+            requested_scale: 1.0,
+            primed: false,
             level: 0.4,
             sample_rate,
         };
@@ -92,12 +118,43 @@ impl EarlyReflections {
     }
 
     /// Map `er_time` (0..1) to a tap-time multiplier in [ER_TIME_MIN..ER_TIME_MAX].
+    ///
+    /// The tap set never relocates mid-signal: a change crossfades the
+    /// whole old set out while the new one fades in over `ER_FADE_MS`.
+    /// Crossfading (rather than the FDN's Doppler glide) keeps the
+    /// discrete early reflections pitch-stable — twelve taps gliding by
+    /// different amounts would smear the room signature into a chorus.
+    /// The fade is linear, not equal-power: during a sweep consecutive
+    /// tap sets are nearly coincident and strongly correlated, and an
+    /// equal-power law would bulge by up to +3 dB at the midpoint. A
+    /// change landing mid-fade is queued (newest wins) and started when
+    /// the running fade completes, so a continuous sweep resolves into
+    /// back-to-back short crossfades.
     pub(super) fn set_time(&mut self, norm: f32) {
         let scale = ER_TIME_MIN + norm.clamp(0.0, 1.0) * (ER_TIME_MAX - ER_TIME_MIN);
-        if (scale - self.time_scale).abs() > 1e-4 {
+        if (scale - self.requested_scale).abs() <= 1e-4 {
+            return;
+        }
+        self.requested_scale = scale;
+        if !self.primed {
             self.time_scale = scale;
             self.recompute_scaled();
+            self.fade_left = 0;
+            self.pending_scale = None;
+        } else if self.fade_left > 0 {
+            self.pending_scale = Some(scale);
+        } else {
+            self.begin_fade(scale);
         }
+    }
+
+    /// Start crossfading from the current tap set to one scaled by
+    /// `scale`.
+    fn begin_fade(&mut self, scale: f32) {
+        self.fade_from = self.scaled_samples;
+        self.time_scale = scale;
+        self.recompute_scaled();
+        self.fade_left = self.fade_total;
     }
 
     pub(super) fn set_level(&mut self, norm: f32) {
@@ -109,13 +166,40 @@ impl EarlyReflections {
     pub(super) fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
         self.delay_l.push(left);
         self.delay_r.push(right);
+        self.primed = true;
         let mut out_l = 0.0f32;
         let mut out_r = 0.0f32;
-        for i in 0..ER_TAPS {
-            let (sl, sr) = self.scaled_samples[i];
-            let (gl, gr) = self.gains[i];
-            out_l += self.delay_l.tap_linear(sl) * gl;
-            out_r += self.delay_r.tap_linear(sr) * gr;
+        if self.fade_left > 0 {
+            // Crossfade: both tap sets are read, old fading out while
+            // new fades in. Bounded extra cost (one more tap set), no
+            // allocation.
+            self.fade_left -= 1;
+            let x = (self.fade_total - self.fade_left) as f32 / self.fade_total as f32;
+            for i in 0..ER_TAPS {
+                let (ol, or) = self.fade_from[i];
+                let (nl, nr) = self.scaled_samples[i];
+                let (gl, gr) = self.gains[i];
+                let old_l = self.delay_l.tap_linear(ol);
+                let old_r = self.delay_r.tap_linear(or);
+                let new_l = self.delay_l.tap_linear(nl);
+                let new_r = self.delay_r.tap_linear(nr);
+                out_l += (old_l + x * (new_l - old_l)) * gl;
+                out_r += (old_r + x * (new_r - old_r)) * gr;
+            }
+            if self.fade_left == 0 {
+                if let Some(scale) = self.pending_scale.take() {
+                    self.begin_fade(scale);
+                }
+            }
+        } else {
+            // Settled: single tap set, bit-identical to the pre-fade
+            // code.
+            for i in 0..ER_TAPS {
+                let (sl, sr) = self.scaled_samples[i];
+                let (gl, gr) = self.gains[i];
+                out_l += self.delay_l.tap_linear(sl) * gl;
+                out_r += self.delay_r.tap_linear(sr) * gr;
+            }
         }
         // 1/sqrt(N) keeps the summed broadband level predictable.
         let scale = self.level * (1.0 / (ER_TAPS as f32).sqrt());
@@ -125,5 +209,14 @@ impl EarlyReflections {
     pub(super) fn clear(&mut self) {
         self.delay_l.clear();
         self.delay_r.clear();
+        // Cancel any fade and land on the newest requested scale, so a
+        // reset instance matches a fresh one that was configured once.
+        self.fade_left = 0;
+        self.pending_scale = None;
+        if self.time_scale != self.requested_scale {
+            self.time_scale = self.requested_scale;
+            self.recompute_scaled();
+        }
+        self.primed = false;
     }
 }

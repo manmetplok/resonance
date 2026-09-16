@@ -113,6 +113,18 @@ pub fn try_diff_replay(
     // `apply_audio_clips`; this rebuilds the asset list and usage tally.
     apply_pool(r, target_file);
 
+    // -- Cycle-record take lanes (epic #15, todo #412/#1394) -----------
+    // An undo/redo that promoted a segment, soloed a take or deleted one
+    // is reconciled verbatim here: the mirror is rebuilt from the target
+    // snapshot and `replay_take_groups` pushes the result into the engine
+    // with `RestoreTakeGroups`. That command replaces the engine's store
+    // wholesale, which is what this path needs — unlike a project load it
+    // sends no `ClearAll`, so a merge would resurrect the very takes an
+    // undo just deleted. Take groups never alter the project shape, so,
+    // like the pool and the quantize state, they are absent from
+    // `structurally_compatible` and always take this fast path.
+    apply_take_groups(r, target_file);
+
     // -- Quantize state (ba todo #395) ---------------------------------
     // The groove library + last-used quantize settings are pure app-side
     // data (no engine instances), so an undo/redo that edited them is
@@ -989,6 +1001,9 @@ fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
 /// group id set is guaranteed equal by `structurally_compatible`, but
 /// the per-group contents (membership, collapse state, nesting, macros)
 /// may differ, so the registry is rebuilt wholesale from the snapshot.
+/// `add_group` drops membership edges that would close a nested-group
+/// cycle, so a corrupted `track_groups` array loads with the cycle
+/// broken rather than aborting the flattening walks downstream.
 fn apply_track_groups(r: &mut Resonance, b: &ProjectFile) {
     r.track_groups = crate::state::TrackGroupRegistry::new();
     for tg in &b.track_groups {
@@ -1033,6 +1048,43 @@ fn apply_pool(r: &mut Resonance, b: &ProjectFile) {
         });
     }
     r.recompute_pool_usage();
+}
+
+/// Restore the cycle-record take lanes from a snapshot on the fast (diff)
+/// path (epic #15, todo #412).
+///
+/// Same split as the slow path, just with the clear inlined: the wipe that
+/// `wipe_registry` performs there has no counterpart on this path (nothing
+/// is cleared at all), so it happens here immediately before the shared
+/// [`super::replay::replay_take_groups`] re-seeds.
+///
+/// The project directory comes from `r.io.project_path`, still set during
+/// an in-session undo/redo — exactly as [`apply_pool`] resolves its assets
+/// — so a take whose WAV was deleted mid-session is re-flagged on every
+/// history step rather than going quiet.
+///
+/// **The clear is [`clear_for_snapshot`], not [`clear`]** (ba todo #1400):
+/// it keeps the waveform peaks. This function runs on *every* history
+/// step, a fader undo included, and since #1400 `replay_take_groups`
+/// reads each take's WAV rather than stat-ing it — so throwing the tables
+/// away here would put an mmap and a full scan of every take in the
+/// project on a hold-to-repeat gesture (~3.2 ms per recorded minute).
+/// With them kept, `replay_take_groups` skips every already-read take and
+/// an undo costs no filesystem access at all. Safe because a recording is
+/// immutable and a cached table records the `clip_ref` it came from, so a
+/// snapshot naming a different recording under the same key misses and
+/// re-reads.
+///
+/// [`clear_for_snapshot`]: crate::state::TakeGroupState::clear_for_snapshot
+/// [`clear`]: crate::state::TakeGroupState::clear
+fn apply_take_groups(r: &mut Resonance, b: &ProjectFile) {
+    // No anchored path (can't happen on the undo path, which only records
+    // with a saved project): an empty dir joins to a bare relative path
+    // that won't exist, which flags rather than hides — the safe way round
+    // for takes, where "present" is the claim that could mislead.
+    let project_dir = r.io.project_path.clone().unwrap_or_default();
+    r.take_groups.clear_for_snapshot();
+    super::replay::replay_take_groups(r, b, &project_dir);
 }
 
 /// Apply the saved per-slot bypass to one chain, telling the engine about

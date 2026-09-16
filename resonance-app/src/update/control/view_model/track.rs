@@ -7,9 +7,9 @@
 //! plugin is named the same way in a view and in an error.
 
 use super::clip::{clip_count, track_clip_views};
-use super::db_to_linear;
 use crate::plugin_chain::instrument_slot;
 use crate::state::{BusState, TrackState};
+use crate::util::db_to_linear;
 use crate::Resonance;
 use resonance_audio::types::{TrackOutput, TrackType};
 use resonance_control::methods::song::{self, TrackDetail, TrackSummary};

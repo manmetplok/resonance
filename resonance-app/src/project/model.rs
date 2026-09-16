@@ -166,6 +166,29 @@ pub struct ProjectFile {
     /// predate Performance mode.
     #[serde(default)]
     pub performance: ProjectPerformance,
+    /// Cycle-record take lanes (epic #15, design doc #165): every
+    /// [`TakeGroup`](resonance_common::TakeGroup) the app mirrored from the
+    /// engine, with its takes, its comp cover and the soloed active take.
+    ///
+    /// Stored as the shared `resonance-common` model verbatim rather than a
+    /// `Project*` shadow struct, for the same reason
+    /// [`automation_lanes`](Self::automation_lanes) and
+    /// [`track_groups`](Self::track_groups) are: the model already lives
+    /// below `resonance-audio` precisely so the engine, the app and this
+    /// file agree on one definition, and it already derives serde. A shadow
+    /// struct here would be a second definition to keep in step for no gain.
+    ///
+    /// An audio take references its recorded WAV by `clip_ref`, resolved
+    /// against the project directory as [`clip_audio_file`] — the same
+    /// project-relative shape [`ProjectClip::audio_file`] uses, so a take
+    /// travels with a relocated `.rproj` bundle. A take whose WAV is gone is
+    /// **kept, not dropped** (see `replay_take_groups`).
+    ///
+    /// Empty on legacy projects — i.e. everything saved before take lanes
+    /// existed, which then load with no take lanes exactly as they did
+    /// before.
+    #[serde(default)]
+    pub take_groups: Vec<resonance_common::TakeGroup>,
 }
 
 /// An empty project at the current format version with neutral
@@ -213,8 +236,23 @@ impl Default for ProjectFile {
             quantize_settings: crate::state::QuantizeSettings::default(),
             automation_lanes: Vec::new(),
             performance: ProjectPerformance::default(),
+            take_groups: Vec::new(),
         }
     }
+}
+
+/// Project-relative path of a clip's WAV inside the `.rproj` bundle, e.g.
+/// `"audio/clip_42.wav"`.
+///
+/// One definition for the whole layer: the save path writes it into
+/// [`ProjectClip::audio_file`], the engine streams recordings and
+/// cycle-record takes to exactly this name (`recording.rs`,
+/// `engine/clips.rs::save_clips_to_project_dir`), and the take-lane
+/// restore resolves a take's `clip_ref` through it. A take carries no
+/// `audio_file` string of its own precisely because this is derivable —
+/// storing a second copy would let the two disagree.
+pub fn clip_audio_file(clip_id: ClipId) -> String {
+    format!("audio/clip_{clip_id}.wav")
 }
 
 /// Persisted Performance-mode footer selection (epic #11, todo #312):

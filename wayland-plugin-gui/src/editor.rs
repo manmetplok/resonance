@@ -2,11 +2,13 @@
 
 use std::sync::mpsc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 
 use crate::app::EditorApp;
 use crate::error::EditorError;
+use crate::join::join_with_timeout;
 use crate::size::SharedSize;
 use crate::window_thread::{Command, EditorThread};
 
@@ -14,6 +16,17 @@ use crate::window_thread::{Command, EditorThread};
 // runtime); re-exported here so `crate::editor::EditorOptions` paths
 // inside this crate keep resolving.
 pub use plugin_gui_core::EditorOptions;
+
+/// How long teardown waits for the editor thread before detaching it.
+///
+/// Generous next to any healthy teardown — a clean quit joins in
+/// milliseconds, and even a stalled compositor is written off after
+/// 250 ms (`FRAME_CALLBACK_STALL`) — but bounded, because the CLAP host
+/// destroys editors on the audio-engine control thread: a plugin whose
+/// `ui()` never returns (a modal rfd dialog is the known case — the
+/// wedge the cocoa runtime's `modal_reentrancy` test guards against)
+/// must cost that thread two seconds once, not wedge it forever.
+const DESTROY_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A handle to a running editor window.
 ///
@@ -52,8 +65,10 @@ impl Editor {
         match ready_rx.recv() {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
-                // Thread set up an error; let it join and surface the error.
-                let _ = thread.join();
+                // Thread hit a setup error and is exiting; reap it —
+                // bounded all the same, so a teardown wedge inside the
+                // failing thread cannot block plugin instantiation.
+                let _ = join_with_timeout(thread, DESTROY_JOIN_TIMEOUT);
                 return Err(err);
             }
             Err(_) => return Err(EditorError::ChannelClosed),
@@ -110,16 +125,37 @@ impl Editor {
         self.resizable
     }
 
-    /// Stop the editor thread and destroy the window. Blocks until the thread
-    /// joins.
+    /// Stop the editor thread and destroy the window.
+    ///
+    /// Blocks until the thread joins, bounded by a wall-clock watchdog:
+    /// the CLAP host calls this on the audio-engine control thread, and
+    /// an unbounded join there would wedge the whole `AudioCommand`
+    /// queue if the plugin's `ui()` never returns. On timeout the
+    /// editor thread is left detached (leaked, by design — same
+    /// trade-off as `AudioEngine::shutdown`) and this returns anyway.
     pub fn destroy(mut self) {
         self.stop();
     }
 
     fn stop(&mut self) {
+        // The command channel is a calloop channel: sending pings the
+        // event loop's wakeup fd, so an editor thread idle-parked in
+        // `dispatch` sees Quit immediately — no separate wake is
+        // needed. The one case no wake can reach is a plugin blocked
+        // inside its own `ui()` (e.g. a modal dialog's nested run
+        // loop); that is what the bounded join below is for.
         let _ = self.sender.send(Command::Quit);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            if !join_with_timeout(thread, DESTROY_JOIN_TIMEOUT) {
+                // Not the RT audio thread — teardown may report like
+                // its neighbours (see EditorThread::run) do.
+                eprintln!(
+                    "wayland-plugin-gui: editor thread did not exit within {:?} \
+                     (plugin ui() blocked?); detaching it instead of wedging \
+                     the host thread",
+                    DESTROY_JOIN_TIMEOUT
+                );
+            }
         }
     }
 }

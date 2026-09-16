@@ -1,5 +1,5 @@
 use egui::{Painter, Rect, Stroke, StrokeKind};
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 use crate::viz::DelayViz;

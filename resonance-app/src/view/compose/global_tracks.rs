@@ -39,13 +39,41 @@ pub fn view<'a>(
     .into()
 }
 
-struct ComposeGlobalTracksCanvas<'a> {
-    tempo_map: &'a TempoMap,
+pub struct ComposeGlobalTracksCanvas<'a> {
+    pub tempo_map: &'a TempoMap,
+    pub start_bar: u32,
+    pub section_length_bars: u32,
+}
+
+/// Canvas-local state: just the geometry cache. The rows are read-only
+/// and fully derived from the tempo map, so they render through a
+/// fingerprinted [`canvas::Cache`] and the 16 ms app tick reuses the
+/// tessellated geometry instead of re-plotting the tempo graph at ~60 fps.
+#[derive(Debug, Default)]
+pub struct ComposeGlobalTracksState {
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<ComposeGlobalTracksFingerprint>,
+}
+
+/// Cheap content fingerprint of everything the global rows draw.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComposeGlobalTracksFingerprint {
+    tempo_hash: u64,
     start_bar: u32,
     section_length_bars: u32,
 }
 
 impl<'a> ComposeGlobalTracksCanvas<'a> {
+    /// Fingerprint the drawn content. Any field change repaints the cache;
+    /// unrelated app-state churn (metering, transport ticks) does not.
+    pub fn fingerprint(&self) -> ComposeGlobalTracksFingerprint {
+        ComposeGlobalTracksFingerprint {
+            tempo_hash: super::tempo_map_hash(self.tempo_map),
+            start_bar: self.start_bar,
+            section_length_bars: self.section_length_bars,
+        }
+    }
+
     fn section_total_ticks(&self) -> u64 {
         crate::view::compose::section_total_ticks(
             self.tempo_map,
@@ -81,17 +109,44 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
 }
 
 impl<'a> canvas::Program<Message> for ComposeGlobalTracksCanvas<'a> {
-    type State = ();
+    type State = ComposeGlobalTracksState;
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let fp = self.fingerprint();
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
+            self.draw_into(frame, bounds);
+        });
+        vec![geometry]
+    }
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        _event: &iced::Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        // Read-only: no interaction in the compose view.
+        None
+    }
+}
+
+impl<'a> ComposeGlobalTracksCanvas<'a> {
+    /// Paint both rows into the cache's frame. Everything here is static
+    /// between tempo/signature edits; the fingerprint in `draw` decides
+    /// when this runs again.
+    fn draw_into(&self, frame: &mut Frame, bounds: Rectangle) {
         let width = bounds.width;
         let section_end_bar = self.start_bar + self.section_length_bars;
 
@@ -121,28 +176,13 @@ impl<'a> canvas::Program<Message> for ComposeGlobalTracksCanvas<'a> {
 
         // ---- Draw tempo line graph ----
         if !self.tempo_map.tempo_points.is_empty() {
-            self.draw_tempo_row(&mut frame, width);
+            self.draw_tempo_row(frame, width);
         }
 
         // ---- Draw signature event markers ----
-        self.draw_signature_row(&mut frame, width, section_end_bar);
-
-        vec![frame.into_geometry()]
+        self.draw_signature_row(frame, width, section_end_bar);
     }
 
-    fn update(
-        &self,
-        _state: &mut Self::State,
-        _event: &iced::Event,
-        _bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        // Read-only: no interaction in the compose view.
-        None
-    }
-}
-
-impl<'a> ComposeGlobalTracksCanvas<'a> {
     fn draw_tempo_row(&self, frame: &mut Frame, width: f32) {
         // Collect tempo points that fall within the section range
         // (plus one on each side for proper edge interpolation).

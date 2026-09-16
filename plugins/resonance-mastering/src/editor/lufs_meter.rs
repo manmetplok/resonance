@@ -1,7 +1,7 @@
 //! Vertical LUFS strip showing Momentary / Short-term / Integrated bars
 //! alongside a target-LUFS reference line.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 

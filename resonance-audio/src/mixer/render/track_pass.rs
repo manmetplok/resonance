@@ -13,7 +13,9 @@ use crate::mixer::common::ramped_stereo_peaks;
 use crate::mixer::midi_events::collect_midi_events;
 use crate::types::*;
 
-use super::clips::{mix_track_clips, recorded_monitor_gate};
+use crate::mixer::take_comp::mix_track_comp;
+
+use super::clips::{mix_track_clips_governed, recorded_monitor_gate};
 use super::context::{run_fx_chain, BlockCtx, BlockScratch};
 use super::frozen::fill_from_frozen_source;
 use super::ports::process_multi_port;
@@ -204,7 +206,10 @@ fn render_track_source(
         });
     }
 
-    if track.track_type == TrackType::Instrument && !track.is_external() {
+    // The same predicate the capture side uses to decide whether to open
+    // an audio recording buffer, so playback and capture cannot drift
+    // apart about what a track's source is.
+    if track.runs_internal_instrument() {
         render_instrument_source(track, disp, ctx, scratch, strategy)
     } else {
         Some(TrackSource {
@@ -355,16 +360,39 @@ fn render_audio_source(
 
     // Accumulate all clips for this track into de-interleaved track
     // buffers, applying each clip's fade-in/out envelope, clip gain, and
-    // the automatic same-track crossfade.
-    if mix_track_clips(
+    // the automatic same-track crossfade. Recorded take clips under comp
+    // control are skipped here and rendered by the comp pass below, so the
+    // raw overlapping passes never play on top of the comp.
+    if mix_track_clips_governed(
         ctx.inputs.clips,
         track.id,
         ctx.inputs.playhead,
         frames,
         scratch.track_buf_l,
         scratch.track_buf_r,
+        ctx.inputs.take_comp,
     ) {
         has_audio = true;
+    }
+
+    // Take-comp playback (epic #15, doc #165): switch the source take clip
+    // per comp segment with an equal-power crossfade at each seam. Reached
+    // by the live callback and the offline bounce through the same
+    // `render_block`, off the same published table, so a comped or
+    // active-take selection bounces exactly as it plays.
+    if !ctx.inputs.take_comp.is_empty() {
+        if let Some(track_comp) = ctx.inputs.take_comp.track_comp(track.id) {
+            if mix_track_comp(
+                track_comp,
+                ctx.inputs.clips,
+                ctx.inputs.playhead,
+                frames,
+                scratch.track_buf_l,
+                scratch.track_buf_r,
+            ) {
+                has_audio = true;
+            }
+        }
     }
 
     // Process through the plugin chain (skipped once the chain's bypass

@@ -152,6 +152,16 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 set.insert(group);
             }
         }
+        UiMessage::ToggleTakeLane(track_id) => {
+            // Everything defaults to *folded* here (unlike the collapsible
+            // panels, which store the collapsed set): a take lane only
+            // exists after cycle recording, and unfolding every stack the
+            // moment a pass lands would shove the arrangement down.
+            let set = &mut r.interaction.take_lane_expanded_tracks;
+            if !set.remove(&track_id) {
+                set.insert(track_id);
+            }
+        }
         UiMessage::ToggleMidiClockSend => {
             r.midi_clock_send_enabled = !r.midi_clock_send_enabled;
             let _ = r.engine.send(AudioCommand::SetMidiClockOutput {

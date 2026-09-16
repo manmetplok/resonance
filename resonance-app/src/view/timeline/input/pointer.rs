@@ -16,7 +16,10 @@ use crate::view::arrange_layout::ArrangeRowKind;
 use super::super::hit_test::{self, HitKind, MarkerHit};
 use super::super::scrollbar::scroll_from_thumb_pos;
 use super::super::{TimelineCanvas, TimelineState};
-use super::{captured, BreakpointDrag, ClipInteraction, MarkerDrag, UpdateResult, DOUBLE_CLICK_MS};
+use super::{
+    captured, BreakpointDrag, ClipInteraction, MarkerDrag, TakePromoteDrag, UpdateResult,
+    DOUBLE_CLICK_MS,
+};
 use resonance_common::CurveKind;
 
 /// Is `pos` inside `rect`?
@@ -269,6 +272,43 @@ impl TimelineCanvas<'_> {
         None
     }
 
+    /// Try to handle the press on a take lane (epic #15, todo #414):
+    /// the comp ribbon on a track's own lane, or a take card in an
+    /// expanded stack. Returns `Some` if consumed.
+    ///
+    /// The ribbon publishes immediately — a split names no range, so
+    /// there is nothing to wait for. A take card does **not**: click and
+    /// drag are the same press, and only the release tells them apart, so
+    /// the press just opens a [`TakePromoteDrag`] and captures.
+    fn press_take_lane(
+        &self,
+        state: &mut TimelineState,
+        pos: Point,
+        layout: &crate::view::arrange_layout::ArrangeRowLayout,
+    ) -> UpdateResult {
+        if let Some(hit) = self.comp_ribbon_at_in(layout, pos) {
+            // Emitted even when the playhead sits outside the slot: the
+            // gate refuses it silently and spends no undo entry, and the
+            // hover affordance has already said "nothing to split" — so a
+            // pre-check here would only be a second copy of the rule.
+            return captured(Message::Take(TakeMessage::SplitCompAtPlayhead {
+                group_id: hit.group_id,
+            }));
+        }
+        let hit = self.take_card_at_in(layout, pos)?;
+        state.take_promote_drag = Some(TakePromoteDrag {
+            track_id: hit.track_id,
+            group_id: hit.group_id,
+            take_id: hit.take_id,
+            anchor_x: pos.x,
+            cursor_x: pos.x,
+            cursor_y: pos.y,
+        });
+        // Redraw so the affordance caption switches from "hover" to
+        // "gesture in flight" on the press itself.
+        Some(canvas::Action::request_redraw().and_capture())
+    }
+
     pub(in crate::view::timeline) fn handle_press(
         &self,
         state: &mut TimelineState,
@@ -324,6 +364,25 @@ impl TimelineCanvas<'_> {
             )));
         }
 
+        // Take-lane comping (epic #15, doc #165, todo #414). Build the
+        // shared arrange-row layout once here: every hit below consults it,
+        // so the variable 60/96 px pitch, the automation / take sub-rows and
+        // collapsed-member hiding are honoured (epic #36, doc #203).
+        //
+        // Ahead of *both* the automation dots and the clips, because the
+        // draw pass paints the comp ribbon after both of them: the ribbon
+        // band overlaps the bottom of the clip body (`CLIP_LANE_INSET` is
+        // 10 px, the ribbon starts 16 px above the row's bottom edge) and
+        // reaches into the 7 px pick radius of a breakpoint pinned at value
+        // 0. Whatever is drawn on top has to be what the pointer hits.
+        let layout = self.arrange_layout();
+        if let Some(result) = self.press_take_lane(state, pos, &layout) {
+            // A take-lane press is not a breakpoint press, so it drops the
+            // keyboard-delete selection like every other non-dot press.
+            state.selected_breakpoint = None;
+            return Some(result);
+        }
+
         // Automation breakpoint dots win over clips (they're small targets
         // drawn on top of the lane band). A dot hit selects + starts a drag,
         // or — on a double-click — toggles its curve kind.
@@ -362,11 +421,8 @@ impl TimelineCanvas<'_> {
         // selection (clip / track / band-add presses all fall through here).
         state.selected_breakpoint = None;
 
-        // Clip hit-testing in the track area. Build the shared arrange-row
-        // layout once — every clip-lane hit and the empty-lane fallback
-        // consult it, so the variable 60/96 px pitch and collapsed-member
-        // hiding are honoured (epic #36, doc #203).
-        let layout = self.arrange_layout();
+        // Clip hit-testing in the track area, against the layout built
+        // above.
         if let Some(result) = self.press_clips(state, pos, &layout) {
             return Some(result);
         }
@@ -406,6 +462,14 @@ impl TimelineCanvas<'_> {
             // falls back to selecting the owning track, so the label strip
             // above the band still behaves like track chrome.
             Some(ArrangeRowKind::AutomationLane { track, .. }) => {
+                captured(Message::Ui(UiMessage::SelectTrack(Some(track))))
+            }
+            // Same fallback for a take sub-row: selecting the owning track
+            // is the safe, non-destructive reading of a press on the take
+            // stack. The comping gestures that will claim these rows first
+            // (select active take / split / promote) are todo #414's —
+            // rendering, todo #413, deliberately adds no new pointer verb.
+            Some(ArrangeRowKind::TakeRow { track, .. }) => {
                 captured(Message::Ui(UiMessage::SelectTrack(Some(track))))
             }
             None => captured(Message::Ui(UiMessage::SelectTrack(None))),
@@ -504,6 +568,17 @@ impl TimelineCanvas<'_> {
                 value,
             }));
         }
+        // Take-lane comping drag (todo #414). Publishes nothing: the
+        // gesture is only resolved on release, so the move just carries
+        // the pointer into the drag state and asks for a repaint of the
+        // preview band. Keeping it silent also keeps a promote to exactly
+        // one undo entry — the reducer never sees an intermediate range.
+        if let Some(drag) = &mut state.take_promote_drag {
+            drag.cursor_x = pos.x;
+            drag.cursor_y = pos.y;
+            return Some(canvas::Action::request_redraw().and_capture());
+        }
+
         match &state.clip_interaction {
             Some(ClipInteraction::Move) => {
                 captured(Message::Clip(ClipMessage::UpdateClipDrag(pos.x, pos.y)))
@@ -559,6 +634,31 @@ impl TimelineCanvas<'_> {
         if state.marker_drag.take().is_some() {
             return Some(canvas::Action::capture());
         }
+        // Take-lane comping (todo #414): the release is where the press
+        // becomes a verb. Under the slop threshold it was a click, which
+        // solos the take (or releases the solo if it was already the
+        // active one); anything wider promotes the dragged range.
+        //
+        // The range emitted is the **raw** drag —
+        // `update::takes::plan_promote` clamps it to the slot and to the
+        // take's audible extent, and that clamp is the single place the
+        // rule lives. Pre-clamping here would give two clamps free to
+        // disagree.
+        if let Some(drag) = state.take_promote_drag.take() {
+            return if drag.is_promote() {
+                captured(Message::Take(TakeMessage::PromoteTakeSegment {
+                    group_id: drag.group_id,
+                    take_id: drag.take_id,
+                    range: self.take_drag_range(drag.anchor_x, drag.cursor_x),
+                }))
+            } else {
+                captured(Message::Take(TakeMessage::SetActiveTake {
+                    group_id: drag.group_id,
+                    take_id: self.take_solo_toggle(drag.group_id, drag.take_id),
+                }))
+            };
+        }
+
         if let Some(interaction) = state.clip_interaction.take() {
             return match interaction {
                 ClipInteraction::Move => captured(Message::Clip(ClipMessage::EndClipDrag)),

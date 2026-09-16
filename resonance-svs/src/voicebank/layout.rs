@@ -230,7 +230,7 @@ fn find_acoustic_config(root: &Path) -> Option<PathBuf> {
 fn declares_acoustic(path: &Path) -> bool {
     std::fs::read_to_string(path)
         .ok()
-        .and_then(|text| serde_yml::from_str::<config::DsAcousticConfigRaw>(&text).ok())
+        .and_then(|text| serde_yaml_ng::from_str::<config::DsAcousticConfigRaw>(&text).ok())
         .is_some_and(|raw| raw.acoustic.is_some())
 }
 

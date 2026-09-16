@@ -111,6 +111,31 @@ pub(super) enum DragMode {
 pub struct ExpandedEditorState {
     pub(super) drag: Option<DragMode>,
     pub(super) previewing_note: Option<u8>,
+    /// Geometry cache for the static layers (toolbar, rows, beat grid,
+    /// notes, keyboard). The hover tooltip is the only live element and
+    /// draws in its own uncached layer on top, so cursor movement never
+    /// invalidates the cache.
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<ExpandedEditorFingerprint>,
+}
+
+/// Cheap content fingerprint of everything the cached layer draws. Live
+/// overlay inputs (the cursor position feeding the hover tooltip) are
+/// deliberately excluded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExpandedEditorFingerprint {
+    track_id: TrackId,
+    clips_hash: u64,
+    section_start: u64,
+    section_end: u64,
+    section_length_bars: u32,
+    sample_rate: u32,
+    tempo_hash: u64,
+    start_bar: u32,
+    scale: Option<Scale>,
+    zoom_y_bits: u32,
+    scroll_x_bits: u32,
+    scroll_y_bits: u32,
 }
 
 impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
@@ -118,17 +143,107 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let fp = self.fingerprint();
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let cached = state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
+            self.draw_into(frame, bounds);
+        });
+        let mut layers = vec![cached];
+
+        // -- Hover tooltip showing note name under cursor --
+        // Live overlay: drawn outside the cache so cursor movement stays
+        // responsive without re-tessellating the grid.
+        if self.section_end > self.section_start && bounds.width > 0.0 {
+            if let Some(pos) = cursor.position_in(bounds) {
+                let layout = self.layout(bounds);
+                let grid_x = layout.grid_x();
+                if pos.y > TOOLBAR_HEIGHT && pos.x >= grid_x {
+                    let viewport = self.viewport(&layout, bounds);
+                    let note = viewport.y_local_to_note(pos.y - TOOLBAR_HEIGHT);
+                    let name = note_name(note);
+                    let mut overlay = Frame::new(renderer, bounds.size());
+                    // Draw in the keyboard area so it doesn't obscure the grid
+                    overlay.fill_text(canvas::Text {
+                        content: name,
+                        position: Point::new(pos.x + 12.0, (pos.y - 14.0).max(TOOLBAR_HEIGHT + 2.0)),
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.75),
+                        size: 11.0.into(),
+                        ..canvas::Text::default()
+                    });
+                    layers.push(overlay.into_geometry());
+                }
+            }
+        }
+
+        layers
+    }
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        self.update_inner(state, event, bounds, cursor)
+    }
+}
+
+impl<'a> ExpandedEditorCanvas<'a> {
+    /// Fingerprint the cached layer's content. Any field change repaints
+    /// the cache; cursor motion and unrelated app-state churn do not.
+    pub fn fingerprint(&self) -> ExpandedEditorFingerprint {
+        use std::hash::{Hash, Hasher};
+        let mut ch = std::collections::hash_map::DefaultHasher::new();
+        // Only this track's clips render here, so edits elsewhere must
+        // not invalidate the cache.
+        for c in self
+            .midi_clips
+            .iter()
+            .filter(|c| c.track_id == self.track_id)
+        {
+            c.start_sample.hash(&mut ch);
+            c.duration_ticks.hash(&mut ch);
+            for n in &c.notes {
+                n.note.hash(&mut ch);
+                n.start_tick.hash(&mut ch);
+                n.duration_ticks.hash(&mut ch);
+                n.velocity.to_bits().hash(&mut ch);
+            }
+        }
+        ExpandedEditorFingerprint {
+            track_id: self.track_id,
+            clips_hash: ch.finish(),
+            section_start: self.section_start,
+            section_end: self.section_end,
+            section_length_bars: self.section_length_bars,
+            sample_rate: self.sample_rate,
+            tempo_hash: super::tempo_map_hash(self.tempo_map),
+            start_bar: self.start_bar,
+            scale: self.scale,
+            zoom_y_bits: self.zoom_y.to_bits(),
+            scroll_x_bits: self.scroll_x.to_bits(),
+            scroll_y_bits: self.scroll_y.to_bits(),
+        }
+    }
+
+    /// Paint the static layers (toolbar, rows, grid, notes, keyboard)
+    /// into the cache's frame. The fingerprint in `draw` decides when
+    /// this runs again.
+    fn draw_into(&self, frame: &mut Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
         if self.section_end <= self.section_start || bounds.width <= 0.0 {
-            return vec![frame.into_geometry()];
+            return;
         }
 
         let layout = self.layout(bounds);
@@ -173,16 +288,16 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
         );
 
         // -- Note row backgrounds --
-        self.draw_note_rows(&mut frame, &layout, &viewport, grid_w);
+        self.draw_note_rows(frame, &layout, &viewport, grid_w);
 
         // -- Beat grid lines --
-        self.draw_beat_grid(&mut frame, &layout, &viewport, grid_w);
+        self.draw_beat_grid(frame, &layout, &viewport, grid_w);
 
         // -- Notes --
-        self.draw_notes(&mut frame, &layout, &viewport);
+        self.draw_notes(frame, &layout, &viewport);
 
         // -- Piano keyboard --
-        piano_roll::draw_keyboard(&mut frame, &layout, &viewport);
+        piano_roll::draw_keyboard(frame, &layout, &viewport);
 
         // -- Separator between keyboard and grid --
         frame.fill_rectangle(
@@ -191,28 +306,11 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
             theme::SEPARATOR,
         );
 
-        // -- Hover tooltip showing note name under cursor --
-        if let Some(pos) = cursor.position_in(bounds) {
-            if pos.y > TOOLBAR_HEIGHT && pos.x >= grid_x {
-                let note = viewport.y_local_to_note(pos.y - TOOLBAR_HEIGHT);
-                let name = note_name(note);
-                // Draw in the keyboard area so it doesn't obscure the grid
-                frame.fill_text(canvas::Text {
-                    content: name,
-                    position: Point::new(pos.x + 12.0, (pos.y - 14.0).max(TOOLBAR_HEIGHT + 2.0)),
-                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.75),
-                    size: 11.0.into(),
-                    ..canvas::Text::default()
-                });
-            }
-        }
-
-        vec![frame.into_geometry()]
     }
 
-    fn update(
+    fn update_inner(
         &self,
-        state: &mut Self::State,
+        state: &mut ExpandedEditorState,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,

@@ -33,8 +33,8 @@ fn overflow_never_rotates_channels() {
     let (mut prod, mut cons) = ring.split();
 
     // Push 4 frames into space for 2.5: only 2 whole frames may land.
-    let overflowed = push_recording_frames(&mut prod, &frames(STRIDE, 0, 4), STRIDE);
-    assert!(overflowed, "dropping frames must be reported");
+    let dropped = push_recording_frames(&mut prod, &frames(STRIDE, 0, 4), STRIDE);
+    assert_eq!(dropped, 2, "both frames that could not land are counted");
     assert_eq!(cons.occupied_len(), 2 * STRIDE, "whole frames only");
 
     // Drain one frame, push again, drain everything: every drained
@@ -43,8 +43,8 @@ fn overflow_never_rotates_channels() {
     assert_eq!(cons.pop_slice(&mut out), STRIDE);
     assert_eq!(out, [0.0, 1.0, 2.0, 3.0], "frame 0 intact");
 
-    let overflowed = push_recording_frames(&mut prod, &frames(STRIDE, 4, 3), STRIDE);
-    assert!(overflowed, "still only room for one of the three frames");
+    let dropped = push_recording_frames(&mut prod, &frames(STRIDE, 4, 3), STRIDE);
+    assert_eq!(dropped, 2, "still only room for one of the three frames");
 
     let mut drained = Vec::new();
     let mut buf = [0.0f32; 4];
@@ -68,7 +68,7 @@ fn fitting_pushes_are_lossless_and_unreported() {
     let ring = ringbuf::HeapRb::<f32>::new(64);
     let (mut prod, mut cons) = ring.split();
     let data = frames(STRIDE, 0, 8);
-    assert!(!push_recording_frames(&mut prod, &data, STRIDE));
+    assert_eq!(push_recording_frames(&mut prod, &data, STRIDE), 0);
     let mut out = vec![0.0f32; data.len()];
     assert_eq!(cons.pop_slice(&mut out), data.len());
     assert_eq!(out, data);

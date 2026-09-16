@@ -33,6 +33,9 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Automation(_)
+        // Comping edits a recorded lane, which only exists inside a
+        // project — block while the startup modal owns the screen.
+        | Message::Take(_)
         | Message::Viewport(_)
         | Message::Reference(_)
         | Message::GlobalTrack(_)
@@ -80,6 +83,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::ToggleReferencePanel)
         | Message::Ui(UiMessage::CloseMarkersOverview)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
+        | Message::Ui(UiMessage::ToggleTakeLane(_))
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
         | Message::Ui(UiMessage::ToggleMidiClockRecv)
@@ -166,6 +170,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Automation(_)
+        | Message::Take(_)
         | Message::Group(_)
         | Message::Viewport(_)
         | Message::Reference(_)
@@ -226,6 +231,7 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         | Message::VocalTuning(_)
         | Message::Plugin(_)
         | Message::Automation(_)
+        | Message::Take(_)
         | Message::Group(_)
         | Message::Viewport(_)
         | Message::Reference(_)
@@ -349,6 +355,23 @@ fn plugin_edit_target(
 }
 
 impl crate::Resonance {
+    /// True while a control client's OFFLINE measurement job
+    /// (`meter.measure` / `meter.stems` with source `"render"`) is still
+    /// rendering.
+    ///
+    /// An offline measurement holds the offline renderer exclusively
+    /// (`OfflineRenderGuard::try_acquire_exclusive`) and refuses to start
+    /// while a bounce / freeze / export runs — but the file-writing
+    /// renderers `mark()` unconditionally, so the exclusion has to be
+    /// enforced in the app in this direction too: every bounce / freeze /
+    /// export START path checks this and refuses, otherwise two offline
+    /// renderers would drive `process()` / `reset()` on the same live
+    /// CLAP plugin instances concurrently — exactly the corruption the
+    /// guard exists to prevent.
+    pub(crate) fn offline_measure_in_progress(&self) -> bool {
+        self.control.jobs.has_live_offline_measure()
+    }
+
     /// The track owning a MIDI clip, by clip id.
     fn track_of_midi_clip(
         &self,
@@ -434,7 +457,37 @@ impl crate::Resonance {
         if self.plugin_move_is_refused(message) {
             return true;
         }
+        if self.take_edit_is_refused(message) {
+            return true;
+        }
         false
+    }
+
+    /// A take-lane comp edit that would change nothing (epic #15, todo
+    /// #411).
+    ///
+    /// Gated for the reason [`plugin_move_is_refused`](Self::plugin_move_is_refused)
+    /// spells out: `update_inner` records the undo snapshot and bumps the
+    /// control-API revision *before* dispatch, so an edit refused inside
+    /// the handler would still leave an undo entry that restores an
+    /// identical snapshot and a revision bump a remote client would read
+    /// as a concurrent edit.
+    ///
+    /// The predicate is `update::takes::plan` itself — the same function
+    /// the handler applies — so the gate and the edit can never disagree
+    /// about what "changes nothing" means. It covers an unknown group or
+    /// take, a solo that is already current, a split off the slot or on an
+    /// existing boundary, and a promote clamped away to nothing.
+    ///
+    /// Deleting a group's **last** take used to be refused here too. Since
+    /// ba todo #1401 it removes the lane instead — the engine grew the
+    /// commands for it (todo #1397) — so the only deletion this gate still
+    /// drops is one naming a group or take that is not there.
+    fn take_edit_is_refused(&self, message: &crate::message::Message) -> bool {
+        let crate::message::Message::Take(m) = message else {
+            return false;
+        };
+        crate::update::takes::plan(self, m).is_none()
     }
 
     /// A chain reorder the domain rule refuses (ba todo #1261).

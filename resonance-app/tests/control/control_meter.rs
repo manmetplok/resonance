@@ -15,8 +15,8 @@
 //! `song.summary`, and one shared range across every entry.
 
 use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
-use resonance_app::state::{TrackState, ViewMode};
+use resonance_app::message::{FreezeMessage, Message, ProjectIoMessage};
+use resonance_app::state::{FreezeStatus, TrackState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{
     AudioEvent, MeasureSource as EngineSource, MixMeasurement, StemSource, TrackType,
@@ -29,6 +29,7 @@ use resonance_control::methods::meter::{
 use resonance_control::{ErrorKind, Request, Response};
 use resonance_metering::offline::BandShares;
 use serde_json::json;
+use crate::common::roundtrip;
 
 const DRUMS: u64 = 1;
 const KICK: u64 = 2;
@@ -54,16 +55,6 @@ fn app() -> Resonance {
         name: "Drum Bus".to_owned(),
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn request(id: i64, method: &str, params: serde_json::Value) -> Request {
@@ -548,6 +539,109 @@ fn a_second_measurement_while_one_is_in_flight_is_busy() {
     let _ = measured(&mut app, job);
     let next = started_job(roundtrip(&mut app, request(3, "meter.measure", json!({}))));
     assert_eq!(job_status(&mut app, next).state, JobState::Pending);
+}
+
+/// The offline-renderer exclusion is mutual (the reverse of
+/// `measuring_while_a_render_is_in_flight_is_busy`): while an offline
+/// measurement holds the renderer, `render.mixdown` refuses with `busy`
+/// instead of starting a second offline render over the same live
+/// plugin instances — and starts normally once the measurement resolves.
+#[test]
+fn a_mixdown_while_a_measurement_is_in_flight_is_busy() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = app();
+    let job = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
+
+    let target = dir.path().join("mix.wav").display().to_string();
+    let response = roundtrip(&mut app, request(2, "render.mixdown", json!({ "path": target })));
+    let error = response.error.expect("measurement guard");
+    assert_eq!(error.kind(), ErrorKind::Busy);
+    assert!(
+        error.message.contains("measurement"),
+        "the error must name the measurement: {}",
+        error.message
+    );
+    assert!(!app.test_is_bouncing(), "the refused mixdown must not start");
+
+    // Once the measurement resolves, the renderer is free again.
+    app.test_apply_engine_event(AudioEvent::MixMeasureError {
+        measure_id: job,
+        message: "done".to_owned(),
+    });
+    let started = started_job(roundtrip(
+        &mut app,
+        request(3, "render.mixdown", json!({ "path": target })),
+    ));
+    assert_eq!(job_status(&mut app, started).state, JobState::Pending);
+    assert!(app.test_is_bouncing());
+}
+
+/// The GUI bounce dialog's path-selected message is the other way a WAV
+/// bounce starts; it must refuse (user-visibly, via the error banner)
+/// while an offline measurement holds the renderer.
+#[test]
+fn the_bounce_dialog_path_refuses_while_a_measurement_is_in_flight() {
+    let mut app = app();
+    let _job = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
+
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::BouncePathSelected(Some(
+        "/tmp/refused.wav".to_owned(),
+    ))));
+    assert!(!app.test_is_bouncing(), "the refused bounce must not start");
+    let message = app.test_error_message().expect("a user-visible refusal");
+    assert!(
+        message.contains("measurement"),
+        "the refusal must name the measurement: {message}"
+    );
+}
+
+/// Freezing drives the same offline renderer, so a single freeze and a
+/// freeze batch both refuse (user-visibly) while an offline measurement
+/// is rendering, and the track never enters `Freezing`.
+#[test]
+fn freezing_refuses_while_a_measurement_is_in_flight() {
+    let mut app = app();
+    let _job = started_job(roundtrip(&mut app, request(1, "meter.measure", json!({}))));
+
+    let _ = app.update(Message::Freeze(FreezeMessage::FreezeTrack(DRUMS)));
+    assert_eq!(
+        app.test_freeze_status(DRUMS),
+        FreezeStatus::Idle,
+        "the refused freeze must not start rendering"
+    );
+    let message = app.test_error_message().expect("a user-visible refusal");
+    assert!(
+        message.contains("measurement"),
+        "the refusal must name the measurement: {message}"
+    );
+
+    let _ = app.update(Message::Freeze(FreezeMessage::FreezeAllTracks));
+    assert!(
+        app.test_freeze_queue().is_none(),
+        "the refused batch must not queue anything"
+    );
+    assert_eq!(app.test_freeze_status(DRUMS), FreezeStatus::Idle);
+    assert_eq!(app.test_freeze_status(BASS), FreezeStatus::Idle);
+}
+
+/// A LIVE measurement reads the streaming tap and renders nothing, so it
+/// must not block a render — only the offline source takes the renderer.
+#[test]
+fn a_live_measurement_does_not_block_a_mixdown() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut app = app();
+    let _live = started_job(roundtrip(
+        &mut app,
+        request(1, "meter.measure", json!({ "source": "live" })),
+    ));
+
+    let target = dir.path().join("mix.wav").display().to_string();
+    let started = started_job(roundtrip(
+        &mut app,
+        request(2, "render.mixdown", json!({ "path": target })),
+    ));
+    assert_eq!(job_status(&mut app, started).state, JobState::Pending);
+    assert!(app.test_is_bouncing());
 }
 
 /// ba todo #1243, the correlation fix, pinned on the order that actually

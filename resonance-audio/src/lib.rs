@@ -88,6 +88,34 @@ pub mod __test_support {
     };
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
+    /// The take-id allocator behind every captured cycle-record pass
+    /// (epic #15, ba doc #292). Pure over a `TakeGroup`, so
+    /// `tests/loop_record_takes.rs` can pin "ids are unique within their
+    /// group" against the real code — including the case where one pass
+    /// emits twice for the same track.
+    pub use crate::engine::takes::push_take;
+    /// The project-load rehydration of the engine's take-group store, and
+    /// the take-group id high-water bump that goes with it (epic #15, ba
+    /// todo #1394). Pure over the map + counter, so
+    /// `tests/loop_record_takes.rs` can pin "a restored group is never
+    /// re-issued to a later cycle-record run" against the real code.
+    pub use crate::engine::takes::restore_take_groups_in_place;
+    /// Headless harness over the engine control thread's real
+    /// `HandlerCtx` + `HandlerState` (ba todo #1399), so a test can run a
+    /// whole command handler — not an extracted pure half of one — with
+    /// no audio device and no engine thread. Used by
+    /// `tests/loop_record_takes.rs` to pin `ClearAll`'s take-lane reset.
+    pub use crate::engine::EngineHandlerHarness;
+    /// The "one lane per slot" lookup a cycle-record run resolves its take
+    /// group through, and the "same slot" predicate behind it (epic #15,
+    /// ba todo #1392). Pure over the store, so
+    /// `tests/loop_record_takes.rs` can pin the reuse ruling — including
+    /// reuse of a group restored from a saved project — against the real
+    /// code.
+    pub use crate::engine::takes::{
+        capture_take_event, resolve_take_group, slots_match, store_take_in, take_group_for_slot,
+        TakeGroupStore, SAME_SLOT_TOLERANCE_FRAMES,
+    };
     /// The "crossfade or land immediately" rule every bypass handler
     /// shares — see `tests/plugin_bypass.rs`.
     pub use crate::engine::plugins::apply_bypass_request;
@@ -138,9 +166,18 @@ pub mod __test_support {
         sum_to_stereo, transport_pos_beats,
         whole_frame_push_len,
     };
+    /// Take-comp playback (epic #15, doc #165): the control-thread flatten
+    /// of the authoritative take groups into the audio-thread table, the
+    /// per-segment render with its equal-power seam crossfades, and the
+    /// block entry point that drives both through the real `render_block`
+    /// — see `tests/take_comp_render.rs`.
+    pub use crate::mixer::{
+        build_comp_table, mix_track_comp, render_take_comp_for_test, CompRenderTable, CompSpan,
+        TrackComp, COMP_XFADE_FRAMES,
+    };
     pub use crate::platform::{
-        choose_assert_rate, force_release_target, needs_reassert, parse_pw_metadata_value,
-        reassert_source_key, CANONICAL_RATE,
+        choose_assert_rate, force_is_redundant, force_release_target, needs_reassert,
+        parse_allowed_rates, parse_pw_metadata_value, reassert_source_key, CANONICAL_RATE,
     };
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,

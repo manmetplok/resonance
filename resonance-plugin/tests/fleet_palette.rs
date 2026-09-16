@@ -146,9 +146,10 @@ fn the_fleet_is_the_size_the_audit_counted() {
 fn every_editor_theme_re_exports_the_canonical_palette() {
     for (crate_name, theme_rs, _) in FLEET {
         assert!(
-            theme_rs.contains("pub use wayland_plugin_gui::theme::lavender::*;"),
+            theme_rs.contains("pub use plugin_gui_core::theme::lavender::*;"),
             "{crate_name}: its editor theme does not re-export the canonical \
-             palette, so this editor is on a palette of its own"
+             palette (via the platform-neutral `plugin_gui_core`), so this \
+             editor is on a palette of its own"
         );
         assert!(
             !code_of(theme_rs).contains("theme::classic"),
@@ -175,7 +176,7 @@ fn no_editor_source_carries_a_retired_palette_colour() {
                 !code.contains(hex),
                 "{}: `{hex}` is {what}, from the palette ba todo #1338 \
                  retired. Shape the colour from a token in \
-                 `wayland_plugin_gui::theme::lavender` instead",
+                 `plugin_gui_core::theme::lavender` instead",
                 file.display()
             );
         }

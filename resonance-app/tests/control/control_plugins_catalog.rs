@@ -16,13 +16,12 @@
 //! with NO project open — it reads the startup scanner's results, which
 //! no project owns, so the mutation gate must not turn it into `busy`.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::{AudioEvent, ScannedPlugin};
 use resonance_control::methods::plugins::{PluginCatalog, CATALOG};
 use resonance_control::{ErrorKind, Request, Response};
+use crate::common::roundtrip;
 
 /// The name the catalog carried before #1236. Spelled out rather than
 /// imported: the constant it came from no longer exists, and the point
@@ -53,16 +52,6 @@ fn app_without_project() -> Resonance {
         ],
     });
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
 }
 
 fn catalog(app: &mut Resonance, method: &str) -> Response {

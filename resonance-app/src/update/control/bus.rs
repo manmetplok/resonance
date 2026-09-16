@@ -26,6 +26,7 @@ use resonance_control::methods::mixer::{VOLUME_DB_MAX, VOLUME_DB_MIN};
 use resonance_control::{Request, Response, RpcError};
 
 use super::chain_presets::{self, Chain};
+use super::effect_addressing::{self, ChainWording};
 use super::reply::{ack, not_found_bus, reject};
 use super::sidechain;
 use super::view_model;
@@ -145,7 +146,15 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             return reject(request, RpcError::invalid_params("bus name must not be empty"))
         }
         Some(name) => name,
-        None => format!("Bus {}", app.registry.busses.len() + 1),
+        // Smallest free "Bus N": len()+1 collides after a deletion (delete
+        // "Bus 1" of two, create → a second "Bus 2").
+        None => {
+            let taken: Vec<&str> = app.registry.busses.iter().map(|b| b.name.as_str()).collect();
+            (1..)
+                .map(|n| format!("Bus {n}"))
+                .find(|candidate| !taken.iter().any(|t| t == candidate))
+                .expect("unbounded counter always finds a free name")
+        }
     };
 
     // App-side id so the reply can return it immediately; the engine
@@ -288,81 +297,48 @@ fn bus_plugin_entries(bus: &BusState) -> Vec<track::PluginParamsEntry> {
         .collect()
 }
 
-/// The chain as `slot:plugin_id` pairs, for error messages that let the
-/// caller correct an address rather than guess again.
-fn chain_description(entries: &[track::PluginParamsEntry]) -> String {
-    entries
-        .iter()
-        .map(|e| format!("{}:{}", e.slot, e.plugin_id))
-        .collect::<Vec<_>>()
-        .join(", ")
+/// Bus's [`ChainWording`]: a bus chain has no instrument slot — every
+/// entry [`bus_plugin_entries`] builds is `PluginKind::Effect` — so
+/// [`ChainWording::instrument_refusal`] never actually fires; it's
+/// implemented anyway to satisfy the shared trait.
+struct BusWording<'a> {
+    bus: &'a BusState,
 }
 
-/// Resolve "which plugin on this bus" from the slot-or-(id, occurrence)
-/// pair every chain method accepts. `verb` only shapes the wording.
-fn resolve_bus_effect(
-    bus: &BusState,
-    slot: Option<u32>,
-    plugin_id: Option<&str>,
-    occurrence: Option<u32>,
-    verb: &str,
-) -> Result<(track::PluginParamsEntry, resonance_audio::types::PluginInstanceId), RpcError> {
-    let entries = bus_plugin_entries(bus);
-    let entry = match (slot, plugin_id) {
-        (Some(_), Some(_)) => {
-            return Err(RpcError::invalid_params(
-                "address the effect by slot OR by plugin_id (+ occurrence), not both",
-            ))
-        }
-        (None, None) => {
-            return Err(RpcError::invalid_params(format!(
-                "name the effect to {verb}: slot, or plugin_id (+ occurrence). Bus {} carries \
-                 [{}]",
-                bus.id,
-                chain_description(&entries)
-            )))
-        }
-        (Some(slot), None) => match entries.iter().find(|e| e.slot == slot) {
-            Some(entry) => entry.clone(),
-            None => {
-                return Err(RpcError::not_found(format!(
-                    "bus {} has no plugin at slot {slot}; it carries [{}]",
-                    bus.id,
-                    chain_description(&entries)
-                )))
-            }
-        },
-        (None, Some(wanted)) => {
-            let occurrence = occurrence.unwrap_or(0);
-            match entries
-                .iter()
-                .find(|e| e.plugin_id == wanted && e.occurrence == occurrence)
-            {
-                Some(entry) => entry.clone(),
-                None => {
-                    return Err(RpcError::not_found(format!(
-                        "bus {} has no plugin {wanted:?} at occurrence {occurrence}; it carries \
-                         [{}]",
-                        bus.id,
-                        chain_description(&entries)
-                    )))
-                }
-            }
-        }
-    };
-    let instance_id = bus
-        .plugins
-        .iter()
-        .filter(|p| p.clap_plugin_id == entry.plugin_id)
-        .nth(entry.occurrence as usize)
-        .map(|p| p.instance_id)
-        .ok_or_else(|| {
-            RpcError::not_found(format!(
-                "plugin {:?} vanished from bus {} between lookup and {verb}",
-                entry.plugin_id, bus.id
-            ))
-        })?;
-    Ok((entry, instance_id))
+impl ChainWording for BusWording<'_> {
+    fn no_address(&self, verb: &str, listing: &str) -> String {
+        format!(
+            "name the effect to {verb}: slot, or plugin_id (+ occurrence). Bus {} carries \
+             [{listing}]",
+            self.bus.id
+        )
+    }
+
+    fn slot_not_found(&self, slot: u32, listing: &str) -> String {
+        format!(
+            "bus {} has no plugin at slot {slot}; it carries [{listing}]",
+            self.bus.id
+        )
+    }
+
+    fn id_not_found(&self, plugin_id: &str, occurrence: u32, listing: &str) -> RpcError {
+        RpcError::not_found(format!(
+            "bus {} has no plugin {plugin_id:?} at occurrence {occurrence}; it carries \
+             [{listing}]",
+            self.bus.id
+        ))
+    }
+
+    fn instrument_refusal(&self, _entry: &track::PluginParamsEntry, _verb: &str) -> Option<String> {
+        None
+    }
+
+    fn vanished(&self, plugin_id: &str, verb: &str) -> String {
+        format!(
+            "plugin {plugin_id:?} vanished from bus {} between lookup and {verb}",
+            self.bus.id
+        )
+    }
 }
 
 /// `bus.add_effect` — put an effect on the group sum.
@@ -455,12 +431,15 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
     let Some(b) = find_bus(app, params.bus_id.0) else {
         return not_found_bus(request, params.bus_id.0);
     };
-    let instance_id = match resolve_bus_effect(
-        b,
+    let entries = bus_plugin_entries(b);
+    let instance_id = match effect_addressing::resolve_effect(
+        &entries,
         params.slot,
         params.plugin_id.as_deref(),
         params.occurrence,
         "remove",
+        &BusWording { bus: b },
+        |id, occurrence| effect_addressing::instance_at(&b.plugins, id, occurrence),
     ) {
         Ok((_, id)) => id,
         Err(error) => return reject(request, error),
@@ -475,8 +454,10 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
 /// `bus.replace_effect` — put a different plugin in one of the group's
 /// chain slots, keeping its position (ba doc #275 P5, todo #1309).
 ///
-/// Addressing is this surface's (`resolve_bus_effect`); everything after
-/// the slot is resolved is shared with the track and master surfaces.
+/// Addressing runs through the shared resolver
+/// ([`effect_addressing::resolve_effect`]) with this surface's own
+/// [`BusWording`]; everything after the slot is resolved is shared with
+/// the track and master surfaces.
 fn replace_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     let params: bus::ReplaceEffectParams = match request.params() {
         Ok(p) => p,
@@ -485,12 +466,15 @@ fn replace_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
     let Some(b) = find_bus(app, params.bus_id.0) else {
         return not_found_bus(request, params.bus_id.0);
     };
-    let (entry, instance_id) = match resolve_bus_effect(
-        b,
+    let entries = bus_plugin_entries(b);
+    let (entry, instance_id) = match effect_addressing::resolve_effect(
+        &entries,
         params.slot,
         params.plugin_id.as_deref(),
         params.occurrence,
         "replace",
+        &BusWording { bus: b },
+        |id, occurrence| effect_addressing::instance_at(&b.plugins, id, occurrence),
     ) {
         Ok(found) => found,
         Err(error) => return reject(request, error),
@@ -513,12 +497,15 @@ fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
     let Some(b) = find_bus(app, params.bus_id.0) else {
         return not_found_bus(request, params.bus_id.0);
     };
-    let (entry, instance_id) = match resolve_bus_effect(
-        b,
+    let entries = bus_plugin_entries(b);
+    let (entry, instance_id) = match effect_addressing::resolve_effect(
+        &entries,
         params.slot,
         params.plugin_id.as_deref(),
         params.occurrence,
         "move",
+        &BusWording { bus: b },
+        |id, occurrence| effect_addressing::instance_at(&b.plugins, id, occurrence),
     ) {
         Ok(found) => found,
         Err(error) => return reject(request, error),
@@ -596,7 +583,7 @@ fn plugin_params(app: &Resonance, request: &Request) -> (Response, Task<Message>
                         "bus {} has no plugin {wanted:?} at occurrence {occurrence}; it carries \
                          [{}]",
                         b.id,
-                        chain_description(&entries)
+                        effect_addressing::chain_description(&entries)
                     )),
                 );
             }
@@ -640,7 +627,7 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
                 Some(id) => format!(
                     "bus {} has no plugin {id:?} at occurrence {occurrence}; it carries [{}]",
                     b.id,
-                    chain_description(&entries)
+                    effect_addressing::chain_description(&entries)
                 ),
                 None => format!(
                     "bus {} carries no plugins; add one with bus.add_effect",

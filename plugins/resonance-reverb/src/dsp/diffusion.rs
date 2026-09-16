@@ -6,12 +6,21 @@
 
 use resonance_dsp::{DelayLine, SimpleRng};
 
-use super::CHANNELS;
+use super::{CHANNELS, TAP_SLEW_PER_SAMPLE};
 
 /// A single diffusion step: N delay lines + Hadamard mix + polarity flips.
 pub(super) struct DiffusionStep {
     delays: [DelayLine; CHANNELS],
+    /// Tap-length *targets*. `ReverbDsp::set_size` rewrites these per
+    /// block; the actual read taps glide toward them in `process`.
     pub(super) delay_samples: [usize; CHANNELS],
+    /// Gliding fractional read positions (same scheme as the FDN
+    /// bank's `read_pos`: slew-limited motion, exact integer at rest so
+    /// a stationary step reads bit-identically to the pre-glide code).
+    read_pos: [f32; CHANNELS],
+    /// False until the first processed sample (activation and `clear`
+    /// snap the read positions instead of gliding).
+    primed: bool,
     flip: [bool; CHANNELS],
 }
 
@@ -35,18 +44,48 @@ impl DiffusionStep {
             flip[c] = rng.next_u32() & 1 == 1;
         }
 
+        let mut read_pos = [0.0f32; CHANNELS];
+        for (c, pos) in read_pos.iter_mut().enumerate() {
+            *pos = delay_samples[c] as f32;
+        }
+
         Self {
             delays,
             delay_samples,
+            read_pos,
+            primed: false,
             flip,
         }
     }
 
     pub(super) fn process(&mut self, channels: &mut [f32; CHANNELS], diffusion: f32) {
-        // Read from delay lines, write input
+        if !self.primed {
+            self.primed = true;
+            for c in 0..CHANNELS {
+                self.read_pos[c] = self.delay_samples[c] as f32;
+            }
+        }
+
+        // Read from delay lines, write input. A stationary tap takes
+        // the integer read (bit-identical to the pre-glide code); a
+        // moving one slews toward its target and interpolates.
         let mut delayed = [0.0f32; CHANNELS];
         for c in 0..CHANNELS {
-            delayed[c] = self.delays[c].tap(self.delay_samples[c]);
+            let target = self.delay_samples[c] as f32;
+            let pos = self.read_pos[c];
+            delayed[c] = if pos == target {
+                self.delays[c].tap(self.delay_samples[c])
+            } else {
+                let pos = if (target - pos).abs() <= TAP_SLEW_PER_SAMPLE {
+                    target
+                } else if target > pos {
+                    pos + TAP_SLEW_PER_SAMPLE
+                } else {
+                    pos - TAP_SLEW_PER_SAMPLE
+                };
+                self.read_pos[c] = pos;
+                self.delays[c].tap_linear(pos)
+            };
             self.delays[c].push(channels[c]);
         }
 
@@ -71,6 +110,7 @@ impl DiffusionStep {
         for d in &mut self.delays {
             d.clear();
         }
+        self.primed = false;
     }
 }
 

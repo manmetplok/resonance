@@ -353,7 +353,12 @@ fn spawn_render(
                 })),
             ),
             Ok(None) => Message::Tick,
-            Err(error) => Message::Compose(ComposeMessage::VocalAudioFailed { error }),
+            Err(error) => Message::Compose(ComposeMessage::VocalAudioFailed {
+                definition_id,
+                track_id,
+                render_epoch,
+                error,
+            }),
         },
     )
 }

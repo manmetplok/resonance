@@ -7,8 +7,8 @@
 //! tests pin the decision logic around it.
 
 use resonance_audio::__test_support::{
-    choose_assert_rate, force_release_target, needs_reassert, parse_pw_metadata_value,
-    reassert_source_key, CANONICAL_RATE,
+    choose_assert_rate, force_is_redundant, force_release_target, needs_reassert,
+    parse_allowed_rates, parse_pw_metadata_value, reassert_source_key, CANONICAL_RATE,
 };
 
 // --- choose_assert_rate -------------------------------------------------
@@ -164,4 +164,60 @@ fn default_source_is_distinguishable_from_never_asserted() {
     let last = reassert_source_key(None);
     assert!(!needs_reassert(Some(&last), None));
     assert!(needs_reassert(None, None));
+}
+
+// --- clock.allowed-rates ------------------------------------------------
+
+#[test]
+fn parses_a_single_allowed_rate() {
+    assert_eq!(parse_allowed_rates("[ 48000 ]"), vec![48_000]);
+}
+
+#[test]
+fn parses_several_allowed_rates() {
+    assert_eq!(
+        parse_allowed_rates("[ 44100, 48000, 96000 ]"),
+        vec![44_100, 48_000, 96_000]
+    );
+}
+
+#[test]
+fn parses_an_empty_allowed_list_as_nothing() {
+    assert!(parse_allowed_rates("[ ]").is_empty());
+    assert!(parse_allowed_rates("").is_empty());
+}
+
+// --- force_is_redundant -------------------------------------------------
+
+#[test]
+fn a_graph_that_cannot_leave_the_target_needs_no_force() {
+    // This is the pinned-by-config setup: the daemon allows exactly one
+    // rate and is already on it, so `clock.force-rate` cannot change
+    // anything — and the write is a driver re-negotiation for nothing.
+    assert!(force_is_redundant(Some(48_000), &[48_000], 48_000));
+}
+
+#[test]
+fn a_graph_that_can_switch_away_still_needs_the_force() {
+    // Same current rate, but the daemon may move it — which is exactly
+    // what the force exists to prevent.
+    assert!(!force_is_redundant(Some(48_000), &[44_100, 48_000], 48_000));
+}
+
+#[test]
+fn a_graph_on_the_wrong_rate_needs_the_force() {
+    assert!(!force_is_redundant(Some(44_100), &[44_100], 48_000));
+}
+
+#[test]
+fn no_allowed_rates_information_is_not_permission_to_skip() {
+    // An absent or unreadable `clock.allowed-rates` says nothing about
+    // whether the graph can move. Defaulting to "redundant" there would
+    // silently disable the feature wherever the key is missing.
+    assert!(!force_is_redundant(Some(48_000), &[], 48_000));
+}
+
+#[test]
+fn an_unknown_graph_rate_needs_the_force() {
+    assert!(!force_is_redundant(None, &[48_000], 48_000));
 }

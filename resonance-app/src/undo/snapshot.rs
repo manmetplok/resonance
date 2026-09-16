@@ -291,6 +291,33 @@ impl crate::Resonance {
     /// the full `ClearAll → AllCleared → replay_loaded_project` pipeline
     /// that `ProjectLoaded(Ok)` uses. Playback is stopped either way
     /// (per v1 policy).
+    ///
+    /// # Take lanes are restored by the replay, not re-asserted after it
+    ///
+    /// Both paths end in `replay_take_groups`, which sends
+    /// `AudioCommand::RestoreTakeGroups` — on the fast path from
+    /// `apply_take_groups` inside [`crate::update::try_diff_replay`], on
+    /// the slow path from `replay_loaded_project`, which the `AllCleared`
+    /// handler runs immediately before `finalize_undo_restore`. That
+    /// command replaces the engine's take-group store wholesale (comp and
+    /// active take included, since both ride the `TakeGroup`) and
+    /// republishes the comp table, so the engine plays and bounces the
+    /// restored lanes without touching the transport.
+    ///
+    /// #411 additionally re-sent every mirrored group's `SetTakeComp` +
+    /// `SetActiveTake` here (`resync_take_comps`), because at the time
+    /// nothing else told the engine about a restore at all. Todo #1394
+    /// landed `RestoreTakeGroups` and that resync became a strict subset
+    /// of it: same two values, read from the same `take_groups` mirror,
+    /// sent one command later. It was removed rather than kept as belt
+    /// and braces (ba todo #1399) because it was also the *weaker* of the
+    /// two — it silently no-ops for a group the engine does not hold, and
+    /// it cannot bring back a take an undo just restored, which are
+    /// exactly the cases `RestoreTakeGroups` exists to cover — and
+    /// because it was not free: those two commands echo
+    /// `TakeCompChanged` / `ActiveTakeChanged` per group on every history
+    /// step, and `RestoreTakeGroups` was deliberately made silent so a
+    /// restore does not come up dirty.
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.
@@ -336,6 +363,10 @@ impl crate::Resonance {
         restore_arrangements(&mut self.compose, &extras.compose_arrangements);
         self.apply_freeze_restore(extras.track_freeze);
         self.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
+        // Take lanes are *not* reconciled here. `replay_loaded_project`
+        // runs immediately before this and ends in `replay_take_groups`,
+        // which sends `RestoreTakeGroups` — see the note on the fast path
+        // in `begin_restore_from_snapshot`.
     }
 
     /// Re-apply snapshotted clip fade/gain to the GUI mirror and re-sync the

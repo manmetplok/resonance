@@ -5,6 +5,7 @@
 //! All I/O errors are swallowed (logged to stderr); a broken or
 //! missing recent file must never prevent the app from starting.
 
+use resonance_common::{atomic_write, quarantine_corrupt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -61,7 +62,11 @@ pub fn load() -> Vec<RecentEntry> {
             list
         }
         Err(e) => {
-            eprintln!("recent.json parse failed: {e}");
+            eprintln!(
+                "recent.json parse failed: {e}; quarantining {} and starting from an empty list",
+                file.display()
+            );
+            quarantine_corrupt(&file);
             Vec::new()
         }
     }
@@ -79,7 +84,7 @@ fn persist(list: &[RecentEntry]) {
     }
     match serde_json::to_vec_pretty(list) {
         Ok(bytes) => {
-            if let Err(e) = std::fs::write(&file, bytes) {
+            if let Err(e) = atomic_write(&file, &bytes) {
                 eprintln!("recent.json write failed: {e}");
             }
         }

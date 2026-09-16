@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use super::theme;
 use super::AmpEditorApp;
@@ -103,11 +103,18 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
             drop(list);
 
             let raw_name = app.model_name.lock().clone();
+            // The stem is a stand-in for a load that has been requested
+            // but has not finished naming itself yet, so it is only
+            // honest while a model path is actually set. Since the
+            // browser is seeded from the downloads directory on a fresh
+            // amp, `file_list[0]` exists long before anything is loaded,
+            // and using it here would name a profile that is not playing.
+            let has_model = !app.params.model_path.lock().is_empty();
             let name = if raw_name.is_empty() {
-                if stem.is_empty() {
-                    "(no model loaded)".to_string()
-                } else {
+                if has_model && !stem.is_empty() {
                     stem.clone()
+                } else {
+                    "(no model loaded)".to_string()
                 }
             } else {
                 raw_name
@@ -194,7 +201,15 @@ fn seek_relative(app: &AmpEditorApp, delta: i32) {
     }
     let len_i = len as i32;
     let current = app.params.file_select.value();
-    let next = (current + delta).rem_euclid(len_i);
+    // With nothing loaded the selector is parked at 0 without that
+    // meaning "file 0 is playing", so the first press loads where it
+    // already points rather than stepping past it — otherwise the entry
+    // the browser is sitting on is the one entry you cannot reach.
+    let next = if app.params.model_path.lock().is_empty() {
+        current.clamp(0, len_i - 1)
+    } else {
+        (current + delta).rem_euclid(len_i)
+    };
     app.params.file_select.set_value(next);
     app.load_request.store(next, Ordering::Release);
 }

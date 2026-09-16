@@ -10,6 +10,7 @@
 //! so an older on-disk file missing a field (or a whole section) loads
 //! cleanly with that field defaulted.
 
+use resonance_common::{atomic_write, quarantine_corrupt};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -85,7 +86,13 @@ pub fn load() -> AppSettings {
     let Some(file) = settings_file_path() else {
         return AppSettings::default();
     };
-    let bytes = match std::fs::read(&file) {
+    load_from(&file)
+}
+
+/// Load from a specific path (useful for testing, mirroring
+/// `registry::load_registry_from` / `midi_map::load_controller_maps_from`).
+pub fn load_from(file: &std::path::Path) -> AppSettings {
+    let bytes = match std::fs::read(file) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AppSettings::default(),
         Err(e) => {
@@ -96,7 +103,11 @@ pub fn load() -> AppSettings {
     match serde_json::from_slice::<AppSettings>(&bytes) {
         Ok(settings) => settings,
         Err(e) => {
-            eprintln!("settings.json parse failed: {e}");
+            eprintln!(
+                "settings.json parse failed: {e}; quarantining {} and starting from defaults",
+                file.display()
+            );
+            quarantine_corrupt(file);
             AppSettings::default()
         }
     }
@@ -109,6 +120,11 @@ pub fn persist(settings: &AppSettings) {
     let Some(file) = settings_file_path() else {
         return;
     };
+    persist_to(&file, settings);
+}
+
+/// Persist to a specific path (useful for testing).
+pub fn persist_to(file: &std::path::Path, settings: &AppSettings) {
     if let Some(parent) = file.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             eprintln!("settings.json mkdir failed: {e}");
@@ -117,7 +133,7 @@ pub fn persist(settings: &AppSettings) {
     }
     match serde_json::to_vec_pretty(settings) {
         Ok(bytes) => {
-            if let Err(e) = std::fs::write(&file, bytes) {
+            if let Err(e) = atomic_write(file, &bytes) {
                 eprintln!("settings.json write failed: {e}");
             }
         }

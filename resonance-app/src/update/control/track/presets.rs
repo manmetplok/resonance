@@ -23,7 +23,7 @@
 //! `TrackMessage`, so the overwrite rule and the captured contents cannot
 //! differ between them.
 
-use super::{ack, find_track, instance_for, not_found_track, reject};
+use super::{ack, find_track, frozen_reject, instance_for, not_found_track, reject};
 use crate::message::{Message, TrackMessage};
 use crate::update::control::{plugin_presets, run_via_update, success, view_model};
 use crate::Resonance;
@@ -141,6 +141,11 @@ pub(super) fn load_plugin_preset(
         Ok(resolved) => resolved,
         Err(response) => return (response, Task::none()),
     };
+    // A preset recall is a frozen-input edit (`LoadPluginPreset`,
+    // gates.rs); reject rather than ack an edit the gate would swallow.
+    if let Some(e) = frozen_reject(app, params.track_id.0) {
+        return reject(request, e);
+    }
 
     let message = match plugin_presets::load_message(
         app,

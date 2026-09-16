@@ -289,12 +289,25 @@ fn preset_file_save_load_replace_delete() {
 }
 
 #[test]
-fn corrupt_preset_file_loads_empty() {
+fn corrupt_preset_file_loads_empty_and_is_quarantined() {
     let dir = std::env::temp_dir().join("resonance_test_controller_maps_corrupt");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("controller_maps.json");
-    std::fs::write(&path, b"{ not valid json").unwrap();
+    let original = b"{ not valid json";
+    std::fs::write(&path, original).unwrap();
+
     assert!(load_controller_maps_from(&path).is_empty());
+
+    // The corrupt file is preserved rather than left in place to be
+    // silently overwritten by the next save.
+    assert!(
+        !path.exists(),
+        "the corrupt file is moved aside, not left where the loader will find it again"
+    );
+    let corrupt_path = dir.join("controller_maps.json.corrupt");
+    assert!(corrupt_path.exists(), "original bytes preserved as .corrupt");
+    assert_eq!(std::fs::read(&corrupt_path).unwrap(), original);
+
     let _ = std::fs::remove_dir_all(&dir);
 }

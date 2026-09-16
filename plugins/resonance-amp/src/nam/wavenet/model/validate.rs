@@ -110,6 +110,91 @@ pub(super) fn validate_config(config: &WaveNetConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Cap on one dilated-conv (or head) state ring, in f32 slots (frame
+/// capacity x channels; the power-of-two rounding in `RingBuffer::new` at
+/// most doubles it). Unlike the width fields, kernel sizes and dilations
+/// are not naturally bounded by the file's weight count — a ring stores
+/// history, not weights — so this is a hard cap: real NAM models stay
+/// under ~2^17 (receptive field ~2048 x at most a few dozen channels),
+/// leaving this ~500x headroom while keeping a hostile dilation from
+/// aborting the process on a multi-TiB allocation.
+const MAX_RING_FLOATS: usize = 1 << 26;
+
+/// Bounds validation against the file's own weight count, before any
+/// config-derived allocation. Every width field sizes at least one
+/// per-width tensor in the weight stream, so a width beyond the whole
+/// weight array can never be satisfied; a hostile file claiming such a
+/// width would otherwise wrap the weight-count products in release builds
+/// or abort on an absurd allocation before the underflow check could
+/// fire. Real models always pass: their widths are dwarfed by their
+/// weight counts.
+pub(super) fn validate_bounds(config: &WaveNetConfig, total_weights: usize) -> Result<(), String> {
+    let check = |what: &str, v: usize| -> Result<(), String> {
+        if v > total_weights {
+            return Err(format!(
+                "WaveNet config: {what} ({v}) exceeds the {total_weights} weights the file provides"
+            ));
+        }
+        Ok(())
+    };
+    check("head_size", config.head_size)?;
+    for (hi, &hidden) in config.head.iter().enumerate() {
+        check(&format!("head layer {hi} size"), hidden)?;
+    }
+    for (si, s) in config.stacks.iter().enumerate() {
+        check(&format!("stack {si} channels"), s.channels)?;
+        check(&format!("stack {si} bottleneck"), s.bottleneck)?;
+        check(&format!("stack {si} condition_size"), s.condition_size)?;
+        check(&format!("stack {si} head_size"), s.head_size)?;
+        check(&format!("stack {si} head_kernel_size"), s.head_kernel_size)?;
+        if s.head1x1.active {
+            check(&format!("stack {si} head1x1 out_channels"), s.head1x1.out_channels)?;
+        }
+        for (li, (&ks, &dilation)) in s.kernel_sizes.iter().zip(&s.dilations).enumerate() {
+            if ks == 0 {
+                return Err(format!(
+                    "WaveNet stack {si} layer {li}: kernel size must be >= 1"
+                ));
+            }
+            check(&format!("stack {si} layer {li} kernel size"), ks)?;
+            check_ring(
+                &format!("stack {si} layer {li}"),
+                ks,
+                dilation,
+                s.channels,
+            )?;
+        }
+        // The head rechannel keeps a skip-frame history ring too.
+        let skip_ch = if s.head1x1.active {
+            s.head1x1.out_channels
+        } else {
+            s.bottleneck
+        };
+        check_ring(
+            &format!("stack {si} head rechannel"),
+            s.head_kernel_size.max(1),
+            s.head_dilation,
+            skip_ch,
+        )?;
+    }
+    Ok(())
+}
+
+/// Bound one state ring's allocation (`(ks - 1) * dilation + 2` frames of
+/// `channels` floats) with checked arithmetic; see [`MAX_RING_FLOATS`].
+fn check_ring(ctx: &str, ks: usize, dilation: usize, channels: usize) -> Result<(), String> {
+    let floats = (ks - 1)
+        .checked_mul(dilation)
+        .and_then(|f| f.checked_add(2))
+        .and_then(|f| f.checked_mul(channels));
+    match floats {
+        Some(f) if f <= MAX_RING_FLOATS => Ok(()),
+        _ => Err(format!(
+            "WaveNet {ctx}: kernel size ({ks}) x dilation ({dilation}) x channels ({channels}) exceeds the supported state-buffer size"
+        )),
+    }
+}
+
 /// The scratch buffers used as representative in/out slices for the
 /// dimension checks below (still zeroed at validation time).
 pub(super) struct ScratchSlices<'a> {

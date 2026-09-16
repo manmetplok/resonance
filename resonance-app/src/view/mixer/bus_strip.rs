@@ -1,6 +1,11 @@
 //! Bus channel strip rendering. Trimmer than a track strip: no
 //! mono/monitor/arm, no instrument slot, no input device picker, no
 //! output selector (busses always go to master).
+//!
+//! Like the track strip, the bus strip splits into a live fader/meter
+//! block (rebuilt every frame) and a lazy body cached behind
+//! `iced::widget::lazy`, keyed on
+//! [`super::strip_fingerprint::bus_strip_fingerprint`].
 
 use iced::widget::{column, container, pick_list, row, scrollable, text, Space};
 use iced::{alignment, Element, Font, Length};
@@ -15,11 +20,83 @@ use crate::view::controls::{bus_remove_button, fader_section, fx_bypass_button, 
 use super::picks::PluginOwner;
 
 impl crate::Resonance {
-    pub(super) fn view_bus_strip(
-        &self,
-        bus: &BusState,
-        available_plugins: &[ScannedPlugin],
-    ) -> Element<'_, Message> {
+    pub(super) fn view_bus_strip<'a>(
+        &'a self,
+        bus: &'a BusState,
+        available_plugins: &'a [ScannedPlugin],
+    ) -> Element<'a, Message> {
+        let _ = available_plugins;
+        let bus_id = bus.id;
+
+        // Live fader + meter block — the per-tick levels (and the live
+        // automated-gain tint) render outside the lazy body, exactly as
+        // on the track strip: a lazy subtree would freeze the meter at
+        // the levels it was built with.
+        let gain_live = super::automation::live_value(
+            &self.automation,
+            resonance_common::AutomationTarget::BusGain(bus.id),
+        )
+        .map(|v| resonance_common::lane_value_to_real(
+            &resonance_common::AutomationTarget::BusGain(bus.id),
+            v,
+        ));
+        let fader_block =
+            fader_section(bus.level_l, bus.level_r, bus.volume, gain_live, move |v| {
+                Message::Bus(BusMessage::SetBusVolume(bus_id, v))
+            });
+
+        // Everything above the fader is non-live — cache it across
+        // redraw ticks.
+        let fp = super::strip_fingerprint::bus_strip_fingerprint(self, bus);
+        let body = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+            self.bus_strip_body(bus)
+        });
+
+        let strip_content = column![body, fader_block]
+            .spacing(6)
+            .padding([12, 10])
+            .width(theme::MIXER_STRIP_WIDTH)
+            .height(Length::Fill);
+
+        // Clicking anywhere on the strip that isn't already a control
+        // selects the bus, exactly as a track strip does — that is what
+        // gives the inspector something to describe. `mouse_area` sits
+        // *outside* the container so the inner buttons, pickers, knob and
+        // fader keep their own press handling.
+        let is_selected = self.mixer.selected_bus == Some(bus_id);
+        iced::widget::mouse_area(
+            container(strip_content)
+                .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32))
+                // Selected saturates the strip's resting warm hairline to
+                // the full warm accent — the same dim-to-saturated move a
+                // selected sub-track's rail makes, in the bus palette
+                // rather than the track one.
+                .style(move |theme| {
+                    let base = theme::card_warm(theme);
+                    if is_selected {
+                        container::Style {
+                            border: iced::Border {
+                                color: theme::WARM,
+                                ..base.border
+                            },
+                            ..base
+                        }
+                    } else {
+                        base
+                    }
+                }),
+        )
+        .on_press(Message::Ui(UiMessage::SelectBus(Some(bus_id))))
+        .into()
+    }
+
+    /// The non-live upper region of a bus strip — everything except the
+    /// fader/meter block. Built inside the strip's `lazy` region, so it
+    /// returns an owned (`'static`) tree and must only read state that
+    /// [`super::strip_fingerprint::bus_strip_fingerprint`] hashes.
+    fn bus_strip_body(&self, bus: &BusState) -> Element<'static, Message> {
+        let bus_id = bus.id;
+
         // Bus strips show their name in the warm/amber accent — matches
         // the design's "audio-or-aggregate" semantic split.
         let bus_name = container(text(bus.name.clone()).size(13).color(theme::WARM))
@@ -30,7 +107,6 @@ impl crate::Resonance {
         // Mute + FX bypass + Remove buttons — same icons as the track header.
         // Fixed-height container so the row doesn't collapse inside a
         // Length::Fill strip column (same quirk as the track strip).
-        let bus_id = bus.id;
         let inner_row = row![
             mute_button(
                 bus.muted,
@@ -68,8 +144,7 @@ impl crate::Resonance {
         // Extract the +FX picker so it can dock above the pan knob (same
         // treatment as track strips). Options come from the cached FX
         // filter on `view_caches` — cloning that Rc is a refcount bump.
-        let _ = available_plugins;
-        let fx_picker_element: Option<Element<'_, Message>> =
+        let fx_picker_element: Option<Element<'static, Message>> =
             if self.view_caches.fx_plugins.is_empty() {
                 None
             } else {
@@ -95,7 +170,9 @@ impl crate::Resonance {
         let auto_header =
             super::automation::automation_header(&self.automation, auto_chan, &bus.plugins, &[]);
 
-        // Pan knob — vertical drag to change, double-click to reset.
+        // Pan knob — vertical drag to change, double-click to reset. The
+        // live automated-pan tint is hashed into the strip fingerprint,
+        // so the body rebuilds exactly when it moves.
         let pan_live = super::automation::live_value(
             &self.automation,
             resonance_common::AutomationTarget::BusPan(bus.id),
@@ -130,19 +207,6 @@ impl crate::Resonance {
             col.push(pan_row)
         };
 
-        let gain_live = super::automation::live_value(
-            &self.automation,
-            resonance_common::AutomationTarget::BusGain(bus.id),
-        )
-        .map(|v| resonance_common::lane_value_to_real(
-            &resonance_common::AutomationTarget::BusGain(bus.id),
-            v,
-        ));
-        let fader_block =
-            fader_section(bus.level_l, bus.level_r, bus.volume, gain_live, move |v| {
-                Message::Bus(BusMessage::SetBusVolume(bus_id, v))
-            });
-
         // FX list scrolls inside its own area between the buttons and
         // the pan/fader block so adding plugins never pushes the fader
         // off the strip.
@@ -155,41 +219,10 @@ impl crate::Resonance {
         .width(Length::Fill)
         .height(Length::Fill);
 
-        let strip_content = column![bus_name, button_row, plugin_fill, fx_pan_block, fader_block,]
+        column![bus_name, button_row, plugin_fill, fx_pan_block]
             .spacing(6)
-            .padding([12, 10])
-            .width(theme::MIXER_STRIP_WIDTH)
-            .height(Length::Fill);
-
-        // Clicking anywhere on the strip that isn't already a control
-        // selects the bus, exactly as a track strip does — that is what
-        // gives the inspector something to describe. `mouse_area` sits
-        // *outside* the container so the inner buttons, pickers, knob and
-        // fader keep their own press handling.
-        let is_selected = self.mixer.selected_bus == Some(bus_id);
-        iced::widget::mouse_area(
-            container(strip_content)
-                .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32))
-                // Selected saturates the strip's resting warm hairline to
-                // the full warm accent — the same dim-to-saturated move a
-                // selected sub-track's rail makes, in the bus palette
-                // rather than the track one.
-                .style(move |theme| {
-                    let base = theme::card_warm(theme);
-                    if is_selected {
-                        container::Style {
-                            border: iced::Border {
-                                color: theme::WARM,
-                                ..base.border
-                            },
-                            ..base
-                        }
-                    } else {
-                        base
-                    }
-                }),
-        )
-        .on_press(Message::Ui(UiMessage::SelectBus(Some(bus_id))))
-        .into()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 }

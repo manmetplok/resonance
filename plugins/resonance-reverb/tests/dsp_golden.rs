@@ -60,6 +60,7 @@
 
 use std::path::PathBuf;
 
+use resonance_dsp_test_support as golden;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 use resonance_reverb::params::ReverbParams;
 use resonance_reverb::ResonanceReverb;
@@ -73,14 +74,13 @@ const MAX_BLOCK: usize = 256;
 const BLOCKS: usize = 28;
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/dsp_golden.f32")
+    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "dsp_golden.f32")
 }
 
 /// `RESONANCE_BLESS=1` is the workspace-wide convention (CLAUDE.md); the
 /// narrower name blesses only this file inside a wider run.
 fn blessing() -> bool {
-    std::env::var("RESONANCE_BLESS").as_deref() == Ok("1")
-        || std::env::var("RESONANCE_BLESS_DSP_GOLDEN").as_deref() == Ok("1")
+    golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_DSP_GOLDEN"])
 }
 
 const TAU: f32 = std::f32::consts::TAU;
@@ -345,55 +345,24 @@ fn reverb_output_is_bit_exact() {
 
     let path = golden_path();
     if blessing() {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes: Vec<u8> = rendered.iter().flat_map(|s| s.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        eprintln!(
-            "blessed golden: {} samples -> {}",
-            rendered.len(),
-            path.display()
-        );
+        golden::bless_f32(&path, &rendered);
         return;
     }
 
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+    let want = golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS=1");
+    let diff = golden::compare_f32(&rendered, &want);
+
+    if let Some((i, got, want)) = diff.first_diff {
         panic!(
-            "missing golden {}: {e}\nregenerate with RESONANCE_BLESS=1",
-            path.display()
-        )
-    });
-    assert_eq!(
-        bytes.len(),
-        rendered.len() * 4,
-        "golden length mismatch — the scenario set changed"
-    );
-
-    let golden = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
-
-    let mut diff_count = 0usize;
-    let mut max_abs = 0.0f32;
-    let mut first_diff = None;
-    for (i, (a, b)) in rendered.iter().zip(golden).enumerate() {
-        if a.to_bits() != b.to_bits() {
-            diff_count += 1;
-            max_abs = max_abs.max((a - b).abs());
-            if first_diff.is_none() {
-                first_diff = Some((i, *a, b));
-            }
-        }
-    }
-
-    if let Some((i, got, want)) = first_diff {
-        panic!(
-            "reverb DSP output changed: {diff_count}/{} samples differ, peak delta \
-             {max_abs:.3e}; first at sample {i} (got {got:?} / {:#010x}, want \
+            "reverb DSP output changed: {}/{} samples differ, peak delta \
+             {:.3e}; first at sample {i} (got {got:?} / {:#010x}, want \
              {want:?} / {:#010x}).\nA refactor of the reverb path must be \
              bit-exact. If the change was intended, re-bless with \
              RESONANCE_BLESS=1.\nA peak delta at ~1e-7 spread over most of the \
              render is libm rounding, not a DSP change.",
+            diff.diff_count,
             rendered.len(),
+            diff.max_abs,
             got.to_bits(),
             want.to_bits(),
         );

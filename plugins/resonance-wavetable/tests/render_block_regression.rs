@@ -37,6 +37,7 @@
 
 use std::path::PathBuf;
 
+use resonance_dsp_test_support as golden;
 use resonance_plugin::{EventIterator, NoteEvent};
 use resonance_wavetable::dsp::engine::SynthEngine;
 use resonance_wavetable::params::WavetableParams;
@@ -48,7 +49,7 @@ const BLOCK: usize = 100;
 const BLOCKS: usize = 40;
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/render_block_regression.f32")
+    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "render_block_regression.f32")
 }
 
 /// A parameter edit applied *between* blocks, so the next block's snapshot
@@ -326,50 +327,20 @@ fn render_block_output_is_bit_exact() {
 
     let path = golden_path();
 
-    if std::env::var("RESONANCE_BLESS_RENDER_BLOCK").as_deref() == Ok("1") {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes: Vec<u8> = rendered.iter().flat_map(|s| s.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        eprintln!(
-            "blessed golden: {} samples -> {}",
-            rendered.len(),
-            path.display()
-        );
+    if golden::blessed(&["RESONANCE_BLESS_RENDER_BLOCK"]) {
+        golden::bless_f32(&path, &rendered);
         return;
     }
 
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+    let want = golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS_RENDER_BLOCK=1");
+    let diff = golden::compare_f32(&rendered, &want);
+
+    if let Some((i, got, want)) = diff.first_diff {
         panic!(
-            "missing golden {}: {e}\nregenerate with RESONANCE_BLESS_RENDER_BLOCK=1",
-            path.display()
-        )
-    });
-    assert_eq!(
-        bytes.len(),
-        rendered.len() * 4,
-        "golden length mismatch — scenario set changed"
-    );
-
-    let golden = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
-
-    let mut diff_count = 0usize;
-    let mut first_diff = None;
-    for (i, (a, b)) in rendered.iter().zip(golden).enumerate() {
-        if a.to_bits() != b.to_bits() {
-            diff_count += 1;
-            if first_diff.is_none() {
-                first_diff = Some((i, *a, b));
-            }
-        }
-    }
-
-    if let Some((i, got, want)) = first_diff {
-        panic!(
-            "render_block output changed: {diff_count}/{} samples differ bitwise; \
+            "render_block output changed: {}/{} samples differ bitwise; \
              first at sample {i} (scenario block {}, frame {}): got {got:?} ({:#010x}), \
              want {want:?} ({:#010x}). A refactor of the render path must be bit-exact.",
+            diff.diff_count,
             rendered.len(),
             i / (BLOCK * 2),
             i % (BLOCK * 2),

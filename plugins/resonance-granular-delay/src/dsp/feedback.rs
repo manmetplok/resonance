@@ -4,13 +4,13 @@
 //! recirculation clock that keeps ticking while the write head is
 //! frozen.
 
-use resonance_dsp::{read_hermite_wrapped, DcBlocker, OnePole};
+use resonance_dsp::{read_hermite_wrapped, DcBlocker, OnePole, SwapFader};
 
 use crate::params::GranularSmoothers;
 
 use super::grains::GrainBank;
-use super::time::{TimeMachine, TimePlan};
-use super::{BlockParams, FbRoute};
+use super::time::{fade_leg_samples, TimeMachine, TimePlan, TIME_EPSILON_SECONDS};
+use super::{BlockParams, FbRoute, TimeMode};
 
 /// One channel of the in-loop feedback conditioning chain (doc #252 §5):
 /// damping filter (LP, or HP as input-minus-LP so the one-pole state
@@ -72,10 +72,28 @@ pub(super) struct FeedbackStage {
     /// Output-only recirc ring keeps its own time axis when the write
     /// head stops (ba todo #1075).
     pos: u64,
+    /// Per-Grain recirc-tap swap machine: in Per-Grain time mode a
+    /// delay change lands on `eff_delay` instantly (grains latch their
+    /// own tap at spawn), which would jump the Output-only recirc read
+    /// tap across a block boundary — an audible click in the feedback
+    /// tail. The change instead rides the same fade-to-silence swap the
+    /// Fade time mode uses; the payload is the committed tap, seconds.
+    recirc_fade: SwapFader<f32>,
+    /// Most recent value handed to `recirc_fade` (active or pending) —
+    /// the swap re-trigger reference.
+    recirc_goal: f32,
+    /// True while a recirc-tap swap (either leg) is still in flight.
+    recirc_busy: bool,
+    /// False until the first block latches the live effective delay
+    /// (so activation never fades in from an arbitrary value).
+    recirc_primed: bool,
+    /// Samples per swap leg (kept so `clear` can rebuild the fader).
+    fade_leg: u32,
 }
 
 impl FeedbackStage {
-    pub(super) fn new(ring_len: usize, max_block: usize) -> Self {
+    pub(super) fn new(ring_len: usize, max_block: usize, sample_rate: f32) -> Self {
+        let fade_leg = fade_leg_samples(sample_rate);
         Self {
             bus_l: vec![0.0; max_block],
             bus_r: vec![0.0; max_block],
@@ -86,6 +104,11 @@ impl FeedbackStage {
             chain_l: FeedbackChain::new(),
             chain_r: FeedbackChain::new(),
             pos: 0,
+            recirc_fade: SwapFader::new(fade_leg),
+            recirc_goal: 0.0,
+            recirc_busy: false,
+            recirc_primed: false,
+            fade_leg,
         }
     }
 
@@ -98,6 +121,24 @@ impl FeedbackStage {
         self.chain_l.reset();
         self.chain_r.reset();
         self.pos = 0;
+        // `SwapFader::new` is allocation-free, so rebuilding it here is
+        // the cheapest full reset (mirrors `TimeMachine::clear`).
+        self.recirc_fade = SwapFader::new(self.fade_leg);
+        self.recirc_goal = 0.0;
+        self.recirc_busy = false;
+        self.recirc_primed = false;
+    }
+
+    /// Latch the recirc-tap swap machine to the current effective delay
+    /// while another route (or a time mode with its own clickless
+    /// machinery) owns the tap, so entering the Per-Grain Output-only
+    /// path later starts from the live value instead of a stale one
+    /// (mirrors `TimeMachine::resolve` keeping its fader in sync).
+    fn sync_recirc_tap(&mut self, eff: f32) {
+        self.recirc_fade.install(eff);
+        self.recirc_goal = eff;
+        self.recirc_busy = false;
+        self.recirc_primed = true;
     }
 
     /// Advance the recirculation clock past a rendered block (it runs
@@ -147,6 +188,7 @@ impl FeedbackStage {
                 // tap carries the un-transposed re-granulation instead
                 // of the transposed wet (ba todo #1078).
                 let cross = params.fb_route == FbRoute::PingPong;
+                self.sync_recirc_tap(time.eff_delay as f32);
                 for i in 0..frames {
                     let g = smoothers.feedback.next().clamp(0.0, 1.1);
                     let (tap_l, tap_r) = if unity_tap {
@@ -172,6 +214,7 @@ impl FeedbackStage {
                 // silent sample with the read masked by the swap gain,
                 // so the tap jump cannot click (in the output or in
                 // what recirculates).
+                self.sync_recirc_tap(time.eff_delay as f32);
                 for i in 0..frames {
                     let g = smoothers.feedback.next().clamp(0.0, 1.1);
                     let idx = (fb_base + i) & self.mask;
@@ -202,22 +245,71 @@ impl FeedbackStage {
                 // a dedicated ring read at the delay time; the grain
                 // source buffer never sees wet material. Bounded even
                 // while frozen: the loop still passes through the tanh.
-                let delay_samples =
-                    ((time.eff_delay as f32 * sample_rate) as usize).clamp(1, self.mask);
-                for i in 0..frames {
-                    let g = smoothers.feedback.next().clamp(0.0, 1.1);
-                    let idx = (fb_base + i) & self.mask;
-                    let ridx = (fb_base + i).wrapping_sub(delay_samples) & self.mask;
-                    let fl = self
-                        .chain_l
-                        .process(self.ring_l[ridx] * g, params.filter_is_highpass);
-                    let fr = self
-                        .chain_r
-                        .process(self.ring_r[ridx] * g, params.filter_is_highpass);
-                    self.ring_l[idx] = grains.wet_l[i] + fl;
-                    self.ring_r[idx] = grains.wet_r[i] + fr;
-                    grains.wet_l[i] += fl;
-                    grains.wet_r[i] += fr;
+                //
+                // Per-Grain lands a delay-time change on `eff_delay`
+                // instantly (grains latch their own tap at spawn), so
+                // the read tap would jump across a block boundary — an
+                // audible click in the recirculating repeats. The
+                // change instead rides the same fade-to-silence swap
+                // the Fade time mode uses: the read is masked by the
+                // swap gain and the tap jumps on the silent sample.
+                // Fade and Repitch keep their own clickless machinery
+                // (the time-varying arm above), so here they only latch
+                // the fader; with a static delay the fader stays idle
+                // and the loop below is untouched.
+                let eff = time.eff_delay as f32;
+                if params.time_mode != TimeMode::PerGrain || !self.recirc_primed {
+                    self.sync_recirc_tap(eff);
+                } else if (eff - self.recirc_goal).abs() > TIME_EPSILON_SECONDS {
+                    self.recirc_fade.begin_swap(eff);
+                    self.recirc_goal = eff;
+                    self.recirc_busy = true;
+                }
+                if self.recirc_busy {
+                    let mut settled = true;
+                    for i in 0..frames {
+                        let g = smoothers.feedback.next().clamp(0.0, 1.1);
+                        let (tap_gain, value) = self.recirc_fade.next();
+                        let secs = value.map_or(eff, |v| *v);
+                        if tap_gain < 1.0 {
+                            settled = false;
+                        }
+                        let delay_samples =
+                            ((secs * sample_rate) as usize).clamp(1, self.mask);
+                        let idx = (fb_base + i) & self.mask;
+                        let ridx = (fb_base + i).wrapping_sub(delay_samples) & self.mask;
+                        let fl = self.chain_l.process(
+                            self.ring_l[ridx] * tap_gain * g,
+                            params.filter_is_highpass,
+                        );
+                        let fr = self.chain_r.process(
+                            self.ring_r[ridx] * tap_gain * g,
+                            params.filter_is_highpass,
+                        );
+                        self.ring_l[idx] = grains.wet_l[i] + fl;
+                        self.ring_r[idx] = grains.wet_r[i] + fr;
+                        grains.wet_l[i] += fl;
+                        grains.wet_r[i] += fr;
+                    }
+                    self.recirc_busy = !settled;
+                } else {
+                    let delay_samples =
+                        ((time.eff_delay as f32 * sample_rate) as usize).clamp(1, self.mask);
+                    for i in 0..frames {
+                        let g = smoothers.feedback.next().clamp(0.0, 1.1);
+                        let idx = (fb_base + i) & self.mask;
+                        let ridx = (fb_base + i).wrapping_sub(delay_samples) & self.mask;
+                        let fl = self
+                            .chain_l
+                            .process(self.ring_l[ridx] * g, params.filter_is_highpass);
+                        let fr = self
+                            .chain_r
+                            .process(self.ring_r[ridx] * g, params.filter_is_highpass);
+                        self.ring_l[idx] = grains.wet_l[i] + fl;
+                        self.ring_r[idx] = grains.wet_r[i] + fr;
+                        grains.wet_l[i] += fl;
+                        grains.wet_r[i] += fr;
+                    }
                 }
                 self.bus_len = 0;
             }

@@ -4,9 +4,6 @@
 //! job completion keyed off the engine bounce events with the WAV's real
 //! duration + sample rate, and render.stems reported `unsupported`.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
-use resonance_app::message::Message;
-use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
 use resonance_audio::types::AudioEvent;
 use resonance_control::job::{JobStarted, JobState, JobStatus};
@@ -15,22 +12,8 @@ use resonance_control::{ErrorKind, Request, Response};
 use serde_json::json;
 use std::io::Write;
 use std::path::Path;
-
-fn app() -> Resonance {
-    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
-    app.test_set_active_project(true);
-    app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
+use crate::common::roundtrip;
+use crate::common::app_active_project as app;
 
 fn request(id: i64, method: &str, params: serde_json::Value) -> Request {
     Request::new(id, method, &params).expect("params serialize")

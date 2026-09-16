@@ -15,6 +15,7 @@
 
 use std::path::PathBuf;
 
+use resonance_dsp_test_support as golden;
 use resonance_plugin::{EventIterator, NoteEvent};
 use resonance_wavetable::dsp::engine::SynthEngine;
 use resonance_wavetable::params::WavetableParams;
@@ -26,7 +27,7 @@ const BLOCK: usize = 128;
 const BLOCKS: usize = 96;
 
 fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/null_test.f32")
+    golden::golden_path(env!("CARGO_MANIFEST_DIR"), "null_test.f32")
 }
 
 /// Deterministic, reproducible render of one scenario. Notes come in at
@@ -246,29 +247,12 @@ fn output_matches_golden() {
     let path = golden_path();
 
     if std::env::var("RESONANCE_BLESS_NULL_TEST").is_ok() {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes: Vec<u8> = rendered.iter().flat_map(|s| s.to_le_bytes()).collect();
-        std::fs::write(&path, bytes).unwrap();
-        eprintln!("blessed golden: {} samples -> {}", rendered.len(), path.display());
+        golden::bless_f32(&path, &rendered);
         return;
     }
 
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
-        panic!(
-            "missing golden {}: {e}\nregenerate with RESONANCE_BLESS_NULL_TEST=1",
-            path.display()
-        )
-    });
-    assert_eq!(
-        bytes.len(),
-        rendered.len() * 4,
-        "golden length mismatch — scenario set changed"
-    );
-
-    let golden: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
+    let golden_samples =
+        golden::load_golden_f32(&path, rendered.len(), "RESONANCE_BLESS_NULL_TEST=1");
 
     // The golden was re-captured for ba todo #1354, which moved four declared
     // defaults onto the "Init" preset's values — `filter_cutoff` 8 kHz ->
@@ -301,45 +285,36 @@ fn output_matches_golden() {
     const MAX_PEAK_DELTA: f32 = 1.0e-4; // ~-80 dBFS
     const MAX_RMS_DELTA: f64 = 1.0e-5; // ~-100 dBFS
 
-    let mut first_diff = None;
-    let mut max_abs = 0.0f32;
-    let mut diff_count = 0usize;
-    let mut sq_err = 0.0f64;
-    let mut sq_sig = 0.0f64;
-    for (i, (a, b)) in rendered.iter().zip(golden.iter()).enumerate() {
-        let d = a - b;
-        sq_err += (d as f64) * (d as f64);
-        sq_sig += (*b as f64) * (*b as f64);
-        if a.to_bits() != b.to_bits() {
-            diff_count += 1;
-            if d.abs() > max_abs {
-                max_abs = d.abs();
-            }
-            if first_diff.is_none() {
-                first_diff = Some((i, *a, *b));
-            }
-        }
-    }
+    let diff = golden::compare_f32(&rendered, &golden_samples);
 
+    // The SNR figure isn't part of the shared compare loop — it weighs
+    // the error against the *golden's* own level, which nothing else
+    // needs — so it stays a small local reduction over the golden here.
+    let sq_sig: f64 = golden_samples.iter().map(|b| (*b as f64) * (*b as f64)).sum();
     let n = rendered.len() as f64;
-    let rms_err = (sq_err / n).sqrt();
     let rms_sig = (sq_sig / n).sqrt();
-    let snr_db = 20.0 * (rms_sig / rms_err.max(f64::MIN_POSITIVE)).log10();
+    let snr_db = 20.0 * (rms_sig / diff.rms_err.max(f64::MIN_POSITIVE)).log10();
 
     eprintln!(
-        "null test: {diff_count}/{} samples differ | peak delta {max_abs:.3e} \
-         | rms delta {rms_err:.3e} | error is {snr_db:.1} dB below signal",
-        rendered.len()
+        "null test: {}/{} samples differ | peak delta {:.3e} \
+         | rms delta {:.3e} | error is {snr_db:.1} dB below signal",
+        diff.diff_count,
+        rendered.len(),
+        diff.max_abs,
+        diff.rms_err,
     );
 
-    if let Some((i, a, b)) = first_diff {
+    if let Some((i, a, b)) = diff.first_diff {
         assert!(
-            max_abs <= MAX_PEAK_DELTA && rms_err <= MAX_RMS_DELTA,
+            diff.max_abs <= MAX_PEAK_DELTA && diff.rms_err <= MAX_RMS_DELTA,
             "output moved beyond the documented tanh_fast bound: \
-             {diff_count}/{} samples differ, peak delta {max_abs:.3e} \
-             (limit {MAX_PEAK_DELTA:.1e}), rms delta {rms_err:.3e} \
+             {}/{} samples differ, peak delta {:.3e} \
+             (limit {MAX_PEAK_DELTA:.1e}), rms delta {:.3e} \
              (limit {MAX_RMS_DELTA:.1e}); first at sample {i}: got {a:?}, want {b:?}",
-            rendered.len()
+            diff.diff_count,
+            rendered.len(),
+            diff.max_abs,
+            diff.rms_err,
         );
     }
 }

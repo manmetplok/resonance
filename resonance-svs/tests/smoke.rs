@@ -1,10 +1,11 @@
 //! Smoke tests for resonance-svs.
 //!
-//! Pure-Rust parsing checks always run. The end-to-end render test runs only when the
-//! environment variable `SVS_POC_VOICEBANK_DIR` is set to a directory containing
-//! `dsconfig.yaml`, the acoustic ONNX, `vocoder.yaml`, and the vocoder ONNX. The `.ds`
-//! fixture path is taken from `SVS_POC_DS_FILE`. This guards CI from needing voicebank
-//! downloads while letting humans verify end-to-end audio quality.
+//! Pure-Rust parsing checks always run. The end-to-end render test is `#[ignore]`d: it
+//! needs a real voicebank directory (`SVS_POC_VOICEBANK_DIR`, containing `dsconfig.yaml`,
+//! the acoustic ONNX, `vocoder.yaml`, and the vocoder ONNX) and a `.ds` fixture
+//! (`SVS_POC_DS_FILE`). Run it by hand with `-- --ignored` once those are set; without
+//! them it panics rather than silently reporting green. This guards CI from needing
+//! voicebank downloads while letting humans verify end-to-end audio quality.
 
 use std::env;
 use std::path::PathBuf;
@@ -66,15 +67,14 @@ fn parses_minimal_openvpi_style_ds_file() {
 }
 
 #[test]
+#[ignore = "needs a voicebank: set SVS_POC_VOICEBANK_DIR and SVS_POC_DS_FILE, run with -- --ignored"]
 fn end_to_end_render() {
-    let Some(voicebank) = env::var_os("SVS_POC_VOICEBANK_DIR").map(PathBuf::from) else {
-        eprintln!("SVS_POC_VOICEBANK_DIR unset; skipping end-to-end render test");
-        return;
-    };
-    let Some(ds_file) = env::var_os("SVS_POC_DS_FILE").map(PathBuf::from) else {
-        eprintln!("SVS_POC_DS_FILE unset; skipping end-to-end render test");
-        return;
-    };
+    let voicebank = env::var_os("SVS_POC_VOICEBANK_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("set SVS_POC_VOICEBANK_DIR to a voicebank directory containing dsconfig.yaml, the acoustic ONNX, vocoder.yaml, and the vocoder ONNX"));
+    let ds_file = env::var_os("SVS_POC_DS_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("set SVS_POC_DS_FILE to a .ds fixture path"));
     let acoustic_config = voicebank.join("dsconfig.yaml");
     let vocoder_config = voicebank.join("vocoder.yaml");
     let out = std::env::temp_dir().join("resonance_svs_smoke.wav");

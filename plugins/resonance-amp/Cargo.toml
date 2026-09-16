@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 default = ["editor"]
 editor = [
     "dep:wayland-plugin-gui",
+    "dep:plugin-gui-core",
     "resonance-plugin/editor-widgets",
     "dep:egui",
     "dep:rfd",
@@ -21,7 +22,6 @@ editor = [
     "dep:sha2",
     "dep:base64",
     "dep:rand",
-    "dep:dirs",
     "dep:webbrowser",
 ]
 
@@ -29,12 +29,19 @@ editor = [
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
+# Not editor-gated: `viz.rs`'s meter/scope state is shared with the audio
+# path regardless of whether the editor feature is built.
+resonance-metering = { path = "../../resonance-metering" }
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Not editor-gated: `initialize()` seeds the model browser from the
+# downloads directory, and a headless build has to find it too.
+dirs.workspace = true
 
 # Editor dependencies — only pulled in when the `editor` feature is on.
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
 egui = { workspace = true, optional = true }
 rfd = { workspace = true, optional = true }
 
@@ -45,11 +52,11 @@ tiny_http = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }
 rand = { workspace = true, optional = true }
-dirs = { workspace = true, optional = true }
 webbrowser = { version = "1", optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 # `tests/state.rs` drives this plugin through a real (in-process) CLAP host
 # across the C ABI, which is the only way to reach the state path the bridge
 # takes while the plugin is active and its object lives in the audio processor.

@@ -9,7 +9,7 @@
 //! fires before any track/plugin work, so no CLAP plugin or audio
 //! device is needed.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -50,6 +50,7 @@ fn run_bounce(state: &EngineState) -> AudioEvent {
         /* target_clip_id */ 1,
         "bounced".into(),
         &state.shared,
+        &AtomicBool::new(false),
         &state.tracks,
         &state.busses,
         &state.master,

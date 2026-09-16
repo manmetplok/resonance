@@ -22,7 +22,11 @@ use crate::engine::SharedState;
 /// (and stopping) on a non-looping run that reaches the end. A no-op when no
 /// preview is playing.
 pub fn mix_audition_overlay(data: &mut [f32], channels: usize, shared: &SharedState) {
-    if !shared.audition_playing.load(Ordering::Relaxed) {
+    // Acquire pairs with the Release store in `start_audition_in_place`: a
+    // `true` observed here guarantees the pos/ratio/loop stores sequenced
+    // before it are visible, so the preview cannot start from a stale playhead
+    // on weakly-ordered CPUs.
+    if !shared.audition_playing.load(Ordering::Acquire) {
         return;
     }
     let guard = shared.audition_source.load();

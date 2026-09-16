@@ -296,7 +296,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             total_frames: c.total_frames,
             trim_start_frames: c.trim_start_frames,
             trim_end_frames: c.trim_end_frames,
-            audio_file: format!("audio/clip_{}.wav", c.id),
+            audio_file: crate::project::clip_audio_file(c.id),
             // Pool-asset provenance (doc #175): persist the link so an
             // imported+placed clip reconnects to its pool asset on reload.
             asset_ref: c.asset_ref.map(|r| r.asset_id),
@@ -466,6 +466,25 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         performance: ProjectPerformance {
             tuning: r.performance.tuning().name.to_string(),
             capo: r.performance.capo,
+        },
+        // Cycle-record take lanes (epic #15, doc #165). The GUI mirror is
+        // rebuilt purely from engine events, so saving it verbatim saves
+        // the takes the engine actually captured. Sorted by group id for a
+        // stable on-disk order that doesn't depend on which order the
+        // engine's `TakeCaptured` echoes happened to arrive in.
+        //
+        // Deliberately NOT filtered the way `sends` / `sidechain_routes`
+        // are: a group whose track has since been deleted is written out
+        // anyway. Those two are routing *edges*, meaningless without both
+        // ends, and a dangling one accumulates in the file forever. A take
+        // is recorded content — dropping it on save is exactly the silent
+        // loss doc #165 forbids ("no take is ever silently lost"), and it
+        // would be unrecoverable, whereas an orphaned group is inert until
+        // something references its track again.
+        take_groups: {
+            let mut groups = r.take_groups.groups.clone();
+            groups.sort_by_key(|g| g.id);
+            groups
         },
     }
 }

@@ -26,5 +26,14 @@ pub(crate) const CHANNELS: usize = 8;
 /// Number of cascaded diffusion steps in the input chain.
 pub(crate) const DIFFUSION_STEPS: usize = 4;
 
+/// Per-sample limit on how fast a gliding delay-line read tap may move,
+/// in samples per sample. A moving read tap resamples its content — the
+/// classic size-morph Doppler — and this bound keeps the pitch swing
+/// inside roughly ±4 semitones (read rate 0.75x..1.25x) while a
+/// full-range size throw still completes in well under two seconds.
+/// Shared by the FDN bank and the diffusion steps, which glide their
+/// taps instead of relocating them per block (which clicked).
+pub(crate) const TAP_SLEW_PER_SAMPLE: f32 = 0.25;
+
 pub use chain::ReverbDsp;
 pub use er::ER_TAPS;

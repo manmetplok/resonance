@@ -13,6 +13,8 @@
 #[path = "common/mod.rs"]
 mod common;
 
+#[path = "timeline/arrange_cull.rs"]
+mod arrange_cull;
 #[path = "timeline/arrange_layout.rs"]
 mod arrange_layout;
 #[path = "timeline/arrangement_marker_reducers.rs"]
@@ -47,6 +49,8 @@ mod drag_placement_handlers;
 mod drag_placement_visuals;
 #[path = "timeline/marker_hit_test.rs"]
 mod marker_hit_test;
+#[path = "timeline/layout_memo.rs"]
+mod layout_memo;
 #[path = "timeline/marker_ui_reducers.rs"]
 mod marker_ui_reducers;
 #[path = "timeline/markers_overview_snapshot.rs"]
@@ -55,8 +59,20 @@ mod markers_overview_snapshot;
 mod markers_overview_ui;
 #[path = "timeline/quantize_persistence.rs"]
 mod quantize_persistence;
+#[path = "timeline/render_cache.rs"]
+mod render_cache;
 #[path = "timeline/selection_bar.rs"]
 mod selection_bar;
+#[path = "timeline/take_comp_edits.rs"]
+mod take_comp_edits;
+#[path = "timeline/take_group_mirror.rs"]
+mod take_group_mirror;
+#[path = "timeline/take_lane_input.rs"]
+mod take_lane_input;
+#[path = "timeline/take_lane_render.rs"]
+mod take_lane_render;
+#[path = "timeline/take_removal_audible.rs"]
+mod take_removal_audible;
 #[path = "timeline/test_arrangement_markers.rs"]
 mod test_arrangement_markers;
 #[path = "timeline/timeline_automation_device_lanes.rs"]
@@ -77,11 +93,15 @@ mod timeline_group_hit_test;
 mod timeline_group_lane;
 #[path = "timeline/timeline_markers_snapshot.rs"]
 mod timeline_markers_snapshot;
+#[path = "timeline/track_group_cycles.rs"]
+mod track_group_cycles;
 #[path = "timeline/track_header_alignment.rs"]
 mod track_header_alignment;
 #[path = "timeline/track_header_automation_lane_rows.rs"]
 mod track_header_automation_lane_rows;
 #[path = "timeline/track_header_freeze_button.rs"]
 mod track_header_freeze_button;
+#[path = "timeline/undo_coalesce.rs"]
+mod undo_coalesce;
 #[path = "timeline/undo_history.rs"]
 mod undo_history;

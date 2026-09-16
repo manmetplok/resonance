@@ -12,13 +12,13 @@
 //! rule. `RESONANCE_PRESET_DIR` points the store at a temp directory, so
 //! the tests never touch the machine's real preset library.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::{Message, TrackMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
 use resonance_control::methods::track::{AddResult, PresetsView};
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 const TRACK: u64 = 1;
 const SYNTH: u64 = 30;
@@ -79,20 +79,6 @@ fn with_instrument(app: &mut Resonance) {
         output_port_count: 1,
         output_port_names: vec!["Main".to_owned()],
     });
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn presets(app: &mut Resonance) -> PresetsView {
@@ -281,6 +267,38 @@ fn an_unknown_track_or_preset_is_refused_by_name() {
         "the error lists what does exist so the caller can correct itself: {:?}",
         error.message
     );
+}
+
+// ---------------------------------------------------------------------------
+// Corrupt preset file on disk
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_corrupt_preset_file_is_skipped_and_quarantined_not_crashed_on() {
+    let dir = preset_dir();
+    let path = dir.join("zz_corrupt_preset.json");
+    let original = b"{ this is not valid preset json";
+    std::fs::write(&path, original).expect("write corrupt preset file");
+
+    // Loading must never panic or take the corrupt file's slot in the
+    // list down with it; it just skips it.
+    let presets = resonance_app::presets::load_user_presets();
+    assert!(
+        presets.iter().all(|p| p.name != "zz_corrupt_preset"),
+        "the corrupt file contributes no preset"
+    );
+
+    // And the corrupt bytes are preserved rather than lost, so the user
+    // isn't left wondering where a preset went.
+    assert!(
+        !path.exists(),
+        "the corrupt file is moved aside, not left where the loader will find it again"
+    );
+    let corrupt_path = dir.join("zz_corrupt_preset.json.corrupt");
+    assert!(corrupt_path.exists(), "original bytes preserved as .corrupt");
+    assert_eq!(std::fs::read(&corrupt_path).unwrap(), original);
+
+    let _ = std::fs::remove_file(&corrupt_path);
 }
 
 // ---------------------------------------------------------------------------

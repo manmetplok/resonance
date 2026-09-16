@@ -237,7 +237,9 @@ impl MixAudioHarness {
             .store(Some(std::sync::Arc::new(source)));
         self.shared.audition_pos_bits.store(0f64.to_bits(), Ordering::Relaxed);
         self.shared.audition_loop.store(looping, Ordering::Relaxed);
-        self.shared.audition_playing.store(true, Ordering::Relaxed);
+        // Release pairs with the overlay's Acquire gate, matching
+        // `start_audition_in_place`.
+        self.shared.audition_playing.store(true, Ordering::Release);
     }
 
     /// Queue a live hardware-MIDI event for the callback's pickup pass.

@@ -33,7 +33,8 @@
 //! set, which it is for the duration of the bounce.
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::types::*;
 
@@ -65,6 +66,13 @@ pub(crate) struct PendingBounce {
     /// Last percentage emitted as a `BounceProgress` event, so the
     /// poll only fires fresh events when fraction changes by ≥1%.
     pub last_emitted_pct: i32,
+    /// This run's own cancel token (also stored in
+    /// `HandlerState::bounce_cancel` so `CancelBounce` can flip it).
+    /// Polled here rather than through the `HandlerState` slot so a
+    /// render that starts later — and replaces the slot with its own
+    /// fresh token — can neither consume nor clear a cancel meant for
+    /// this run.
+    pub cancel: Arc<AtomicBool>,
 }
 
 pub(crate) fn handle_bounce_track_realtime(
@@ -94,12 +102,6 @@ pub(crate) fn handle_bounce_track_realtime(
         ));
         return;
     }
-
-    // Clear any stale cancel flag from a prior run before we start —
-    // the same atomic gates the offline renderer and signals the
-    // realtime path. A leftover `true` would abort the run on the
-    // very first poll.
-    ctx.shared.bounce_cancel.store(false, Ordering::Relaxed);
 
     // Compute render range — punch-in/out loop wins, otherwise the
     // source track's MIDI extent + tail.
@@ -253,6 +255,11 @@ pub(crate) fn handle_bounce_track_realtime(
     // actually moved off `render_start`.
     let _ = ctx.event_tx.send(AudioEvent::BounceProgress { fraction: 0.0 });
 
+    // Fresh per-run cancel token, published in `HandlerState::bounce_cancel`
+    // so `CancelBounce` targets this run and no other (ba: the old shared
+    // flag let concurrent renders cross-cancel and lose cancels).
+    let cancel = Arc::new(AtomicBool::new(false));
+    state.bounce_cancel = Some(Arc::clone(&cancel));
     state.pending_bounce = Some(PendingBounce {
         source_track_id,
         target_track_id,
@@ -261,6 +268,7 @@ pub(crate) fn handle_bounce_track_realtime(
         mute_snapshot,
         prev_target_input_device,
         last_emitted_pct: 0,
+        cancel,
     });
 }
 
@@ -270,15 +278,16 @@ pub(crate) fn handle_bounce_track_realtime(
 /// snapshot, mute the source, disarm the target, and emit
 /// `TrackBounceCompleted`.
 pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
-    // Cancel handling: `CancelBounce` flips `bounce_cancel` for both
-    // the offline and realtime paths. The offline path checks it
-    // between chunks; the realtime path checks it here, runs the
-    // teardown, and emits `TrackBounceCancelled` so the app drops the
-    // modal without showing an error banner.
-    if state.pending_bounce.is_some()
-        && ctx.shared.bounce_cancel.load(Ordering::Relaxed)
+    // Cancel handling: `CancelBounce` flips the current bounce render's
+    // own token. The offline paths check theirs between chunks; the
+    // realtime path checks its run's token here, runs the teardown, and
+    // emits `TrackBounceCancelled` so the app drops the modal without
+    // showing an error banner.
+    if state
+        .pending_bounce
+        .as_ref()
+        .is_some_and(|b| b.cancel.load(Ordering::Relaxed))
     {
-        ctx.shared.bounce_cancel.store(false, Ordering::Relaxed);
         let bounce = state.pending_bounce.take().unwrap();
         super::transport::handle_pause(ctx, state);
         restore_after_bounce(

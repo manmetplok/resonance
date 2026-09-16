@@ -130,10 +130,52 @@ fn prepare_parent_dir(path: &Path) -> io::Result<()> {
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
+/// The instance lock guarding the socket path: `<socket>.lock`, held
+/// with a `flock`-style exclusive lock for the server's lifetime.
+fn lock_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    PathBuf::from(name)
+}
+
+/// Take the single-instance lock for `path`: open (creating) the
+/// adjacent `<socket>.lock` file and `try_lock` it exclusively. The
+/// winner holds the lock (the open `File`) until drop; a loser gets
+/// `AddrInUse` immediately — another live instance owns the socket.
+///
+/// This is what makes stale-socket replacement race-free: only the
+/// lock holder may unlink or rebind the socket path, so two instances
+/// starting concurrently can no longer both probe a stale file and
+/// have the loser's `remove_file` unlink the winner's freshly bound
+/// socket. The lock file itself is never removed — unlinking it would
+/// let a racer holding the old inode and a fresh starter creating a
+/// new one both "win" at the same path.
+fn acquire_instance_lock(path: &Path) -> io::Result<std::fs::File> {
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(lock_path(path))?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(std::fs::TryLockError::WouldBlock) => Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!(
+                "another resonance instance is serving {}",
+                path.display()
+            ),
+        )),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
 /// Bind the listener, replacing a stale socket file left by a crashed
-/// instance: on `AddrInUse`, probe with a connect — if nothing accepts,
-/// unlink and rebind; if something does, another instance owns the
-/// socket and we bail out.
+/// instance. Caller holds the instance lock, so anything sitting at
+/// the path is stale by definition — a live instance would have kept
+/// the lock. The connect probe stays as a belt-and-braces guard
+/// against a server that is accepting without holding the lock (e.g.
+/// a pre-lock build): if something answers, bail out rather than
+/// yank a live socket.
 fn bind_or_replace_stale(path: &Path) -> io::Result<UnixListener> {
     match UnixListener::bind(path) {
         Ok(listener) => Ok(listener),
@@ -154,6 +196,15 @@ fn bind_or_replace_stale(path: &Path) -> io::Result<UnixListener> {
     }
 }
 
+/// Filesystem identity (`st_dev`, `st_ino`) of the socket file a
+/// freshly bound listener created, recorded so [`ControlServer::drop`]
+/// can prove the path still points at *its* socket before unlinking.
+fn socket_file_identity(path: &Path) -> io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok((meta.dev(), meta.ino()))
+}
+
 // ---------------------------------------------------------------------------
 // Server lifecycle
 // ---------------------------------------------------------------------------
@@ -164,6 +215,13 @@ fn bind_or_replace_stale(path: &Path) -> io::Result<UnixListener> {
 pub struct ControlServer {
     path: PathBuf,
     shutdown: Arc<AtomicBool>,
+    /// `(st_dev, st_ino)` of the socket file this instance bound; the
+    /// unlink in `drop` is gated on the path still matching it.
+    bound_identity: (u64, u64),
+    /// Held single-instance lock (see [`acquire_instance_lock`]).
+    /// Dropped last (declaration order), so the lock outlives the
+    /// socket-file removal above it.
+    _instance_lock: std::fs::File,
 }
 
 impl ControlServer {
@@ -173,13 +231,28 @@ impl ControlServer {
     }
 }
 
+impl std::fmt::Debug for ControlServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlServer")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Drop for ControlServer {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
         // Wake the accept loop so it observes the flag and exits; the
         // connection is dropped immediately on the other side.
         let _ = UnixStream::connect(&self.path);
-        let _ = std::fs::remove_file(&self.path);
+        // Remove the socket only if the path still points at the file
+        // this instance bound. If the lock file was purged externally
+        // (tmpfiles-style cleanup) a newer instance may have rebound
+        // the path legitimately — a blind unlink here would silently
+        // unpublish that live server.
+        if socket_file_identity(&self.path).is_ok_and(|id| id == self.bound_identity) {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -194,13 +267,20 @@ pub fn spawn(
     jobs: Arc<JobBoard>,
 ) -> io::Result<ControlServer> {
     prepare_parent_dir(&path)?;
+    let instance_lock = acquire_instance_lock(&path)?;
     let listener = bind_or_replace_stale(&path)?;
+    let bound_identity = socket_file_identity(&path)?;
     let shutdown = Arc::new(AtomicBool::new(false));
     let accept_shutdown = Arc::clone(&shutdown);
     std::thread::Builder::new()
         .name("control-accept".into())
         .spawn(move || accept_loop(listener, bridge, jobs, accept_shutdown))?;
-    Ok(ControlServer { path, shutdown })
+    Ok(ControlServer {
+        path,
+        shutdown,
+        bound_identity,
+        _instance_lock: instance_lock,
+    })
 }
 
 fn accept_loop(

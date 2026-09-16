@@ -54,6 +54,12 @@ impl TimelineCanvas<'_> {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         use mouse::Interaction;
+        // A take-comping drag (todo #414) holds the horizontal-resize
+        // cursor: the gesture only has a horizontal degree of freedom, and
+        // the pointer routinely leaves the 29 px card mid-sweep.
+        if state.take_promote_drag.is_some() {
+            return Interaction::ResizingHorizontally;
+        }
         // An active breakpoint drag holds the grabbing cursor regardless of
         // where the pointer wandered.
         if state.breakpoint_drag.is_some() {
@@ -92,11 +98,28 @@ impl TimelineCanvas<'_> {
         if pos.y < self.fixed_header_height() {
             return Interaction::default();
         }
+        let layout = self.arrange_layout();
+        // Take lanes come before the breakpoint dots and the clips —
+        // exactly the press order, which is itself the draw order.
+        //
+        // The ribbon reports the split's *positional* precondition up
+        // front: with the playhead outside the slot there is no cut point
+        // and the edit would be refused silently, so the cursor says
+        // "not here" rather than the click vanishing without a trace.
+        if let Some(hit) = self.comp_ribbon_at_in(&layout, pos) {
+            return if self.split_has_a_cut_point(hit.slot) {
+                Interaction::ResizingHorizontally
+            } else {
+                Interaction::NotAllowed
+            };
+        }
+        if self.take_card_at_in(&layout, pos).is_some() {
+            return Interaction::Grab;
+        }
         // Breakpoint dots win over clips (matching the press order).
         if self.breakpoint_hit(pos).is_some() {
             return Interaction::Grab;
         }
-        let layout = self.arrange_layout();
         // MIDI clips on top, then audio — matching the press hit order.
         for clip in self.midi_clips.iter().rev() {
             let clip_end = self.tempo_map.tick_to_abs_sample(
@@ -168,6 +191,18 @@ impl TimelineCanvas<'_> {
         }
         if pos.y < self.fixed_header_height() {
             return None;
+        }
+        // A take card: right-click deletes the take, the same convention
+        // the chord lane / MIDI editor / breakpoint dots use. Deleting a
+        // group's *last* take removes the whole lane (ba todo #1401) — the
+        // card the user clicked is the last thing in it, so the stack
+        // disappearing is what they asked for.
+        if let Some(hit) = self.take_card_at(pos) {
+            state.take_promote_drag = None;
+            return captured(Message::Take(TakeMessage::DeleteTake {
+                group_id: hit.group_id,
+                take_id: hit.take_id,
+            }));
         }
         let hit = self.breakpoint_hit(pos)?;
         state.selected_breakpoint = None;

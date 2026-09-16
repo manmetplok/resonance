@@ -4,4 +4,4 @@
 //! the migration note in `wayland_plugin_gui::theme`. Only design-system
 //! v1 lavender tokens — no per-plugin raw colors.
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;

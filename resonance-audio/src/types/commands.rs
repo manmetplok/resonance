@@ -2,7 +2,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use resonance_common::{BindingId, ControllerMap, MidiBinding, MidiTarget};
+use resonance_common::{
+    BindingId, CompSegment, ControllerMap, MidiBinding, MidiTarget, TakeGroup, TakeGroupId, TakeId,
+};
 
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
 
@@ -344,6 +346,215 @@ pub enum AudioCommand {
     /// `AudioEvent::TakeCaptured` per pass. When disabled, a looped
     /// recording keeps the legacy single-clip behaviour.
     SetLoopRecordMode(bool),
+    /// Replace the comp — the ordered, non-overlapping cover of the loop
+    /// slot — of take group `group_id`. The mix graph plays the comped
+    /// cover, switching the source take clip per [`CompSegment`] with a
+    /// short equal-power crossfade at each seam, on both realtime playback
+    /// and offline bounce.
+    ///
+    /// Setting a comp does not clear an active take: an active take still
+    /// overrides the comp until cleared with
+    /// [`AudioCommand::SetActiveTake`]`(_, None)`. Confirmed by
+    /// `AudioEvent::TakeCompChanged`; an unknown group is ignored.
+    SetTakeComp {
+        group_id: TakeGroupId,
+        segments: Vec<CompSegment>,
+    },
+    /// Solo one whole take of group `group_id` for full-slot playback,
+    /// overriding the comp — or clear the override with `None` so the comp
+    /// plays again. Confirmed by `AudioEvent::ActiveTakeChanged`; an unknown
+    /// group, or a take id the group does not hold, is ignored.
+    SetActiveTake {
+        group_id: TakeGroupId,
+        take_id: Option<TakeId>,
+    },
+    /// Remove take `take_id` from take group `group_id`: drop the take,
+    /// re-cover the slot from the takes that remain, park the take's
+    /// recording so it stops sounding, and republish the comp table.
+    ///
+    /// Confirmed by `AudioEvent::TakeRemoved`, followed by
+    /// `TakeCompChanged` / `ActiveTakeChanged` when the removal moved
+    /// either. An unknown group, or a take the group does not hold, is
+    /// ignored (the handlers' standing missing-lookup convention).
+    ///
+    /// **The comp re-covers; it is never left dangling.** The removal
+    /// itself is `TakeGroup::remove_take` in `resonance-common` — one
+    /// definition shared with anything mirroring the group, exactly as
+    /// `effective_cover` is one definition of what a group sounds like
+    /// (ba todo #1395). Segments naming the removed take are dropped and
+    /// the holes handed to the take the cover now falls back to, so the
+    /// only stretch of the slot that changes is the one the removed take
+    /// used to play.
+    ///
+    /// **Removing the last take removes the group** (ba todo #1397). Three
+    /// reasons, and the first is a trap: with no takes left the comp is
+    /// empty, and an empty comp is exactly the state in which the cover
+    /// falls back to *the most recent pass* — the take just deleted. A
+    /// group with no takes resolves to no spans today, but leaving the
+    /// hazard guarded by one early return in `effective_cover` is how it
+    /// comes back. Second, a group *is* its takes (doc #165): an empty
+    /// lane is chrome the user cannot record into or comp. Third, an
+    /// empty group keeps its slot — which never moves once bound (ba todo
+    /// #1392) — so the next cycle-record run over that region would join
+    /// the lane the user had just deleted instead of starting a new one.
+    /// The echo in that case is `TakeGroupRemoved`, not `TakeRemoved`.
+    ///
+    /// **The WAV survives — by decision, not by accident.** The handler
+    /// holds `HandlerState`, so `project_dir` is right there and unlinking
+    /// `audio/clip_N.wav` would be two lines. It must not, because
+    /// deleting a user's recording is irreversible and the removal is not:
+    /// an undo restores the take through
+    /// [`AudioCommand::RestoreTakeGroups`] carrying the same `clip_ref`,
+    /// so a deleted file would make undo silently lossy. The clip is
+    /// *parked* instead — moved out of the shared clip list, which is what
+    /// stops it playing, and kept in memory so the undo is instant. The id
+    /// cannot be re-issued while the file lives, because `next_clip_id`
+    /// only ever rises within a session and is reserved past every
+    /// restored `clip_ref` (ba todo #1393). Reclaiming orphaned audio is a
+    /// project-level operation the user asks for, not something a command
+    /// on the audio path does behind their back.
+    RemoveTake {
+        group_id: TakeGroupId,
+        take_id: TakeId,
+    },
+    /// Remove take group `group_id` outright: the lane, every take in it,
+    /// and its comp. Confirmed by `AudioEvent::TakeGroupRemoved`; an
+    /// unknown group is ignored.
+    ///
+    /// Every audio take in the group is parked exactly as
+    /// [`AudioCommand::RemoveTake`] parks one, so no recording is deleted
+    /// and an undo restores the whole lane.
+    ///
+    /// Parking is what makes the removal *inaudible*, and it is the whole
+    /// reason this is a command rather than a comp edit. A take's
+    /// recording is an ordinary [`AudioClip`](crate::types::AudioClip) in
+    /// the shared clip list; it stays silent only because the comp table
+    /// marks it *governed* and the clip phase skips it. Drop the group
+    /// without parking and every take in it stops being governed — so
+    /// deleting a lane would play all of its passes at once, on top of
+    /// each other, at full gain.
+    RemoveTakeGroup {
+        group_id: TakeGroupId,
+    },
+    /// Replace the engine's take-group store **wholesale** with `groups`,
+    /// republish the comp playback table, and raise both the take-group id
+    /// allocator and the clip id allocator above every id the restored
+    /// groups already hold.
+    ///
+    /// This is how a saved project's take lanes get back into the engine
+    /// (ba todo #1394). Take groups are born in the engine — cycle
+    /// recording calls `capture_take_event` as each pass rolls — but a project
+    /// load has no capture to be born from, and until this command
+    /// existed nothing else wrote the store: the app restored its own
+    /// mirror, drew the lanes, and the engine rendered **silence** for a
+    /// comp the user could see. Doc #165 requires a comp to persist
+    /// across save/load, on playback *and* on bounce; both read the same
+    /// published table, so republishing here is what makes a loaded comp
+    /// audible without touching the transport.
+    ///
+    /// **Wholesale, not additive.** The two senders — a disk load and an
+    /// undo/redo diff replay — each rebuild the app-side mirror from
+    /// scratch and send the result, so replacing keeps engine and app
+    /// mirror identical by construction. Merging instead would resurrect
+    /// takes an undo had just deleted.
+    ///
+    /// **Wholesale covers the recordings too** (ba todo #1397). The store
+    /// is not the only thing a removal touched: [`AudioCommand::RemoveTake`]
+    /// parks the take's clip out of the shared clip list, so restoring
+    /// must un-park every recording the incoming groups claim — otherwise
+    /// undoing a deletion brings the take back on screen and leaves it
+    /// silent. It must also park every take clip the incoming groups
+    /// *stop* claiming, which is what a redo of a deletion looks like on
+    /// this path: without it the clip would be left registered and
+    /// un-governed, and the redone deletion would play the take at full
+    /// gain on the ordinary clip path.
+    ///
+    /// **Restored groups are reused, not shadowed.** Since todo #1392 a
+    /// cycle-record run resolves its group by looking up the store for a
+    /// lane on the same track over the same loop region, so a pass
+    /// recorded after a load joins the *restored* lane rather than
+    /// starting a second one beside it — one lane per slot, across a save
+    /// as well as across a stop.
+    ///
+    /// **The allocators — two of them.** `next_take_group_id` is
+    /// engine-thread-local and starts at 1 each session;
+    /// `loop_record_group_for` is its only consumer, and only for a run
+    /// that matches no existing lane. Without the high-water bump the
+    /// first cycle-record run after a load re-issued group id 1, and since
+    /// `push_take` allocates take ids *from the group*, that run's first
+    /// take took id 0 — silently replacing a restored take in the app's
+    /// `(group_id, take_id)`-keyed mirror. `next_clip_id` gets the same
+    /// treatment here (ba todo #1393): an audio take's `clip_ref` owns
+    /// `audio/clip_N.wav`, and take clips never travel the
+    /// [`AudioCommand::LoadClipFromWav`] path that would otherwise reserve
+    /// it, so without the bump the next recording or import **overwrote a
+    /// restored take's WAV**. Pool assets get it from
+    /// [`AudioCommand::ReserveAssetIds`]. Take ids inside a restored
+    /// group need no reservation of their own: `push_take` derives them
+    /// from the group's own contents, so they are correct the moment the
+    /// group is present.
+    ///
+    /// Deliberately silent — no echo. The sender is restoring state it
+    /// already holds, so an echo would only invite it to re-apply its own
+    /// input, exactly as [`AudioCommand::ReserveAssetIds`] does.
+    RestoreTakeGroups {
+        groups: Vec<TakeGroup>,
+    },
+    /// Put one restored **take** clip's recorded WAV back into the
+    /// engine's clip list on project load (ba todo #1402).
+    ///
+    /// [`AudioCommand::RestoreTakeGroups`] rebuilds the *groups*; this
+    /// rebuilds the audio they name. Both are needed and neither implies
+    /// the other: a take clip enters the engine only through the capture
+    /// path (`roll_audio_pass` pushes the `AudioClip` straight into the
+    /// list and emits no clip command at all), so a reloaded project had
+    /// the comp table resolving to clip ids the engine did not hold, and
+    /// the comp rendered **silence on playback and on bounce** — the very
+    /// failure `RestoreTakeGroups` was added to fix, surviving in its
+    /// other half.
+    ///
+    /// **Why not [`AudioCommand::LoadClipFromWav`].** Same mmap, same
+    /// worker, one decisive difference: that command echoes
+    /// `AudioEvent::ClipImported`, and the app's handler pushes a
+    /// `ClipState` for any clip it does not already know. A take clip is
+    /// not a timeline clip (ba todo #1396) — it must not appear in
+    /// `Resonance::clips`, or it would be drawn on the timeline, saved
+    /// into the project's clip list, and then also play raw on the next
+    /// load. So this command is **silent**, for the same reason
+    /// `RestoreTakeGroups` is: the app is the sender and the mirror, and a
+    /// freshly loaded project must not come up dirty.
+    ///
+    /// **Ordering.** Sent *after* `RestoreTakeGroups`, so a take clip is
+    /// governed by the published comp table from the first instant it
+    /// exists. The reverse order leaves a window in which the raw,
+    /// overlapping passes are ungoverned and all play at once on the
+    /// ordinary clip path. The window this order does leave — a table
+    /// naming a clip not yet loaded — is benign: `mix_track_comp` skips a
+    /// span whose clip it cannot find, and the load is asynchronous
+    /// anyway, so no send order could close it.
+    ///
+    /// **Idempotent.** A clip id already present in the list is left
+    /// alone. The sender also fires on the undo/redo diff replay, where
+    /// the clips are already loaded, and (once take removal lands) a
+    /// restore may have just un-parked this very clip.
+    ///
+    /// `start_sample` is the take's `extent.start`: `RolledAudioTake::extent`
+    /// is defined as the rolled clip's own `[start_sample, +duration)`, so
+    /// the persisted extent is an exact record of where capture placed the
+    /// clip. It matters — `mix_track_comp` intersects every span with
+    /// `clip.start_sample .. + duration_frames()`, so a clip restored to
+    /// the wrong origin reads the wrong audio or none.
+    ///
+    /// Trims and fades are absent because a take clip has none: capture
+    /// writes it whole, and comping trims by choosing spans, not by
+    /// editing the clip.
+    LoadTakeClipFromWav {
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: SamplePos,
+        path: PathBuf,
+        name: String,
+    },
     SavePluginState {
         instance_id: PluginInstanceId,
     },

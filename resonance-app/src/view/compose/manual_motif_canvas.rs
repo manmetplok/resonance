@@ -42,8 +42,46 @@ pub struct ManualMotifCanvas<'a> {
     pub scale: Option<Scale>,
 }
 
+/// Canvas-local state: just the geometry cache. The motif grid has no
+/// live overlay, so it renders through a fingerprinted [`canvas::Cache`]
+/// and the 16 ms app tick reuses the tessellated geometry instead of
+/// re-building the grid + note cells at ~60 fps.
+#[derive(Debug, Default)]
+pub struct ManualMotifCanvasState {
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<ManualMotifFingerprint>,
+}
+
+/// Cheap content fingerprint of everything [`ManualMotifCanvas`] draws.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ManualMotifFingerprint {
+    definition_id: u64,
+    notes_hash: u64,
+    scale: Option<Scale>,
+}
+
+impl<'a> ManualMotifCanvas<'a> {
+    /// Fingerprint the drawn content. Any field change repaints the cache;
+    /// unrelated app-state churn does not.
+    pub fn fingerprint(&self) -> ManualMotifFingerprint {
+        use std::hash::{Hash, Hasher};
+        let mut nh = std::collections::hash_map::DefaultHasher::new();
+        for n in self.notes {
+            n.scale_step.hash(&mut nh);
+            n.duration_sixteenths.hash(&mut nh);
+            n.accent.hash(&mut nh);
+            n.is_rest.hash(&mut nh);
+        }
+        ManualMotifFingerprint {
+            definition_id: self.definition_id,
+            notes_hash: nh.finish(),
+            scale: self.scale,
+        }
+    }
+}
+
 impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
-    type State = ();
+    type State = ManualMotifCanvasState;
 
     fn update(
         &self,
@@ -113,14 +151,31 @@ impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let fp = self.fingerprint();
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state
+            .cache
+            .draw(renderer, bounds.size(), |frame: &mut canvas::Frame| {
+                self.draw_into(frame, bounds);
+            });
+        vec![geometry]
+    }
+}
 
+impl<'a> ManualMotifCanvas<'a> {
+    /// Paint the motif grid into the cache's frame. Everything here is
+    /// static between content edits; the fingerprint in `draw` decides
+    /// when this runs again.
+    fn draw_into(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
         // Pitched row backgrounds — alternate by chord-tone-ness vs
@@ -246,7 +301,6 @@ impl<'a> canvas::Program<Message> for ManualMotifCanvas<'a> {
         );
 
         let _ = self.scale; // reserved for future scale-aware row labeling
-        vec![frame.into_geometry()]
     }
 }
 

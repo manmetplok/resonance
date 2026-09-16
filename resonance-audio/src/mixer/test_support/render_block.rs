@@ -107,6 +107,7 @@ pub fn render_aux_with_comp_for_test(
             active_busses,
             aux_sends: &aux_sends,
             sidechain_routes: &[],
+            take_comp: &crate::mixer::CompRenderTable::default(),
             playhead: 0,
             frames,
             latency_comp: &latency,
@@ -238,6 +239,7 @@ impl RenderBenchHarness {
                 active_busses,
                 aux_sends: &self.aux_sends,
                 sidechain_routes: &[],
+                take_comp: &crate::mixer::CompRenderTable::default(),
                 playhead,
                 frames,
                 latency_comp: &self.latency,
@@ -259,3 +261,140 @@ impl RenderBenchHarness {
     }
 }
 
+
+/// Render one block through the real [`render_block`] with an explicit
+/// take-comp table, on either the live or the offline (bounce) strategy.
+/// Returns the interleaved-stereo master output.
+///
+/// This is the entry point for the "a comp bounces the way it plays"
+/// guarantee (epic #15, doc #165): the two strategies differ in plugin
+/// locking, gain ramps and metering, none of which the comp path touches,
+/// so rendering the same table both ways and comparing the buffers proves
+/// the shared path really is shared. It also exercises the governance
+/// interaction — the raw take clips sit in `clips` and must be skipped by
+/// the clip phase — which calling `mix_track_comp` directly cannot.
+#[doc(hidden)]
+pub fn render_take_comp_for_test(
+    tracks: Vec<Track>,
+    clips: Vec<AudioClip>,
+    take_comp: &crate::mixer::CompRenderTable,
+    playhead: u64,
+    frames: usize,
+    sample_rate: u32,
+    live: bool,
+) -> Vec<f32> {
+    render_take_comp_borrowed_for_test(
+        tracks,
+        &clips,
+        take_comp,
+        playhead,
+        frames,
+        sample_rate,
+        live,
+    )
+}
+
+/// [`render_take_comp_for_test`] over a **borrowed** clip list.
+///
+/// `AudioClip` is deliberately not `Clone`, so the owned entry point above
+/// consumes the clips and can render a given set exactly once. A caller
+/// that holds the clips in shared engine state — `EngineHandlerHarness`,
+/// which renders what the engine would actually play, before and after a
+/// command — needs to render the same list repeatedly instead.
+#[doc(hidden)]
+pub fn render_take_comp_borrowed_for_test(
+    tracks: Vec<Track>,
+    clips: &[AudioClip],
+    take_comp: &crate::mixer::CompRenderTable,
+    playhead: u64,
+    frames: usize,
+    sample_rate: u32,
+    live: bool,
+) -> Vec<f32> {
+    let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
+    let busses_guard: IndexMap<BusId, Bus> = IndexMap::new();
+    let plugins_guard: PluginMap = IndexMap::new();
+    let midi_clips: Vec<MidiClip> = Vec::new();
+    let tempo_map = TempoMap::default();
+    let latency = crate::latency::LatencyComp::empty();
+    let automation = AutomationSnapshot::default();
+
+    let mut data = vec![0.0f32; frames * 2];
+    let mut track_buf_l = vec![0.0f32; frames];
+    let mut track_buf_r = vec![0.0f32; frames];
+    let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
+    let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
+    let mut note_buf: Vec<PendingNoteEvent> = Vec::new();
+    let mut fx_dry = crate::bypass::FxDryScratch::new(frames);
+    let mut sidechain = SidechainTaps::new(frames);
+    let mut midi_stash = MidiStash::new();
+
+    let in_filter = |_id: TrackId| true;
+    let fan_out_only = |_id: TrackId| false;
+    let key_only = |_id: TrackId| false;
+    let key_only_bus = |_id: BusId| false;
+    let mut strategy = if live {
+        RenderStrategy::Live {
+            midi_stash: &mut midi_stash,
+            transport_snap: None,
+            monitor_temp: &[],
+            monitor_frames: 0,
+            input_channels: 0,
+        }
+    } else {
+        RenderStrategy::Bounce {
+            in_filter: &in_filter,
+            fan_out_only: &fan_out_only,
+            key_only: &key_only,
+            key_only_bus: &key_only_bus,
+            respect_mute_solo: false,
+            freeze_raw: false,
+        }
+    };
+
+    // The live strategy sweeps each track's fader from its remembered
+    // last-gain to the target across the block, so a track's very first
+    // block ramps up from zero while a bounce applies the constant gain.
+    // That difference is the fader, not the render, and it would mask what
+    // a caller comparing the two paths is actually asking about — so the
+    // live path renders one settling block first (which stores the target
+    // into the last-gain atomics) and returns the second, steady-state one.
+    let passes = if live { 2 } else { 1 };
+    for _ in 0..passes {
+        data.fill(0.0);
+        render_block(
+            BlockInputs {
+                channels: 2,
+                tracks: &tracks_guard,
+                busses: &busses_guard,
+                clips,
+                midi_clips: &midi_clips,
+                plugins: &plugins_guard,
+                tempo_map: &tempo_map,
+                sample_rate,
+                any_solo: false,
+                active_busses: 0,
+                aux_sends: &[],
+                sidechain_routes: &[],
+                take_comp,
+                playhead,
+                frames,
+                latency_comp: &latency,
+                automation: &automation,
+            },
+            &mut BlockScratch {
+                data: &mut data,
+                track_buf_l: &mut track_buf_l,
+                track_buf_r: &mut track_buf_r,
+                bus_bufs: &mut bus_bufs,
+                port_scratch: &mut port_scratch,
+                note_event_buf: &mut note_buf,
+                sidechain: &mut sidechain,
+                fx_dry: &mut fx_dry,
+            },
+            &mut strategy,
+        );
+    }
+
+    data
+}

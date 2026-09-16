@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::atomic_file::{atomic_write, quarantine_corrupt};
+
 /// Type of installed content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -89,7 +91,14 @@ pub fn load_registry() -> InstalledRegistry {
 /// Load from a specific path (useful for testing).
 pub fn load_registry_from(path: &Path) -> InstalledRegistry {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            eprintln!(
+                "{} is corrupt ({e}); quarantining and starting from an empty registry",
+                path.display()
+            );
+            quarantine_corrupt(path);
+            InstalledRegistry::default()
+        }),
         Err(_) => InstalledRegistry::default(),
     }
 }
@@ -107,7 +116,7 @@ pub fn save_registry_to(registry: &InstalledRegistry, path: &Path) -> Result<(),
     }
     let json =
         serde_json::to_string_pretty(registry).map_err(|e| format!("serialize registry: {e}"))?;
-    std::fs::write(path, json.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))?;
+    atomic_write(path, json.as_bytes())?;
     Ok(())
 }
 

@@ -7,9 +7,9 @@
 //! the left/right and line/fill relationships they encode are too. Tints
 //! are hand-premultiplied: scale the accent's RGB by (alpha / 255).
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
-pub use wayland_plugin_gui::theme::lavender::*;
+pub use plugin_gui_core::theme::lavender::*;
 
 /// Waveform trace — left channel (bright).
 pub const WAVE_L: egui::Color32 = ACCENT_SOFT;

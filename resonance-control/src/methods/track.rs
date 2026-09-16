@@ -24,7 +24,9 @@ pub const DELETE: &str = "track.delete";
 /// id ([`AddPluginParams`] -> [`AddPluginResult`]).
 pub const ADD_INSTRUMENT: &str = "track.add_instrument";
 /// `track.add_effect` — append a built-in effect to the insert chain
-/// ([`AddPluginParams`] -> [`AddPluginResult`]).
+/// ([`AddPluginParams`] -> [`AddPluginResult`]). Instrument plugins are
+/// rejected — an effect slot has no notes to play; use
+/// `track.add_instrument`.
 pub const ADD_EFFECT: &str = "track.add_effect";
 /// `track.remove_effect` — take an effect off the insert chain
 /// ([`RemoveEffectParams`] -> `MutationAck`).

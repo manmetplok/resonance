@@ -100,6 +100,40 @@ fn coalesces_same_key_and_breaks_on_intervening_action() {
     assert_eq!(h.test_undo_entries().len(), 4);
 }
 
+/// `try_extend_coalesced` is the snapshot-free fast path `record_undo`
+/// checks before building an O(project) snapshot: it must say yes only
+/// when `record_coalesced` would have merged, and must never touch the
+/// run-opening snapshot.
+#[test]
+fn try_extend_coalesced_only_continues_a_matching_run() {
+    let mut h = UndoHistory::new();
+    let key = CoalesceKey::TrackVolume(7);
+
+    // Nothing recorded yet: no run to continue.
+    assert!(!h.try_extend_coalesced(&key));
+
+    h.record_coalesced(dummy_snapshot(1.0), key.clone(), label(1.0));
+    assert!(h.try_extend_coalesced(&key), "same key continues the run");
+    assert_eq!(h.test_undo_entries().len(), 1);
+    assert_eq!(
+        h.test_undo_entries()[0].project.file.bpm,
+        1.0,
+        "the run keeps its opening snapshot"
+    );
+
+    // A different control is not part of the run.
+    assert!(!h.try_extend_coalesced(&CoalesceKey::TrackPan(7)));
+
+    // An atomic record breaks the run...
+    h.record(dummy_snapshot(2.0), label(2.0));
+    assert!(!h.try_extend_coalesced(&key));
+
+    // ...and so does popping an entry off the stack.
+    h.record_coalesced(dummy_snapshot(3.0), key.clone(), label(3.0));
+    h.pop_undo();
+    assert!(!h.try_extend_coalesced(&key));
+}
+
 #[test]
 fn coalesce_run_is_broken_by_pop() {
     let mut h = UndoHistory::new();
@@ -110,6 +144,62 @@ fn coalesce_run_is_broken_by_pop() {
     h.record_coalesced(dummy_snapshot(2.0), key, label(2.0));
     assert_eq!(h.test_undo_entries().len(), 1);
     assert_eq!(h.test_undo_entries()[0].project.file.bpm, 2.0);
+}
+
+// ---- Compound groups (the control API's per-call atomicity) ----------
+
+#[test]
+fn compound_group_absorbs_everything_after_its_opening_mutation() {
+    let mut h = UndoHistory::new();
+    h.begin_compound();
+    assert!(h.in_compound());
+    // The first mutation arms the group and records normally...
+    assert!(!h.absorb_into_compound(), "the opening mutation records");
+    h.record(dummy_snapshot(1.0), label(1.0));
+    // ...and every later mutation inside the group is absorbed.
+    assert!(h.absorb_into_compound());
+    assert!(h.absorb_into_compound());
+    h.end_compound();
+    assert!(!h.in_compound());
+    assert_eq!(h.test_undo_entries().len(), 1, "one entry for the group");
+    // Closed again: back to per-edit recording.
+    assert!(!h.absorb_into_compound());
+}
+
+/// A group that saw no mutation leaves no trace: nothing armed, nothing
+/// recorded, and the next edit records individually.
+#[test]
+fn an_empty_compound_group_records_nothing() {
+    let mut h = UndoHistory::new();
+    h.begin_compound();
+    h.end_compound();
+    assert_eq!(h.test_undo_entries().len(), 0);
+    assert!(!h.absorb_into_compound(), "no group is open anymore");
+}
+
+/// Opening a group breaks an in-progress coalesce run, so a control
+/// call landing mid-fader-drag records its own entry instead of merging
+/// into the user's gesture — and the drag cannot merge into the group's
+/// entry afterwards either.
+#[test]
+fn begin_compound_breaks_a_coalesce_run_in_both_directions() {
+    let mut h = UndoHistory::new();
+    let key = CoalesceKey::TrackVolume(7);
+    h.record_coalesced(dummy_snapshot(1.0), key.clone(), label(1.0));
+    assert!(h.try_extend_coalesced(&key), "the run is live");
+
+    h.begin_compound();
+    assert!(
+        !h.try_extend_coalesced(&key),
+        "the group's opening edit starts fresh"
+    );
+    h.record(dummy_snapshot(2.0), label(2.0));
+    h.end_compound();
+
+    // The group's entry recorded plain, so the resumed drag cannot
+    // extend into it.
+    assert!(!h.try_extend_coalesced(&key));
+    assert_eq!(h.test_undo_entries().len(), 2);
 }
 
 #[test]

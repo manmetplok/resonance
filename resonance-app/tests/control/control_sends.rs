@@ -11,7 +11,6 @@
 //! `AuxSendChanged` / `AuxSendRemoved` echoes the way the real engine
 //! does.
 
-use resonance_app::control_socket::{ControlMessage, ControlRequest, ReplySender};
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
@@ -19,7 +18,8 @@ use resonance_audio::types::{AudioCommand, AudioEvent, SendSource, TrackType};
 use resonance_control::methods::bus::CreateResult;
 use resonance_control::methods::song::{SendView, TracksView};
 use resonance_control::methods::track::AddSendResult;
-use resonance_control::{ErrorKind, MutationAck, Request, Response};
+use resonance_control::{ErrorKind, MutationAck, Request};
+use crate::common::{call, roundtrip};
 
 const GUITAR: u64 = 1;
 const KEYS: u64 = 2;
@@ -31,20 +31,6 @@ fn app() -> Resonance {
     app.test_add_track(GUITAR, TrackType::Instrument);
     app.test_add_track(KEYS, TrackType::Instrument);
     app
-}
-
-fn roundtrip(app: &mut Resonance, req: Request) -> Response {
-    let (reply, rx) = ReplySender::test_pair();
-    let _ = app.update(Message::Control(ControlMessage::Request(ControlRequest {
-        conn: 1,
-        request: req,
-        reply,
-    })));
-    rx.try_recv().expect("one reply per request")
-}
-
-fn call(app: &mut Resonance, method: &str, params: serde_json::Value) -> Response {
-    roundtrip(app, Request::new(1, method, &params).expect("params serialize"))
 }
 
 fn create_bus(app: &mut Resonance, name: &str) -> u64 {
@@ -318,6 +304,79 @@ fn a_send_is_a_tap_not_a_re_route() {
         .find(|t| t.summary.id.0 == KEYS)
         .expect("keys");
     assert!(keys.sends.is_empty());
+}
+
+/// `track.add_send` dispatches two messages (the return-role flag and
+/// the send creation); the wire contract makes them ONE undoable
+/// transaction — one revision bump for the call, one history entry.
+#[test]
+fn add_send_is_one_revision_bump_and_one_undo_entry() {
+    let mut app = app();
+    let reverb = create_bus(&mut app, "Reverb");
+    let before = app.revision();
+    let entries = app.test_undo_history().test_undo_entries().len();
+
+    let result: AddSendResult = call(
+        &mut app,
+        "track.add_send",
+        serde_json::json!({"track_id": GUITAR, "to_bus": reverb, "level_db": -6.0}),
+    )
+    .result()
+    .expect("track.add_send succeeds");
+    assert_eq!(result.revision, before + 1, "one call, one revision bump");
+    assert_eq!(
+        result.revision,
+        app.revision(),
+        "the reply carries the post-call revision"
+    );
+    assert_eq!(
+        app.test_undo_history().test_undo_entries().len(),
+        entries + 1,
+        "role flag + send creation are one history entry"
+    );
+}
+
+/// `track.set_send` changing destination, level, tap point, and enable
+/// in one call dispatches four messages; the call is ONE undoable
+/// transaction, so one `edit.undo` takes the whole re-route back.
+#[test]
+fn set_send_of_four_fields_is_one_atomic_undo_transaction() {
+    let mut app = app();
+    let reverb = create_bus(&mut app, "Reverb");
+    let delay = create_bus(&mut app, "Delay");
+    let send_id = add_send(&mut app, GUITAR, reverb, 0.0);
+    let before = app.revision();
+    let entries = app.test_undo_history().test_undo_entries().len();
+
+    let ack: MutationAck = call(
+        &mut app,
+        "track.set_send",
+        serde_json::json!({
+            "send_id": send_id,
+            "to_bus": delay,
+            "level_db": -9.0,
+            "pre_fader": true,
+            "enabled": false,
+        }),
+    )
+    .result()
+    .expect("track.set_send succeeds");
+    assert_eq!(ack.revision, before + 1, "four sub-edits, one revision bump");
+    assert_eq!(
+        ack.revision,
+        app.revision(),
+        "the ack carries the post-call revision"
+    );
+    assert_eq!(
+        app.test_undo_history().test_undo_entries().len(),
+        entries + 1,
+        "the whole call is one history entry"
+    );
+
+    // One undo pops exactly that one entry — the whole call, not a
+    // quarter of it.
+    let _ = app.update(Message::Undo);
+    assert_eq!(app.test_undo_history().test_undo_entries().len(), entries);
 }
 
 #[test]

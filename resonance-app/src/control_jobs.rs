@@ -36,9 +36,10 @@ pub const MAX_RETAINED_JOBS: usize = 64;
 pub const MAX_WAIT: Duration = Duration::from_secs(600);
 
 /// Correlation token stored when a job starts. The completion hooks in
-/// the existing message handlers complete/fail the newest live job
-/// carrying the matching token. Extended by the namespace todos as they
-/// wire more long-running operations.
+/// the existing message handlers complete/fail the oldest live job
+/// carrying the matching token (FIFO — completions arrive in dispatch
+/// order). Extended by the namespace todos as they wire more
+/// long-running operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobToken {
     /// Completes on `ProjectIoMessage::ProjectSaved` (manual saves only —
@@ -167,6 +168,20 @@ pub struct JobBoard {
 }
 
 impl JobBoard {
+    /// Lock the table, recovering from a poisoned mutex. The table is
+    /// locked from the per-connection reader threads (`job.wait`) *and*
+    /// the main update loop; a panic on a reader thread would otherwise
+    /// poison the lock and turn the next main-thread access into a
+    /// second panic — one lost client taking the whole app down. The
+    /// table holds no cross-panic invariants (every mutation leaves it
+    /// consistent at each statement), so the data under a poisoned lock
+    /// is safe to keep using.
+    fn table(&self) -> std::sync::MutexGuard<'_, Table> {
+        self.table
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Register a new `pending` job and return its id (monotonic per
     /// app run).
     pub fn start(
@@ -176,7 +191,7 @@ impl JobBoard {
         token: Option<JobToken>,
         owner: Option<ConnId>,
     ) -> JobStarted {
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         table.next_id += 1;
         let id = table.next_id;
         let remaining_lanes = match &token {
@@ -210,7 +225,7 @@ impl JobBoard {
 
     /// Move a pending job to `running`, optionally seeding progress.
     pub fn set_running(&self, id: u64, progress: Option<f32>) {
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         if let Some(entry) = table.jobs.get_mut(&id) {
             if !entry.state.is_terminal() {
                 entry.state = JobState::Running;
@@ -221,7 +236,7 @@ impl JobBoard {
 
     /// Update a live job's fractional progress (`0.0..=1.0`).
     pub fn set_progress(&self, id: u64, progress: f32) {
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         if let Some(entry) = table.jobs.get_mut(&id) {
             if !entry.state.is_terminal() {
                 entry.state = JobState::Running;
@@ -232,7 +247,7 @@ impl JobBoard {
 
     /// Complete a job by id with its method-specific result payload.
     pub fn complete(&self, id: u64, result: Value) {
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         if let Some(entry) = table.jobs.get_mut(&id) {
             if !entry.state.is_terminal() {
                 entry.state = JobState::Done;
@@ -246,7 +261,7 @@ impl JobBoard {
 
     /// Fail a job by id with a human-readable message.
     pub fn fail(&self, id: u64, error: impl Into<String>) {
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         if let Some(entry) = table.jobs.get_mut(&id) {
             if !entry.state.is_terminal() {
                 entry.state = JobState::Error;
@@ -257,11 +272,18 @@ impl JobBoard {
         self.terminal.notify_all();
     }
 
-    /// Complete the newest live job carrying `token`. Returns whether a
+    /// Complete the OLDEST live job carrying `token`. Returns whether a
     /// job matched — a `false` is normal (the operation wasn't
     /// control-initiated), never an error.
+    ///
+    /// Oldest, not newest: completion events for identical operations
+    /// arrive in dispatch order (one update loop, one engine queue), so
+    /// if two live jobs ever carry the same token the first completion
+    /// belongs to the first job. Resolving the newest instead completed
+    /// the later client's job and left the earlier one running until
+    /// the [`MAX_WAIT`] cap.
     pub fn complete_token(&self, token: &JobToken, result: Value) -> bool {
-        match self.newest_live_with_token(token) {
+        match self.oldest_live_with_token(token) {
             Some(id) => {
                 self.complete(id, result);
                 true
@@ -270,10 +292,10 @@ impl JobBoard {
         }
     }
 
-    /// Fail the newest live job carrying `token`; see
+    /// Fail the oldest live job carrying `token`; see
     /// [`complete_token`](Self::complete_token).
     pub fn fail_token(&self, token: &JobToken, error: impl Into<String>) -> bool {
-        match self.newest_live_with_token(token) {
+        match self.oldest_live_with_token(token) {
             Some(id) => {
                 self.fail(id, error);
                 true
@@ -282,11 +304,26 @@ impl JobBoard {
         }
     }
 
-    /// Tick off one source path of every live [`JobToken::PoolImport`]
-    /// batch that covers it. `error` is `Some` when that file failed to
-    /// import.
+    /// Is any live job carrying exactly `token`? The project-lifecycle
+    /// busy guard uses this to refuse starting a duplicate of an
+    /// operation whose in-flight window the app state doesn't expose
+    /// (a `project.new` from a user template loads asynchronously
+    /// before `io.loading` is set, so only its live job betrays it).
+    pub fn has_live_token(&self, token: &JobToken) -> bool {
+        self.oldest_live_with_token(token).is_some()
+    }
+
+    /// Tick off one source path of ONE live [`JobToken::PoolImport`]
+    /// batch that covers it — the oldest still awaiting that path.
+    /// `error` is `Some` when that file failed to import.
     ///
-    /// Returns the batches whose LAST path just landed, as
+    /// One batch, not every batch: the engine emits one import event per
+    /// file it was handed, so two overlapping batches naming the same
+    /// file get two events, in dispatch order. Ticking every batch let
+    /// the second batch resolve `done` off the *first* batch's event,
+    /// before its own copy of the file had imported.
+    ///
+    /// Returns the batch whose LAST path just landed, as
     /// `(job_id, batch_error)` — still un-resolved, because the result
     /// payload is built from app state (the pool assets that appeared, the
     /// clip that was placed) which this board cannot see. The caller
@@ -294,18 +331,23 @@ impl JobBoard {
     /// is the normal case for a GUI-driven import.
     pub fn tick_import_path(&self, path: &str, error: Option<&str>) -> Vec<(u64, Option<String>)> {
         let mut finished = Vec::new();
-        let mut table = self.table.lock().expect("job table poisoned");
-        for (id, entry) in table.jobs.iter_mut() {
-            if entry.state.is_terminal() || !entry.remaining_paths.remove(path) {
-                continue;
-            }
+        let mut table = self.table();
+        let oldest = table
+            .jobs
+            .iter()
+            .filter(|(_, e)| !e.state.is_terminal() && e.remaining_paths.contains(path))
+            .map(|(id, _)| *id)
+            .min();
+        if let Some(id) = oldest {
+            let entry = table.jobs.get_mut(&id).expect("id came from the table");
+            entry.remaining_paths.remove(path);
             if let Some(error) = error {
                 entry
                     .import_error
                     .get_or_insert_with(|| format!("{path}: {error}"));
             }
             if entry.remaining_paths.is_empty() {
-                finished.push((*id, entry.import_error.clone()));
+                finished.push((id, entry.import_error.clone()));
             }
         }
         finished
@@ -315,7 +357,7 @@ impl JobBoard {
     /// [`Self::status`] does — completion hooks use it to pick the result
     /// shape, and a peek must not count as the client collecting it.
     pub fn kind_of(&self, id: u64) -> Option<String> {
-        let table = self.table.lock().expect("job table poisoned");
+        let table = self.table();
         table.jobs.get(&id).map(|e| e.kind.clone())
     }
 
@@ -323,7 +365,7 @@ impl JobBoard {
     /// can collect exactly that batch's assets when building its result.
     /// Empty for any other job.
     pub fn import_batch_paths(&self, id: u64) -> Vec<String> {
-        let table = self.table.lock().expect("job table poisoned");
+        let table = self.table();
         match table.jobs.get(&id).and_then(|e| e.token.as_ref()) {
             Some(JobToken::PoolImport { paths }) => paths.clone(),
             _ => Vec::new(),
@@ -339,13 +381,27 @@ impl JobBoard {
     /// half-rendered track back as `done`. Returns whether any job was
     /// tracking this lane (a `false` is normal: a GUI-driven render).
     ///
+    /// Call this only for a `VocalAudioReady` the render-epoch check has
+    /// ACCEPTED. A superseded render's event used to tick lanes off
+    /// every batch before that check ran, letting a later job resolve
+    /// `done` off audio the install then discarded as stale.
+    ///
+    /// Every covering batch, not the oldest — deliberately unlike
+    /// [`tick_import_path`](Self::tick_import_path). Two import batches
+    /// naming the same file get one engine event each, so events map to
+    /// batches in dispatch order; but two render jobs covering the same
+    /// lane share a SINGLE surviving event: the later request bumps the
+    /// lane's epoch, the earlier render is discarded on arrival, and the
+    /// one accepted install is current for every job that asked. Ticking
+    /// only the oldest would strand the newer job until [`MAX_WAIT`].
+    ///
     /// The result payload carries every track the batch rendered, so a
     /// whole-project render reports all of them.
     pub fn complete_vocal_lane(&self, definition_id: u64, track_id: u64, revision: u64) -> bool {
         let mut finished: Vec<(u64, Value)> = Vec::new();
         let mut matched = false;
         {
-            let mut table = self.table.lock().expect("job table poisoned");
+            let mut table = self.table();
             for (id, entry) in table.jobs.iter_mut() {
                 if entry.state.is_terminal()
                     || !entry.remaining_lanes.remove(&(definition_id, track_id))
@@ -375,31 +431,40 @@ impl JobBoard {
         matched
     }
 
-    /// Fail the newest live `VocalRender` job, whatever its lane. The
-    /// `VocalAudioFailed` message (todo #1156) carries no lane identity,
-    /// and control renders run one at a time through the update loop, so
-    /// the newest live vocal-render job is the one that just failed.
-    /// No-op when none is live (a GUI-driven render).
-    pub fn fail_newest_vocal_render(&self, error: impl Into<String>) -> bool {
-        let id = {
-            let table = self.table.lock().expect("job table poisoned");
+    /// Fail every live [`JobToken::VocalRender`] batch still waiting on
+    /// this lane. `VocalAudioFailed` names the lane that errored (it
+    /// used to carry nothing, so the failure had to be *inferred* onto
+    /// the oldest live render job — which killed a job covering only
+    /// lane A when an unrelated GUI regeneration of lane B failed), and
+    /// the caller has already epoch-checked it, so a failure here means
+    /// the lane's audio is genuinely not coming: no batch waiting on it
+    /// can ever complete. Batches not waiting on the lane — including
+    /// ones that already received its audio and moved on — keep running.
+    /// Returns whether any batch matched (a `false` is normal: a
+    /// GUI-driven render, with no control job attached).
+    pub fn fail_vocal_lane(
+        &self,
+        definition_id: u64,
+        track_id: u64,
+        error: impl Into<String>,
+    ) -> bool {
+        let ids: Vec<u64> = {
+            let table = self.table();
             table
                 .jobs
                 .iter()
                 .filter(|(_, e)| {
                     !e.state.is_terminal()
-                        && matches!(e.token, Some(JobToken::VocalRender { .. }))
+                        && e.remaining_lanes.contains(&(definition_id, track_id))
                 })
                 .map(|(id, _)| *id)
-                .max()
+                .collect()
         };
-        match id {
-            Some(id) => {
-                self.fail(id, error);
-                true
-            }
-            None => false,
+        let error = error.into();
+        for id in &ids {
+            self.fail(*id, error.clone());
         }
+        !ids.is_empty()
     }
 
     /// The token of `job_id` if it is a [`JobToken::Measure`] that is
@@ -417,7 +482,7 @@ impl JobBoard {
     /// the token's contents (which method asked) to shape the result
     /// before it can complete the job.
     pub fn live_measure(&self, job_id: u64) -> Option<JobToken> {
-        let table = self.table.lock().expect("job table poisoned");
+        let table = self.table();
         let entry = table.jobs.get(&job_id)?;
         if entry.state.is_terminal() {
             return None;
@@ -439,21 +504,24 @@ impl JobBoard {
     /// refuse EVERY overlap, live included, purely to keep "the newest
     /// live measure job" naming the right job).
     pub fn has_live_offline_measure(&self) -> bool {
-        let table = self.table.lock().expect("job table poisoned");
+        let table = self.table();
         table.jobs.values().any(|e| {
             !e.state.is_terminal()
                 && matches!(e.token, Some(JobToken::Measure { offline: true, .. }))
         })
     }
 
-    fn newest_live_with_token(&self, token: &JobToken) -> Option<u64> {
-        let table = self.table.lock().expect("job table poisoned");
+    /// Oldest (lowest-id) live job carrying exactly `token` — FIFO, to
+    /// match the order completions arrive in; see
+    /// [`complete_token`](Self::complete_token).
+    fn oldest_live_with_token(&self, token: &JobToken) -> Option<u64> {
+        let table = self.table();
         table
             .jobs
             .iter()
             .filter(|(_, e)| !e.state.is_terminal() && e.token.as_ref() == Some(token))
             .map(|(id, _)| *id)
-            .max()
+            .min()
     }
 
     /// Fail every live [`JobToken::Export`] job with `error`. The engine's
@@ -463,7 +531,7 @@ impl JobBoard {
     /// matched.
     pub fn fail_export_jobs(&self, error: impl Into<String>) -> bool {
         let ids: Vec<u64> = {
-            let table = self.table.lock().expect("job table poisoned");
+            let table = self.table();
             table
                 .jobs
                 .iter()
@@ -483,7 +551,7 @@ impl JobBoard {
     /// The job's current status, `None` for an unknown id. Marks a
     /// terminal status as fetched (eviction priority).
     pub fn status(&self, id: u64) -> Option<JobStatus> {
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         let entry = table.jobs.get_mut(&id)?;
         if entry.state.is_terminal() {
             entry.fetched = true;
@@ -498,7 +566,7 @@ impl JobBoard {
     /// answers `job.wait` as an immediate snapshot instead.
     pub fn wait(&self, id: u64, timeout: Option<Duration>) -> Option<JobStatus> {
         let deadline = Instant::now() + timeout.unwrap_or(MAX_WAIT).min(MAX_WAIT);
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         loop {
             let entry = table.jobs.get_mut(&id)?;
             if entry.state.is_terminal() {
@@ -512,7 +580,9 @@ impl JobBoard {
             let (guard, _timeout) = self
                 .terminal
                 .wait_timeout(table, deadline - now)
-                .expect("job table poisoned");
+                // Same poison recovery as [`Self::table`]: a panicking
+                // reader thread must not wedge everyone else's waits.
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             table = guard;
         }
     }
@@ -521,15 +591,25 @@ impl JobBoard {
     /// nobody can query them anymore. Wakes waiting readers so a
     /// blocked `job.wait` on a dropped job resolves to `not_found`.
     pub fn on_disconnect(&self, conn: ConnId) {
-        let mut table = self.table.lock().expect("job table poisoned");
+        let mut table = self.table();
         table.jobs.retain(|_, e| e.owner != Some(conn));
         drop(table);
         self.terminal.notify_all();
     }
 
+    /// Panic while holding the table lock — poisoning it exactly the way
+    /// a crashing `job.wait` reader thread would. Test support for the
+    /// containment guarantee in [`Self::table`]; the caller runs it on a
+    /// scratch thread it expects to die.
+    #[doc(hidden)]
+    pub fn panic_holding_table_for_test(&self) -> ! {
+        let _guard = self.table();
+        panic!("intentional test panic while holding the job table");
+    }
+
     /// Kind + description of a job, for diagnostics. `None` when unknown.
     pub fn describe(&self, id: u64) -> Option<(String, String)> {
-        let table = self.table.lock().expect("job table poisoned");
+        let table = self.table();
         table
             .jobs
             .get(&id)

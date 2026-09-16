@@ -1,7 +1,7 @@
 //! Modulation matrix tab — numbered rows of source → destination with a
 //! bipolar amount slider per row.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::editor::theme;
 use crate::editor::WavetableEditorApp;

@@ -430,6 +430,76 @@ fn output_only_route_follows_time_modes_without_clicks() {
     }
 }
 
+/// Per-Grain with the Output-only route: stepping Time must not click
+/// in the recirculating feedback tail. Per-Grain moves the effective
+/// delay instantly, so without the fade-to-silence swap on the recirc
+/// read tap the tap position jumps across a block boundary and the
+/// repeats crack (the regression this pins). The 300 -> 155 ms step is
+/// 7.25 periods of the 50 Hz source, so the jump lands a quarter-cycle
+/// out of phase — maximally audible on the old integer tap.
+#[test]
+fn per_grain_output_only_time_step_does_not_click() {
+    let frames = (3.5 * SR) as usize;
+    let change_at = (2.0 * SR) as usize;
+    let input = sine(frames, 50.0, 0.8);
+    let mut plugin = mode_plugin(2, 300.0, 90.0, 25.0);
+    plugin.params.fb_route.set_value(1); // Output-only
+    plugin.params.feedback.set_value(0.6);
+    plugin.initialize(SR, 4096);
+    let mut left = input.clone();
+    let mut right = input.clone();
+    run_blocks(&mut plugin, &mut left[..change_at], &mut right[..change_at], 512);
+    plugin.params.time_ms.set_value(155.0);
+    let (l_rest, r_rest) = (&mut left[change_at..], &mut right[change_at..]);
+    run_blocks(&mut plugin, l_rest, r_rest, 512);
+
+    for &x in left.iter() {
+        assert!(x.is_finite(), "non-finite sample {x}");
+    }
+    // The recirc tap still jumped immediately in the effective-delay
+    // sense (Per-Grain semantics are untouched)...
+    let eff = plugin.effective_delay_seconds();
+    assert!(
+        (eff - 0.155).abs() < 1e-6,
+        "per-grain effective delay did not jump: {eff}"
+    );
+    // ... but the feedback tail through the step stays as smooth as the
+    // steady-state cloud around it (the old integer tap cracked here at
+    // an order of magnitude above steady state).
+    let steady = max_second_difference(&left[change_at - (0.5 * SR) as usize..change_at]);
+    let through = max_second_difference(&left[change_at..change_at + (0.2 * SR) as usize]);
+    assert!(
+        through < 3.0 * steady.max(1e-3),
+        "per-grain output-only recirc tap clicked on the step: \
+         max d2 {through} vs steady {steady}"
+    );
+}
+
+/// With a constant delay the Output-only recirculation renders
+/// bit-identically across the three time modes — the recirc-tap swap
+/// machine only engages on an actual Per-Grain time change, so every
+/// static clean-repeats render keeps its exact bits.
+#[test]
+fn constant_delay_output_only_renders_identically_across_time_modes() {
+    let frames = 2 * SR as usize;
+    let input = sine(frames, 110.0, 0.7);
+    let render = |mode: i32| -> Vec<f32> {
+        let mut plugin = mode_plugin(mode, 250.0, 90.0, 25.0);
+        plugin.params.fb_route.set_value(1); // Output-only
+        plugin.params.feedback.set_value(0.5);
+        plugin.initialize(SR, 4096);
+        let mut left = input.clone();
+        let mut right = input.clone();
+        run_blocks(&mut plugin, &mut left, &mut right, 512);
+        left
+    };
+    let fade = render(0);
+    let repitch = render(1);
+    let per_grain = render(2);
+    assert_eq!(fade, per_grain, "fade diverged with a constant delay");
+    assert_eq!(repitch, per_grain, "repitch diverged with a constant delay");
+}
+
 /// The audio path performs no allocation across repeated time steps in
 /// Fade mode, a mid-run switch to Repitch and further steps (fader,
 /// slew state and per-sample buffers are all pre-allocated).
@@ -472,6 +542,13 @@ fn time_mode_changes_do_not_allocate() {
     plugin.params.time_ms.set_value(400.0);
     seconds(&mut plugin, 0.5);
     plugin.params.time_mode.set_value(2); // back to Per-Grain
+    seconds(&mut plugin, 0.25);
+    // Per-Grain + Output-only time steps ride the recirc-tap swap
+    // machine, which is likewise pre-allocated.
+    plugin.params.fb_route.set_value(1);
+    plugin.params.feedback.set_value(0.5);
+    seconds(&mut plugin, 0.25);
+    plugin.params.time_ms.set_value(250.0);
     seconds(&mut plugin, 0.25);
     let after = thread_allocs();
     assert_eq!(

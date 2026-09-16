@@ -10,7 +10,7 @@
 //! [`GateViz`] with every string already resolved, so what the header
 //! shows can be asserted in `tests/viz.rs` without a window.
 
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 use crate::dsp::GateState;
 use crate::viz::{DetectorSource, GateViz};

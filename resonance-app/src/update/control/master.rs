@@ -25,6 +25,7 @@ use resonance_control::methods::track;
 use resonance_control::{Request, Response, RpcError};
 
 use super::chain_presets::{self, Chain};
+use super::effect_addressing::{self, ChainWording};
 use super::reply::{ack, reject};
 use super::sidechain;
 use super::view_model;
@@ -252,69 +253,38 @@ fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
         .collect()
 }
 
-/// Resolve "which plugin on the master" from the slot-or-(id,
-/// occurrence) pair every chain method accepts. `verb` only shapes the
-/// wording.
-fn resolve_master_effect(
-    app: &Resonance,
-    slot: Option<u32>,
-    plugin_id: Option<&str>,
-    occurrence: Option<u32>,
-    verb: &str,
-) -> Result<(track::PluginParamsEntry, resonance_audio::types::PluginInstanceId), RpcError> {
-    let entries = master_plugin_entries(app);
-    let entry = match (slot, plugin_id) {
-        (Some(_), Some(_)) => {
-            return Err(RpcError::invalid_params(
-                "address the effect by slot OR by plugin_id (+ occurrence), not both",
-            ))
-        }
-        (None, None) => {
-            return Err(RpcError::invalid_params(format!(
-                "name the effect to {verb}: slot, or plugin_id (+ occurrence). The master \
-                 chain is [{}]",
-                chain_description(app)
-            )))
-        }
-        (Some(slot), None) => match entries.iter().find(|e| e.slot == slot) {
-            Some(entry) => entry.clone(),
-            None => {
-                return Err(RpcError::not_found(format!(
-                    "the master chain has no slot {slot}; it carries [{}]",
-                    chain_description(app)
-                )))
-            }
-        },
-        (None, Some(wanted)) => {
-            let occurrence = occurrence.unwrap_or(0);
-            match entries
-                .iter()
-                .find(|e| e.plugin_id == wanted && e.occurrence == occurrence)
-            {
-                Some(entry) => entry.clone(),
-                None => {
-                    return Err(RpcError::not_found(format!(
-                        "the master chain has no plugin {wanted:?} at occurrence {occurrence}; \
-                         it carries [{}]",
-                        chain_description(app)
-                    )))
-                }
-            }
-        }
-    };
-    let instance_id = app
-        .master_plugins
-        .iter()
-        .filter(|p| p.clap_plugin_id == entry.plugin_id)
-        .nth(entry.occurrence as usize)
-        .map(|p| p.instance_id)
-        .ok_or_else(|| {
-            RpcError::not_found(format!(
-                "plugin {:?} vanished from the master chain between lookup and {verb}",
-                entry.plugin_id
-            ))
-        })?;
-    Ok((entry, instance_id))
+/// Master's [`ChainWording`]: no id (there is exactly one master) and
+/// no instrument slot — every entry [`master_plugin_entries`] builds is
+/// `PluginKind::Effect` — so [`ChainWording::instrument_refusal`] never
+/// actually fires; it's implemented anyway to satisfy the shared trait.
+struct MasterWording;
+
+impl ChainWording for MasterWording {
+    fn no_address(&self, verb: &str, listing: &str) -> String {
+        format!(
+            "name the effect to {verb}: slot, or plugin_id (+ occurrence). The master chain is \
+             [{listing}]"
+        )
+    }
+
+    fn slot_not_found(&self, slot: u32, listing: &str) -> String {
+        format!("the master chain has no slot {slot}; it carries [{listing}]")
+    }
+
+    fn id_not_found(&self, plugin_id: &str, occurrence: u32, listing: &str) -> RpcError {
+        RpcError::not_found(format!(
+            "the master chain has no plugin {plugin_id:?} at occurrence {occurrence}; it \
+             carries [{listing}]"
+        ))
+    }
+
+    fn instrument_refusal(&self, _entry: &track::PluginParamsEntry, _verb: &str) -> Option<String> {
+        None
+    }
+
+    fn vanished(&self, plugin_id: &str, verb: &str) -> String {
+        format!("plugin {plugin_id:?} vanished from the master chain between lookup and {verb}")
+    }
 }
 
 /// `master.add_effect` — append an effect to the master chain.
@@ -404,12 +374,15 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         Err(e) => return reject(request, e),
     };
 
-    let instance_id = match resolve_master_effect(
-        app,
+    let entries = master_plugin_entries(app);
+    let instance_id = match effect_addressing::resolve_effect(
+        &entries,
         params.slot,
         params.plugin_id.as_deref(),
         params.occurrence,
         "remove",
+        &MasterWording,
+        |id, occurrence| effect_addressing::instance_at(&app.master_plugins, id, occurrence),
     ) {
         Ok((_, id)) => id,
         Err(error) => return reject(request, error),
@@ -434,12 +407,15 @@ fn replace_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let (entry, instance_id) = match resolve_master_effect(
-        app,
+    let entries = master_plugin_entries(app);
+    let (entry, instance_id) = match effect_addressing::resolve_effect(
+        &entries,
         params.slot,
         params.plugin_id.as_deref(),
         params.occurrence,
         "replace",
+        &MasterWording,
+        |id, occurrence| effect_addressing::instance_at(&app.master_plugins, id, occurrence),
     ) {
         Ok(found) => found,
         Err(error) => return reject(request, error),
@@ -463,12 +439,15 @@ fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let (entry, instance_id) = match resolve_master_effect(
-        app,
+    let entries = master_plugin_entries(app);
+    let (entry, instance_id) = match effect_addressing::resolve_effect(
+        &entries,
         params.slot,
         params.plugin_id.as_deref(),
         params.occurrence,
         "move",
+        &MasterWording,
+        |id, occurrence| effect_addressing::instance_at(&app.master_plugins, id, occurrence),
     ) {
         Ok(found) => found,
         Err(error) => return reject(request, error),
@@ -518,7 +497,7 @@ fn plugin_params(app: &Resonance, request: &Request) -> (Response, Task<Message>
                     RpcError::not_found(format!(
                         "the master chain has no plugin {wanted:?} at occurrence {occurrence}; \
                          it carries [{}]",
-                        chain_description(app)
+                        effect_addressing::chain_description(&entries)
                     )),
                 );
             }
@@ -559,7 +538,7 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
                 Some(id) => format!(
                     "the master chain has no plugin {id:?} at occurrence {occurrence}; it \
                      carries [{}]",
-                    chain_description(app)
+                    effect_addressing::chain_description(&entries)
                 ),
                 None => "the master chain carries no plugins; add one with master.add_effect"
                     .to_owned(),
@@ -714,17 +693,6 @@ fn save_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task
         &params.name,
         params.overwrite,
     )
-}
-
-/// The master chain as `slot:plugin_id` pairs, for error messages that
-/// let the caller correct an id rather than guess.
-fn chain_description(app: &Resonance) -> String {
-    app.master_plugins
-        .iter()
-        .enumerate()
-        .map(|(slot, p)| format!("{slot}:{}", p.clap_plugin_id))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// `master.set_plugin_bypass` — one slot on the master chain.

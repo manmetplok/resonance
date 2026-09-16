@@ -70,6 +70,9 @@ fn new(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<
     if let Some(error) = busy_guard(app) {
         return (super::failure(request, error), Task::none());
     }
+    if let Some(error) = render_guard(app) {
+        return (super::failure(request, error), Task::none());
+    }
     if let Some(error) = dirty_guard(app, params.confirm, "project.new") {
         return (super::failure(request, error), Task::none());
     }
@@ -112,6 +115,9 @@ fn open(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task
         Err(e) => return (super::failure(request, e), Task::none()),
     };
     if let Some(error) = busy_guard(app) {
+        return (super::failure(request, error), Task::none());
+    }
+    if let Some(error) = render_guard(app) {
         return (super::failure(request, error), Task::none());
     }
     if let Some(error) = dirty_guard(app, params.confirm, "project.open") {
@@ -188,8 +194,15 @@ fn save_impl(
         Some(raw) => {
             // Mirror the GUI save path (`SavePathSelected`): the `.rproj`
             // project-directory extension is appended when missing, so the
-            // overwrite check below sees the real target.
-            let normalized = if raw.ends_with(".rproj") {
+            // overwrite check below sees the real target. The check is
+            // case-insensitive — `Song.RPROJ` already carries the
+            // extension — and the stored path keeps the caller's casing;
+            // it just isn't doubled to `Song.RPROJ.rproj`.
+            let has_rproj_ext = Path::new(&raw)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rproj"));
+            let normalized = if has_rproj_ext {
                 raw
             } else {
                 format!("{raw}.rproj")
@@ -277,6 +290,11 @@ fn save_impl(
 /// `busy` while a project load or save is already in flight — a second
 /// save collector would clobber the first, and a load swaps the whole
 /// project out from under any concurrent operation.
+///
+/// This is also what keeps job tokens unique: at most one lifecycle
+/// operation may be live at a time, so no two live jobs ever carry the
+/// same `ProjectSave` / `ProjectLoad` / `ProjectNew` token and its
+/// completion event cannot resolve the wrong client's job.
 fn busy_guard(app: &Resonance) -> Option<RpcError> {
     if app.io.loading || app.io.pending_load.is_some() {
         return Some(RpcError::busy("a project load is in progress"));
@@ -284,7 +302,37 @@ fn busy_guard(app: &Resonance) -> Option<RpcError> {
     if app.io.saving || app.io.save_state.is_some() {
         return Some(RpcError::busy("a project save is in progress"));
     }
+    // A `project.new` from a *user* template loads the template
+    // asynchronously, and until `TemplateLoaded` lands nothing in
+    // `app.io` records it — its live job is the only witness. Without
+    // this a second lifecycle op could start mid-load, clobbering the
+    // pending instantiation and putting two live identical `ProjectNew`
+    // tokens on the board.
+    if app.control.jobs.has_live_token(&JobToken::ProjectNew) {
+        return Some(RpcError::busy("a project instantiation is in progress"));
+    }
     None
+}
+
+/// `busy` while the offline renderer is occupied: a `render.mixdown` /
+/// GUI export in flight (`io.bouncing`), plus the bounce/freeze renders
+/// the mutation gate refuses (shared via
+/// [`super::offline_render_busy_error`], so the wording matches).
+///
+/// Only the DESTRUCTIVE lifecycle ops (`project.new` / `project.open`)
+/// check this: they run above the mutation gate — they establish the
+/// very project it requires — yet swapping the project out mid-render
+/// pulls the song out from under the offline renderer. `project.save` /
+/// `save_as` stay allowed: a save only reads app state and writes the
+/// project directory, exactly what the GUI permits mid-bounce (the
+/// pre-dispatch gates exempt `ProjectIo` messages for that reason).
+fn render_guard(app: &Resonance) -> Option<RpcError> {
+    if app.io.bouncing {
+        return Some(RpcError::busy(
+            "an offline render is in progress; retry when it finishes",
+        ));
+    }
+    super::offline_render_busy_error(app)
 }
 
 /// `needs_confirmation` when the open project has unsaved changes that

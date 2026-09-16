@@ -11,23 +11,26 @@ crate-type = ["cdylib", "lib"]
 # The editor is enabled by default so the bundled .clap ships with a GUI.
 # Turn it off (`--no-default-features`) for headless builds.
 default = ["editor"]
-editor = ["dep:wayland-plugin-gui", "dep:egui", "dep:rfd", "resonance-plugin/editor-widgets"]
+editor = ["dep:wayland-plugin-gui", "dep:plugin-gui-core", "dep:egui", "dep:rfd", "resonance-plugin/editor-widgets"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
+resonance-metering = { path = "../../resonance-metering" }
 parking_lot.workspace = true
 rustfft.workspace = true
 serde_json.workspace = true
 
 # Editor dependencies — only pulled in when the `editor` feature is on.
 wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
 egui = { workspace = true, optional = true }
 rfd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
 # `tests/latency_mode_host.rs` drives a real (in-process) CLAP host across
 # the C ABI, which is the only way to exercise the host handle a runtime
 # latency change goes through.

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
-use wayland_plugin_gui::{egui, EditorApp};
+use plugin_gui_core::{egui, EditorApp};
 
 use crate::assistant::Genre;
 use crate::params::MasteringParams;
