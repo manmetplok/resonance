@@ -129,10 +129,21 @@ impl SpectrumAnalyzer {
         }
     }
 
-    /// Clear any pending ring samples and publish a silent snapshot.
-    /// Filter history inside the worker decays naturally on the next FFT.
+    /// Request a full analyzer reset: pending ring samples are dropped,
+    /// the worker's FFT accumulation state (rolling history, peak-hold
+    /// bars) is zeroed, and a silent snapshot is published.
+    ///
+    /// Safe to call from the producer (audio) thread: this only sets an
+    /// atomic flag that the FFT worker — the ring's single consumer —
+    /// services at the top of its loop, where calling `ring.clear()` is
+    /// legitimate. (An earlier version called `ring.clear()` directly
+    /// from here, which raced the worker's `pop_into`: both threads wrote
+    /// `head`, so the producer could see a full ring's worth of free
+    /// space and overwrite the very cells the worker was mid-read.)
+    /// The reset lands within one worker poll (~16 ms); samples pushed in
+    /// that window are dropped with the rest, which is what reset means.
     pub fn reset(&self) {
-        self.ring.clear();
+        self.ring.request_clear();
     }
 }
 

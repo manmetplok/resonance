@@ -182,6 +182,97 @@ fn mixed_push_paths_cross_thread_stress() {
 }
 
 #[test]
+fn clear_request_is_deferred_until_consumer_services_it() {
+    let ring = SpscRing::new(16);
+    ring.push_slice(&[1.0, 2.0, 3.0]);
+    // No request pending yet.
+    assert!(!ring.take_clear_request());
+    assert_eq!(ring.available(), 3);
+    // A request does nothing until the consumer services it.
+    ring.request_clear();
+    assert_eq!(ring.available(), 3);
+    assert!(ring.take_clear_request());
+    assert_eq!(ring.available(), 0);
+    let mut dst = [0.0_f32; 4];
+    assert_eq!(ring.pop_into(&mut dst), 0);
+    // The request is one-shot.
+    assert!(!ring.take_clear_request());
+    // Samples pushed after the service point flow through normally.
+    ring.push(9.0);
+    assert_eq!(ring.pop_into(&mut dst), 1);
+    assert_eq!(dst[0], 9.0);
+}
+
+#[test]
+fn producer_side_clear_requests_never_corrupt_stream() {
+    use std::sync::Arc;
+
+    // The bug this guards: SpectrumAnalyzer::reset() used to call
+    // ring.clear() from the producer (audio) thread, writing `head` while
+    // the consumer's pop_into was also writing `head` — the producer could
+    // then see a whole ring of free space and overwrite cells the consumer
+    // was mid-read, and the consumer's later `head` store resurrected
+    // "cleared" samples. With request_clear/take_clear_request the clear
+    // only ever happens on the consumer thread, between complete pops.
+    //
+    // Invariant: the producer pushes a strictly increasing integer stream
+    // and requests clears at arbitrary points. Whatever the interleaving,
+    // the consumed stream must be a strictly increasing subsequence of the
+    // pushed values — a clear may drop a contiguous run, but must never
+    // duplicate, reorder, resurrect, or garble a sample.
+    let ring = Arc::new(SpscRing::new(32));
+    let producer_ring = ring.clone();
+    let total: usize = 20_000;
+    let producer = std::thread::spawn(move || {
+        let mut next = 0usize;
+        let mut chunk = [0.0_f32; 7];
+        while next < total {
+            if next.is_multiple_of(611) {
+                // What the audio thread's reset() now does.
+                producer_ring.request_clear();
+            }
+            let want = 7.min(total - next);
+            for (i, slot) in chunk.iter_mut().enumerate().take(want) {
+                *slot = (next + i) as f32;
+            }
+            let pushed = producer_ring.push_slice(&chunk[..want]);
+            next += pushed;
+            if pushed == 0 {
+                std::thread::yield_now();
+            }
+        }
+    });
+
+    let mut last_seen: i64 = -1;
+    let mut dst = [0.0_f32; 13];
+    loop {
+        // Consumer service point, exactly as the FFT worker runs it.
+        ring.take_clear_request();
+        let n = ring.pop_into(&mut dst);
+        for &v in &dst[..n] {
+            assert!(
+                v >= 0.0 && v.fract() == 0.0 && (v as usize) < total,
+                "garbled sample {v} popped from the ring"
+            );
+            let v = v as i64;
+            assert!(
+                v > last_seen,
+                "duplicate/reordered/resurrected sample {v} after {last_seen}"
+            );
+            last_seen = v;
+        }
+        if producer.is_finished() && ring.available() == 0 && !ring.take_clear_request() {
+            break;
+        }
+        if n == 0 {
+            std::thread::yield_now();
+        }
+    }
+    producer.join().unwrap();
+    assert_eq!(ring.pop_into(&mut dst), 0);
+}
+
+#[test]
 fn wraps_around_zero() {
     let ring = SpscRing::new(8);
     // Fill, drain, fill again — exercises wrap arithmetic.

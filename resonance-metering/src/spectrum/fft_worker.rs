@@ -78,6 +78,14 @@ impl FftWorker {
     pub fn run(mut self) {
         let mut drain_scratch = vec![0.0_f32; HOP_SIZE];
         while !self.done.load(Ordering::Acquire) {
+            // Service a deferred clear (SpectrumAnalyzer::reset on the
+            // audio thread) before draining. This runs on the consumer
+            // thread between complete `pop_into` calls, so the ring clear
+            // can never interleave a partial pop, and the producer never
+            // has to touch `head` itself.
+            if self.ring.take_clear_request() {
+                self.reset_analysis_state();
+            }
             let did_work = self.try_process_one(&mut drain_scratch);
             if !did_work {
                 // Nothing to do yet — sleep and poll again.
@@ -97,6 +105,21 @@ impl FftWorker {
                 std::thread::park_timeout(Duration::from_millis(16));
             }
         }
+    }
+
+    /// Drop all FFT accumulation state (the ring itself has just been
+    /// cleared by [`super::ring::SpscRing::take_clear_request`]) and
+    /// publish a silent snapshot, so a reset takes the bars to the floor
+    /// immediately instead of waiting ~3.7 s of peak-hold decay — decay
+    /// that would in any case only run while new samples arrive.
+    fn reset_analysis_state(&mut self) {
+        self.history.fill(0.0);
+        self.samples_since_fft = 0;
+        self.held_db = [FLOOR_DB; NUM_OCTAVE_BINS];
+        self.snapshot.store(Arc::new(SpectrumSnapshot {
+            magnitudes_db: self.held_db,
+            sample_rate: self.sample_rate,
+        }));
     }
 
     /// Try to drain and run one FFT frame. Returns true if work was done.

@@ -114,6 +114,9 @@ impl ResonancePlugin for ResonanceEq {
         if let Some(dsp) = &mut self.dsp {
             dsp.clear_state();
         }
+        // Audio-thread safe: analyzer reset only sets an atomic clear
+        // request; the FFT workers (the ring consumers) service it. The
+        // audio thread never writes the rings' consumer index.
         if let Some(an) = &self.analyzers {
             an.reset();
         }
