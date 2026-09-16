@@ -381,6 +381,20 @@ impl JobBoard {
     /// half-rendered track back as `done`. Returns whether any job was
     /// tracking this lane (a `false` is normal: a GUI-driven render).
     ///
+    /// Call this only for a `VocalAudioReady` the render-epoch check has
+    /// ACCEPTED. A superseded render's event used to tick lanes off
+    /// every batch before that check ran, letting a later job resolve
+    /// `done` off audio the install then discarded as stale.
+    ///
+    /// Every covering batch, not the oldest — deliberately unlike
+    /// [`tick_import_path`](Self::tick_import_path). Two import batches
+    /// naming the same file get one engine event each, so events map to
+    /// batches in dispatch order; but two render jobs covering the same
+    /// lane share a SINGLE surviving event: the later request bumps the
+    /// lane's epoch, the earlier render is discarded on arrival, and the
+    /// one accepted install is current for every job that asked. Ticking
+    /// only the oldest would strand the newer job until [`MAX_WAIT`].
+    ///
     /// The result payload carries every track the batch rendered, so a
     /// whole-project render reports all of them.
     pub fn complete_vocal_lane(&self, definition_id: u64, track_id: u64, revision: u64) -> bool {
@@ -417,34 +431,40 @@ impl JobBoard {
         matched
     }
 
-    /// Fail a live `VocalRender` job, whatever its lane. The
-    /// `VocalAudioFailed` message (todo #1156) carries no lane identity,
-    /// so the job is inferred: renders dispatch in job order and each
-    /// batch's lanes chain one after another, so a failure belongs to
-    /// the OLDEST live vocal-render job — the one whose lanes are
-    /// actually rendering. (Historic name: it used to pick the newest,
-    /// which with two live batches failed the one still waiting its
-    /// turn.) No-op when none is live (a GUI-driven render).
-    pub fn fail_newest_vocal_render(&self, error: impl Into<String>) -> bool {
-        let id = {
+    /// Fail every live [`JobToken::VocalRender`] batch still waiting on
+    /// this lane. `VocalAudioFailed` names the lane that errored (it
+    /// used to carry nothing, so the failure had to be *inferred* onto
+    /// the oldest live render job — which killed a job covering only
+    /// lane A when an unrelated GUI regeneration of lane B failed), and
+    /// the caller has already epoch-checked it, so a failure here means
+    /// the lane's audio is genuinely not coming: no batch waiting on it
+    /// can ever complete. Batches not waiting on the lane — including
+    /// ones that already received its audio and moved on — keep running.
+    /// Returns whether any batch matched (a `false` is normal: a
+    /// GUI-driven render, with no control job attached).
+    pub fn fail_vocal_lane(
+        &self,
+        definition_id: u64,
+        track_id: u64,
+        error: impl Into<String>,
+    ) -> bool {
+        let ids: Vec<u64> = {
             let table = self.table();
             table
                 .jobs
                 .iter()
                 .filter(|(_, e)| {
                     !e.state.is_terminal()
-                        && matches!(e.token, Some(JobToken::VocalRender { .. }))
+                        && e.remaining_lanes.contains(&(definition_id, track_id))
                 })
                 .map(|(id, _)| *id)
-                .min()
+                .collect()
         };
-        match id {
-            Some(id) => {
-                self.fail(id, error);
-                true
-            }
-            None => false,
+        let error = error.into();
+        for id in &ids {
+            self.fail(*id, error.clone());
         }
+        !ids.is_empty()
     }
 
     /// The token of `job_id` if it is a [`JobToken::Measure`] that is

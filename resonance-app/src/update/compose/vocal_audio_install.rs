@@ -13,10 +13,16 @@ use super::vocal_audio_io::unlink_if_exists;
 /// Apply the vocal audio render result: send `LoadClipFromWav` to the
 /// engine for every snapshotted placement and remember the resulting
 /// clip ids (+ path) so the next regen can tear them down cleanly.
+///
+/// Returns whether the render was **accepted** — `false` means the
+/// epoch check found it superseded and its audio was discarded. The
+/// caller must not resolve any control job off a discarded render: a
+/// job ticked off a stale event reports `done` for audio that never
+/// installed.
 pub(super) fn handle_vocal_audio_ready(
     r: &mut crate::Resonance,
     data: crate::compose::messages::VocalAudioReadyData,
-) {
+) -> bool {
     use resonance_audio::types::AudioCommand;
 
     let crate::compose::messages::VocalAudioReadyData {
@@ -30,16 +36,9 @@ pub(super) fn handle_vocal_audio_ready(
         render_epoch,
     } = data;
 
-    let current_epoch = r
-        .compose
-        .vocal_audio
-        .render_epoch
-        .get(&(definition_id, track_id))
-        .copied()
-        .unwrap_or(0);
-    if render_epoch != current_epoch {
+    if render_epoch != current_render_epoch(r, definition_id, track_id) {
         unlink_if_exists(&wav_path);
-        return;
+        return false;
     }
 
     for (placement_id, start_sample) in placements {
@@ -69,6 +68,24 @@ pub(super) fn handle_vocal_audio_ready(
             (audio_clip_id, wav_path.clone()),
         );
     }
+    true
+}
+
+/// The lane's current render epoch — the snapshot a completion (success
+/// or failure) must carry to be about the render that is actually in
+/// flight, rather than one a later request superseded. `0` for a lane
+/// that never rendered.
+pub(super) fn current_render_epoch(
+    r: &crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+) -> u64 {
+    r.compose
+        .vocal_audio
+        .render_epoch
+        .get(&(definition_id, track_id))
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Drop every previously-installed vocal audio clip on this (def, track)

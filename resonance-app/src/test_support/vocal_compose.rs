@@ -152,6 +152,24 @@ impl Resonance {
             .copied()
     }
 
+    /// Test-only: pin a vocal lane's in-flight render epoch, standing in
+    /// for the bump `enqueue_vocal_render` performs when a render is
+    /// queued. Lets a test stage the supersede race — a `VocalAudioReady`
+    /// / `VocalAudioFailed` carrying any *other* epoch is stale and must
+    /// resolve no control job.
+    #[doc(hidden)]
+    pub fn test_set_vocal_render_epoch(
+        &mut self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+        epoch: u64,
+    ) {
+        self.compose
+            .vocal_audio
+            .render_epoch
+            .insert((definition_id, track_id), epoch);
+    }
+
     /// Test-only: install a rendered-vocal-audio clip entry for a lane,
     /// standing in for audio a previous session rendered. A re-render
     /// tears these down, so their disappearance is the observable "this
