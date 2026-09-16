@@ -52,6 +52,8 @@ impl MeteringCore {
     pub fn reset(&mut self) {
         self.lufs.reset();
         self.true_peak.reset();
+        // Audio-thread safe: only sets an atomic clear request that the
+        // spectrum's FFT worker (the ring consumer) services.
         self.spectrum.reset();
         self.correlation.reset();
         self.crest.reset();

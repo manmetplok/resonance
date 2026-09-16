@@ -5,7 +5,7 @@
 //! so the index wrap is a cheap bitmask.
 
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Fixed-size lock-free ring buffer for f32 samples.
 ///
@@ -23,6 +23,13 @@ pub struct SpscRing {
     mask: usize,
     head: AtomicUsize,
     tail: AtomicUsize,
+    /// Deferred-clear flag. Any thread may set it via
+    /// [`SpscRing::request_clear`]; only the consumer services it via
+    /// [`SpscRing::take_clear_request`]. This exists so the producer can
+    /// ask for a clear without writing `head` itself — a producer-side
+    /// `clear()` would race the consumer's `pop_into` (both writing
+    /// `head`), letting the producer reuse cells the consumer is mid-read.
+    clear_requested: AtomicBool,
 }
 
 // Safety: SpscRing is designed for cross-thread SPSC use (`UnsafeCell` is
@@ -47,6 +54,7 @@ impl SpscRing {
             mask: capacity - 1,
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
+            clear_requested: AtomicBool::new(false),
         }
     }
 
@@ -164,10 +172,39 @@ impl SpscRing {
         n
     }
 
-    /// Drop all unread samples. Only the consumer may call this.
+    /// Drop all unread samples. Only the consumer may call this: it writes
+    /// `head`, which the SPSC discipline reserves for the consumer. Any
+    /// other thread that wants the ring emptied must use
+    /// [`SpscRing::request_clear`] instead.
     pub fn clear(&self) {
         let tail = self.tail.load(Ordering::Acquire);
         self.head.store(tail, Ordering::Release);
+    }
+
+    /// Ask the consumer to drop all unread samples at its next service
+    /// point. Safe to call from any thread (including the producer):
+    /// it only sets an atomic flag and never touches `head`/`tail`.
+    ///
+    /// The clear is deferred until the consumer calls
+    /// [`SpscRing::take_clear_request`], so samples pushed between the
+    /// request and the service point are dropped along with the pending
+    /// ones — acceptable for reset-style semantics.
+    pub fn request_clear(&self) {
+        self.clear_requested.store(true, Ordering::Release);
+    }
+
+    /// Consumer-only: service a pending [`SpscRing::request_clear`], if
+    /// any. Returns `true` if a clear was performed, so the consumer can
+    /// also reset whatever downstream state it accumulated from samples
+    /// that are now discarded. Call this *between* `pop_into` calls —
+    /// on the consumer thread it can never interleave a partial pop.
+    pub fn take_clear_request(&self) -> bool {
+        if self.clear_requested.swap(false, Ordering::Acquire) {
+            self.clear();
+            true
+        } else {
+            false
+        }
     }
 }
 
