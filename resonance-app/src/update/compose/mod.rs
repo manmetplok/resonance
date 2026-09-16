@@ -372,24 +372,48 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         // Vocal audio render completion (dispatched from the background
         // SVS task that `lane_inspector::handle` queued).
         ComposeMessage::VocalAudioReady(data) => {
-            // Tick this lane off any control-initiated vocal render job
-            // (doc #265, todo #1156) before the install consumes `data`.
-            // A track-level `vocal.render` covers every lane on the
-            // track, so the job only resolves once the last of them
-            // lands. No-op when no control job covers the lane (a
-            // GUI-driven render).
-            r.control
-                .jobs
-                .complete_vocal_lane(data.definition_id, data.track_id, r.revision());
-            vocal_audio_install::handle_vocal_audio_ready(r, *data);
+            // Install FIRST: the epoch check inside decides whether this
+            // render is current or was superseded (a later `vocal.render`
+            // or GUI regeneration re-queued the lane while it was in
+            // flight). Only an accepted install may tick the lane off the
+            // control-initiated render jobs (doc #265, todo #1156) —
+            // ticking before the check let a superseded render resolve a
+            // later job `done` while the audio that job asked for was
+            // then discarded as stale, so a client that waited on the job
+            // read old/no audio back. A track-level `vocal.render` covers
+            // every lane on the track, so the job only resolves once the
+            // last of them lands; no-op when no control job covers the
+            // lane (a GUI-driven render).
+            let (definition_id, track_id) = (data.definition_id, data.track_id);
+            if vocal_audio_install::handle_vocal_audio_ready(r, *data) {
+                r.control
+                    .jobs
+                    .complete_vocal_lane(definition_id, track_id, r.revision());
+            }
         }
-        ComposeMessage::VocalAudioFailed { error } => {
-            // A vocal render carries no lane identity on failure, so fail
-            // the newest live vocal-render job regardless of lane. In
-            // practice control renders are serialized (one at a time
-            // through the update loop) so this resolves the right one.
-            r.control.jobs.fail_newest_vocal_render(error.clone());
-            r.compose.last_error = Some(error);
+        ComposeMessage::VocalAudioFailed {
+            definition_id,
+            track_id,
+            render_epoch,
+            error,
+        } => {
+            // Same epoch gate as the success path: a failure from a
+            // superseded render is moot — a newer render for the lane is
+            // already in flight, and *its* outcome is what the lane (and
+            // any job waiting on it) will get. Only a current-epoch
+            // failure means the lane's audio is genuinely not coming, so
+            // only then does it fail the jobs still waiting on this lane
+            // — and only those: before the message carried the lane, a
+            // GUI regeneration of lane B erroring killed a control job
+            // that covered only lane A.
+            if render_epoch
+                == vocal_audio_install::current_render_epoch(r, definition_id, track_id)
+            {
+                r.control
+                    .jobs
+                    .fail_vocal_lane(definition_id, track_id, error.clone());
+                r.compose.last_error = Some(error);
+            }
         }
     }
     Task::none()
