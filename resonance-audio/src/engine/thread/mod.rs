@@ -210,6 +210,24 @@ pub(crate) struct HandlerState {
     /// [`super::clips::poll_deferred_clip_commands`] on each engine-loop
     /// iteration.
     pub deferred_clip_commands: Vec<super::clips::DeferredClipCommand>,
+    /// Cancel token of the render most recently started by a bounce /
+    /// export command (`BounceToWav` / `ExportAudio` / `BounceTrackToAudio`
+    /// / `BounceTrackRealtimeToAudio`); `CancelBounce` flips it. Every
+    /// render gets a FRESH token at start, so a cancel aimed at one render
+    /// can neither abort a different renderer that happens to poll first
+    /// nor be lost to a later render clearing a shared flag — the two
+    /// failure modes of the old single `SharedState::bounce_cancel` atomic.
+    /// Stays `Some` after the render ends; setting a finished render's
+    /// token is harmless.
+    pub bounce_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Cancel token of the most recently started freeze render
+    /// (`FreezeTrack`); `CancelFreeze` flips it. Same per-render
+    /// semantics as [`Self::bounce_cancel`].
+    pub freeze_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Cancel token of the most recently started stem export
+    /// (`ExportStems`); `CancelStemExport` flips it. Same per-render
+    /// semantics as [`Self::bounce_cancel`].
+    pub stem_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Rebuild the audio-thread automation snapshot from the engine-thread
@@ -281,6 +299,9 @@ pub(crate) fn engine_thread(
         external_instruments: external_instrument::ExternalInstruments::new(),
         pending_latency_ping: None,
         deferred_clip_commands: Vec::new(),
+        bounce_cancel: None,
+        freeze_cancel: None,
+        stem_cancel: None,
     };
     let ctx = HandlerCtx {
         shared: &shared,

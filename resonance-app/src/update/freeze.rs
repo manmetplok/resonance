@@ -103,6 +103,14 @@ fn freeze_one(r: &mut Resonance, track_id: TrackId) {
         r.error_message = Some("Stop transport before freezing".into());
         return;
     }
+    // An offline control measurement holds the offline renderer
+    // exclusively; a freeze render on top of it would drive the same
+    // live plugin instances from two renderers at once (mirrors
+    // `meter.measure` refusing while a freeze runs).
+    if r.offline_measure_in_progress() {
+        r.error_message = Some("A measurement is in progress; freeze again when it finishes".into());
+        return;
+    }
     if r.freeze.status(track_id).is_freezing() {
         // Already rendering — ignore the repeat request.
         return;
@@ -155,6 +163,11 @@ fn cancel_freeze(r: &mut Resonance) {
 fn start_batch(r: &mut Resonance, tracks: Vec<TrackId>) {
     if r.transport.playing {
         r.error_message = Some("Stop transport before freezing".into());
+        return;
+    }
+    // Same offline-renderer exclusion as `freeze_one`.
+    if r.offline_measure_in_progress() {
+        r.error_message = Some("A measurement is in progress; freeze again when it finishes".into());
         return;
     }
     // Skip tracks already frozen or mid-render — re-freezing them would be

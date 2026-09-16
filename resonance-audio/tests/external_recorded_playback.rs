@@ -9,6 +9,7 @@
 //! side of the mixer's per-track branch, so an external track has to
 //! take that branch even though its type says Instrument.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -92,6 +93,7 @@ fn peak_of_render(track: Track, name: &str) -> f32 {
         1,
         path.to_string_lossy().into_owned(),
         &state.shared,
+        &AtomicBool::new(false),
         &state.tracks,
         &state.busses,
         &state.master,

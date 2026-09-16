@@ -9,7 +9,7 @@
 //! regardless of the live A/B monitor selection.
 
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -33,6 +33,11 @@ use super::render::{
 /// The render range is `[earliest MIDI start, latest MIDI end + 2 s]`
 /// on the source track. The 2 s tail catches FX / bus reverb decay.
 ///
+/// `cancel` is this render's own cooperative cancel token, polled
+/// between chunks; flipping it aborts the bounce and tears down the
+/// half-rendered target track. The token belongs to this render alone
+/// (see `HandlerState::bounce_cancel`), so it is never cleared here.
+///
 /// Public so integration tests can drive the renderer directly without
 /// going through the full engine command path; production callers
 /// route through [`AudioCommand::BounceTrackToAudio`].
@@ -43,6 +48,7 @@ pub fn to_audio_clip(
     target_clip_id: ClipId,
     name: String,
     shared: &Arc<SharedState>,
+    cancel: &AtomicBool,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
@@ -115,12 +121,6 @@ pub fn to_audio_clip(
         return;
     }
 
-    // Clear any stale cancel flag from a previous run before we start
-    // — the same atomic gates this offline render and serves as the
-    // realtime path's cancel signal, so a leftover `true` would abort
-    // the render before its first chunk.
-    shared.bounce_cancel.store(false, Ordering::Relaxed);
-
     // Refresh the vocal-tuning render caches so the chunk loop below mixes
     // corrected audio for any retuned clip — identical to live playback,
     // which reads the same caches through `mix_track_clips` (todo #358).
@@ -170,12 +170,13 @@ pub fn to_audio_clip(
     let mut written: usize = 0;
     let mut last_emitted_pct: i32 = 0;
     while pos < render_stop {
-        if shared.bounce_cancel.load(Ordering::Relaxed) {
+        if cancel.load(Ordering::Relaxed) {
             // Cooperative cancel: tear down the half-rendered target
             // track + clip allocation and report back. The clip wasn't
             // pushed yet (we only push at the very end), so we just
             // need to remove the freshly-added empty target track.
-            shared.bounce_cancel.store(false, Ordering::Relaxed);
+            // The token is this render's own, so it is not cleared —
+            // a later render starts with a fresh one.
             let _ = tracks.write().shift_remove(&target_track_id);
             let _ = event_tx.send(AudioEvent::TrackRemoved {
                 track_id: target_track_id,

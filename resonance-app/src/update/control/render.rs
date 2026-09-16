@@ -279,7 +279,8 @@ fn stems(request: &Request) -> (Response, Task<Message>) {
 // ---------------------------------------------------------------------------
 
 /// `busy` while the transport is recording (a bounce requires a stopped
-/// transport) or another render is already in flight.
+/// transport), another render is already in flight, or an offline
+/// measurement holds the offline renderer.
 fn busy_guard(app: &Resonance) -> Option<RpcError> {
     if app.transport.recording {
         return Some(RpcError::busy(
@@ -288,6 +289,15 @@ fn busy_guard(app: &Resonance) -> Option<RpcError> {
     }
     if app.io.bouncing {
         return Some(RpcError::busy("a render is already in progress"));
+    }
+    // The mirror image of `meter.measure`'s guard: an offline
+    // measurement took the offline renderer exclusively, and a mixdown
+    // started on top of it would drive the same live plugin instances
+    // from two renderers at once.
+    if app.offline_measure_in_progress() {
+        return Some(RpcError::busy(
+            "a measurement is in progress; render again when it finishes",
+        ));
     }
     None
 }

@@ -159,14 +159,6 @@ pub struct SharedState {
     /// with `count_in_remaining` to derive elapsed frames for beat
     /// alignment inside the mixer's count-in branch.
     pub count_in_total: AtomicU64,
-    /// Cooperative cancel flag for the offline bounce renderer
-    /// (`bounce::to_audio_clip`). The renderer polls this between
-    /// chunks and aborts when it flips to true. The realtime bounce
-    /// path doesn't need it — its cancel goes through `handle_pause`
-    /// directly — but stays in shared state so the offline renderers
-    /// running on their worker threads can be aborted from the same
-    /// `CancelBounce` command without threading another channel.
-    pub bounce_cancel: AtomicBool,
     /// How many offline renders are running right now (ba todo #1218).
     ///
     /// Bounce / export / freeze / stem export / mix measurement all run on
@@ -183,8 +175,12 @@ pub struct SharedState {
     /// error otherwise — it is a read-only query, so refusing costs the
     /// caller nothing and it must never disturb a render that is producing
     /// a file. The file-producing renderers keep their existing behaviour
-    /// (the app serialises them through its export/freeze modals); making
-    /// them refuse each other is a behaviour change for another todo.
+    /// (the app serialises them through its export/freeze modals, and its
+    /// bounce / freeze / export START paths refuse while an offline
+    /// measurement is live — `Resonance::offline_measure_in_progress` —
+    /// so the exclusion holds in both directions); making the renderers
+    /// refuse each other engine-side is a behaviour change for another
+    /// todo.
     pub offline_render_count: AtomicU32,
     /// External-instrument round-trip offsets per track
     /// (`latency_offset_samples`, positive = the hardware return
@@ -357,7 +353,6 @@ impl Default for SharedState {
             count_in_active: AtomicBool::new(false),
             count_in_remaining: AtomicU64::new(0),
             count_in_total: AtomicU64::new(0),
-            bounce_cancel: AtomicBool::new(false),
             offline_render_count: AtomicU32::new(0),
             external_offsets: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
             dsp_load_ema_bits: AtomicU32::new(0),

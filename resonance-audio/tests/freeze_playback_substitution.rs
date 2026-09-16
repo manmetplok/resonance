@@ -15,6 +15,7 @@
 //! * **mute / solo / pan / volume** still affect a frozen track;
 //! * a **sample-rate mismatch** between cache and engine is handled.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
@@ -152,6 +153,7 @@ fn freeze_track1(state: &EngineState, name: &str) -> FrozenSource {
         1,
         path.to_string_lossy().into_owned(),
         &state.shared,
+        &AtomicBool::new(false),
         &state.tracks,
         &state.busses,
         &state.master,

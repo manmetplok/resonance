@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -55,10 +55,12 @@ pub const FREEZE_CANCELLED_MSG: &str = "Freeze cancelled";
 /// master on the next playback, so applying them here would double them.
 ///
 /// `progress` is called with a fraction in `[0.0, 1.0]` at most once per
-/// integer percent. Cancellation reuses the shared bounce-cancel atomic
-/// ([`SharedState::bounce_cancel`]): flipping it to `true` from the
-/// engine thread aborts the render between chunks, removes the partial
-/// WAV, and returns `Err`.
+/// integer percent. `cancel` is this render's own cooperative cancel
+/// token (created per render — see `HandlerState::freeze_cancel`):
+/// flipping it to `true` aborts the render between chunks, removes the
+/// partial WAV, and returns `Err`. It is never cleared here, so a
+/// cancel can neither be consumed by a different renderer nor lost to a
+/// later render starting.
 ///
 /// Public so integration tests can drive the renderer directly without
 /// going through the (separate) engine command path.
@@ -67,6 +69,7 @@ pub fn to_freeze_cache(
     source_track_id: TrackId,
     path: String,
     shared: &Arc<SharedState>,
+    cancel: &AtomicBool,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
@@ -138,11 +141,6 @@ pub fn to_freeze_cache(
         return Err("Nothing to freeze".into());
     }
 
-    // Clear any stale cancel flag from a previous run before we start —
-    // the same atomic gates this render, so a leftover `true` would
-    // abort before the first chunk.
-    shared.bounce_cancel.store(false, Ordering::Relaxed);
-
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate,
@@ -193,9 +191,9 @@ pub fn to_freeze_cache(
     let mut last_emitted_pct: i32 = 0;
     while pos < render_stop {
         // Cooperative cancel — checked once per chunk (~tens of ms each)
-        // so a UI Cancel button releases the freeze promptly.
-        if shared.bounce_cancel.load(Ordering::Relaxed) {
-            shared.bounce_cancel.store(false, Ordering::Relaxed);
+        // so a UI Cancel button releases the freeze promptly. The token
+        // is this render's own, so it is not cleared.
+        if cancel.load(Ordering::Relaxed) {
             drop(writer);
             let _ = std::fs::remove_file(&path);
             return Err(FREEZE_CANCELLED_MSG.into());
