@@ -3,10 +3,28 @@
 //! Intended for mastering-grade harmonic coloration. Two shaper modes:
 //! `Smooth` runs `tanh` for clean even/odd harmonics; `Gritty` runs a
 //! cubic soft-clipper with a sharper knee and richer odd-harmonic
-//! content for a more obviously analog sound. With the default drive
-//! the output distortion products stay below Nyquist/2 at 48 kHz, so
-//! no oversampling is applied — aliasing is inaudible at the levels
-//! mastering uses.
+//! content for a more obviously analog sound.
+//!
+//! Both shapers run through first-order antiderivative antialiasing
+//! (ADAA). A memoryless nonlinearity generates harmonics with no upper
+//! bound — the cubic hard-clamps at its knee, a C¹ corner whose
+//! harmonic series extends far past Nyquist on full-band material, and
+//! `tanh` at +18 dB drive is nearly as bright — and every partial born
+//! above Nyquist folds back into the passband as *inharmonic* grit.
+//! Instead of oversampling, each output sample is the exact average of
+//! the shaper over the segment the driven input traversed since the
+//! previous sample, `(F(u[n]) − F(u[n−1])) / (u[n] − u[n−1])` with `F`
+//! the shaper's closed-form antiderivative; that continuous-time
+//! averaging acts as an extra first-order lowpass on the distortion
+//! products and knocks the folded partials down steeply with
+//! frequency. ADAA runs in the *driven*-input domain `u = drive · x`
+//! (the nonlinearity is static in `u`, so the antiderivatives stay
+//! valid even while the drive smoother ramps per-sample). It adds no
+//! latency to the chain's latency model — the nonlinear path acquires
+//! only a ~half-sample *effective* delay, which the internal dry/wet
+//! mix tolerates (its worst case is a gentle ~3 dB shade at Nyquist at
+//! mix = 0.5, and the wet path is already phase-shifted by the two
+//! shelves anyway).
 //!
 //! Chain per sample:
 //!
@@ -116,6 +134,13 @@ pub struct Saturator {
     cached_shaper: Shaper,
     drive_lin: f32,
     inv_drive: f32,
+    /// ADAA memory: the previous *driven* shaper input `u[n−1] =
+    /// drive_lin·x[n−1]`, one per channel so L/R stay independent.
+    /// Held in f64 because the ADAA quotient subtracts two nearby
+    /// antiderivative values; f32 cancellation there would put noise
+    /// on the master bus.
+    adaa_x1_l: f64,
+    adaa_x1_r: f64,
     /// Has any audio streamed through since construction/reset? An
     /// enable on the very first block engages instantly (there is no
     /// audio history to click against); a later enable crossfades in.
@@ -145,6 +170,8 @@ impl Saturator {
             cached_shaper: Shaper::Smooth,
             drive_lin: 1.0,
             inv_drive: 1.0,
+            adaa_x1_l: 0.0,
+            adaa_x1_r: 0.0,
             primed: false,
             was_enabled: false,
         };
@@ -186,6 +213,8 @@ impl Saturator {
         self.enable_sm.reset(0.0);
         self.enable_tgt = f32::NAN;
         self.cached_drive_db = f32::NAN;
+        self.adaa_x1_l = 0.0;
+        self.adaa_x1_r = 0.0;
         self.primed = false;
         self.was_enabled = false;
     }
@@ -206,6 +235,18 @@ impl Saturator {
             self.lf_shelf_r.reset();
             self.dc_l.reset();
             self.dc_r.reset();
+            // The ADAA memory is state from the same stale era as the
+            // filters, so it resets with them: once the stage has been
+            // fully faded out its `u[n−1]` stops tracking the input
+            // (the early return below skips processing entirely), and
+            // an ADAA step from a months-old sample would smear the
+            // first wet sample arbitrarily. The reset's own first-step
+            // error is bounded — the ADAA quotient is a mean of f, so
+            // |output| ≤ sup|f| always — and it lands together with
+            // the filter resets under the same enable crossfade, so it
+            // is no more audible than they are.
+            self.adaa_x1_l = 0.0;
+            self.adaa_x1_r = 0.0;
             self.drive_sm.reset(cfg.drive_db);
             self.drive_tgt = cfg.drive_db;
             self.character_sm.reset(character);
@@ -250,18 +291,30 @@ impl Saturator {
                 self.cached_drive_db = drive_db;
                 self.cached_shaper = shaper;
                 self.drive_lin = db_to_linear(drive_db);
-                self.inv_drive = 1.0 / base_shape(self.drive_lin, shaper).max(1e-6);
+                self.inv_drive =
+                    (1.0 / base_shape(self.drive_lin as f64, shaper).max(1e-6)) as f32;
             }
             let drive = self.drive_lin;
             let inv_drive = self.inv_drive;
-            let character = self.character_sm.next();
+            let character = self.character_sm.next() as f64;
             let mix = self.mix_sm.next() * self.enable_sm.next();
 
             let l1 = self.hf_shelf_l.process(dry_l);
             let r1 = self.hf_shelf_r.process(dry_r);
 
-            let l2 = self.dc_l.process(waveshape(l1 * drive, character, shaper) * inv_drive);
-            let r2 = self.dc_r.process(waveshape(r1 * drive, character, shaper) * inv_drive);
+            // ADAA in the driven domain: the smoothed drive is folded
+            // into `u` before the shaper, so per-sample drive ramps
+            // just move this sample's segment endpoint — the
+            // antiderivatives themselves never depend on drive.
+            let ul = l1 as f64 * drive as f64;
+            let ur = r1 as f64 * drive as f64;
+            let wet_l = (waveshape_adaa(ul, self.adaa_x1_l, character, shaper) as f32) * inv_drive;
+            let wet_r = (waveshape_adaa(ur, self.adaa_x1_r, character, shaper) as f32) * inv_drive;
+            self.adaa_x1_l = ul;
+            self.adaa_x1_r = ur;
+
+            let l2 = self.dc_l.process(wet_l);
+            let r2 = self.dc_r.process(wet_r);
 
             let l3 = self.lf_shelf_l.process(l2);
             let r3 = self.lf_shelf_r.process(r2);
@@ -278,7 +331,7 @@ impl Saturator {
 /// `tanh` and produces noticeably more harmonic content at the same
 /// input level.
 #[inline]
-fn base_shape(x: f32, shaper: Shaper) -> f32 {
+fn base_shape(x: f64, shaper: Shaper) -> f64 {
     match shaper {
         Shaper::Smooth => x.tanh(),
         Shaper::Gritty => {
@@ -291,16 +344,82 @@ fn base_shape(x: f32, shaper: Shaper) -> f32 {
     }
 }
 
+/// Closed-form antiderivative `F` of [`base_shape`], `F′ = f`. The
+/// integration constant is irrelevant (ADAA only ever takes
+/// differences of `F`) but `F` must be *continuous*, including across
+/// the cubic's clamp points — a jump there would put a spike in every
+/// output sample whose input segment crosses the knee.
 #[inline]
-fn waveshape(x: f32, character: f32, shaper: Shaper) -> f32 {
+fn shape_antiderivative(x: f64, shaper: Shaper) -> f64 {
+    match shaper {
+        Shaper::Smooth => {
+            // ∫ tanh(x) dx = ln cosh(x). Evaluated as
+            //   ln cosh(x) = |x| + ln(1 + e^{−2|x|}) − ln 2
+            // which never overflows (cosh itself blows up past x ≈ 700
+            // and drive alone reaches ~8 here, so hot inter-sample
+            // segments would be at risk in the naive form).
+            let ax = x.abs();
+            ax + (-2.0 * ax).exp().ln_1p() - std::f64::consts::LN_2
+        }
+        Shaper::Gritty => {
+            // Piecewise, matching the clamp in `base_shape`:
+            //   |x| ≤ 1.5:  f(x) = x − (4/27)x³   (the cubic in x-units:
+            //               1.5·(u − u³/3) with u = x/1.5)
+            //               F(x) = x²/2 − x⁴/27
+            //   |x| > 1.5:  f(x) = sign(x)·1
+            //               F(x) = |x| − 9/16
+            // Continuity at the knee: F(±1.5) = 1.125 − 0.1875 = 0.9375
+            // from the cubic branch and 1.5 − 0.5625 = 0.9375 from the
+            // clamped branch. (F is even because f is odd.)
+            let ax = x.abs();
+            if ax <= 1.5 {
+                let x2 = x * x;
+                x2 / 2.0 - x2 * x2 / 27.0
+            } else {
+                ax - 0.5625
+            }
+        }
+    }
+}
+
+/// Below this input step the ADAA quotient `(F(u0) − F(u1)) / (u0 − u1)`
+/// is a 0/0 and the code falls back to the midpoint rule
+/// `f((u0 + u1)/2)`. The two forms agree to O(Δu²), so the switch is
+/// seamless; in f64 the quotient itself is still accurate to ~1e-10 at
+/// this threshold, so the exact value is uncritical.
+const ADAA_EPS: f64 = 1.0e-5;
+
+/// First-order ADAA evaluation of [`base_shape`] over the segment
+/// `[u1, u0]`: the exact mean of `f` across the interval the driven
+/// input traversed, which is what suppresses the fold-back of
+/// harmonics born above Nyquist. `du = u0 − u1` is passed in so the
+/// symmetric and offset (asymmetric) branches share one denominator
+/// and one fallback decision.
+#[inline]
+fn adaa1(u0: f64, u1: f64, du: f64, shaper: Shaper) -> f64 {
+    if du.abs() < ADAA_EPS {
+        base_shape(0.5 * (u0 + u1), shaper)
+    } else {
+        (shape_antiderivative(u0, shaper) - shape_antiderivative(u1, shaper)) / du
+    }
+}
+
+/// ADAA counterpart of the memoryless waveshaper: `u0` is the current
+/// driven input, `u1` the previous one (per channel).
+#[inline]
+fn waveshape_adaa(u0: f64, u1: f64, character: f64, shaper: Shaper) -> f64 {
+    let du = u0 - u1;
     // Symmetric branch: pure odd harmonics.
-    let symmetric = base_shape(x, shaper);
+    let symmetric = adaa1(u0, u1, du, shaper);
     // Asymmetric branch: DC-offset before the shaper, then subtract
     // the offset's own shaped value so the curve still passes through
     // the origin. The tilted transfer function generates 2nd-harmonic
     // content. Larger offset → more obvious tube/tape character.
-    let offset = 0.35_f32;
-    let asymmetric = base_shape(x + offset, shaper) - base_shape(offset, shaper);
+    // Offsetting both endpoints leaves du unchanged, so the branch
+    // shares the symmetric branch's denominator; the subtracted
+    // `f(offset)` is a constant and needs no antialiasing.
+    let offset = 0.35_f64;
+    let asymmetric = adaa1(u0 + offset, u1 + offset, du, shaper) - base_shape(offset, shaper);
     symmetric * (1.0 - character) + asymmetric * character
 }
 
