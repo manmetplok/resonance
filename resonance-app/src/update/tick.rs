@@ -122,6 +122,7 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     auto_follow_playhead(r);
     refresh_midi_devices_if_stale(r);
     check_engine_disconnected(r);
+    check_output_stream_lost(r);
     if tasks.is_empty() {
         Task::none()
     } else {
@@ -149,6 +150,49 @@ fn check_engine_disconnected(r: &mut Resonance) {
             "Audio engine stopped responding — restart the app; edits are no longer reaching audio"
                 .to_string(),
         );
+    }
+}
+
+/// User-facing banner for a lost output stream. A named constant so the
+/// recovery branch of [`check_output_stream_lost`] can clear exactly the
+/// banner this module raised and never an unrelated error that landed on
+/// `error_message` in the meantime.
+const STREAM_LOST_BANNER: &str = "Audio output stream lost (device unplugged or audio server \
+     restarted) — playback and recording are silent until it reconnects";
+
+/// Surface output-*stream* death to the user. Distinct from
+/// [`check_engine_disconnected`]: when the USB interface is unplugged or
+/// PipeWire restarts, the engine thread stays alive — the transport
+/// appears to run and edits still ack — so `is_disconnected` never
+/// fires, while no audio plays and recording captures nothing. The
+/// output backends publish that state as a per-engine flag
+/// (`AudioEngine::output_stream_lost`), polled here into the same
+/// persistent error banner engine death uses.
+///
+/// Unlike engine death this state can recover: PipeWire reconnecting
+/// the stream to a new sink clears the flag, and this check then clears
+/// the banner it raised — but only if `error_message` still holds
+/// exactly [`STREAM_LOST_BANNER`], so a different error that arrived in
+/// the meantime is left standing. On the cpal fallback backend recovery
+/// is not observable and the banner stays until restart.
+/// `stream_lost_banner_shown` tracks the raise so a banner the user
+/// dismissed isn't forced back every tick while the flag stays set.
+fn check_output_stream_lost(r: &mut Resonance) {
+    // Engine death outranks stream loss: once the engine thread is gone
+    // the stream banner would understate the failure (nothing recovers a
+    // dead engine thread), so never raise over that banner.
+    if r.engine_disconnected_banner_shown {
+        return;
+    }
+    let lost = r.engine.output_stream_lost();
+    if lost && !r.stream_lost_banner_shown {
+        r.stream_lost_banner_shown = true;
+        r.error_message = Some(STREAM_LOST_BANNER.to_string());
+    } else if !lost && r.stream_lost_banner_shown {
+        r.stream_lost_banner_shown = false;
+        if r.error_message.as_deref() == Some(STREAM_LOST_BANNER) {
+            r.error_message = None;
+        }
     }
 }
 

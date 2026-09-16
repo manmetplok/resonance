@@ -285,17 +285,45 @@ fn on_param_changed(
     }
 }
 
-/// Surface stream errors on stderr — the graph killing the stream
-/// (sink gone, daemon restart) is otherwise silent. Runs on the
-/// PipeWire loop thread, not the RT process path.
+/// Surface stream death to the app — the graph killing the stream
+/// (sink gone, daemon restart) is otherwise silent: the engine thread
+/// stays alive, so the app's engine-death check never fires while no
+/// audio plays. Publishes `SharedState::output_stream_lost`, which the
+/// app's tick handler polls into a persistent banner. Runs on the
+/// PipeWire loop thread, not the RT process path, so a plain atomic
+/// store is fine here.
+///
+/// Recovery: when the session manager revives the stream (e.g.
+/// PipeWire reconnects it to a new sink after a device swap), the
+/// stream transitions back through `Connecting`/`Paused` to
+/// `Streaming`, and that healthy transition clears the flag — so the
+/// app's banner clears itself when audio is actually flowing again. A
+/// stream the graph never revives stays in `Error` and the flag (and
+/// banner) stay set until the app restarts.
 fn on_state_changed(
     _stream: &pw::stream::Stream,
-    _user_data: &mut UserData,
+    user_data: &mut UserData,
     old: pw::stream::StreamState,
     new: pw::stream::StreamState,
 ) {
-    if let pw::stream::StreamState::Error(e) = &new {
-        eprintln!("audio: PipeWire output stream error (was {old:?}): {e}");
+    match &new {
+        pw::stream::StreamState::Error(e) => {
+            user_data
+                .shared
+                .output_stream_lost
+                .store(true, Ordering::Release);
+            eprintln!("audio: PipeWire output stream error (was {old:?}): {e}");
+        }
+        pw::stream::StreamState::Streaming => {
+            if user_data
+                .shared
+                .output_stream_lost
+                .swap(false, Ordering::AcqRel)
+            {
+                eprintln!("audio: PipeWire output stream recovered (was {old:?})");
+            }
+        }
+        _ => {}
     }
 }
 
