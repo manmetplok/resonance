@@ -171,7 +171,7 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
     if ctx
         .latency_comp
         .load()
-        .delays_match(&track_delays, &bus_delays, bus_max)
+        .delays_match(track_max, &track_delays, bus_max, &bus_delays)
     {
         return;
     }
