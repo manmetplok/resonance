@@ -92,9 +92,12 @@ pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
         }
         ControlMessage::Disconnected { conn } => {
             app.control.sessions.remove(&conn);
-            // Drop the connection's jobs (todo #1149): nobody can query
-            // them anymore, and a reader blocked in `job.wait` on one
-            // of them resolves to `not_found`.
+            // Drop the connection's terminal jobs and orphan its live
+            // ones: the operations behind live jobs keep running, and
+            // the MCP client reconnects after any transport failure
+            // expecting `job.status` on the same (global) job id to
+            // still find them. A reader blocked in `job.wait` on a
+            // dropped terminal job resolves to `not_found`.
             app.control.jobs.on_disconnect(conn);
             Task::none()
         }

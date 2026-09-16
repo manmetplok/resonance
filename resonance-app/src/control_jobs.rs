@@ -15,8 +15,12 @@
 //!
 //! Retention: jobs stay queryable after completion; the table is
 //! bounded ([`MAX_RETAINED_JOBS`]) with terminal already-fetched entries
-//! evicted first, and a closing connection drops the jobs it owns, so
-//! lost clients don't leak entries.
+//! evicted first. A closing connection drops the *terminal* jobs it
+//! owns and orphans its live ones (job ids are global, so a client that
+//! reconnects after a transport hiccup can keep polling the operation
+//! that is still running); orphans go terminal through the normal
+//! completion hooks and are then reaped by the same LRU bound, so lost
+//! clients still don't leak entries.
 
 use crate::control_socket::ConnId;
 use resonance_control::ids::JobId;
@@ -134,7 +138,12 @@ struct JobEntry {
     /// its other files imported fine — those assets are still in the pool
     /// and visible to `pool.list`.
     import_error: Option<String>,
-    /// Connection that started the job; its close drops the entry.
+    /// Connection that started the job. Its close drops the entry if the
+    /// job is already terminal, and orphans it (`owner = None`) while it
+    /// is live — see [`JobBoard::on_disconnect`]. Ownership gates nothing
+    /// else: completion hooks resolve by token/id and `job.status` /
+    /// `job.wait` serve any connection, so an orphan finishes normally
+    /// and stays queryable by a reconnected client.
     owner: Option<ConnId>,
     /// A terminal status has been delivered at least once — the entry
     /// is first in line for LRU eviction.
@@ -587,12 +596,40 @@ impl JobBoard {
         }
     }
 
-    /// Drop every job owned by a closing connection (terminal or not) —
-    /// nobody can query them anymore. Wakes waiting readers so a
-    /// blocked `job.wait` on a dropped job resolves to `not_found`.
+    /// Clean up after a closing connection: drop the *terminal* jobs it
+    /// owns (their results were for that client alone, and keeping them
+    /// only competes with live clients for retention slots), but ORPHAN
+    /// its live jobs — `owner = None` — instead of deleting them.
+    ///
+    /// The operation behind a live job keeps running in the app whether
+    /// or not the socket that asked for it is still open, and the MCP
+    /// client drops its connection on any transport-level failure (a
+    /// read timeout on an unrelated call included) while telling the
+    /// model to poll `job.status` with the job id after reconnecting.
+    /// Deleting the live job here turned that recovery path into
+    /// `not_found` for a render that was in fact still in flight. Job
+    /// ids are global and status/wait check no ownership, so the
+    /// reconnected client legitimately resumes polling the orphan; it
+    /// completes or fails through the normal token-matched hooks and is
+    /// then subject to the ordinary [`MAX_RETAINED_JOBS`] eviction.
+    ///
+    /// Wakes waiting readers so a blocked `job.wait` on a dropped
+    /// terminal job resolves to `not_found`. (The dead connection's own
+    /// reader threads die with the socket; waits from other connections
+    /// on an orphaned job keep blocking until it turns terminal, as
+    /// they should.)
     pub fn on_disconnect(&self, conn: ConnId) {
         let mut table = self.table();
-        table.jobs.retain(|_, e| e.owner != Some(conn));
+        table.jobs.retain(|_, e| {
+            if e.owner != Some(conn) {
+                return true;
+            }
+            if e.state.is_terminal() {
+                return false;
+            }
+            e.owner = None;
+            true
+        });
         drop(table);
         self.terminal.notify_all();
     }
