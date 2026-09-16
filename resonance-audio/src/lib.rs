@@ -30,6 +30,7 @@ pub(crate) mod prefault;
 pub mod quantize;
 mod recording;
 pub(crate) mod stream_errors;
+pub(crate) mod supervise;
 pub mod types;
 
 pub use decode::{linear_resample, StreamingLinearResampler};
@@ -182,6 +183,12 @@ pub mod __test_support {
     pub use crate::stream_errors::{
         format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
     };
+    /// The panic containment every detached worker (offline render
+    /// spawn sites, `ImportQueue` jobs) runs its body through — exposed
+    /// so tests can pin "a panicking worker still emits its terminal
+    /// error event" without needing a way to make the real render core
+    /// panic.
+    pub use crate::supervise::{panic_message, run_supervised};
     pub use crate::cycle_load::{
         format_cycle_load_line, CycleLoadMeter, CycleLoadReport, LOAD_EMA_ALPHA,
         QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, VERBOSE_REPORT_INTERVAL,

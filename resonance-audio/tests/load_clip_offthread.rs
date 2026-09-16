@@ -414,3 +414,48 @@ fn queued_loads_past_the_cap_are_never_dropped() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Regression for the pool-death half of the story: the worker loop used
+/// to run `job()` bare, so a job that panicked (a corrupt WAV tripping an
+/// assert deep in the decode, say) unwound out of the loop and killed the
+/// worker thread — while `workers`, which the queue trusts as its live
+/// worker count, never decremented. After `max_workers` panicking jobs
+/// the pool was empty but claimed full, and every later import queued
+/// forever: clip imports silently stopped for the session.
+///
+/// The loop now contains each job's panic, so one bad job costs that job
+/// only. A single-worker queue makes worker death immediately visible:
+/// if the panicking first job killed the worker, the second job could
+/// never run.
+#[test]
+fn panicking_job_does_not_kill_the_worker() {
+    let mut queue = ImportQueue::new(1);
+
+    queue
+        .submit(|| panic!("injected import panic"))
+        .expect("submit panicking job");
+
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran_flag = Arc::clone(&ran);
+    queue
+        .submit(move || ran_flag.store(true, Ordering::SeqCst))
+        .expect("submit follow-up job");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ran.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "job submitted after a panicking job never ran — the worker \
+             died with the panic and the pool has no live workers left"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    // The panic must not have leaked a worker slot either: the surviving
+    // worker handled both jobs, so no second thread was ever spawned.
+    assert_eq!(
+        queue.worker_count(),
+        1,
+        "the queue respawned or over-counted workers around a panicking job"
+    );
+}

@@ -47,7 +47,11 @@ pub struct ImportQueue {
     max_workers: usize,
     /// Workers spawned so far. Only ever grows, up to `max_workers`;
     /// workers are long-lived and park on `recv()` between jobs rather
-    /// than exiting, so this is also the live worker count.
+    /// than exiting, so this is also the live worker count. That claim
+    /// holds even for a panicking job: the worker loop contains each
+    /// job's panic (`crate::supervise::run_supervised`), because a
+    /// worker that unwound and died would never be replaced — after
+    /// `max_workers` panics, imports would silently queue forever.
     workers: usize,
 }
 
@@ -95,9 +99,15 @@ impl ImportQueue {
         let name = format!("resonance-clip-import-{}", self.workers + 1);
         match std::thread::Builder::new().name(name).spawn(move || {
             // Ends when every `Sender` is gone (engine shutdown), after
-            // the remaining queued jobs have been drained.
+            // the remaining queued jobs have been drained. A panicking
+            // job must NOT end it: `workers` is never decremented, so a
+            // worker lost to an unwind would permanently shrink the
+            // pool and, after `max_workers` panics, strand every later
+            // import in the queue. Contain the panic and keep serving.
             while let Ok(job) = rx.recv() {
-                job();
+                crate::supervise::run_supervised("clip-import", job, |message| {
+                    eprintln!("clip-import: {message}");
+                });
             }
         }) {
             Ok(_handle) => {

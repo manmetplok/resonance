@@ -44,7 +44,10 @@ pub(crate) enum ExportReporter {
 }
 
 impl ExportReporter {
-    fn error(self, tx: &Sender<AudioEvent>, kind: ExportErrorKind, message: String) {
+    /// `pub(super)` so [`super::export_spawn`]'s panic supervision can
+    /// report a panicking worker through the same event family this
+    /// run's expected failures use.
+    pub(super) fn error(self, tx: &Sender<AudioEvent>, kind: ExportErrorKind, message: String) {
         let _ = match self {
             ExportReporter::Bounce => tx.send(AudioEvent::BounceError(message)),
             ExportReporter::Export => tx.send(AudioEvent::ExportError { kind, message }),
