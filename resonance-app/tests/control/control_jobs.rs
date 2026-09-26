@@ -196,7 +196,7 @@ fn board_wait_times_out_cleanly_with_current_status() {
 fn socket_job_wait_never_crosses_the_bridge() {
     use std::os::unix::net::UnixStream;
 
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = crate::control_socket_roundtrip::private_tempdir();
     let path = dir.path().join("control.sock");
     let (tx, _rx) = iced::futures::channel::mpsc::unbounded();
     let board = Arc::new(JobBoard::default());

@@ -38,6 +38,9 @@ impl FakeApp {
             NEXT_SOCKET.fetch_add(1, Ordering::Relaxed),
         ));
         std::fs::create_dir_all(&dir).expect("create fake-app socket dir");
+        // The client refuses a socket dir open to group/other (CTL-11).
+        std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .expect("make socket dir private");
         let path = dir.join("control.sock");
         let listener = UnixListener::bind(&path).expect("bind fake-app socket");
         let requests: Arc<Mutex<Vec<Request>>> = Arc::default();
