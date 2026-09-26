@@ -876,3 +876,49 @@ fn generate_without_project_is_busy() {
     };
     expect_error(call(&mut app, "generate.part", &params), ErrorKind::Busy);
 }
+
+/// CTL-13: `chord_count` / `beats_per_chord` / `sevenths` are in the
+/// schema but the generator reads the chord grid as it stands, so
+/// accepting them was a success that silently ignored the request.
+#[test]
+fn part_rejects_the_harmony_knobs_it_cannot_honour() {
+    let mut app = app_with_project();
+    let section_id = section_with_chords(&mut app);
+    let track = add_synth_track(&mut app, 10);
+    let revision = app.revision();
+
+    let base = proto::PartParams {
+        section_id,
+        track_id: track,
+        role: GenerateRole::Pad,
+        chord_count: None,
+        beats_per_chord: None,
+        sevenths: None,
+        seed: Some(1),
+        options: None,
+    };
+    for params in [
+        proto::PartParams {
+            sevenths: Some(true),
+            ..base.clone()
+        },
+        proto::PartParams {
+            chord_count: Some(4),
+            ..base.clone()
+        },
+        proto::PartParams {
+            beats_per_chord: Some(2.0),
+            ..base.clone()
+        },
+    ] {
+        let message = expect_error(
+            call(&mut app, "generate.part", &params),
+            ErrorKind::InvalidParams,
+        );
+        assert!(
+            message.contains("harmony.apply_progression"),
+            "the refusal must point at the method that does honour it: {message}"
+        );
+    }
+    assert_eq!(app.revision(), revision, "nothing was generated");
+}

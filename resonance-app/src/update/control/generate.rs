@@ -58,6 +58,29 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
+    // The generators read the section's chord grid exactly as it stands;
+    // these three would reshape the harmony, which is not this method's
+    // job. Accepting and ignoring them was a success that did not do what
+    // was asked (CTL-13), so name the method that does.
+    let ignored: Vec<&str> = [
+        ("chord_count", params.chord_count.is_some()),
+        ("beats_per_chord", params.beats_per_chord.is_some()),
+        ("sevenths", params.sevenths.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, set)| set.then_some(name))
+    .collect();
+    if !ignored.is_empty() {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "generate.part cannot honour {}: it plays the section's chord grid as it \
+                 stands. Shape the harmony first with harmony.apply_progression (which takes \
+                 beats_per_chord and sevenths), then generate without these fields",
+                ignored.join(", ")
+            )),
+        );
+    }
     let definition_id: u64 = params.section_id.into();
     if let Some(e) = super::section::definition_missing(app, definition_id) {
         return reject(request, e);

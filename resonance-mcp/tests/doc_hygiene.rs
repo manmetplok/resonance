@@ -188,8 +188,9 @@ fn known_traps_stay_documented() {
         ("section_create", &["place: false"]),
         // render.mixdown rejects a partial range on current builds.
         ("render_mixdown", &["range", "not supported", "NOT SUPPORTED"]),
-        // generate.part silently ignores three of its own params.
-        ("generate_part", &["IGNORES"]),
+        // generate.part refuses three of its own params (it used to
+        // accept and silently ignore them — CTL-13).
+        ("generate_part", &["REJECTED"]),
         // The bass default is a placeholder, not a part.
         ("generate_part", &["RootPulse"]),
         // transport.set_time_signature rewrites the bar-1 event and

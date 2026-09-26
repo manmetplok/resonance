@@ -6,8 +6,9 @@ works, so `{"style": "Walking"}` is a valid whole object. Enum values are
 serde error naming the offending field.
 
 The section needs chords first (`harmony_apply_progression`) or the call is
-refused. `chord_count`, `beats_per_chord` and `sevenths` are in the schema but
-**ignored** — the generator always reads the section's grid as it stands.
+refused. Leave `chord_count`, `beats_per_chord` and `sevenths` out: the
+generator always reads the section's grid as it stands, so setting any of them
+is rejected.
 
 ## bass
 

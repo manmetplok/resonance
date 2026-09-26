@@ -80,9 +80,9 @@ produce an actual part.
 `${CLAUDE_SKILL_DIR}/references/generators.md` has the full option tables per
 role, which styles are worth reaching for, and where each one falls down.
 
-Note that `chord_count`, `beats_per_chord` and `sevenths` appear in
-`generate_part`'s schema but the app **ignores** them — it always reads the
-section's grid as it stands. Shape harmony in step 1, not here.
+Leave `chord_count`, `beats_per_chord` and `sevenths` out of `generate_part`:
+it always reads the section's grid as it stands, and rejects a call that sets
+them. Shape harmony in step 1, not here.
 
 `seed` makes output reproducible; omitted, it derives from the section id, so
 repeating a call is stable rather than random. To get a *different* take, change

@@ -31,12 +31,17 @@ pub struct PartParams {
     pub section_id: SectionDefinitionId,
     pub track_id: TrackId,
     pub role: GenerateRole,
-    /// Number of chords to generate over; defaults to the section's grid.
+    /// Not supported — must be omitted. The generator plays the
+    /// section's chord grid as it stands; setting this is
+    /// `invalid_params` (shape the grid with `harmony.apply_progression`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chord_count: Option<u32>,
+    /// Not supported — must be omitted; see `chord_count`.
+    /// `harmony.apply_progression` takes `beats_per_chord`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beats_per_chord: Option<f64>,
-    /// Include sevenths in generated voicings.
+    /// Not supported — must be omitted; see `chord_count`.
+    /// `harmony.apply_progression` takes `sevenths`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sevenths: Option<bool>,
     /// RNG seed for reproducible output.
