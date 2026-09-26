@@ -4,11 +4,57 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::traits::{Observer, Producer};
+use thiserror::Error;
 
 use crate::engine::SharedState;
 use crate::types::*;
 
 use std::sync::atomic::Ordering;
+
+/// Failure building the cpal (or PipeWire, see [`crate::input_pipewire`])
+/// input stream. Message text matches the historical `format!()` strings.
+#[derive(Debug, Error)]
+pub enum InputStreamError {
+    #[error("No input device found")]
+    NoDevice,
+    #[error("No default input config: {0}")]
+    DefaultConfig(#[source] cpal::DefaultStreamConfigError),
+    /// None of the channel counts the device advertises (up to the
+    /// monitor-scratch cap) were accepted. `tried` is a `"; "`-joined
+    /// `"{channels}ch: {error}"` list, one per rejected attempt.
+    #[error(
+        "Failed to build input stream: the device offers no channel count up to the \
+         supported {max_channels} that it accepts (default {default_channels}ch; tried {tried})"
+    )]
+    NoChannelCount {
+        max_channels: u16,
+        default_channels: u16,
+        tried: String,
+    },
+    #[error("Failed to start input stream: {0}")]
+    Play(#[source] cpal::PlayStreamError),
+}
+
+impl InputStreamError {
+    /// The [`EngineErrorKind`] this failure classifies as. Exposed
+    /// separately from the `From<InputStreamError> for EngineError`
+    /// conversion so a caller that wraps the message in its own
+    /// context text (`"Failed to open input stream: {e}"`, ...) can
+    /// keep that wording while still getting the right kind.
+    pub fn kind(&self) -> EngineErrorKind {
+        match self {
+            InputStreamError::NoDevice => EngineErrorKind::NotFound,
+            InputStreamError::NoChannelCount { .. } => EngineErrorKind::Unsupported,
+            InputStreamError::DefaultConfig(_) | InputStreamError::Play(_) => EngineErrorKind::Io,
+        }
+    }
+}
+
+impl From<InputStreamError> for EngineError {
+    fn from(e: InputStreamError) -> Self {
+        EngineError::new(e.kind(), e.to_string())
+    }
+}
 
 /// Replace ALSA's default `stderr` error handler with a no-op so the
 /// startup PCM probing doesn't print things like "Cannot open device
@@ -639,7 +685,7 @@ pub(crate) fn build_input_stream(
     engine_sample_rate: u32,
     desired_channels: u16,
     capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
-) -> Result<(crate::input_handle::InputHandle, u32, u16), String> {
+) -> Result<(crate::input_handle::InputHandle, u32, u16), InputStreamError> {
     // Input streams are (re)built on device switches — re-assert the
     // engine's graph rate so the new device negotiation can't leave
     // the graph on a foreign rate. Gated on the source having actually
@@ -822,7 +868,7 @@ fn build_input_stream_cpal(
     engine_sample_rate: u32,
     desired_channels: u16,
     capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
-) -> Result<(cpal::Stream, u32, u16), String> {
+) -> Result<(cpal::Stream, u32, u16), InputStreamError> {
     let _env_guard = PIPEWIRE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     if let Some(name) = source_name {
@@ -873,11 +919,11 @@ fn build_input_stream_cpal(
         })
         .or_else(pipewire_pcm)
         .or_else(|| host.default_input_device())
-        .ok_or_else(|| "No input device found".to_string())?;
+        .ok_or(InputStreamError::NoDevice)?;
 
     let default_config = device
         .default_input_config()
-        .map_err(|e| format!("No default input config: {}", e))?;
+        .map_err(InputStreamError::DefaultConfig)?;
 
     let sample_rate = pick_sample_rate(&device, &default_config, DeviceDirection::Input);
     let default_channels = default_config.channels();
@@ -1010,15 +1056,16 @@ fn build_input_stream_cpal(
         } else {
             failures.join("; ")
         };
-        return Err(format!(
-            "Failed to build input stream: the device offers no channel count up to the \
-             supported {max_channels} that it accepts (default {default_channels}ch; tried {tried})"
-        ));
+        return Err(InputStreamError::NoChannelCount {
+            max_channels,
+            default_channels,
+            tried,
+        });
     };
 
     stream
         .play()
-        .map_err(|e| format!("Failed to start input stream: {}", e))?;
+        .map_err(InputStreamError::Play)?;
 
     // SAFETY: the PIPEWIRE_ENV_LOCK mutex serializes all write accesses within
     // this process, and this is only called during stream construction (not in the

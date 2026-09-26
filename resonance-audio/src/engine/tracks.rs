@@ -494,10 +494,10 @@ fn sync_input_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
             ctx.shared.input_channels.store(in_ch, Ordering::Release);
         }
         Err(e) => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
-                "Failed to open input stream: {}",
-                e
-            ))));
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::new(
+                e.kind(),
+                format!("Failed to open input stream: {}", e),
+            )));
         }
     }
 }
