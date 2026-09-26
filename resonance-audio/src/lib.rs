@@ -87,6 +87,13 @@ pub mod __test_support {
         export_stems, measure_mix, measure_rendered_buffer, render_stem, stem_filter,
         stem_project_range, write_stem_wav, StemFilter, MEASURE_BUSY_MSG,
     };
+    /// The one "offline render in progress" gate (code review MIX-02 /
+    /// ENG-05): every offline renderer holds one of these, the audio
+    /// callback outputs silence instead of touching a plugin while any is
+    /// held, and Play / Record refuse. Exposed so
+    /// `tests/offline_render_gate.rs` can hold the real guard over the
+    /// mixer and engine harnesses.
+    pub use crate::engine::{OfflineRenderGuard, OFFLINE_RENDER_BUSY_MSG};
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
     /// The take-id allocator behind every captured cycle-record pass
@@ -161,7 +168,8 @@ pub mod __test_support {
         parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
     };
     pub use crate::mixer::{
-        auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
+        auto_gain_ramp, auto_master_volume, auto_muted, commit_playhead, mix_audition_overlay,
+        mix_track_clips,
         live_instrument_for, monitor_catchup_skip, monitor_read_len, ramped_gain,
         recorded_monitor_gate, MixAudioHarness, MonitorDrain, CLIP_DECLICK_FRAMES,
         MONITOR_DRAIN_STREAK,

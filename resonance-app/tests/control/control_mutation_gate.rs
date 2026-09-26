@@ -15,8 +15,10 @@
 //! `control.hello`) and the project-lifecycle methods (`project.*`,
 //! which open/create the project the gate checks for) are exempt.
 
+use resonance_app::message::{Message, ProjectIoMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance};
+use resonance_audio::types::AudioCommand;
 use resonance_control::methods;
 use resonance_control::{ErrorKind, Request};
 use crate::common::roundtrip;
@@ -164,4 +166,35 @@ fn allowlisted_methods_are_not_busy_gated() {
             );
         }
     }
+}
+
+/// A WAV mixdown (`io.bouncing`, started by the GUI bounce dialog or by
+/// `render.mixdown`) drives the live plugin instances from a worker
+/// thread, exactly like a bounce in place or a freeze. Until code review
+/// UPD-06 it gated nothing: `transport.play` was accepted mid-export and
+/// the live callback and the export interleaved `process()` on the same
+/// CLAP instances. The engine refuses on its own now (MIX-02); the
+/// control surface must answer `busy` rather than send a command the
+/// engine will bounce.
+#[test]
+fn transport_play_is_busy_while_a_wav_mixdown_renders() {
+    let (mut app, _task, cmd_rx) = Resonance::new_for_test_with_capture();
+    app.test_set_active_project(true);
+
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::BouncePathSelected(Some(
+        "/tmp/control-mutation-gate-mixdown.wav".to_owned(),
+    ))));
+    assert!(app.test_is_bouncing(), "the bounce dialog's path starts the mixdown");
+    // Drain the `BounceToWav` the dialog sent.
+    while cmd_rx.try_recv().is_ok() {}
+
+    let response = roundtrip(&mut app, Request::without_params(1, "transport.play"));
+    let error = response
+        .error
+        .expect("transport.play must not succeed while a mixdown renders");
+    assert_eq!(error.kind(), ErrorKind::Busy, "got {error:?}");
+    assert!(
+        !cmd_rx.try_iter().any(|c| matches!(c, AudioCommand::Play)),
+        "no Play may reach the engine while the export owns the plugins"
+    );
 }

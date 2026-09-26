@@ -33,8 +33,8 @@ pub use bounce::{
     chunk_span, encode_buffer_for_test, export_stems, freeze_terminal_event, measure_mix,
     measure_rendered_buffer, normalize_buffer_for_test, read_freeze_cache, render_stem,
     stem_filter, stem_project_range, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
-    try_lock_with_backoff, write_stem_wav, BOUNCE_CHUNK, FREEZE_CANCELLED_MSG, MEASURE_BUSY_MSG,
-    MIN_CLAP_FRAMES, StemFilter,
+    try_lock_with_backoff, write_stem_wav, OfflineRenderGuard, BOUNCE_CHUNK,
+    FREEZE_CANCELLED_MSG, MEASURE_BUSY_MSG, MIN_CLAP_FRAMES, OFFLINE_RENDER_BUSY_MSG, StemFilter,
 };
 mod bounce_common;
 pub use bounce_common::midi_render_range;
@@ -191,6 +191,12 @@ pub struct SharedState {
     /// so the exclusion holds in both directions); making the renderers
     /// refuse each other engine-side is a behaviour change for another
     /// todo.
+    ///
+    /// It is also the gate between an offline render and the *live*
+    /// callback (code review MIX-02 / ENG-05): while it is non-zero the
+    /// audio callback outputs silence and holds the transport instead of
+    /// touching a plugin, and Play / Record / realtime bounce / MIDI-clock
+    /// start refuse — see [`Self::offline_render_active`].
     pub offline_render_count: AtomicU32,
     /// External-instrument round-trip offsets per track
     /// (`latency_offset_samples`, positive = the hardware return
@@ -340,6 +346,18 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    /// Whether an offline renderer (export, stem export, bounce in place,
+    /// freeze, offline measurement) currently owns the live plugin
+    /// instances — the one gate the audio callback and the transport
+    /// handlers both honour (code review MIX-02 / ENG-05). A single
+    /// acquire load, safe on the audio thread.
+    #[inline]
+    pub fn offline_render_active(&self) -> bool {
+        self.offline_render_count
+            .load(std::sync::atomic::Ordering::Acquire)
+            > 0
+    }
+
     /// Called by the capture callbacks on every recording push: on the
     /// *first* push of a session (armed via `recording_start_pending`)
     /// latch the raw playhead at that instant into

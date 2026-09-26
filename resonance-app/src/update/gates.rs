@@ -372,6 +372,34 @@ impl crate::Resonance {
         self.control.jobs.has_live_offline_measure()
     }
 
+    /// True while ANY offline render owns the engine's plugin instances:
+    /// a WAV / FLAC mixdown (`io.bouncing`, GUI or `render.mixdown`), a
+    /// bounce in place, a freeze (single or batch) or an offline control
+    /// measurement.
+    pub(crate) fn offline_render_in_progress(&self) -> bool {
+        self.io.bouncing
+            || self.bounce_in_progress.is_some()
+            || self.freeze.any_in_flight()
+            || self.offline_measure_in_progress()
+    }
+
+    /// Refuse to swap the project out under an offline render (code
+    /// review UPD-06): `ClearAll` + replay would drain the plugin map and
+    /// the track / clip lists the worker is rendering from. The
+    /// `ProjectIo` family is deliberately exempt from the pre-dispatch
+    /// gates (saves and render-completion traffic must flow), so the
+    /// open / new-project entry points call this themselves. Sets the
+    /// error banner and reports `true` when the request must be dropped.
+    pub(crate) fn refuse_project_switch_during_render(&mut self) -> bool {
+        if !self.offline_render_in_progress() {
+            return false;
+        }
+        self.error_message = Some(
+            "An offline render is in progress; open or create a project when it finishes".into(),
+        );
+        true
+    }
+
     /// The track owning a MIDI clip, by clip id.
     fn track_of_midi_clip(
         &self,
@@ -448,7 +476,13 @@ impl crate::Resonance {
         if !self.io.has_active_project && is_gated_message(message) {
             return true;
         }
-        if self.bounce_in_progress.is_some() && bounce_blocks_message(message) {
+        // A WAV / FLAC mixdown (`io.bouncing`) drives the same live plugin
+        // instances as a bounce in place, so it gates the same traffic
+        // (code review UPD-06; the engine refuses Play / Record on its
+        // own — `resonance_audio` MIX-02 — this keeps the GUI honest).
+        if (self.bounce_in_progress.is_some() || self.io.bouncing)
+            && bounce_blocks_message(message)
+        {
             return true;
         }
         if self.freeze.any_in_flight() && freeze_blocks_message(message) {

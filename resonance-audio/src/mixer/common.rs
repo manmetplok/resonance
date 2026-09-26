@@ -39,6 +39,30 @@ pub(super) fn latch_transport(inst: &mut SyncClapInstance, snap: Option<Transpor
     }
 }
 
+/// Publish the audio thread's playhead advance for a block that observed
+/// the playhead at `observed`, unless the engine control thread moved it
+/// in the meantime.
+///
+/// The callback reads the playhead once at the top of the block, renders
+/// (the whole render time is the window), and publishes `observed +
+/// frames` here. A Seek, a Stop-to-zero or a MIDI-clock song position
+/// that landed in between is a plain `store` from the control thread;
+/// an unconditional store here used to clobber it (code review MIX-01).
+/// The compare-exchange makes the reposition win: it returns `false` and
+/// leaves the playhead where the control thread put it, so the next
+/// block simply starts there.
+///
+/// `false` therefore means "the transport was repositioned under this
+/// block" — the hook a discontinuity handler (voice flush on seek) can
+/// build on. Lock-free, allocation-free; `pub` for the race test.
+#[inline]
+pub fn commit_playhead(shared: &SharedState, observed: u64, new_playhead: u64) -> bool {
+    shared
+        .playhead
+        .compare_exchange(observed, new_playhead, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+}
+
 /// Fallback playhead advance used when the audio callback couldn't acquire
 /// its locks. No audio is rendered on that path, so we only need to move
 /// the playhead forward and handle the loop seam by snapping back — stuck

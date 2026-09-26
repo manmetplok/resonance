@@ -109,9 +109,18 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::SavePathSelected(None) => {}
         ProjectIoMessage::OpenProject => {
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
             return dialogs::open_project_dialog();
         }
         ProjectIoMessage::OpenPathSelected(Some(path)) => {
+            // The dialog may have been open since before the render
+            // started (or Ctrl+O bypasses every modal), so check again
+            // at the moment the project would actually be swapped.
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
             // Path and engine dir are only repointed once the load
             // succeeds (`ProjectLoaded(Ok)`): a failed open must leave
             // the still-open project tied to its own folder.
@@ -121,6 +130,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
         ProjectIoMessage::OpenRecent(path) => {
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
             // The recent list is no longer pruned with a stat-per-entry
             // sweep at startup (slow on NFS / removable media), so a
             // clicked entry may point at a project that's been deleted

@@ -75,6 +75,9 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.mixer.settings_open = false;
         }
         UiMessage::StartNewProject => {
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
             return project_io::save_project_as_dialog();
         }
         UiMessage::SelectTrack(id) => {

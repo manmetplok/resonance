@@ -13,7 +13,28 @@ use crate::types::*;
 
 use super::thread::{HandlerCtx, HandlerState, LoopRecordSession};
 
+/// The transport side of the one "offline render in progress" gate (code
+/// review MIX-02 / ENG-05): every offline renderer holds
+/// `SharedState::offline_render_count` up for the length of its render,
+/// on the engine thread *before* its worker spawns, so this check and
+/// the renderers' own "stop the transport first" check see each other in
+/// engine-thread order — there is no window in which both pass. Refuses
+/// with an `AudioEvent::Error` (the app's banner) and reports `true`.
+pub(crate) fn refuse_while_offline_render(ctx: &HandlerCtx, what: &str) -> bool {
+    if !ctx.shared.offline_render_active() {
+        return false;
+    }
+    let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+        "Cannot {what}: {}",
+        super::bounce::OFFLINE_RENDER_BUSY_MSG
+    )));
+    true
+}
+
 pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
+    if refuse_while_offline_render(ctx, "start playback") {
+        return;
+    }
     let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
     ctx.shared.playing.store(true, Ordering::SeqCst);
     if !was_playing {
@@ -33,6 +54,9 @@ pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
 }
 
 pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount_bars: u8) {
+    if refuse_while_offline_render(ctx, "start recording") {
+        return;
+    }
     if precount_bars == 0 {
         let start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
         begin_recording_stream(ctx, state, start_sample);

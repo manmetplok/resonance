@@ -4,7 +4,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::mixer::common::advance_playhead_silent;
+use crate::mixer::common::{advance_playhead_silent, commit_playhead};
 use crate::mixer::render_core::BlockInputs;
 use crate::types::any_top_level_solo;
 
@@ -12,15 +12,19 @@ use super::context::{BlockTiming, CallbackInputs, CallbackScratch, MonitorRead};
 use super::master_pass::{run_master_passes, MasterTail};
 use super::seam;
 
+/// `playhead` is the callback's single observation of the transport for
+/// this block (`mix_audio` loads it once); both publishes below are
+/// conditional on it still being current, so a reposition from the control
+/// thread that lands mid-block wins over this block's advance.
 pub(super) fn render_playing_block(
     inputs: &CallbackInputs<'_>,
     scratch: &mut CallbackScratch<'_>,
     timing: &BlockTiming<'_>,
     monitor: MonitorRead,
+    playhead: u64,
     frames: usize,
 ) {
     let shared = inputs.shared;
-    let playhead = shared.playhead.load(Ordering::Relaxed);
 
     let (
         Some(tracks_guard),
@@ -40,7 +44,7 @@ pub(super) fn render_playing_block(
         // silence this buffer.
         shared.render_skip_cycles.fetch_add(1, Ordering::Relaxed);
         let new_playhead = advance_playhead_silent(shared, playhead, frames as u64);
-        shared.playhead.store(new_playhead, Ordering::Relaxed);
+        commit_playhead(shared, playhead, new_playhead);
         return;
     };
 
@@ -110,5 +114,7 @@ pub(super) fn render_playing_block(
         },
     );
 
-    shared.playhead.store(new_playhead, Ordering::Relaxed);
+    // A lost commit means the control thread repositioned the transport
+    // while this block rendered; the next block starts from its position.
+    commit_playhead(shared, playhead, new_playhead);
 }
