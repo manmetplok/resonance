@@ -90,7 +90,10 @@ pub(crate) fn handle_set_track_frozen_source(
     // not here: it costs ~2.7 ms per audio second, and a project load
     // sends one per frozen track (FU-A4c). Until it lands the track has
     // no cache (never the previous one, which may be other content), and
-    // `settle_frozen_conversions` attaches it.
+    // `settle_frozen_conversions` attaches it. Accepted cost (FU-A5c): for
+    // those ~100s of ms a live-playing frozen track renders through its
+    // live chain instead — audible only if the transport is already
+    // rolling, and offline renders wait for the conversion first.
     let source = match source {
         Some(s) if s.sample_rate != ctx.sample_rate && s.sample_rate != 0 => {
             let rate = ctx.sample_rate;

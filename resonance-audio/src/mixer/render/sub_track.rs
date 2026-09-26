@@ -112,7 +112,9 @@ fn render_sub_track_tap(
         parent_volume,
     ) {
         Some(gains) => (gains, false),
-        None if strategy.renders(sub_track.id) && key_consumed(ctx, scratch.sidechain, sub_tap) => {
+        None if strategy.renders(sub_track.id)
+            && key_consumed(ctx, scratch.sidechain, strategy, sub_tap) =>
+        {
             (((0.0, 0.0), (0.0, 0.0)), true)
         }
         None => return,

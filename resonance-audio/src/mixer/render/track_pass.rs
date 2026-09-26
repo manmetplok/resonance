@@ -73,11 +73,14 @@ fn render_one_track(
     // review MIX-05): the ghost kick keys the bass compressor while muted.
     let disp = match strategy.track_disposition(track, ctx.inputs.any_solo, auto_gain, auto_mute)
     {
-        Some(d) if d.discard_after_instrument && keys_from(track, ctx, scratch.sidechain) => {
+        Some(d)
+            if d.discard_after_instrument
+                && keys_from(track, ctx, scratch.sidechain, strategy) =>
+        {
             TrackDisposition::key_only()
         }
         Some(d) => d,
-        None if strategy.renders(track.id) && keys_from(track, ctx, scratch.sidechain) => {
+        None if strategy.renders(track.id) && keys_from(track, ctx, scratch.sidechain, strategy) => {
             TrackDisposition::key_only()
         }
         None => return,
@@ -190,13 +193,18 @@ fn render_one_track(
 /// a silenced track must still render for. Only
 /// consulted for silenced tracks, so the sub-track scan costs nothing on
 /// the audible path.
-fn keys_from(track: &Track, ctx: &BlockCtx<'_>, sidechain: &SidechainTaps) -> bool {
-    if key_consumed(ctx, sidechain, SendSource::Track(track.id)) {
+fn keys_from(
+    track: &Track,
+    ctx: &BlockCtx<'_>,
+    sidechain: &SidechainTaps,
+    strategy: &RenderStrategy<'_>,
+) -> bool {
+    if key_consumed(ctx, sidechain, strategy, SendSource::Track(track.id)) {
         return true;
     }
     ctx.inputs.tracks.values().any(|t| {
         matches!(t.sub_track_of, Some((parent, _)) if parent == track.id)
-            && key_consumed(ctx, sidechain, SendSource::Track(t.id))
+            && key_consumed(ctx, sidechain, strategy, SendSource::Track(t.id))
     })
 }
 
