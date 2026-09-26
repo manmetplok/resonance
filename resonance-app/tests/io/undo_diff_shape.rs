@@ -386,3 +386,70 @@ fn placing_and_removing_a_section_undoes_through_the_diff_path() {
     undo_redo_over(&mut f, &before, &placed, "placement add");
     step_lands_on(&mut f, Message::Redo, &removed, "redo placement delete");
 }
+
+// ---------------------------------------------------------------------------
+// Section definitions
+// ---------------------------------------------------------------------------
+
+fn definition_ids(app: &Resonance) -> HashSet<u64> {
+    app.compose_state().definitions.iter().map(|d| d.id).collect()
+}
+
+/// A definition created unplaced (`section.create` without `place`), then
+/// deleted: only the definition set changes.
+#[test]
+fn creating_and_deleting_a_section_undoes_through_the_diff_path() {
+    let mut f = fixture("definition");
+    let before = f.app.test_snapshot_for_undo();
+    let ids = definition_ids(&f.app);
+
+    let created = edit(
+        &mut f,
+        compose(ComposeMessage::CreateSection {
+            name: "Bridge".into(),
+            length_bars: 4,
+            color: [10, 20, 30],
+            place: false,
+        }),
+    );
+    let definition_id = definition_ids(&f.app)
+        .into_iter()
+        .find(|id| !ids.contains(id))
+        .expect("the edit created a section");
+    let deleted = edit(
+        &mut f,
+        compose(ComposeMessage::DeleteSectionDefinition { definition_id }),
+    );
+
+    step_lands_on(&mut f, Message::Undo, &created, "undo section delete");
+    undo_redo_over(&mut f, &before, &created, "section create");
+    step_lands_on(&mut f, Message::Redo, &deleted, "redo section delete");
+}
+
+/// The GUI's create: a new definition and its placement in one edit.
+#[test]
+fn creating_a_placed_section_undoes_through_the_diff_path() {
+    let mut f = fixture("definition-placed");
+    let before = f.app.test_snapshot_for_undo();
+    let created = edit(
+        &mut f,
+        compose(ComposeMessage::CreateSection {
+            name: "Outro".into(),
+            length_bars: 4,
+            color: [30, 20, 10],
+            place: true,
+        }),
+    );
+    assert_eq!(
+        (
+            created.project.file.section_definitions.len(),
+            created.project.file.section_placements.len(),
+        ),
+        (
+            before.project.file.section_definitions.len() + 1,
+            before.project.file.section_placements.len() + 1,
+        ),
+        "the edit created and placed a section"
+    );
+    undo_redo_over(&mut f, &before, &created, "placed section create");
+}
