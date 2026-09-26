@@ -549,7 +549,7 @@ pub(super) fn handle_delete_with_placements(r: &mut crate::Resonance, definition
 /// playing a section that no longer exists. The vocal WAV is left on
 /// disk: it is shared by the definition's other placements, and an undo
 /// of this delete restores a clip that still points at it.
-fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u64) {
+pub(crate) fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u64) {
     let midi: Vec<_> = r
         .compose
         .derived_clips

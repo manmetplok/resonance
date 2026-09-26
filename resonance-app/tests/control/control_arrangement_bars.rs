@@ -457,3 +457,53 @@ fn repeated_inserts_cannot_push_content_past_max_bars() {
     let after = raw_insert(&mut app, half + 10, 4);
     assert!(after.error.is_none(), "insert past the end fits: {:?}", after.error);
 }
+
+/// FU-B2: removing bars that hold a section placement drops the
+/// placement's installed vocal-audio entry too, not just its clips — a
+/// stale entry would be "replaced" (deleted again) by the next re-render
+/// and keeps the WAV looking referenced.
+#[test]
+fn removing_a_placement_drops_its_vocal_audio_entry() {
+    let mut app = app_with_project();
+    let def = resonance_app::compose::SectionDefinitionState {
+        id: 1,
+        name: "Verse".to_owned(),
+        color: [0, 0, 0],
+        length_bars: 2,
+        chords: Vec::new(),
+        scale: None,
+        progression_seed: 0,
+        generate_params: Default::default(),
+        generator_spec: None,
+        generator_seed: 0,
+        generated_material: None,
+        lane_generators: std::collections::HashMap::new(),
+        beats_per_chord: 4,
+        seventh_chords: false,
+        motif_source: Default::default(),
+        arrangement: Vec::new(),
+    };
+    app.test_push_section_definition(def);
+    // 0-based bar 4 = 1-based bar 5.
+    let placement = app.test_place_section(1, 4);
+    push_audio_clip(&mut app, 7, 5);
+    app.test_install_vocal_audio_clip(1, placement, AUDIO, 7, "/tmp/v.wav".into());
+    assert_eq!(app.test_vocal_audio_clips(AUDIO), vec![(1, 7)]);
+
+    let response = call(
+        &mut app,
+        proto::REMOVE_BARS,
+        &RemoveBarsParams {
+            at_bar: 5,
+            count: 2,
+            confirm: true,
+        },
+    );
+    assert!(response.error.is_none(), "{:?}", response.error);
+    assert!(app.test_placements().is_empty(), "the placement went");
+    assert_eq!(clip_start(&app, 7), None, "its clip went");
+    assert!(
+        app.test_vocal_audio_clips(AUDIO).is_empty(),
+        "its vocal-audio entry went with it"
+    );
+}

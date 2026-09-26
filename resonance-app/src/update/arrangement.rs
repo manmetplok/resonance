@@ -184,7 +184,18 @@ pub fn insert_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
 /// span is deleted, everything after it moves earlier.
 pub fn remove_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
     let casualties = removal_casualties(r, at_bar, count);
+    // Placements first, through the one teardown every placement delete
+    // shares: it drops their derived MIDI clips, installed vocal audio
+    // and the compose maps pointing at them (FU-B2). What it removes is
+    // skipped below rather than deleted twice.
+    for placement_id in &casualties.placements {
+        crate::update::compose::purge_placement_outputs(r, *placement_id);
+        r.compose.placements.retain(|p| p.id != *placement_id);
+    }
     for clip_id in &casualties.audio_clips {
+        if !r.clips.iter().any(|c| c.id == *clip_id) {
+            continue;
+        }
         r.clips.retain(|c| c.id != *clip_id);
         let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: *clip_id });
     }
@@ -192,16 +203,14 @@ pub fn remove_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
         r.recompute_pool_usage(); // review VIEW-30
     }
     for clip_id in &casualties.midi_clips {
+        if !r.midi_clips.iter().any(|c| c.id == *clip_id) {
+            continue;
+        }
         r.midi_clips.retain(|c| c.id != *clip_id);
+        r.compose.vocal_audio.clip_lyrics.remove(clip_id);
         let _ = r
             .engine
             .send(AudioCommand::DeleteMidiClip { clip_id: *clip_id });
-    }
-    for placement_id in &casualties.placements {
-        r.compose.placements.retain(|p| p.id != *placement_id);
-        r.compose
-            .derived_clips
-            .retain(|(_, placement, _), _| placement != placement_id);
     }
 
     let at = at_bar.saturating_sub(1);
