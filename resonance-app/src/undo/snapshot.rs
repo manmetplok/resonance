@@ -2,8 +2,9 @@
 //! and apply snapshots.
 //!
 //! Three kinds of types live here:
-//! - Capture types that shadow fields not yet covered by `ProjectFile`
-//!   (`ClipFadeGain`, `UndoExtras`, `UndoSnapshot`).
+//! - The snapshot itself (`UndoSnapshot`: a `LoadedProject`) and the
+//!   `UndoExtras` it still carries beside the `ProjectFile` (ARCH-01 A1-2
+//!   folds those into the file one at a time).
 //! - The `CoalesceKey` discriminator used by the history stack to merge a
 //!   burst of fader/knob messages into one undo entry.
 //! - The `impl crate::Resonance` blocks for building a snapshot
@@ -12,30 +13,23 @@
 
 use std::collections::HashMap;
 
-use resonance_audio::types::{AudioCommand, ClipId, FadeCurve, MidiNote, PluginInstanceId};
+use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
 use resonance_common::{AutomationLane, AutomationTarget, ExternalInstrument};
 
 use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
 
-/// Per-clip fade + gain values captured for undo. Mirrors the editable
-/// fields on [`crate::state::ClipState`] (and on the engine's `AudioClip`).
-/// These don't ride the `ProjectFile` snapshot yet — clip fade/gain
-/// persistence is a separate todo (doc #156 A6 / #321) — so, exactly like
-/// `reference` / `chord_track`, the undoable set is captured here and
-/// re-applied (mirror + engine re-sync) by the restore paths.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ClipFadeGain {
-    pub fade_in_frames: u64,
-    pub fade_in_curve: FadeCurve,
-    pub fade_out_frames: u64,
-    pub fade_out_curve: FadeCurve,
-    pub gain_db: f32,
-}
-
-/// Runtime-only compose state that isn't captured in `ProjectFile` and
-/// therefore can't be rebuilt by `replay_loaded_project` alone. Applied
-/// to `Resonance::compose` after the replay completes.
+/// State an undo snapshot carries beside its `ProjectFile`, re-applied
+/// after the replay by both restore paths (`try_diff_replay` and
+/// `finalize_undo_restore`).
+///
+/// Most of it is *already* in the `ProjectFile` too, and the full replay
+/// restores it from there; the diff replay still reads it from here. It
+/// is being folded away field by field (ARCH-01 A1-2): a field leaves
+/// once both paths restore it from the file, guarded by
+/// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain and the drum
+/// arrangements already went — `ProjectClip` and
+/// `ProjectSectionDefinition::arrangement` carry them.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
     pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
@@ -46,81 +40,44 @@ pub struct UndoExtras {
     /// a session the undo system snapshots them separately because
     /// the project-file form of a clip isn't rebuilt on each edit.
     pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
-    /// App-side parameter-automation lanes, one per target. Captured here
-    /// so lane and breakpoint edits are reversible. Automation lanes are
-    /// currently runtime-only — they aren't written into `ProjectFile`
-    /// yet (project persistence lands in todo #379), so they ride in the
-    /// extras like the other state the replay path can't rebuild on its
-    /// own. `restore_automation_lanes` reconciles the engine to this set
-    /// on undo/redo.
+    /// App-side parameter-automation lanes, one per target. Also
+    /// persisted as `ProjectFile::automation_lanes`, which the full
+    /// replay reads; the diff replay reconciles the engine to this copy
+    /// via `restore_automation_lanes`.
     pub automation_lanes: HashMap<AutomationTarget, AutomationLane>,
-    /// Reference-track (A/B) content. References aren't part of the
-    /// `ProjectFile` yet, so `replay_loaded_project` can't rebuild them;
-    /// the undoable subset is snapshotted here and reapplied after the
-    /// replay (both the fast diff path and the full-clear path).
+    /// Reference-track (A/B) content. The durable facts are also in
+    /// `ProjectFile::references` / `reference_settings`, but the live
+    /// entries (engine ids, analysis status) are reapplied from here after
+    /// the replay on both paths, without yanking the monitor around.
     pub reference: crate::reference::ReferenceUndo,
     /// The global chord track (epic #33). Captured here rather than in
     /// `ProjectFile` because chord-track persistence is a later todo;
     /// until then the track is declarative app state that the replay
     /// path can't rebuild, so undo snapshots it directly.
     pub chord_track: crate::chord_track::ChordTrack,
-    /// Full drum arrangement per section definition. The project-file
-    /// form still flattens each arrangement to its primary pattern id
-    /// (multi-entry persistence is a separate todo), so the snapshot
-    /// captures the complete `Vec<PatternEntry>` here to make
-    /// arrangement edits — reorder, fills, length modes, multi-entry —
-    /// fully reversible without waiting on disk persistence.
-    pub compose_arrangements: HashMap<u64, Vec<crate::compose::PatternEntry>>,
     /// Per-track freeze status at snapshot time. The rendered cache is not
     /// part of undo history, so on restore
     /// [`crate::Resonance::apply_freeze_restore`] detaches + deletes the
     /// cache of any track that is no longer frozen and downgrades a
     /// re-frozen track whose cache file is gone to stale.
     pub track_freeze: HashMap<TrackId, crate::state::FreezeStatus>,
-    /// Per-clip fade + gain at snapshot time (doc #156 A2/#317). Captured
-    /// here because clip fade/gain isn't part of `ProjectFile` yet (the
-    /// persistence slice is #321); the restore paths re-apply each entry to
-    /// the `ClipState` mirror and re-sync the engine via `SetClipFade` /
-    /// `SetClipGain`, making fade/gain edits fully reversible without
-    /// waiting on disk persistence. Only clips present at restore time are
-    /// touched (a clip removed by the same undo is handled by the
-    /// structural replay path).
-    pub clip_fade_gain: HashMap<ClipId, ClipFadeGain>,
     /// External-instrument config per track (bank/program/latency + the
-    /// external-mode marker). Captured here because the `ProjectFile` shape
-    /// doesn't carry it yet (project persistence lands in a later todo), so
-    /// the undo system snapshots it separately — exactly like
-    /// `vocal_clip_lyrics`. The runtime device-offline flags are *not*
-    /// captured: they reflect live hardware, not project state.
+    /// external-mode marker). Also persisted as
+    /// `ProjectTrack::external_instrument`; the restore paths re-assert
+    /// it from here. The runtime device-offline flags are *not* captured:
+    /// they reflect live hardware, not project state.
     pub external_instruments: HashMap<TrackId, ExternalInstrument>,
     /// Selected device-preset id per external-instrument track (epic #40,
     /// doc #201 §5). Snapshotted alongside `external_instruments` because the
     /// selection is app-side project state that isn't part of the engine
-    /// `ExternalInstrument` config (nor the `ProjectFile` shape yet —
-    /// persistence is a later todo). `None` means the track is external but
-    /// has no preset selected. On restore the id is re-applied and the
-    /// resolved params are re-sent via `SetTrackDeviceParams`, so device
-    /// selection is fully reversible. Runtime device-param echoes
+    /// `ExternalInstrument` config (it is persisted as
+    /// `ProjectExternalInstrument::device_id`). `None` means the track is
+    /// external but has no preset selected. On restore the id is re-applied
+    /// and the resolved params are re-sent via `SetTrackDeviceParams`, so
+    /// device selection is fully reversible. Runtime device-param echoes
     /// (`applied_param_ids`) are *not* captured — they reflect the engine's
     /// live state, not project state.
     pub external_instrument_devices: HashMap<TrackId, Option<String>>,
-}
-
-/// Re-apply the snapshotted full arrangements onto the compose state after
-/// a project replay. The replay path rebuilds each section's arrangement
-/// from the persisted (flattened) primary pattern id; this overwrites it
-/// with the captured `Vec<PatternEntry>` so multi-entry arrangements,
-/// fills, and `Bars` length modes survive an undo/redo. Sections present
-/// in the live state but missing from the snapshot are left untouched.
-pub(crate) fn restore_arrangements(
-    compose: &mut crate::compose::ComposeState,
-    arrangements: &HashMap<u64, Vec<crate::compose::PatternEntry>>,
-) {
-    for (id, arrangement) in arrangements {
-        if let Some(def) = compose.find_definition_mut(*id) {
-            def.arrangement = arrangement.clone();
-        }
-    }
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -134,8 +91,7 @@ pub struct UndoSnapshot {
     /// cause the restore path to reinstantiate the plugin with default
     /// internal state and rely on the replayed parameter values.
     pub project: LoadedProject,
-    /// Runtime-only state rebuilt after the replay — currently just the
-    /// compose tab's derived-clip cache.
+    /// State re-applied after the replay; see [`UndoExtras`].
     pub extras: UndoExtras,
 }
 
@@ -166,9 +122,7 @@ impl UndoSnapshot {
             && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
             && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
             && a.chord_track == b.chord_track
-            && a.compose_arrangements == b.compose_arrangements
             && a.track_freeze == b.track_freeze
-            && a.clip_fade_gain == b.clip_fade_gain
             && a.external_instruments == b.external_instruments
             && a.external_instrument_devices == b.external_instrument_devices;
         if !(notes_equal && extras_equal) {
@@ -240,29 +194,7 @@ impl crate::Resonance {
             automation_lanes: self.automation.lanes.clone(),
             reference: self.reference.undo_snapshot(),
             chord_track: self.chord_track.clone(),
-            compose_arrangements: self
-                .compose
-                .definitions
-                .iter()
-                .map(|d| (d.id, d.arrangement.clone()))
-                .collect(),
             track_freeze: self.freeze.statuses.clone(),
-            clip_fade_gain: self
-                .clips
-                .iter()
-                .map(|c| {
-                    (
-                        c.id,
-                        ClipFadeGain {
-                            fade_in_frames: c.fade_in_frames,
-                            fade_in_curve: c.fade_in_curve,
-                            fade_out_frames: c.fade_out_frames,
-                            fade_out_curve: c.fade_out_curve,
-                            gain_db: c.gain_db,
-                        },
-                    )
-                })
-                .collect(),
             external_instruments: self
                 .external_instruments
                 .iter()
@@ -399,10 +331,12 @@ impl crate::Resonance {
         let _ = self.engine.send(AudioCommand::ClearAll);
     }
 
-    /// Apply the runtime-only extras captured in the snapshot. Called
-    /// from the `AllCleared` engine-event handler immediately after
+    /// Apply the extras captured in the snapshot. Called from the
+    /// `AllCleared` engine-event handler immediately after
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
+    /// Clip fade/gain and the drum arrangements need nothing here: the
+    /// replay restores them from the snapshot's `ProjectFile`.
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         self.restore_automation_lanes(&extras.automation_lanes);
         self.restore_external_instruments(&extras);
@@ -411,55 +345,11 @@ impl crate::Resonance {
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
         self.reference.restore_undo(extras.reference);
         self.chord_track = extras.chord_track;
-        restore_arrangements(&mut self.compose, &extras.compose_arrangements);
         self.apply_freeze_restore(extras.track_freeze);
-        self.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
         // Take lanes are *not* reconciled here. `replay_loaded_project`
         // runs immediately before this and ends in `replay_take_groups`,
         // which sends `RestoreTakeGroups` — see the note on the fast path
         // in `begin_restore_from_snapshot`.
-    }
-
-    /// Re-apply snapshotted clip fade/gain to the GUI mirror and re-sync the
-    /// engine. Used by both restore paths (the slow `finalize_undo_restore`
-    /// and the fast `try_diff_replay`). For each clip still present, the
-    /// stored fade/gain is written to [`crate::state::ClipState`] and pushed
-    /// to the engine via `SetClipFade` / `SetClipGain` — the same commands
-    /// the live edits use, so undo/redo and direct editing share one code
-    /// path. Clips absent from the map (or absent from the project) are
-    /// left untouched. Reads only app-side state — no engine read-getters.
-    pub(crate) fn apply_clip_fade_gain_restore(&mut self, map: &HashMap<ClipId, ClipFadeGain>) {
-        for clip in self.clips.iter_mut() {
-            let Some(fg) = map.get(&clip.id) else {
-                continue;
-            };
-            // Skip the engine round-trip when nothing changed, so a restore
-            // that didn't touch this clip stays quiet.
-            let unchanged = clip.fade_in_frames == fg.fade_in_frames
-                && clip.fade_in_curve == fg.fade_in_curve
-                && clip.fade_out_frames == fg.fade_out_frames
-                && clip.fade_out_curve == fg.fade_out_curve
-                && clip.gain_db == fg.gain_db;
-            clip.fade_in_frames = fg.fade_in_frames;
-            clip.fade_in_curve = fg.fade_in_curve;
-            clip.fade_out_frames = fg.fade_out_frames;
-            clip.fade_out_curve = fg.fade_out_curve;
-            clip.gain_db = fg.gain_db;
-            if unchanged {
-                continue;
-            }
-            let _ = self.engine.send(AudioCommand::SetClipFade {
-                clip_id: clip.id,
-                fade_in_frames: fg.fade_in_frames,
-                fade_in_curve: fg.fade_in_curve,
-                fade_out_frames: fg.fade_out_frames,
-                fade_out_curve: fg.fade_out_curve,
-            });
-            let _ = self.engine.send(AudioCommand::SetClipGain {
-                clip_id: clip.id,
-                gain_db: fg.gain_db,
-            });
-        }
     }
 
     /// Drive the engine + GUI external-instrument state back to `extras`.

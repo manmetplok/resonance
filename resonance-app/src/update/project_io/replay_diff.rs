@@ -158,13 +158,6 @@ pub fn try_diff_replay(
     // -- Track freeze status (detach/delete caches no longer frozen) ----
     r.apply_freeze_restore(extras.track_freeze.clone());
 
-    // -- Clip fade / gain ----------------------------------------------
-    // Clip fade/gain isn't in the `ProjectFile` yet (persistence is #321),
-    // so it rides in the snapshot's extras (doc #156 A2/#317) and is
-    // re-applied to the mirror + engine here. Fade/gain edits never alter
-    // the project shape, so they always take this fast path.
-    r.apply_clip_fade_gain_restore(&extras.clip_fade_gain);
-
     // -- External-instrument config (not carried by ProjectFile) -------
     r.restore_external_instruments(extras);
 
@@ -1012,9 +1005,10 @@ fn apply_midi_clips(
 }
 
 fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
-    // Section definitions / placements come back through `load_from_project`,
-    // which clears runtime-only sub-state. After that, restore the extras
-    // captured at snapshot time.
+    // Section definitions / placements — drum arrangements included, from
+    // `ProjectSectionDefinition::arrangement` — come back through
+    // `load_from_project`, which clears runtime-only sub-state. After
+    // that, restore the extras captured at snapshot time.
     r.compose
         .load_from_project(&b.section_definitions, &b.section_placements);
     // Restore the drum pattern bank. Modern snapshots persist
@@ -1026,11 +1020,6 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     r.compose.derived_clips = extras.compose_derived_clips.clone();
     r.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
     r.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics.clone();
-    // Overwrite the (flattened) arrangements rebuilt by `load_from_project`
-    // with the full snapshotted entries so undo/redo restores multi-entry
-    // arrangements, fills, and `Bars` lengths that the project file can't
-    // yet persist.
-    crate::undo::restore_arrangements(&mut r.compose, &extras.compose_arrangements);
 }
 
 /// `MidiNote` is a plain bag of `u8/f32/u64` fields but does not derive

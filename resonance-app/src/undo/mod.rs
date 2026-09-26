@@ -14,7 +14,7 @@
 //!
 //! | Sub-module | Contents |
 //! |---|---|
-//! | [`snapshot`] | Capture types (`ClipFadeGain`, `UndoExtras`, `UndoSnapshot`, `CoalesceKey`) and the `Resonance` methods that build and apply them |
+//! | [`snapshot`] | Capture types (`UndoExtras`, `UndoSnapshot`, `CoalesceKey`) and the `Resonance` methods that build and apply them |
 //! | [`history`] | The bounded `UndoHistory` stack with transaction + coalesce logic |
 //! | [`classify`] | `UndoAction` enum and the `classify` function that maps messages to actions |
 //! | [`describe`] | Short human labels for history entries, reported by `edit.status` (todo #1196) |
@@ -29,8 +29,7 @@ pub mod snapshot;
 pub use classify::{classify, UndoAction};
 pub use describe::describe;
 pub use history::UndoHistory;
-pub use snapshot::{ClipFadeGain, CoalesceKey, UndoExtras, UndoSnapshot};
-pub(crate) use snapshot::restore_arrangements;
+pub use snapshot::{CoalesceKey, UndoExtras, UndoSnapshot};
 
 // -------------------------------------------------------------------------
 // Record-undo dispatch — bridges message classification (classify.rs),
