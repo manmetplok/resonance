@@ -795,6 +795,8 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 - Unplanned: UPD-05's `freeze_content_fingerprint` now hashes the file form, else a padding-only restore marked frozen vocal tracks stale. `compute_track_freeze_fingerprint` (test-support only) still hashes the raw entry — switch it too if it is ever wired live.
 - Lyric entries for clips no longer in `midi_clips` are dropped on restore (vocal clips join `midi_clips` at install time, so no FU-H2a-style loss). `UndoExtras` is down to 5 fields.
 
+**C-1 landed (A5-3 first half) @ 8339eecd.** 39 emit sites (not 41). `PluginEditorFailure::engine_error_kind()` classifies editor-open failures per variant. 12 sites stay `Internal` because their `Result<_, String>` source mixes causes: 4 "no project directory", 2 worker-panic recoveries, 2 `platform::build_input_stream`, 4 MIDI hardware/clock `configure`/`set_track_*` — C-3's per-module `thiserror` should split these. `midi/hardware.rs`'s `set_track_input` `Err` arm is unreachable today.
+
 **E landed (A7-3) @ 38d66942.** `dirs` and `time` stay unconditional deps, not optional under `model`: the ungated `registry` module (used by drums) calls `dirs::data_dir()` and `time::OffsetDateTime`. `symphonia` is optional under `decode`. amp and `resonance-plugin` use no features; drums and ir use `decode`. `arch-invariants::plugins_disable_default_features_on_resonance_common` guards it.
 
 
