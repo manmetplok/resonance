@@ -477,8 +477,7 @@ pub(crate) fn create_clip_with_notes(
         .map(|n| n.start_tick + n.duration_ticks)
         .max()
         .unwrap_or(0);
-    let bar_ticks = app.transport.time_sig_num.max(1) as u64 * TICKS_PER_QUARTER_NOTE;
-    let duration_ticks = length_ticks.div_ceil(bar_ticks).max(1) * bar_ticks;
+    let duration_ticks = whole_bars_ticks(app, start_sample, length_ticks);
     let clip_id = app.compose.fresh_derived_clip_id();
     let create = app.update(Message::MidiClip(MidiClipMessage::CreateEmptyClip {
         clip_id,
@@ -493,6 +492,29 @@ pub(crate) fn create_clip_with_notes(
     }));
     crate::engine_events::midi::optimistic_set_notes(app, clip_id, notes);
     (clip_id, Task::batch([create, write]))
+}
+
+/// `length_ticks` rounded up to whole bars of the project's signature map,
+/// counted from the bar containing `start_sample` (at least one bar). Each
+/// bar's own length is used — a 7/8 bar is 3.5 quarters, not 7 (FU-E1).
+fn whole_bars_ticks(app: &Resonance, start_sample: u64, length_ticks: u64) -> u64 {
+    let (mut bar, _) = app.tempo_map.sample_to_bar(start_sample, app.sample_rate);
+    let table_end = app.tempo_map.bar_count() as u32;
+    let mut total = 0u64;
+    loop {
+        let bar_ticks = app.tempo_map.bar_len_ticks_at(bar).max(1);
+        if bar >= table_end {
+            // Past the bar table every bar has the last signature: finish
+            // arithmetically instead of walking a pathological length.
+            let rest = length_ticks.saturating_sub(total);
+            return total + rest.div_ceil(bar_ticks).max(1) * bar_ticks;
+        }
+        total += bar_ticks;
+        bar += 1;
+        if total >= length_ticks {
+            return total;
+        }
+    }
 }
 
 /// Rescale notes from the file's tempo map onto a constant `project_bpm`
