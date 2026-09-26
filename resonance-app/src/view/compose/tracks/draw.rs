@@ -30,7 +30,7 @@ impl<'a> ComposeTrackCanvas<'a> {
         };
         Rectangle {
             x: 0.0,
-            y: index as f32 * height - self.scroll_offset_y,
+            y: index as f32 * height,
             width: bounds.width,
             height,
         }

@@ -50,6 +50,12 @@ impl Resonance {
         self.viewport.zoom
     }
 
+    /// Test-only: the arrange timeline's vertical scroll offset (px).
+    #[doc(hidden)]
+    pub fn test_arrange_scroll_y(&self) -> f32 {
+        self.viewport.scroll_offset_y
+    }
+
     /// Test-only: read the GUI-side audio clip list. Used by the
     /// engine-event mirroring tests to assert that fade/gain events
     /// land on the matching `ClipState`.

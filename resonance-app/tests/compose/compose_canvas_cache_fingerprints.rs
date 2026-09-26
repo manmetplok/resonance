@@ -78,7 +78,6 @@ fn track_canvas<'a>(
         sample_rate: SAMPLE_RATE,
         tempo_map,
         start_bar: 0,
-        scroll_offset_y: 0.0,
         scale: Some(Scale::new(PitchClass::C, Mode::Major)),
         details_track_id: None,
         expanded_track_id: None,
@@ -126,7 +125,7 @@ fn track_canvas_fingerprint_changes_on_tempo_edit() {
 }
 
 #[test]
-fn track_canvas_fingerprint_changes_on_selection_and_scroll() {
+fn track_canvas_fingerprint_changes_on_selection() {
     let tracks = tracks_fixture();
     let clips = clips_fixture();
     let tempo = TempoMap::default();
@@ -135,10 +134,6 @@ fn track_canvas_fingerprint_changes_on_selection_and_scroll() {
     let mut selected = track_canvas(&tracks, &clips, &tempo);
     selected.details_track_id = Some(1);
     assert_ne!(base, selected.fingerprint(), "selection highlight is drawn");
-
-    let mut scrolled = track_canvas(&tracks, &clips, &tempo);
-    scrolled.scroll_offset_y = 40.0;
-    assert_ne!(base, scrolled.fingerprint(), "scroll shifts every row");
 }
 
 #[test]
