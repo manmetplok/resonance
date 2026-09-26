@@ -296,11 +296,8 @@ fn cancel_aborts_and_removes_partial_file() {
     );
 
     match result {
-        Err(msg) => assert!(
-            msg.contains("cancel"),
-            "cancel must name the reason, got: {msg}"
-        ),
-        Ok(_) => panic!("pre-armed cancel must abort the freeze"),
+        Err(resonance_audio::test_support::FreezeError::Cancelled) => {}
+        other => panic!("pre-armed cancel must abort the freeze as Cancelled, got: {other:?}"),
     }
     assert!(!path.exists(), "cancelled freeze must remove the partial WAV");
 }
@@ -436,8 +433,8 @@ fn freeze_refuses_while_transport_playing() {
     );
 
     match result {
-        Err(msg) => assert!(msg.contains("Stop transport"), "got: {msg}"),
-        Ok(_) => panic!("freeze must refuse while the transport plays"),
+        Err(resonance_audio::test_support::FreezeError::TransportRunning) => {}
+        other => panic!("freeze must refuse while the transport plays as TransportRunning, got: {other:?}"),
     }
     assert!(!path.exists(), "guarded freeze must not create a file");
 }
@@ -465,8 +462,8 @@ fn missing_source_track_errors() {
     );
 
     match result {
-        Err(msg) => assert!(msg.contains("not found"), "got: {msg}"),
-        Ok(_) => panic!("freeze of a missing track must error"),
+        Err(resonance_audio::test_support::FreezeError::SourceTrackNotFound(42)) => {}
+        other => panic!("freeze of a missing track must error as SourceTrackNotFound, got: {other:?}"),
     }
 }
 

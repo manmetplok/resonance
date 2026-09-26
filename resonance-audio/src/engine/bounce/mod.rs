@@ -47,7 +47,7 @@ mod stem_export;
 mod wav;
 
 pub use clip::to_audio_clip;
-pub use freeze::{read_freeze_cache, to_freeze_cache, FREEZE_CANCELLED_MSG};
+pub use freeze::{read_freeze_cache, to_freeze_cache, FreezeError, FREEZE_CANCELLED_MSG};
 pub use render::try_lock_with_backoff;
 pub use render::{chunk_span, BOUNCE_CHUNK, MIN_CLAP_FRAMES};
 pub use measure::{measure_mix, measure_rendered_buffer};
@@ -106,7 +106,7 @@ impl PartialFile {
 /// `format!()` string.
 #[derive(Debug, Error)]
 #[error("Could not move the finished file into place at {path}: {source}")]
-pub(super) struct PartialFileError {
+pub struct PartialFileError {
     path: String,
     #[source]
     source: std::io::Error,
@@ -215,16 +215,19 @@ impl Drop for OfflineRenderGuard {
 /// Pulled out of [`to_freeze_cache_spawn`]'s worker closure so the
 /// complete / cancel / error mapping is unit-testable without spawning a
 /// render: a successful render maps to `FreezeCompleted`, the cooperative
-/// cancel sentinel ([`FREEZE_CANCELLED_MSG`]) to `FreezeCancelled`, and any
-/// other error to `FreezeError`.
+/// cancel variant ([`freeze::FreezeError::Cancelled`]) to `FreezeCancelled`,
+/// and any other error to `AudioEvent::FreezeError`.
 pub fn freeze_terminal_event(
     track_id: TrackId,
-    result: Result<FreezeCacheRef, String>,
+    result: Result<FreezeCacheRef, freeze::FreezeError>,
 ) -> AudioEvent {
     match result {
         Ok(cache_ref) => AudioEvent::FreezeCompleted { track_id, cache_ref },
-        Err(msg) if msg == FREEZE_CANCELLED_MSG => AudioEvent::FreezeCancelled { track_id },
-        Err(message) => AudioEvent::FreezeError { track_id, message },
+        Err(freeze::FreezeError::Cancelled) => AudioEvent::FreezeCancelled { track_id },
+        Err(e) => AudioEvent::FreezeError {
+            track_id,
+            message: e.to_string(),
+        },
     }
 }
 

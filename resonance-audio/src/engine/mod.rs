@@ -33,8 +33,9 @@ pub use bounce::{
     measure_mix,
     measure_rendered_buffer, normalize_buffer_for_test, read_freeze_cache, render_stem,
     stem_filter, stem_project_range, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
-    try_lock_with_backoff, write_stem_wav, OfflineRenderGuard, BOUNCE_CHUNK,
-    FREEZE_CANCELLED_MSG, MEASURE_BUSY_MSG, MIN_CLAP_FRAMES, OFFLINE_RENDER_BUSY_MSG, StemFilter,
+    try_lock_with_backoff, write_stem_wav, FreezeError, OfflineRenderGuard,
+    BOUNCE_CHUNK, FREEZE_CANCELLED_MSG, MEASURE_BUSY_MSG, MIN_CLAP_FRAMES,
+    OFFLINE_RENDER_BUSY_MSG, StemFilter,
 };
 mod bounce_common;
 pub use bounce_common::midi_render_range;

@@ -110,7 +110,7 @@ pub mod test_support {
         chunk_span, encode_buffer_for_test, export_for_test, freeze_terminal_event,
         midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
-        try_lock_with_backoff, AutomationSnapshot, ResolvedParamLane, BOUNCE_CHUNK,
+        try_lock_with_backoff, AutomationSnapshot, FreezeError, ResolvedParamLane, BOUNCE_CHUNK,
         FREEZE_CANCELLED_MSG, MIN_CLAP_FRAMES, SharedState,
     };
     pub use crate::engine::{
