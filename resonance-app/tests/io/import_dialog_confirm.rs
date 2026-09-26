@@ -214,6 +214,82 @@ fn adopting_the_file_tempo_rewrites_the_project_tempo_in_the_same_edit() {
     assert_eq!(app.test_undo_history().undo_len(), 1, "tempo + notes: ONE edit");
 }
 
+/// A one-track file at `bpm` whose single note sits on `beat`.
+fn one_note_file(tag: &str, bpm: f32, beat: u64) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "resonance-import-confirm-{tag}-{}.mid",
+        std::process::id()
+    ));
+    let lead = [note(72, beat)];
+    let mut map = TempoMap::default();
+    map.bpm = bpm;
+    write_midi_project(&path, &map, &[MidiTrackSource { name: "Lead", notes: &lead }])
+        .expect("write test MIDI file");
+    path
+}
+
+/// FU-V4a: "match time" follows the project's tempo map across the
+/// imported span, not just the tempo at the import point.
+#[test]
+fn matching_time_follows_a_project_tempo_change_inside_the_span() {
+    use resonance_app::state::TempoEvent;
+    let mut app = app();
+    // 120 BPM for bar 1, then a step to 60 BPM from bar 2 on.
+    app.test_push_tempo_event(TempoEvent { bar: 1, bpm: 120.0 });
+    app.test_push_tempo_event(TempoEvent { bar: 1, bpm: 60.0 });
+    app.test_rebuild_tempo_map();
+    // Beat 6 at 90 BPM is 4 s in: bar 1 takes 2 s at 120, the remaining
+    // 2 s at 60 BPM are 2 more beats — project beat 6, not the 8 beats a
+    // constant 120 BPM rescale gives.
+    let path = one_note_file("time-change", 90.0, 6);
+    open_parsed(&mut app, &path);
+    send(&mut app, ImportMessage::SetTempoChoice(TempoChoice::KeepProject));
+    send(&mut app, ImportMessage::SetConflictAlignment(TempoAlignment::MatchTime));
+    send(&mut app, ImportMessage::ResolveTempo);
+    send(&mut app, ImportMessage::Confirm);
+    let lead = app
+        .test_midi_clips()
+        .iter()
+        .find(|c| c.name == "Lead")
+        .expect("Lead clip");
+    let start = lead.notes[0].start_tick as i64;
+    assert!((start - 6 * TPQ as i64).abs() <= 2, "wall-clock onset (got {start})");
+}
+
+/// FU-V4a: adopting the file tempo for an import placed at the playhead
+/// rewrites the tempo from the placement bar on; the bars before it keep
+/// the project's tempo.
+#[test]
+fn adopting_the_file_tempo_at_the_playhead_leaves_earlier_bars_alone() {
+    use resonance_app::message::TransportMessage;
+    use resonance_app::state::PlacementStart;
+    let mut app = app();
+    let bar_3 = app.test_tempo_map().bar_to_sample(2);
+    let _ = app.update(Message::Transport(TransportMessage::SeekToSample(bar_3)));
+    let path = one_note_file("adopt-playhead", 90.0, 0);
+    open_parsed(&mut app, &path);
+    send(&mut app, ImportMessage::SetTempoChoice(TempoChoice::AdoptFile));
+    send(&mut app, ImportMessage::ResolveTempo);
+    send(&mut app, ImportMessage::SetPlacementStart(PlacementStart::Playhead));
+    send(&mut app, ImportMessage::Confirm);
+
+    let events: Vec<(u32, f32)> = app.test_tempo_events().iter().map(|e| (e.bar, e.bpm)).collect();
+    assert_eq!(events[0], (0, 120.0), "bars before the placement keep their tempo");
+    let at_placement = events
+        .iter()
+        .rev()
+        .find(|(bar, _)| *bar <= 2)
+        .expect("a tempo governs the placement bar");
+    assert_eq!(at_placement.0, 2, "the file tempo starts at the placement bar");
+    assert!((at_placement.1 - 90.0).abs() < 0.01, "file tempo adopted: {events:?}");
+    let lead = app
+        .test_midi_clips()
+        .iter()
+        .find(|c| c.name == "Lead")
+        .expect("Lead clip");
+    assert_eq!(lead.start_sample, bar_3, "the clip lands on the placement bar");
+}
+
 #[test]
 fn confirm_is_refused_before_the_tempo_conflict_is_resolved() {
     let mut app = app();

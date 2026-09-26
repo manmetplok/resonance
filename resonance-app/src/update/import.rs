@@ -17,10 +17,12 @@
 //! - **keep the project tempo, match bars** — the notes keep their
 //!   bar/beat positions and play at the project tempo;
 //! - **keep the project tempo, match time** — the notes keep their
-//!   wall-clock timing, rescaled from the file's tempo map onto the
-//!   project tempo at the import point;
+//!   wall-clock timing, re-timed from the file's tempo map onto the
+//!   project's tempo map from the import point on, so a project tempo
+//!   change inside the imported span is followed;
 //! - **use the file tempo** — the project's tempo map is replaced by the
-//!   file's, and the notes keep their bar/beat positions.
+//!   file's from the placement bar on (bars before it keep theirs), and
+//!   the notes keep their bar/beat positions.
 
 use std::path::{Path, PathBuf};
 
@@ -376,35 +378,38 @@ fn confirm(app: &mut Resonance) -> Task<Message> {
 
     app.continue_as_one_undo(|app| {
         let mut tasks = Vec::new();
+        // Where the import lands, musically: the bar and the fraction into
+        // it. Adopting the file tempo re-times everything from that bar
+        // on, so the sample is resolved again afterwards.
+        let (start_bar, start_frac) = match placement.start {
+            PlacementStart::Bar1 => (0, 0.0),
+            PlacementStart::Playhead => app
+                .tempo_map
+                .sample_to_bar(app.transport.playhead, app.sample_rate),
+        };
         if adopt_file_tempo && !smf.tempo_points.is_empty() {
-            let mut points = smf.tempo_points.clone();
-            if points[0].bar != 0 {
-                let bpm = points[0].bpm;
-                points.insert(0, crate::state::TempoEvent { bar: 0, bpm });
-            }
-            app.tempo_events = points;
+            app.tempo_events = adopted_tempo(&app.tempo_events, &smf.tempo_points, start_bar);
             app.rebuild_and_send_tempo();
             app.sync_tempo_display();
         }
 
-        let start_sample = match placement.start {
-            PlacementStart::Bar1 => app.tempo_map.bar_to_sample(0),
-            PlacementStart::Playhead => app.transport.playhead,
-        };
-        let project_bpm = app
-            .tempo_map
-            .tempo_at_sample(start_sample, app.sample_rate)
-            .0;
+        let bar_start = app.tempo_map.bar_to_sample(start_bar);
+        let bar_len = app.tempo_map.bar_to_sample(start_bar + 1) - bar_start;
+        let start_sample = bar_start + (start_frac * bar_len as f64).round() as u64;
+        // Owned: the closure outlives the borrows `update()` takes below.
+        let tempo_map = match_time.then(|| app.tempo_map.clone());
+        let sample_rate = app.sample_rate;
         let notes_of = |index: usize| -> Vec<MidiNote> {
             let notes = smf
                 .tracks
                 .get(index)
                 .map(|t| t.notes.clone())
                 .unwrap_or_default();
-            if match_time {
-                retime_notes(&notes, &smf.tempo_events, project_bpm)
-            } else {
-                notes
+            match &tempo_map {
+                Some(map) => {
+                    retime_notes(&notes, &smf.tempo_events, map, start_sample, sample_rate)
+                }
+                None => notes,
             }
         };
 
@@ -517,14 +522,62 @@ fn whole_bars_ticks(app: &Resonance, start_sample: u64, length_ticks: u64) -> u6
     }
 }
 
-/// Rescale notes from the file's tempo map onto a constant `project_bpm`
-/// so each note keeps its wall-clock onset and length ("keep project
-/// tempo, match time"). Constant across the clip: a project tempo change
-/// inside the imported span is not followed.
-fn retime_notes(notes: &[MidiNote], file_tempo: &[TempoEvent], project_bpm: f32) -> Vec<MidiNote> {
+/// The project tempo map after adopting the file's (`file`, bar-relative
+/// to the file's start) for an import landing at 0-based `start_bar`
+/// (code review FU-V4a). Events before the placement bar are kept, and
+/// the project's tempo at that bar is pinned there first, so a ramp into
+/// the placement cannot bend the bars before it; the file's events follow,
+/// shifted onto the placement. At bar 1 this is the file's map outright.
+fn adopted_tempo(
+    project: &[crate::state::TempoEvent],
+    file: &[crate::state::TempoEvent],
+    start_bar: u32,
+) -> Vec<crate::state::TempoEvent> {
+    use crate::state::TempoEvent;
+    let mut events: Vec<TempoEvent> = project
+        .iter()
+        .filter(|e| e.bar < start_bar)
+        .cloned()
+        .collect();
+    if start_bar > 0 {
+        let arrival = resonance_audio::types::bpm_at_bar(start_bar as f64, project);
+        events.push(TempoEvent {
+            bar: start_bar,
+            bpm: arrival as f32,
+        });
+    }
+    if file[0].bar != 0 {
+        events.push(TempoEvent {
+            bar: start_bar,
+            bpm: file[0].bpm,
+        });
+    }
+    events.extend(file.iter().map(|e| TempoEvent {
+        bar: e.bar.saturating_add(start_bar),
+        bpm: e.bpm,
+    }));
+    events
+}
+
+/// Re-time notes so each keeps its wall-clock onset and length from the
+/// file ("keep project tempo, match time"): a note `s` seconds into the
+/// file lands `s` seconds after `start_sample` on the project's tempo
+/// map, so project tempo changes inside the imported span are followed
+/// (code review FU-V4a).
+fn retime_notes(
+    notes: &[MidiNote],
+    file_tempo: &[TempoEvent],
+    tempo_map: &resonance_audio::types::TempoMap,
+    start_sample: u64,
+    sample_rate: u32,
+) -> Vec<MidiNote> {
+    let origin = tempo_map.sample_to_abs_tick(start_sample, sample_rate);
     let to_project_ticks = |tick: u64| -> u64 {
         let seconds = file_seconds_at(tick, file_tempo);
-        (seconds * project_bpm as f64 / 60.0 * TICKS_PER_QUARTER_NOTE as f64).round() as u64
+        let sample = start_sample + (seconds * sample_rate as f64).round() as u64;
+        tempo_map
+            .sample_to_abs_tick(sample, sample_rate)
+            .saturating_sub(origin)
     };
     notes
         .iter()

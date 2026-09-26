@@ -16,8 +16,10 @@
 //! Review ends in an Import button, enabled exactly when Confirm would be
 //! accepted; TempoConflict offers the three ways to reconcile a tempo
 //! difference and a Continue; Imported reports what landed (code review
-//! FU-V2a). Drop / Parsing / Error stay single labelled lines, and the
-//! placement controls (#507) are not built yet — the defaults apply.
+//! FU-V2a). Drop / Parsing / Error stay single labelled lines. Review also
+//! carries minimal placement controls (#507, code review FU-V4a): start at
+//! bar 1 or the playhead, and new tracks or a merge into one existing
+//! instrument/vocal track.
 
 use iced::widget::{
     button, column, container, mouse_area, opaque, row, scrollable, stack, text, text_input, Space,
@@ -26,8 +28,8 @@ use iced::{alignment, Element, Length};
 
 use crate::message::{ImportMessage, Message};
 use crate::state::{
-    ImportDialogState, ImportStage, ImportSummary, ImportTrackKind, TempoAlignment, TempoChoice,
-    TrackImportRow,
+    ImportDialogState, ImportStage, ImportSummary, ImportTrackKind, PlacementMode, PlacementStart,
+    TempoAlignment, TempoChoice, TrackImportRow,
 };
 use crate::theme;
 use crate::Resonance;
@@ -62,7 +64,7 @@ pub(crate) fn view_import_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
     // fall back to a single labelled line until their todos land. The
     // dialog widens for Review so the track table breathes.
     let (body, width): (Element<'a, Message>, f32) = match dialog.stage {
-        ImportStage::Review => (review_body(dialog), 600.0),
+        ImportStage::Review => (review_body(r, dialog), 600.0),
         ImportStage::TempoConflict => (tempo_conflict_body(r, dialog), 460.0),
         ImportStage::Imported => (imported_body(dialog), 460.0),
         _ => (stage_placeholder(dialog), 460.0),
@@ -284,7 +286,7 @@ fn imported_body<'a>(dialog: &'a ImportDialogState) -> Element<'a, Message> {
 
 /// The populated Review screen: summary band, the All/None + count header,
 /// and the scrollable tracks-to-import list.
-fn review_body<'a>(dialog: &'a ImportDialogState) -> Element<'a, Message> {
+fn review_body<'a>(r: &'a Resonance, dialog: &'a ImportDialogState) -> Element<'a, Message> {
     let summary: Element<'a, Message> = match dialog.summary.as_ref() {
         Some(s) => summary_band(s),
         None => Space::new().height(Length::Fixed(0.0)).into(),
@@ -331,9 +333,95 @@ fn review_body<'a>(dialog: &'a ImportDialogState) -> Element<'a, Message> {
         header,
         Space::new().height(8),
         list_scroll,
+        Space::new().height(12),
+        placement_controls(r, dialog),
     ]
     .spacing(0)
     .into()
+}
+
+/// Where the import lands: a Start row (bar 1 / playhead) and an Into row
+/// (new tracks / merge into one existing instrument or vocal track, whose
+/// candidates appear once Merge is chosen). Plain toggles on the dialog's
+/// existing messages; `confirm_blocker` still has the last word.
+fn placement_controls<'a>(r: &'a Resonance, dialog: &'a ImportDialogState) -> Element<'a, Message> {
+    let p = dialog.placement;
+    let label = |s: &'a str| text(s).size(12).color(theme::TEXT_2).width(Length::Fixed(44.0));
+    let start = row![
+        label("Start"),
+        choice_chip(
+            "Bar 1",
+            p.start == PlacementStart::Bar1,
+            ImportMessage::SetPlacementStart(PlacementStart::Bar1)
+        ),
+        choice_chip(
+            "Playhead",
+            p.start == PlacementStart::Playhead,
+            ImportMessage::SetPlacementStart(PlacementStart::Playhead)
+        ),
+    ]
+    .spacing(6)
+    .align_y(alignment::Vertical::Center);
+    let into = row![
+        label("Into"),
+        choice_chip(
+            "New tracks",
+            p.mode == PlacementMode::NewTracks,
+            ImportMessage::SetPlacementMode(PlacementMode::NewTracks)
+        ),
+        choice_chip(
+            "Merge into…",
+            p.mode == PlacementMode::MergeIntoSelected,
+            ImportMessage::SetPlacementMode(PlacementMode::MergeIntoSelected)
+        ),
+    ]
+    .spacing(6)
+    .align_y(alignment::Vertical::Center);
+
+    let mut controls = column![start, into].spacing(4);
+    if p.mode == PlacementMode::MergeIntoSelected {
+        let mut targets = row![label("")].spacing(6);
+        for t in r.registry.tracks.iter().filter(|t| {
+            matches!(
+                t.track_type,
+                resonance_audio::types::TrackType::Instrument
+                    | resonance_audio::types::TrackType::Vocal
+            )
+        }) {
+            targets = targets.push(choice_chip(
+                &t.name,
+                p.merge_target == Some(t.id),
+                ImportMessage::SetMergeTarget(Some(t.id)),
+            ));
+        }
+        controls = controls.push(scrollable(targets).direction(
+            scrollable::Direction::Horizontal(scrollable::Scrollbar::new()),
+        ));
+    }
+    controls.into()
+}
+
+/// One option of a small radio group: the selected one wears the row
+/// selection wash, the others are pressable.
+fn choice_chip<'a>(label: &'a str, selected: bool, msg: ImportMessage) -> Element<'a, Message> {
+    let color = if selected { theme::ACCENT_SOFT } else { theme::TEXT_2 };
+    button(text(label).size(12).color(color))
+        .padding([4, 10])
+        .on_press(Message::Import(msg))
+        .style(move |_theme, status| {
+            if selected {
+                let s = row_style(true, false);
+                button::Style {
+                    background: s.background,
+                    border: s.border,
+                    text_color: color,
+                    ..Default::default()
+                }
+            } else {
+                theme::ghost_button_style(status)
+            }
+        })
+        .into()
 }
 
 /// Summary band: file name + an SMF-format chip on top, then a row of stat
