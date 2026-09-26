@@ -184,7 +184,7 @@ pub fn execute(
     // falls through to `method_not_found` rather than being masked by a
     // `busy` — the gate answers "can't right now", not "no such method".
     if is_protocol_method(method) && !is_read_only_method(method) {
-        if let Some(error) = mutation_gate_error(app) {
+        if let Some(error) = mutation_gate_error(app, method) {
             return (failure(request, error), Task::none());
         }
     }
@@ -478,10 +478,22 @@ pub(super) fn optional_params<T: serde::de::DeserializeOwned + Default>(
 /// otherwise silently swallow a synthesized domain message (startup
 /// modal / offline bounce / freeze render) — a remote client must see a
 /// stable `busy` error instead of a no-op that claims success.
-pub(crate) fn mutation_gate_error(app: &Resonance) -> Option<RpcError> {
+pub(crate) fn mutation_gate_error(app: &Resonance, method: &str) -> Option<RpcError> {
     if !app.io.has_active_project {
         return Some(RpcError::busy(
             "no active project — open or create one first",
+        ));
+    }
+    // A WAV / FLAC mixdown (GUI bounce or `render.mixdown`) drives the
+    // live plugin instances like a bounce in place, and the GUI gate
+    // drops every synthesized domain message while it runs (code review
+    // UPD-06) — so a mutation must answer `busy` here rather than no-op.
+    // `meter.*` is the one namespace that stays open: its own render
+    // guard refuses the offline source and keeps the live master meter
+    // readable during a render, which is exactly when a client wants it.
+    if app.io.bouncing && !resonance_control::methods::meter::METHODS.contains(&method) {
+        return Some(RpcError::busy(
+            "an offline render is in progress; retry when it finishes",
         ));
     }
     offline_render_busy_error(app)

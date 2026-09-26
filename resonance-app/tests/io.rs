@@ -43,6 +43,8 @@ mod import_placement;
 mod import_progress_dialog;
 #[path = "io/media_browser_scaffold.rs"]
 mod media_browser_scaffold;
+#[path = "io/offline_render_gate.rs"]
+mod offline_render_gate;
 #[path = "io/pool_persistence.rs"]
 mod pool_persistence;
 #[path = "io/pool_tab_rendering.rs"]
