@@ -163,6 +163,10 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 // Tear down any freeze cache the track owned (ba todo #577).
                 r.cleanup_freeze_on_delete(id);
                 let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: id });
+                // Mirror the removal now, not on the `TrackRemoved` echo,
+                // so an undo before the echo sees it (code review
+                // STATE-10). The echo's handler is idempotent.
+                crate::engine_events::tracks::removed(r, id);
             }
         }
         TrackMessage::CancelRemoveTrack => {

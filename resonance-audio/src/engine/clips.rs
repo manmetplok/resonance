@@ -31,6 +31,28 @@ pub struct DeferredClipCommand {
     pub parked_at: std::time::Instant,
 }
 
+/// Raise the clip-id allocator past every `audio/clip_{id}.wav` in a
+/// project dir the engine is pointed at, so a new clip never overwrites
+/// the WAV of a clip deleted before the last save — one a versioned
+/// backup can still reference (code review STATE-08). Runs on the
+/// control thread; a missing dir reserves nothing.
+pub(crate) fn reserve_clip_ids_in_project_dir(state: &mut HandlerState, dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
+        return;
+    };
+    let highest = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name();
+            let name = name.to_str()?;
+            name.strip_prefix("clip_")?.strip_suffix(".wav")?.parse::<ClipId>().ok()
+        })
+        .max();
+    if let Some(id) = highest {
+        state.next_clip_id = state.next_clip_id.max(id.saturating_add(1));
+    }
+}
+
 /// Park `command` until `clip_id` shows up, instead of dropping it.
 ///
 /// The engine's convention everywhere else is that a command naming
@@ -182,6 +204,8 @@ pub(crate) fn handle_import_clip(
     let clip_id = state.next_clip_id;
     state.next_clip_id += 1;
     let sr = ctx.sample_rate;
+    let clear_generation = Arc::clone(&state.clear_generation);
+    let generation = clear_generation.load(std::sync::atomic::Ordering::SeqCst);
 
     // Queued rather than run here: decoding is heavy and the engine
     // thread must stay responsive. The queue bounds how many decodes
@@ -220,7 +244,21 @@ pub(crate) fn handle_import_clip(
                                 warp_markers: Vec::new(),
                                 tuning_render_cache: None,
                             };
-                            clips_arc.write().push(clip);
+                            // Checked under the clip lock, and the event sent
+                            // before releasing it: `ClearAll` bumps the
+                            // generation before it takes the lock, so either
+                            // this push (and its echo) precedes the clear, or
+                            // the import is dropped (code review UPD-09).
+                            let mut clips = clips_arc.write();
+                            if clear_generation.load(std::sync::atomic::Ordering::SeqCst)
+                                != generation
+                            {
+                                drop(clips);
+                                drop(clip);
+                                let _ = std::fs::remove_file(&target);
+                                return;
+                            }
+                            clips.push(clip);
                             let _ = thread_event_tx.send(AudioEvent::ClipImported {
                                 clip_id,
                                 track_id,
@@ -229,6 +267,7 @@ pub(crate) fn handle_import_clip(
                                 name,
                                 waveform_peaks,
                             });
+                            drop(clips);
                         }
                         Err(e) => {
                             let _ = thread_event_tx.send(AudioEvent::Error(format!(

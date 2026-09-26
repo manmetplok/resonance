@@ -3,6 +3,7 @@
 //! engine + state replay lives in `replay.rs`, and rfd file-dialog
 //! tasks live in `dialogs.rs`.
 
+mod autosave;
 mod dialogs;
 mod instantiate;
 mod replay;
@@ -19,6 +20,7 @@ use crate::message::*;
 use crate::project::SaveCollector;
 use crate::Resonance;
 
+pub use autosave::{should_autosave, tick_autosave, AutosaveGate};
 pub use dialogs::save_project_as_dialog;
 pub use instantiate::{begin_instantiate, instantiate_builtin, load_user_template_task};
 pub use replay::replay_loaded_project;
@@ -150,8 +152,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             return dialogs::load_project_task(path);
         }
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
-            r.io.save_state = None;
-            r.io.saving = false;
+            finish_save_write(r);
             // Resolve a control-initiated save job (doc #265, todo
             // #1149) — manual saves only: an autosave completing must
             // never satisfy a client's project.save. No-op when no
@@ -196,8 +197,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::ProjectSaved(Err(e), autosave) => {
-            r.io.save_state = None;
-            r.io.saving = false;
+            finish_save_write(r);
             if !autosave {
                 r.io.save_capture_revision = None;
             }
@@ -318,10 +318,18 @@ pub fn start_autosave(r: &mut Resonance) -> Task<Message> {
 /// flag rides along on the collector so the completion path
 /// (`engine_events::project_io`) routes correctly.
 fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
-    // Never run two saves at once: a second collector would clobber the
-    // first. A manual save the user explicitly triggered wins, so only
-    // an autosave backs off here — the timer will retry next tick.
-    if autosave && r.io.save_state.is_some() {
+    // Never run two engine round-trips at once: the engine's
+    // `ClipsSavedToProjectDir` / `AllPluginStatesSaved` carry no tag, so a
+    // second collector would take the first one's results — a manual Save
+    // As finishing with an autosave's scratch-dir clips (code review
+    // STATE-11). An autosave backs off (the timer retries); a manual save
+    // is queued and starts the moment the in-flight collector completes
+    // (`start_queued_save`).
+    if r.io.save_state.is_some() {
+        if !autosave {
+            r.io.manual_save_queued = true;
+            r.io.saving = true;
+        }
         return Task::none();
     }
 
@@ -365,6 +373,24 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
     let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir);
     let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
     Task::none()
+}
+
+/// Start the manual save that [`begin_save`] queued behind an in-flight
+/// collector, now that the collector has taken its engine results.
+pub(crate) fn start_queued_save(r: &mut Resonance) {
+    if r.io.save_state.is_none() && std::mem::take(&mut r.io.manual_save_queued) {
+        let _ = begin_save(r, false);
+    }
+}
+
+/// A save's async write finished (either outcome). Only drop the
+/// `saving` flag when no other save is collecting or queued: a manual
+/// save may have started while an autosave was writing, and the
+/// autosave's completion must not wipe its collector (STATE-11).
+fn finish_save_write(r: &mut Resonance) {
+    if r.io.save_state.is_none() && !r.io.manual_save_queued {
+        r.io.saving = false;
+    }
 }
 
 /// Scratch directory for autosaving a never-saved project:

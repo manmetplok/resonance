@@ -164,3 +164,93 @@ fn list_backups_ignores_unrelated_and_tmp_files() {
         "only project-<timestamp>.json snapshots are listed"
     );
 }
+
+// ---- Self-contained backups (code review STATE-12) --------------------
+
+fn plugin(instance_id: u64) -> resonance_app::project::ProjectPlugin {
+    serde_json::from_value(serde_json::json!({
+        "instance_id": instance_id,
+        "plugin_name": "Synth",
+        "clap_plugin_id": "com.example.synth",
+        "clap_file_path": "/nowhere/synth.clap",
+        "state_file": format!("plugins/plugin_{instance_id}.bin"),
+    }))
+    .expect("plugin json")
+}
+
+fn clip_with_notes(pitch: u8) -> (resonance_app::project::ProjectFile, Vec<(u64, Vec<resonance_audio::types::MidiNote>)>) {
+    let file = resonance_app::project::ProjectFile {
+        master_plugins: vec![plugin(5)],
+        midi_clips: vec![resonance_app::project::ProjectMidiClip {
+            id: 1,
+            track_id: 1,
+            start_sample: 0,
+            duration_ticks: 960,
+            name: "clip".into(),
+            trim_start_ticks: 0,
+            trim_end_ticks: 0,
+            midi_file: "midi/clip_1.mid".into(),
+            vocal_lyrics: Vec::new(),
+            notes: None,
+        }],
+        ..Default::default()
+    };
+    let notes = vec![(
+        1,
+        vec![resonance_audio::types::MidiNote {
+            note: pitch,
+            velocity: 0.8,
+            start_tick: 0,
+            duration_ticks: 480,
+        }],
+    )];
+    (file, notes)
+}
+
+/// A backup used to copy only `project.json`; the plugin blobs and MIDI
+/// files it points to are rewritten in place by every later save, so
+/// restoring it gave yesterday's arrangement with today's plugin states.
+#[test]
+fn a_backup_keeps_its_own_plugin_state_and_notes() {
+    use resonance_app::project::{load_project, save_project};
+
+    let dir = scratch_dir("selfcontained");
+    let (file, notes) = clip_with_notes(60);
+    save_project(&dir, &file, &[(5, b"state at backup".to_vec())], &notes).unwrap();
+    let backup = write_backup(&dir, "2026-01-01T00:00:00Z", 10).unwrap();
+
+    let (file, notes) = clip_with_notes(72);
+    save_project(&dir, &file, &[(5, b"later state".to_vec())], &notes).unwrap();
+
+    let restored = load_project(&backup).expect("a backup file loads");
+    assert_eq!(restored.project_dir, dir, "a backup resolves against its bundle");
+    assert_eq!(restored.plugin_states[&5], b"state at backup");
+    assert_eq!(restored.midi_notes[&1][0].note, 60);
+
+    // The current project is untouched by the backup.
+    let current = load_project(&dir).unwrap();
+    assert_eq!(current.plugin_states[&5], b"later state");
+}
+
+/// Pruning a backup also removes the side files it owned.
+#[test]
+fn pruning_removes_a_backups_side_files() {
+    use resonance_app::project::save_project;
+
+    let dir = scratch_dir("prunefiles");
+    let (file, notes) = clip_with_notes(60);
+    save_project(&dir, &file, &[(5, b"s".to_vec())], &notes).unwrap();
+    write_backup(&dir, "2026-01-01T00:00:00Z", 1).unwrap();
+    write_backup(&dir, "2026-01-02T00:00:00Z", 1).unwrap();
+
+    let mut names: Vec<String> = std::fs::read_dir(dir.join("backups"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["project-2026-01-02T00:00:00Z.files", "project-2026-01-02T00:00:00Z.json"]
+    );
+}

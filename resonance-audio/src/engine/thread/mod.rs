@@ -129,6 +129,11 @@ pub(crate) struct HandlerState {
     /// runs on its workers. Dropped with `HandlerState` at engine
     /// shutdown, which lets the workers finish and exit.
     pub imports: ImportQueue,
+    /// Bumped by every `ClearAll`. An `ImportClip` job captures it when
+    /// queued and drops its result if it changed meanwhile, so an import
+    /// never lands in the project that replaced its own (code review
+    /// UPD-09). Shared with the import workers.
+    pub clear_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Current project directory. Set via `AudioCommand::SetProjectDir`
     /// whenever the app opens, creates, or saves-as a project.
     /// Recording and import refuse to run when this is `None`.
@@ -285,6 +290,7 @@ impl HandlerState {
             rec: RecordingState::new(sample_rate),
             bundles: Vec::new(),
             imports: ImportQueue::default(),
+            clear_generation: Default::default(),
             project_dir: None,
             midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
             midi_recording: HashMap::new(),

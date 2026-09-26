@@ -509,6 +509,27 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
                 crate::compose::messages::ArrangementMessage::SelectEntry { .. },
             ) => UndoAction::Skip,
 
+            // Drum-ribbon span selection and the Expression dock's tool
+            // state (active curve, pen, snap) are view state too (code
+            // review VIEW-18): recording them wiped the redo stack.
+            ComposeMessage::SelectArrangementEntry(_)
+            | ComposeMessage::Expression {
+                msg:
+                    crate::compose::messages::ExpressionMessage::SelectCurve(_)
+                    | crate::compose::messages::ExpressionMessage::SetPenMode(_)
+                    | crate::compose::messages::ExpressionMessage::SetSnap(_),
+                ..
+            } => UndoAction::Skip,
+
+            // A vocal render finishing is the tail of the edit that queued
+            // it, seconds later — not a new edit, so it must not clear the
+            // redo stack an undo in the meantime filled (VIEW-18). An
+            // accepted install still marks the project dirty and bumps the
+            // revision in its handler: it changed the project's clips.
+            ComposeMessage::VocalAudioReady(_) | ComposeMessage::VocalAudioFailed { .. } => {
+                UndoAction::Skip
+            }
+
             // Everything else in Compose mutates project state.
             _ => UndoAction::Record,
         },

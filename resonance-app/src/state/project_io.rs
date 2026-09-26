@@ -80,4 +80,14 @@ pub struct ProjectIoState {
     /// when the revision is unchanged: an edit made while the files were
     /// being written is not in them (code review STATE-09).
     pub save_capture_revision: Option<u64>,
+    /// A manual save was requested while another save's engine round-trip
+    /// was collecting; it starts once that collector completes (code
+    /// review STATE-11).
+    pub manual_save_queued: bool,
+    /// When the project last went from clean to dirty, as seen by the
+    /// autosave trigger: the first interval runs from here (UPD-07).
+    pub autosave_armed_at: Option<std::time::SystemTime>,
+    /// The revision the last autosave snapshot started at; an unchanged
+    /// project is not snapshotted again.
+    pub autosave_revision: Option<u64>,
 }

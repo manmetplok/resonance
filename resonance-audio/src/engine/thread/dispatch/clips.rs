@@ -127,6 +127,7 @@ pub(super) fn dispatch_clips(
             publish_automation_snapshot(ctx, &state.automation_lanes);
         }
         AudioCommand::SetProjectDir(dir) => {
+            clips::reserve_clip_ids_in_project_dir(state, &dir);
             state.project_dir = Some(dir);
         }
         AudioCommand::LoadClipFromWav {

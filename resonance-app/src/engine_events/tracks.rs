@@ -76,7 +76,7 @@ pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
     r.apply_pending_control_track(track_id);
 }
 
-pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
+pub(crate) fn removed(r: &mut Resonance, track_id: TrackId) {
     // Aux sends leaving this track die with it (ba todo #1269 review).
     // The engine does NOT prune its own table on RemoveTrack, so tell it
     // explicitly -- otherwise it keeps rendering-and-cycle-checking an

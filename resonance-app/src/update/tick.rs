@@ -128,6 +128,8 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     refresh_midi_devices_if_stale(r);
     check_engine_disconnected(r);
     check_output_stream_lost(r);
+    // Change-gated periodic autosave (todo #465, code review UPD-07).
+    crate::update::project_io::tick_autosave(r);
     if tasks.is_empty() {
         Task::none()
     } else {

@@ -14,6 +14,20 @@ pub(super) fn imported(
     name: String,
     waveform_peaks: Vec<(f32, f32)>,
 ) {
+    // A stale import — queued in a project that a load or slow-path undo
+    // has since replaced — names a track this project doesn't have, or an
+    // id that is another track's clip here. Drop it rather than overwrite
+    // that clip's waveform or add a phantom clip (code review UPD-09; the
+    // engine fences these too).
+    let known_track = r.registry.tracks.iter().any(|t| t.id == track_id);
+    let same_track = r
+        .clips
+        .iter()
+        .find(|c| c.id == clip_id)
+        .is_none_or(|c| c.track_id == track_id);
+    if !known_track || !same_track {
+        return;
+    }
     // Idempotent: if the clip already exists (created by project load),
     // just update its waveform and total frames. Otherwise push new.
     if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {

@@ -2368,3 +2368,87 @@ fn a_park_claim_does_not_outlive_its_project() {
         "and the app must still be told the clip arrived"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Clip ids are never handed out twice in a session (code review STATE-08)
+// ---------------------------------------------------------------------------
+
+/// `ClearAll` (a slow-path undo, a project load) reset the clip allocator
+/// to 1. The undone clips' ids became free again although the redo stack
+/// still names them and their `audio/clip_{id}.wav` files, so the next
+/// take reused an id and overwrote the WAV a redo would bring back.
+#[test]
+fn clear_all_keeps_the_clip_allocator_past_every_issued_id() {
+    let mut h = EngineHandlerHarness::new();
+    h.load_clip_from_wav(7, 1, 0, PathBuf::from("/nonexistent/clip_7.wav"), "take".into());
+    assert_eq!(h.next_clip_id(), 8, "precondition: the load reserved id 7");
+
+    h.clear_all();
+
+    assert!(h.next_clip_id() >= 8, "clip id 7 must not be issued again");
+}
+
+/// A fresh session has issued nothing yet, but the project folder holds
+/// the WAVs of clips deleted before it was last saved — which versioned
+/// backups still reference. Pointing the engine at the folder reserves
+/// every `audio/clip_{id}.wav` id in it.
+#[test]
+fn setting_the_project_dir_reserves_the_ids_of_its_wavs() {
+    let dir = std::env::temp_dir().join(format!("resonance_state08_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("audio")).unwrap();
+    std::fs::write(dir.join("audio/clip_41.wav"), b"").unwrap();
+    std::fs::write(dir.join("audio/clip_9.wav"), b"").unwrap();
+    std::fs::write(dir.join("audio/notes.txt"), b"").unwrap();
+
+    let mut h = EngineHandlerHarness::new();
+    h.set_project_dir(dir.clone());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(h.next_clip_id(), 42);
+}
+
+// ---------------------------------------------------------------------------
+// An import queued before `ClearAll` never lands after it (code review UPD-09)
+// ---------------------------------------------------------------------------
+
+/// `ImportClip` decodes on a worker. A project load or slow-path undo
+/// (`ClearAll`) while it ran used to let the worker push the old
+/// project's clip (old id, old track) into the new project's clip list
+/// and tell the app about it after `AllCleared`.
+#[test]
+fn an_import_finishing_after_clear_all_is_dropped() {
+    let dir = make_tempdir("import-vs-clear-all");
+    // Long enough that the decode is still running when `ClearAll` lands.
+    let source = write_dc_take_wav(&dir, 1, 0.5, 48_000 * 30);
+    let project = dir.join("project");
+    std::fs::create_dir_all(project.join("audio")).unwrap();
+
+    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    engine.set_project_dir(project.clone());
+    let clip_id = engine.next_clip_id();
+    engine.import_clip(7, source.display().to_string(), 0);
+    engine.clear_all();
+
+    // The worker transcodes before it would push; wait for that, then a
+    // grace period for a (wrong) push to show up.
+    let target = project.join("audio").join(format!("clip_{clip_id}.wav"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !target.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    assert!(engine.clip_ids().is_empty(), "the stale import landed: {:?}", engine.clip_ids());
+    let events = engine.drain_events();
+    let cleared = events
+        .iter()
+        .position(|e| matches!(e, resonance_audio::types::AudioEvent::AllCleared))
+        .expect("ClearAll echoed");
+    assert!(
+        !events[cleared..]
+            .iter()
+            .any(|e| matches!(e, resonance_audio::types::AudioEvent::ClipImported { .. })),
+        "no ClipImported may follow AllCleared"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

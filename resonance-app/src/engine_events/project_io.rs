@@ -90,6 +90,10 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
         .map(|mc| (mc.id, mc.notes.clone()))
         .collect();
 
+    // A manual save requested while this one collected starts its own
+    // engine round-trip now (code review STATE-11).
+    crate::update::project_io::start_queued_save(r);
+
     Task::perform(
         async move {
             if autosave {

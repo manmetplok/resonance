@@ -95,14 +95,52 @@ fn leftover_tmp_does_not_clobber_good_file() {
     assert_eq!(read, b"the good file");
 
     // A subsequent atomic write still succeeds over the good file even
-    // with the stale tmp present, and reuses (overwrites) that tmp name.
+    // with the stale tmp present. Each write uses its own unique temp
+    // name (code review FU-M6a), so the stale one is left alone, inert.
     project::atomic_write(&target, b"the better file").expect("rewrite over stale tmp");
     let read = std::fs::read(&target).expect("read back 2");
     assert_eq!(read, b"the better file");
-    assert!(
-        !dir.path().join("project.json.tmp").exists(),
-        "atomic_write should consume/rename its tmp, leaving none"
-    );
+    assert_eq!(tmp_files(dir.path()), vec!["project.json.tmp".to_string()]);
+}
+
+/// Every `*.tmp` file name in `dir`, sorted.
+fn tmp_files(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("read dir")
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Code review FU-M6a: the project writer used its own copy of
+/// `atomic_write` with a fixed `<name>.tmp` temp file. Anything already
+/// occupying that name (here a directory a crashed tool left behind, or a
+/// concurrent writer's temp file) made every later save of the target
+/// fail. The shared `resonance_common::atomic_write` uses a unique temp
+/// name per write.
+#[test]
+fn atomic_write_is_not_blocked_by_an_occupied_fixed_tmp_name() {
+    let dir = TempDir::new("occupiedtmp");
+    let target = dir.path().join("project.json");
+    std::fs::create_dir_all(dir.path().join("project.json.tmp")).expect("occupy tmp name");
+
+    project::atomic_write(&target, b"saved anyway").expect("write despite occupied tmp name");
+    assert_eq!(std::fs::read(&target).expect("read back"), b"saved anyway");
+}
+
+/// A failed write (target is a directory, so the rename fails) must not
+/// strand its temp file.
+#[test]
+fn failed_atomic_write_leaves_no_tmp() {
+    let dir = TempDir::new("failedwrite");
+    let target = dir.path().join("occupied");
+    std::fs::create_dir_all(target.join("child")).expect("non-empty dir at target");
+
+    assert!(project::atomic_write(&target, b"nope").is_err());
+    assert!(tmp_files(dir.path()).is_empty(), "failed write stranded a tmp");
 }
 
 #[test]
@@ -154,13 +192,13 @@ fn save_project_survives_a_leftover_tmp_from_a_prior_crash() {
     let recovered = project::load_project(&project_dir).expect("load after crash");
     assert_eq!(recovered.file.bpm, 100.0);
 
-    // A new save cleanly replaces it and clears the tmp.
+    // A new save cleanly replaces it; the stale tmp stays inert.
     let second = ProjectFile {
         bpm: 140.0,
         ..ProjectFile::default()
     };
     project::save_project(&project_dir, &second, &[], &[]).expect("second save");
-    assert!(!project_dir.join("project.json.tmp").exists());
+    assert_eq!(tmp_files(&project_dir), vec!["project.json.tmp".to_string()]);
 
     let loaded = project::load_project(&project_dir).expect("load");
     assert_eq!(loaded.file.bpm, 140.0);

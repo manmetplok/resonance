@@ -512,6 +512,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             }
             let accepted = vocal_audio_install::handle_vocal_audio_ready(r, *data);
             if accepted {
+                r.mark_edited_without_history();
                 r.control
                     .jobs
                     .complete_vocal_lane(definition_id, track_id, r.revision());

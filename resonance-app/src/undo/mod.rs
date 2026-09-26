@@ -169,6 +169,16 @@ impl crate::Resonance {
         self.undo.commit();
     }
 
+    /// Count a project change that is not an edit of its own — the async
+    /// tail of an earlier, already-recorded edit, such as a vocal render
+    /// installing its audio (code review VIEW-18). Marks the project
+    /// dirty and bumps the revision like any committed change, but leaves
+    /// the history (and so the redo stack) alone.
+    pub(crate) fn mark_edited_without_history(&mut self) {
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     /// Record what a recording lands as an undoable edit (STATE-02). Called
     /// by the engine-event handlers that add recorded material — a
     /// `RecordingFinished` clip, a cycle-record `TakeCaptured`, the MIDI
