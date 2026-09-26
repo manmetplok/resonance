@@ -104,9 +104,10 @@ pub fn split_render_units(
     // builder would insert a real rest.
     let mut starts = vec![0usize];
     for i in 0..notes.len().saturating_sub(1) {
-        let slot_sec = ((notes[i + 1].start_tick.saturating_sub(notes[i].start_tick)) as f64
-            * spt)
-            .max(0.05);
+        // Unfloored, like the duration builder (VIEW-34); a slot under
+        // the floor can never exceed `sing_cap + SILENCE_GAP_SEC` anyway.
+        let slot_sec =
+            (notes[i + 1].start_tick.saturating_sub(notes[i].start_tick)) as f64 * spt;
         let sing_cap = (notes[i].duration_ticks as f64 * spt).max(0.05);
         if slot_sec > sing_cap + SILENCE_GAP_SEC {
             starts.push(i + 1);

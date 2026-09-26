@@ -138,8 +138,11 @@ pub(super) fn build_phoneme_track(
             .get(i + 1)
             .map(|nx| nx.start_tick)
             .unwrap_or(n.start_tick + n.duration_ticks);
+        // Overlapping / stacked notes are trimmed to the next onset (a
+        // zero slot for a note sharing its tick); the floor is applied
+        // afterwards by borrowing, never by adding time (VIEW-34).
         let slot_ticks = next_start_tick.saturating_sub(n.start_tick);
-        let slot_sec = (slot_ticks as f64 * seconds_per_tick).max(0.05);
+        let slot_sec = slot_ticks as f64 * seconds_per_tick;
 
         // For genuine silences (long gaps to the next note), cap the
         // sing duration and put the rest into a trailing AP. Threshold
@@ -196,6 +199,10 @@ pub(super) fn build_phoneme_track(
         });
     }
 
+    // Pass 1b: lift slots under the minimum by borrowing from their
+    // neighbours, so the segment still spans exactly the notes' ticks.
+    borrow_min_slot(&mut plans, MIN_NOTE_SEC);
+
     // Pass 2: pull each syllable's onset consonants back across the
     // preceding note boundary (see `onset_lead_in` above). Purely a
     // transfer between two adjacent slots, so the segment's total length
@@ -208,7 +215,9 @@ pub(super) fn build_phoneme_track(
         let (sing_sec, ap_sec, sp_sec) = (plan.sing_sec, plan.ap_sec, plan.sp_sec);
         let phonemes = plan.phonemes;
         let stressed_velocity = plan.velocity;
-        let phon_sing_sec = (sing_sec - sp_sec).max(0.05);
+        // No floor here: the slot was already floored by borrowing, and
+        // a floor at this point would add time (VIEW-34).
+        let phon_sing_sec = (sing_sec - sp_sec).max(0.0);
 
         // Split `phon_sing_sec` across phonemes with per-class targets
         // and audibility floors — see [`allocate_phoneme_durations`].
@@ -285,6 +294,78 @@ pub(super) fn build_phoneme_track(
     push_rest_entry(&mut track, params, "AP", SEGMENT_PAD_SEC);
 
     track
+}
+
+/// Shortest slot a note is given. Enforced by [`borrow_min_slot`], which
+/// moves time between neighbours rather than adding it.
+const MIN_NOTE_SEC: f64 = 0.05;
+
+/// Raise every note's `sing_sec` to at least `min` by taking the shortfall
+/// from nearby notes' surplus (and from rests), nearest first — forwards,
+/// then backwards. The total (sing + rest) is preserved exactly, so the
+/// segment spans the same time as the notes on the timeline and a run of
+/// short or stacked notes cannot push the rest of the phrase late
+/// (VIEW-34). When the whole span can't give every note `min`, it is
+/// shared out evenly instead.
+fn borrow_min_slot(plans: &mut [NotePlan], min: f64) {
+    const EPS: f64 = 1e-12;
+    let n = plans.len();
+    if n == 0 || plans.iter().all(|p| p.sing_sec >= min) {
+        return;
+    }
+    let total: f64 = plans.iter().map(|p| p.sing_sec + p.ap_sec).sum();
+    if total <= 0.0 {
+        // A zero-length span: nothing to preserve, keep notes audible.
+        for p in plans.iter_mut() {
+            p.sing_sec = min;
+            p.sp_sec = 0.0;
+        }
+        return;
+    }
+    if total < min * n as f64 {
+        let share = total / n as f64;
+        for p in plans.iter_mut() {
+            p.sing_sec = share;
+            p.ap_sec = 0.0;
+            p.sp_sec = p.sp_sec.min(share * 0.3);
+        }
+        return;
+    }
+    // Take up to `need` from one donor field, returning what's still owed.
+    fn take(field: &mut f64, keep: f64, need: f64) -> f64 {
+        let t = (*field - keep).max(0.0).min(need);
+        *field -= t;
+        need - t
+    }
+    for i in 0..n {
+        let mut need = min - plans[i].sing_sec;
+        if need <= EPS {
+            continue;
+        }
+        plans[i].sing_sec = min;
+        // Forwards: this note's own rest, then the next note's surplus,
+        // then that note's rest, ...
+        let mut k = i;
+        while need > EPS && k < n {
+            need = take(&mut plans[k].ap_sec, 0.0, need);
+            if need > EPS && k + 1 < n {
+                need = take(&mut plans[k + 1].sing_sec, min, need);
+            }
+            k += 1;
+        }
+        // Backwards: earlier rests and notes.
+        let mut k = i;
+        while need > EPS && k > 0 {
+            k -= 1;
+            need = take(&mut plans[k].ap_sec, 0.0, need);
+            if need > EPS {
+                need = take(&mut plans[k].sing_sec, min, need);
+            }
+        }
+    }
+    for p in plans.iter_mut() {
+        p.sp_sec = p.sp_sec.min(p.sing_sec * 0.3);
+    }
 }
 
 /// Phoneme list used when the resolver produced nothing for a note (an

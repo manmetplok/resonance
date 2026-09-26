@@ -498,6 +498,7 @@ fn vocal_audio_ready(definition_id: u64, track_id: u64, render_epoch: u64) -> Me
             trim_end_frames: 0,
             lead_ticks: 0,
             render_epoch,
+            bpm: 120.0,
         },
     )))
 }
@@ -615,5 +616,72 @@ fn a_superseded_renders_failure_fails_nothing() {
 
     // The current render then succeeds, and the job completes normally.
     let _ = app.update(vocal_audio_ready(def, track, 2));
+    assert_eq!(job_state(&mut app, job), JobState::Done);
+}
+
+/// A structural edit undone through the full `ClearAll -> AllCleared ->
+/// replay` pipeline, which wipes every lane's render epoch.
+fn slow_path_undo(app: &mut Resonance) {
+    let before = app.test_snapshot_for_undo();
+    app.test_add_track(99, resonance_audio::types::TrackType::Instrument);
+    app.test_begin_restore_from_snapshot(before);
+    app.test_apply_engine_event(resonance_audio::types::AudioEvent::AllCleared);
+}
+
+#[test]
+fn a_render_in_flight_across_a_full_replay_fails_its_job() {
+    // UPD-08: a slow-path undo (or project load) wipes the per-lane epoch
+    // map. The render queued before it then arrives stale and is dropped
+    // — and with nothing else ever coming for the lane, the job waiting
+    // on it used to stay `pending` forever (every `job.wait` timed out).
+    let (def, track) = (7, 50);
+    let mut app = app();
+
+    app.test_set_vocal_render_epoch(def, track, 1);
+    let job = vocal_render_job(&mut app, "client", vec![(def, track)]);
+    slow_path_undo(&mut app);
+    assert_eq!(
+        app.test_vocal_render_epoch(def, track),
+        None,
+        "precondition: the replay wiped the lane's epoch"
+    );
+
+    let _ = app.update(vocal_audio_ready(def, track, 1));
+    assert_eq!(
+        job_state(&mut app, job),
+        JobState::Error,
+        "the pre-replay render's job must resolve, not hang"
+    );
+}
+
+#[test]
+fn a_failure_in_flight_across_a_full_replay_fails_its_job() {
+    let (def, track) = (7, 50);
+    let mut app = app();
+
+    app.test_set_vocal_render_epoch(def, track, 1);
+    let job = vocal_render_job(&mut app, "client", vec![(def, track)]);
+    slow_path_undo(&mut app);
+
+    let _ = app.update(vocal_audio_failed(def, track, 1, "boom"));
+    assert_eq!(job_state(&mut app, job), JobState::Error);
+}
+
+#[test]
+fn a_stale_render_with_a_newer_one_in_flight_leaves_the_job_to_it() {
+    // The counterpart: after the replay the lane is re-rendered, so the
+    // pre-replay render's arrival must not fail the job — the new render
+    // will complete it.
+    let (def, track) = (7, 50);
+    let mut app = app();
+
+    app.test_set_vocal_render_epoch(def, track, 1);
+    let job = vocal_render_job(&mut app, "client", vec![(def, track)]);
+    slow_path_undo(&mut app);
+    app.test_set_vocal_render_epoch(def, track, 5);
+
+    let _ = app.update(vocal_audio_ready(def, track, 1));
+    assert_eq!(job_state(&mut app, job), JobState::Pending);
+    let _ = app.update(vocal_audio_ready(def, track, 5));
     assert_eq!(job_state(&mut app, job), JobState::Done);
 }

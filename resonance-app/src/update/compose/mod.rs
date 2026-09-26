@@ -494,11 +494,37 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             // last of them lands; no-op when no control job covers the
             // lane (a GUI-driven render).
             let (definition_id, track_id) = (data.definition_id, data.track_id);
-            if vocal_audio_install::handle_vocal_audio_ready(r, *data) {
+            let render_epoch = data.render_epoch;
+            // Sung at a tempo the section no longer has (its placement
+            // moved into another tempo region, or the tempo was edited,
+            // while the render ran): re-render instead of installing
+            // audio that drifts against the grid (FU-V2d).
+            if let Some(task) = rerender_on_tempo_change(r, &data) {
+                vocal_audio_io::unlink_if_exists(&data.wav_path);
+                vocal_audio_install::settle_render_event(
+                    r,
+                    definition_id,
+                    track_id,
+                    render_epoch,
+                    false,
+                );
+                return task;
+            }
+            let accepted = vocal_audio_install::handle_vocal_audio_ready(r, *data);
+            if accepted {
                 r.control
                     .jobs
                     .complete_vocal_lane(definition_id, track_id, r.revision());
             }
+            // A discarded render with no successor in flight fails the
+            // jobs waiting on it instead of stranding them (UPD-08).
+            vocal_audio_install::settle_render_event(
+                r,
+                definition_id,
+                track_id,
+                render_epoch,
+                accepted,
+            );
         }
         ComposeMessage::VocalAudioFailed {
             definition_id,
@@ -515,17 +541,51 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             // — and only those: before the message carried the lane, a
             // GUI regeneration of lane B erroring killed a control job
             // that covered only lane A.
-            if render_epoch
-                == vocal_audio_install::current_render_epoch(r, definition_id, track_id)
-            {
+            let current = render_epoch
+                == vocal_audio_install::current_render_epoch(r, definition_id, track_id);
+            if current {
                 r.control
                     .jobs
                     .fail_vocal_lane(definition_id, track_id, error.clone());
                 r.compose.last_error = Some(error);
             }
+            vocal_audio_install::settle_render_event(
+                r,
+                definition_id,
+                track_id,
+                render_epoch,
+                current,
+            );
         }
     }
     Task::none()
+}
+
+/// FU-V2d: when a *current* render finished at a tempo the section no
+/// longer has, queue a re-render at the section's tempo now and return
+/// its task. `None` — install as usual — when the render is stale anyway
+/// (the epoch check discards it), the tempo still matches, or no
+/// re-render could be queued (then the old-tempo audio is still better
+/// than none, and the error the re-render reported is left showing).
+fn rerender_on_tempo_change(
+    r: &mut crate::Resonance,
+    data: &crate::compose::messages::VocalAudioReadyData,
+) -> Option<Task<Message>> {
+    let (definition_id, track_id) = (data.definition_id, data.track_id);
+    if data.render_epoch
+        != vocal_audio_install::current_render_epoch(r, definition_id, track_id)
+        || !r.compose.placements.iter().any(|p| p.definition_id == definition_id)
+    {
+        return None;
+    }
+    let now = section_meter(r, definition_id).bpm;
+    if (now - data.bpm).abs() <= 1e-3 {
+        return None;
+    }
+    let task = vocal_render::rerender_vocal_audio(r, definition_id, track_id);
+    let requeued = vocal_audio_install::current_render_epoch(r, definition_id, track_id)
+        != data.render_epoch;
+    requeued.then_some(task)
 }
 
 /// Outcome of a control-endpoint melodic-part generation
@@ -635,9 +695,10 @@ pub(crate) fn control_generate_vocal(
         }
     }
     if lyrics {
-        // Seed already pinned above when explicit: mix 0 leaves it be.
-        let mix = if seed.is_some() { 0 } else { 0xBF58476D1CE4E5B9 };
-        vocal_render::roll_vocal_lyrics(r, definition_id, track_id, mix);
+        // Seed already pinned above when explicit: use it as given
+        // (VIEW-35 — `bump_seed` always moves, even with mix 0).
+        let mix = if seed.is_some() { None } else { Some(0xBF58476D1CE4E5B9) };
+        vocal_render::draft_vocal_lyrics(r, definition_id, track_id, mix);
         vocal_lyrics::sync_bulk_lyrics_from_draft(r, definition_id, track_id);
     }
     if seed.is_none() {
