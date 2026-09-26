@@ -8,8 +8,6 @@
 //! — handlers mutate this mirror optimistically and the engine echoes
 //! authoritative values back through `engine_events::reference`.
 
-use std::collections::VecDeque;
-
 use resonance_audio::types::{ABSource, ReferenceAnalysisStage, ReferenceId};
 use resonance_metering::MeterSnapshot;
 
@@ -106,8 +104,8 @@ pub struct AbMeters {
 /// - **Monitor** — [`ReferenceMonitorState`]: what the user is listening
 ///   to right now. Never undone, so a history step does not yank the
 ///   monitor around.
-/// - **Runtime bookkeeping** — `last_error`, `pending_loads`,
-///   `next_engine_id`, `next_marker_id`. Neither saved nor undone.
+/// - **Runtime bookkeeping** — `last_error`, `next_engine_id`,
+///   `next_marker_id`. Neither saved nor undone.
 #[derive(Debug, Clone, Default)]
 pub struct ReferenceState {
     /// All loaded references, in load order.
@@ -123,12 +121,6 @@ pub struct ReferenceState {
     /// Most recent load-failure reason, shown until dismissed. Load
     /// failures carry no id, so they live here rather than as an entry.
     pub last_error: Option<String>,
-    /// User loads whose `LoadReferenceTrack` has been sent but whose first
-    /// analysis event has not arrived yet: `(id, path)`, in send order.
-    /// The first event for `id` takes its entry out, to recover the path.
-    /// Dropped by an undo or a restore that supersedes the load, which is
-    /// what makes a later echo for it stale (FU-A5b/c).
-    pub pending_loads: VecDeque<(ReferenceId, String)>,
     /// The reference-id allocator. The app hints every `LoadReferenceTrack`
     /// with an id from here ([`Self::alloc_engine_id`]), and it is
     /// session-monotonic — no restore rewinds it, though `ClearAll` resets
@@ -188,21 +180,15 @@ impl ReferenceState {
         }
     }
 
-    /// Take the pending user load `id` was sent for, if any.
-    pub fn take_pending(&mut self, id: ReferenceId) -> Option<String> {
-        let idx = self.pending_loads.iter().position(|(p, _)| *p == id)?;
-        self.pending_loads.remove(idx).map(|(_, path)| path)
-    }
-
     /// Whether an engine event for `id` is an echo of a reference the app
     /// has dropped — removed, undone, or superseded by a restore: an id
-    /// this app handed out that is neither listed nor pending. Ids past
-    /// the allocator were never issued here and are not stale.
+    /// this app handed out that is no longer listed. (A load is listed
+    /// from the moment it is sent, so its own echoes are never stale.)
+    /// Ids past the allocator were never issued here and are not stale.
     pub fn is_stale(&self, id: ReferenceId) -> bool {
         id.0 < self.next_engine_id
             && id.0 < crate::state::ids::MISSING_REFERENCE_ID_BASE
             && self.index_of(id).is_none()
-            && !self.pending_loads.iter().any(|(p, _)| *p == id)
     }
 
     /// A fresh marker id for the reference `ref_id`: past every id this

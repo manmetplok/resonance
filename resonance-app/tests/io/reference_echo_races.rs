@@ -19,7 +19,9 @@ use resonance_app::reference::{ReferenceMessage, ReferenceStatus};
 use resonance_app::update::project_io::BuiltinTemplateId;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, ReferenceAnalysisStage, ReferenceId};
+use resonance_audio::types::{
+    AudioCommand, AudioEvent, ReferenceAnalysisStage, ReferenceId, TrackType,
+};
 use resonance_audio::{
     handle_add_ref_marker, handle_remove_ref_marker, handle_remove_reference_track,
     register_reference, ReferencePlayer,
@@ -363,5 +365,84 @@ fn a_stale_echo_from_before_a_reopen_does_not_overwrite_a_restored_reference() {
             ReferenceStatus::Loaded
         ),
         "the reopened reference is still waiting for its own analysis"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FU-A5c — an undo taken while a load's first echo is still in flight
+// ---------------------------------------------------------------------------
+
+/// Undo a load before the engine has reported anything for it (diff
+/// replay). Before FU-A5c the panel listed nothing until the first echo,
+/// so the undo had no entry to drop: it left the pending load in place
+/// (and the engine's registered copy with it), and the echo then landed
+/// the undone reference.
+#[test]
+fn undoing_a_load_whose_echo_is_in_flight_cancels_it() {
+    let mut f = Fixture::new("undo-pending");
+    let a = f.file("a");
+    f.user(ReferenceMessage::LoadRequested(a.clone()));
+    let id = f.engine.last_load();
+    assert!(f.engine.holds(id), "the engine registers the load at once");
+
+    f.undo();
+    assert!(listed_paths(&f.app).is_empty(), "the undo drops the load");
+    assert!(!f.engine.holds(id), "and the engine's copy");
+    f.worker(progress(id));
+    f.worker(loaded(id, &a));
+
+    assert!(
+        listed_paths(&f.app).is_empty(),
+        "the in-flight echo landed the undone reference: {:?}",
+        listed_paths(&f.app)
+    );
+}
+
+/// An undo that does not reach back past the load keeps it: the load is
+/// part of the snapshot it restores, echo in flight or not. (Cancelling
+/// every in-flight load on undo would drop it here.)
+#[test]
+fn undoing_a_later_edit_keeps_a_load_whose_echo_is_in_flight() {
+    let mut f = Fixture::new("undo-after-pending");
+    let a = f.file("a");
+    f.user(ReferenceMessage::LoadRequested(a.clone()));
+    let id = f.engine.last_load();
+    f.user(ReferenceMessage::TrimChanged(-3.0));
+
+    f.undo();
+    assert_eq!(f.app.test_reference().trim_db, 0.0, "the undo takes the trim");
+    assert!(f.engine.holds(id), "the load stays registered");
+    f.worker(progress(id));
+    f.worker(loaded(id, &a));
+
+    let st = f.app.test_reference();
+    assert_eq!(st.entries.len(), 1, "the load stays listed");
+    assert_eq!(st.entries[0].id, id);
+    assert_eq!(st.entries[0].status, ReferenceStatus::Loaded, "and its echo lands");
+}
+
+/// The same through the full clear-and-replay path: a structural change
+/// alongside the load sends the restore through `ClearAll`.
+#[test]
+fn a_full_replay_restore_cancels_an_in_flight_load() {
+    let mut f = Fixture::new("full-replay-pending");
+    let a = f.file("a");
+    let snapshot = f.app.test_snapshot_for_undo();
+    f.user(ReferenceMessage::LoadRequested(a.clone()));
+    let id = f.engine.last_load();
+    f.app.test_add_track(9_999, TrackType::Audio);
+    f.pump();
+
+    f.app.test_begin_restore_from_snapshot(snapshot);
+    f.pump();
+    assert!(listed_paths(&f.app).is_empty(), "the restore drops the load");
+    assert!(!f.engine.holds(id), "ClearAll dropped the engine's copy");
+    f.worker(progress(id));
+    f.worker(loaded(id, &a));
+
+    assert!(
+        listed_paths(&f.app).is_empty(),
+        "the in-flight echo landed after the full replay: {:?}",
+        listed_paths(&f.app)
     );
 }

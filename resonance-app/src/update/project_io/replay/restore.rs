@@ -390,7 +390,8 @@ pub(crate) enum ReferenceMonitorSource {
 /// allocator (hinted on each `LoadReferenceTrack`), not restarted at 1
 /// with the engine's: a late echo from a load `ClearAll` superseded
 /// carries an old id, which must not name a restored entry (FU-A5b).
-/// Pending loads are dropped with the rest, so their echoes are stale.
+/// Entries the restore does not bring back are dropped, in-flight loads
+/// included, so their echoes are stale.
 /// Missing entries — which the engine never hears about — take ids from
 /// a high, disjoint base so a later in-session load can never collide
 /// with one.

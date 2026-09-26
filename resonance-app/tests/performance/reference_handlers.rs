@@ -39,7 +39,7 @@ fn fold_loaded(app: &mut Resonance, id: u32, name: &str) {
 }
 
 #[test]
-fn load_requested_queues_pending_and_clears_error() {
+fn load_requested_lists_an_analysing_entry_and_clears_error() {
     let mut app = app();
     // Seed a stale error to prove the load clears it.
     send(&mut app, ReferenceMessage::DismissError);
@@ -47,11 +47,13 @@ fn load_requested_queues_pending_and_clears_error() {
     send(&mut app, ReferenceMessage::LoadRequested(path.clone()));
 
     let st = app.test_reference();
-    assert_eq!(st.pending_loads.len(), 1);
-    assert_eq!(st.pending_loads.front().unwrap().1, "/refs/track.wav");
     assert!(st.last_error.is_none());
-    // No entry yet — the id is allocated by the engine.
-    assert!(st.entries.is_empty());
+    // Listed at once under the app-allocated id, before any engine echo
+    // (FU-A5c), so an undo snapshot taken from here on holds it.
+    assert_eq!(st.entries.len(), 1);
+    assert_eq!(st.entries[0].path, "/refs/track.wav");
+    assert_eq!(st.entries[0].name, "track");
+    assert!(matches!(st.entries[0].status, ReferenceStatus::Analyzing(_)));
 }
 
 #[test]

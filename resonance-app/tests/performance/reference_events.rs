@@ -17,10 +17,10 @@ fn fold(app: &mut Resonance, e: AudioEvent) {
 }
 
 #[test]
-fn analysis_progress_registers_provisional_entry_from_pending_path() {
+fn analysis_progress_advances_the_listed_load() {
     let mut app = app();
-    // Simulate a dispatched load that queued its path. The first analysis
-    // event for the id it was sent under recovers the name from that path.
+    // Simulate a dispatched load, which lists itself as analysing; the
+    // analysis events for the id it was sent under advance that entry.
     let id = app.test_reference_push_pending("/refs/song.wav");
 
     fold(
@@ -41,7 +41,21 @@ fn analysis_progress_registers_provisional_entry_from_pending_path() {
         entry.status,
         ReferenceStatus::Analyzing(ReferenceAnalysisStage::MeasuringLufs)
     );
-    assert!(st.pending_loads.is_empty());
+}
+
+#[test]
+fn analysis_progress_for_an_unissued_id_registers_a_provisional_entry() {
+    let mut app = app();
+    fold(
+        &mut app,
+        AudioEvent::ReferenceAnalysisProgress {
+            id: ReferenceId(3),
+            stage: ReferenceAnalysisStage::Decoding,
+        },
+    );
+    let st = app.test_reference();
+    assert_eq!(st.entries.len(), 1);
+    assert_eq!(st.entries[0].id, ReferenceId(3));
 }
 
 #[test]
@@ -96,11 +110,11 @@ fn loaded_without_prior_progress_registers_directly() {
     let st = app.test_reference();
     assert_eq!(st.entries.len(), 1);
     assert_eq!(st.entries[0].id, id);
-    assert!(st.pending_loads.is_empty(), "pending path drained");
+    assert_eq!(st.entries[0].status, ReferenceStatus::Loaded);
 }
 
 #[test]
-fn load_failed_sets_error_and_drains_pending() {
+fn load_failed_sets_error_and_fails_the_entry() {
     let mut app = app();
     app.test_reference_push_pending("/refs/missing.wav");
     fold(
@@ -111,8 +125,12 @@ fn load_failed_sets_error_and_drains_pending() {
         },
     );
     let st = app.test_reference();
-    assert!(st.entries.is_empty());
-    assert!(st.pending_loads.is_empty());
+    assert_eq!(st.entries.len(), 1);
+    assert_eq!(
+        st.entries[0].status,
+        ReferenceStatus::Error("file not found".into()),
+        "the failed load stops analysing"
+    );
     let err = st.last_error.as_deref().unwrap();
     assert!(err.contains("missing.wav"));
     assert!(err.contains("file not found"));

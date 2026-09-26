@@ -12,19 +12,17 @@ use resonance_metering::MeterSnapshot;
 use crate::reference::{AbMeters, ReferenceEntry, ReferenceMarkerState, ReferenceStatus};
 use crate::Resonance;
 
-/// The path of the pending load `id` was sent for, or `None` when the
-/// event is a stale echo to drop: the analysis worker of a reference the
-/// app has removed, undone or replaced by a restore runs on and still
-/// reports (FU-A5b). An id the app never issued is taken as it comes.
-fn new_entry_path(r: &mut Resonance, id: ReferenceId) -> Option<String> {
-    if let Some(path) = r.reference.take_pending(id) {
-        return Some(path);
-    }
+/// Whether an event for an unlisted `id` should register it. A load the
+/// app sent is listed from the start, so an unlisted id is either the
+/// stale echo of one it has dropped — the analysis worker of a removed,
+/// undone or superseded reference runs on and still reports (FU-A5b) —
+/// or one the app never issued, which is taken as it comes.
+fn registers(r: &mut Resonance, id: ReferenceId) -> bool {
     if r.reference.is_stale(id) {
-        return None;
+        return false;
     }
     r.reference.saw_engine_id(id);
-    Some(String::new())
+    true
 }
 
 pub(super) fn analysis_progress(r: &mut Resonance, id: ReferenceId, stage: ReferenceAnalysisStage) {
@@ -32,19 +30,16 @@ pub(super) fn analysis_progress(r: &mut Resonance, id: ReferenceId, stage: Refer
         entry.status = ReferenceStatus::Analyzing(stage);
         return;
     }
-    // First we've heard of this id — register a provisional entry so the
+    // An id the app never issued: register a provisional entry so the
     // view can show the "analysing…" stage before `ReferenceLoaded`.
-    let Some(path) = new_entry_path(r, id) else {
-        return;
-    };
-    let name = std::path::Path::new(&path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(str::to_owned)
-        .unwrap_or_default();
-    r.reference
-        .entries
-        .push(ReferenceEntry::analyzing(id, name, path, stage));
+    if registers(r, id) {
+        r.reference.entries.push(ReferenceEntry::analyzing(
+            id,
+            String::new(),
+            String::new(),
+            stage,
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -65,9 +60,9 @@ pub(super) fn loaded(
         entry.length_samples = length_samples;
         entry.status = ReferenceStatus::Loaded;
     } else {
-        // No provisional entry (no analysis-progress was seen) — register
-        // the finished reference directly, unless it is a stale echo.
-        if new_entry_path(r, id).is_none() {
+        // Not listed: register the finished reference directly, unless it
+        // is a stale echo.
+        if !registers(r, id) {
             return;
         }
         r.reference.entries.push(ReferenceEntry {
@@ -85,12 +80,16 @@ pub(super) fn loaded(
 }
 
 pub(super) fn load_failed(r: &mut Resonance, path: String, reason: String) {
-    // The failure carries no id: drop the oldest pending load of that
-    // path (a restore's re-decode has none) and surface the reason as a
-    // dismissable notice.
-    let pending = r.reference.pending_loads.iter().position(|(_, p)| *p == path);
-    if let Some(idx) = pending {
-        r.reference.pending_loads.remove(idx);
+    // The failure carries no id: mark the oldest still-analysing entry of
+    // that path as failed, so it stops showing a spinner, and surface the
+    // reason as a dismissable notice.
+    if let Some(entry) = r
+        .reference
+        .entries
+        .iter_mut()
+        .find(|e| e.path == path && matches!(e.status, ReferenceStatus::Analyzing(_)))
+    {
+        entry.status = ReferenceStatus::Error(reason.clone());
     }
     r.reference.last_error = Some(format!("{path}: {reason}"));
 }

@@ -334,17 +334,25 @@ impl Resonance {
         &self.reference
     }
 
-    /// Test-only: enqueue a pending reference load under a fresh id,
-    /// mimicking what a dispatched `LoadReferenceTrack` does, so an
-    /// engine-event-folding test can exercise the id↔path correlation
-    /// without an active project. Returns the id the load was sent for.
+    /// Test-only: list a reference load under a fresh id, as a user load
+    /// does before the engine echoes anything (analysing, name from the
+    /// file stem), so an engine-event-folding test can exercise the echo
+    /// path without an active project or an engine. Returns the id the
+    /// load was sent under.
     #[doc(hidden)]
     pub fn test_reference_push_pending(
         &mut self,
         path: &str,
     ) -> resonance_audio::types::ReferenceId {
         let id = self.reference.alloc_engine_id();
-        self.reference.pending_loads.push_back((id, path.to_string()));
+        self.reference
+            .entries
+            .push(crate::reference::ReferenceEntry::analyzing(
+                id,
+                crate::update::reference::reference_name(std::path::Path::new(path)),
+                path.to_string(),
+                resonance_audio::types::ReferenceAnalysisStage::Decoding,
+            ));
         id
     }
 
