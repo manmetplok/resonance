@@ -22,7 +22,9 @@ use ringbuf::traits::Split;
 use resonance_common::{CompSegment, TakeGroup, TakeGroupId, TakeId};
 
 use crate::clap_host::PluginMap;
-use crate::engine::{automation::AutomationSnapshot, takes, tracks, SharedState};
+use crate::engine::{
+    automation::AutomationSnapshot, takes, tracks, transport, OfflineRenderGuard, SharedState,
+};
 use crate::mixer::CompRenderTable;
 use crate::types::*;
 
@@ -343,6 +345,40 @@ impl EngineHandlerHarness {
     /// Every echo the handlers have emitted since the last drain.
     pub fn drain_events(&mut self) -> Vec<AudioEvent> {
         self.event_rx.try_iter().collect()
+    }
+
+    /// Run the real `AudioCommand::Play` handler.
+    pub fn play(&mut self) {
+        self.with_ctx(|ctx, state| transport::handle_play(ctx, state));
+    }
+
+    /// Run the real `AudioCommand::Record { precount_bars }` handler.
+    pub fn record(&mut self, precount_bars: u8) {
+        self.with_ctx(|ctx, state| transport::handle_record(ctx, state, precount_bars));
+    }
+
+    /// Run the real `AudioCommand::Stop` handler.
+    pub fn stop(&mut self) {
+        self.with_ctx(|ctx, state| transport::handle_stop(ctx, state));
+    }
+
+    /// The transport flag the audio callback reads.
+    pub fn is_playing(&self) -> bool {
+        self.shared.playing.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Whether the mixer is in its count-in branch (a `Record` with a
+    /// precount arms it).
+    pub fn count_in_active(&self) -> bool {
+        self.shared
+            .count_in_active
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Hold the real offline-render gate over this engine, as an export /
+    /// bounce / freeze / stem worker does for the length of its render.
+    pub fn hold_offline_render(&self) -> OfflineRenderGuard {
+        OfflineRenderGuard::mark(&self.shared)
     }
 
     /// Render one block of `track_id` through the **real** `render_block`,

@@ -130,6 +130,13 @@ pub(crate) fn handle_midi_clock_event(
     }
     match event {
         MidiClockEvent::Start { .. } => {
+            // Same gate as Play: an offline render owns the plugins.
+            if super::super::transport::refuse_while_offline_render(
+                ctx,
+                "start playback from the MIDI clock master",
+            ) {
+                return;
+            }
             state.midi_clock_tempo.reset();
             state.midi_clock_external_running = true;
             ctx.shared.playhead.store(0, Ordering::SeqCst);
@@ -138,6 +145,12 @@ pub(crate) fn handle_midi_clock_event(
             let _ = ctx.event_tx.send(AudioEvent::MidiClockStarted);
         }
         MidiClockEvent::Continue { .. } => {
+            if super::super::transport::refuse_while_offline_render(
+                ctx,
+                "continue playback from the MIDI clock master",
+            ) {
+                return;
+            }
             state.midi_clock_tempo.reset();
             state.midi_clock_external_running = true;
             ctx.shared.playing.store(true, Ordering::SeqCst);

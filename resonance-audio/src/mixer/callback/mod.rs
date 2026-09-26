@@ -48,19 +48,35 @@ use context::BlockTiming;
 pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratch<'_>) {
     resonance_common::flush_denormals();
 
+    // The one "offline render in progress" gate (code review MIX-02 /
+    // ENG-05). Every offline renderer (export, stems, bounce in place,
+    // freeze, measurement) drives the SAME live plugin instances from a
+    // worker thread; while one holds the gate this callback must not
+    // touch a plugin: no live-MIDI delivery, no monitor pass through the
+    // armed tracks' chains, no arrangement render. It outputs silence and
+    // holds the transport (Play / Record refuse engine-side while the
+    // gate is up, so this is the backstop for a render that started an
+    // instant before a Play landed, or an external MIDI-clock master).
+    // One acquire load, never a lock, never a wait.
+    let offline_render = inputs.shared.offline_render_active();
+
     // Live hardware-MIDI pickup runs first — before any early-exit branch
     // (reference monitor, count-in, stopped) — so a live note reaches its
     // instrument within one quantum no matter which branch renders this
     // block (doc #260 finding #16).
-    pickup_live_midi(
-        inputs.live_midi_rx,
-        inputs.live_midi_fwd,
-        inputs.tracks,
-        inputs.plugins,
-        scratch.midi_stash,
-        inputs.sample_rate,
-        scratch.data.len() / inputs.channels.max(1),
-    );
+    if offline_render {
+        forward_live_midi_unplayed(&inputs);
+    } else {
+        pickup_live_midi(
+            inputs.live_midi_rx,
+            inputs.live_midi_fwd,
+            inputs.tracks,
+            inputs.plugins,
+            scratch.midi_stash,
+            inputs.sample_rate,
+            scratch.data.len() / inputs.channels.max(1),
+        );
+    }
 
     // Zero the output buffer.
     scratch.data.fill(0.0);
@@ -93,9 +109,16 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
         inputs.sample_rate,
     );
 
+    // The monitor ring is drained even while gated, so monitoring resumes
+    // at its standing latency (not a render's worth of backlog) once the
+    // offline render lets go.
     let monitor = monitor_input::read_monitor_input(&inputs, scratch, frames);
 
-    if inputs.shared.count_in_active.load(Ordering::Relaxed) {
+    if offline_render {
+        // Silence out, transport held, no plugin touched (see above). The
+        // audition overlay below reads no plugin either, so a sample
+        // preview stays audible during an export.
+    } else if inputs.shared.count_in_active.load(Ordering::Relaxed) {
         count_in::render_count_in_block(&inputs, scratch, &timing, monitor, frames);
     } else if !inputs.shared.playing.load(Ordering::Relaxed) {
         stopped::render_stopped_block(&inputs, scratch, &timing, monitor);
@@ -108,6 +131,19 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
     // whether or not the project is rolling. Bypasses the master fader/FX
     // by design — it's a monitor-style preview, not part of the mix.
     mix_audition_overlay(scratch.data, inputs.channels, inputs.shared);
+}
+
+/// While an offline render owns the plugin instances, live hardware MIDI
+/// is still handed to the engine thread (recording / MIDI-thru
+/// bookkeeping) but not queued into any instrument: the render would
+/// otherwise pick the notes up as part of its own `process()` calls, and
+/// leaving them in the channel would replay them, stale, when the render
+/// ends. Non-blocking; a full forward channel drops the bookkeeping only,
+/// exactly as `pickup_live_midi` does.
+fn forward_live_midi_unplayed(inputs: &CallbackInputs<'_>) {
+    for ev in inputs.live_midi_rx.try_iter() {
+        let _ = inputs.live_midi_fwd.try_send(ev);
+    }
 }
 
 /// Frames this callback renders: what the backend asked for, clamped to

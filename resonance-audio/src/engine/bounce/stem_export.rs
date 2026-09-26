@@ -184,6 +184,8 @@ pub(crate) fn export_stems_spawn(
 ) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_render = Arc::clone(&cancel);
+    // Gate raised on the engine thread; see `export_spawn`.
+    let offline = super::OfflineRenderGuard::mark(&shared);
     std::thread::Builder::new()
         .name("export-stems".into())
         .spawn(move || {
@@ -193,7 +195,7 @@ pub(crate) fn export_stems_spawn(
             crate::supervise::run_supervised(
                 "export-stems",
                 || {
-                    let _offline = super::OfflineRenderGuard::mark(&shared);
+                    let _offline = offline;
                     export_stems(
                         targets,
                         range,

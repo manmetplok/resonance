@@ -61,11 +61,25 @@ pub(crate) use wav::{run_export, ExportReporter};
 /// (ba todo #1218).
 ///
 /// Every offline renderer drives the same live CLAP plugin instances, so
-/// two concurrent renders corrupt each other. Holding one of these for the
-/// duration of a render publishes that fact in
-/// [`SharedState::offline_render_count`], which is what lets the read-only
-/// mix-measurement command refuse to start rather than interfere with a
-/// render that is producing a file.
+/// two concurrent renders corrupt each other — and so does the live audio
+/// callback running alongside one. Holding one of these for the duration
+/// of a render publishes that fact in
+/// [`SharedState::offline_render_count`], which is the one gate (code
+/// review MIX-02 / ENG-05) that
+///
+/// * lets the read-only mix-measurement command refuse to start rather
+///   than interfere with a render that is producing a file,
+/// * makes the audio callback output silence and hold the transport
+///   instead of touching a plugin (`mixer::callback::mix_audio`), and
+/// * makes Play / Record / realtime bounce / MIDI-clock start refuse
+///   (`transport::refuse_while_offline_render`).
+///
+/// The file-writing spawn paths take it on the **engine thread**, before
+/// the worker exists, and move it into the worker: the transport
+/// handlers and the renderers' own "stop the transport first" check are
+/// then ordered by the engine thread, so a Play can neither slip in
+/// between the spawn and the worker's check nor be accepted once the
+/// render is under way.
 ///
 /// [`mark`](Self::mark) always succeeds and just counts (the file-writing
 /// renderers keep their existing behaviour);
@@ -74,7 +88,7 @@ pub(crate) use wav::{run_export, ExportReporter};
 /// reverse exclusion — no bounce / freeze / export starting while a
 /// measurement holds the renderer — is enforced app-side at every render
 /// START path (`Resonance::offline_measure_in_progress`).
-pub(crate) struct OfflineRenderGuard {
+pub struct OfflineRenderGuard {
     shared: Arc<SharedState>,
 }
 
@@ -83,9 +97,16 @@ pub(crate) struct OfflineRenderGuard {
 /// recognise the busy case without string-matching a literal.
 pub const MEASURE_BUSY_MSG: &str = "Another offline render is in progress";
 
+/// Reason the transport (Play / Record / realtime bounce / MIDI-clock
+/// start) is refused while an offline render holds the plugin instances.
+/// Public so the app and tests can recognise the refusal.
+pub const OFFLINE_RENDER_BUSY_MSG: &str =
+    "An offline render (export, bounce, freeze or stem render) is in progress";
+
 impl OfflineRenderGuard {
-    /// Join the set of running offline renders unconditionally.
-    pub(crate) fn mark(shared: &Arc<SharedState>) -> Self {
+    /// Join the set of running offline renders unconditionally. `pub`
+    /// (doc-hidden re-export) so the gate tests can hold the real guard.
+    pub fn mark(shared: &Arc<SharedState>) -> Self {
         shared
             .offline_render_count
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
@@ -216,6 +237,10 @@ pub(crate) fn export_spawn(
 ) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_render = Arc::clone(&cancel);
+    // Raise the offline-render gate here, on the engine thread, so a
+    // Play dispatched after this command is refused before the worker
+    // even checks the transport.
+    let offline = OfflineRenderGuard::mark(&shared);
     std::thread::Builder::new()
         .name("export".into())
         .spawn(move || {
@@ -229,7 +254,7 @@ pub(crate) fn export_spawn(
             crate::supervise::run_supervised(
                 "export",
                 || {
-                    let _offline = OfflineRenderGuard::mark(&shared);
+                    let _offline = offline;
                     run_export(
                         path,
                         &settings,
@@ -281,6 +306,8 @@ pub(crate) fn to_audio_clip_spawn(
 ) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_render = Arc::clone(&cancel);
+    // Gate raised on the engine thread; see `export_spawn`.
+    let offline = OfflineRenderGuard::mark(&shared);
     std::thread::Builder::new()
         .name("bounce-in-place".into())
         .spawn(move || {
@@ -290,7 +317,7 @@ pub(crate) fn to_audio_clip_spawn(
             crate::supervise::run_supervised(
                 "bounce-in-place",
                 || {
-                    let _offline = OfflineRenderGuard::mark(&shared);
+                    let _offline = offline;
                     to_audio_clip(
                         source_track_id,
                         target_track_id,
@@ -344,6 +371,8 @@ pub fn to_freeze_cache_spawn(
 ) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_render = Arc::clone(&cancel);
+    // Gate raised on the engine thread; see `export_spawn`.
+    let offline = OfflineRenderGuard::mark(&shared);
     std::thread::Builder::new()
         .name("freeze-render".into())
         .spawn(move || {
@@ -353,7 +382,7 @@ pub fn to_freeze_cache_spawn(
             crate::supervise::run_supervised(
                 "freeze-render",
                 || {
-                    let _offline = OfflineRenderGuard::mark(&shared);
+                    let _offline = offline;
                     let mut progress = |fraction: f32| {
                         let _ = event_tx.send(AudioEvent::FreezeProgress { track_id, fraction });
                     };

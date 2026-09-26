@@ -90,6 +90,14 @@ pub(crate) fn handle_bounce_track_realtime(
         ));
         return;
     }
+    // A realtime bounce is a Play: same gate as `handle_play` (code
+    // review MIX-02 / ENG-05), reported on this path's own event.
+    if ctx.shared.offline_render_active() {
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
+            super::bounce::OFFLINE_RENDER_BUSY_MSG.into(),
+        ));
+        return;
+    }
     if state.project_dir.is_none() {
         let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
             "Save the project before bouncing — recording needs a project directory.".into(),
