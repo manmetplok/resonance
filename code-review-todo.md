@@ -72,6 +72,7 @@ master and updates this table. Agents do **not** edit this file.
 | FU-A4a (from A-4) | Undo/redo re-attach frozen caches (`SetTrackFrozenSource`) on both paths; undecodable cache → Stale | opus | merged | 5dc2fa1e |
 | FU-A10a (from A-10) | Coalesced undo: track name, drum group name + 5 knobs, vocal theme / line text; `BounceInPlace` → Skip + recorded `BounceInPlaceOffline` | sonnet | merged | a8a5f234 |
 | FU-A10b (from A-10) | Coalesced undo: 16 lane-inspector + 3 chord-inspector sliders; bulk-lyrics edits coalesce, cursor moves skip | sonnet | merged | e4869177 |
+| FU-A10c (from A-10) | Coalesced undo: drum cycle/phase/pad weight, external latency offset | haiku | merged | 0e82b6fc |
 | refactor-intent A-13a (ARCH-01) | `Reconcile` trait + `DOMAINS` table + staged driver; tempo, chord, markers, pool, quantize, performance, track groups, take groups migrated | opus | merged | b18300be |
 | refactor-intent A-13b (ARCH-01) | Reconcile group 2: derived clips, references, external instruments, lanes, missing plugins, freeze; `LiveCarry`; stages Timeline/Clips/Content/Tail | opus | merged | 5aeec0c2 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
