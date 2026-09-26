@@ -92,7 +92,7 @@ impl ResonancePlugin for ResonanceReverb {
         };
         let left = &mut *main.left;
         let right = &mut *main.right;
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         let Some(reverb) = &mut self.reverb else {
             return;

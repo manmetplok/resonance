@@ -156,7 +156,7 @@ impl ResonancePlugin for ResonanceGate {
         let Some(main) = outputs.first_mut() else {
             return;
         };
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         let Some(dsp) = &mut self.dsp else {
             return;

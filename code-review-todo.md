@@ -44,8 +44,9 @@ master and updates this table. Agents do **not** edit this file.
 | H5 plan ARCH-04/05/06/07/09 | planning (read-only) | fable | done → arch-migration-plan.md Part 2 | |
 | V4 import dialog + app follow-ups | VIEW-25/FU-V2a, FU-M11a, FU-M4b, FU-C2, FU-C3, FU-V2b, FU-V3a, FU-V3b | opus | in progress | |
 | H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | in progress | |
-| H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | in progress | |
+| H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
 | H8 message enums + undo blobs + ids | ARCH-06 A6-1, ARCH-09 A9-1/2, ARCH-04 A4-1/2/3 | — | queued (after V4/H3) | |
+| P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
@@ -1846,7 +1847,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Move undo classification beside the enum: `impl TrackMessage { fn undo_action(&self) -> UndoAction }` with an exhaustive match (no `_`), so adding a variant fails to compile until classified. Delete the sub-enum catch-alls in `classify.rs` as each domain migrates.
 - **Verification / done-when:** `message.rs` < 300 lines; `Resonance` ≤ 40 fields; `grep -nE '\(_\) => UndoAction::Skip' resonance-app/src/undo/classify.rs` empty.
 
-### [ ] ARCH-07 — `resonance-common` is a domain-model crate wearing a primitives label, and every plugin links it
+### [ ] ARCH-07 — (partial: A7-1/A7-2 landed @cae04146 — 8 plugins dropped resonance-common, allow-list invariant; A7-3 feature-gating open) `resonance-common` is a domain-model crate wearing a primitives label, and every plugin links it
 - **Severity:** medium
 - **Category:** layering
 - **Location:** `resonance-common/src/` (`take.rs` 733, `audio_probe.rs` 402, `midi_map.rs` 334, `device_definition.rs` 328, `automation.rs`, `freeze.rs`, `external_instrument.rs`, `track_group.rs`, `device_registry.rs`); `resonance-common/Cargo.toml` deps (symphonia, serde_json, dirs, time); every `plugins/*/Cargo.toml` depends on it but the plugins import only `flush_denormals`, `scan_directory`, `registry`, `drum_map`, `decode_wav_*`.
