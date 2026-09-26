@@ -14,8 +14,8 @@ use resonance_plugin::{Smoother, SmoothingStyle};
 const BLOCK_SIZE: usize = 128;
 const SAMPLE_RATE: f32 = 44_100.0;
 
-/// Verbatim copy of the old `lib.rs` per-sample processing loop and swap
-/// state machine, kept as the golden reference.
+/// Copy of the old `lib.rs` per-sample processing loop and swap state
+/// machine, kept as the golden reference (mix law since LIB-04).
 struct Reference {
     active_convolver: Option<StereoConvolver>,
     pending_convolver: Option<StereoConvolver>,
@@ -93,17 +93,20 @@ impl Reference {
             self.bypass_delay_l.push(dry_l);
             self.bypass_delay_r.push(dry_r);
 
+            // Mix law updated for LIB-04: the swap fade scales the wet
+            // share only; the dry path is never interrupted.
             match &mut self.active_convolver {
                 Some(conv) => {
                     let (wet_l, wet_r) = conv.process_sample(dry_l, dry_r);
 
-                    let dry_amount = 1.0 - dry_wet;
-                    left[i] = (delayed_l * dry_amount + wet_l * dry_wet) * output_gain * fade_gain;
-                    right[i] = (delayed_r * dry_amount + wet_r * dry_wet) * output_gain * fade_gain;
+                    let wet_amount = dry_wet * fade_gain;
+                    let dry_amount = 1.0 - wet_amount;
+                    left[i] = (delayed_l * dry_amount + wet_l * wet_amount) * output_gain;
+                    right[i] = (delayed_r * dry_amount + wet_r * wet_amount) * output_gain;
                 }
                 None => {
-                    left[i] = delayed_l * output_gain * fade_gain;
-                    right[i] = delayed_r * output_gain * fade_gain;
+                    left[i] = delayed_l * output_gain;
+                    right[i] = delayed_r * output_gain;
                 }
             }
 
@@ -260,5 +263,77 @@ fn bypass_is_exact_block_size_delay() {
         let expected = if i < BLOCK_SIZE { 0.0 } else { src[i - BLOCK_SIZE] };
         assert_eq!(l[i], expected, "sample {i} is not a {BLOCK_SIZE}-sample delay");
         assert_eq!(r[i], expected, "sample {i} is not a {BLOCK_SIZE}-sample delay");
+    }
+}
+
+fn unity_smoothers(dry_wet_value: f32) -> (Smoother, Smoother) {
+    let mut dry_wet = Smoother::new(SmoothingStyle::Linear(50.0));
+    let mut output_gain = Smoother::new(SmoothingStyle::Linear(50.0));
+    dry_wet.set_sample_rate(SAMPLE_RATE);
+    output_gain.set_sample_rate(SAMPLE_RATE);
+    dry_wet.reset(dry_wet_value);
+    output_gain.reset(1.0);
+    (dry_wet, output_gain)
+}
+
+/// LIB-04: at 0% wet the swap crossfade must not touch the dry path —
+/// neither the first load (no active convolver) nor a replacement.
+#[test]
+fn ir_swap_leaves_a_fully_dry_signal_untouched() {
+    let ir_a = make_ir(5, 300);
+    let ir_b = make_ir(6, 300);
+    let mut engine = IrEngine::new(BLOCK_SIZE);
+    let (mut dw, mut og) = unity_smoothers(0.0);
+
+    let total = BLOCK_SIZE * 12;
+    let src: Vec<f32> = (0..total).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+    let mut out = Vec::with_capacity(total);
+    for (n, chunk) in src.chunks(BLOCK_SIZE).enumerate() {
+        if n == 3 {
+            engine.begin_swap(StereoConvolver::new(&ir_a, None, BLOCK_SIZE));
+        }
+        if n == 7 {
+            engine.begin_swap(StereoConvolver::new(&ir_b, None, BLOCK_SIZE));
+        }
+        let mut l = chunk.to_vec();
+        let mut r = chunk.to_vec();
+        engine.process_block(&mut l, &mut r, &mut dw, &mut og);
+        out.extend_from_slice(&l);
+    }
+
+    assert!(out.iter().any(|v| v.abs() > 0.1), "render is silent");
+    for i in BLOCK_SIZE..total {
+        let want = src[i - BLOCK_SIZE];
+        assert!(
+            (out[i] - want).abs() <= 1e-6,
+            "sample {i}: dry signal dipped during the swap ({} vs {want})",
+            out[i]
+        );
+    }
+}
+
+/// LIB-04: `reset()` clears the bypass delay, so no pre-reset audio is
+/// replayed after it.
+#[test]
+fn reset_clears_the_bypass_delay() {
+    for with_conv in [false, true] {
+        let mut engine = IrEngine::new(BLOCK_SIZE);
+        if with_conv {
+            engine.install(StereoConvolver::new(&make_ir(9, 200), None, BLOCK_SIZE));
+        }
+        let (mut dw, mut og) = unity_smoothers(0.5);
+        let mut l: Vec<f32> = (0..BLOCK_SIZE * 2).map(|i| (i as f32 * 0.3).sin()).collect();
+        let mut r = l.clone();
+        engine.process_block(&mut l, &mut r, &mut dw, &mut og);
+        assert!(l.iter().any(|v| v.abs() > 0.1), "pre-reset render is silent");
+
+        engine.reset();
+        let mut l = vec![0.0f32; BLOCK_SIZE * 2];
+        let mut r = l.clone();
+        engine.process_block(&mut l, &mut r, &mut dw, &mut og);
+        assert!(
+            l.iter().chain(r.iter()).all(|&v| v == 0.0),
+            "stale audio after reset (convolver: {with_conv})"
+        );
     }
 }

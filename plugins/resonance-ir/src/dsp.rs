@@ -214,10 +214,19 @@ impl IrEngine {
         self.fader.begin_swap(conv);
     }
 
-    /// Reset the active convolver's internal state (FDL, overlap, buffers).
+    /// Reset the active convolver's internal state (FDL, overlap, buffers)
+    /// and clear the dry path's latency-compensation delay, so no
+    /// pre-reset audio is replayed.
     pub fn reset(&mut self) {
         if let Some(conv) = self.fader.active_mut() {
             conv.reset();
+        }
+        // Overwrite rather than reallocate: `reset` may run on the audio
+        // thread. The dry path reads `block_size` pushes back, so that
+        // many zeros flush everything it can still reach.
+        for _ in 0..self.block_size {
+            self.bypass_delay_l.push(0.0);
+            self.bypass_delay_r.push(0.0);
         }
     }
 
@@ -259,19 +268,22 @@ impl IrEngine {
             self.bypass_delay_l.push(dry_l);
             self.bypass_delay_r.push(dry_r);
 
+            // The swap fade scales the WET share only: while a convolver
+            // fades out/in the mix leans toward the dry signal, which is
+            // never interrupted. With no convolver the output is fully
+            // dry, so the first load's fade-in is continuous with it.
             match conv {
                 Some(conv) => {
                     let (wet_l, wet_r) = conv.process_sample(dry_l, dry_r);
 
-                    let dry_amount = 1.0 - dry_wet;
-                    left[i] =
-                        (delayed_l * dry_amount + wet_l * dry_wet) * output_gain * fade_gain;
-                    right[i] =
-                        (delayed_r * dry_amount + wet_r * dry_wet) * output_gain * fade_gain;
+                    let wet_amount = dry_wet * fade_gain;
+                    let dry_amount = 1.0 - wet_amount;
+                    left[i] = (delayed_l * dry_amount + wet_l * wet_amount) * output_gain;
+                    right[i] = (delayed_r * dry_amount + wet_r * wet_amount) * output_gain;
                 }
                 None => {
-                    left[i] = delayed_l * output_gain * fade_gain;
-                    right[i] = delayed_r * output_gain * fade_gain;
+                    left[i] = delayed_l * output_gain;
+                    right[i] = delayed_r * output_gain;
                 }
             }
 
