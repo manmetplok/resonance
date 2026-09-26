@@ -14,7 +14,7 @@ master and updates this table. Agents do **not** edit this file.
 | Batch | Items | Model | Status | Merge |
 |---|---|---|---|---|
 | A1 project open/load | STATE-01/UPD-01, UPD-02, STATE-04 | opus | merged | 46c87319 |
-| A2 recording+plugin undo | STATE-02, STATE-03 | opus | in progress |  |
+| A2 recording+plugin undo | STATE-02, STATE-03 | opus | merged | d47a3916 |
 | B compose sections | VIEW-03, VIEW-04, VIEW-05 | opus | merged | 1f1ae03d |
 | C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | merged | 302009d3 |
 | D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | in progress |  |
@@ -45,6 +45,13 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-E1** (medium) `update/control/import_midi.rs:275` rounds imported clip length with `time_sig_num * TICKS_PER_QUARTER_NOTE` — wrong for x/8 meters; use `tempo_map.bar_len_ticks_at(bar)`.
 - [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
 - [ ] **FU-G1** (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
+- [ ] **FU-C1** (medium, = UPD-11) global `keyboard::listen()` shortcuts (Enter, B, Cmd-Z) still fire while typing; use the `any_text_input_focused` probe pattern.
+- [ ] **FU-C2** (low) timeline Delete now needs a prior click on the timeline (KeyFocus); a clip selected via control API/other widget isn't deletable by key until clicked.
+- [ ] **FU-C3** (low) expanded compose editor's `+`/`-`/Escape still use hover gating, not KeyFocus.
+- [ ] **FU-A2a** (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
+- [ ] **FU-A2b** (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
+- [ ] **FU-A2c** (medium) live MIDI recording: `close_open_recordings` sets note durations at Stop without an event → app mirror keeps zero-length held notes.
+- [ ] **FU-A2d** (low, = STATE-08 remainder) engine can still reuse clip ids after a full-reload undo.
 
 ## How to use this file
 
@@ -156,7 +163,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Do not change `project_path` or the engine dir until the load succeeds. Carry the path inside the load result: return `(PathBuf, LoadedProject)` from `load_project_task`, or keep a `pending_open_path`. Set `project_path` and send `SetProjectDir` in the `ProjectLoaded(Ok)` arm. In the `Err` arm, leave both untouched, or re-send `SetProjectDir(previous)` if the engine dir has to be set early. Apply the same change to the control `project.open` path, which goes through `OpenPathSelected`.
 - **Verification:** Add a module to `resonance-app/tests/io` (for example `open_failure_keeps_path.rs`, included from the io group binary). Build the app with `Resonance::new_for_test_with_capture()` and set a project path P1. Dispatch `OpenPathSelected(Some(P2))`, then `ProjectLoaded(Err("x"))`. Assert that `project_path == P1` and that no `SetProjectDir(P2)` command was captured (or that a later one restores P1).
 
-### [ ] STATE-02 — A finished recording never marks the project dirty and is not in the undo history, so closing loses the take and an unrelated undo removes it
+### [x] STATE-02 — A finished recording never marks the project dirty and is not in the undo history, so closing loses the take and an unrelated undo removes it — fixed @c69296db (one coalesced undo entry per recording session)
 - **Severity:** high
 - **Confidence:** high
 - **Category:** data-loss
@@ -168,7 +175,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** In `recording_finished`, `take_captured` and the MIDI-record completion handler, set `r.dirty = true`, bump `r.revision`, and push an undo entry. Two ways to get the pre-recording snapshot: record `UndoAction::Record` on `TransportMessage::Record` so that snapshot is the pre-take state, or capture a snapshot at record start and `undo.record()` it when the recording finishes. Either way, undoing the recording is then its own step. A cheaper minimal fix is `r.dirty = true` plus `self.undo.record(pre_record_snapshot)`.
 - **Verification:** Add a module to `resonance-app/tests/timeline`. With `new_for_test()` and a project path set, deliver `AudioEvent::RecordingFinished` through the test event hook and assert `app.is_dirty()`. Record a fader edit, deliver `RecordingFinished`, send `Message::Undo`, and assert that the recorded clip id is still present, or that undo first removes only the take.
 
-### [ ] STATE-03 — Undoing a plugin parameter change or preset recall (fast path) does not restore the parameters and pushes a stale state blob
+### [x] STATE-03 — Undoing a plugin parameter change or preset recall (fast path) does not restore the parameters and pushes a stale state blob — fixed @d7c6074d
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
