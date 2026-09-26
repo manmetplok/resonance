@@ -15,10 +15,13 @@
 //! selector — *must* push, or every other track in the project stays
 //! compensated for the old figure while this one delays by the new one.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use clack_plugin::prelude::HostSharedHandle;
+
+/// Top bit of `HostHandle::calls`: the handle has been retired.
+const RETIRED: usize = 1 << (usize::BITS - 1);
 
 /// Handle to the host that owns this plugin instance.
 ///
@@ -29,20 +32,24 @@ use clack_plugin::prelude::HostSharedHandle;
 /// allocates or locks, so the audio thread may use them.
 ///
 /// A handle whose plugin instance has been destroyed goes inert: every method
-/// becomes a no-op instead of calling through a dangling host pointer. That
-/// makes it safe for a plugin to leak a clone into an editor thread that
-/// outlives the instance.
+/// becomes a no-op instead of calling through a dangling host pointer, and
+/// the instance's destruction waits for any call already inside the host.
+/// That makes it safe for a plugin to leak a clone into an editor thread
+/// that outlives the instance.
 pub struct HostHandle {
     /// The host's `clap_host` handle with its lifetime erased.
     ///
     /// SAFETY: the real lifetime is the plugin instance's `'a`. It is upheld
-    /// by `alive`: the bridge clears that flag in `ClapMainThread::drop`,
+    /// by `calls`: the bridge retires the handle in `ClapMainThread::drop`,
     /// i.e. while the instance — and therefore the host pointer — is still
-    /// valid, and every method checks it before calling through. See
+    /// valid, and `retire` does not return until every call already
+    /// through the check has left the host. See [`Self::with_host`] and
     /// `clap_bridge::shared::ClapMainThread`.
     host: HostSharedHandle<'static>,
-    /// False once the plugin instance has been destroyed.
-    alive: AtomicBool,
+    /// [`RETIRED`] once the plugin instance is being destroyed, plus, in
+    /// the remaining bits, the number of calls into the host in flight
+    /// right now (PLG-07).
+    calls: AtomicUsize,
     /// True while the plugin is activated. Governs whether a latency change
     /// also needs a restart request (CLAP only allows the reported latency to
     /// change while the plugin is deactivated).
@@ -67,13 +74,13 @@ impl HostHandle {
     /// Wrap the bridge's host handle. Called once per plugin instance, on the
     /// main thread, before the plugin can ever be activated.
     pub(crate) fn new(host: HostSharedHandle<'_>, initial_latency: u32) -> Arc<Self> {
-        // SAFETY: the erased lifetime is re-established by `alive` — see the
+        // SAFETY: the erased lifetime is re-established by `calls` — see the
         // field docs. This handle is created inside `new_main_thread`, where
         // the host pointer is live by construction.
         let host: HostSharedHandle<'static> = unsafe { host.with_arbitrary_lifetime() };
         Arc::new(Self {
             host,
-            alive: AtomicBool::new(true),
+            calls: AtomicUsize::new(0),
             active: AtomicBool::new(false),
             latency: AtomicU32::new(initial_latency),
             latency_dirty: AtomicBool::new(false),
@@ -125,23 +132,34 @@ impl HostHandle {
     /// Ask the host to deactivate and then reactivate the plugin. Delayed to
     /// a safe point by the host; never synchronous.
     pub fn request_restart(&self) {
-        if self.alive.load(Ordering::Acquire) {
-            self.host.request_restart();
-        }
+        self.with_host(|host| host.request_restart());
     }
 
     /// Ask the host to activate the plugin and start processing.
     pub fn request_process(&self) {
-        if self.alive.load(Ordering::Acquire) {
-            self.host.request_process();
-        }
+        self.with_host(|host| host.request_process());
     }
 
     /// Ask the host to call the plugin back on the main thread.
     pub fn request_callback(&self) {
-        if self.alive.load(Ordering::Acquire) {
-            self.host.request_callback();
+        self.with_host(|host| host.request_callback());
+    }
+
+    /// Call through the host pointer unless the handle is retired.
+    ///
+    /// The check and the call are one unit with respect to [`Self::retire`]
+    /// (PLG-07): the call is counted in `calls` *before* the retired bit is
+    /// looked at, and `retire` sets the bit and then waits for the count to
+    /// drain. So a call either sees the bit and does nothing, or is counted
+    /// and finishes before `retire` returns — before the host can free the
+    /// pointer. Two uncontended atomic RMWs; no lock, no allocation, so the
+    /// audio thread may still use it.
+    fn with_host(&self, call: impl FnOnce(&HostSharedHandle<'static>)) {
+        let prev = self.calls.fetch_add(1, Ordering::AcqRel);
+        if prev & RETIRED == 0 {
+            call(&self.host);
         }
+        self.calls.fetch_sub(1, Ordering::Release);
     }
 
     // -- bridge-internal ----------------------------------------------------
@@ -184,7 +202,15 @@ impl HostHandle {
 
     /// Make the handle inert. Called when the plugin instance is destroyed,
     /// while the host pointer is still valid.
+    ///
+    /// Returns only once no call is inside the host any more; from then on
+    /// every method is a no-op. The wait is bounded by the host's own
+    /// `[thread-safe]` request callbacks, which only schedule work. It must
+    /// not run on a thread that is itself inside one of this handle's calls.
     pub(crate) fn retire(&self) {
-        self.alive.store(false, Ordering::Release);
+        self.calls.fetch_or(RETIRED, Ordering::AcqRel);
+        while self.calls.load(Ordering::Acquire) & !RETIRED != 0 {
+            std::thread::yield_now();
+        }
     }
 }
