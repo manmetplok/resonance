@@ -215,7 +215,7 @@ impl ResonanceMcp {
                        clip exactly. \
                        \
                        `at` is a POSITION on the timeline ({bar, beat} with beat in the time \
-                       signature's unit, or {seconds}/{samples}), \
+                       signature's unit, or an absolute {sample}; there is no seconds form), \
                        not an offset into the source, and must fall strictly inside the clip — \
                        a cut at either edge is refused rather than making an empty half. The \
                        head keeps the fade-in, the tail the fade-out. Returns {head_clip_id, \

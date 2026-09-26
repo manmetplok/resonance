@@ -183,6 +183,45 @@ fn a_tempo_change_marks_it_stale() {
     assert!(is_stale(&app), "the notes now play at another tempo");
 }
 
+/// A structural undo (the full `ClearAll` replay) back to a state where
+/// the track is frozen must keep the content baseline its cache was
+/// rendered from. `replay_loaded_project`'s `freeze.reset()` used to wipe
+/// every baseline, so the restored `Frozen` track never went stale again
+/// until its next freeze (FU-H2b).
+#[test]
+fn a_full_replay_undo_keeps_the_frozen_content_baseline() {
+    let (mut app, rx, _) = frozen_generated_track();
+    // A real freeze directory, so the restore keeps the track `Frozen`
+    // rather than downgrading it for a missing cache file.
+    let root = tempfile::tempdir().expect("temp dir");
+    let project = root.path().join("song.rproj");
+    std::fs::create_dir_all(&project).expect("project dir");
+    let freeze_dir = project.with_extension("freeze");
+    std::fs::create_dir_all(&freeze_dir).expect("freeze dir");
+    std::fs::write(freeze_dir.join("freeze_10.wav"), b"").expect("cache file");
+    app.test_set_project_path(project);
+
+    let snapshot = app.test_snapshot_for_undo();
+    app.test_add_track(99, TrackType::Audio);
+    let _ = rx.try_iter().count();
+    app.test_begin_restore_from_snapshot(snapshot);
+    assert!(
+        rx.try_iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a structural undo takes the full replay"
+    );
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    echo_clip_loads(&mut app, &rx);
+    assert!(is_frozen(&app), "the restore brings the freeze back");
+
+    let _ = app.update(Message::Transport(TransportMessage::SetBpmText("140".into())));
+    let _ = app.update(Message::Transport(TransportMessage::CommitBpm));
+    echo_clip_loads(&mut app, &rx);
+    assert!(
+        is_stale(&app),
+        "a content change after the restore still invalidates the freeze"
+    );
+}
+
 // ---- plugin automation (code review ENG-08) ------------------------------
 
 /// The freeze bakes the track's plugin-param automation, so editing one of

@@ -196,10 +196,38 @@ impl crate::Resonance {
         if !self.can_record_undo() {
             return;
         }
+        // A drag is open (FU-A2a): committing its pre-drag snapshot after
+        // the take's entry would make undoing the drag drop the take. Close
+        // the part of the drag made so far as its own entry, record the
+        // take after it, and re-open the drag on the post-take state once
+        // the event has landed (`resume_split_gesture`).
+        if self.undo.has_pending() {
+            let changed = self
+                .undo
+                .pending_snapshot()
+                .is_some_and(|before| self.gesture_changed_since(before));
+            if let Some((before, label)) = self.undo.split_pending() {
+                if changed {
+                    self.undo.record(before, label);
+                }
+            }
+        }
         let key = CoalesceKey::Recording;
         if !self.undo.try_extend_coalesced(&key) {
             let snap = self.snapshot_for_undo();
             self.undo.record_coalesced(snap, key, "Record".to_string());
+        }
+    }
+
+    /// Re-open a gesture that a take split mid-drag (see
+    /// `record_recording_edit`), now that the take has landed: the rest
+    /// of the drag becomes its own entry, whose pre-state includes the
+    /// take. Called after every engine event; a no-op unless a split is
+    /// outstanding.
+    pub(crate) fn resume_split_gesture(&mut self) {
+        if let Some(label) = self.undo.take_split_gesture() {
+            let snap = self.snapshot_for_undo();
+            self.undo.begin(snap, label);
         }
     }
 

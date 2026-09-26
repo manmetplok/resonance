@@ -688,3 +688,58 @@ fn the_whole_limiter_sequence_runs_over_the_control_api_alone() {
     assert_eq!(value_of(&view, 0, "Ceiling"), -1.0);
     assert_eq!(value_of(&view, 0, "Input Trim"), 7.5);
 }
+
+/// FU-M5c: a first-party plugin's string parameter key (`lim_on`, the
+/// one its presets and state use) addresses the parameter too. Keys are
+/// stable across display renames; the CLAP id is derived from the key.
+#[test]
+fn a_parameter_can_be_addressed_by_its_string_key() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    add(&mut app, "com.resonance.mastering");
+    let instance_id = hinted(&rx);
+    let lim_on = resonance_plugin::stable_hash("lim_on");
+    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+        instance_id,
+        plugin_name: "Resonance Mastering".to_owned(),
+        clap_plugin_id: "com.resonance.mastering".to_owned(),
+        clap_file_path: "/plugins/mastering.clap".to_owned(),
+        params: vec![ParamInfo {
+            id: lim_on,
+            name: "Limiter On".to_owned(),
+            min_value: 0.0,
+            max_value: 1.0,
+            default_value: 0.0,
+            current_value: 0.0,
+            ..Default::default()
+        }],
+        has_gui: false,
+        has_sidechain_input: false,
+    });
+
+    let rx = app.test_capture_engine();
+    let _: MutationAck = call(
+        &mut app,
+        "master.set_plugin_param",
+        serde_json::json!({"param": "lim_on", "value": 1.0}),
+    )
+    .result()
+    .expect("a string key resolves");
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(
+            c,
+            AudioCommand::SetPluginParam { param_id, value, .. }
+                if param_id == lim_on && value == 1.0
+        )),
+        "the keyed param must reach the DSP"
+    );
+
+    let error = call(
+        &mut app,
+        "master.set_plugin_param",
+        serde_json::json!({"param": "no_such_key", "value": 1.0}),
+    )
+    .error
+    .expect("an unknown key is not_found");
+    assert_eq!(error.kind(), ErrorKind::NotFound);
+}

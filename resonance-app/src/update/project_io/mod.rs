@@ -131,8 +131,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             if recovery::prompt_before_open(r, &path) {
                 return Task::none();
             }
-            r.io.pending_open_path = Some(path.clone());
-            return dialogs::load_project_task(path);
+            return start_open(r, path);
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
         ProjectIoMessage::OpenRecent(path) => {
@@ -155,8 +154,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             if recovery::prompt_before_open(r, &path) {
                 return Task::none();
             }
-            r.io.pending_open_path = Some(path.clone());
-            return dialogs::load_project_task(path);
+            return start_open(r, path);
         }
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             finish_save_write(r);
@@ -189,6 +187,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 }
                 r.io.has_active_project = true;
                 r.io.last_saved_at = Some(std::time::SystemTime::now());
+                reap_orphaned_vocal_takes(r);
                 if let Some(ref path) = r.io.project_path {
                     crate::recent::add(&mut r.io.recent_projects, path);
                 }
@@ -225,11 +224,22 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 r.error_message = Some(format!("Save failed: {e}"));
             }
         }
+        ProjectIoMessage::OpenLoadFinished(token, result) => {
+            // A later open overtook this one: its result is stale, and
+            // adopting it would pair this content with the later open's
+            // path (or, on failure, clear that open's pending slot).
+            if token != r.io.open_token || r.io.pending_open_path.is_none() {
+                tracing::debug!("dropping the result of a superseded project open");
+                return Task::none();
+            }
+            return handle(r, ProjectIoMessage::ProjectLoaded(result));
+        }
         ProjectIoMessage::ProjectLoaded(Ok(loaded)) => {
             // Adopt the opened path now that the load succeeded — before
             // `ClearAll`, since `all_cleared` restores `project_path`
             // around the replay.
-            if let Some(path) = r.io.pending_open_path.take() {
+            let pending = r.io.pending_open_path.take();
+            if let Some(path) = pending.filter(|_| !recovery::loads_untitled(r)) {
                 let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
                 r.io.project_path = Some(path);
             }
@@ -300,6 +310,17 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Start an async disk open of `path` under a fresh open token. The path
+/// is only adopted when the load succeeds, and only if no later open has
+/// replaced this one in the meantime (FU-A1a).
+fn start_open(r: &mut Resonance, path: std::path::PathBuf) -> Task<Message> {
+    r.io.open_token = r.io.open_token.wrapping_add(1);
+    r.io.pending_open_path = Some(path.clone());
+    // A plain open supersedes an overtaken recovery open's intent too.
+    r.io.load_recovery = None;
+    dialogs::load_project_task(path, r.io.open_token)
 }
 
 /// Tempo and meter for the exported chord sheet's page header.
@@ -404,6 +425,32 @@ pub(crate) fn start_queued_save(r: &mut Resonance) {
 /// `saving` flag when no other save is collecting or queued: a manual
 /// save may have started while an autosave was writing, and the
 /// autosave's completion must not wipe its collector (STATE-11).
+/// After a manual save: delete rendered vocal WAVs in the project's
+/// `audio/` that no installed vocal clip points at (FU-B3). Skipped while
+/// a render is in flight — its WAV may already be on disk, waiting for
+/// the completion to install it.
+fn reap_orphaned_vocal_takes(r: &Resonance) {
+    use crate::update::compose::vocal_audio_io;
+    let Some(project) = r.io.project_path.as_deref() else {
+        return;
+    };
+    if !r.compose.vocal_audio.in_flight_render.is_empty() {
+        return;
+    }
+    let keep = r
+        .compose
+        .vocal_audio
+        .clips
+        .values()
+        .map(|(_, path)| path.clone())
+        .collect();
+    let removed =
+        vocal_audio_io::reap_orphaned_takes(&vocal_audio_io::vocal_audio_dir(Some(project)), &keep);
+    if !removed.is_empty() {
+        tracing::info!("[vocal] removed {} unreferenced rendered take(s)", removed.len());
+    }
+}
+
 fn finish_save_write(r: &mut Resonance) {
     if r.io.save_state.is_none() && !r.io.manual_save_queued {
         r.io.saving = false;

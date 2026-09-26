@@ -10,11 +10,12 @@ use resonance_app::update::compose::vocal_audio_io::{
 };
 
 #[test]
-fn a_saved_project_keeps_its_vocals_beside_it() {
-    // `audio/` next to the project file, so "save" captures the clip
-    // and a moved project folder keeps its renders.
-    let dir = vocal_audio_dir(Some(std::path::Path::new("/songs/demo/demo.rson")));
-    assert_eq!(dir, std::path::Path::new("/songs/demo/audio"));
+fn a_saved_project_keeps_its_vocals_inside_it() {
+    // `project_path` is the `.rproj` project DIRECTORY, so renders go to
+    // its own `audio/` — not a sibling `audio/` shared with every other
+    // project in the same parent folder (FU-B3).
+    let dir = vocal_audio_dir(Some(std::path::Path::new("/songs/demo.rproj")));
+    assert_eq!(dir, std::path::Path::new("/songs/demo.rproj/audio"));
 }
 
 #[test]
@@ -71,4 +72,45 @@ fn unlinking_is_best_effort() {
     // A second pass (a stale-epoch result racing the tear-down) must not
     // fail the regen.
     unlink_if_exists(&path);
+}
+
+/// FU-B3: a manual save garbage-collects rendered vocal WAVs in the
+/// project's `audio/` that nothing references any more — conservatively:
+/// only `vocal_*.wav`, only inside this project, never one an installed
+/// vocal clip still points at, and never on autosave.
+#[test]
+fn a_manual_save_reaps_orphaned_vocal_wavs_only() {
+    use resonance_app::message::{Message, ProjectIoMessage};
+    use resonance_app::state::ViewMode;
+    use resonance_app::Resonance;
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let project = root.path().join("song.rproj");
+    let audio = project.join("audio");
+    std::fs::create_dir_all(&audio).expect("audio dir");
+    let orphan = audio.join("vocal_1.wav");
+    let live = audio.join("vocal_2.wav");
+    let saved_clip = audio.join("clip_5.wav");
+    let user_file = audio.join("vocal_notes.txt");
+    let sibling = root.path().join("audio").join("vocal_3.wav");
+    std::fs::create_dir_all(sibling.parent().unwrap()).expect("sibling dir");
+    for f in [&orphan, &live, &saved_clip, &user_file, &sibling] {
+        std::fs::write(f, b"x").expect("write fixture");
+    }
+
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_set_project_path(project.clone());
+    app.test_install_vocal_audio_clip(1, 2, 3, 40, live.clone());
+
+    let saved = |autosave| Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()), autosave));
+    let _ = app.update(saved(true));
+    assert!(orphan.exists(), "an autosave never reaps");
+
+    let _ = app.update(saved(false));
+    assert!(!orphan.exists(), "the unreferenced render is reaped");
+    assert!(live.exists(), "an installed vocal clip's WAV stays");
+    assert!(saved_clip.exists(), "clip_<id>.wav belongs to the saved project");
+    assert!(user_file.exists(), "only vocal_*.wav are candidates");
+    assert!(sibling.exists(), "nothing outside the project directory is touched");
 }

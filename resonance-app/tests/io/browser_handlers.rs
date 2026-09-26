@@ -131,6 +131,26 @@ fn open_folder_clears_the_previous_filter() {
     assert_eq!(app.test_browser().filter, "", "filter resets on navigate");
 }
 
+/// FU-V1b: `app.update(Browser(SetFilter))` "not applying" in a test was
+/// the startup gate, not a reducer bug. Browser traffic is gated while no
+/// project is open (`gates.rs::is_gated_message` — the startup modal owns
+/// the screen), and `new_for_test()` starts with none; `test_dispatch`
+/// skips the gates. Through `update()` the filter applies as soon as a
+/// project is active.
+#[test]
+fn set_filter_through_update_is_gated_only_until_a_project_is_open() {
+    let mut app = app();
+    let set = |app: &mut Resonance, text: &str| {
+        let _ = app.update(Message::Browser(BrowserMessage::SetFilter(text.into())));
+    };
+    set(&mut app, "kick");
+    assert_eq!(app.test_browser().filter, "", "no project: the gate drops it");
+
+    app.test_set_active_project(true);
+    set(&mut app, "kick");
+    assert_eq!(app.test_browser().filter, "kick", "with a project it applies");
+}
+
 #[test]
 fn scan_completed_applies_for_current_folder() {
     let mut app = app();

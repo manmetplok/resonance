@@ -58,18 +58,31 @@ pub(crate) fn offer_orphaned_session(r: &mut Resonance) {
     }
 }
 
-/// Start the async load of `target`, recording what it means for
-/// recovery. `open_dir` becomes the project path once it succeeds (`None`
-/// for an untitled recovery).
+/// Start the async load of `target` as a token-tagged open (FU-A1a: a
+/// later open makes this one's result stale), recording what it means for
+/// recovery. `open_dir` fills the pending-open slot and becomes the
+/// project path once the load succeeds — except for an untitled recovery,
+/// whose slot holds its scratch dir and is never adopted
+/// ([`loads_untitled`]).
 fn start_load(
     r: &mut Resonance,
     target: PathBuf,
-    open_dir: Option<PathBuf>,
+    open_dir: PathBuf,
     recovery: LoadRecovery,
 ) -> Task<Message> {
-    r.io.pending_open_path = open_dir;
+    r.io.open_token = r.io.open_token.wrapping_add(1);
+    r.io.pending_open_path = Some(open_dir);
     r.io.load_recovery = Some(recovery);
-    super::dialogs::load_project_task(target)
+    super::dialogs::load_project_task(target, r.io.open_token)
+}
+
+/// The open in flight recovers a crashed untitled session: it lands
+/// untitled, so its pending slot (the scratch dir) is not adopted.
+pub(crate) fn loads_untitled(r: &Resonance) -> bool {
+    r.io
+        .load_recovery
+        .as_ref()
+        .is_some_and(|l| l.scratch_dir.is_some())
 }
 
 /// The user's answer to the recovery prompt.
@@ -87,7 +100,7 @@ pub(crate) fn handle_choice(r: &mut Resonance, choice: RecoveryChoice) -> Task<M
                 autosave_available: true,
                 scratch_dir: None,
             };
-            start_load(r, offer.autosave_json(), Some(offer.dir.clone()), recovery)
+            start_load(r, offer.autosave_json(), offer.dir.clone(), recovery)
         }
         (RecoveryChoice::RecoverAutosave, true) => {
             // Offered only at startup, before anything is open: the
@@ -98,7 +111,7 @@ pub(crate) fn handle_choice(r: &mut Resonance, choice: RecoveryChoice) -> Task<M
                 autosave_available: true,
                 scratch_dir: Some(offer.dir.clone()),
             };
-            start_load(r, offer.autosave_json(), None, recovery)
+            start_load(r, offer.autosave_json(), offer.dir.clone(), recovery)
         }
         (RecoveryChoice::OpenLastSaved, false) => {
             let recovery = LoadRecovery {
@@ -106,7 +119,7 @@ pub(crate) fn handle_choice(r: &mut Resonance, choice: RecoveryChoice) -> Task<M
                 autosave_available: true,
                 scratch_dir: None,
             };
-            start_load(r, offer.dir.clone(), Some(offer.dir.clone()), recovery)
+            start_load(r, offer.dir.clone(), offer.dir.clone(), recovery)
         }
         (RecoveryChoice::Discard, true) => {
             remove_scratch_dir(&offer.dir);
@@ -132,7 +145,7 @@ pub(crate) fn open_resolved(r: &mut Resonance, path: PathBuf, recover: bool) -> 
                 autosave_available: true,
                 scratch_dir: None,
             };
-            start_load(r, offer.autosave_json(), Some(offer.dir.clone()), recovery)
+            start_load(r, offer.autosave_json(), offer.dir.clone(), recovery)
         }
         offer => {
             let recovery = LoadRecovery {
@@ -140,7 +153,7 @@ pub(crate) fn open_resolved(r: &mut Resonance, path: PathBuf, recover: bool) -> 
                 autosave_available: offer.is_some(),
                 scratch_dir: None,
             };
-            start_load(r, path.clone(), Some(path), recovery)
+            start_load(r, path.clone(), path, recovery)
         }
     }
 }

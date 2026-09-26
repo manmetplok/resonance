@@ -79,7 +79,9 @@ fn update(app: &mut Resonance, m: ProjectIoMessage) {
 /// engine confirming the clear.
 fn land_load(app: &mut Resonance, target: &Path) {
     let loaded = load_project(target).expect("load");
-    update(app, ProjectIoMessage::ProjectLoaded(Ok(Box::new(loaded))));
+    // Through the token-tagged completion a real open uses (FU-A1a).
+    let token = app.test_pending_open_token();
+    update(app, ProjectIoMessage::OpenLoadFinished(token, Ok(Box::new(loaded))));
     app.test_apply_engine_event(AudioEvent::AllCleared);
 }
 
@@ -159,6 +161,31 @@ fn cancel_opens_nothing_and_leaves_the_crash_evidence() {
     assert_eq!(app.test_project_path(), None);
     let marker = session::read_marker(&dir).expect("marker untouched");
     assert_eq!(marker.session_id, "crashed-session");
+}
+
+/// FU-A1a covers the recovery opens too: a recovery load overtaken by a
+/// later open is dropped, and its "land dirty" intent goes with it.
+#[test]
+fn a_recovery_open_overtaken_by_a_plain_open_is_stale() {
+    let crashed = crashed_project("overtaken_crashed");
+    let clean = crashed_project("overtaken_clean");
+    std::fs::remove_file(clean.join(SESSION_MARKER)).unwrap();
+    let (mut app, _task) = Resonance::new_for_test();
+
+    open_via_gui(&mut app, &crashed);
+    update(&mut app, ProjectIoMessage::RecoveryChoice(RecoveryChoice::RecoverAutosave));
+    let stale_token = app.test_pending_open_token();
+    open_via_gui(&mut app, &clean);
+    assert_ne!(app.test_pending_open_token(), stale_token);
+
+    let stale = load_project(&crashed.join(AUTOSAVE_JSON)).unwrap();
+    update(&mut app, ProjectIoMessage::OpenLoadFinished(stale_token, Ok(Box::new(stale))));
+    assert_eq!(app.test_project_path(), None, "the overtaken recovery is dropped");
+
+    land_load(&mut app, &clean);
+    assert_eq!(app.test_project_path(), Some(clean.as_path()));
+    assert_eq!(track_count(&app), 0);
+    assert!(!app.test_dirty(), "the plain open does not inherit the recovery's dirty flag");
 }
 
 // ---- Control: never a modal ----------------------------------------------

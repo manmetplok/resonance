@@ -355,3 +355,33 @@ fn multi_track_smf() -> Vec<u8> {
     .expect("write multi-track smf");
     std::fs::read(&path).expect("read back")
 }
+
+/// FU-E1: a new clip is rounded up to whole bars of the signature active
+/// where it lands — a 7/8 bar is 3.5 quarters, not 7.
+#[test]
+fn a_new_clip_is_sized_in_bars_of_the_active_signature() {
+    let mut app = app();
+    call(
+        &mut app,
+        "transport.set_time_signature",
+        serde_json::json!({ "numerator": 7, "denominator": 8 }),
+    )
+    .result::<serde_json::Value>()
+    .expect("set_time_signature succeeds");
+
+    let result: ImportMidiResult = call(
+        &mut app,
+        "notes.import_midi",
+        serde_json::json!({"track_id": TRACK, "data_base64": base64_of(&fixture())}),
+    )
+    .result()
+    .expect("notes.import_midi succeeds");
+
+    let clip = app
+        .test_midi_clips()
+        .iter()
+        .find(|c| c.id == result.clip_id.0)
+        .expect("clip mirrored");
+    // Three quarters of notes fit in one 7/8 bar (3.5 quarters).
+    assert_eq!(clip.duration_ticks, 7 * TICKS_PER_QUARTER_NOTE / 2);
+}

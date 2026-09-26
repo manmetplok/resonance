@@ -424,14 +424,19 @@ pub(crate) fn handle_record_midi_event(
 }
 
 /// Close any still-open recorded notes (e.g. user pressed Stop with
-/// keys held down) and clear per-track recording state. Called from
-/// the transport-stop handler.
-pub(crate) fn close_open_recordings(ctx: &HandlerCtx, state: &mut HandlerState) {
+/// keys held down) at `close_sample` — the playhead where the transport
+/// halted, captured before Stop rewinds it to 0 — echo each as a
+/// `MidiNoteResized`, and clear per-track recording state. Called from
+/// the transport stop/pause handlers.
+pub(crate) fn close_open_recordings(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    close_sample: SamplePos,
+) {
     if state.midi_recording.is_empty() {
         return;
     }
-    let playhead = ctx.shared.playhead.load(Ordering::Relaxed);
-    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.load(), playhead, ctx.sample_rate);
+    let abs_tick = sample_to_abs_tick(&ctx.tempo_map.load(), close_sample, ctx.sample_rate);
     let mut clips = ctx.midi_clips.write();
     for rec in state.midi_recording.values() {
         let Some(clip) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
@@ -443,6 +448,15 @@ pub(crate) fn close_open_recordings(ctx: &HandlerCtx, state: &mut HandlerState) 
                     .saturating_sub(rec.clip_start_tick)
                     .saturating_sub(n.start_tick);
                 n.duration_ticks = duration;
+                let end = n.start_tick + duration;
+                clip.duration_ticks = clip.duration_ticks.max(end);
+                // Echo it like a NoteOff would: the app mirror only saw
+                // the zero-length NoteOn (code review FU-A2c).
+                let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
+                    clip_id: rec.clip_id,
+                    note_index: *idx,
+                    new_duration_ticks: duration,
+                });
             }
         }
     }

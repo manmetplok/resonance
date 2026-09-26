@@ -24,6 +24,8 @@ mod midi_clock_parse;
 mod midi_hardware_emit;
 #[path = "midi_hw/midi_hardware_parse.rs"]
 mod midi_hardware_parse;
+#[path = "midi_hw/live_record_stop.rs"]
+mod live_record_stop;
 #[path = "midi_hw/midi_io.rs"]
 mod midi_io;
 #[path = "midi_hw/midi_program_change.rs"]

@@ -145,7 +145,11 @@ fn open(app: &mut Resonance, dir: &Path) {
         dir.display().to_string(),
     ))));
     let loaded = load_project(dir).expect("load project");
-    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(Box::new(loaded)))));
+    let token = app.test_pending_open_token();
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::OpenLoadFinished(
+        token,
+        Ok(Box::new(loaded)),
+    )));
 }
 
 fn finish_collect(app: &mut Resonance) {
