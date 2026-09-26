@@ -29,20 +29,15 @@ use resonance_audio::types::TrackId;
 /// is being folded away field by field (ARCH-01 A1-2): a field leaves
 /// once both paths restore it from the file, guarded by
 /// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain, the drum
-/// arrangements, the chord track, the external-instrument config and the
-/// vocal lyrics already went — `ProjectClip`,
+/// arrangements, the chord track, the external-instrument config, the
+/// vocal lyrics and the automation lanes already went — `ProjectClip`,
 /// `ProjectSectionDefinition::arrangement`, `ProjectFile::chord_track`,
-/// `ProjectTrack::external_instrument` and `ProjectMidiClip::vocal_lyrics`
-/// carry them.
+/// `ProjectTrack::external_instrument`, `ProjectMidiClip::vocal_lyrics`
+/// and `ProjectFile::automation_lanes` carry them.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
     pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
     pub compose_next_derived_clip_id: u64,
-    /// App-side parameter-automation lanes, one per target. Also
-    /// persisted as `ProjectFile::automation_lanes`, which the full
-    /// replay reads; the diff replay reconciles the engine to this copy
-    /// via `restore_automation_lanes`.
-    pub automation_lanes: HashMap<AutomationTarget, AutomationLane>,
     /// Reference-track (A/B) content. The durable facts are also in
     /// `ProjectFile::references` / `reference_settings`, but the live
     /// entries (engine ids, analysis status) are reapplied from here after
@@ -96,7 +91,6 @@ impl UndoSnapshot {
 fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
     a.compose_derived_clips == b.compose_derived_clips
         && a.compose_next_derived_clip_id == b.compose_next_derived_clip_id
-        && a.automation_lanes == b.automation_lanes
         && a.reference.entries == b.reference.entries
         && a.reference.active_id == b.reference.active_id
         && a.reference.loudness_match == b.reference.loudness_match
@@ -240,7 +234,6 @@ impl crate::Resonance {
         UndoExtras {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
-            automation_lanes: self.automation.lanes.clone(),
             reference: self.reference.undo_snapshot(),
             track_freeze: self.freeze.statuses.clone(),
         }
@@ -340,10 +333,10 @@ impl crate::Resonance {
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
     /// Clip fade/gain, the drum arrangements, the chord track, the
-    /// external-instrument config and the vocal lyrics need nothing here:
-    /// the replay restores them from the snapshot's `ProjectFile`.
+    /// external-instrument config, the vocal lyrics and the automation
+    /// lanes need nothing here: the replay restores them from the
+    /// snapshot's `ProjectFile`.
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
-        self.restore_automation_lanes(&extras.automation_lanes);
         // `ClearAll` wiped any clip whose echo was still pending at
         // snapshot time; nothing will re-create it.
         self.restore_derived_clips(
@@ -448,23 +441,30 @@ impl crate::Resonance {
         }
     }
 
-    /// Reconcile the engine's automation lanes to `target` and overwrite
-    /// the app-side mirror to match. Shared by both undo/redo restore
-    /// paths (the structure-preserving diff replay and the full
-    /// clear-and-replay), and correct for either because the engine's
+    /// Reconcile the engine's automation lanes to `lanes` — the file form,
+    /// `ProjectFile::automation_lanes` — and overwrite the app-side mirror
+    /// to match. The one restore for a disk load and both undo/redo paths
+    /// (the structure-preserving diff replay and the full
+    /// clear-and-replay), and correct for each because the engine's
     /// lane set always equals the current mirror at call time: the diff
     /// path never touches lanes, and `ClearAll` deliberately leaves the
     /// engine's automation lanes intact (they are re-keyed per target,
     /// not by track/clip identity).
     ///
-    /// Lanes present now but absent from `target` are cleared; lanes that
+    /// The file form is lossless: the serializer writes the mirror's
+    /// lanes verbatim (sorted by lane id), and the mirror is keyed by each
+    /// lane's own target, so rebuilding the map here gives back the
+    /// mirror that was saved.
+    ///
+    /// Lanes present now but absent from `lanes` are cleared; lanes that
     /// are new or whose breakpoints/Read flag changed are re-sent
     /// whole-lane. Transient live-value tints for dropped targets are
     /// discarded so a stale fader/knob tint can't outlive its lane.
-    pub(crate) fn restore_automation_lanes(
-        &mut self,
-        target: &HashMap<AutomationTarget, AutomationLane>,
-    ) {
+    pub(crate) fn restore_automation_lanes(&mut self, lanes: &[AutomationLane]) {
+        let target: HashMap<AutomationTarget, AutomationLane> = lanes
+            .iter()
+            .map(|lane| (lane.target.clone(), lane.clone()))
+            .collect();
         let stale: Vec<AutomationTarget> = self
             .automation
             .lanes
@@ -475,18 +475,18 @@ impl crate::Resonance {
         for t in stale {
             let _ = self.engine.send(AudioCommand::ClearAutomationLane { target: t });
         }
-        for (t, lane) in target {
+        for (t, lane) in &target {
             if self.automation.lanes.get(t) != Some(lane) {
                 let _ = self
                     .engine
                     .send(AudioCommand::SetAutomationLane { lane: lane.clone() });
             }
         }
-        self.automation.lanes = target.clone();
-        self.automation.bump_allocator_past_lanes();
         self.automation
             .live_values
             .retain(|t, _| target.contains_key(t));
+        self.automation.lanes = target;
+        self.automation.bump_allocator_past_lanes();
     }
 
     /// Attempt to undo. No-ops (returning false) if the history is empty

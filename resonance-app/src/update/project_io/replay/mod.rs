@@ -133,17 +133,8 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // track's `SetTrackDeviceParams` (dispatched in `replay_track`) — the
     // engine already knows the bindings by the time the lane arrives. Legacy
     // projects carry no lanes, so this reduces to clearing stale ones and is
-    // otherwise a no-op.
-    let lanes: std::collections::HashMap<
-        resonance_common::AutomationTarget,
-        resonance_common::AutomationLane,
-    > = project
-        .automation_lanes
-        .iter()
-        .cloned()
-        .map(|lane| (lane.target.clone(), lane))
-        .collect();
-    r.restore_automation_lanes(&lanes);
+    // otherwise a no-op. An undo's diff replay makes the same call.
+    r.restore_automation_lanes(&project.automation_lanes);
 }
 
 // ---------------------------------------------------------------------------

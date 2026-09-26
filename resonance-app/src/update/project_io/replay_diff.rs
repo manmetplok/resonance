@@ -179,10 +179,12 @@ pub fn try_diff_replay(
     apply_tempo(r, target_file);
 
     // -- Automation lanes ----------------------------------------------
-    // Lanes aren't part of `ProjectFile` (and so don't affect the
-    // structural check), so reconcile them straight from the snapshot's
-    // extras: clear lanes that went away, re-send those that changed.
-    r.restore_automation_lanes(&extras.automation_lanes);
+    // From `ProjectFile::automation_lanes`, as `replay_loaded_project`
+    // does on the slow path: clear lanes that went away, re-send those
+    // that changed. Lanes never alter the project shape, so the
+    // structural check ignores them. After the external-instrument
+    // restore, so a `DeviceParam` lane lands on known bindings.
+    r.restore_automation_lanes(&target_file.automation_lanes);
 
     // -- Sort track / bus registry so view-layer invariant holds -------
     r.registry.resort_tracks();
