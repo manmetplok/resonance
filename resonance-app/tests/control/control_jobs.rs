@@ -410,20 +410,24 @@ fn duplicate_live_tokens_resolve_oldest_first() {
 // ---------------- overlapping import batches ----------------
 
 #[test]
-fn one_import_event_ticks_only_the_oldest_batch_awaiting_that_path() {
-    // Two overlapping `pool.import` batches name the same source file:
-    // the engine imports it twice and reports twice. Each event must
-    // tick ONE batch — ticking every batch resolved the second batch
-    // `done` off the first batch's event, before its own copy of the
-    // file had imported.
+fn one_import_event_ticks_only_the_batch_awaiting_that_asset_id() {
+    // Two overlapping `pool.import` batches name the SAME source path: the
+    // engine imports it twice and reports twice. Before D-7a these batches
+    // shared one key (the path) and an event had to be ticked against only
+    // the oldest matching batch, or the second batch could resolve `done`
+    // off the first batch's event before its own copy had imported. Since
+    // D-7a the app allocates a distinct asset id per file up front, so the
+    // two batches never share a key at all — each event names exactly the
+    // batch it belongs to, by construction, not by an "oldest wins" rule.
     let board = JobBoard::default();
     let path = "/tmp/shared-kick.wav";
+    let (asset_a, asset_b) = (1u64, 2u64);
     let first = u64::from(
         board
             .start(
                 "pool.import",
                 "batch A",
-                Some(JobToken::PoolImport { paths: vec![path.to_owned()] }),
+                Some(JobToken::PoolImport { asset_ids: vec![asset_a] }),
                 None,
             )
             .job_id,
@@ -433,28 +437,30 @@ fn one_import_event_ticks_only_the_oldest_batch_awaiting_that_path() {
             .start(
                 "pool.import",
                 "batch B",
-                Some(JobToken::PoolImport { paths: vec![path.to_owned()] }),
+                Some(JobToken::PoolImport { asset_ids: vec![asset_b] }),
                 None,
             )
             .job_id,
     );
 
-    // First per-file event: exactly the oldest batch finishes.
-    let finished = board.tick_import_path(path, None);
-    assert_eq!(finished, vec![(first, None)]);
-    board.complete(first, serde_json::json!({ "assets": [] }));
+    // Batch B's event lands first (its worker thread finished first) —
+    // ticks batch B, batch A is untouched.
+    let finished = board.tick_import_asset(asset_b, path, None);
+    assert_eq!(finished, vec![(second, None)]);
+    board.complete(second, serde_json::json!({ "assets": [] }));
     assert_eq!(
-        board.status(second).unwrap().state,
+        board.status(first).unwrap().state,
         JobState::Pending,
-        "the overlapping batch still awaits its own event"
+        "the other batch still awaits its own event"
     );
 
-    // Second event: now the second batch finishes.
-    let finished = board.tick_import_path(path, None);
-    assert_eq!(finished, vec![(second, None)]);
+    // Batch A's event lands after: ticks batch A.
+    let finished = board.tick_import_asset(asset_a, path, None);
+    assert_eq!(finished, vec![(first, None)]);
 
-    // A third event has nobody left to tick.
-    assert!(board.tick_import_path(path, None).is_empty());
+    // A stray third event for either id has nobody left to tick.
+    assert!(board.tick_import_asset(asset_a, path, None).is_empty());
+    assert!(board.tick_import_asset(asset_b, path, None).is_empty());
 }
 
 // ---------------- superseded vocal renders ----------------

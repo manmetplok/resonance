@@ -306,8 +306,12 @@ pub(crate) fn restore_pool(
 /// `project_dir` is `None` for an untitled project on the undo diff path
 /// (which only records with a saved project, so not expected): no asset
 /// is flagged missing then, rather than all of them. `reserve_engine_ids`
-/// is set after a `ClearAll`, which reset the engine's allocator; the
-/// diff path leaves the live allocator alone.
+/// gates seeding the app's asset-id counter (D-7a: despite the name, it is
+/// the app's own allocator now, not the engine's) — set after a `ClearAll`,
+/// which is the only moment a project's ids could otherwise collide with a
+/// live import in flight; the diff path leaves the counter alone, since it
+/// is session-monotonic and a diff never introduces an asset the counter
+/// hasn't already seen.
 pub(crate) fn restore_pool_assets(
     r: &mut Resonance,
     project: &ProjectFile,
@@ -348,19 +352,23 @@ pub(crate) fn restore_pool_assets(
     // an asset that didn't load simply isn't counted.
     r.recompute_pool_usage();
 
-    // Push the engine's id allocator past every restored id (ba doc #276
-    // BUG 2). It is engine-thread-local and starts at 1 each session,
-    // and nothing else tells it about a loaded project's assets — so
-    // without this the first `pool.import` after opening a project
-    // handed out an id the project was already using, and every clip
-    // referencing it silently started playing the newly imported file.
+    // Push the app's own asset-id counter past every restored id (ba doc
+    // #276 BUG 2 / D-7a). Nothing else tells it about a loaded project's
+    // assets — so without this the first `pool.import` after opening a
+    // project handed out an id the project was already using, and every
+    // clip referencing it silently started playing the newly imported
+    // file. Also seed past every `audio/asset_<id>.wav` on disk (STATE-12
+    // for assets): an orphaned file the pool no longer names (an import
+    // undone before saving, a stale backup) would otherwise be overwritten
+    // by the next import after this reopen.
     if !reserve_engine_ids {
         return;
     }
     if let Some(above) = r.media.pool.max_asset_id() {
-        let _ = r
-            .engine
-            .send(resonance_audio::types::AudioCommand::ReserveAssetIds { above });
+        r.media.ids.assets.seed_past(std::iter::once(above));
+    }
+    if let Some(dir) = project_dir {
+        r.seed_asset_ids_on_disk(dir);
     }
 }
 

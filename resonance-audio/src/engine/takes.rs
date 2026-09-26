@@ -402,10 +402,12 @@ pub fn push_take(
 ///   `clip_ref` 100..102 while its timeline clips stop at 5 therefore
 ///   reopened with `next_clip_id = 6`, and the next recording or import
 ///   **overwrote `audio/clip_100.wav`** — the take then silently played the
-///   new material. Same shape as the media pool's `ReserveAssetIds` (ba doc
-///   #276 BUG 2), reserved here rather than through a second command
-///   because this is the one path that already carries every restored
-///   `clip_ref`, so it cannot go out of step with what was restored.
+///   new material. Same shape as the media pool's old id-collision
+///   problem (ba doc #276 BUG 2, since fixed for assets by moving that
+///   allocator to the app entirely, D-7a), reserved here rather than
+///   through a second command because this is the one path that already
+///   carries every restored `clip_ref`, so it cannot go out of step with
+///   what was restored.
 ///
 ///   Still load-bearing now that a restore also loads the take clips
 ///   (`LoadTakeClipFromWav`, ba todo #1402). That load raises the counter

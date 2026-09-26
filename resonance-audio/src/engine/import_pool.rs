@@ -23,7 +23,7 @@ use thiserror::Error;
 use crate::decode;
 use crate::types::*;
 
-use super::clips::{transcode_to_wav, TranscodeError};
+use super::clips::{transcode_to_wav_new, TranscodeError};
 use super::thread::{HandlerCtx, HandlerState};
 
 /// Failure importing one source file into the pool
@@ -100,7 +100,13 @@ pub fn import_one_to_pool(
 
     let project_relative_path = asset_relative_path(asset_id);
     let target = project_dir.join(&project_relative_path);
-    transcode_to_wav(&target, &data, engine_rate)?;
+    // `create_new`: the app is the pool's only id allocator (D-7a) and
+    // never hands out an id twice, but the engine keeps no registry of
+    // its own to check that against, so refusing to clobber an existing
+    // file is the one guard it CAN enforce — a stale/orphaned
+    // `asset_<id>.wav` a prior undone import left behind (or a duplicate
+    // id from an app bug) is reported rather than silently overwritten.
+    transcode_to_wav_new(&target, &data, engine_rate)?;
 
     let peaks = compute_waveform_peaks(&data);
     let duration_frames = (data.len() / 2) as u64;
@@ -239,7 +245,7 @@ fn cancellation(
 pub(crate) fn handle_import_audio_to_pool(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
-    paths: Vec<String>,
+    files: Vec<PoolImportFile>,
 ) {
     // A project directory is the destination for the transcoded WAVs;
     // startup enforces an active project, so this normally holds. Treat
@@ -256,20 +262,15 @@ pub(crate) fn handle_import_audio_to_pool(
         }
     };
 
-    if paths.is_empty() {
+    if files.is_empty() {
         return;
     }
 
-    // Allocate a stable asset id per file on the engine thread so
-    // concurrent/back-to-back batches never collide, then move the work
-    // list onto the worker.
-    let jobs: Vec<(AssetId, String)> = paths
+    // The app allocated every asset id up front (D-7a: the app is the
+    // pool's only id allocator); move the work list onto the worker as-is.
+    let jobs: Vec<(AssetId, String)> = files
         .into_iter()
-        .map(|path| {
-            let id = state.next_asset_id;
-            state.next_asset_id += 1;
-            (id, path)
-        })
+        .map(|f| (f.asset_id, f.path))
         .collect();
 
     let event_tx = ctx.event_tx.clone();

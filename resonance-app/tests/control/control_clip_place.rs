@@ -360,9 +360,25 @@ fn temp_source(name: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// The asset ids of every `ImportAudioToPool` batch captured on `rx`, in
+/// send order — the app allocates them itself (D-7a), so a test simulating
+/// the engine's `AssetImported`/`ImportFailed` echo has to use the SAME
+/// ids, not ones it makes up.
+fn sent_asset_ids(rx: &resonance_audio::test_support::Receiver<resonance_audio::types::AudioCommand>) -> Vec<u64> {
+    std::iter::from_fn(|| rx.try_recv().ok())
+        .flat_map(|c| match c {
+            resonance_audio::types::AudioCommand::ImportAudioToPool { files } => {
+                files.into_iter().map(|f| f.asset_id).collect()
+            }
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 #[test]
 fn an_unpooled_path_waits_for_its_import_then_reports_the_clip() {
     let mut app = app();
+    let rx = app.test_capture_engine();
     let source = temp_source("place-async");
     let target = bar_to_sample(&app, 2);
 
@@ -377,6 +393,9 @@ fn an_unpooled_path_waits_for_its_import_then_reports_the_clip() {
     );
     let started: resonance_control::job::JobStarted = response.result().expect("job starts");
     let job_id = u64::from(started.job_id);
+    // The app allocated this file's asset id itself (D-7a) before sending
+    // `ImportAudioToPool`; the job token is keyed on it.
+    let asset_id = *sent_asset_ids(&rx).first().expect("import sent");
 
     // Still importing: the engine hasn't reported, so the job must not
     // claim a result it does not have.
@@ -386,25 +405,26 @@ fn an_unpooled_path_waits_for_its_import_then_reports_the_clip() {
 
     // The worker finishes: the asset lands, the queued placement runs, and
     // the job resolves with the real clip.
-    app.test_handle_engine_event(asset_imported(42, &source, 96_000));
+    app.test_handle_engine_event(asset_imported(asset_id, &source, 96_000));
 
     let status = job_status(&mut app, job_id);
     assert_eq!(status.state, JobState::Done, "{:?}", status.error);
     let placed: PlaceResult =
         serde_json::from_value(status.result.expect("result")).expect("PlaceResult");
-    assert_eq!(u64::from(placed.asset_id), 42);
+    assert_eq!(u64::from(placed.asset_id), asset_id);
     assert_eq!(u64::from(placed.track_id), AUDIO_TRACK);
     assert_eq!(placed.start.sample, target, "placed where it was asked, unsnapped");
     assert_eq!(placed.length_samples, 96_000);
 
     let clip = clip(&app, u64::from(placed.clip_id));
     assert_eq!(clip.start_sample, target);
-    assert_eq!(clip.asset_ref.map(|r| r.asset_id), Some(42));
+    assert_eq!(clip.asset_ref.map(|r| r.asset_id), Some(asset_id));
 }
 
 #[test]
 fn a_failed_import_fails_the_place_job() {
     let mut app = app();
+    let rx = app.test_capture_engine();
     let source = temp_source("place-fails");
 
     let response = call(
@@ -414,9 +434,10 @@ fn a_failed_import_fails_the_place_job() {
     );
     let started: resonance_control::job::JobStarted = response.result().expect("job starts");
     let job_id = u64::from(started.job_id);
+    let asset_id = *sent_asset_ids(&rx).first().expect("import sent");
 
     app.test_handle_engine_event(resonance_audio::types::AudioEvent::ImportFailed {
-        asset_id: 43,
+        asset_id,
         path: source.clone(),
         reason: "unsupported codec".to_string(),
     });
@@ -431,6 +452,7 @@ fn a_failed_import_fails_the_place_job() {
 #[test]
 fn pool_import_resolves_only_when_every_file_has_landed() {
     let mut app = app();
+    let rx = app.test_capture_engine();
     let first = temp_source("batch-a");
     let second = temp_source("batch-b");
 
@@ -441,24 +463,30 @@ fn pool_import_resolves_only_when_every_file_has_landed() {
     );
     let started: resonance_control::job::JobStarted = response.result().expect("job starts");
     let job_id = u64::from(started.job_id);
+    let ids_sent = sent_asset_ids(&rx);
+    let (id_a, id_b) = (ids_sent[0], ids_sent[1]);
 
     // One of two: the batch must not resolve on the first file, or a
     // client that waited on it would read a half-imported pool as done.
-    app.test_handle_engine_event(asset_imported(50, &first, 24_000));
+    app.test_handle_engine_event(asset_imported(id_a, &first, 24_000));
     let status = job_status(&mut app, job_id);
     assert!(
         !matches!(status.state, JobState::Done | JobState::Error),
         "still waiting on the second file"
     );
 
-    app.test_handle_engine_event(asset_imported(51, &second, 48_000));
+    app.test_handle_engine_event(asset_imported(id_b, &second, 48_000));
     let status = job_status(&mut app, job_id);
     assert_eq!(status.state, JobState::Done, "{:?}", status.error);
 
     let result: resonance_control::methods::pool::ImportResult =
         serde_json::from_value(status.result.expect("result")).expect("ImportResult");
     let ids: Vec<u64> = result.assets.iter().map(|a| u64::from(a.id)).collect();
-    assert_eq!(ids, vec![50, 51], "the batch reports exactly its own assets");
+    assert_eq!(
+        ids,
+        vec![id_a, id_b],
+        "the batch reports exactly its own assets"
+    );
     // A pool-only import places nothing.
     assert!(app.test_clips().is_empty());
 }

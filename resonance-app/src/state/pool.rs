@@ -152,10 +152,12 @@ impl MediaPool {
     /// An id arriving with a DIFFERENT file is an id collision, and
     /// replacing in place is the worst possible response: every clip
     /// referencing that id silently starts playing the new audio, which
-    /// is what happened when the engine's allocator handed out ids a
-    /// loaded project was already using (ba doc #276 BUG 2 — fixed at
-    /// the source by `ReserveAssetIds`). The existing asset wins and the
-    /// collision is reported rather than absorbed.
+    /// is what happened when the engine's own allocator used to hand out
+    /// ids a loaded project was already using (ba doc #276 BUG 2 — fixed
+    /// at the source by moving the allocator to the app, D-7a, session-
+    /// monotonic and seeded past every id a load or a disk scan finds).
+    /// The existing asset wins and the collision is reported rather than
+    /// absorbed.
     pub fn add(&mut self, asset: PoolAsset) {
         if let Some(slot) = self.assets.iter_mut().find(|a| a.id == asset.id) {
             if slot.project_relative_path != asset.project_relative_path {

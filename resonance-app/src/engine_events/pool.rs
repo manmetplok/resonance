@@ -58,8 +58,11 @@ pub(super) fn asset_imported(
 
     // Place the asset as a clip if this file's import queued one. A
     // pool-only import (dialog / `PoolOnly`) queues no clip; a stray
-    // asset with no matching entry is left in the pool unplaced.
-    let placed = match r.media.pool_import.take_matching(&original_path) {
+    // asset with no matching entry is left in the pool unplaced. Matched
+    // by asset id (D-7a), not source path: two drops of the same path
+    // used to be able to swap placements if their imports landed out of
+    // order (ba doc #276 / D-6 design §8.2).
+    let placed = match r.media.pool_import.take_matching(asset_id) {
         // The target track was deleted while the file transcoded: drop
         // the placement rather than push a clip onto a dead id (code
         // review UPD-04). A waiting `clip.place` job fails below.
@@ -84,10 +87,10 @@ pub(super) fn asset_imported(
         Some(PlacementTarget::PoolOnly) | None => None,
     };
 
-    resolve_control_import(r, &original_path, None, asset_id, placed);
+    resolve_control_import(r, asset_id, &original_path, None, placed);
 }
 
-/// Tick this source file off any control-endpoint import job waiting on it
+/// Tick this asset id off any control-endpoint import job waiting on it
 /// and, for a batch whose last file just landed, build that job's result
 /// from what actually arrived (ba doc #265, `pool.import` / `clip.place`).
 ///
@@ -98,12 +101,12 @@ pub(super) fn asset_imported(
 /// and are visible to `pool.list`.
 fn resolve_control_import(
     r: &mut Resonance,
-    source_path: &str,
-    error: Option<&str>,
     asset_id: AssetId,
+    path: &str,
+    error: Option<&str>,
     placed: Option<ClipId>,
 ) {
-    let finished = r.control.jobs.tick_import_path(source_path, error);
+    let finished = r.control.jobs.tick_import_asset(asset_id, path, error);
     for (job_id, batch_error) in finished {
         if let Some(message) = batch_error {
             r.control.jobs.fail(job_id, message);
@@ -129,8 +132,8 @@ fn resolve_control_import(
                 }
             },
             _ => {
-                let paths = r.control.jobs.import_batch_paths(job_id);
-                serde_json::to_value(crate::update::control::import_result(r, &paths))
+                let asset_ids = r.control.jobs.import_batch_asset_ids(job_id);
+                serde_json::to_value(crate::update::control::import_result(r, &asset_ids))
                     .unwrap_or(serde_json::Value::Null)
             }
         };
@@ -161,7 +164,7 @@ pub(super) fn import_progress(
 /// surface the reason. The batch's other files are independent and
 /// continue.
 pub(super) fn import_failed(r: &mut Resonance, asset_id: AssetId, path: String, reason: String) {
-    let _ = r.media.pool_import.take_matching(&path);
+    let _ = r.media.pool_import.take_matching(asset_id);
     r.media.import_progress.upsert(
         asset_id,
         path.clone(),
@@ -170,7 +173,7 @@ pub(super) fn import_failed(r: &mut Resonance, asset_id: AssetId, path: String, 
         },
     );
     r.banners.error_message = Some(format!("Import failed: {reason}"));
-    resolve_control_import(r, &path, Some(&reason), asset_id, None);
+    resolve_control_import(r, asset_id, &path, Some(&reason), None);
 }
 
 /// Place an imported asset as an audio clip on `track_id` at

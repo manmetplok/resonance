@@ -5,12 +5,21 @@
 //! A multi-file import (dialog or drop) fans out into one
 //! `AudioCommand::ImportAudioToPool` and, per file, an ordered lifecycle
 //! of engine events (`ImportProgress` → `AssetImported` / `ImportFailed`).
-//! The app doesn't know a file's engine-assigned `AssetId` at send time —
-//! only its source path — so this side-table remembers, per queued source
-//! file, *what to do once its asset lands*: place it as a clip on a
-//! target track at a sample position, or nothing (a pool-only import).
-//! When `AssetImported` arrives the handler matches back by the original
-//! source path, performs the placement, and drops the entry.
+//! The app allocates each file's `AssetId` itself, up front (D-7a), so
+//! this side-table remembers, per queued asset id, *what to do once it
+//! lands*: place it as a clip on a target track at a sample position, or
+//! nothing (a pool-only import). When `AssetImported` arrives the handler
+//! matches back by that asset id, performs the placement, and drops the
+//! entry.
+//!
+//! **Why by id, not by path (D-7a).** Two drops of the SAME source path
+//! (onto two different tracks, say) used to queue two entries that only
+//! differed by which arrived first — `take_matching` picked the oldest
+//! queued entry for the path, so if the second file's `AssetImported`
+//! landed before the first's (each batch decodes on its own worker
+//! thread; nothing orders them against each other), the placements swapped
+//! tracks. Every entry now carries its own distinct asset id from the
+//! moment it's queued, so there is no shared key left to collide on.
 //!
 //! This is **transient runtime state**, deliberately not part of
 //! `ProjectFile` and not captured by the undo snapshot: it only exists
@@ -39,13 +48,14 @@ pub enum PlacementTarget {
     },
 }
 
-/// One queued source file awaiting its `AssetImported` event, plus what
-/// to do with it when it arrives.
+/// One queued asset id awaiting its `AssetImported` event, plus what to
+/// do with it when it arrives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingImport {
-    /// Source path exactly as passed in `AudioCommand::ImportAudioToPool`
-    /// — the key the engine echoes back as `original_path`.
-    pub source_path: String,
+    /// The id the app allocated for this file before sending
+    /// `AudioCommand::ImportAudioToPool` (D-7a) — unique per queued file,
+    /// even across two imports of the same source path.
+    pub asset_id: AssetId,
     /// Placement to perform once the asset lands.
     pub target: PlacementTarget,
     /// Undo-stack depth right after the import recorded its entry. An
@@ -55,7 +65,7 @@ pub struct PendingImport {
     pub history_depth: usize,
 }
 
-/// In-flight import placements, keyed by source path. Emptied as each
+/// In-flight import placements, keyed by asset id (D-7a). Emptied as each
 /// file's `AssetImported` (or `ImportFailed`) event is handled.
 #[derive(Debug, Clone, Default)]
 pub struct PendingImports {
@@ -63,22 +73,28 @@ pub struct PendingImports {
 }
 
 impl PendingImports {
-    /// Queue a placement for a source file about to be imported.
+    /// Queue a placement for a file about to be imported.
     pub fn push(&mut self, entry: PendingImport) {
         self.entries.push(entry);
     }
 
-    /// Take the placement queued for `source_path`, removing it. Matches
-    /// the *first* queued entry for the path (a file imported twice in
-    /// one gesture resolves in FIFO order). `None` when nothing is queued
-    /// for the path — e.g. a stray `AssetImported` for a re-import or an
-    /// asset that arrived after its entry was already consumed.
-    pub fn take_matching(&mut self, source_path: &str) -> Option<PlacementTarget> {
-        let pos = self
-            .entries
-            .iter()
-            .position(|e| e.source_path == source_path)?;
+    /// Take the placement queued for `asset_id`, removing it. `None` when
+    /// nothing is queued for that id — e.g. a stray `AssetImported` for a
+    /// re-import, or one that arrived after its entry was already
+    /// consumed.
+    pub fn take_matching(&mut self, asset_id: AssetId) -> Option<PlacementTarget> {
+        let pos = self.entries.iter().position(|e| e.asset_id == asset_id)?;
         Some(self.entries.remove(pos).target)
+    }
+
+    /// The asset ids of the last `n` queued entries, in the order they
+    /// were pushed. Used by the control endpoints (`pool.import`,
+    /// `clip.place`) to learn which ids a shared `import()` call just
+    /// allocated, right after dispatching it — see
+    /// `update::control::clip::import`.
+    pub fn last_n_asset_ids(&self, n: usize) -> Vec<AssetId> {
+        let start = self.entries.len().saturating_sub(n);
+        self.entries[start..].iter().map(|e| e.asset_id).collect()
     }
 
     /// Forget every queued placement. The project they were queued
@@ -132,11 +148,11 @@ pub enum FileImportProgress {
 }
 
 /// One per-file progress row for the audio-import transcode modal.
-/// Keyed by [`AssetId`] (set by the engine at import time and echoed
-/// back via `ImportProgress` / `ImportFailed`).
+/// Keyed by [`AssetId`] (allocated by the app at import time, D-7a, and
+/// echoed back via `ImportProgress` / `ImportFailed`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileImportStatus {
-    /// Engine-assigned id for this asset.
+    /// App-assigned id for this asset.
     pub asset_id: AssetId,
     /// Source path as passed in `AudioCommand::ImportAudioToPool`.
     pub path: String,

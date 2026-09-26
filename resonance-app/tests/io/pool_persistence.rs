@@ -307,17 +307,19 @@ fn favourites_and_recent_persist_via_settings_not_project() {
 
 /// An id arriving with a DIFFERENT file must not rebind the slot.
 ///
-/// The engine's asset-id allocator is engine-thread-local and starts at 1
-/// each session, while a loaded project's assets keep their saved ids, so
-/// the first import after opening a project used to be handed an id the
-/// project was already using. `MediaPool::add` replaced in place, and
-/// every clip referencing that id silently started playing the newly
-/// imported file: a clap arrived as id 4 carrying the ride's usage count
-/// of 2, and two clips placed as rides were now claps. Nothing errored.
+/// Before ba doc #276 BUG 2 the engine's own asset-id allocator was
+/// engine-thread-local and started at 1 each session, while a loaded
+/// project's assets kept their saved ids, so the first import after
+/// opening a project could be handed an id the project was already using.
+/// `MediaPool::add` replaced in place, and every clip referencing that id
+/// silently started playing the newly imported file: a clap arrived as id
+/// 4 carrying the ride's usage count of 2, and two clips placed as rides
+/// were now claps. Nothing errored.
 ///
-/// The allocator is fixed at the source (`ReserveAssetIds` on load); this
-/// is the backstop that turns any remaining collision into a visible
-/// refusal instead of silently wrong audio.
+/// The allocator is fixed at the source now (D-7a: the app is the pool's
+/// only allocator, session-monotonic, seeded past every id a load or a
+/// disk scan finds); this is the backstop that turns any remaining
+/// collision into a visible refusal instead of silently wrong audio.
 #[test]
 fn an_id_collision_does_not_rebind_an_existing_asset() {
     let dir = make_project_dir("collide", &["audio/asset_1.wav"]);

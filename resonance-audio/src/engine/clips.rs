@@ -1110,6 +1110,23 @@ pub enum TranscodeError {
         #[source]
         source: hound::Error,
     },
+    /// [`transcode_to_wav_new`] refused to overwrite an existing file
+    /// (D-7a): the app is the pool's only asset-id allocator and never
+    /// hands out an id twice, so an `asset_<id>.wav` already on disk means
+    /// either a stale/orphaned file the app hasn't seeded past, or a
+    /// duplicate id — either way, silently overwriting it would risk
+    /// destroying audio a clip or a backup still names.
+    #[error("asset id in use: {path} already exists")]
+    AssetIdInUse { path: String },
+    /// A non-collision failure opening the file for
+    /// [`transcode_to_wav_new`] (permissions, a missing/unwritable parent
+    /// after the `create_dir_all`, …).
+    #[error("create {path}: {source}")]
+    OpenNew {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl From<TranscodeError> for EngineError {
@@ -1118,26 +1135,22 @@ impl From<TranscodeError> for EngineError {
     }
 }
 
-/// Write a stereo-interleaved f32 buffer to a 32-bit float WAV.
-/// Creates the target directory if needed. Used by both the import
-/// transcode path and the save-time fallback for in-RAM clips.
-pub fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), TranscodeError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| TranscodeError::CreateDir {
-            path: parent.display().to_string(),
-            source: e,
-        })?;
-    }
-    let spec = WavSpec {
+fn wav_spec(sample_rate: u32) -> WavSpec {
+    WavSpec {
         channels: 2,
         sample_rate,
         bits_per_sample: 32,
         sample_format: SampleFormat::Float,
-    };
-    let mut writer = WavWriter::create(path, spec).map_err(|e| TranscodeError::Create {
-        path: path.display().to_string(),
-        source: e,
-    })?;
+    }
+}
+
+/// Write every sample to an already-opened writer and finalize it. Shared
+/// tail of [`transcode_to_wav`] and [`transcode_to_wav_new`], which differ
+/// only in how the underlying file is opened.
+fn write_wav_samples<W: std::io::Write + std::io::Seek>(
+    mut writer: WavWriter<W>,
+    samples: &[f32],
+) -> Result<(), TranscodeError> {
     for &s in samples {
         writer
             .write_sample(s)
@@ -1147,4 +1160,67 @@ pub fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Resul
         .finalize()
         .map_err(|e| TranscodeError::Finalize { source: e })?;
     Ok(())
+}
+
+/// Write a stereo-interleaved f32 buffer to a 32-bit float WAV, creating
+/// or overwriting `path`. Creates the target directory if needed. Used by
+/// both the save-time fallback for in-RAM clips and clip-load paths that
+/// deliberately re-lay a file (e.g. a persisted take being remapped).
+pub fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), TranscodeError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| TranscodeError::CreateDir {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
+    }
+    let writer = WavWriter::create(path, wav_spec(sample_rate)).map_err(|e| TranscodeError::Create {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    write_wav_samples(writer, samples)
+}
+
+/// Write a stereo-interleaved f32 buffer to a FRESH 32-bit float WAV,
+/// refusing (`TranscodeError::AssetIdInUse`) if `path` already exists
+/// (`O_EXCL` via `create_new`). Creates the target directory if needed.
+///
+/// Used only for pool-asset writes (`asset_<id>.wav`, D-7a): unlike
+/// [`transcode_to_wav`]'s overwrite semantics, an asset name must never be
+/// silently reused out from under a file that's already there — the app is
+/// the pool's only id allocator and never means to hand out the same id
+/// twice, so a collision here is either a stale orphaned file or a bug,
+/// and either way the existing bytes are worth keeping.
+pub fn transcode_to_wav_new(
+    path: &Path,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<(), TranscodeError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| TranscodeError::CreateDir {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                TranscodeError::AssetIdInUse {
+                    path: path.display().to_string(),
+                }
+            } else {
+                TranscodeError::OpenNew {
+                    path: path.display().to_string(),
+                    source: e,
+                }
+            }
+        })?;
+    let writer = WavWriter::new(std::io::BufWriter::new(file), wav_spec(sample_rate))
+        .map_err(|e| TranscodeError::Create {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+    write_wav_samples(writer, samples)
 }

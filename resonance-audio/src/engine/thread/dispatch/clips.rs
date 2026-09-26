@@ -16,13 +16,8 @@ pub(super) fn dispatch_clips(
             path,
             start_sample,
         } => clips::handle_import_clip(ctx, state, track_id, path, start_sample),
-        AudioCommand::ImportAudioToPool { paths } => {
-            import_pool::handle_import_audio_to_pool(ctx, state, paths)
-        }
-        // High-water mark for pool ids, the same rule `LoadClipFromWav`
-        // applies to clip ids (ba doc #276 BUG 2).
-        AudioCommand::ReserveAssetIds { above } => {
-            state.next_asset_id = state.next_asset_id.max(above.saturating_add(1));
+        AudioCommand::ImportAudioToPool { files } => {
+            import_pool::handle_import_audio_to_pool(ctx, state, files)
         }
         // Every edit that names an existing clip goes through the
         // load race first (ba doc #276 BUG 1): the clip may still be

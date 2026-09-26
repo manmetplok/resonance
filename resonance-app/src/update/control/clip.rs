@@ -139,19 +139,23 @@ fn import(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Ta
         Ok(paths) => paths,
         Err(e) => return reject(request, e),
     };
+    let file_count = paths.len();
 
+    // Dispatch first, THEN build the job token from the ids `import()` just
+    // allocated (D-7a: the app is the pool's only asset-id allocator, so
+    // they don't exist until it runs). `run_via_update` runs the reducer
+    // synchronously — the only async part is the returned `Task`, which
+    // resolves later via the ordinary engine-event path — so the newly
+    // queued placements are still in `pool_import` right here, and nothing
+    // else can interleave a second import between the two calls.
+    let task = super::run_via_update(app, Message::Pool(PoolMessage::ImportFilesToPool(paths)));
+    let asset_ids = app.media.pool_import.last_n_asset_ids(file_count);
     let started = app.start_control_job(
         pool_proto::IMPORT,
-        &format!("Import {} file(s) into the pool", paths.len()),
-        JobToken::PoolImport {
-            paths: paths
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect(),
-        },
+        &format!("Import {file_count} file(s) into the pool"),
+        JobToken::PoolImport { asset_ids },
         Some(conn),
     );
-    let task = super::run_via_update(app, Message::Pool(PoolMessage::ImportFilesToPool(paths)));
     (super::success(request, &started), task)
 }
 
@@ -281,7 +285,7 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
                 proto::PLACE,
                 &format!("Place {original_path} on track {track_id}"),
                 JobToken::PoolImport {
-                    paths: vec![original_path],
+                    asset_ids: vec![asset_id],
                 },
                 Some(conn),
             );
@@ -332,14 +336,10 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
             if let Some(e) = project_dir_guard(app) {
                 return reject(request, e);
             }
-            let started = app.start_control_job(
-                proto::PLACE,
-                &format!("Import and place {} on track {track_id}", path.display()),
-                JobToken::PoolImport {
-                    paths: vec![path.to_string_lossy().into_owned()],
-                },
-                Some(conn),
-            );
+            let display_path = path.display().to_string();
+            // Dispatch first, then build the job token from the id
+            // `import()` just allocated (D-7a) — see the same reordering
+            // note on `pool.import` above.
             let task = super::run_via_update(
                 app,
                 Message::Pool(PoolMessage::ImportAndPlaceExact {
@@ -347,6 +347,13 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
                     track_id,
                     start_sample,
                 }),
+            );
+            let asset_ids = app.media.pool_import.last_n_asset_ids(1);
+            let started = app.start_control_job(
+                proto::PLACE,
+                &format!("Import and place {display_path} on track {track_id}"),
+                JobToken::PoolImport { asset_ids },
+                Some(conn),
             );
             (super::success(request, &started), task)
         }
@@ -399,15 +406,18 @@ pub(crate) fn place_result(
 }
 
 /// Build the `pool.import` job result for a finished batch: the pool
-/// assets whose source is one of `paths`. Public to the control module so
-/// the completion hook in `engine_events::pool` shares this definition.
-pub(crate) fn import_result(app: &Resonance, paths: &[String]) -> pool_proto::ImportResult {
+/// assets whose id is one of `asset_ids` (D-7a — the app allocated them
+/// itself, so they identify the batch's files unambiguously, unlike their
+/// source paths when two files in flight share one). Public to the control
+/// module so the completion hook in `engine_events::pool` shares this
+/// definition.
+pub(crate) fn import_result(app: &Resonance, asset_ids: &[u64]) -> pool_proto::ImportResult {
     let assets = app
         .media
         .pool
         .assets
         .iter()
-        .filter(|a| paths.contains(&a.original_path))
+        .filter(|a| asset_ids.contains(&a.id))
         .map(|a| asset_view(app, a))
         .collect();
     pool_proto::ImportResult {

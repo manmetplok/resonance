@@ -257,8 +257,8 @@ fn drop_on_existing_lane_dispatches_import_and_place() {
 
     // The asset lands on the target lane at the snapped position.
     app.test_handle_engine_event(AudioEvent::AssetImported {
-        asset_id: 5,
-        project_relative_path: "audio/asset_5.wav".to_string(),
+        asset_id: 1,
+        project_relative_path: "audio/asset_1.wav".to_string(),
         original_path: "/imports/loop.wav".to_string(),
         format: AudioFormat::Wav,
         channels: 2,
@@ -333,8 +333,8 @@ fn drop_records_exactly_one_undo_entry() {
     });
     let _ = app.update(Message::Drag(DragMessage::Drop));
     app.test_handle_engine_event(AudioEvent::AssetImported {
-        asset_id: 5,
-        project_relative_path: "audio/asset_5.wav".to_string(),
+        asset_id: 1,
+        project_relative_path: "audio/asset_1.wav".to_string(),
         original_path: "/imports/loop.wav".to_string(),
         format: AudioFormat::Wav,
         channels: 2,

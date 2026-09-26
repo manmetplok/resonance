@@ -126,6 +126,78 @@ fn import_one_downmixes_and_preserves_matched_rate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// D-7a: the app is the pool's only asset-id allocator now, so the engine
+/// keeps no id registry of its own — the one collision guard it CAN still
+/// enforce is refusing to overwrite an `asset_<id>.wav` that already
+/// exists. Writes to it first (standing in for a stale/orphaned file, or a
+/// duplicate id from an app bug), then imports at the SAME id and checks
+/// the original bytes survive untouched.
+#[test]
+fn a_colliding_asset_id_is_refused_and_the_existing_file_is_untouched() {
+    let dir = make_tempdir("collide");
+    let audio_dir = dir.join("audio");
+    std::fs::create_dir_all(&audio_dir).unwrap();
+    let existing_path = audio_dir.join("asset_5.wav");
+    let existing_bytes = b"not a real wav, just needs to survive untouched";
+    std::fs::write(&existing_path, existing_bytes).unwrap();
+
+    let src = write_wav(&dir, "new.wav", PROJECT_RATE, 2, 4_800);
+    let err = import_one_to_pool(5, &src, &dir, PROJECT_RATE).expect_err("id 5 is taken");
+    assert!(
+        err.to_string().contains("asset id in use"),
+        "expected an id-in-use error, got: {err}"
+    );
+
+    let after = std::fs::read(&existing_path).unwrap();
+    assert_eq!(
+        after, existing_bytes,
+        "the existing file must not be overwritten by the refused import"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same refusal, driven through the real batch path
+/// (`run_pool_import`/the engine handler) rather than the pure per-file
+/// step: the batch reports `ImportFailed` for the colliding file and keeps
+/// going, exactly like any other per-file failure (ENG-09).
+#[test]
+fn a_colliding_asset_id_fails_that_file_in_a_batch_and_the_batch_continues() {
+    let dir = make_tempdir("collide-batch");
+    let audio_dir = dir.join("audio");
+    std::fs::create_dir_all(&audio_dir).unwrap();
+    std::fs::write(audio_dir.join("asset_2.wav"), b"orphaned").unwrap();
+
+    let a = write_wav(&dir, "a.wav", PROJECT_RATE, 2, 4_800);
+    let b = write_wav(&dir, "b.wav", PROJECT_RATE, 2, 4_800);
+    let jobs = vec![(1u64, a), (2u64, b)];
+
+    let mut events: Vec<AudioEvent> = Vec::new();
+    run_pool_import(&jobs, &dir, PROJECT_RATE, |ev| events.push(ev));
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AudioEvent::AssetImported { asset_id: 1, .. })),
+        "the non-colliding file still imports: {events:?}"
+    );
+    let failed = events.iter().find_map(|e| match e {
+        AudioEvent::ImportFailed { asset_id: 2, reason, .. } => Some(reason.clone()),
+        _ => None,
+    });
+    assert!(
+        failed.is_some_and(|r| r.contains("asset id in use")),
+        "the colliding file fails with an id-in-use reason: {events:?}"
+    );
+    assert_eq!(
+        std::fs::read(audio_dir.join("asset_2.wav")).unwrap(),
+        b"orphaned",
+        "the orphaned file at the colliding id is untouched"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn import_one_reports_error_for_missing_file() {
     let dir = make_tempdir("missing");

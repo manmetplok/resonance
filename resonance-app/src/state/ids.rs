@@ -1,15 +1,16 @@
 //! The app side of the entity-id partition, in one place (ARCH-04 A4-2).
 //!
 //! Two owners once hand out entity ids here. The engine allocates the ids
-//! of everything the GUI creates without a hint (clips, assets, take
-//! groups — counters in `resonance-audio/src/engine/thread/mod.rs`), and
-//! the app allocates the ids it needs *synchronously* — a control reply
-//! that must carry the id before the engine echoes, a sub-track the
-//! mirror names up front, a derived clip the compose model owns outright.
-//! Each app-owned space starts at a base far above anything the engine's
-//! counters reach, so the two owners never meet; this file is where those
-//! bases live and where the "is it free?" loop every allocator runs is
-//! written once.
+//! of what's left that the GUI creates without a hint (clips, take groups —
+//! counters in `resonance-audio/src/engine/thread/mod.rs`), and the app
+//! allocates the ids it needs *synchronously* — a control reply that must
+//! carry the id before the engine echoes, a sub-track the mirror names up
+//! front, a derived clip the compose model owns outright, a pool asset
+//! (D-7a) about to be imported. Each app-owned space with a base starts far
+//! above anything the engine's own counters reach, so the two owners never
+//! meet there; this file is where those bases live and where the "is it
+//! free?" loop every allocator runs is written once. A space with no base
+//! (see the table) has no engine counter to stay clear of at all.
 //!
 //! Who gets what:
 //!
@@ -18,6 +19,7 @@
 //! | bus | [`BUS_ID_BASE`] | `TrackRegistry::allocate_bus_id` | none — the engine has no bus counter left (D-3); this base is an app/control-API-only convention (see below) |
 //! | clip (derived, control-created, vocal render, …) | [`DERIVED_CLIP_ID_BASE`] | [`ComposeState::fresh_derived_clip_id`](crate::compose::ComposeState::fresh_derived_clip_id) | counter bumps only for ids *below* the base (FU-A6a) |
 //! | missing reference | [`MISSING_REFERENCE_ID_BASE`] | local counter in `replay::restore` | never sees one (app-only) |
+//! | pool asset (D-7a) | none — the app is the ONLY allocator | [`EntityIds::assets`] (`MediaState::ids`) | none left — the engine invents no asset ids any more; `ImportAudioToPool` carries a mandatory id per file and the engine refuses (`ImportFailed`, `create_new`) rather than overwrite a colliding `asset_<id>.wav` |
 //!
 //! **Plugin instance ids, aux-send ids and track ids are no longer a
 //! partition** (ARCH-04 D-1, D-2, D-4 respectively): the app is the ONLY
@@ -88,7 +90,7 @@
 //! and reference rows into the same "app is the only owner" shape
 //! plugins, sends and busses already had.)
 
-use resonance_audio::types::{BusId, TrackId};
+use resonance_audio::types::{AssetId, BusId, TrackId};
 
 // `DERIVED_CLIP_ID_BASE` is where `ComposeState::fresh_derived_clip_id`
 // starts: the clips the app names before the engine echoes (compose
@@ -148,6 +150,96 @@ pub fn allocate_unused(next: &mut u64, in_use: impl Fn(u64) -> bool) -> u64 {
         if !in_use(candidate) {
             return candidate;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// D-7a: an id space with no engine counter left to stay clear of at all —
+// the app is the ONLY allocator, so there is no base to name, only a
+// session-monotonic counter (`docs/design/D-6-engine-created-ids.md` §4.1).
+// `IdCounter` is deliberately generic: D-7b promotes the derived-clip
+// allocator (`ComposeState::next_derived_clip_id`) into a second field of
+// `EntityIds` the same shape, and D-7e a third for take groups.
+// ---------------------------------------------------------------------------
+
+/// A session-monotonic id counter: never rewound by undo, a load, or
+/// `ClearAll` — only ever raised, by [`Self::allocate`] or
+/// [`Self::seed_past`]. This is what makes STATE-08 (an id that ever named
+/// a file must never be reissued in the session) trivially true for a space
+/// with exactly one allocator: nothing else can ever hand out one of its
+/// ids, so "never rewound" is the whole guarantee.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdCounter {
+    next: u64,
+}
+
+impl IdCounter {
+    /// A counter that will hand out `start` first.
+    pub(crate) const fn starting_at(start: u64) -> Self {
+        Self { next: start }
+    }
+
+    /// Hand out the next id and advance past it.
+    pub(crate) fn allocate(&mut self) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+
+    /// Raise the counter past every id in `ids` (each treated as an id
+    /// that already exists somewhere — on disk, in a loaded project — so
+    /// the next [`Self::allocate`] must not repeat it). A no-op for an
+    /// empty iterator or one whose ids are already below the counter.
+    pub(crate) fn seed_past(&mut self, ids: impl IntoIterator<Item = u64>) {
+        if let Some(max) = ids.into_iter().max() {
+            self.next = self.next.max(max.saturating_add(1));
+        }
+    }
+}
+
+/// The app's own allocators for spaces the engine invents no ids for at
+/// all (D-7a start: just the pool's asset ids; D-7b/D-7e add clips and take
+/// groups here as they promote their allocators out of `ComposeState` /
+/// the engine).
+#[derive(Debug, Clone)]
+pub(crate) struct EntityIds {
+    /// Media-pool asset ids (`audio/asset_<id>.wav`). Seeded past every
+    /// asset a loaded project holds AND every `asset_<id>.wav` a disk scan
+    /// finds (`Resonance::seed_asset_ids_on_disk`) — see
+    /// `update::project_io::replay::restore_pool_assets`.
+    pub assets: IdCounter,
+}
+
+impl Default for EntityIds {
+    fn default() -> Self {
+        Self {
+            assets: IdCounter::starting_at(1),
+        }
+    }
+}
+
+impl crate::Resonance {
+    /// Reserve the asset-id counter past every `audio/asset_<id>.wav` file
+    /// under the project directory `dir` (D-7a, mirrors
+    /// [`ComposeState::reserve_derived_clip_ids_on_disk`](crate::compose::ComposeState::reserve_derived_clip_ids_on_disk)
+    /// for the pool). Without this an `asset_<id>.wav` an undone import
+    /// left behind (or a stale backup) could be silently overwritten by
+    /// the next import after a reopen — the pool itself only knows about
+    /// the assets it currently holds, not an orphaned file with no asset
+    /// pointing at it any more. A missing or unreadable `audio/` reserves
+    /// nothing.
+    pub(crate) fn seed_asset_ids_on_disk(&mut self, dir: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
+            return;
+        };
+        self.media.ids.assets.seed_past(entries.flatten().filter_map(|e| {
+            let name = e.file_name();
+            let digits = name.to_str()?.strip_prefix("asset_")?.strip_suffix(".wav")?;
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            digits.parse::<AssetId>().ok()
+        }));
     }
 }
 
