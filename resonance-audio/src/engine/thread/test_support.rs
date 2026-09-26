@@ -474,6 +474,35 @@ impl EngineHandlerHarness {
         OfflineRenderGuard::mark(&self.shared)
     }
 
+    /// Run the real `AudioCommand::MeasureMix` spawn path: one offline
+    /// (`Render`) measurement of the master, on its worker thread.
+    pub fn measure_master(&mut self, measure_id: u64) {
+        self.with_ctx(|ctx, _| {
+            crate::engine::bounce::measure_mix_spawn(
+                measure_id,
+                vec![StemSource::Master],
+                None,
+                MeasureSource::Render,
+                Arc::clone(ctx.shared),
+                Arc::clone(ctx.tracks),
+                Arc::clone(ctx.busses),
+                Arc::clone(ctx.master),
+                Arc::clone(ctx.clips),
+                Arc::clone(ctx.midi_clips),
+                Arc::clone(ctx.plugins),
+                Arc::clone(ctx.tempo_map),
+                ctx.sample_rate,
+                ctx.event_tx.clone(),
+            )
+        });
+    }
+
+    /// The engine's clip list, so a test can hold its lock to park a
+    /// worker that reads it.
+    pub fn clips_lock(&self) -> Arc<RwLock<Vec<AudioClip>>> {
+        Arc::clone(&self.clips)
+    }
+
     /// Render one block of `track_id` through the **real** `render_block`,
     /// from the engine's own clip list and published comp table, and return
     /// the left channel.
