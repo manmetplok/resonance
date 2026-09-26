@@ -141,6 +141,12 @@ pub fn try_diff_replay(
     // always takes the fast path.
     super::replay::restore_quantize(r, target_file);
 
+    // -- Performance footer (tuning + capo) ----------------------------
+    // Pure app-side, persisted in the `ProjectFile`: restored verbatim as
+    // the slow path's `replay_loaded_project` does, so both paths land on
+    // the same state (FU-H2c).
+    super::replay::restore_performance(r, target_file);
+
     // -- Reference (A/B) content ---------------------------------------
     // References aren't in the `ProjectFile`, so they ride along in the
     // snapshot's `extras` and are restored verbatim here. Engine re-sync

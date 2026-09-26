@@ -337,18 +337,32 @@ fn edit_every_domain(f: &mut Fixture, h: &Handles, variant: u8) {
         }
     }
 
-    // Vocal lyrics, one per note (the serializer strips trailing empties
-    // and the loader pads back to the note count, so a full vector is
-    // the shape that survives both untouched).
+    // Vocal lyrics with a trailing empty entry and one short of the note
+    // count: the serializer strips trailing empties and a disk load pads
+    // back to the note count, so this is the shape on which the two
+    // restore paths could disagree in live state (FU-H2c).
     if let Some((clip, n)) = h.vocal_clip {
         let syllable = if variant == 0 { "la" } else { "da" };
-        app.test_set_clip_lyrics(clip, vec![syllable.to_string(); n]);
+        app.test_set_clip_lyrics(clip, short_lyrics(syllable, n));
     }
+
+    // Performance footer: tuning + capo live in the `ProjectFile`, so a
+    // restore must bring them back on both paths (FU-H2c).
+    app.test_dispatch(Message::Ui(UiMessage::SetPerformanceTuning(1 + variant as usize)));
+    app.test_dispatch(Message::Ui(UiMessage::SetPerformanceCapo(2 + variant)));
 
     // The arrangement edit re-materialises the drum clip through the
     // engine; land its echo as the live engine would, so the snapshot
     // never captures a derived-clip entry whose mirror is still pending.
     echo_midi_clip_loads(app, &f.rx);
+}
+
+/// A lyric vector shorter than the clip's `n` notes (for `n >= 3`) that
+/// ends in an empty entry.
+fn short_lyrics(syllable: &str, n: usize) -> Vec<String> {
+    let mut lyrics = vec![syllable.to_string(); n.saturating_sub(2).max(1)];
+    lyrics.push(String::new());
+    lyrics
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +495,7 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     );
     assert!(!file.tempo_events.is_empty(), "tempo event landed");
     assert!(!file.arrangement_markers.is_empty(), "marker landed");
+    assert_eq!(file.performance.capo, 2, "performance capo landed");
     assert_eq!(file.chord_track.regions.len(), 1, "chord region landed");
     assert_eq!(file.chord_track.key_changes.len(), 1, "key change landed");
     assert!(
@@ -535,7 +550,7 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     if let Some((clip, n)) = h.vocal_clip {
         assert_eq!(
             x.vocal_clip_lyrics.get(&clip).map(Vec::len),
-            Some(n),
+            Some(short_lyrics("", n).len()),
             "lyrics landed"
         );
     }
