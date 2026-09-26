@@ -20,6 +20,7 @@ mod clips;
 mod entities;
 mod globals;
 mod plugin_state;
+mod removals;
 mod restored;
 mod routing;
 
@@ -143,11 +144,17 @@ pub enum Stage {
     /// (reads the meter). Right after `Globals` on both paths, before any
     /// track or clip is restored.
     Timeline,
+    /// What a diff restore removes: the routing edges `new` lacks, then
+    /// the plugin instances and busses (A-13h). Before `Entities`, so an
+    /// edge is gone before its endpoint and an instance before a re-add
+    /// under its id. Nothing after a `ClearAll`.
+    Removals,
     /// The entities: tracks, busses, the master chain, the track outputs,
     /// then each plugin's state (blob, bypass, params), then the registry
-    /// order. Right after `Timeline` on both paths. After a `ClearAll`
-    /// every entity is added; on the diff path only changed scalars are
-    /// sent.
+    /// and chain order. Right after `Removals` on both paths. After a
+    /// `ClearAll` every entity is added; on the diff path only changed
+    /// scalars are sent, and the busses and plugin instances `old` lacks
+    /// are added (A-13h).
     Entities,
     /// The routing edges between entities: aux sends, then sidechain key
     /// routes. Right after `Entities` (the engine rejects a send naming an
@@ -204,6 +211,10 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::Markers>(Stage::Timeline),
     // Reads the meter (tempo events) and the sections.
     domain::<globals::SectionChordTrim>(Stage::Timeline),
+    // Diff path only: edges before the entities they connect, instances
+    // before a re-add under the same id.
+    domain::<removals::RoutingRemovals>(Stage::Removals),
+    domain::<removals::EntityRemovals>(Stage::Removals),
     // Tracks before busses (as both paths always had it), the master
     // chain, then the track outputs once every bus they name exists.
     domain::<entities::Tracks>(Stage::Entities),
@@ -214,7 +225,8 @@ pub(crate) const DOMAINS: &[Domain] = &[
     // bypass, then params (which win over the blob).
     domain::<plugin_state::PluginState>(Stage::Entities),
     // Last: resorts every registry the domains above filled or re-ordered,
-    // and (after a `ClearAll`) the plugin chains + side-index.
+    // puts every plugin chain into the target's order, rebuilds the
+    // side-index.
     domain::<entities::EntityOrder>(Stage::Entities),
     // After every entity they connect. Sends before key routes, as both
     // paths always had it (the two are independent tables in the engine).

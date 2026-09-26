@@ -1,23 +1,28 @@
-//! Roadmap group (6), first step: the entities themselves — tracks,
-//! busses, the master chain and the track outputs (ARCH-01 A-13f).
+//! Roadmap group (6): the entities themselves — tracks, busses, the
+//! master chain and the track outputs (ARCH-01 A-13f, A-13h).
 //!
 //! Shaped like `clips::AudioClips`: after a `ClearAll` (`old = None`) the
 //! mirror is emptied and every entity is added with every scalar; on the
 //! diff path only the scalars that differ from `old` are sent and the
-//! mirror is updated in place. The diff path relies on
-//! `structurally_compatible`: the track, bus and plugin-instance sets of
-//! `old` and `new` are equal (same types, same sub-track links, same chain
-//! identity and order), so it never adds or removes an entity. An id
-//! missing from `old` is skipped there as defence in depth.
+//! mirror is updated in place.
+//!
+//! Since A-13h the diff path also adds what `old` lacks: a bus (the
+//! after-`ClearAll` add body, [`replay_bus`]) and a plugin instance on a
+//! chain that stays (the same [`replay_plugins`] body, appended to the
+//! live chain). What `new` lacks was already removed by
+//! `removals::EntityRemovals`, the stage before, and [`EntityOrder`] puts
+//! every chain into the target's order last. Tracks are still gated by
+//! `structurally_compatible` (A-13i): a track id missing from `old` is
+//! skipped here as defence in depth.
 //!
 //! Each plugin's state (blob, per-slot bypass, params) is
 //! `plugin_state::PluginState`'s, the next domain in the stage.
 //!
-//! `Stage::Entities` runs after `Timeline` and before `Routing` on both
+//! `Stage::Entities` runs after `Removals` and before `Routing` on both
 //! paths: the engine rejects a send naming an unregistered endpoint, and a
 //! key route names a plugin instance id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use resonance_audio::types::*;
 
@@ -37,7 +42,9 @@ use crate::Resonance;
 ///   legacy generate-params migration, which reads the replayed track
 ///   roles.
 /// * Diff: per track, each scalar that differs from `old` is sent; the
-///   mirror takes every field (name, order, …) from `new`.
+///   mirror takes every field (name, order, …) from `new`; each plugin
+///   `old` did not have on the chain is added to its end (`EntityOrder`
+///   moves it into place).
 ///
 /// The main output (`SetTrackOutput`) is [`TrackOutputs`]', after the
 /// busses it names exist.
@@ -77,12 +84,23 @@ impl Reconcile for Tracks {
             return;
         };
         let old_by_id: HashMap<u64, &ProjectTrack> = old.tracks.iter().map(|t| (t.id, t)).collect();
+        let kept = kept_plugins(Some(old), new);
         for pt in &new.tracks {
             // Defence in depth: `structurally_compatible` should have gated
             // us here, but if it ever drifts we'd rather skip an unmatched
             // id than crash on undo.
             if let Some(&ot) = old_by_id.get(&pt.id) {
                 apply_track(r, ot, pt);
+                let track_id = pt.id;
+                let added = replay_plugins(r, fresh(&pt.plugins, &kept), |pp| AudioCommand::AddPlugin {
+                    track_id,
+                    clap_file_path: pp.clap_file_path.clone(),
+                    clap_plugin_id: pp.clap_plugin_id.clone(),
+                    id: pp.instance_id,
+                });
+                if let Some(t) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+                    t.plugins.extend(added);
+                }
             }
         }
     }
@@ -93,8 +111,12 @@ impl Reconcile for Tracks {
 /// * After a `ClearAll`: the registry and the bus-order counter are
 ///   emptied, then every bus goes out (`AddBus` + every scalar, its return
 ///   role, its plugin chain) and is mirrored.
-/// * Diff: per bus, each scalar that differs from `old` is sent (including
-///   `SetBusName`); the mirror takes every field from `new`.
+/// * Diff: a bus `old` lacks is added exactly as after a `ClearAll` (with
+///   its saved `.order`); per bus `old` has, each scalar that differs is
+///   sent (including `SetBusName`), the mirror takes every field from
+///   `new`, and each plugin `old` did not have on the chain is added (to
+///   the end; [`EntityOrder`] moves it into place). A bus `new` lacks is
+///   already gone (`removals::EntityRemovals`).
 pub(crate) struct Busses;
 
 impl Reconcile for Busses {
@@ -110,10 +132,29 @@ impl Reconcile for Busses {
             return;
         };
         let old_by_id: HashMap<u64, &ProjectBus> = old.busses.iter().map(|b| (b.id, b)).collect();
+        let kept = kept_plugins(Some(old), new);
         for pb in &new.busses {
-            // Defence in depth — see `Tracks`.
-            if let Some(&ob) = old_by_id.get(&pb.id) {
-                apply_bus(r, ob, pb);
+            let Some(&ob) = old_by_id.get(&pb.id) else {
+                replay_bus(r, pb);
+                // `replay_bus` numbers a bus by replay position; a diff add
+                // keeps the snapshot's `.order` (the fixed point), and the
+                // counter stays past it.
+                if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == pb.id) {
+                    bus.order = pb.order;
+                }
+                r.registry.next_bus_order = r.registry.next_bus_order.max(pb.order + 1);
+                continue;
+            };
+            apply_bus(r, ob, pb);
+            let bus_id = pb.id;
+            let added = replay_plugins(r, fresh(&pb.plugins, &kept), |pp| AudioCommand::AddPluginToBus {
+                bus_id,
+                clap_file_path: pp.clap_file_path.clone(),
+                clap_plugin_id: pp.clap_plugin_id.clone(),
+                id: pp.instance_id,
+            });
+            if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
+                bus.plugins.extend(added);
             }
         }
     }
@@ -123,7 +164,8 @@ impl Reconcile for Busses {
 ///
 /// * After a `ClearAll`: `SetMasterFxBypass`, then every master plugin is
 ///   added; the mirror is rebuilt.
-/// * Diff: `SetMasterFxBypass` when it changed; slot names refreshed.
+/// * Diff: `SetMasterFxBypass` when it changed; slot names refreshed;
+///   each plugin `old` did not have is added to the end of the chain.
 ///
 /// The per-slot bypass, blobs and params of every chain are
 /// `plugin_state::PluginState`'s.
@@ -148,6 +190,15 @@ impl Reconcile for Master {
             return;
         };
         apply_master(r, old, new);
+        let kept = kept_plugins(Some(old), new);
+        let added = replay_plugins(r, fresh(&new.master_plugins, &kept), |pp| {
+            AudioCommand::AddPluginToMaster {
+                clap_file_path: pp.clap_file_path.clone(),
+                clap_plugin_id: pp.clap_plugin_id.clone(),
+                id: pp.instance_id,
+            }
+        });
+        r.master.plugins.extend(added);
     }
 }
 
@@ -196,11 +247,19 @@ impl Reconcile for TrackOutputs {
 /// output-destination picker rebuilt from the bus list, the compose
 /// instrument-lane count refreshed.
 ///
-/// After a `ClearAll` also: each chain re-sorted into its saved order
-/// (stable, so a no-op when the placeholders went in in order) and the
-/// plugin side-index rebuilt from the replayed chains. The diff path's
-/// chains cannot have moved: `structurally_compatible` requires the same
-/// instance ids in the same order, and its index is live.
+/// Then each chain is put into the target's order:
+///
+/// * After a `ClearAll`: re-sorted app-side into its saved order (stable,
+///   so a no-op when the placeholders went in in order) — the engine's
+///   chains were built in that order.
+/// * Diff: the live chain is the kept slots in their old order, then the
+///   slots the entity domains appended, which is also the engine's order.
+///   Each slot out of place is moved with `MovePlugin` /
+///   `MovePluginInBus` / `MovePluginInMaster` and mirrored at once (see
+///   [`order_chain`]).
+///
+/// Last, on every origin, the plugin side-index is rebuilt from the
+/// chains (a diff restore may have added and removed slots).
 pub(crate) struct EntityOrder;
 
 impl Reconcile for EntityOrder {
@@ -211,7 +270,9 @@ impl Reconcile for EntityOrder {
         r.registry.resort_busses();
         r.ui.view_caches.rebuild_output(&r.registry.busses);
         r.compose.refresh_track_count(&r.registry.tracks);
-        if old.is_some() {
+        if let Some(old) = old {
+            order_live_chains(r, old, new);
+            r.rebuild_plugin_index();
             return;
         }
         let saved_ids = |plugins: &[ProjectPlugin]| -> Vec<u64> {
@@ -482,12 +543,12 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus) {
 /// stays in the chain with an empty `params` mirror and the engine has
 /// no instance to save state from (see `PluginState` for what keeps its
 /// settings alive).
-fn replay_plugins(
+fn replay_plugins<'p>(
     r: &mut Resonance,
-    plugins: &[ProjectPlugin],
+    plugins: impl IntoIterator<Item = &'p ProjectPlugin>,
     mut add_command: impl FnMut(&ProjectPlugin) -> AudioCommand,
 ) -> Vec<PluginSlotState> {
-    let mut gui_plugins = Vec::with_capacity(plugins.len());
+    let mut gui_plugins = Vec::new();
     for pp in plugins {
         let _ = r.engine.send(add_command(pp));
         let mut slot = PluginSlotState::new(
@@ -666,13 +727,11 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
         t.midi_input_channel = b.midi_input_channel;
         t.midi_output_device = b.midi_output_device.clone();
         t.midi_output_channel = b.midi_output_channel;
-        // Plugin slot metadata: instance_id/clap identity are
-        // guaranteed stable by the structural check, but the
-        // human-visible name may change. The per-slot bypass is
+        // Plugin slot metadata: the human-visible name may change.
+        // Matched by id: the chain still holds the old order (and the
+        // fresh slots come after this). The per-slot bypass is
         // `PluginState`'s.
-        for (slot, pp) in t.plugins.iter_mut().zip(b.plugins.iter()) {
-            slot.plugin_name = pp.plugin_name.clone();
-        }
+        rename_slots(&mut t.plugins, &b.plugins);
     }
 }
 
@@ -719,9 +778,7 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
         bus.muted = b.muted;
         bus.fx_bypassed = b.fx_bypassed;
         bus.is_return = b.is_return;
-        for (slot, pp) in bus.plugins.iter_mut().zip(b.plugins.iter()) {
-            slot.plugin_name = pp.plugin_name.clone();
-        }
+        rename_slots(&mut bus.plugins, &b.plugins);
     }
 }
 
@@ -732,7 +789,187 @@ fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
             bypassed: b.master_fx_bypassed,
         });
     }
-    for (slot, pp) in r.master.plugins.iter_mut().zip(b.master_plugins.iter()) {
-        slot.plugin_name = pp.plugin_name.clone();
+    rename_slots(&mut r.master.plugins, &b.master_plugins);
+}
+
+fn rename_slots(slots: &mut [PluginSlotState], saved: &[ProjectPlugin]) {
+    for slot in slots {
+        if let Some(pp) = saved.iter().find(|p| p.instance_id == slot.instance_id) {
+            slot.plugin_name = pp.plugin_name.clone();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin instances: which a diff restore keeps, and chain order
+// ---------------------------------------------------------------------------
+
+/// Every plugin instance `file` carries, with the chain that holds it.
+pub(super) fn plugin_owners(file: &ProjectFile) -> HashMap<u64, (PluginLocator, &ProjectPlugin)> {
+    let mut out = HashMap::new();
+    for pt in &file.tracks {
+        for pp in &pt.plugins {
+            out.insert(pp.instance_id, (PluginLocator::Track(pt.id), pp));
+        }
+    }
+    for pb in &file.busses {
+        for pp in &pb.plugins {
+            out.insert(pp.instance_id, (PluginLocator::Bus(pb.id), pp));
+        }
+    }
+    for pp in &file.master_plugins {
+        out.insert(pp.instance_id, (PluginLocator::Master, pp));
+    }
+    out
+}
+
+/// The plugin instances a diff restore keeps live (ARCH-01 A-13h): in
+/// both files, on the same chain, with the same `.clap` identity. Every
+/// other instance of `new` is *fresh* — added, then given its blob,
+/// bypass and parked params as a load does — and every other instance of
+/// `old` is removed. So an id whose identity changed (a relocated missing
+/// plugin, `update::plugin_replace`) is removed and re-added, which is
+/// what the full replay did to it. Empty after a `ClearAll`: everything
+/// is fresh.
+pub(super) fn kept_plugins(old: Option<&ProjectFile>, new: &ProjectFile) -> HashSet<u64> {
+    let Some(old) = old else {
+        return HashSet::new();
+    };
+    let before = plugin_owners(old);
+    plugin_owners(new)
+        .into_iter()
+        .filter(|(id, (owner, pp))| {
+            before.get(id).is_some_and(|(was_owner, was)| {
+                was_owner == owner
+                    && was.clap_plugin_id == pp.clap_plugin_id
+                    && was.clap_file_path == pp.clap_file_path
+            })
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// The plugins of `chain` a diff restore adds, in chain order.
+fn fresh<'p>(
+    chain: &'p [ProjectPlugin],
+    kept: &'p HashSet<u64>,
+) -> impl Iterator<Item = &'p ProjectPlugin> + 'p {
+    chain.iter().filter(|pp| !kept.contains(&pp.instance_id))
+}
+
+/// Diff arm of [`EntityOrder`]: every chain of `new` whose live order
+/// differs is moved into it, engine and mirror alike.
+fn order_live_chains(r: &mut Resonance, old: &ProjectFile, new: &ProjectFile) {
+    let kept = kept_plugins(Some(old), new);
+    let ids = |plugins: &[ProjectPlugin]| -> Vec<u64> {
+        plugins.iter().map(|p| p.instance_id).collect()
+    };
+    let Resonance {
+        registry,
+        master,
+        engine,
+        io,
+        ..
+    } = r;
+    for pt in &new.tracks {
+        if let Some(t) = registry.tracks.iter_mut().find(|t| t.id == pt.id) {
+            let track_id = t.id;
+            order_chain(&mut t.plugins, &ids(&pt.plugins), &kept, |instance_id, to_index| {
+                let _ = engine.send(AudioCommand::MovePlugin {
+                    track_id,
+                    instance_id,
+                    to_index,
+                });
+                io.restore_echoes.expect_plugin_moved(instance_id, to_index);
+            });
+        }
+    }
+    for pb in &new.busses {
+        if let Some(b) = registry.busses.iter_mut().find(|b| b.id == pb.id) {
+            let bus_id = b.id;
+            order_chain(&mut b.plugins, &ids(&pb.plugins), &kept, |instance_id, to_index| {
+                let _ = engine.send(AudioCommand::MovePluginInBus {
+                    bus_id,
+                    instance_id,
+                    to_index,
+                });
+                io.restore_echoes.expect_plugin_moved(instance_id, to_index);
+            });
+        }
+    }
+    order_chain(&mut master.plugins, &ids(&new.master_plugins), &kept, |instance_id, to_index| {
+        let _ = engine.send(AudioCommand::MovePluginInMaster {
+            instance_id,
+            to_index,
+        });
+        io.restore_echoes.expect_plugin_moved(instance_id, to_index);
+    });
+}
+
+/// Move `slots` into `target`'s order, one `send_move(instance, engine
+/// index)` per slot that has to move, mirroring each move at once.
+///
+/// On entry the chain is what the removals and the entity domains left:
+/// the kept slots in their old relative order, then the fresh ones in the
+/// order they were appended — the engine's order too, since it appends an
+/// add. Two passes, left to right:
+///
+/// 1. the kept slots into their target relative order (the fresh ones
+///    stay at the tail);
+/// 2. each fresh slot into its target position.
+///
+/// A move names an **engine** index ([`crate::plugin_chain::engine_slot_index`]):
+/// a slot whose plugin is missing on this machine holds its place in the
+/// app's chain but not in the engine's, and moving one sends nothing.
+/// Kept slots go first because they are the ones known to exist: a fresh
+/// slot is `Available` until its echo says otherwise, so a fresh plugin
+/// that turns out missing is still counted, and pass 2 can then place a
+/// later fresh plugin one engine slot off. That needs two plugins re-added
+/// by one restore, one of them missing and out of append order; the
+/// recovery path re-positions the missing one if it ever loads.
+///
+/// Sends nothing for a chain already in order. Ids in `target` that are
+/// not in `slots` are skipped; slots not in `target` stay at the end.
+pub(super) fn order_chain(
+    slots: &mut [PluginSlotState],
+    target: &[u64],
+    kept: &HashSet<u64>,
+    mut send_move: impl FnMut(PluginInstanceId, usize),
+) {
+    let present: Vec<u64> = target
+        .iter()
+        .copied()
+        .filter(|id| slots.iter().any(|s| s.instance_id == *id))
+        .collect();
+    let kept_order: Vec<u64> = present.iter().copied().filter(|id| kept.contains(id)).collect();
+    for (i, &id) in kept_order.iter().enumerate() {
+        place(slots, id, i, &mut send_move);
+    }
+    for (i, &id) in present.iter().enumerate() {
+        place(slots, id, i, &mut send_move);
+    }
+}
+
+fn place(
+    slots: &mut [PluginSlotState],
+    id: u64,
+    to: usize,
+    send_move: &mut impl FnMut(PluginInstanceId, usize),
+) {
+    let Some(from) = slots.iter().position(|s| s.instance_id == id) else {
+        return;
+    };
+    if from == to {
+        return;
+    }
+    if from > to {
+        slots[to..=from].rotate_right(1);
+    } else {
+        slots[from..=to].rotate_left(1);
+    }
+    // The engine index is the number of live plugins ahead of the slot
+    // once it has moved.
+    if !slots[to].availability.is_missing() {
+        send_move(id, crate::plugin_chain::engine_slot_index(slots, to));
     }
 }

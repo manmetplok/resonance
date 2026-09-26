@@ -198,8 +198,10 @@ fn a_diff_undo_sends_tempo_before_the_clips_and_only_changed_scalars() {
 /// The table itself, pinned: a domain added, dropped or moved is a
 /// decision, recorded in `docs/design/A-13-reconcile.md`. `Globals` feeds
 /// `Timeline` (the tempo map is rebuilt from the transport scalars) and
-/// the compose load precedes `Clips` (it resets the derived map). `Routing`
-/// (sends, then key routes) follows every entity it connects. Within
+/// the compose load precedes `Clips` (it resets the derived map). A diff
+/// restore's `Removals` (edges, then plugin instances and busses) precede
+/// every add (A-13h). `Routing` (sends, then key routes) follows every
+/// entity it connects. Within
 /// `Tail`, external instruments come before the lanes (a `DeviceParam` lane needs
 /// the device bindings) and freeze is last (a disk load's baseline
 /// fingerprints the lanes); derived clips follow the clips.
@@ -216,6 +218,8 @@ fn the_table_is_the_agreed_order() {
             (Stage::Timeline, "chord_track"),
             (Stage::Timeline, "markers"),
             (Stage::Timeline, "section_chord_trim"),
+            (Stage::Removals, "routing_removals"),
+            (Stage::Removals, "entity_removals"),
             (Stage::Entities, "tracks"),
             (Stage::Entities, "busses"),
             (Stage::Entities, "master"),
@@ -662,4 +666,41 @@ fn a_diff_undo_resorts_the_registry() {
     let ids: Vec<_> = app.test_registry().tracks.iter().map(|t| t.id).collect();
     assert_eq!(ids, vec![KICK + 1, KICK], "sorted by the restored .order");
     assert_eq!(app.test_registry().busses[0].name, "Drums");
+}
+
+/// Diff path (A-13h): the routing removals left `Sends` /
+/// `SidechainRoutes` for `Stage::Removals`, ahead of every entity command,
+/// so an edge is gone before any endpoint it names can be. They used to go
+/// out after the track, bus and master scalars and the plugin state. The
+/// engine's send and key-route tables are independent of those (design
+/// doc §10, §11), so only the position moves.
+#[test]
+fn a_diff_undo_removes_edges_before_any_entity_command() {
+    let mut app = app_with_routing();
+    let rx = app.test_capture_engine();
+    let mut target = app.test_snapshot_for_undo();
+    target.project.file.sends.clear();
+    target.project.file.sidechain_routes.clear();
+    target.project.file.tracks[0].volume = -3.0;
+    target.project.file.master_fx_bypassed = true;
+    let _ = drain(&rx);
+    app.test_begin_restore_from_snapshot(target);
+    let cmds = drain(&rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "an unchanged shape takes the diff path"
+    );
+    let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
+        cmds.iter().position(pred).expect("the diff replay sends it")
+    };
+    let send = pos(&|c| matches!(c, AudioCommand::RemoveAuxSend { send_id: SEND }));
+    let route = pos(&|c| matches!(c, AudioCommand::ClearSidechainRoute { plugin: MASTER_COMP }));
+    let volume = pos(&|c| matches!(c, AudioCommand::SetTrackVolume { track_id: KICK, .. }));
+    let master = pos(&|c| matches!(c, AudioCommand::SetMasterFxBypass { bypassed: true }));
+    assert!(
+        send < route && route < volume && volume < master,
+        "{send} < {route} < {volume} < {master}"
+    );
+    assert!(app.test_aux_sends().is_empty());
+    assert!(app.test_sidechain_routes().is_empty());
 }

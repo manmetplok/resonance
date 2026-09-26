@@ -3,13 +3,14 @@
 //!
 //! Shaped like `clips::AudioClips`: after a `ClearAll` (`old = None`) the
 //! mirror is emptied and every edge is sent; on the diff path the edges
-//! are reconciled against `old` — removals first, then only the edges that
-//! are new or changed. One body validates every edge it sends (both
-//! endpoints must exist, the source kind must be known), on every origin.
-//! On the diff path that is a no-op for any snapshot the app itself took:
-//! `structurally_compatible` makes the track, bus and plugin sets of `old`
-//! and `new` equal, and the live mirrors never hold an edge onto a missing
-//! endpoint (deleting an endpoint drops its edges).
+//! are reconciled against `old` — only the edges that are new or changed
+//! go out. The removals ran first, before any entity was removed
+//! (`removals::RoutingRemovals`, A-13h). One body validates every edge it
+//! sends (both endpoints must exist, the source kind must be known), on
+//! every origin. On the diff path that is a no-op for any snapshot the app
+//! itself took: the entity domains have just made the live bus and plugin
+//! sets the target's, and the live mirrors never hold an edge onto a
+//! missing endpoint (deleting an endpoint drops its edges).
 //!
 //! `Stage::Routing` runs after every track, bus and the master chain
 //! exist on both paths: the engine rejects a send naming an unregistered
@@ -19,14 +20,14 @@ use std::collections::{HashMap, HashSet};
 
 use resonance_audio::types::{AudioCommand, AuxSend, SendSource, SidechainRoute};
 
+use super::removals::kept_route_plugins;
 use super::{Reconcile, ReconcileCtx};
 use crate::project::{send_source_from_tag, ProjectFile, ProjectSend, ProjectSidechainRoute};
 use crate::Resonance;
 
 /// Whether an edge's source is a track or bus the app has registered.
 /// On the full path the registry is the replayed file's; on the diff path
-/// it is the live one, whose id sets `structurally_compatible` made equal
-/// to the target's.
+/// it is the live one, which `Entities` has just made the target's.
 fn source_exists(r: &Resonance, source: SendSource) -> bool {
     match source {
         SendSource::Track(id) => r.registry.tracks.iter().any(|t| t.id == id),
@@ -41,13 +42,14 @@ fn source_exists(r: &Resonance, source: SendSource) -> bool {
 ///   a load on top of another project would otherwise inherit routes into
 ///   busses that no longer exist), then every send goes out as an
 ///   `AddAuxSend` carrying its saved id, so send ids survive a reload.
-/// * Diff: every send `old` has and `new` lacks is removed FIRST, so the
+/// * Diff: every send `old` has and `new` lacks was removed FIRST, by
+///   `removals::RoutingRemovals` at the head of the restore, so the
 ///   reconciliation is order-independent: upserting first would check a
 ///   send that replaces another edge for feedback loops against a graph
 ///   that still holds the edge it replaces (undo across "delete bus A->B,
 ///   create bus B->A" would have the new edge rejected as a loop, then the
 ///   old one removed, leaving the engine with neither while the mirror
-///   shows the new one). Then every send that is new or changed goes out;
+///   shows the new one). Here every send that is new or changed goes out;
 ///   sends equal to `old`'s are left alone, so the common undo emits no
 ///   send traffic.
 ///
@@ -76,16 +78,8 @@ impl Reconcile for Sends {
                 r.aux.last_rejection = None;
                 HashMap::new()
             }
-            Some(old) => {
-                let target_ids: HashSet<u64> = new.sends.iter().map(|s| s.id).collect();
-                for sa in &old.sends {
-                    if !target_ids.contains(&sa.id) {
-                        let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id: sa.id });
-                        r.aux.remove(sa.id);
-                    }
-                }
-                old.sends.iter().map(|s| (s.id, s)).collect()
-            }
+            // The sends `new` lacks are already gone (`RoutingRemovals`).
+            Some(old) => old.sends.iter().map(|s| (s.id, s)).collect(),
         };
 
         for ps in &new.sends {
@@ -163,10 +157,13 @@ fn plugin_instance_ids(file: &ProjectFile) -> HashSet<u64> {
 ///   route), then every route goes out as `SetSidechainRoute` naming the
 ///   target plugin's saved instance id — the same id the replayed chain
 ///   handed the engine — so a route survives a reload without remapping.
-/// * Diff: every route `old` has and `new` lacks is cleared first (same
-///   order-independence rule as [`Sends`]; the stakes are lower, as a
-///   route simply replaces whatever its plugin had), then every route that
-///   is new or changed is set; unchanged routes are left alone.
+/// * Diff: every route of `old` that is not kept — `new` lacks it, or its
+///   plugin instance was removed or re-added
+///   (`removals::kept_route_plugins`) — was cleared first by
+///   `removals::RoutingRemovals` (same order-independence rule as
+///   [`Sends`]; the stakes are lower, as a route simply replaces whatever
+///   its plugin had). Here every route that is new or changed against a
+///   kept one is set; unchanged kept routes are left alone.
 ///
 /// A route whose source or target plugin is missing, or whose source kind
 /// is unknown, is dropped with a warning rather than mirrored: a phantom
@@ -184,18 +181,16 @@ impl Reconcile for SidechainRoutes {
                 r.sidechain.clear();
                 HashMap::new()
             }
+            // The routes that are not kept are already cleared
+            // (`RoutingRemovals`); one onto a re-added instance is sent
+            // again below.
             Some(old) => {
-                let target_plugins: HashSet<u64> =
-                    new.sidechain_routes.iter().map(|route| route.plugin_instance_id).collect();
-                for ra in &old.sidechain_routes {
-                    if !target_plugins.contains(&ra.plugin_instance_id) {
-                        let _ = r.engine.send(AudioCommand::ClearSidechainRoute {
-                            plugin: ra.plugin_instance_id,
-                        });
-                        r.sidechain.clear_plugin(ra.plugin_instance_id);
-                    }
-                }
-                old.sidechain_routes.iter().map(|route| (route.plugin_instance_id, route)).collect()
+                let kept = kept_route_plugins(old, new);
+                old.sidechain_routes
+                    .iter()
+                    .filter(|route| kept.contains(&route.plugin_instance_id))
+                    .map(|route| (route.plugin_instance_id, route))
+                    .collect()
             }
         };
         if new.sidechain_routes.is_empty() {
