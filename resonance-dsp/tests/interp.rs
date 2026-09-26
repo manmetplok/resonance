@@ -3,7 +3,8 @@
 //! B-spline HQ kernel and the linear Lo-fi circular read.
 
 use resonance_dsp::{
-    bspline6, hermite4, read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped,
+    bspline6, hermite4, lagrange6, read_bspline6_wrapped, read_hermite_wrapped,
+    read_linear_wrapped,
 };
 use std::f32::consts::TAU;
 
@@ -296,4 +297,42 @@ fn linear_circular_read_matches_integer_samples_and_wraps() {
     assert!((got - expected).abs() < 1e-6, "{got} vs {expected}");
     // Negative indices wrap like the other readers.
     assert!((read_linear_wrapped(&buf, -1.0) - buf[15]).abs() < 1e-6);
+}
+
+/// `lagrange6` is interpolating (hits every sample at `frac` 0 and 1) and
+/// reproduces polynomials up to degree 5 exactly — the property that gives
+/// the wavetable oscillator its bass image rejection (FU-G2a).
+#[test]
+fn lagrange6_reproduces_quintics_and_hits_samples() {
+    let f = |t: f32| 0.01 * t.powi(5) - 0.2 * t.powi(4) + 0.5 * t.powi(3) - t * t + 3.0 * t - 5.0;
+    let taps = [f(-2.0), f(-1.0), f(0.0), f(1.0), f(2.0), f(3.0)];
+    let read = |frac: f32| lagrange6(taps[0], taps[1], taps[2], taps[3], taps[4], taps[5], frac);
+    assert_eq!(read(0.0), f(0.0));
+    assert!((read(1.0) - f(1.0)).abs() < 1e-5);
+    for i in 0..=100 {
+        let frac = i as f32 / 100.0;
+        let (got, want) = (read(frac), f(frac));
+        assert!((got - want).abs() < 1e-4, "frac {frac}: {got} vs {want}");
+    }
+}
+
+/// On a sine at a sixth of the sample rate the 6-point Lagrange read is at
+/// least 10 dB more accurate than the 4-point Hermite one.
+#[test]
+fn lagrange6_beats_hermite_on_dense_content() {
+    let w = TAU / 6.0;
+    let s = |i: i32| (w * i as f32).sin();
+    let (mut e_h, mut e_l) = (0.0f64, 0.0f64);
+    for i in 0..64 {
+        for k in 1..8 {
+            let frac = k as f32 / 8.0;
+            let want = (w * (i as f32 + frac)).sin();
+            let h = hermite4(s(i - 1), s(i), s(i + 1), s(i + 2), frac);
+            let l = lagrange6(s(i - 2), s(i - 1), s(i), s(i + 1), s(i + 2), s(i + 3), frac);
+            e_h += ((h - want) as f64).powi(2);
+            e_l += ((l - want) as f64).powi(2);
+        }
+    }
+    let gain_db = 10.0 * (e_h / e_l).log10();
+    assert!(gain_db > 10.0, "lagrange6 only {gain_db:.1} dB better than hermite4");
 }

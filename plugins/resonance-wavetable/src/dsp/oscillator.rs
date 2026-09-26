@@ -1,5 +1,5 @@
 /// Wavetable oscillator with band-limited mip-map selection and cubic Hermite
-/// interpolation.
+/// interpolation (6-point Lagrange on the dense bass levels).
 ///
 /// The read is split into two halves:
 ///
@@ -8,7 +8,7 @@
 ///   frequency — are control-rate quantities (they change only when the mod
 ///   matrix ticks or portamento moves the pitch), yet it is where the
 ///   expensive `log2` lives.
-/// * [`read_tap`] does the per-sample work: two to four cubic Hermite reads
+/// * [`read_tap`] does the per-sample work: two to four interpolated reads
 ///   at the current phase, blended with the precomputed weights.
 ///
 /// The caller ([`crate::dsp::render`]) caches a [`TableTap`] per unison
@@ -35,6 +35,9 @@ pub struct TableTap {
     pub oct_frac: f32,
     pub frame_hi_needed: bool,
     pub oct_hi_needed: bool,
+    /// Read with the 6-point Lagrange kernel instead of cubic Hermite:
+    /// set for the dense bass levels (see [`HQ_INTERP_MAX_LEVEL`]).
+    pub hq_interp: bool,
     /// False when the table has no frames at all; [`read_tap`] returns 0.
     pub valid: bool,
 }
@@ -50,6 +53,15 @@ const TABLE_SAMPLE_RATE: f32 = 44_100.0;
 /// whose cubic-interpolation images are the one remaining source of
 /// inharmonic energy at low notes.
 const MAX_BAND_SAMPLE_RATE: f32 = 48_000.0;
+
+/// Highest mip level read with the 6-point Lagrange kernel. Levels up to
+/// here hold more than 256 partials in a 2048-sample table (level 3: 337,
+/// level 2: 674), where a 4-point cubic Hermite read's images — at
+/// `(2048 - h) * f`, folded at the output rate — left a -69 dB inharmonic
+/// floor on bass notes at 44.1/48 kHz (FU-G2a); Lagrange takes it below
+/// -80 dB. Sparser levels keep the cheaper Hermite read, whose images are
+/// already under -80 dB there, so the extra reads cost only bass notes.
+const HQ_INTERP_MAX_LEVEL: usize = 3;
 
 /// Width, in octaves, of the crossfade into the next (darker) level at the
 /// top of each level's range. Keeps the timbre continuous across a level
@@ -124,6 +136,7 @@ pub fn plan_tap(table: &Wavetable, position: f32, freq_hz: f32, sample_rate: f32
         oct_frac,
         frame_hi_needed,
         oct_hi_needed,
+        hq_interp: oct_lo <= HQ_INTERP_MAX_LEVEL,
         valid: true,
     }
 }
@@ -139,15 +152,23 @@ pub fn read_tap(table: &Wavetable, tap: &TableTap, phase: f64) -> f32 {
     }
 
     let idx = PhaseIndex::new(phase);
+    // One well-predicted branch per sample: `hq_interp` is fixed per tap.
+    let read = |t: &[f32; WAVETABLE_SIZE]| {
+        if tap.hq_interp {
+            idx.read6(t)
+        } else {
+            idx.read(t)
+        }
+    };
     let frame_lo = tap.frame_lo as usize;
     let oct_lo = tap.oct_lo as usize;
 
     let lo = if tap.oct_hi_needed {
-        let s00 = idx.read(table.mip(frame_lo, oct_lo));
-        let s01 = idx.read(table.mip(frame_lo, oct_lo + 1));
+        let s00 = read(table.mip(frame_lo, oct_lo));
+        let s01 = read(table.mip(frame_lo, oct_lo + 1));
         s00 + tap.oct_frac * (s01 - s00)
     } else {
-        idx.read(table.mip(frame_lo, oct_lo))
+        read(table.mip(frame_lo, oct_lo))
     };
 
     if !tap.frame_hi_needed {
@@ -155,11 +176,11 @@ pub fn read_tap(table: &Wavetable, tap: &TableTap, phase: f64) -> f32 {
     }
 
     let hi = if tap.oct_hi_needed {
-        let s10 = idx.read(table.mip(frame_lo + 1, oct_lo));
-        let s11 = idx.read(table.mip(frame_lo + 1, oct_lo + 1));
+        let s10 = read(table.mip(frame_lo + 1, oct_lo));
+        let s11 = read(table.mip(frame_lo + 1, oct_lo + 1));
         s10 + tap.oct_frac * (s11 - s10)
     } else {
-        idx.read(table.mip(frame_lo + 1, oct_lo))
+        read(table.mip(frame_lo + 1, oct_lo))
     };
 
     lo + tap.frame_frac * (hi - lo)
@@ -206,6 +227,23 @@ impl PhaseIndex {
         let c2 = s0 - 2.5 * s1 + 2.0 * s2 - 0.5 * s3;
         let c3 = 0.5 * (s3 - s0) + 1.5 * (s1 - s2);
         ((c3 * frac + c2) * frac + c1) * frac + c0
+    }
+
+    /// Read a single mip level with 6-point Lagrange interpolation; same
+    /// provably-in-bounds power-of-two wrap as [`Self::read`].
+    #[inline]
+    fn read6(&self, table: &[f32; WAVETABLE_SIZE]) -> f32 {
+        const MASK: usize = WAVETABLE_SIZE - 1;
+        let i = self.i;
+        resonance_dsp::lagrange6(
+            table[i.wrapping_sub(2) & MASK],
+            table[i.wrapping_sub(1) & MASK],
+            table[i & MASK],
+            table[(i + 1) & MASK],
+            table[(i + 2) & MASK],
+            table[(i + 3) & MASK],
+            self.frac,
+        )
     }
 }
 

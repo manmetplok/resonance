@@ -276,6 +276,10 @@ fn output_matches_golden() {
     // (peak delta <= 0.05); `init_single` (a sine, identical in every level)
     // did not.
     //
+    // And for FU-G2a: mip levels 0-3 (bass) are read with 6-point Lagrange
+    // instead of cubic Hermite. Only scenarios playing below ~70 Hz moved
+    // (25580 samples, peak delta 2.2e-4, 84 dB below signal).
+    //
     // Every transform applied to the DSP itself is a caching or hoisting
     // change that re-uses the identical expression, so all of those are
     // bit-exact against the golden — with exactly one deliberate exception:

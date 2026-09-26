@@ -25,14 +25,13 @@ const GUARD_BINS: f64 = 10.0;
 /// [`INTERP_FLOOR_BELOW_HZ`] up.
 const MAX_ALIAS_DB: f64 = -80.0;
 /// Below about D2 the selected levels (2 and 3) hold 337-674 partials in a
-/// 2048-sample table, and the cubic Hermite read's interpolation images —
-/// at `(2048 - h) * f`, folded — set a floor of about -69 dB there
-/// (measured -68.6 dB worst at 44.1/48 kHz; clean at 96 kHz, where the
-/// images fold onto harmonics). That is the interpolator, not the mip
-/// selection: no alias-free level choice changes it short of darkening the
-/// bass to a few kHz. It is guarded, not hidden, by [`LOW_NOTE_MAX_DB`].
+/// 2048-sample table. A 4-point cubic Hermite read's interpolation images
+/// — at `(2048 - h) * f`, folded — set a floor of about -69 dB there at
+/// 44.1/48 kHz (FU-G2a), so those levels are read with a 6-point Lagrange
+/// interpolator instead. The bass is held to the same bound as the rest of
+/// the keyboard; the split is kept so a regression names its region.
 const INTERP_FLOOR_BELOW_HZ: f32 = 70.0;
-const LOW_NOTE_MAX_DB: f64 = -65.0;
+const LOW_NOTE_MAX_DB: f64 = -78.0;
 
 /// Basic table: frames sine, triangle, saw, square.
 const BASIC: usize = 0;
