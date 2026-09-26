@@ -125,6 +125,11 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 "Plugin must declare at least one output port",
             ));
         }
+        if output_ports.len() > shared::MAX_OUTPUT_PORTS {
+            return Err(PluginError::Message(
+                "At most 8 output ports are supported",
+            ));
+        }
         for port in &output_ports {
             if port.channel_count != 1 && port.channel_count != 2 {
                 return Err(PluginError::Message(

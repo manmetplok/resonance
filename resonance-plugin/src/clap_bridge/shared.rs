@@ -13,6 +13,11 @@ use clack_plugin::prelude::*;
 use crate::gui::{EditorFactory, PluginEditor};
 use crate::plugin::{OutputPortSpec, PluginEvent, ResonancePlugin};
 
+/// Most output ports a bridged plugin may declare. `process()` builds its
+/// per-block port views in a stack array of this size (no audio-thread
+/// allocation), so `new_shared` refuses a larger layout at load (PLG-09).
+pub(crate) const MAX_OUTPUT_PORTS: usize = 8;
+
 // ---------------------------------------------------------------------------
 // Param metadata stored in SharedState
 // ---------------------------------------------------------------------------

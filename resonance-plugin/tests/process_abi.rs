@@ -531,3 +531,79 @@ fn a_host_that_connects_fewer_output_ports_than_declared_is_survivable() {
     // Still alive on the next block, which is the real assertion.
     harness.run_empty();
 }
+
+// ---------------------------------------------------------------------------
+// Too many output ports fail at load, not in every process() (PLG-09)
+// ---------------------------------------------------------------------------
+
+/// One port more than the bridge's per-block view array holds.
+struct NinePortPlugin {
+    gain: FloatParam,
+}
+
+impl ResonancePlugin for NinePortPlugin {
+    const CLAP_ID: &'static str = "test.abi-nine-ports";
+    const NAME: &'static str = "NinePorts";
+    const VENDOR: &'static str = "test";
+    const VERSION: &'static str = "0.0.0";
+    const DESCRIPTION: &'static str = "";
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::INSTRUMENT];
+    const INPUT_CHANNELS: Option<u32> = None;
+
+    fn output_layout(&self) -> Vec<OutputPortSpec> {
+        (0..9)
+            .map(|i| OutputPortSpec {
+                name: format!("Out {i}").into(),
+                channel_count: 2,
+            })
+            .collect()
+    }
+
+    fn new() -> Self {
+        Self {
+            gain: FloatParam::new("gain", "Gain", 1.0, FloatRange::Linear { min: 0.0, max: 1.0 }),
+        }
+    }
+    fn param_count(&self) -> usize {
+        1
+    }
+    fn param(&self, _index: usize) -> &dyn Param {
+        &self.gain
+    }
+    fn initialize(&mut self, _sample_rate: f32, _max_buffer_size: u32) -> bool {
+        true
+    }
+    fn reset(&mut self) {}
+    fn process(
+        &mut self,
+        _outputs: &mut [OutputBuffer<'_>],
+        _frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+    }
+}
+
+/// The 8-port limit used to be a `debug_assert!` plus an array index: in a
+/// release build a 9-port plugin loaded fine and then panicked in every
+/// `process()`. It must be refused at instantiation instead.
+#[test]
+fn a_plugin_declaring_more_than_eight_output_ports_fails_to_load() {
+    let entry = PluginEntry::load_from_clack::<SinglePluginEntry<ClapBridge<NinePortPlugin>>>(
+        c"nine-ports.clap",
+    )
+    .expect("bundle entry init");
+    let host_info = HostInfo::new("test-host", "test", "https://example.com", "0.0.0").unwrap();
+    let instance = PluginInstance::<TestHost>::new(
+        |_| TestHostShared,
+        |_| (),
+        &entry,
+        c"test.abi-nine-ports",
+        &host_info,
+    );
+    assert!(
+        instance.is_err(),
+        "a plugin with 9 output ports must fail to instantiate"
+    );
+}

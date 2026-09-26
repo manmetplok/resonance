@@ -6,7 +6,7 @@ use clack_plugin::events::event_types::NoteExpressionType;
 use clack_plugin::prelude::*;
 
 use super::ports::sidechain_port_index;
-use super::shared::{ClapAudioProcessor, ClapMainThread, ClapShared};
+use super::shared::{ClapAudioProcessor, ClapMainThread, ClapShared, MAX_OUTPUT_PORTS};
 use crate::plugin::{
     ControlEvent, EventIterator, KeyBuffer, NoteEvent, OutputBuffer, PluginEvent, ResonancePlugin,
     TempoInfo,
@@ -470,15 +470,8 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 
         // Build a transient slice of OutputBuffer views over the scratch.
         // Uses a stack array to avoid heap allocation on the audio thread.
-        // A plugin declaring more ports than the array holds is a plugin
-        // bug: caught by the debug_assert in debug builds, and by the
-        // array's bounds check (panic, not silent truncation) in release.
-        const MAX_OUTPUT_PORTS: usize = 8;
-        debug_assert!(
-            self.output_scratch.len() <= MAX_OUTPUT_PORTS,
-            "plugin declares {} output ports; the CLAP bridge supports at most {MAX_OUTPUT_PORTS}",
-            self.output_scratch.len(),
-        );
+        // `new_shared` refuses a layout with more ports than the array
+        // holds, so a plugin cannot get this far with one (PLG-09).
         let mut port_views_arr: [std::mem::MaybeUninit<OutputBuffer<'_>>; MAX_OUTPUT_PORTS] =
             [const { std::mem::MaybeUninit::uninit() }; MAX_OUTPUT_PORTS];
         let mut port_views_len = 0;
