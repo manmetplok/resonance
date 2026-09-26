@@ -173,6 +173,16 @@ impl EngineHandlerHarness {
         });
     }
 
+    /// Run the real `AudioCommand::SetBpm` handler.
+    pub fn set_bpm(&mut self, bpm: f32) {
+        self.with_ctx(|ctx, _| transport::handle_set_bpm(ctx, bpm));
+    }
+
+    /// The flat tempo of the published tempo map.
+    pub fn published_bpm(&self) -> f32 {
+        self.tempo_map.load().bpm
+    }
+
     /// Run the real `AudioCommand::ClearAll` handler.
     pub fn clear_all(&mut self) {
         self.with_ctx(tracks::handle_clear_all);
