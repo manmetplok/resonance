@@ -159,7 +159,11 @@ pub fn to_freeze_cache(
         bits_per_sample: FREEZE_BIT_DEPTH,
         sample_format: hound::SampleFormat::Float,
     };
-    let mut writer = hound::WavWriter::create(&path, spec)
+    // Written to a temp file and renamed into place once complete (code
+    // review ENG-13): a failed or cancelled refreeze keeps the previous
+    // cache intact. Every early return drops `output`, removing the temp.
+    let output = super::PartialFile::new(&path);
+    let mut writer = hound::WavWriter::create(output.temp(), spec)
         .map_err(|e| format!("Failed to create freeze-cache WAV: {e}"))?;
 
     reset_plugins(plugins);
@@ -203,7 +207,7 @@ pub fn to_freeze_cache(
         // is this render's own, so it is not cleared.
         if cancel.load(Ordering::Relaxed) {
             drop(writer);
-            let _ = std::fs::remove_file(&path);
+            drop(output);
             return Err(FREEZE_CANCELLED_MSG.into());
         }
 
@@ -242,7 +246,7 @@ pub fn to_freeze_cache(
                 // Drop the partial file so a half-written cache never
                 // sits next to its expected output.
                 drop(writer);
-                let _ = std::fs::remove_file(&path);
+                drop(output);
                 return Err(format!("Freeze-cache WAV write error: {e}"));
             }
         }
@@ -262,6 +266,7 @@ pub fn to_freeze_cache(
     writer
         .finalize()
         .map_err(|e| format!("Freeze-cache WAV finalize error: {e}"))?;
+    output.commit()?;
 
     progress(1.0);
 

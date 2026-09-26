@@ -527,3 +527,51 @@ fn freeze_renders_the_tracks_plugin_automation() {
     assert_ne!(swept.render_fingerprint, reswept.render_fingerprint);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+// ---------------------------------------------------------------------------
+// ENG-13 — a failed export never destroys the file it would replace
+// ---------------------------------------------------------------------------
+
+/// Every `*.partial` file left in `dir`.
+fn partials(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "partial"))
+        .collect()
+}
+
+#[test]
+fn a_failed_export_leaves_the_previous_file_untouched() {
+    let e = Engine::with_clip(tone(SR as usize / 4, 0.25));
+    let path = tmp("eng13");
+    let dir = path.parent().unwrap().to_path_buf();
+    std::fs::write(&path, b"previous good export").unwrap();
+
+    // A render that stops before finishing (the cancel path stands in for
+    // any mid-render failure: every one of them used to have truncated
+    // the target already, when the sink was built).
+    let events = e.export(&path, &ExportSettings::default_wav(), true);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AudioEvent::ExportError {
+                kind: ExportErrorKind::Cancelled,
+                ..
+            }
+        )),
+        "export must report the cancel: {events:?}"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("the previous file must still exist"),
+        b"previous good export",
+        "a failed export must not touch the previous file"
+    );
+    assert!(partials(&dir).is_empty(), "no temp file may be left behind");
+
+    // A successful export replaces it, and leaves no temp file either.
+    assert_completed(&e.export(&path, &ExportSettings::default_wav(), false));
+    assert!(peak(&read_f32_wav(&path)) > 0.1, "the new export is in place");
+    assert!(partials(&dir).is_empty(), "no temp file may be left behind");
+    let _ = std::fs::remove_dir_all(&dir);
+}

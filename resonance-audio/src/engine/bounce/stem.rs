@@ -650,7 +650,10 @@ pub fn write_stem_wav(
         bits_per_sample: bit_depth.bits(),
         sample_format: bit_depth.format(),
     };
-    let mut writer = hound::WavWriter::create(path, spec)
+    // Temp file + rename on success (code review ENG-13): a failed write
+    // leaves any previous file at `path` intact and no partial behind.
+    let output = super::PartialFile::new(path);
+    let mut writer = hound::WavWriter::create(output.temp(), spec)
         .map_err(|e| format!("Failed to create WAV file: {e}"))?;
 
     match bit_depth {
@@ -682,5 +685,6 @@ pub fn write_stem_wav(
 
     writer
         .finalize()
-        .map_err(|e| format!("WAV finalize error: {e}"))
+        .map_err(|e| format!("WAV finalize error: {e}"))?;
+    output.commit()
 }

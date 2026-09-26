@@ -34,6 +34,7 @@ use super::render::{
     ChunkScratch, BOUNCE_CHUNK,
 };
 use super::resample::ResampleStage;
+use super::PartialFile;
 
 /// Which engine-event family an export run reports through. The legacy
 /// `BounceToWav` shim keeps emitting `Bounce*` events (`Bounce` variant);
@@ -281,16 +282,18 @@ fn render_range(
 }
 
 /// Drop the partial output file and report a cancel. Shared by every
-/// export pass so a cancel never leaves a half-rendered file behind.
-/// The cancel token is per-render, so there is nothing to clear here.
+/// export pass so a cancel never leaves a half-rendered file behind —
+/// and, since the render writes to a temp file (code review ENG-13),
+/// never touches the file at the target path either. The cancel token is
+/// per-render, so there is nothing to clear here.
 fn cancel_cleanup(
     sink: Box<dyn EncoderSink>,
-    path: &str,
+    output: PartialFile,
     reporter: ExportReporter,
     event_tx: &Sender<AudioEvent>,
 ) {
     drop(sink);
-    let _ = std::fs::remove_file(path);
+    drop(output);
     reporter.error(event_tx, ExportErrorKind::Cancelled, "Bounce cancelled".into());
 }
 
@@ -385,7 +388,14 @@ pub(crate) fn run_export(
     // Build the encoder sink. Unavailable encoders (e.g. MP3/Opus) error
     // here *before any file is written*, so the app can offer the WAV/FLAC
     // fallback without a partial file lingering on disk.
-    let mut sink = match build_sink(&settings.format, out_sr, std::path::Path::new(&path)) {
+    //
+    // The sink writes to a sibling temp file, renamed over `path` only once
+    // the export is complete (code review ENG-13): every error / cancel
+    // return below drops `output`, which removes the temp file and leaves
+    // whatever was at `path` untouched. Declared before `sink` so the
+    // encoder's file handle is closed before the temp file is removed.
+    let output = PartialFile::new(&path);
+    let mut sink = match build_sink(&settings.format, out_sr, output.temp()) {
         Ok(s) => s,
         Err(e) => {
             reporter.error(event_tx, (&e).into(), e.message().to_string());
@@ -451,7 +461,7 @@ pub(crate) fn run_export(
             },
         ) {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, reporter, event_tx);
+                cancel_cleanup(sink, output, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -491,7 +501,7 @@ pub(crate) fn run_export(
         );
         match outcome {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, reporter, event_tx);
+                cancel_cleanup(sink, output, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -536,7 +546,7 @@ pub(crate) fn run_export(
         );
         match outcome {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, reporter, event_tx);
+                cancel_cleanup(sink, output, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -556,8 +566,15 @@ pub(crate) fn run_export(
         }
     }
     reporter.progress(event_tx, ExportPhase::Encode, 1.0);
-    match sink.finalize(&settings.metadata) {
-        Ok(bytes) => reporter.complete(event_tx, path, achieved_lufs, achieved_dbtp, bytes),
-        Err(e) => reporter.error(event_tx, (&e).into(), e.message().to_string()),
+    let bytes = match sink.finalize(&settings.metadata) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            reporter.error(event_tx, (&e).into(), e.message().to_string());
+            return;
+        }
+    };
+    match output.commit() {
+        Ok(()) => reporter.complete(event_tx, path, achieved_lufs, achieved_dbtp, bytes),
+        Err(message) => reporter.error(event_tx, ExportErrorKind::Io, message),
     }
 }
