@@ -31,6 +31,8 @@ Hard rules — these are load-bearing for build times, testability, and cognitiv
 - `cocoa-plugin-gui` is the macOS editor runtime — same public `Editor` surface, inverted mechanics: the window lives on the AppKit main thread (which AppKit requires) and the `Send` handle dispatches onto it; rendering is NSOpenGLView + the same egui_glow painter. Windowing body macOS-only, stub elsewhere. Plugins reach whichever runtime matches the platform through `resonance_plugin::editor_host` (migration tracked in `macos-editor-plan.md` item 3c).
 - `resonance-app` is allowed to depend on everything; it is the integration layer.
 
+These rules are tests, not only prose: `tools/arch-invariants/tests/architecture.rs` reads `cargo metadata` and fails the suite on an internal dependency that is not an edge of the diagram, a plugin manifest or source that names a platform runtime, a GUI toolkit or windowing stack outside its crate, an inline `#[cfg(test)]` beyond the documented exception, or a new top-level file in `resonance-app/tests/` (ARCH-10). Adding a crate means deciding its layer here and adding its row there.
+
 When extending: add new building blocks to the lowest layer they fit, not the most convenient one. A new filter goes in `resonance-dsp`, not in the plugin that needs it first.
 
 ## Plugin Pattern

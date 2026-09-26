@@ -1,0 +1,13 @@
+[package]
+name = "arch-invariants"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The workspace's architecture rules as tests: reads `cargo metadata` and walks the tree, links nothing (ARCH-10)."
+
+# An empty library so cargo has a target; everything is in tests/.
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+serde_json.workspace = true
