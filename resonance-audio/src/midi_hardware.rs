@@ -21,8 +21,61 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
+use thiserror::Error;
 
-use crate::types::TrackId;
+use crate::types::{EngineError, EngineErrorKind, TrackId};
+
+/// Failure opening or connecting a hardware MIDI input/output/control-
+/// surface port. `surface` names which registry raised it (`"midi"` or
+/// `"control-surface"`), matching the historical message text (`"create
+/// midi input: ..."`, `"control-surface input port not found: ..."`, ...).
+#[derive(Debug, Error)]
+pub enum MidiHardwareError {
+    #[error("create {surface} input: {source}")]
+    CreateInput {
+        surface: &'static str,
+        #[source]
+        source: midir::InitError,
+    },
+    #[error("create {surface} output: {source}")]
+    CreateOutput {
+        surface: &'static str,
+        #[source]
+        source: midir::InitError,
+    },
+    #[error("{surface} input port not found: {name}")]
+    InputPortNotFound { surface: &'static str, name: String },
+    #[error("{surface} output port not found: {name}")]
+    OutputPortNotFound { surface: &'static str, name: String },
+    #[error("connect {surface} input {name}: {source}")]
+    ConnectInput {
+        surface: &'static str,
+        name: String,
+        #[source]
+        source: midir::ConnectError<MidiInput>,
+    },
+    #[error("connect {surface} output {name}: {source}")]
+    ConnectOutput {
+        surface: &'static str,
+        name: String,
+        #[source]
+        source: midir::ConnectError<MidiOutput>,
+    },
+}
+
+impl From<MidiHardwareError> for EngineError {
+    fn from(e: MidiHardwareError) -> Self {
+        let kind = match &e {
+            MidiHardwareError::InputPortNotFound { .. }
+            | MidiHardwareError::OutputPortNotFound { .. } => EngineErrorKind::NotFound,
+            MidiHardwareError::CreateInput { .. }
+            | MidiHardwareError::CreateOutput { .. }
+            | MidiHardwareError::ConnectInput { .. }
+            | MidiHardwareError::ConnectOutput { .. } => EngineErrorKind::Io,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
 
 /// A hardware MIDI port the user can pick from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,7 +212,7 @@ impl MidiInputRegistry {
         track_id: TrackId,
         device_name: Option<String>,
         channel_filter: Option<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<(), MidiHardwareError> {
         // Live update: if a connection already exists for this track
         // and only the channel filter changed, swap the atomic in
         // place rather than re-opening.
@@ -231,14 +284,19 @@ fn open_input(
     track_id: TrackId,
     channel_filter: Option<u8>,
     tx: Sender<LiveMidiEvent>,
-) -> Result<ActiveInputConn, String> {
-    let input =
-        MidiInput::new("resonance-input").map_err(|e| format!("create midi input: {e}"))?;
+) -> Result<ActiveInputConn, MidiHardwareError> {
+    let input = MidiInput::new("resonance-input").map_err(|e| MidiHardwareError::CreateInput {
+        surface: "midi",
+        source: e,
+    })?;
     let port = input
         .ports()
         .into_iter()
         .find(|p| input.port_name(p).map(|n| n == name).unwrap_or(false))
-        .ok_or_else(|| format!("midi input port not found: {name}"))?;
+        .ok_or_else(|| MidiHardwareError::InputPortNotFound {
+            surface: "midi",
+            name: name.to_string(),
+        })?;
 
     let filter = Arc::new(AtomicU8::new(encode_channel_filter(channel_filter)));
     let filter_callback = Arc::clone(&filter);
@@ -260,7 +318,11 @@ fn open_input(
             },
             (),
         )
-        .map_err(|e| format!("connect midi input {name}: {e}"))?;
+        .map_err(|e| MidiHardwareError::ConnectInput {
+            surface: "midi",
+            name: name.to_string(),
+            source: e,
+        })?;
 
     Ok(ActiveInputConn {
         device_name: name.to_string(),
@@ -367,7 +429,7 @@ impl ControlSurfaceInput {
     ///
     /// Wired to `AudioCommand::SetControlSurfaceInput` in todo #429 (E2).
     #[allow(dead_code)]
-    pub fn set_input(&mut self, device_name: Option<String>) -> Result<(), String> {
+    pub fn set_input(&mut self, device_name: Option<String>) -> Result<(), MidiHardwareError> {
         // Already connected to the requested device — nothing to do.
         if let Some(active) = &self.conn {
             if Some(&active.device_name) == device_name.as_ref() {
@@ -417,14 +479,21 @@ impl ControlSurfaceInput {
 fn open_control_input(
     name: &str,
     tx: Sender<LiveControlEvent>,
-) -> Result<ActiveControlConn, String> {
-    let input = MidiInput::new("resonance-control-surface")
-        .map_err(|e| format!("create control-surface input: {e}"))?;
+) -> Result<ActiveControlConn, MidiHardwareError> {
+    let input = MidiInput::new("resonance-control-surface").map_err(|e| {
+        MidiHardwareError::CreateInput {
+            surface: "control-surface",
+            source: e,
+        }
+    })?;
     let port = input
         .ports()
         .into_iter()
         .find(|p| input.port_name(p).map(|n| n == name).unwrap_or(false))
-        .ok_or_else(|| format!("control-surface input port not found: {name}"))?;
+        .ok_or_else(|| MidiHardwareError::InputPortNotFound {
+            surface: "control-surface",
+            name: name.to_string(),
+        })?;
 
     let tx_callback = tx;
     let conn = input
@@ -441,7 +510,11 @@ fn open_control_input(
             },
             (),
         )
-        .map_err(|e| format!("connect control-surface input {name}: {e}"))?;
+        .map_err(|e| MidiHardwareError::ConnectInput {
+            surface: "control-surface",
+            name: name.to_string(),
+            source: e,
+        })?;
 
     Ok(ActiveControlConn {
         device_name: name.to_string(),
@@ -520,7 +593,7 @@ impl MidiOutputRegistry {
         &mut self,
         track_id: TrackId,
         device_name: Option<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), MidiHardwareError> {
         // Drop any previous assignment for this track first, sending
         // All Notes Off so a hardware synth doesn't sustain a stale
         // note across the reassign.
@@ -544,16 +617,27 @@ impl MidiOutputRegistry {
             return Ok(());
         }
 
-        let output = MidiOutput::new("resonance-output")
-            .map_err(|e| format!("create midi output: {e}"))?;
+        let output = MidiOutput::new("resonance-output").map_err(|e| {
+            MidiHardwareError::CreateOutput {
+                surface: "midi",
+                source: e,
+            }
+        })?;
         let port = output
             .ports()
             .into_iter()
             .find(|p| output.port_name(p).map(|n| n == name).unwrap_or(false))
-            .ok_or_else(|| format!("midi output port not found: {name}"))?;
+            .ok_or_else(|| MidiHardwareError::OutputPortNotFound {
+                surface: "midi",
+                name: name.clone(),
+            })?;
         let conn = output
             .connect(&port, "resonance-output-conn")
-            .map_err(|e| format!("connect midi output {name}: {e}"))?;
+            .map_err(|e| MidiHardwareError::ConnectOutput {
+                surface: "midi",
+                name: name.clone(),
+                source: e,
+            })?;
 
         self.connections.insert(
             name.clone(),
