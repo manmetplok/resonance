@@ -16,7 +16,7 @@ master and updates this table. Agents do **not** edit this file.
 | A1 project open/load | STATE-01/UPD-01, UPD-02, STATE-04 | opus | merged | 46c87319 |
 | A2 recording+plugin undo | STATE-02, STATE-03 | opus | in progress |  |
 | B compose sections | VIEW-03, VIEW-04, VIEW-05 | opus | merged | 1f1ae03d |
-| C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | in progress | |
+| C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | merged | 302009d3 |
 | D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | in progress |  |
 | E control beat units | CTL-01 | opus | merged | 5f63160a |
 | F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | in progress | |
@@ -460,7 +460,7 @@ framing and the CLAP state stream were checked and found correct.
 
 Paths are relative to `resonance-app/src/` unless stated otherwise. Every finding was traced through view → message → update handler. Items marked "spot-checked" were re-read at the cited lines during consolidation.
 
-### [ ] VIEW-01 — Delete/Backspace while editing notes deletes the whole MIDI clip being edited
+### [x] VIEW-01 — Delete/Backspace while editing notes deletes the whole MIDI clip being edited — fixed @2c9eddcc (KeyFocus click-to-own)
 - **Severity:** high
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
@@ -470,7 +470,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Pass `editing_midi_clip.is_some()` into `TimelineCanvas` and skip clip deletion while it is set. More generally, act on Delete only when `cursor.is_over(bounds)` or behind `crate::focus::any_text_input_focused()` returning false. The piano-roll canvas needs the same guard. The simplest structure is one app-level Delete router.
 - **Verification:** Add a module to the `timeline` group binary: `Resonance::new_for_test_with_capture()`, open a MIDI clip in the editor, select a note, send `keyboard::Event::KeyPressed(Named::Delete)` through the view, then assert the captured commands contain a note removal and no `DeleteMidiClip`. No current test sends Delete or Backspace.
 
-### [ ] VIEW-02 — Dragging a note past a neighbour starts moving the neighbour (stale `note_index` after the re-sort)
+### [x] VIEW-02 — Dragging a note past a neighbour starts moving the neighbour (stale `note_index` after the re-sort) — fixed @91a200af
 - **Severity:** high
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
@@ -553,7 +553,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Hash `p.bypassed` in both the track and bus fingerprints, along with the other fields listed. Extend the table-driven fingerprint tests with these facets.
 - **Verification:** The fingerprint tests live in the `mixer` group binary. Add a case asserting that flipping `bypassed` changes the fingerprint, plus a golden of the inspector with a bypassed plugin.
 
-### [ ] VIEW-09 — Vocal-roll shortcuts fire while typing in right-rail text fields ("s" toggles a slur, Backspace deletes a note)
+### [x] VIEW-09 — Vocal-roll shortcuts fire while typing in right-rail text fields ("s" toggles a slur, Backspace deletes a note) — fixed @2c9eddcc
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
@@ -864,7 +864,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Pick one unit. Signature beats are the right choice for `PositionSpec`, because that is what `SongPosition` already reports. In `resolve_position`, convert `beat - 1` to ticks with `beat_len_ticks(denominator of the bar)` from the tempo map (the same helper `samples_per_signature_beat` uses). Also reject `beat >= numerator + 1` instead of letting it roll into the next bar. Document in `common.rs` (`SongPosition` / `PositionSpec`), in the server `INSTRUCTIONS` string (`resonance-mcp/src/server.rs:31`) and in the `transport_seek` / `clip_*` tool descriptions that bar-level beats are meter beats while clip- and section-relative `*_beat` fields are quarter notes. Mirror that in the drumming, arranging and song-structure skills. This changes one resolver plus docs, so it lands as one slice (it touches no tool or wire shape).
 - **Verification:** Add to the `control` group binary (`resonance-app/tests/control/control_transport.rs`): set 6/8, `transport.seek {bar:2, beat:4}`, then assert `song.summary.playhead == {bar:2, beat:4}` and that the sample equals `bar_to_sample(1) + 3 eighths`. Add the same round trip for `clip.split` and a `meter.measure` range.
 
-### [ ] CTL-02 — `notes.edit` that moves a note earlier/later AND changes duration/velocity edits the wrong note
+### [x] CTL-02 — `notes.edit` that moves a note earlier/later AND changes duration/velocity edits the wrong note — fixed @91a200af
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
