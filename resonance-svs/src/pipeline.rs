@@ -196,7 +196,7 @@ fn preprocess_acoustic(
     speaker_embeddings: &SpeakerEmbeddings,
     selected_speaker: Option<&str>,
 ) -> Result<PreprocessedAcoustic> {
-    let tokens = phonemes_to_tokens(phoneme_map, &seg.ph_seq);
+    let tokens = phonemes_to_tokens(phoneme_map, &seg.ph_seq)?;
     let durations = phoneme_durations_to_frames(&seg.ph_dur, frame_length);
     let target_frames: i64 = durations.iter().sum();
     let n_frames = target_frames.max(0) as usize;
@@ -325,30 +325,34 @@ fn preprocess_acoustic(
     })
 }
 
-fn phonemes_to_tokens(map: &HashMap<String, i64>, phonemes: &[String]) -> Vec<i64> {
-    // Unknown phonemes fall back to token 0 (typically `<PAD>` / `AP`),
-    // which silently corrupts the rendered segment if the caller's g2p
-    // emits a symbol the voicebank doesn't have. Log the first few
-    // unknowns per call so the issue isn't completely silent — once
-    // per phoneme is enough to identify a missing mapping without
-    // flooding the logs.
-    let mut warned: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    phonemes
+/// Map phoneme symbols to the voicebank's token ids.
+///
+/// A symbol the dictionary lacks is an error listing every missing symbol
+/// (each once, in order of first appearance). It used to fall back to
+/// token 0 (`<PAD>` / `AP`), which rendered breath or silence where the
+/// phoneme should be while the render reported success; callers are
+/// expected to substitute to the voicebank's inventory before this point.
+pub fn phonemes_to_tokens(map: &HashMap<String, i64>, phonemes: &[String]) -> Result<Vec<i64>> {
+    let mut missing: Vec<&str> = Vec::new();
+    let tokens: Vec<i64> = phonemes
         .iter()
         .map(|ph| {
-            if let Some(&tok) = map.get(ph) {
-                tok
-            } else {
-                if warned.insert(ph.as_str()) {
-                    eprintln!(
-                        "resonance-svs: phoneme {:?} not in voicebank dictionary — substituting token 0",
-                        ph
-                    );
+            map.get(ph).copied().unwrap_or_else(|| {
+                if !missing.contains(&ph.as_str()) {
+                    missing.push(ph.as_str());
                 }
                 0
-            }
+            })
         })
-        .collect()
+        .collect();
+    if missing.is_empty() {
+        Ok(tokens)
+    } else {
+        Err(anyhow!(
+            "phoneme(s) not in the voicebank dictionary: {}",
+            missing.join(", ")
+        ))
+    }
 }
 
 /// Convert phoneme durations (seconds) into frame counts, using the same accumulate-then-diff
