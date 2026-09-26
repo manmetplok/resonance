@@ -144,9 +144,15 @@ mod live {
         // Land well inside the modal window, not on its edge.
         std::thread::sleep(Duration::from_millis(100));
 
-        // The destroy dispatch-syncs onto the main queue, which the modal
-        // loop services: teardown runs nested inside the in-flight frame.
+        // The destroy is queued onto the main queue (asynchronously from
+        // this thread, PLG-05), which the modal loop services: teardown
+        // runs nested inside the in-flight frame. Wait for it to land.
+        let alive = editor.liveness();
         editor.destroy();
+        assert!(
+            wait_for(|| !alive.load(Ordering::SeqCst), Duration::from_secs(5)),
+            "the queued teardown never ran"
+        );
         let mid_modal = !MODAL_FINISHED.load(Ordering::SeqCst);
 
         assert!(
