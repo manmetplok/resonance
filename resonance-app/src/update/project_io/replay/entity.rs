@@ -178,47 +178,8 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
     track.midi_output_channel = pt.midi_output_channel;
     r.registry.tracks.push(track);
     r.registry.next_track_order += 1;
-
-    // Re-establish external-instrument mode. The route (MIDI out device +
-    // channel, audio-return device + port) and the monitor / record-arm
-    // flags were already replayed via the track fields above; here we
-    // register the bank/program/latency config with the engine
-    // (`SetExternalInstrument`) and mirror it into the app map. The actual
-    // Bank Select + Program Change patch is re-sent once for every external
-    // track after the whole project finishes replaying (see
-    // `engine_events::project_io::all_cleared`), so a freshly-powered synth
-    // lands on its saved patch and any offline device is reported then. The
-    // runtime offline flags start clear and are re-checked on the next ping.
-    // This is also the undo slow path's only restore of external state; the
-    // fast path's is `Resonance::restore_external_instruments`.
-    if let Some(ext) = &pt.external_instrument {
-        let mut state = ExternalInstrumentState::new(track_id);
-        state.bank = ext.bank;
-        state.program = ext.program;
-        state.latency_offset_samples = ext.latency_offset_samples;
-        state.device_id = ext.device_id.clone();
-        let _ = r.engine.send(AudioCommand::SetExternalInstrument {
-            config: state.config(),
-        });
-
-        // Device preset (epic #40, doc #201 §5). Rehydrate the engine's
-        // per-track param bindings so any restored `DeviceParam` automation
-        // lane (re-applied at the tail of the load) maps correctly. Resolve
-        // the params from the embedded user-authored copy first (portable
-        // projects carry it), else the registry (bundled devices, or a user
-        // device installed on this machine). An unresolved id sends an empty
-        // map — harmless, and the selection is kept so a later rescan can
-        // recover it. No selection ⇒ no command (back-compat: identical to a
-        // plain external track).
-        if ext.device_id.is_some() {
-            let params = ext.device_params(&r.device_registry);
-            let _ = r
-                .engine
-                .send(AudioCommand::SetTrackDeviceParams { track_id, params });
-        }
-
-        r.external_instruments.insert(track_id, state);
-    }
+    // External-instrument mode is restored after every track, by the
+    // `ExternalInstruments` reconcile domain (ARCH-01 A-13b).
 }
 
 pub(super) fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {

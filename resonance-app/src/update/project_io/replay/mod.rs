@@ -16,15 +16,16 @@
 //!
 //! Domains migrated to the `Reconcile` driver (`super::reconcile`, ARCH-01
 //! A-13) are not restored inline here: `replay_globals` runs
-//! `Stage::Timeline` and the tail of [`replay_loaded_project`] runs
-//! `Stage::Content`, the same stages `try_diff_replay` runs.
+//! `Stage::Timeline`, `replay_vocal` runs `Stage::Clips` and the end of
+//! [`replay_loaded_project`] runs `Stage::Content` and `Stage::Tail` — the
+//! same stages, in the same sequence, `try_diff_replay` runs.
 
 mod entity;
 mod restore;
 
 use resonance_audio::types::*;
 
-use super::reconcile::{reconcile_stage, Origin, ReconcileCtx, Stage};
+use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
 use crate::project::{LoadedProject, ProjectFile};
 use crate::state::*;
 use crate::util::db_to_gain;
@@ -59,59 +60,33 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // `io.restoring_undo` marks an undo/redo's full replay (set at its
     // `ClearAll`, cleared by `all_cleared` after this returns); the
     // replay reads it only through the ctx.
-    let ctx = ReconcileCtx {
-        origin: if r.io.restoring_undo {
-            Origin::UndoFull
-        } else {
-            Origin::DiskLoad
-        },
-        project_dir: Some(&loaded.project_dir),
+    let origin = if r.io.restoring_undo {
+        Origin::UndoFull
+    } else {
+        Origin::DiskLoad
     };
     r.io.reconcile_trace.clear();
     // Will be set by the caller (OpenPathSelected); an undo/redo's caller
-    // puts this one back, which the freeze restore needs meanwhile.
+    // puts this one back. The freeze restore needs it meanwhile, so the
+    // ctx carries it.
     let live_project_path = r.io.project_path.take();
-    // An undo/redo never lowers the derived-clip id counter (ARCH-01
-    // A-6); `load_from_project` resets it, so remember it here.
-    let derived_counter_floor = ctx
-        .origin
-        .is_undo()
-        .then_some(r.compose.next_derived_clip_id);
+    let ctx = ReconcileCtx {
+        origin,
+        project_dir: Some(&loaded.project_dir),
+        live: LiveCarry {
+            project_path: live_project_path.as_deref(),
+            // An undo/redo never lowers the derived-clip id counter
+            // (ARCH-01 A-6); `load_from_project` resets it, so remember it
+            // here.
+            derived_counter_floor: LiveCarry::derived_counter_floor(r, origin),
+        },
+    };
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
     // before re-installing entries from the project. Without this,
     // loading a project on top of an existing one keeps stale lyrics
     // for clips that no longer exist.
     r.compose.vocal_audio.clear();
-
-    // Freeze status is restored from `ProjectTrack.freeze` at the end of
-    // the replay (`replay_freeze`). A disk load drops the previously open
-    // project's statuses, batch and UPD-05 baselines now. An undo/redo
-    // keeps the live statuses until then, so `apply_freeze_restore` can
-    // see which caches the restore retires, and keeps the baselines: a
-    // track it brings back `Frozen` must still go stale on its next
-    // content edit, and the baseline it was frozen with is not in the
-    // snapshot (FU-H2b). The fingerprint is keyed by track id and slot
-    // position, both stable across the replay. Nothing in the replay
-    // reads the statuses.
-    if ctx.origin.is_undo() {
-        r.freeze.queue = None;
-    } else {
-        r.freeze.reset();
-    }
-
-    // Missing-plugin warning (ba doc #275 P5, todo #1309). A genuine
-    // disk load starts with a clean slate: every slot is re-added
-    // optimistically and the engine's refusals raise the warning again
-    // for THIS project. An undo/redo replay re-adds the same plugins and
-    // gets the same refusals, so it would re-raise the modal on every
-    // history step — the same reason the missing-FILE modal is opened
-    // only for disk loads (`engine_events::project_io::all_cleared`).
-    if !ctx.origin.is_undo() {
-        r.missing_plugins.reset();
-    } else {
-        r.missing_plugins.dismiss();
-    }
 
     // Point the engine at the loaded project's directory so that
     // subsequent imports and recordings stream into it.
@@ -133,65 +108,23 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     replay_midi_clips(r, project, &loaded);
 
     // Rebuild vocal-derived state from the restored clips.
-    replay_vocal(r, project, &loaded, derived_counter_floor);
+    replay_vocal(r, project, &loaded, &ctx);
 
     // Re-impose the saved plugin-slot order and refresh the side-index.
     finalize_plugin_chains(r, &saved_plugin_order);
 
-    // Restore independent sub-states. An undo/redo keeps the live A/B
-    // monitor; a disk load takes the one the project was saved with.
-    let reference_monitor = if ctx.origin.is_undo() {
-        ReferenceMonitorSource::Live
-    } else {
-        ReferenceMonitorSource::File
-    };
-    restore_references(r, project, reference_monitor);
-    // Pool (after the clips, whose asset refs it counts), quantize,
-    // performance, track groups, and the cycle-record take lanes (each
-    // audio take's WAV resolved against the project directory, so a take
-    // whose file travelled with the bundle comes back and one that didn't
-    // is flagged rather than lost).
+    // References, pool (after the clips, whose asset refs it counts),
+    // quantize, performance, track groups, and the cycle-record take lanes
+    // (each audio take's WAV resolved against the project directory, so a
+    // take whose file travelled with the bundle comes back and one that
+    // didn't is flagged rather than lost).
     reconcile_stage(r, Stage::Content, None, project, &ctx);
 
-    // Parameter-automation lanes (epic #14 / epic #40). Reconcile the
-    // engine + app mirror to exactly the saved set: `restore_automation_lanes`
-    // clears any lane left over from a previously-open project (ClearAll does
-    // not touch engine automation) and (re-)sends every saved lane. This runs
-    // last, so `DeviceParam` lanes are (re-)applied *after* each external
-    // track's `SetTrackDeviceParams` (dispatched in `replay_track`) — the
-    // engine already knows the bindings by the time the lane arrives. Legacy
-    // projects carry no lanes, so this reduces to clearing stale ones and is
-    // otherwise a no-op. An undo's diff replay makes the same call.
-    r.restore_automation_lanes(&project.automation_lanes);
-
-    // Last: a disk load's freeze baseline fingerprints the replayed
-    // content, automation lanes included.
-    replay_freeze(r, project, &ctx, live_project_path.as_deref());
-}
-
-/// Restore every track's freeze status from `ProjectTrack.freeze` (ARCH-01
-/// A-4). A disk load re-attaches each frozen track's cache to the engine
-/// (ba todo #577); an undo/redo reconciles against the live statuses the
-/// way the diff replay does, deleting the cache of a freeze it undoes —
-/// against the live project path, which the undo caller restores after the
-/// replay (`engine_events::project_io::all_cleared`).
-fn replay_freeze(
-    r: &mut Resonance,
-    project: &ProjectFile,
-    ctx: &ReconcileCtx<'_>,
-    live_project_path: Option<&std::path::Path>,
-) {
-    if ctx.origin.is_undo() {
-        r.apply_freeze_restore(&project.tracks, live_project_path);
-    } else if let Some(project_dir) = ctx.project_dir {
-        let freezes: Vec<_> = project
-            .tracks
-            .iter()
-            .filter(|t| t.freeze.is_frozen)
-            .map(|t| (t.id, t.freeze.clone()))
-            .collect();
-        r.rehydrate_frozen_tracks(project_dir, &freezes);
-    }
+    // External instruments, then the automation lanes (a `DeviceParam`
+    // lane needs the device bindings the first sends), the missing-plugin
+    // warning, and freeze last (a disk load's baseline fingerprints the
+    // replayed content, lanes included).
+    reconcile_stage(r, Stage::Tail, None, project, &ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,10 +253,9 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // leave the new one keying plugins from the old one's tracks.
     // `replay_sidechain_routes` re-seeds it from the project file.
     r.sidechain.clear();
-    // Drop external-instrument mode so the load starts clean. Both a fresh
-    // project load and an undo's full replay re-assert it per-track from
-    // `ProjectTrack.external_instrument` in `replay_track`.
-    r.external_instruments.clear();
+    // External-instrument mode is dropped and re-asserted by its own
+    // reconcile domain (`ExternalInstruments`, `Stage::Tail`); nothing in
+    // between reads it.
     // The cycle-record take lanes are cleared by their own reconcile
     // domain (`reconcile::app_side::TakeGroups`), just before it re-seeds
     // them; nothing in between reads them.
@@ -675,19 +607,18 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
 }
 
 /// Rebuild vocal-derived state that depends on the already-restored MIDI and
-/// audio clips: the `derived_clips` section→clip map (used by the compose
-/// view) and the vocal-audio clip map (so the next Generate Vocal correctly
+/// audio clips: the [`Stage::Clips`] domains (the `derived_clips`
+/// section→clip map the compose view uses) and the vocal-audio clip map (so the next Generate Vocal correctly
 /// tears down old clips rather than stacking on top of them).
 fn replay_vocal(
     r: &mut Resonance,
     project: &ProjectFile,
     loaded: &LoadedProject,
-    derived_counter_floor: Option<u64>,
+    ctx: &ReconcileCtx<'_>,
 ) {
-    // The saved map (ARCH-01 A-6), keeping only entries whose clip this
-    // replay installed — `ClearAll` wiped anything else. A legacy file
-    // gets the positional rebuild (`rebuild_derived_clips`).
-    r.restore_derived_clips(project, false, derived_counter_floor);
+    // The derived-clip map (ARCH-01 A-6), keeping only entries whose clip
+    // this replay installed — `ClearAll` wiped anything else.
+    reconcile_stage(r, Stage::Clips, None, project, ctx);
 
     // Rebuild the vocal audio clip map so subsequent regen tear-downs
     // find the loaded clips and clean them up — otherwise the next

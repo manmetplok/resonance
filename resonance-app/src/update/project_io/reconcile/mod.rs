@@ -14,6 +14,7 @@
 //! domains in table order.
 
 mod app_side;
+mod restored;
 
 use std::path::Path;
 
@@ -55,6 +56,41 @@ pub struct ReconcileCtx<'a> {
     /// `LoadedProject::project_dir` on the full paths, the live
     /// `io.project_path` on the diff path (`None` for an untitled project).
     pub project_dir: Option<&'a Path>,
+    /// Live state an undo keeps, captured by the entry point before
+    /// anything is restored.
+    pub live: LiveCarry<'a>,
+}
+
+/// Live state an undo/redo restore keeps but the restore itself would
+/// overwrite before the domain that needs it runs (ARCH-01 A-13b). Each
+/// entry point captures it at its top — before `replay_loaded_project`
+/// takes `io.project_path` and `ComposeState::load_from_project` resets the
+/// derived counter — and hands it to every domain through the ctx.
+///
+/// Live state a restore does *not* overwrite before its domain runs stays
+/// in `Resonance` and is read there under the origin: the freeze statuses
+/// (nothing in the replay touches them until `Freeze`) and the reference
+/// A/B monitor (`restore_references` takes it out of `r.reference`
+/// itself).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveCarry<'a> {
+    /// The live project's `.rproj` path, whose sibling directory holds the
+    /// freeze caches an undo retires. The full replay `take()`s
+    /// `io.project_path` (the `AllCleared` handler puts it back after), so
+    /// it is carried here; the diff path clones it. `None` for an untitled
+    /// project.
+    pub project_path: Option<&'a Path>,
+    /// The derived-clip id counter before the restore, which an undo never
+    /// lowers (ARCH-01 A-6). `None` on a disk load.
+    pub derived_counter_floor: Option<u64>,
+}
+
+impl LiveCarry<'_> {
+    /// The derived-counter floor for a restore of `origin`: the live
+    /// counter on an undo, none on a disk load.
+    pub(crate) fn derived_counter_floor(r: &Resonance, origin: Origin) -> Option<u64> {
+        origin.is_undo().then_some(r.compose.next_derived_clip_id)
+    }
 }
 
 /// One project domain's restore, shared by every [`Origin`].
@@ -79,12 +115,23 @@ pub(crate) trait Reconcile {
 pub enum Stage {
     /// Tempo events, chord track, markers. Full path: inside
     /// `replay_globals`, after `SetBpm` and before the chord trim (which
-    /// reads the meter). Diff path: after external instruments.
+    /// reads the meter). Diff path: after `apply_compose`, the first of
+    /// the four stages it runs back to back.
     Timeline,
-    /// App-side content restored whole. Full path: after the clips (the
-    /// pool counts their asset refs) and references. Diff path: right
-    /// after `Timeline`.
+    /// State derived from the restored clips: the derived-clip map. Full
+    /// path: right after the MIDI clips are replayed. Diff path: after
+    /// `Timeline`.
+    Clips,
+    /// App-side content restored whole, and the references. Full path:
+    /// after the plugin chains are finalised (the pool counts the clips'
+    /// asset refs). Diff path: after `Clips`.
     Content,
+    /// Domains that must see everything else restored: external
+    /// instruments, then the automation lanes (a `DeviceParam` lane needs
+    /// the engine's device bindings), the missing-plugin warning, and
+    /// freeze last (a disk load's baseline fingerprints the replayed
+    /// content, lanes included). The end of both paths' restore.
+    Tail,
 }
 
 type ReconcileFn =
@@ -113,13 +160,23 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::TempoEvents>(Stage::Timeline),
     domain::<app_side::ChordTrack>(Stage::Timeline),
     domain::<app_side::Markers>(Stage::Timeline),
+    // After the MIDI and audio clips it filters against.
+    domain::<restored::DerivedClips>(Stage::Clips),
     // After the clips: the pool counts their asset refs. The full path's
     // order.
+    domain::<restored::References>(Stage::Content),
     domain::<app_side::Pool>(Stage::Content),
     domain::<app_side::Quantize>(Stage::Content),
     domain::<app_side::Performance>(Stage::Content),
     domain::<app_side::TrackGroups>(Stage::Content),
     domain::<app_side::TakeGroups>(Stage::Content),
+    // External instruments before the lanes (a `DeviceParam` lane needs
+    // the device bindings), freeze last.
+    domain::<restored::ExternalInstruments>(Stage::Tail),
+    domain::<restored::AutomationLanes>(Stage::Tail),
+    domain::<restored::MissingPlugins>(Stage::Tail),
+    // Last: a disk load's baseline fingerprints everything above.
+    domain::<restored::Freeze>(Stage::Tail),
 ];
 
 /// Run every [`DOMAINS`] entry of `stage`, in table order.

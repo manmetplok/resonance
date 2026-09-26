@@ -34,7 +34,7 @@ use crate::project::{
 use crate::util::db_to_gain;
 use crate::Resonance;
 
-use super::reconcile::{reconcile_stage, Origin, ReconcileCtx, Stage};
+use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
 use super::replay::restore_drum_patterns;
 use super::serialize::build_project_file;
 
@@ -61,6 +61,10 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     let ctx = ReconcileCtx {
         origin: Origin::UndoDiff,
         project_dir: project_path.as_deref(),
+        live: LiveCarry {
+            project_path: project_path.as_deref(),
+            derived_counter_floor: LiveCarry::derived_counter_floor(r, Origin::UndoDiff),
+        },
     };
 
     // -- Global transport / master -------------------------------------
@@ -119,43 +123,29 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file);
 
-    // -- Reference (A/B) content ---------------------------------------
-    // From `ProjectFile::references` / `reference_settings`, reconciled
-    // against the engine's live references (no `ClearAll` here, so they
-    // are all still loaded). The monitor state is left alone.
-    super::replay::reconcile_references(r, target_file);
-
-    // -- Track freeze status (detach/delete caches no longer frozen) ----
-    // From `ProjectTrack::freeze`, as `replay_loaded_project` does on the
-    // slow path (A-4).
-    r.apply_freeze_restore(&target_file.tracks, project_path.as_deref());
-
-    // -- External-instrument config -----------------------------------
-    // From `ProjectTrack::external_instrument`, as `replay_track` does on
-    // the slow path. Entering or leaving external mode never alters the
-    // project shape, so it always takes this fast path.
-    r.restore_external_instruments(target_file);
-
     // -- Migrated domains (ARCH-01 A-13) -------------------------------
-    // Tempo / signature events, chord track, markers. Tempo stays where
-    // the diff path always sent it (the full path sends it before the
-    // clips; roadmap group (4) moves it there on this path too).
+    // All four stages, back to back: this path has no inline code left
+    // between them. Tempo / signature events, chord track, markers. Tempo
+    // is still sent after the clips here (the full path sends it before
+    // them; roadmap group (4) moves it there on this path too).
     reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
-    // Pool, quantize, performance, track groups, take lanes: app-side
-    // content the structural check ignores, restored verbatim. The pool
-    // counts the clips' asset refs `apply_audio_clips` mirrored; the take
-    // lanes' `RestoreTakeGroups` replaces the engine's store wholesale, so
-    // an undo that deleted a take does not resurrect it (no `ClearAll`
-    // here).
+    // The derived-clip map: the snapshot's with every entry, pending
+    // echoes included (FU-H2a, A-6). After `apply_compose` reset it.
+    reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
+    // References (reconciled against the engine's live ones, no
+    // `ClearAll` here), then pool, quantize, performance, track groups,
+    // take lanes: app-side content the structural check ignores, restored
+    // verbatim. The pool counts the clips' asset refs `apply_audio_clips`
+    // mirrored; the take lanes' `RestoreTakeGroups` replaces the engine's
+    // store wholesale, so an undo that deleted a take does not resurrect it
+    // (no `ClearAll` here).
     reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
 
-    // -- Automation lanes ----------------------------------------------
-    // From `ProjectFile::automation_lanes`, as `replay_loaded_project`
-    // does on the slow path: clear lanes that went away, re-send those
-    // that changed. Lanes never alter the project shape, so the
-    // structural check ignores them. After the external-instrument
-    // restore, so a `DeviceParam` lane lands on known bindings.
-    r.restore_automation_lanes(&target_file.automation_lanes);
+    // External instruments, then the automation lanes (a `DeviceParam`
+    // lane lands on known bindings), freeze last (detach/delete caches no
+    // longer frozen). None alters the project shape, so the structural
+    // check ignores them.
+    reconcile_stage(r, Stage::Tail, Some(&current), target_file, &ctx);
 
     // -- Sort track / bus registry so view-layer invariant holds -------
     r.registry.resort_tracks();
@@ -166,8 +156,9 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // Rebuild runtime-only caches that aren't captured in the snapshot.
     // Mirrors the tail end of `replay_loaded_project` so the Compose tab
     // shows the right vocal audio clips after the restore. The derived
-    // MIDI clip map is *not* rebuilt here: `apply_compose` restored the
-    // snapshot's from `ProjectFile::derived_clips` (FU-H2a, A-6).
+    // MIDI clip map is *not* rebuilt here: the `DerivedClips` domain
+    // restored the snapshot's from `ProjectFile::derived_clips` (FU-H2a,
+    // A-6).
     use std::collections::HashSet;
     let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
         .registry
@@ -1027,9 +1018,9 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile) {
     // Section definitions / placements — drum arrangements included, from
     // `ProjectSectionDefinition::arrangement` — come back through
     // `load_from_project`, which clears runtime-only sub-state — the
-    // derived-clip counter included, which an undo must never lower
+    // derived-clip map and counter included; the `DerivedClips` domain
+    // restores both afterwards, the counter from the floor the ctx carries
     // (ARCH-01 A-6).
-    let derived_counter_floor = r.compose.next_derived_clip_id;
     r.compose
         .load_from_project(&b.section_definitions, &b.section_placements);
     // Restore the drum pattern bank. Modern snapshots persist
@@ -1038,10 +1029,6 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile) {
     // project loader does. Unlike the full load, an all-empty snapshot
     // clears the bank rather than keeping the seeded default.
     restore_drum_patterns(&mut r.compose, b, true);
-    // After `apply_midi_clips`, so the counter is reserved past the
-    // restored clips. The snapshot's map with every entry, pending echoes
-    // included: see `restore_derived_clips` (FU-H2a, A-6).
-    r.restore_derived_clips(b, true, Some(derived_counter_floor));
     // Lyrics from `ProjectMidiClip::vocal_lyrics`, installed exactly as
     // the full replay does (`replay_midi_clips`). After `apply_midi_clips`,
     // so the note counts they are padded to are the snapshot's; the clip
