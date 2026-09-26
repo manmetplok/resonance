@@ -12,8 +12,23 @@
 use iced::Task;
 use resonance_audio::types::{AudioCommand, ClipId, TrackType};
 
-use crate::message::{Message, VocalTuningMessage};
+use crate::message::Message;
 use crate::Resonance;
+
+/// Vocal pitch-editor (graphical tuning) messages, doc #160. This todo
+/// (#359) wires only the editor open/close lifecycle: opening on a vocal
+/// clip requests pitch analysis (`AudioCommand::AnalyzeClipPitch`) and the
+/// detected contour/notes arrive back via `AudioEvent::ClipPitchDetected`
+/// to populate [`crate::state::ClipState::vocal_tuning`]. The per-note /
+/// global edit variants and the editor view land in later todos.
+#[derive(Debug, Clone)]
+pub enum VocalTuningMessage {
+    /// Open the pitch editor on the given audio clip and kick off pitch
+    /// analysis. A no-op unless the clip exists on a vocal track.
+    OpenPitchEditor(ClipId),
+    /// Close the pitch editor, clearing the open-editor state.
+    ClosePitchEditor,
+}
 
 pub fn handle(r: &mut Resonance, m: VocalTuningMessage) -> Task<Message> {
     match m {

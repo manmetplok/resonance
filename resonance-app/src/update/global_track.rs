@@ -1,9 +1,37 @@
 use iced::Task;
 use resonance_audio::types::AudioCommand;
 
-use crate::message::{GlobalTrackMessage, Message};
-use crate::state;
+use crate::message::Message;
+use crate::state::{self, SelectedGlobalEvent};
 use crate::Resonance;
+
+#[derive(Debug, Clone)]
+pub enum GlobalTrackMessage {
+    /// Add a tempo change event at the given bar with the given BPM.
+    AddTempoEvent { bar: u32, bpm: f32 },
+    /// Update an existing tempo event in-place (drag interaction).
+    UpdateTempoEvent { index: usize, bar: u32, bpm: f32 },
+    /// Start dragging a tempo event (undo begin + select).
+    StartTempoDrag(usize),
+    /// Finish dragging a tempo event (undo commit).
+    EndTempoDrag,
+    /// Add a time signature change event at the given bar.
+    AddSignatureEvent {
+        bar: u32,
+        numerator: u8,
+        denominator: u8,
+    },
+    /// Update an existing signature event's numerator or denominator.
+    UpdateSignatureEvent {
+        index: usize,
+        numerator: u8,
+        denominator: u8,
+    },
+    /// Select an event on a global track.
+    SelectEvent(Option<SelectedGlobalEvent>),
+    /// Delete the currently selected global track event.
+    DeleteSelectedEvent,
+}
 
 impl Resonance {
     /// Rebuild the GUI-side tempo map from the current events and send the

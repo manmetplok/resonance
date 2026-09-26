@@ -1,10 +1,180 @@
 use iced::Task;
-use resonance_audio::quantize::{self, GrooveTemplate};
-use resonance_audio::types::{AudioCommand, ClipId, MidiNote};
+use resonance_audio::quantize::{self, Division, GrooveTemplate, QuantizeMode};
+use resonance_audio::types::{AudioCommand, ClipId, MidiNote, TrackId};
 
-use crate::message::{Message, MidiEditorMessage};
+use crate::message::Message;
+use crate::state::{GridChoice, GrooveSelection};
 use crate::update::clips;
 use crate::Resonance;
+
+#[derive(Debug, Clone)]
+pub enum MidiEditorMessage {
+    OpenMidiEditor(ClipId),
+    /// Open the currently selected MIDI clip (if any) in the piano roll editor.
+    OpenSelectedMidiClip,
+    CloseMidiEditor,
+    AddNote {
+        clip_id: ClipId,
+        note: u8,
+        start_tick: u64,
+        duration_ticks: u64,
+        velocity: f32,
+    },
+    RemoveNote {
+        clip_id: ClipId,
+        note_index: usize,
+    },
+    /// Remove every currently-selected note from `clip_id` in one edit
+    /// (the piano roll's Delete/Backspace on a multi-note selection).
+    RemoveSelectedNotes {
+        clip_id: ClipId,
+    },
+    MoveNote {
+        clip_id: ClipId,
+        note_index: usize,
+        new_start_tick: u64,
+        new_note: u8,
+    },
+    ResizeNote {
+        clip_id: ClipId,
+        note_index: usize,
+        new_duration_ticks: u64,
+    },
+    /// Set one note's velocity in place (control endpoint `notes.edit`,
+    /// doc #265, todo #1155). The piano roll has no velocity-drag yet, so
+    /// this variant exists for the control surface; undoable + frozen-
+    /// input-gated exactly like the other single-note edits.
+    SetNoteVelocity {
+        clip_id: ClipId,
+        note_index: usize,
+        velocity: f32,
+    },
+    /// Replace a clip's whole note array in one edit (control endpoints
+    /// `notes.insert_many` / `notes.replace_all`, ba doc #269 FR-5).
+    /// The caller passes the final, sorted array; the engine stores it
+    /// and echoes one `MidiNotesEdited`. One undo entry and one engine
+    /// round trip for the whole batch — writing a 400-note part
+    /// note-by-note would cost 400 of each.
+    SetClipNotes {
+        clip_id: ClipId,
+        notes: Vec<resonance_audio::types::MidiNote>,
+    },
+    /// Replace the selection with a single note, or clear it (`None`).
+    /// Used by a plain click and by the vocal roll's single-select path.
+    SelectNote {
+        note_index: Option<usize>,
+    },
+    /// Toggle one note's membership in the selection (shift/ctrl-click).
+    ToggleNoteSelection {
+        note_index: usize,
+    },
+    /// Apply a rubber-band marquee result: the notes whose rectangles fall
+    /// inside the drag rect. `additive` (shift held) unions with the
+    /// current selection instead of replacing it.
+    SelectNotesInRect {
+        indices: Vec<usize>,
+        additive: bool,
+    },
+    /// Select every note in the open clip (Ctrl/Cmd+A).
+    SelectAllNotes,
+    /// Drop the whole selection (click on empty space).
+    ClearNoteSelection,
+    PreviewNote(TrackId, u8),
+    StopPreview(TrackId, u8),
+    ScrollY(f32),
+    /// Vocal-roll only: toggle the OpenUtau slur marker on the i-th
+    /// note of `clip_id`. `+` continuation ↔ the auto-syllabified
+    /// surface form. Lives on this enum so the vocal roll's key
+    /// handlers can dispatch through the same router as the other
+    /// note edits.
+    ToggleSlur {
+        clip_id: ClipId,
+        note_index: usize,
+    },
+
+    // -- Bulk timing edits (quantize / humanize / groove), doc #163, epic #25 --
+    // These operate on the *open* MIDI editor clip, so they carry no
+    // `clip_id`: the handler reads the active editor and the current
+    // multi-note selection (#389), falling back to the whole clip when the
+    // selection is empty. Each dispatches one bulk `AudioCommand` (#388)
+    // that the engine applies atomically and mirrors back as a single
+    // `MidiNotesEdited`; the pre-dispatch undo snapshot captures the prior
+    // notes so the whole op is one undo step.
+    /// Quantize the current selection (or whole clip) toward `grid`.
+    Quantize {
+        grid: Division,
+        /// Blend toward the grid, `0.0..=1.0` (`1.0` snaps exactly).
+        strength: f32,
+        /// Swing applied to odd grid steps, `0.0..=1.0`.
+        swing: f32,
+        mode: QuantizeMode,
+        /// Snap note-offs to the grid as well as note-ons.
+        quantize_ends: bool,
+        /// Apply the strength blend repeatedly (soft/iterative quantize).
+        iterative: bool,
+    },
+    /// Humanize the current selection (or whole clip) with bounded,
+    /// seeded timing + velocity jitter. `seed` is `None` for ordinary
+    /// invocations — the handler draws one fresh seed per invocation so a
+    /// single edit is reproducible (and captured as one undo step); a new
+    /// invocation re-rolls. Tests pass `Some(_)` for determinism.
+    Humanize {
+        /// Maximum absolute timing offset in ticks.
+        timing: u32,
+        /// Velocity jitter fraction, `0.0..=1.0`.
+        vel: f32,
+        seed: Option<u64>,
+    },
+    /// Apply the named groove template to the current selection (or whole
+    /// clip). `template_id` names a stock groove today; user/extracted
+    /// grooves land with the library-persistence slice (#395).
+    ApplyGroove {
+        template_id: String,
+        /// Template blend, `0.0..=1.0`.
+        strength: f32,
+    },
+    /// Extract a groove template from the open clip at `grid` resolution.
+    /// Reads the whole clip (selection-independent); emits
+    /// `AudioEvent::GrooveExtracted` and does not modify the notes.
+    ExtractGroove {
+        grid: Division,
+    },
+
+    // -- Quantize panel controls (todo #392) --
+    // These write the Quantize panel's settings
+    // (`Resonance::midi_quantize`); none of them touch the notes. The
+    // panel's Apply button reads those settings to build the bulk
+    // `Quantize` message above. Pure view-state edits, so undo skips them.
+    /// Set the quantize grid division.
+    SetQuantizeGrid(GridChoice),
+    /// Set the quantize strength, `0.0..=1.0`.
+    SetQuantizeStrength(f32),
+    /// Set the swing amount, `0.0..=1.0`.
+    SetQuantizeSwing(f32),
+    /// Set the quantize mode (start-only vs start+length).
+    SetQuantizeMode(QuantizeMode),
+    /// Toggle snapping note-ends to the grid.
+    SetQuantizeEnds(bool),
+    /// Toggle iterative/soft quantize.
+    SetQuantizeIterative(bool),
+    /// Set the Humanize timing-jitter amount, in ticks (clamped to
+    /// `0..=`[`crate::state::HUMANIZE_TIMING_MAX_TICKS`]).
+    SetHumanizeTiming(u32),
+    /// Set the Humanize velocity-jitter fraction, `0.0..=1.0`.
+    SetHumanizeVelocity(f32),
+
+    // -- Groove extract / apply panel controls (todo #394) --
+    // Pure view-state edits to the Quantize panel's groove fields
+    // (`Resonance::midi_quantize`); none touch the notes, so undo skips
+    // them. The Extract / Apply buttons read these to build the bulk
+    // `ExtractGroove` / `ApplyGroove` messages above.
+    /// Set the name for the next "Extract groove" capture.
+    SetGrooveName(String),
+    /// Select a groove (stock or user-extracted) in the apply picker.
+    SetGrooveSelection(GrooveSelection),
+    /// Set the groove apply strength, `0.0..=1.0`.
+    SetGrooveStrength(f32),
+}
 
 pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
     match m {

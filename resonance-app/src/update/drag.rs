@@ -16,10 +16,60 @@
 //! lanes) is a no-op that just clears the drag.
 
 use iced::Task;
+use resonance_audio::types::{SamplePos, TrackId};
 
-use crate::message::{DragMessage, Message, PoolMessage};
-use crate::state::DragPlacement;
+use crate::message::{Message, PoolMessage};
+use crate::state::{DragPlacement, DraggedAsset, DropResolution};
 use crate::Resonance;
+
+/// Drag-to-timeline placement gesture (doc #175, todo #605). The primary
+/// way audio lands on the arrangement: a browser row is dragged over the
+/// timeline, which previews a grid-snapped ghost clip, lights the target
+/// lane, and — on release — drops the file as a clip.
+///
+/// Every variant is **transient** (classified `UndoAction::Skip`): the
+/// pill / ghost / tooltip are pure preview state. Only the drop has a
+/// durable effect, and it borrows the undoable
+/// [`PoolMessage::ImportAndPlace`] path so the whole import + placement is
+/// a single undo entry. Routed through `update::drag::handle`.
+#[derive(Debug, Clone)]
+pub enum DragMessage {
+    /// Begin dragging `asset` (a browser row) onto the timeline. Records the
+    /// in-flight drag so the timeline can start previewing it.
+    Start(DraggedAsset),
+    /// Pointer moved to `cursor` (timeline-canvas content coordinates) with
+    /// a freshly resolved drop target. Published by the timeline canvas each
+    /// move while a drag is active; updates the pill / ghost / tooltip.
+    /// `resolved` is `None` when the cursor is off the lane area.
+    Hover {
+        cursor: iced::Point,
+        resolved: Option<DropResolution>,
+    },
+    /// Release over the timeline: commit the current resolution. Reads the
+    /// resolved [`DropTarget`], clears the drag, and re-dispatches a
+    /// [`PoolMessage::ImportAndPlace`] so the placement is imported +
+    /// undoable. A no-op if the drag never resolved a target.
+    Drop,
+    /// Abandon the drag (released off the timeline, or Esc). Clears the
+    /// preview with no placement.
+    Cancel,
+}
+
+/// Where a drop-import lands its clips (doc #175, ba todo #598). The
+/// sample position is the **raw** drop position; the orchestration snaps
+/// it to the timeline grid (the same snap the clip-drag handlers use)
+/// before placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropTarget {
+    /// Place each imported file on an existing track at `start_sample`.
+    ExistingTrack {
+        track_id: TrackId,
+        start_sample: SamplePos,
+    },
+    /// Spawn a new audio track (the new-audio-track drop zone below the
+    /// last lane) and place each imported file on it at `start_sample`.
+    NewTrack { start_sample: SamplePos },
+}
 
 pub fn handle(app: &mut Resonance, message: DragMessage) -> Task<Message> {
     match message {
