@@ -3,6 +3,9 @@
 
 use super::{Origin, Reconcile, ReconcileCtx};
 use crate::project::ProjectFile;
+use crate::update::project_io::replay::{
+    reconcile_references, restore_references, ReferenceMonitorSource,
+};
 use crate::Resonance;
 
 /// Parameter-automation lanes (epic #14 / epic #40): the engine and the
@@ -76,5 +79,32 @@ impl Reconcile for ExternalInstruments {
 
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         r.restore_external_instruments(new, ctx.origin.after_clear_all());
+    }
+}
+
+/// The reference A/B block (ARCH-01 A-5): content (entries, selection,
+/// loudness match, trim) from `ProjectFile::references` /
+/// `reference_settings`; the monitor state (A/B source, loop-to-mix,
+/// meters) is not undo state.
+///
+/// **Three bodies.** After a `ClearAll` the engine's references and its id
+/// allocator are gone, so [`restore_references`] re-registers every entry
+/// and re-sends the whole `ReferencePlayer` state: a disk load takes the
+/// monitor from the file, a full-replay undo keeps the live one (still in
+/// `r.reference.monitor` — nothing in the replay touches it before this).
+/// On the diff path the engine still holds every reference, so
+/// [`reconcile_references`] matches by path, keeps ids and analysis, and
+/// sends only what changed.
+pub(crate) struct References;
+
+impl Reconcile for References {
+    const NAME: &'static str = "references";
+
+    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        match ctx.origin {
+            Origin::DiskLoad => restore_references(r, new, ReferenceMonitorSource::File),
+            Origin::UndoFull => restore_references(r, new, ReferenceMonitorSource::Live),
+            Origin::UndoDiff => reconcile_references(r, new),
+        }
     }
 }

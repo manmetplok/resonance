@@ -140,19 +140,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Re-impose the saved plugin-slot order and refresh the side-index.
     finalize_plugin_chains(r, &saved_plugin_order);
 
-    // Restore independent sub-states. An undo/redo keeps the live A/B
-    // monitor; a disk load takes the one the project was saved with.
-    let reference_monitor = if ctx.origin.is_undo() {
-        ReferenceMonitorSource::Live
-    } else {
-        ReferenceMonitorSource::File
-    };
-    restore_references(r, project, reference_monitor);
-    // Pool (after the clips, whose asset refs it counts), quantize,
-    // performance, track groups, and the cycle-record take lanes (each
-    // audio take's WAV resolved against the project directory, so a take
-    // whose file travelled with the bundle comes back and one that didn't
-    // is flagged rather than lost).
+    // References, pool (after the clips, whose asset refs it counts),
+    // quantize, performance, track groups, and the cycle-record take lanes
+    // (each audio take's WAV resolved against the project directory, so a
+    // take whose file travelled with the bundle comes back and one that
+    // didn't is flagged rather than lost).
     reconcile_stage(r, Stage::Content, None, project, &ctx);
 
     // External instruments, then the automation lanes (a `DeviceParam`

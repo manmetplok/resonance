@@ -123,12 +123,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file);
 
-    // -- Reference (A/B) content ---------------------------------------
-    // From `ProjectFile::references` / `reference_settings`, reconciled
-    // against the engine's live references (no `ClearAll` here, so they
-    // are all still loaded). The monitor state is left alone.
-    super::replay::reconcile_references(r, target_file);
-
     // -- Track freeze status (detach/delete caches no longer frozen) ----
     // From `ProjectTrack::freeze`, as `replay_loaded_project` does on the
     // slow path (A-4).
@@ -142,8 +136,10 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // The derived-clip map: the snapshot's with every entry, pending
     // echoes included (FU-H2a, A-6). After `apply_compose` reset it.
     reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
-    // Pool, quantize, performance, track groups, take lanes: app-side
-    // content the structural check ignores, restored verbatim. The pool
+    // References (reconciled against the engine's live ones, no
+    // `ClearAll` here), then pool, quantize, performance, track groups,
+    // take lanes: app-side content the structural check ignores, restored
+    // verbatim. The pool
     // counts the clips' asset refs `apply_audio_clips` mirrored; the take
     // lanes' `RestoreTakeGroups` replaces the engine's store wholesale, so
     // an undo that deleted a take does not resurrect it (no `ClearAll`

@@ -163,6 +163,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<restored::DerivedClips>(Stage::Clips),
     // After the clips: the pool counts their asset refs. The full path's
     // order.
+    domain::<restored::References>(Stage::Content),
     domain::<app_side::Pool>(Stage::Content),
     domain::<app_side::Quantize>(Stage::Content),
     domain::<app_side::Performance>(Stage::Content),
