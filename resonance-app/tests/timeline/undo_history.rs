@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use resonance_app::project::{LoadedProject, ProjectFile};
-use resonance_app::undo::{CoalesceKey, UndoExtras, UndoHistory, UndoSnapshot};
+use resonance_app::undo::{CoalesceKey, UndoHistory, UndoSnapshot};
 
 /// Produce a snapshot that carries `id` in its `project.file.bpm` field
 /// so tests can distinguish snapshots on the history stack. `bpm` is
@@ -31,7 +31,6 @@ fn dummy_snapshot(id: f32) -> UndoSnapshot {
             midi_notes: HashMap::new(),
             plugin_states: HashMap::new(),
         },
-        extras: UndoExtras::default(),
     }
 }
 

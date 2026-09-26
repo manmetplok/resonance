@@ -197,7 +197,7 @@ impl Resonance {
     }
 
     /// Test-only: whether two snapshots describe the same undoable state
-    /// (project file, notes and extras) — the fixed-point check the
+    /// (project file and notes) — the fixed-point check the
     /// snapshot/restore invariant test runs after each restore path.
     #[doc(hidden)]
     pub fn test_snapshot_same_state(a: &crate::undo::UndoSnapshot, b: &crate::undo::UndoSnapshot) -> bool {
@@ -262,6 +262,14 @@ impl Resonance {
         self.undo.can_undo()
     }
 
+    /// Test-only: whether the pending `AllCleared` replay is an undo/redo's
+    /// full restore (`io.restoring_undo`, ARCH-01 A-7) rather than a disk
+    /// load or template.
+    #[doc(hidden)]
+    pub fn test_restoring_undo(&self) -> bool {
+        self.io.restoring_undo
+    }
+
     /// Test-only: the current project path. `None` for an untitled project
     /// (including one freshly instantiated from a template).
     #[doc(hidden)]
@@ -312,16 +320,6 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_device_definitions(&self) -> Vec<&resonance_common::DeviceDefinition> {
         self.device_registry.list()
-    }
-
-    /// Test-only: capture the current undo snapshot's runtime extras (the
-    /// part of an undo entry that the `ProjectFile` shape doesn't carry,
-    /// including external-instrument config). Lets a reducer test prove the
-    /// external-instrument config is captured for undo without standing up
-    /// the async engine replay loop.
-    #[doc(hidden)]
-    pub fn test_snapshot_undo_extras(&self) -> crate::undo::UndoExtras {
-        self.snapshot_for_undo().extras
     }
 
     /// Test-only: read the current error message banner, if any.

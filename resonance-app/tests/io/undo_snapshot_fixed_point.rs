@@ -1,20 +1,21 @@
 //! Undo snapshot/restore is a fixed point (ARCH-01 A1-1).
 //!
 //! `build_project_file(restore(snapshot_for_undo(app))) == snapshot.file`,
-//! and the whole snapshot (`ProjectFile` + MIDI notes; `UndoExtras` is
-//! empty since A-6) comes back `same_state`, through BOTH restore paths:
+//! and the whole snapshot (`ProjectFile` + MIDI notes; the former
+//! `UndoExtras` side-car is gone since A-7) comes back `same_state`,
+//! through BOTH restore paths:
 //!
 //!   * the structure-preserving diff replay (`try_diff_replay`), reached
 //!     when only scalars changed since the snapshot;
-//!   * the full `ClearAll → AllCleared → replay_loaded_project →
-//!     finalize_undo_restore` pipeline, forced here by adding a track
-//!     after the snapshot.
+//!   * the full `ClearAll → AllCleared → replay_loaded_project` pipeline
+//!     (with `io.restoring_undo` set), forced here by adding a track after
+//!     the snapshot.
 //!
 //! Every fixture (the demo project and each built-in template) is first
 //! taken through one round of edits per domain — transport, mixer, tempo
 //! events, markers, chord track, automation, clip fade/gain, freeze,
 //! external instrument, reference trim, drum arrangement, vocal lyrics —
-//! so the snapshot carries every field `UndoExtras` duplicates; then a
+//! so the snapshot carries every field `UndoExtras` used to duplicate; then a
 //! second round with different values is applied, and the restore must
 //! undo it exactly. That is the guard for folding each extras field into
 //! the `ProjectFile` (A1-2): a field that stops being restored shows up
@@ -611,7 +612,7 @@ fn external_of(file: &ProjectFile, t: TrackId) -> Option<&ProjectExternalInstrum
 
 /// Each restore path re-asserts the snapshot's external-instrument config
 /// exactly once per external track (A1-2 (3): the slow path used to do it
-/// twice, from the replay and again from `UndoExtras`), with the config
+/// twice, from the replay and again from the old `UndoExtras`), with the config
 /// the snapshot's `ProjectFile` carries, and binds the selected device's
 /// params once.
 fn assert_external_restored(path: &str, cmds: &[AudioCommand], snapshot: &ProjectFile) {

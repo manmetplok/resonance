@@ -56,10 +56,16 @@ pub struct ProjectIoState {
     /// overtaken by a later open and is dropped, so two overlapping opens
     /// can't adopt one's content under the other's path (FU-A1a).
     pub open_token: u64,
-    /// Runtime-only state to re-apply after an undo/redo restore, once
-    /// `replay_loaded_project` has rebuilt the declarative project.
-    /// `None` for a normal project load, `Some` for undo/redo.
-    pub pending_undo_extras: Option<crate::undo::UndoExtras>,
+    /// The `pending_load` the next `AllCleared` replays is an undo/redo's
+    /// full restore (the slow path of `begin_restore_from_snapshot`), not
+    /// a disk load or template. Set together with `pending_load` when that
+    /// slow path sends `ClearAll`; read throughout `replay_loaded_project`
+    /// (freeze restore vs rehydrate, missing-plugin modal, reference A/B
+    /// monitor, derived-clip counter floor) and cleared by the `AllCleared`
+    /// handler right after the replay, where it also skips the disk-load
+    /// tail (`ResendExternalInstrumentPatches`, scroll reset, relink modal,
+    /// control-job completion). ARCH-01 A-7: was `pending_undo_extras`.
+    pub restoring_undo: bool,
     pub bouncing: bool,
     /// Progress `[0.0, 1.0]` of the in-flight WAV mixdown (`bouncing`),
     /// from the engine's `BounceProgress` events; drives the blocking

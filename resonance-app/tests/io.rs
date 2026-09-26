@@ -99,6 +99,8 @@ mod save_keeps_dirty_for_late_edit;
 mod take_lanes_persistence;
 #[path = "io/undo_snapshot_fixed_point.rs"]
 mod undo_snapshot_fixed_point;
+#[path = "io/undo_restore_flag.rs"]
+mod undo_restore_flag;
 #[path = "io/user_definitions_rescan.rs"]
 mod user_definitions_rescan;
 #[path = "io/files_listing_fingerprint.rs"]
