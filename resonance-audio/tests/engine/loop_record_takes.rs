@@ -2385,15 +2385,13 @@ fn setting_the_project_dir_reserves_the_ids_of_its_wavs() {
 // ---------------------------------------------------------------------------
 // (D-7c) `AudioCommand::ImportClip` deleted — no app sender (only this file
 // used it, to reproduce code review UPD-09: an import queued before
-// `ClearAll` must never land after it). `ImportClip`'s worker checked
-// `HandlerState::clear_generation` before publishing; `LoadClipFromWav`'s
-// `submit_clip_load` worker (the closest live analog) does NOT check it —
-// only its own duplicate-id guard — so this test's exact intent has no
-// live command left that actually gives the same guarantee, and rewriting
-// it against `LoadClipFromWav` would assert a protection that isn't there.
-// Not fixed here (out of scope for D-7c): a `LoadClipFromWav`/
-// `LoadTakeClipFromWav` racing a *later* `ClearAll` can in principle still
-// land after it, same shape as `ImportClip` before UPD-09.
+// `ClearAll` must never land after it). Gap closed (FU-D7c):
+// `submit_clip_load` (the worker behind `LoadClipFromWav` and
+// `LoadTakeClipFromWav`) now captures `HandlerState::clear_generation` at
+// submit time and re-checks it under the same `ctx.clips` write lock as
+// the push and the echo send, so a load racing a later `ClearAll` gets
+// the same guarantee `ImportClip` gave — see
+// `io/load_clip_stale_after_clear_all.rs`.
 // ---------------------------------------------------------------------------
 // Loop-record seams at a mismatched device rate (code review FU-G3b)
 // ---------------------------------------------------------------------------

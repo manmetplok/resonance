@@ -3,6 +3,7 @@
 //! `import_pool.rs`), and ensure-all-clips-have-wav-files (project save).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -694,6 +695,20 @@ fn submit_clip_load(
     // The take-clip park, so the publish below can see a removal that
     // happened while this load was in flight (ba todo #1403).
     let park = Arc::clone(&state.take_clip_park);
+    // Project fence (FU-D7c, like UPD-09's pool imports and the freeze
+    // conversions in `settle_frozen_conversions`): `handle_clear_all`
+    // bumps `clear_generation` before it takes `ctx.clips`' write lock to
+    // drain it. Capturing the generation now and re-checking it under the
+    // very same write lock the push and the drain both use means: if a
+    // `ClearAll` landed between submit and here, either its drain already
+    // ran and this load observes the bumped generation (and drops), or
+    // this load's push+send happens first, entirely inside the lock the
+    // drain then blocks on — so the drain still removes it before
+    // `AllCleared` goes out. Either way the app never keeps a clip (or a
+    // `ClipImported`/take-park delivery) that belonged to the project this
+    // load was issued against.
+    let clear_generation = Arc::clone(&state.clear_generation);
+    let generation = clear_generation.load(Ordering::SeqCst);
 
     let submit_result = state.imports.submit(move || {
         // `open_wav_at_rate` resamples to the engine rate when the
@@ -752,6 +767,15 @@ fn submit_clip_load(
                     // caller ever does need "reload this clip in place",
                     // it wants an explicit replace, not a second load.
                     let mut clips = clips_arc.write();
+                    // The `ClearAll` fence (FU-D7c): checked under the same
+                    // write lock `handle_clear_all` drains under, so this
+                    // can never land in — or echo into — a project that
+                    // isn't the one this load was submitted against. See
+                    // the comment on `generation` above for why the lock
+                    // makes this race-free rather than best-effort.
+                    if clear_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
                     if clips.iter().any(|c| c.id == clip_id) {
                         return;
                     }
@@ -773,16 +797,21 @@ fn submit_clip_load(
                         return;
                     };
                     clips.push(clip);
-                }
-                if echo == ClipLoadEcho::Timeline {
-                    let _ = thread_event_tx.send(AudioEvent::ClipImported {
-                        clip_id,
-                        track_id,
-                        start_sample,
-                        duration_samples,
-                        name,
-                        waveform_peaks,
-                    });
+                    // Sent while still holding the write lock: `ClearAll`
+                    // blocks on the same lock to drain, so if this send
+                    // happens at all, it is strictly before `ClearAll` can
+                    // emit `AllCleared` — the app never sees this echo
+                    // arrive after its mirror has already been wiped.
+                    if echo == ClipLoadEcho::Timeline {
+                        let _ = thread_event_tx.send(AudioEvent::ClipImported {
+                            clip_id,
+                            track_id,
+                            start_sample,
+                            duration_samples,
+                            name,
+                            waveform_peaks,
+                        });
+                    }
                 }
             }
             Err(e) => {
