@@ -237,17 +237,26 @@ pub(super) fn all_cleared(r: &mut Resonance) {
             }
 
             // A control-initiated `project.new` (doc #265, todo #1151)
-            // resolves here: the engine confirmed the clear and the
-            // fresh project replayed. Untitled case only — a template
-            // instantiation always lands with no path, while disk loads
-            // (which restore one) resolve their own `ProjectLoad` token
-            // in the `ProjectLoaded` arm instead. No-op when no control
-            // job carries the token.
-            if r.io.project_path.is_none() {
-                r.control.jobs.complete_token(
-                    &crate::control_jobs::JobToken::ProjectNew,
-                    serde_json::json!({ "path": null, "revision": r.revision() }),
-                );
+            // or `project.open` (todo #1149) resolves here: the engine
+            // confirmed the clear and the project replayed, so a readback
+            // right after `job.wait` sees it (code review UPD-02). A
+            // template instantiation always lands with no path, while a
+            // disk load restores one. No-op when no control job carries
+            // the token.
+            match r.io.project_path.as_ref() {
+                None => {
+                    r.control.jobs.complete_token(
+                        &crate::control_jobs::JobToken::ProjectNew,
+                        serde_json::json!({ "path": null, "revision": r.revision() }),
+                    );
+                }
+                Some(path) => {
+                    let path = path.display().to_string();
+                    r.control.jobs.complete_token(
+                        &crate::control_jobs::JobToken::ProjectLoad,
+                        serde_json::json!({ "path": path, "revision": r.revision() }),
+                    );
+                }
             }
         }
     }

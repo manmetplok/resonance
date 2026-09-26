@@ -196,17 +196,11 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
                 r.io.project_path = Some(path);
             }
-            // Resolve a control-initiated load job (todo #1149). Keyed
-            // off this existing completion message per doc #265; the
-            // engine replay that follows is synchronous within this
-            // dispatch's task chain.
-            {
-                let path = r.io.project_path.as_ref().map(|p| p.display().to_string());
-                r.control.jobs.complete_token(
-                    &crate::control_jobs::JobToken::ProjectLoad,
-                    serde_json::json!({ "path": path, "revision": r.revision() }),
-                );
-            }
+            // A control-initiated load job (todo #1149) is NOT resolved
+            // here: the replay only runs once the engine confirms the
+            // `ClearAll` below, on a later Tick. `all_cleared` completes
+            // the `ProjectLoad` token after the replay (code review
+            // UPD-02).
             let _ = r.engine.send(AudioCommand::Stop);
             r.transport.playing = false;
             r.transport.recording = false;

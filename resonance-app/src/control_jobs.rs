@@ -49,7 +49,9 @@ pub enum JobToken {
     /// Completes on `ProjectIoMessage::ProjectSaved` (manual saves only —
     /// autosaves never resolve control jobs).
     ProjectSave,
-    /// Completes on `ProjectIoMessage::ProjectLoaded`.
+    /// Fails on `ProjectIoMessage::ProjectLoaded(Err)`; completes once
+    /// the engine confirms the clear and the loaded project replays
+    /// (`engine_events::project_io::all_cleared`, disk path only).
     ProjectLoad,
     /// A `project.new` instantiation (todo #1151): completes once the
     /// engine confirms the clear and the fresh project replays
