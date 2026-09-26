@@ -19,7 +19,7 @@ master and updates this table. Agents do **not** edit this file.
 | C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | merged | 302009d3 |
 | D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | in progress |  |
 | E control beat units | CTL-01 | opus | merged | 5f63160a |
-| F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | in progress | |
+| F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | merged | 2c811666 |
 | F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | merged | eac3b10c |
 | G1 drums timing | DSP-01 | opus | merged | 50dad7db |
 | G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
@@ -54,6 +54,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-A2b** (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
 - [ ] **FU-A2c** (medium) live MIDI recording: `close_open_recordings` sets note durations at Stop without an event → app mirror keeps zero-length held notes.
 - [ ] **FU-A2d** (low, = STATE-08 remainder) engine can still reuse clip ids after a full-reload undo.
+- [ ] **FU-F1a** (low) if the engine refuses Play as a backstop (e.g. external MIDI-clock master), app mirror `transport.playing` stays true until Stop (banner shows).
+- [ ] **FU-F1b** (low) `measure_mix` acquires its render guard on the worker → sub-quantum window where Play lands and the transport appears to start then stall. Move acquire to the engine thread.
+- [ ] **FU-F1c** (low, UX) WAV mixdown now blocks GUI traffic like bounce-in-place but has no modal, only the master-strip label.
 
 ## How to use this file
 
@@ -393,7 +396,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** After dispatch in `update_inner` (or at the end of each compose/arrangement/global-track handler), call `revalidate_frozen_track` for every frozen track. The fingerprint makes this safe for no-ops. Also add tempo/signature events to the fingerprint, or invalidate every frozen track on a tempo-map change. Control `generate.*` / `harmony.*` should also use a `frozen_reject` like `notes.*`, or at least report that the track went stale.
 - **Verification:** `tests/plugins/freeze_readonly.rs` (existing module): freeze a track that is the lane of a section with chords, dispatch a `ComposeMessage` chord edit, and assert `freeze.status(track).is_stale()`.
 
-### [ ] UPD-06 — A WAV mixdown (`io.bouncing`) gates nothing, and the GUI can swap the project out under any offline render
+### [x] UPD-06 — A WAV mixdown (`io.bouncing`) gates nothing, and the GUI can swap the project out under any offline render — fixed @e92649ee
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** concurrency
@@ -1000,7 +1003,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 
 ## Audio mixer / RT path
 
-### [ ] MIX-01 — Audio thread's playhead store overwrites concurrent Seek / Stop (lost update)
+### [x] MIX-01 — Audio thread's playhead store overwrites concurrent Seek / Stop (lost update) — fixed @07efbf58 (CAS publish; commit_playhead false = MIX-06 hook)
 - **Severity:** high
 - **Confidence:** high
 - **Category:** concurrency
@@ -1010,7 +1013,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Make the audio thread's publish conditional: `let _ = shared.playhead.compare_exchange(playhead, new_playhead, AcqRel, Relaxed);` — if it fails, somebody else moved the playhead and theirs wins. Do this in all three audio-thread writers (`play.rs` both paths, `reference.rs`). Use the single playhead value loaded in `mix_audio` (pass `playhead_now` into `render_playing_block` instead of re-loading at `play.rs:22`) so timing, render and CAS all agree. Alternatively route seeks through a `pending_seek: AtomicU64` (sentinel `u64::MAX`) that the callback `swap`s at the top of `mix_audio`; CAS is the smaller change. Pair with MIX-06 (panic on discontinuity) so the seek also flushes voices.
 - **Verification:** Add `resonance-audio/tests/playhead_seek_race.rs` (resonance-audio tests are per-file; the no-new-file rule only applies to resonance-app/tests). Deterministic repro: a test CLAP-less hook is hard, so factor the publish into `fn commit_playhead(shared, observed, new)` in `mixer/common.rs`, `pub` via the existing test re-exports, and assert that after `shared.playhead.store(X)` between observe and commit, the value stays X. Also a `MixAudioHarness` test: set playhead P, run one block, store Q, run a block and assert the playhead continues from Q.
 
-### [ ] MIX-02 — Live mixer keeps processing the shared plugin instances while an offline render is running
+### [x] MIX-02 — Live mixer keeps processing the shared plugin instances while an offline render is running — fixed @de0b2a42
 - **Severity:** high
 - **Confidence:** high
 - **Category:** concurrency
@@ -1156,7 +1159,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `reset_processing`, call `(*self.plugin).reset` when present (the caller holds the instance mutex, so it is not concurrent with `process()` — same argument as `flush_pending_params`), and only fall back to stop/start when `reset` is absent. Also queue/flush `all_notes_off()` so voice-holding plugins without a good reset release. Update the doc comments that claim the stop/start cycle clears tails.
 - **Verification:** Fake plugin test (`__instance_from_raw_for_test`) asserting `reset` is invoked by `reset_processing`; and an offline-render test with the first-party delay/reverb: render a burst, then run the export path and assert the first N frames of the export are silent when the timeline is silent there.
 
-### [ ] ENG-05 — Nothing in the engine stops live playback from running on the same plugin instances as an in-flight offline render
+### [x] ENG-05 — Nothing in the engine stops live playback from running on the same plugin instances as an in-flight offline render — fixed @de0b2a42 (same as MIX-02)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** concurrency
