@@ -21,6 +21,7 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
+use thiserror::Error;
 
 use crate::clap_host::PluginMap;
 use crate::types::*;
@@ -123,11 +124,29 @@ fn output_sample_rate(format: &ExportFormat, engine_sr: u32) -> u32 {
     }
 }
 
+/// Failure surfaced by the [`encode_buffer_for_test`] /
+/// [`normalize_buffer_for_test`] test surfaces. Both drive the same
+/// pipeline as [`run_export`] / the normalized export path, which report
+/// through [`EncoderError`] and its `.message()` string; this just
+/// carries that text through a real `Error` type instead of a bare
+/// `String` (the two functions are `#[doc(hidden)]` test-only surfaces,
+/// so the classification `EncoderError` already has is enough — no
+/// further `EngineError` conversion is needed here).
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct TestEncodeError(String);
+
+impl From<&EncoderError> for TestEncodeError {
+    fn from(e: &EncoderError) -> Self {
+        TestEncodeError(e.message().to_string())
+    }
+}
+
 /// Test surface: run the encoder-sink pipeline (export resampler + sink,
 /// exactly as [`run_export`]'s tail) over a pre-rendered interleaved-stereo
 /// `f32` buffer at `engine_sr`. Lets integration tests round-trip every
 /// format through real encoders without booting the engine thread. Returns
-/// the encoded byte size, or a user-facing error string.
+/// the encoded byte size, or a user-facing error.
 #[doc(hidden)]
 pub fn encode_buffer_for_test(
     format: &ExportFormat,
@@ -135,25 +154,25 @@ pub fn encode_buffer_for_test(
     engine_sr: u32,
     frames: &[f32],
     path: &std::path::Path,
-) -> Result<u64, String> {
+) -> Result<u64, TestEncodeError> {
     let out_sr = output_sample_rate(format, engine_sr);
     let mut resampler = if out_sr != engine_sr {
-        Some(ResampleStage::new(engine_sr, out_sr).map_err(|e| e.message().to_string())?)
+        Some(ResampleStage::new(engine_sr, out_sr).map_err(|e| TestEncodeError::from(&e))?)
     } else {
         None
     };
-    let mut sink = build_sink(format, out_sr, path).map_err(|e| e.message().to_string())?;
+    let mut sink = build_sink(format, out_sr, path).map_err(|e| TestEncodeError::from(&e))?;
     for chunk in frames.chunks(BOUNCE_CHUNK * 2) {
         match resampler.as_mut() {
             Some(rs) => rs.process(chunk, sink.as_mut()),
             None => sink.write_frames(chunk),
         }
-        .map_err(|e| e.message().to_string())?;
+        .map_err(|e| TestEncodeError::from(&e))?;
     }
     if let Some(mut rs) = resampler.take() {
-        rs.flush(sink.as_mut()).map_err(|e| e.message().to_string())?;
+        rs.flush(sink.as_mut()).map_err(|e| TestEncodeError::from(&e))?;
     }
-    sink.finalize(metadata).map_err(|e| e.message().to_string())
+    sink.finalize(metadata).map_err(|e| TestEncodeError::from(&e))
 }
 
 /// Test surface: run the two-pass loudness-normalization pipeline (measure
@@ -162,7 +181,7 @@ pub fn encode_buffer_for_test(
 /// stereo `f32` buffer at `engine_sr`. Both passes see the same buffer (no
 /// engine), so the analyze pass measures it and the apply pass re-renders
 /// it through the gain + limiter. Returns `(bytes, achieved_lufs,
-/// achieved_dbtp)` or a user-facing error string.
+/// achieved_dbtp)` or a user-facing error.
 #[doc(hidden)]
 pub fn normalize_buffer_for_test(
     format: &ExportFormat,
@@ -171,7 +190,7 @@ pub fn normalize_buffer_for_test(
     engine_sr: u32,
     frames: &[f32],
     path: &std::path::Path,
-) -> Result<(u64, Option<f32>, f32), String> {
+) -> Result<(u64, Option<f32>, f32), TestEncodeError> {
     // Pass 1: analyze the rendered mix.
     let mut measure = LoudnessMeasure::new(engine_sr);
     for chunk in frames.chunks(BOUNCE_CHUNK * 2) {
@@ -182,11 +201,11 @@ pub fn normalize_buffer_for_test(
     // Pass 2: gain + limit, encode, re-measure the limited output.
     let out_sr = output_sample_rate(format, engine_sr);
     let mut resampler = if out_sr != engine_sr {
-        Some(ResampleStage::new(engine_sr, out_sr).map_err(|e| e.message().to_string())?)
+        Some(ResampleStage::new(engine_sr, out_sr).map_err(|e| TestEncodeError::from(&e))?)
     } else {
         None
     };
-    let mut sink = build_sink(format, out_sr, path).map_err(|e| e.message().to_string())?;
+    let mut sink = build_sink(format, out_sr, path).map_err(|e| TestEncodeError::from(&e))?;
     let mut limiter = TruePeakLimiter::new(engine_sr as f32, gain_db, normalize.ceiling_dbtp);
     let mut remeasure = LoudnessMeasure::new(engine_sr);
     let mut stage = Vec::new();
@@ -199,18 +218,18 @@ pub fn normalize_buffer_for_test(
         stage.clear();
         limiter.process(chunk, &mut stage);
         remeasure.push(&stage);
-        feed(&stage, sink.as_mut()).map_err(|e| e.message().to_string())?;
+        feed(&stage, sink.as_mut()).map_err(|e| TestEncodeError::from(&e))?;
     }
     stage.clear();
     limiter.flush(&mut stage);
     remeasure.push(&stage);
-    feed(&stage, sink.as_mut()).map_err(|e| e.message().to_string())?;
+    feed(&stage, sink.as_mut()).map_err(|e| TestEncodeError::from(&e))?;
     drop(feed);
 
     if let Some(mut rs) = resampler.take() {
-        rs.flush(sink.as_mut()).map_err(|e| e.message().to_string())?;
+        rs.flush(sink.as_mut()).map_err(|e| TestEncodeError::from(&e))?;
     }
-    let bytes = sink.finalize(metadata).map_err(|e| e.message().to_string())?;
+    let bytes = sink.finalize(metadata).map_err(|e| TestEncodeError::from(&e))?;
     let measured = remeasure.finish();
     let lufs = measured.integrated_lufs.is_finite().then_some(measured.integrated_lufs);
     Ok((bytes, lufs, measured.true_peak_dbtp))
