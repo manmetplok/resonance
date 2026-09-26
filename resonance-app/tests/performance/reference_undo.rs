@@ -1,12 +1,12 @@
 //! Undo/redo coverage for the reference-track (A/B) feature: the
 //! classifier picks the right action per message, and the content-
-//! changing actions round-trip through the undo history (captured in
-//! `UndoExtras` and restored on the fast diff-replay path).
+//! changing actions round-trip through the undo history (restored from
+//! the snapshot's `ProjectFile` on the fast diff-replay path).
 
 use std::path::PathBuf;
 
 use resonance_app::message::Message;
-use resonance_app::reference::ReferenceMessage;
+use resonance_app::reference::{ReferenceMessage, ReferenceStatus};
 use resonance_app::undo::{classify, CoalesceKey, UndoAction};
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioEvent, ReferenceId};
@@ -115,9 +115,45 @@ fn remove_round_trips_through_undo() {
     send(&mut app, ReferenceMessage::Remove(ReferenceId(1)));
     assert!(app.test_reference().entries.is_empty());
 
+    // `/refs/1.wav` does not exist, so it comes back the way a disk load
+    // brings back a vanished file: `Missing`, name and path kept.
     let _ = app.update(Message::Undo);
     assert_eq!(app.test_reference().entries.len(), 1, "removed ref comes back");
-    assert_eq!(app.test_reference().entries[0].id, ReferenceId(1));
+    assert_eq!(app.test_reference().entries[0].path, "/refs/1.wav");
+    assert_eq!(
+        app.test_reference().entries[0].status,
+        ReferenceStatus::Missing
+    );
+}
+
+/// A removed reference whose file is still there is loaded again by the
+/// undo, under an id the engine has not handed out — the engine freed the
+/// old one when it removed the reference (ARCH-01 A-5).
+#[test]
+fn undo_of_remove_reloads_the_reference_under_a_fresh_id() {
+    let path = std::env::temp_dir().join(format!(
+        "resonance-reference-undo-{}.wav",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"").unwrap();
+    let mut app = app();
+    app.test_handle_engine_event(AudioEvent::ReferenceLoaded {
+        id: ReferenceId(1),
+        name: "ref".into(),
+        path: path.to_string_lossy().into_owned(),
+        integrated_lufs: -14.0,
+        waveform_peaks: vec![],
+        length_samples: 480_000,
+    });
+    send(&mut app, ReferenceMessage::Remove(ReferenceId(1)));
+
+    let _ = app.update(Message::Undo);
+    let st = app.test_reference();
+    assert_eq!(st.entries.len(), 1, "removed ref comes back");
+    assert_eq!(st.entries[0].id, ReferenceId(2), "past every id the engine used");
+    assert_eq!(st.entries[0].integrated_lufs, -14.0, "cached loudness kept");
+    assert!(matches!(st.entries[0].status, ReferenceStatus::Analyzing(_)));
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -149,5 +185,5 @@ fn transient_toggle_is_not_undoable() {
     let _ = app.update(Message::Undo);
     assert_eq!(app.test_reference().trim_db, 0.0);
     // loop_to_mix is live state, untouched by the undo.
-    assert!(app.test_reference().loop_to_mix);
+    assert!(app.test_reference().monitor.loop_to_mix);
 }

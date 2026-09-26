@@ -57,11 +57,11 @@ fn load_requested_queues_pending_and_clears_error() {
 #[test]
 fn toggle_ab_source_flips_mix_and_reference() {
     let mut app = app();
-    assert_eq!(app.test_reference().ab_source, ABSource::Mix);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Mix);
     send(&mut app, ReferenceMessage::ToggleAbSource);
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
     send(&mut app, ReferenceMessage::ToggleAbSource);
-    assert_eq!(app.test_reference().ab_source, ABSource::Mix);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Mix);
 }
 
 #[test]
@@ -70,20 +70,20 @@ fn momentary_audition_restores_prior_source() {
     // Start from Reference (via a toggle) to prove the prior source is
     // remembered, not assumed to be Mix.
     send(&mut app, ReferenceMessage::ToggleAbSource);
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
 
     send(&mut app, ReferenceMessage::MomentaryAudition(true));
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
     send(&mut app, ReferenceMessage::MomentaryAudition(false));
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
 
     // From Mix, a momentary press auditions the reference then returns.
     send(&mut app, ReferenceMessage::ToggleAbSource);
-    assert_eq!(app.test_reference().ab_source, ABSource::Mix);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Mix);
     send(&mut app, ReferenceMessage::MomentaryAudition(true));
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
     send(&mut app, ReferenceMessage::MomentaryAudition(false));
-    assert_eq!(app.test_reference().ab_source, ABSource::Mix);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Mix);
 }
 
 #[test]
@@ -147,9 +147,9 @@ fn remove_clears_stale_load_error() {
 #[test]
 fn toggle_loop_to_mix_flips() {
     let mut app = app();
-    assert!(!app.test_reference().loop_to_mix);
+    assert!(!app.test_reference().monitor.loop_to_mix);
     send(&mut app, ReferenceMessage::ToggleLoopToMix);
-    assert!(app.test_reference().loop_to_mix);
+    assert!(app.test_reference().monitor.loop_to_mix);
 }
 
 #[test]

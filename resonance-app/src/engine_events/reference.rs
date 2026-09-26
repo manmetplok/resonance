@@ -19,6 +19,7 @@ fn take_pending(r: &mut Resonance) -> Option<String> {
 }
 
 pub(super) fn analysis_progress(r: &mut Resonance, id: ReferenceId, stage: ReferenceAnalysisStage) {
+    r.reference.saw_engine_id(id);
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.status = ReferenceStatus::Analyzing(stage);
         return;
@@ -46,6 +47,7 @@ pub(super) fn loaded(
     waveform_peaks: Vec<(f32, f32)>,
     length_samples: u64,
 ) {
+    r.reference.saw_engine_id(id);
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.name = name;
         entry.path = path;
@@ -92,12 +94,12 @@ pub(super) fn active_changed(r: &mut Resonance, id: ReferenceId) {
 }
 
 pub(super) fn ab_source_changed(r: &mut Resonance, source: ABSource) {
-    r.reference.ab_source = source;
+    r.reference.monitor.ab_source = source;
 }
 
 pub(super) fn loudness_match_changed(r: &mut Resonance, enabled: bool, offset_db: f32) {
     r.reference.loudness_match = enabled;
-    r.reference.offset_db = offset_db;
+    r.reference.monitor.offset_db = offset_db;
 }
 
 pub(super) fn trim_changed(r: &mut Resonance, db: f32) {
@@ -136,7 +138,7 @@ pub(super) fn position_changed(r: &mut Resonance, ref_id: ReferenceId, position_
 }
 
 pub(super) fn loop_to_mix_changed(r: &mut Resonance, enabled: bool) {
-    r.reference.loop_to_mix = enabled;
+    r.reference.monitor.loop_to_mix = enabled;
 }
 
 pub(super) fn ab_meter_snapshot(
@@ -144,5 +146,5 @@ pub(super) fn ab_meter_snapshot(
     mix: MeterSnapshot,
     reference: Option<MeterSnapshot>,
 ) {
-    r.reference.ab_meter = Some(AbMeters { mix, reference });
+    r.reference.monitor.ab_meter = Some(AbMeters { mix, reference });
 }

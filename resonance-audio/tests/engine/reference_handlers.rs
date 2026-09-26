@@ -12,7 +12,8 @@ use crossbeam_channel::{unbounded, Receiver};
 
 use resonance_audio::types::{ABSource, AudioEvent, ReferenceId};
 use resonance_audio::{
-    handle_add_ref_marker, handle_poll_ab_meters, handle_remove_ref_marker,
+    handle_add_ref_marker, handle_clear_active_reference, handle_poll_ab_meters,
+    handle_remove_ref_marker,
     handle_remove_reference_track, handle_set_ab_source, handle_set_active_reference,
     handle_set_ref_loop_to_mix, handle_set_ref_loudness_match, handle_set_ref_position,
     handle_set_ref_trim, register_reference, ABMeterTap, ReferencePlayer,
@@ -102,6 +103,28 @@ fn set_active_reference_requires_existing() {
     register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     assert!(matches!(next_event(&rx), AudioEvent::ActiveReferenceChanged { id } if id == ReferenceId(1)));
+}
+
+/// `ClearActiveReference` (an undo back to "nothing selected") deselects
+/// silently and keeps the entry loaded.
+#[test]
+fn clear_active_reference_deselects_silently() {
+    let mut player = ReferencePlayer::new();
+    let (tx, rx) = unbounded::<AudioEvent>();
+    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
+    handle_set_active_reference(&mut player, &tx, ReferenceId(1));
+    let _ = next_event(&rx);
+
+    handle_clear_active_reference(&mut player);
+    assert!(rx.try_recv().is_err(), "no echo");
+    handle_poll_ab_meters(&player, MeterSnapshot::default(), MeterSnapshot::default(), &tx);
+    match next_event(&rx) {
+        AudioEvent::ABMeterSnapshot { reference, .. } => {
+            assert!(reference.is_none(), "nothing is active any more")
+        }
+        other => panic!("expected ABMeterSnapshot, got {other:?}"),
+    }
+    assert_eq!(player.entry_has_pcm(ReferenceId(1)), Some(false), "entry kept");
 }
 
 #[test]

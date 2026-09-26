@@ -99,8 +99,8 @@ fn a_release_without_a_press_leaves_the_source_alone() {
     let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     let _ = app.update(Message::Reference(ReferenceMessage::ToggleAbSource));
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
 
     let _ = app.update(Message::Reference(ReferenceMessage::MomentaryAudition(false)));
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
 }

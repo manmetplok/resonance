@@ -93,34 +93,67 @@ pub struct AbMeters {
 }
 
 /// GUI-side reference/A/B state. Hangs off [`crate::Resonance`].
+///
+/// Split three ways (ARCH-01 A-5):
+///
+/// - **Content** — `entries`, `active_id`, `loudness_match`, `trim_db`:
+///   what the user compares against and how it is levelled. Persisted in
+///   `ProjectFile::references` / `reference_settings` (an entry's path,
+///   name, cached loudness and markers; the rest of an entry is engine
+///   readback) and restored from there by a disk load and both undo
+///   paths.
+/// - **Monitor** — [`ReferenceMonitorState`]: what the user is listening
+///   to right now. Never undone, so a history step does not yank the
+///   monitor around.
+/// - **Runtime bookkeeping** — `last_error`, `pending_loads`,
+///   `next_engine_id`. Neither saved nor undone.
 #[derive(Debug, Clone, Default)]
 pub struct ReferenceState {
     /// All loaded references, in load order.
     pub entries: Vec<ReferenceEntry>,
     /// Which reference the A/B monitor auditions, if any.
     pub active_id: Option<ReferenceId>,
-    /// Whether the monitor is currently on the mix or the reference.
-    pub ab_source: ABSource,
     /// Whether the active reference is loudness-matched to the mix.
     pub loudness_match: bool,
-    /// Applied loudness-match gain offset (dB), reported by the engine.
-    pub offset_db: f32,
     /// Manual level trim (dB) on top of any loudness match.
     pub trim_db: f32,
-    /// Whether the reference cursor follows the mix transport.
-    pub loop_to_mix: bool,
-    /// Latest A/B meter snapshot (transient; repopulated each poll).
-    pub ab_meter: Option<AbMeters>,
+    /// Live monitoring state; see [`ReferenceMonitorState`].
+    pub monitor: ReferenceMonitorState,
     /// Most recent load-failure reason, shown until dismissed. Load
     /// failures carry no id, so they live here rather than as an entry.
     pub last_error: Option<String>,
     /// Paths whose `LoadReferenceTrack` has been dispatched but whose
     /// engine-allocated id is not yet known. Drained FIFO when the first
     /// analysis event for a new id arrives, to recover its name / path.
-    /// Runtime-only — never part of an undo snapshot.
     pub pending_loads: VecDeque<String>,
+    /// The app's copy of the engine's reference-id allocator: past every
+    /// id the engine has registered, or will register for a load already
+    /// sent. A restore that brings a reference back hints its id from
+    /// here ([`Self::alloc_engine_id`]), so it never collides with a live
+    /// engine entry. `ClearAll` resets the engine's allocator; the replay
+    /// after it resets this one (`restore_references`).
+    pub next_engine_id: u32,
+}
+
+/// The monitor half of [`ReferenceState`]: what the A/B switch listens
+/// to and the live readback that goes with it. `ab_source` and
+/// `loop_to_mix` are remembered per project
+/// (`ProjectReferenceSettings::{ab_source_is_reference, loop_to_mix}`),
+/// but none of this is undo state: the undo snapshot strips it and both
+/// restore paths leave it as it is.
+#[derive(Debug, Clone, Default)]
+pub struct ReferenceMonitorState {
+    /// Whether the monitor is currently on the mix or the reference.
+    pub ab_source: ABSource,
+    /// Whether the reference cursor follows the mix transport.
+    pub loop_to_mix: bool,
+    /// Applied loudness-match gain offset (dB), reported by the engine —
+    /// readback derived from the active reference's analysis, re-reported
+    /// whenever loudness matching is (re)set.
+    pub offset_db: f32,
+    /// Latest A/B meter snapshot (transient; repopulated each poll).
+    pub ab_meter: Option<AbMeters>,
     /// The source to restore when a momentary-audition gesture ends.
-    /// Runtime-only — never part of an undo snapshot.
     pub momentary_restore: Option<ABSource>,
 }
 
@@ -135,39 +168,26 @@ impl ReferenceState {
         self.entries.iter_mut().find(|e| e.id == id)
     }
 
-    /// Capture the undo-relevant subset (the user-meaningful content) for
-    /// an undo snapshot. Transient monitoring state — `ab_source`,
-    /// `loop_to_mix`, the meter snapshot, in-flight loads and the
-    /// momentary-restore target — is deliberately left live across an
-    /// undo/redo so a history step doesn't yank the monitor around.
-    pub fn undo_snapshot(&self) -> ReferenceUndo {
-        ReferenceUndo {
-            entries: self.entries.clone(),
-            active_id: self.active_id,
-            loudness_match: self.loudness_match,
-            offset_db: self.offset_db,
-            trim_db: self.trim_db,
+    /// Note that the engine has registered (or will register) `id`, so
+    /// [`Self::alloc_engine_id`] stays past it. Ids of missing entries,
+    /// which the engine never hears about, are ignored.
+    pub fn saw_engine_id(&mut self, id: ReferenceId) {
+        if id.0 < crate::state::ids::MISSING_REFERENCE_ID_BASE {
+            self.next_engine_id = self.next_engine_id.max(id.0.saturating_add(1));
         }
     }
 
-    /// Restore the undo-relevant subset captured by [`Self::undo_snapshot`],
-    /// leaving the live monitoring fields untouched.
-    pub fn restore_undo(&mut self, snap: ReferenceUndo) {
-        self.entries = snap.entries;
-        self.active_id = snap.active_id;
-        self.loudness_match = snap.loudness_match;
-        self.offset_db = snap.offset_db;
-        self.trim_db = snap.trim_db;
+    /// Note a `LoadReferenceTrack` sent without a hint: the engine gives
+    /// it the next id from its allocator.
+    pub fn saw_unhinted_load(&mut self) {
+        self.next_engine_id = self.next_engine_id.max(1) + 1;
     }
-}
 
-/// The subset of [`ReferenceState`] carried in an undo snapshot. See
-/// [`ReferenceState::undo_snapshot`] for what is and isn't captured.
-#[derive(Debug, Clone, Default)]
-pub struct ReferenceUndo {
-    pub entries: Vec<ReferenceEntry>,
-    pub active_id: Option<ReferenceId>,
-    pub loudness_match: bool,
-    pub offset_db: f32,
-    pub trim_db: f32,
+    /// An id no live or in-flight engine entry uses, for a hinted
+    /// `LoadReferenceTrack`.
+    pub fn alloc_engine_id(&mut self) -> ReferenceId {
+        let id = self.next_engine_id.max(1);
+        self.next_engine_id = id + 1;
+        ReferenceId(id)
+    }
 }

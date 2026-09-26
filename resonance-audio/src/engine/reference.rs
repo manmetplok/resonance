@@ -755,6 +755,12 @@ pub fn handle_set_active_reference(
     let _ = event_tx.send(AudioEvent::ActiveReferenceChanged { id });
 }
 
+/// `ClearActiveReference`: deselect the active reference. Emits nothing
+/// — only an undo sends it, and the app has already applied it.
+pub fn handle_clear_active_reference(player: &mut ReferencePlayer) {
+    player.active_id = None;
+}
+
 /// `SetABSource`: switch the monitored signal between mix and reference.
 pub fn handle_set_ab_source(
     player: &mut ReferencePlayer,

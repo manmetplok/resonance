@@ -32,8 +32,8 @@ const VALUE_COL_WIDTH: f32 = 52.0;
 const VALUE_COL_SPACING: f32 = 6.0;
 
 pub(super) fn loudness_readout(state: &ReferenceState) -> Element<'static, Message> {
-    let mix = state.ab_meter.map(|m| m.mix);
-    let reference = state.ab_meter.and_then(|m| m.reference);
+    let mix = state.monitor.ab_meter.map(|m| m.mix);
+    let reference = state.monitor.ab_meter.and_then(|m| m.reference);
 
     container(
         column![

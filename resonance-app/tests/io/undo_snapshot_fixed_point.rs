@@ -37,14 +37,15 @@ use resonance_app::compose::{ComposeMessage, EntryLength};
 use resonance_app::demo;
 use resonance_app::message::*;
 use resonance_app::project::{LoadedProject, ProjectExternalInstrument, ProjectFile};
-use resonance_app::reference::ReferenceMessage;
+use resonance_app::reference::{ReferenceMessage, ReferenceStatus};
 use resonance_app::state::FreezeStatus;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::BuiltinTemplateId;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{
-    AudioCommand, AudioEvent, ClipId, PluginInstanceId, TrackId, TrackType,
+    ABSource, AudioCommand, AudioEvent, ClipId, PluginInstanceId, ReferenceId, TrackId,
+    TrackType,
 };
 use resonance_common::{
     AutomationLane, AutomationTarget, CurveKind, FreezeCacheRef, FreezeCacheStatus,
@@ -471,13 +472,7 @@ fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
         "compose_next_derived_clip_id",
         x.compose_next_derived_clip_id == y.compose_next_derived_clip_id,
     );
-    check(
-        "reference",
-        x.reference.entries == y.reference.entries
-            && x.reference.active_id == y.reference.active_id
-            && x.reference.loudness_match == y.reference.loudness_match
-            && x.reference.trim_db.to_bits() == y.reference.trim_db.to_bits(),
-    );
+    check("project file", a.project.file == b.project.file);
     out
 }
 
@@ -539,7 +534,6 @@ fn assert_lyrics_canonical(app: &Resonance, path: &str, snapshot: &UndoSnapshot)
 /// vacuous (the silent-goldens rule, applied to state).
 fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     let file = &snapshot.project.file;
-    let x = &snapshot.extras;
     assert!((file.bpm - 100.0).abs() < 1e-6, "bpm edit landed");
     assert!(
         file.loop_enabled && file.loop_out == 48_000,
@@ -551,7 +545,7 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     assert_eq!(file.chord_track.regions.len(), 1, "chord region landed");
     assert_eq!(file.chord_track.key_changes.len(), 1, "key change landed");
     assert!(
-        (x.reference.trim_db + 3.0).abs() < 1e-6,
+        (file.reference_settings.trim_db + 3.0).abs() < 1e-6,
         "reference trim landed"
     );
     if let Some(&t) = h.tracks.first() {
@@ -1549,4 +1543,386 @@ fn freeze_states_restore_identically_through_both_paths() {
         freeze_statuses(&f.app, &t),
         "both paths restore the same freeze state"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Reference A/B content vs monitor state (A-5)
+// ---------------------------------------------------------------------------
+//
+// A reference's *content* — which files are loaded (path, name, cached
+// loudness, markers), the active selection, loudness-match and trim — is
+// undoable and lives in `ProjectFile::references` / `reference_settings`.
+// Its *monitor* state — which source the A/B switch monitors, loop-to-mix,
+// the meters — is live and never moved by an undo. These tests drive the
+// app through a stand-in for the engine's `ReferencePlayer` (same id
+// allocator, same command semantics), so a restore that updates the GUI
+// mirror without telling the engine shows up as the two disagreeing.
+
+/// The engine's reference state as the command stream leaves it — a
+/// model of `resonance_audio`'s `ReferencePlayer`.
+#[derive(Debug, Default)]
+struct EngineRefs {
+    ids: Vec<u32>,
+    active: Option<u32>,
+    next_id: u32,
+    ab_reference: bool,
+    loop_to_mix: bool,
+    loudness_match: bool,
+    trim_db: f32,
+    /// `(id, path)` of every load the model registered, in order, so the
+    /// test can echo the ones it wants to land.
+    loads: Vec<(u32, String)>,
+    /// Commands the engine would mis-handle — a hinted id that is already
+    /// registered, a selection of an id it does not hold.
+    errors: Vec<String>,
+}
+
+impl EngineRefs {
+    fn new() -> Self {
+        Self {
+            next_id: 1,
+            ..Self::default()
+        }
+    }
+
+    fn apply(&mut self, cmd: &AudioCommand) {
+        match cmd {
+            AudioCommand::ClearAll => {
+                let errors = std::mem::take(&mut self.errors);
+                *self = Self::new();
+                self.errors = errors;
+            }
+            AudioCommand::LoadReferenceTrack { id_hint, path } => {
+                let id = match id_hint {
+                    Some(h) => {
+                        self.next_id = self.next_id.max(h.0 + 1);
+                        h.0
+                    }
+                    None => {
+                        self.next_id += 1;
+                        self.next_id - 1
+                    }
+                };
+                if self.ids.contains(&id) {
+                    self.errors
+                        .push(format!("LoadReferenceTrack reuses live id {id}"));
+                }
+                self.ids.push(id);
+                self.loads.push((id, path.to_string_lossy().into_owned()));
+            }
+            AudioCommand::RemoveReferenceTrack { id } => {
+                self.ids.retain(|x| *x != id.0);
+                if self.active == Some(id.0) {
+                    self.active = None;
+                }
+            }
+            AudioCommand::SetActiveReference { id } => {
+                if self.ids.contains(&id.0) {
+                    self.active = Some(id.0);
+                } else {
+                    self.errors
+                        .push(format!("SetActiveReference to unknown id {}", id.0));
+                }
+            }
+            AudioCommand::ClearActiveReference => self.active = None,
+            AudioCommand::SetABSource { source } => {
+                self.ab_reference = *source == ABSource::Reference;
+            }
+            AudioCommand::SetRefLoopToMix { enabled } => self.loop_to_mix = *enabled,
+            AudioCommand::SetRefLoudnessMatch { enabled } => self.loudness_match = *enabled,
+            AudioCommand::SetRefTrim { db } => self.trim_db = *db,
+            _ => {}
+        }
+    }
+}
+
+/// Drain the capture channel through the engine model.
+fn sync_refs(f: &Fixture, engine: &mut EngineRefs) -> Vec<AudioCommand> {
+    let cmds = drain(&f.rx);
+    for cmd in &cmds {
+        engine.apply(cmd);
+    }
+    cmds
+}
+
+fn ref_file(f: &Fixture, name: &str) -> PathBuf {
+    let path = f.root.join(format!("{name}.wav"));
+    std::fs::write(&path, b"").expect("write reference file");
+    path
+}
+
+/// Load `path` as the user does and land the engine's `ReferenceLoaded`.
+fn load_reference(
+    f: &mut Fixture,
+    engine: &mut EngineRefs,
+    path: &Path,
+    lufs: f32,
+) -> ReferenceId {
+    f.app
+        .test_dispatch(Message::Reference(ReferenceMessage::LoadRequested(
+            path.to_path_buf(),
+        )));
+    sync_refs(f, engine);
+    let (id, echoed) = engine
+        .loads
+        .last()
+        .cloned()
+        .expect("the load reached the engine");
+    assert_eq!(echoed, path.to_string_lossy());
+    f.app.test_apply_engine_event(AudioEvent::ReferenceLoaded {
+        id: ReferenceId(id),
+        name: path.file_stem().unwrap().to_string_lossy().into_owned(),
+        path: echoed,
+        integrated_lufs: lufs,
+        waveform_peaks: vec![(-0.5, 0.5)],
+        length_samples: 480_000,
+    });
+    ReferenceId(id)
+}
+
+fn ref_id_of(app: &Resonance, path: &Path) -> ReferenceId {
+    let path = path.to_string_lossy();
+    app.test_reference()
+        .entries
+        .iter()
+        .find(|e| e.path == path)
+        .map(|e| e.id)
+        .expect("reference is loaded")
+}
+
+fn ref_msg(f: &mut Fixture, engine: &mut EngineRefs, m: ReferenceMessage) {
+    f.app.test_dispatch(Message::Reference(m));
+    sync_refs(f, engine);
+}
+
+/// The live monitor state: `(ab_source, loop_to_mix)`.
+fn ref_monitor(app: &Resonance) -> (ABSource, bool) {
+    let st = app.test_reference();
+    (st.monitor.ab_source, st.monitor.loop_to_mix)
+}
+
+/// The reference content a restore must bring back, from a file.
+fn reference_content(file: &ProjectFile) -> String {
+    let s = &file.reference_settings;
+    format!(
+        "{}\nactive={:?} loudness_match={} trim_db={}",
+        serde_json::to_string_pretty(&file.references).unwrap(),
+        s.active,
+        s.loudness_match,
+        s.trim_db
+    )
+}
+
+/// Everything wrong with the restored reference state, by name — so the
+/// guard reports every leg at once instead of stopping at the first.
+fn reference_restore_problems(
+    f: &Fixture,
+    engine: &EngineRefs,
+    snapshot: &UndoSnapshot,
+    monitor: (ABSource, bool),
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let st = f.app.test_reference();
+    let file = f.app.test_build_project_file();
+
+    // Content: from the snapshot's `ProjectFile`.
+    if reference_content(&file) != reference_content(&snapshot.project.file) {
+        out.push(format!(
+            "content differs from the snapshot:\n--- restored:\n{}\n--- snapshot:\n{}",
+            reference_content(&file),
+            reference_content(&snapshot.project.file)
+        ));
+    }
+    // Monitor: whatever it was live, untouched.
+    if ref_monitor(&f.app) != monitor {
+        out.push(format!(
+            "monitor state moved: (ab_source, loop_to_mix) = {:?}, was {:?}",
+            ref_monitor(&f.app),
+            monitor
+        ));
+    }
+    // The engine holds exactly the references the panel shows, under
+    // the same ids, with the same selection and levels.
+    let mut gui_ids: Vec<u32> = st
+        .entries
+        .iter()
+        .filter(|e| e.status != ReferenceStatus::Missing)
+        .map(|e| e.id.0)
+        .collect();
+    gui_ids.sort_unstable();
+    let mut engine_ids = engine.ids.clone();
+    engine_ids.sort_unstable();
+    if gui_ids != engine_ids {
+        out.push(format!("panel ids {gui_ids:?} != engine ids {engine_ids:?}"));
+    }
+    if st.active_id.map(|id| id.0) != engine.active {
+        out.push(format!(
+            "panel active {:?} != engine active {:?}",
+            st.active_id, engine.active
+        ));
+    }
+    if st.loudness_match != engine.loudness_match {
+        out.push(format!(
+            "panel loudness_match {} != engine {}",
+            st.loudness_match, engine.loudness_match
+        ));
+    }
+    if st.trim_db != engine.trim_db {
+        out.push(format!(
+            "panel trim {} != engine trim {}",
+            st.trim_db, engine.trim_db
+        ));
+    }
+    let (ab, looped) = ref_monitor(&f.app);
+    if (ab == ABSource::Reference, looped) != (engine.ab_reference, engine.loop_to_mix) {
+        out.push(format!(
+            "panel monitor ({ab:?}, {looped}) != engine ({}, {})",
+            engine.ab_reference, engine.loop_to_mix
+        ));
+    }
+    if !engine.errors.is_empty() {
+        out.push(format!("engine refused: {:?}", engine.errors));
+    }
+    // And the restore is the snapshot, as far as undo can tell.
+    let after = f.app.test_snapshot_for_undo();
+    if !Resonance::test_snapshot_same_state(&after, snapshot) {
+        out.push(format!(
+            "not same_state as the snapshot: {:?}",
+            snapshot_differences(&after, snapshot)
+        ));
+    }
+    if f.app.test_gesture_changed_since(snapshot) {
+        out.push("gesture_changed_since(snapshot) after the restore".into());
+    }
+    out
+}
+
+/// Reference content edited every way the panel can — trim, loudness
+/// match, a remove, a load, a new selection — between snapshot and
+/// restore, with the A/B switch and loop-to-mix flipped as well, restores
+/// the content through BOTH paths, leaves the monitor where the user put
+/// it, and keeps the engine in step with the panel.
+#[test]
+fn reference_content_restores_and_monitor_state_stays_through_both_paths() {
+    let mut f = fixture("reference", load_template(BuiltinTemplateId::Empty));
+    let mut engine = EngineRefs::new();
+    let _ = sync_refs(&f, &mut engine);
+    let (x, a, b, c) = (
+        ref_file(&f, "x"),
+        ref_file(&f, "a"),
+        ref_file(&f, "b"),
+        ref_file(&f, "c"),
+    );
+
+    // Seed: a reference loaded and removed again first, so the live ids
+    // are not the 1..=K a reload hands out.
+    let xid = load_reference(&mut f, &mut engine, &x, -10.0);
+    ref_msg(&mut f, &mut engine, ReferenceMessage::Remove(xid));
+    let aid = load_reference(&mut f, &mut engine, &a, -11.0);
+    let bid = load_reference(&mut f, &mut engine, &b, -12.0);
+    f.app.test_apply_engine_event(AudioEvent::RefMarkerAdded {
+        ref_id: aid,
+        marker_id: 1,
+        position_samples: 44_100,
+        label: "drop".into(),
+    });
+    ref_msg(&mut f, &mut engine, ReferenceMessage::SetActive(bid));
+    ref_msg(&mut f, &mut engine, ReferenceMessage::ToggleLoudnessMatch);
+    ref_msg(&mut f, &mut engine, ReferenceMessage::TrimChanged(-3.0));
+    let snapshot = f.app.test_snapshot_for_undo();
+    let seeded = &snapshot.project.file;
+    assert_eq!(seeded.references.len(), 2, "two references landed");
+    assert_eq!(seeded.references[0].markers.len(), 1, "marker landed");
+    assert_eq!(seeded.reference_settings.active, Some(1), "selection landed");
+    assert!(seeded.reference_settings.loudness_match, "loudness match landed");
+    assert_eq!(seeded.reference_settings.trim_db, -3.0, "trim landed");
+
+    let dirty = |f: &mut Fixture, engine: &mut EngineRefs| {
+        ref_msg(f, engine, ReferenceMessage::TrimChanged(-6.0));
+        ref_msg(f, engine, ReferenceMessage::ToggleLoudnessMatch);
+        let aid = ref_id_of(&f.app, &a);
+        ref_msg(f, engine, ReferenceMessage::Remove(aid));
+        let cid = load_reference(f, engine, &c, -13.0);
+        ref_msg(f, engine, ReferenceMessage::SetActive(cid));
+        assert_eq!(f.app.test_reference().entries.len(), 2);
+    };
+
+    // -- Fast path. The monitor goes to the reference, looping. --
+    dirty(&mut f, &mut engine);
+    ref_msg(&mut f, &mut engine, ReferenceMessage::ToggleAbSource);
+    ref_msg(&mut f, &mut engine, ReferenceMessage::ToggleLoopToMix);
+    let monitor = ref_monitor(&f.app);
+    assert_eq!(monitor, (ABSource::Reference, true));
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let cmds = sync_refs(&f, &mut engine);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "reference edits take the diff replay"
+    );
+    let fast = reference_restore_problems(&f, &engine, &snapshot, monitor);
+
+    // -- Slow path: the same edits plus an extra track. --
+    dirty(&mut f, &mut engine);
+    f.app.test_add_track(9_999, TrackType::Audio);
+    let _ = sync_refs(&f, &mut engine);
+    let monitor = ref_monitor(&f.app);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let cmds = sync_refs(&f, &mut engine);
+    assert!(
+        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a structural change forces the full clear-and-replay"
+    );
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    let _ = sync_refs(&f, &mut engine);
+    let slow = reference_restore_problems(&f, &engine, &snapshot, monitor);
+
+    assert!(
+        fast.is_empty() && slow.is_empty(),
+        "fast path: {fast:#?}\nslow path: {slow:#?}"
+    );
+}
+
+/// Undoing the first selection of a reference leaves nothing selected —
+/// in the engine too, or the A/B switch keeps auditioning a reference the
+/// panel no longer shows as active.
+#[test]
+fn undoing_the_first_reference_selection_clears_the_engine_selection() {
+    let mut f = fixture("reference-select", load_template(BuiltinTemplateId::Empty));
+    let mut engine = EngineRefs::new();
+    let _ = sync_refs(&f, &mut engine);
+    let a = ref_file(&f, "a");
+    let aid = load_reference(&mut f, &mut engine, &a, -11.0);
+    let snapshot = f.app.test_snapshot_for_undo();
+    assert_eq!(snapshot.project.file.reference_settings.active, None);
+
+    ref_msg(&mut f, &mut engine, ReferenceMessage::SetActive(aid));
+    ref_msg(&mut f, &mut engine, ReferenceMessage::ToggleAbSource);
+    let monitor = ref_monitor(&f.app);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let _ = sync_refs(&f, &mut engine);
+    let problems = reference_restore_problems(&f, &engine, &snapshot, monitor);
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// The monitor state is not part of an undo snapshot: flipping the A/B
+/// switch or loop-to-mix is not a change a gesture records.
+#[test]
+fn reference_monitor_toggles_are_not_snapshot_state() {
+    let mut f = fixture("reference-monitor", load_template(BuiltinTemplateId::Empty));
+    let mut engine = EngineRefs::new();
+    let _ = sync_refs(&f, &mut engine);
+    let a = ref_file(&f, "a");
+    let aid = load_reference(&mut f, &mut engine, &a, -11.0);
+    ref_msg(&mut f, &mut engine, ReferenceMessage::SetActive(aid));
+    let before = f.app.test_snapshot_for_undo();
+    ref_msg(&mut f, &mut engine, ReferenceMessage::ToggleAbSource);
+    ref_msg(&mut f, &mut engine, ReferenceMessage::ToggleLoopToMix);
+    assert!(
+        !f.app.test_gesture_changed_since(&before),
+        "an A/B or loop-to-mix toggle is not an undoable change"
+    );
+    assert!(Resonance::test_snapshot_same_state(
+        &f.app.test_snapshot_for_undo(),
+        &before
+    ));
 }

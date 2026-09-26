@@ -1311,6 +1311,11 @@ pub enum AudioCommand {
     SetActiveReference {
         id: ReferenceId,
     },
+    /// Deselect the active reference, so the A/B monitor has nothing to
+    /// audition (it falls through to the mix). Sent by an undo that
+    /// restores "nothing selected"; the user can only change the
+    /// selection, never clear it. Silent: the app has already applied it.
+    ClearActiveReference,
     /// Switch the monitored signal between the project mix and the
     /// active reference. Emits `AudioEvent::ABSourceChanged`.
     SetABSource {

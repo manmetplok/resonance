@@ -10,5 +10,6 @@ mod state;
 
 pub use messages::ReferenceMessage;
 pub use state::{
-    AbMeters, ReferenceEntry, ReferenceMarkerState, ReferenceState, ReferenceStatus, ReferenceUndo,
+    AbMeters, ReferenceEntry, ReferenceMarkerState, ReferenceMonitorState, ReferenceState,
+    ReferenceStatus,
 };

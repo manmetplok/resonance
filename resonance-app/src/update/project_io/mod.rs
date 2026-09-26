@@ -28,7 +28,7 @@ pub use replay::replay_loaded_project;
 pub use replay::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use replay::{
     restore_drum_patterns, restore_performance, restore_pool, restore_quantize,
-    restore_references,
+    restore_references, ReferenceMonitorSource,
 };
 pub use replay_diff::try_diff_replay;
 pub use serialize::{build_project_file, plugin_states_for_save};

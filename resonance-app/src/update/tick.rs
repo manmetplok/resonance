@@ -264,7 +264,7 @@ fn peaks_have_consumers(r: &Resonance) -> bool {
 /// Drive the Reference panel's comparative loudness readout: while the
 /// rail is open with at least one loaded reference, ask the engine for a
 /// fresh A/B meter snapshot each tick. The reply arrives as
-/// `AudioEvent::ABMeterSnapshot` and is folded into `r.reference.ab_meter`
+/// `AudioEvent::ABMeterSnapshot` and is folded into `r.reference.monitor.ab_meter`
 /// by `engine_events::reference::ab_meter_snapshot`. Gated on the panel
 /// being visible so we don't poll the A/B taps when nothing reads them.
 fn poll_ab_meters(r: &mut Resonance) {

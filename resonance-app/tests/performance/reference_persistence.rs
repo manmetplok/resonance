@@ -142,10 +142,10 @@ fn restore_round_trips_entries_markers_and_settings() {
     assert_eq!(st.entries[0].markers[0].label, "drop");
 
     assert_eq!(st.active_id, Some(ReferenceId(2)), "active index maps to entry id");
-    assert_eq!(st.ab_source, ABSource::Reference);
+    assert_eq!(st.monitor.ab_source, ABSource::Reference);
     assert!(st.loudness_match);
     assert_eq!(st.trim_db, -3.0);
-    assert!(st.loop_to_mix);
+    assert!(st.monitor.loop_to_mix);
 
     // The re-decode echoes `ReferenceLoaded`; the entry flips to Loaded and
     // gains its waveform while the restored markers survive the fold.
