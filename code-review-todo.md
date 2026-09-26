@@ -84,6 +84,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
 | refactor-intent A-12b (ARCH-06) | A6-2 batch 2: PresetState (8), ModalState (7); `Resonance` 79 → 66 fields | sonnet | merged | 7c9af9de |
 | refactor-intent A-12c (ARCH-06) | A6-2 batch 3: PluginMirror (`state_cache`, `index`, `next_id`); `Resonance` 66 → 64 | sonnet | merged | 0768c633 |
+| refactor-intent A-12d (ARCH-06) | A6-2 batch 4: MasterState (`volume`, `level_l/r`, `plugins`, `fx_bypassed`); `Resonance` 64 → 60; survey `docs/design/A-12-resonance-fields.md` | sonnet | merged | 5281dd48 |
 | refactor-intent E (ARCH-07) | A7-3 `model`/`decode` features in resonance-common; plugins set `default-features = false` (invariant) | sonnet | merged | 38d66942 |
 | refactor-intent A-11 (ARCH-06) | A1-3 remainder: 11 enums moved beside handlers, `message.rs` 1084 → 416 | sonnet | merged | d8bd59b7 |
 | refactor-intent C-1 (ARCH-05) | A5-3 `EngineError { kind, message }`; 39 emit sites classified (NotFound 5, Busy 2, Io 15, Plugin 4, dynamic 1, Internal 12) | sonnet | merged | 8339eecd |
