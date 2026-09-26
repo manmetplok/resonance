@@ -22,11 +22,69 @@ use midly::num::{u15, u24, u4, u7};
 use midly::{
     Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
 };
+use thiserror::Error;
 
 use crate::types::{
-    bar_len_ticks, sanitize_bpm, MidiNote, SignaturePoint, TempoMap, TempoPoint, MAX_BPM,
-    MIN_BPM, TICKS_PER_QUARTER_NOTE,
+    bar_len_ticks, sanitize_bpm, EngineError, EngineErrorKind, MidiNote, SignaturePoint, TempoMap,
+    TempoPoint, MAX_BPM, MIN_BPM, TICKS_PER_QUARTER_NOTE,
 };
+
+/// Failure reading or writing a Standard MIDI File. Message text matches
+/// the historical `format!()` strings.
+#[derive(Debug, Error)]
+pub enum MidiIoError {
+    #[error("create {path}: {source}")]
+    CreateDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    // midly's `Write for Vec<u8>` reports failures as `&'static str`
+    // (`midly::io::Write::Error`), not `midly::Error` — no `#[source]`
+    // to chain since `&str` doesn't implement `std::error::Error`.
+    #[error("serialize smf: {message}")]
+    Serialize { message: &'static str },
+    #[error("write {path}: {source}")]
+    Write {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("read {path}: {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parse smf: {source}")]
+    Parse {
+        #[source]
+        source: midly::Error,
+    },
+    /// SMF Format 2 (independent, non-simultaneous tracks) isn't a shape
+    /// the sequencer model can represent.
+    #[error("unsupported SMF Format 2 (sequential tracks)")]
+    UnsupportedFormat2,
+    /// SMPTE-timed files (frame-based delta times) aren't supported; only
+    /// metrical (pulses-per-quarter-note) timing is.
+    #[error("unsupported SMPTE-timed SMF (only metrical PPQ timing)")]
+    UnsupportedSmpte,
+}
+
+impl From<MidiIoError> for EngineError {
+    fn from(e: MidiIoError) -> Self {
+        let kind = match &e {
+            MidiIoError::CreateDir { .. } | MidiIoError::Write { .. } | MidiIoError::Read { .. } => {
+                EngineErrorKind::Io
+            }
+            MidiIoError::Serialize { .. }
+            | MidiIoError::Parse { .. }
+            | MidiIoError::UnsupportedFormat2
+            | MidiIoError::UnsupportedSmpte => EngineErrorKind::Unsupported,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
 
 /// One named source track for a multi-track (Format 1) export.
 pub struct MidiTrackSource<'a> {
@@ -42,7 +100,7 @@ pub struct MidiTrackSource<'a> {
 /// are written. The note list is sorted by absolute tick, expanded into
 /// paired note-on/note-off events, delta-encoded, and terminated by a
 /// single End-of-Track meta event.
-pub fn write_midi_file(path: &Path, notes: &[MidiNote]) -> Result<(), String> {
+pub fn write_midi_file(path: &Path, notes: &[MidiNote]) -> Result<(), MidiIoError> {
     let track = build_note_track(None, notes);
     let header = Header::new(Format::SingleTrack, metrical_timing());
     write_smf(path, header, vec![track])
@@ -54,7 +112,7 @@ pub fn write_midi_file(path: &Path, notes: &[MidiNote]) -> Result<(), String> {
 /// instead of writing them, so callers that need a crash-safe
 /// (write-temp-then-rename) write can route the bytes through their
 /// own atomic writer.
-pub fn encode_midi(notes: &[MidiNote]) -> Result<Vec<u8>, String> {
+pub fn encode_midi(notes: &[MidiNote]) -> Result<Vec<u8>, MidiIoError> {
     let track = build_note_track(None, notes);
     let header = Header::new(Format::SingleTrack, metrical_timing());
     let smf = Smf {
@@ -63,7 +121,7 @@ pub fn encode_midi(notes: &[MidiNote]) -> Result<Vec<u8>, String> {
     };
     let mut buf: Vec<u8> = Vec::new();
     smf.write(&mut buf)
-        .map_err(|e| format!("serialize smf: {e}"))?;
+        .map_err(|e| MidiIoError::Serialize { message: e })?;
     Ok(buf)
 }
 
@@ -80,7 +138,7 @@ pub fn write_midi_project(
     path: &Path,
     tempo_map: &TempoMap,
     tracks: &[MidiTrackSource],
-) -> Result<(), String> {
+) -> Result<(), MidiIoError> {
     let mut smf_tracks: Vec<Track> = Vec::with_capacity(tracks.len() + 1);
     smf_tracks.push(build_conductor_track(tempo_map));
     for t in tracks {
@@ -265,24 +323,33 @@ fn u28(ticks: u64) -> midly::num::u28 {
 }
 
 /// Serialize `tracks` under `header` to `path`, creating parent dirs.
-fn write_smf(path: &Path, header: Header, tracks: Vec<Track>) -> Result<(), String> {
+fn write_smf(path: &Path, header: Header, tracks: Vec<Track>) -> Result<(), MidiIoError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| MidiIoError::CreateDir {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
     }
     let smf = Smf { header, tracks };
     let mut buf: Vec<u8> = Vec::new();
     smf.write(&mut buf)
-        .map_err(|e| format!("serialize smf: {e}"))?;
-    std::fs::write(path, buf).map_err(|e| format!("write {}: {e}", path.display()))?;
+        .map_err(|e| MidiIoError::Serialize { message: e })?;
+    std::fs::write(path, buf).map_err(|e| MidiIoError::Write {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     Ok(())
 }
 
 /// Parse a Format 0 (or Format 1 first-track-wins) SMF at `path`
 /// back into a list of notes. Unmatched note-ons are silently
 /// dropped — a repaired file round-trips bit-for-bit.
-pub fn read_midi_file(path: &Path) -> Result<Vec<MidiNote>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let smf = Smf::parse(&bytes).map_err(|e| format!("parse smf: {e}"))?;
+pub fn read_midi_file(path: &Path) -> Result<Vec<MidiNote>, MidiIoError> {
+    let bytes = std::fs::read(path).map_err(|e| MidiIoError::Read {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let smf = Smf::parse(&bytes).map_err(|e| MidiIoError::Parse { source: e })?;
 
     let track = match smf.tracks.first() {
         Some(t) => t,
@@ -527,27 +594,30 @@ fn length_in_bars(length_ticks: u64, spans: &[MeterSpan]) -> u32 {
 ///
 /// Accepts Format 0 and Format 1. Format 2 and SMPTE-timed files are
 /// rejected with a descriptive `Err`, as are corrupt files.
-pub fn parse_midi_file(path: &Path) -> Result<ImportedSmf, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+pub fn parse_midi_file(path: &Path) -> Result<ImportedSmf, MidiIoError> {
+    let bytes = std::fs::read(path).map_err(|e| MidiIoError::Read {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     parse_smf_bytes(&bytes)
 }
 
 /// Parse SMF bytes into a structured [`ImportedSmf`]. Pure — no I/O.
-pub fn parse_smf_bytes(bytes: &[u8]) -> Result<ImportedSmf, String> {
-    let smf = Smf::parse(bytes).map_err(|e| format!("parse smf: {e}"))?;
+pub fn parse_smf_bytes(bytes: &[u8]) -> Result<ImportedSmf, MidiIoError> {
+    let smf = Smf::parse(bytes).map_err(|e| MidiIoError::Parse { source: e })?;
 
     let format = match smf.header.format {
         Format::SingleTrack => SmfFormat::Format0,
         Format::Parallel => SmfFormat::Format1,
         Format::Sequential => {
-            return Err("unsupported SMF Format 2 (sequential tracks)".to_string());
+            return Err(MidiIoError::UnsupportedFormat2);
         }
     };
 
     let source_ppq: u16 = match smf.header.timing {
         Timing::Metrical(ppq) => u16::from(ppq),
         Timing::Timecode(_, _) => {
-            return Err("unsupported SMPTE-timed SMF (only metrical PPQ timing)".to_string());
+            return Err(MidiIoError::UnsupportedSmpte);
         }
     };
     let src = source_ppq as u32;
