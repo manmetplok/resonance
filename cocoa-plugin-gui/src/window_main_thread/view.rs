@@ -22,7 +22,7 @@ use objc2_app_kit::{NSEvent, NSOpenGLPixelFormat, NSOpenGLView, NSTrackingArea, 
 use objc2_foundation::{NSRect, NSRunLoop, NSRunLoopCommonModes, NSTimer};
 
 use plugin_gui_core::repaint::{plan_repaint, repaint_due, RepaintPlan};
-use plugin_gui_core::{EditorApp, EditorError, SharedSize};
+use plugin_gui_core::{CloseNotifier, EditorApp, EditorError, SharedSize};
 
 use crate::input::{self, InputState};
 
@@ -47,6 +47,10 @@ pub(super) struct ViewIvars {
     /// handle reads it to mirror the Wayland handle's send-failure
     /// semantics after its editor thread has exited.
     alive: Arc<AtomicBool>,
+    /// Tells the host the window closed itself (PLG-01). Raised from
+    /// [`EditorView::fire_on_close`], i.e. only on the user-close and
+    /// panic paths; the handle disarms it before a host destroy.
+    closed: CloseNotifier,
     start_time: Instant,
     /// Reentrancy guard: a modal run loop started inside `ui()` (an rfd /
     /// NSOpenPanel dialog) services the main queue and can deliver another
@@ -217,6 +221,7 @@ impl EditorView {
         app: Box<dyn EditorApp>,
         shared_size: SharedSize,
         alive: Arc<AtomicBool>,
+        closed: CloseNotifier,
         editor_id: u64,
     ) -> Result<Retained<Self>, EditorError> {
         let this = Self::alloc(mtm).set_ivars(ViewIvars {
@@ -228,6 +233,7 @@ impl EditorView {
             pending_events: RefCell::new(Vec::new()),
             shared_size,
             alive,
+            closed,
             start_time: Instant::now(),
             in_paint: Cell::new(false),
             needs_repaint: Cell::new(true),
@@ -397,7 +403,8 @@ impl EditorView {
     }
 
     /// Invoke `EditorApp::on_close` exactly once, tolerating (impossible,
-    /// but FFI-adjacent) reentrancy instead of panicking across it.
+    /// but FFI-adjacent) reentrancy instead of panicking across it, then
+    /// tell the host the window is closing on its own (PLG-01).
     fn fire_on_close(&self) {
         let ivars = self.ivars();
         if !ivars.on_close_fired.replace(true) {
@@ -406,6 +413,7 @@ impl EditorView {
             }
         }
         ivars.alive.store(false, Ordering::Relaxed);
+        ivars.closed.notify();
     }
 
     /// Release everything that must die on the main thread: the repaint

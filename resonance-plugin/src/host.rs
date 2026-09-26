@@ -15,7 +15,7 @@
 //! selector — *must* push, or every other track in the project stays
 //! compensated for the old figure while this one delays by the new one.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use clack_plugin::prelude::HostSharedHandle;
@@ -54,6 +54,13 @@ pub struct HostHandle {
     /// Consumed on the main thread, which is the only thread allowed to call
     /// `clap_host_latency.changed()`.
     latency_dirty: AtomicBool,
+    /// The serial of an editor whose window closed itself and the host has
+    /// not been told yet; 0 when there is none. Set from whatever thread
+    /// the GUI runtime closes on, consumed on the main thread, which is
+    /// the only one allowed to call `clap_host_gui.closed()` (PLG-01).
+    /// A serial rather than a flag, so a late report from an editor the
+    /// host has since destroyed cannot be pinned on its successor.
+    gui_closed: AtomicU64,
 }
 
 impl HostHandle {
@@ -70,6 +77,7 @@ impl HostHandle {
             active: AtomicBool::new(false),
             latency: AtomicU32::new(initial_latency),
             latency_dirty: AtomicBool::new(false),
+            gui_closed: AtomicU64::new(0),
         })
     }
 
@@ -154,6 +162,24 @@ impl HostHandle {
     /// whether a restart request is required.
     pub(crate) fn set_active(&self, active: bool) {
         self.active.store(active, Ordering::Release);
+    }
+
+    /// The editor with this serial closed its own window. Latch it and
+    /// ask for a main-thread callback, where the bridge's `on_main_thread`
+    /// turns it into `clap_host_gui.closed()` (a `[main-thread]` call; the
+    /// runtime may be on its own thread).
+    pub(crate) fn report_gui_closed(&self, editor_serial: u64) {
+        self.gui_closed.store(editor_serial, Ordering::Release);
+        self.request_callback();
+    }
+
+    /// Take the pending self-close report: the serial of the editor that
+    /// closed, or `None`.
+    pub(crate) fn take_gui_closed(&self) -> Option<u64> {
+        match self.gui_closed.swap(0, Ordering::AcqRel) {
+            0 => None,
+            serial => Some(serial),
+        }
     }
 
     /// Make the handle inert. Called when the plugin instance is destroyed,

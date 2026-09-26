@@ -14,7 +14,7 @@ use std::sync::Arc;
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 
-use plugin_gui_core::{EditorApp, EditorError, EditorOptions, SharedSize};
+use plugin_gui_core::{CloseNotifier, EditorApp, EditorError, EditorOptions, SharedSize};
 
 use crate::window_main_thread;
 
@@ -61,6 +61,11 @@ pub struct Editor {
     /// Cleared by the controller when the editor dies (user close or
     /// teardown). Mirrors the Wayland handle's send-failure signal.
     alive: Arc<AtomicBool>,
+    /// Raised by the main-thread controller when the window goes away
+    /// without a host `destroy` (user close, or a panicking `ui()`);
+    /// disarmed by [`Editor::stop`] so a host-initiated teardown is never
+    /// reported.
+    closed: CloseNotifier,
     /// Teardown ran (destroy or drop); makes both idempotent.
     stopped: bool,
 }
@@ -76,17 +81,19 @@ impl Editor {
         let size = SharedSize::new(options.initial_size);
         let resizable = options.resizable;
         let alive = Arc::new(AtomicBool::new(true));
+        let closed = CloseNotifier::new();
 
         let mut result: Option<Result<(), EditorError>> = None;
         {
             let size = size.clone();
             let alive = Arc::clone(&alive);
+            let closed = closed.clone();
             let app: Box<dyn EditorApp> = Box::new(app);
             let options = &options;
             let result = &mut result;
             run_on_main_blocking(move || {
                 *result = Some(window_main_thread::EditorMain::create(
-                    id, app, options, size, alive,
+                    id, app, options, size, alive, closed,
                 ));
             });
         }
@@ -96,6 +103,7 @@ impl Editor {
                 size,
                 resizable,
                 alive,
+                closed,
                 stopped: false,
             }),
             Some(Err(err)) => Err(err),
@@ -150,6 +158,17 @@ impl Editor {
         self.resizable
     }
 
+    /// Install the callback that tells the host the window closed itself:
+    /// the user clicked the titlebar close button (after
+    /// [`EditorApp::on_close`]) or the plugin's `ui()` panicked and the
+    /// runtime closed the editor. Runs at most once, on the main thread;
+    /// never for a teardown the caller started with [`Editor::destroy`] or
+    /// a drop. If the window already closed, it runs immediately on this
+    /// thread.
+    pub fn set_closed_callback(&self, callback: impl FnOnce() + Send + 'static) {
+        self.closed.set_callback(callback);
+    }
+
     /// Destroy the window. Blocks until the main thread has torn it down,
     /// exactly as the Wayland handle joins its editor thread.
     pub fn destroy(mut self) {
@@ -161,6 +180,8 @@ impl Editor {
             return;
         }
         self.stopped = true;
+        // Host-initiated: not a close the host needs to hear about.
+        self.closed.disarm();
         let id = self.id;
         run_on_main_blocking(move || window_main_thread::destroy(id));
     }

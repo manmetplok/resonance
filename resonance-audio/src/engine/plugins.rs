@@ -204,6 +204,10 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
             let Some(mut inst) = mutex.try_lock() else {
                 continue;
             };
+            // Deliver the plugin's requested main-thread callback first:
+            // that is where a plugin reports a self-closed editor
+            // (`clap_host_gui.closed()`, PLG-01) or a latency change.
+            inst.0.run_requested_callback();
             // The user closed the editor from the floating window's own
             // titlebar and the plugin told us via `clap_host_gui.closed()`
             // (ba todo #1347). `take_gui_closed` finishes the CLAP-side

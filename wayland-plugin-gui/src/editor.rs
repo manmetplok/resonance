@@ -4,6 +4,7 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use plugin_gui_core::CloseNotifier;
 use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 
 use crate::app::EditorApp;
@@ -41,6 +42,10 @@ pub struct Editor {
     /// size it applies (see [`crate::size`]).
     size: SharedSize,
     resizable: bool,
+    /// Raised by the editor thread when the window goes away without a
+    /// host `destroy` (user close, or the thread dying); disarmed by
+    /// [`Editor::stop`] so a host-initiated teardown is never reported.
+    closed: CloseNotifier,
 }
 
 impl Editor {
@@ -49,15 +54,24 @@ impl Editor {
         let size = SharedSize::new(options.initial_size);
         let resizable = options.resizable;
 
+        let closed = CloseNotifier::new();
         let (sender, cmd_channel) = calloop_channel::channel::<Command>();
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), EditorError>>(1);
 
         let thread_opts = options.clone();
         let thread_size = size.clone();
+        let thread_closed = closed.clone();
         let thread = std::thread::Builder::new()
             .name("wayland-plugin-gui".to_string())
             .spawn(move || {
-                EditorThread::run(Box::new(app), thread_opts, cmd_channel, ready_tx, thread_size);
+                EditorThread::run(
+                    Box::new(app),
+                    thread_opts,
+                    cmd_channel,
+                    ready_tx,
+                    thread_size,
+                    thread_closed,
+                );
             })
             .map_err(EditorError::ThreadSpawn)?;
 
@@ -79,7 +93,18 @@ impl Editor {
             thread: Some(thread),
             size,
             resizable,
+            closed,
         })
+    }
+
+    /// Install the callback that tells the host the window closed itself:
+    /// the user closed it (CSD close button or `xdg_toplevel.close`, after
+    /// [`EditorApp::on_close`]) or the editor thread died. Runs at most
+    /// once, on the editor thread, after the window is gone; never for a
+    /// teardown the caller started with [`Editor::destroy`] or a drop.
+    /// If the window already closed, it runs immediately on this thread.
+    pub fn set_closed_callback(&self, callback: impl FnOnce() + Send + 'static) {
+        self.closed.set_callback(callback);
     }
 
     /// Show the window. Idempotent.
@@ -138,6 +163,9 @@ impl Editor {
     }
 
     fn stop(&mut self) {
+        // Host-initiated: whatever the thread does on its way out is not
+        // a close the host needs to hear about.
+        self.closed.disarm();
         // The command channel is a calloop channel: sending pings the
         // event loop's wakeup fd, so an editor thread idle-parked in
         // `dispatch` sees Quit immediately — no separate wake is

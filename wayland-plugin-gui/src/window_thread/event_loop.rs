@@ -4,6 +4,7 @@ use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
 use plugin_gui_core::repaint::repaint_due;
+use plugin_gui_core::CloseNotifier;
 use smithay_client_toolkit::compositor::CompositorState;
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
@@ -44,13 +45,34 @@ impl EditorThread {
         cmd_channel: calloop_channel::Channel<Command>,
         ready_tx: SyncSender<Result<(), EditorError>>,
         shared_size: SharedSize,
+        closed: CloseNotifier,
     ) {
-        let result = Self::run_inner(app, options, cmd_channel, ready_tx.clone(), shared_size);
-        if let Err(err) = result {
-            eprintln!("wpg: editor thread exited with error: {}", err);
-            // Try to send the error; the main thread may have given up already.
-            let _ = ready_tx.try_send(Err(err));
+        // A panic in the plugin's `ui()` only ends this thread (the host
+        // survives; the handle degrades to `ChannelClosed`), but it must
+        // still reach the notification below, so catch it here rather
+        // than let the unwind skip it.
+        let ready = ready_tx.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            Self::run_inner(app, options, cmd_channel, ready, shared_size)
+        }));
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                eprintln!("wpg: editor thread exited with error: {}", err);
+                // Try to send the error; the main thread may have given up already.
+                let _ = ready_tx.try_send(Err(err));
+            }
+            Err(_) => {
+                // The panic hook already printed the message.
+                eprintln!("wpg: editor thread panicked; closing the editor");
+                let _ = ready_tx.try_send(Err(EditorError::ChannelClosed));
+            }
         }
+        // The window is gone. Unless the host asked for that (`Editor::stop`
+        // disarms this before sending Quit), tell it: a user close, or a
+        // runtime failure that ended the thread, leaves a host that still
+        // thinks the editor is open otherwise (PLG-01).
+        closed.notify();
     }
 
     fn run_inner(

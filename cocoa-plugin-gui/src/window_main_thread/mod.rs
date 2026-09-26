@@ -22,7 +22,7 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use plugin_gui_core::{EditorApp, EditorError, EditorOptions, SharedSize};
+use plugin_gui_core::{CloseNotifier, EditorApp, EditorError, EditorOptions, SharedSize};
 
 use delegate::WindowDelegate;
 use view::EditorView;
@@ -56,6 +56,7 @@ impl EditorMain {
         options: &EditorOptions,
         shared_size: SharedSize,
         alive: Arc<AtomicBool>,
+        closed: CloseNotifier,
     ) -> Result<(), EditorError> {
         let mtm = MainThreadMarker::new()
             .expect("EditorMain::create must run on the AppKit main thread");
@@ -64,7 +65,7 @@ impl EditorMain {
         let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
 
         let pf = crate::gl_context::pixel_format(mtm)?;
-        let view = EditorView::new(mtm, content, &pf, app, shared_size, alive, id)?;
+        let view = EditorView::new(mtm, content, &pf, app, shared_size, alive, closed, id)?;
         // Retina: render at the backing resolution, not 1x. Physical sizes
         // come from `convertRectToBacking` from then on. (Deprecated with
         // the rest of NSOpenGL — the v1 rendering decision, plan §2.)

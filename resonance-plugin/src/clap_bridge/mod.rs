@@ -238,6 +238,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             host_handle,
             editor_factory,
             editor: None,
+            editor_serial: 0,
             extra_state_saver,
         })
     }

@@ -173,6 +173,25 @@ impl ClapInstance {
         self.latency
     }
 
+    /// Run the plugin's `on_main_thread` if it asked for it through
+    /// `clap_host.request_callback()` since the last call. Engine thread,
+    /// under the instance lock, before the other host-request flags are
+    /// read — whatever the callback reports (`clap_host_gui.closed`,
+    /// `clap_host_latency.changed`) is then picked up in the same poll.
+    pub fn run_requested_callback(&mut self) {
+        use std::sync::atomic::Ordering;
+        if !self.host_data.callback_requested.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        // SAFETY: `plugin` is live for the instance's lifetime, and the
+        // engine thread is the thread every other main-thread call runs on.
+        unsafe {
+            if let Some(on_main_thread) = (*self.plugin).on_main_thread {
+                on_main_thread(self.plugin);
+            }
+        }
+    }
+
     /// Consume the host-callback flags set by the plugin: returns true
     /// when it asked for a restart (`clap_host.request_restart`) and/or
     /// signalled a latency change (`clap_host_latency.changed`) since
