@@ -8,7 +8,8 @@ use std::time::{Duration, SystemTime};
 
 use resonance_app::message::{Message, ProjectIoMessage};
 use resonance_app::project::session::{
-    self, probe, recoverable_from_state, scan_scratch_root, SessionMarker, SESSION_MARKER,
+    self, gc_scratch_root, probe, recoverable_from_state, retire_stale_autosave,
+    scan_scratch_root, SessionMarker, SCRATCH_GC_AGE, SESSION_MARKER,
 };
 use resonance_app::project::{load_project, save_project, AUTOSAVE_JSON, PROJECT_JSON};
 use resonance_app::Resonance;
@@ -236,4 +237,119 @@ fn saving_an_untitled_project_retires_its_scratch_autosave() {
 
     assert!(!scratch.exists(), "the scratch autosave is superseded by the real save");
     assert_eq!(marker_owner(&target).as_deref(), Some(app.session_id()));
+}
+
+// ---- Autosave hygiene (FU-R1a) ----------------------------------------
+
+fn set_dir_mtime(dir: &Path, at: SystemTime) {
+    std::fs::File::open(dir)
+        .and_then(|f| f.set_modified(at))
+        .expect("set dir mtime");
+}
+
+/// A project dir with a `project.json` at `saved` and an autosave (JSON +
+/// `autosave/` side files) at `autosaved`.
+fn project_with_autosave(tag: &str, saved: SystemTime, autosaved: SystemTime) -> PathBuf {
+    let dir = temp_dir(tag);
+    touch(&dir.join(PROJECT_JSON), saved);
+    let side = dir.join("autosave");
+    std::fs::create_dir_all(side.join("midi")).unwrap();
+    std::fs::write(side.join("midi").join("clip_1.mid"), b"x").unwrap();
+    touch(&dir.join(AUTOSAVE_JSON), autosaved);
+    dir
+}
+
+#[test]
+fn an_autosave_older_than_the_save_is_retired_with_its_side_files() {
+    let dir = project_with_autosave("retire_old", t(20), t(10));
+    retire_stale_autosave(&dir);
+    assert!(!dir.join(AUTOSAVE_JSON).exists(), "stale autosave JSON must go");
+    assert!(!dir.join("autosave").exists(), "its side files must go too");
+    assert!(dir.join(PROJECT_JSON).exists(), "the save itself is untouched");
+
+    // Same instant: the save holds everything the snapshot did.
+    let same = project_with_autosave("retire_same", t(20), t(20));
+    retire_stale_autosave(&same);
+    assert!(!same.join(AUTOSAVE_JSON).exists());
+}
+
+#[test]
+fn an_autosave_newer_than_the_save_is_kept() {
+    let dir = project_with_autosave("retire_newer", t(10), t(20));
+    retire_stale_autosave(&dir);
+    assert!(dir.join(AUTOSAVE_JSON).exists(), "a newer autosave is not stale");
+    assert!(dir.join("autosave").join("midi").join("clip_1.mid").exists());
+}
+
+#[test]
+fn orphaned_side_files_without_their_json_are_retired() {
+    let dir = project_with_autosave("retire_orphan", t(20), t(10));
+    std::fs::remove_file(dir.join(AUTOSAVE_JSON)).unwrap();
+    retire_stale_autosave(&dir);
+    assert!(!dir.join("autosave").exists());
+}
+
+#[test]
+fn a_never_saved_dir_keeps_its_autosave() {
+    let dir = temp_dir("retire_unsaved");
+    touch(&dir.join(AUTOSAVE_JSON), t(10));
+    retire_stale_autosave(&dir);
+    assert!(dir.join(AUTOSAVE_JSON).exists(), "no save: the autosave is the only copy");
+}
+
+#[test]
+fn a_manual_save_retires_the_projects_stale_autosave() {
+    let dir = saved_project("save_retires");
+    let (mut app, _task) = Resonance::new_for_test();
+    open(&mut app, &dir);
+    // An autosave from before this save (a minute older than project.json).
+    let saved_at = std::fs::metadata(dir.join(PROJECT_JSON)).unwrap().modified().unwrap();
+    std::fs::create_dir_all(dir.join("autosave")).unwrap();
+    touch(&dir.join(AUTOSAVE_JSON), saved_at - Duration::from_secs(60));
+
+    // An autosave completing never retires anything.
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()), true)));
+    assert!(dir.join(AUTOSAVE_JSON).exists(), "an autosave must not retire itself");
+
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
+    finish_collect(&mut app);
+    // The write task is not run here; `project.json` already stands in
+    // for what it writes (newer than the autosave).
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectSaved(Ok(()), false)));
+    assert!(!dir.join(AUTOSAVE_JSON).exists(), "the save supersedes the autosave");
+    assert!(!dir.join("autosave").exists());
+}
+
+#[test]
+fn scratch_gc_drops_only_old_markerless_dirs() {
+    let root = temp_dir("gc");
+    let now = SystemTime::now();
+    let old = now - SCRATCH_GC_AGE - Duration::from_secs(3600);
+    let recent = now - Duration::from_secs(3600);
+    let mk = |name: &str, at: SystemTime, marker: bool| {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        touch(&dir.join(AUTOSAVE_JSON), at);
+        if marker {
+            write_marker_as(&dir, 0, name);
+        }
+        set_dir_mtime(&dir, at);
+        dir
+    };
+    let orphan_old = mk("orphan-old", old, false);
+    let orphan_recent = mk("orphan-recent", recent, false);
+    let crashed_old = mk("crashed-old", old, true);
+    let mine_old = mk("mine", old, false);
+    // An old dir whose autosave was rewritten recently is still active.
+    let touched = mk("touched", old, false);
+    touch(&touched.join(AUTOSAVE_JSON), recent);
+    set_dir_mtime(&touched, old);
+
+    assert_eq!(gc_scratch_root(&root, "mine", SCRATCH_GC_AGE, now), 1);
+    assert!(!orphan_old.exists(), "an old marker-less scratch dir is collected");
+    assert!(orphan_recent.exists(), "a recent one may still be in use");
+    assert!(crashed_old.exists(), "a marked dir is recovery evidence, never collected");
+    assert!(mine_old.exists(), "this session's own dir is never collected");
+    assert!(touched.exists(), "recent autosave activity keeps a dir");
+    assert_eq!(gc_scratch_root(&root.join("missing"), "mine", SCRATCH_GC_AGE, now), 0);
 }

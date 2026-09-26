@@ -15,10 +15,11 @@
 //! swallowed.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+use super::io::AUTOSAVE_SIDECAR_DIR;
 use super::model::{AUTOSAVE_JSON, PROJECT_JSON};
 
 /// File name of the session marker inside a project (or scratch) dir.
@@ -93,6 +94,22 @@ pub fn read_marker(dir: &Path) -> Option<SessionMarker> {
 /// (`own_session_id`) or another live process. Only Linux can tell for
 /// another process (`/proc/<pid>`); elsewhere a foreign marker counts as
 /// dead, which at worst offers a recovery the user can decline.
+///
+/// Known limitation (code review FU-R1a) — on macOS / Windows a second
+/// *running* instance is indistinguishable from a crashed one:
+/// - opening a project another live instance has open offers its
+///   autosave for recovery (declining is harmless; recovering loads a
+///   snapshot the other instance keeps editing — the two then diverge,
+///   exactly as opening one project twice does without markers);
+/// - the startup scan can offer another live instance's untitled scratch
+///   session, and answering that prompt with *Discard* deletes the scratch
+///   dir the other instance is still autosaving into (it recreates it on
+///   its next autosave, so only the snapshots in between are lost).
+///
+/// A portable liveness check (an advisory lock held on the marker for the
+/// session's lifetime) would close both; until then the pid check is
+/// Linux-only. [`gc_scratch_root`] never touches a dir with a marker, live
+/// or not, so the age-based cleanup is safe everywhere.
 pub fn marker_is_live(marker: &SessionMarker, own_session_id: &str) -> bool {
     if marker.session_id == own_session_id {
         return true;
@@ -137,6 +154,75 @@ pub fn probe(dir: &Path, own_session_id: &str) -> Option<RecoveryOffer> {
         autosave_at: autosave_at.unwrap_or(SystemTime::UNIX_EPOCH),
         saved_at,
     })
+}
+
+/// After a successful manual save of the project in `dir`: delete its
+/// autosave (`project.autosave.json` plus the `autosave/` side-file dir)
+/// when that autosave is not newer than the `project.json` just written —
+/// the save holds everything the snapshot did, so it would only linger
+/// (code review FU-R1a). An autosave newer than the save is kept: it is
+/// not stale. Side files without their JSON are useless and always go.
+/// Best effort: errors are logged.
+pub fn retire_stale_autosave(dir: &Path) {
+    let Some(saved) = mtime(&dir.join(PROJECT_JSON)) else {
+        return;
+    };
+    let json = dir.join(AUTOSAVE_JSON);
+    if mtime(&json).is_some_and(|auto| auto > saved) {
+        return;
+    }
+    let results = [
+        std::fs::remove_file(&json),
+        std::fs::remove_dir_all(dir.join(AUTOSAVE_SIDECAR_DIR)),
+    ];
+    for e in results.into_iter().filter_map(Result::err) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("retiring the stale autosave in {}: {e}", dir.display());
+        }
+    }
+}
+
+/// How long a marker-less untitled scratch dir may sit before
+/// [`gc_scratch_root`] deletes it.
+pub const SCRATCH_GC_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Delete the untitled scratch dirs under `root` that no session marker
+/// claims and that nothing has touched for `max_age` (FU-R1a). They are
+/// what an autosave racing a Save As, or a crash between an autosave's
+/// first write and its marker, leaves behind: without a marker they are
+/// never offered for recovery, so nothing else would ever remove them.
+/// A dir with a marker — a live session's, or a crashed one still on
+/// offer — is never touched, nor is `own_session_id`'s. Activity is the
+/// newer of the dir's own mtime (bumped by every atomic write into it) and
+/// its autosave JSON's. Returns how many dirs were deleted.
+pub fn gc_scratch_root(
+    root: &Path,
+    own_session_id: &str,
+    max_age: Duration,
+    now: SystemTime,
+) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for dir in entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        if dir.file_name().is_some_and(|n| n == own_session_id)
+            || dir.join(SESSION_MARKER).exists()
+        {
+            continue;
+        }
+        let last_touched = mtime(&dir).max(mtime(&dir.join(AUTOSAVE_JSON)));
+        let stale = last_touched
+            .is_some_and(|t| now.duration_since(t).is_ok_and(|age| age >= max_age));
+        if !stale {
+            continue;
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => removed += 1,
+            Err(e) => tracing::warn!("autosave scratch GC of {}: {e}", dir.display()),
+        }
+    }
+    removed
 }
 
 /// The newest recoverable untitled session among the scratch dirs under

@@ -50,6 +50,14 @@ pub(crate) fn offer_orphaned_session(r: &mut Resonance) {
     let Some(root) = super::autosave_scratch_root() else {
         return;
     };
+    // First drop marker-less scratch dirs nobody touched for a week: no
+    // prompt would ever offer them (FU-R1a).
+    session::gc_scratch_root(
+        &root,
+        r.session_id(),
+        session::SCRATCH_GC_AGE,
+        std::time::SystemTime::now(),
+    );
     if let Some(offer) = session::scan_scratch_root(&root, r.session_id()) {
         r.io.recovery_prompt = Some(RecoveryPrompt {
             offer,
@@ -224,9 +232,15 @@ pub(crate) fn close_session(r: &mut Resonance) {
 /// A completed save (`autosave` false) or autosave. A manual save that
 /// gave an untitled project its path leaves the scratch dir's autosave
 /// superseded, so it is deleted — as is a recovered crashed session's,
-/// whose work is now saved.
+/// whose work is now saved — and so is the project dir's own autosave
+/// when it is older than the save (FU-R1a).
 pub(crate) fn after_save(r: &mut Resonance, autosave: bool) {
     sync_session_marker(r);
+    if !autosave {
+        if let Some(dir) = &r.io.project_path {
+            session::retire_stale_autosave(dir);
+        }
+    }
     if !autosave && r.io.project_path.is_some() {
         if let Some(scratch) = super::autosave_scratch_dir(r) {
             remove_scratch_dir(&scratch);
