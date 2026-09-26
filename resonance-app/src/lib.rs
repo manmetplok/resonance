@@ -267,6 +267,10 @@ pub struct Resonance {
     /// entry) and reads the tally back from here. Overwritten by each
     /// shift and never persisted.
     pub(crate) last_arrangement_shift: Option<crate::update::arrangement::ShiftOutcome>,
+    /// Nesting depth of `update()`: handlers (control calls, the import
+    /// dialog's Confirm) re-enter it. Only the outermost call decides
+    /// whether a selection change grants the timeline the keyboard.
+    pub(crate) update_depth: u32,
     pub(crate) interaction: ClipInteractionState,
     /// Settings of the MIDI editor's Quantize panel (todo #392). App-level
     /// so the chosen grid/strength/swing/mode persist across clip
@@ -870,6 +874,7 @@ impl Resonance {
             viewport: ArrangeViewport::default(),
             markers: state::ArrangementMarkers::default(),
             last_arrangement_shift: None,
+            update_depth: 0,
             interaction: ClipInteractionState::default(),
             midi_quantize: state::MidiQuantizePanelState::default(),
             io: ProjectIoState {

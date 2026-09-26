@@ -42,6 +42,8 @@ pub use self::snap::snap_sample_to_grid_tempo;
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
 pub struct TimelineCanvas<'a> {
+    /// `interaction.timeline_key_grant` — see `focus::KeyFocus::sync_grant`.
+    pub key_grant: u64,
     pub tracks: &'a [TrackState],
     pub track_groups: &'a state::TrackGroupRegistry,
     pub clips: &'a [ClipState],
@@ -857,6 +859,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        state.key_focus.sync_grant(self.key_grant);
         state.key_focus.track(event, bounds, cursor);
         let result = match event {
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {

@@ -129,6 +129,8 @@ mod undo_coalesce;
 mod undo_history;
 #[path = "timeline/editor_key_focus.rs"]
 mod editor_key_focus;
+#[path = "timeline/timeline_key_grant.rs"]
+mod timeline_key_grant;
 #[path = "timeline/vertical_scrollbar_visible.rs"]
 mod vertical_scrollbar_visible;
 #[path = "timeline/vertical_scroll_clamp.rs"]

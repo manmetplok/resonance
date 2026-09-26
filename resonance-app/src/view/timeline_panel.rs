@@ -39,6 +39,7 @@ impl crate::Resonance {
             .collect();
 
         TimelineCanvas {
+            key_grant: self.interaction.timeline_key_grant,
             tracks: &self.registry.tracks,
             track_groups: &self.track_groups,
             clips: &self.clips,
