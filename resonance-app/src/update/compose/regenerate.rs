@@ -135,6 +135,9 @@ pub(super) fn regenerate_lane(
     definition_id: u64,
     track_id: TrackId,
 ) -> iced::Task<crate::message::Message> {
+    if !super::track_exists(r, track_id) {
+        return iced::Task::none();
+    }
     let mut def = match r.compose.find_definition(definition_id) {
         Some(d) => d.clone(),
         None => return iced::Task::none(),

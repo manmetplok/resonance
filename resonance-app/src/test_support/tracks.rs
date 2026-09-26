@@ -15,6 +15,13 @@ impl Resonance {
         &self.registry
     }
 
+    /// Test-only: mutable registry, for staging states the handlers can't
+    /// reach (a lane generator whose track is missing, code review VIEW-12).
+    #[doc(hidden)]
+    pub fn test_registry_mut(&mut self) -> &mut state::TrackRegistry {
+        &mut self.registry
+    }
+
     /// Test-only: read the mixer-side expanded-sub-track-parents set,
     /// also driven from `tests/mixer_sub_track_grouping.rs`.
     #[doc(hidden)]

@@ -81,6 +81,9 @@ pub(super) fn roll_vocal_melody(
 ) -> Task<Message> {
     use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 
+    if !super::track_exists(r, track_id) {
+        return Task::none();
+    }
     let Some(mut def) = r.compose.find_definition(definition_id).cloned() else {
         return Task::none();
     };
@@ -374,6 +377,9 @@ pub(super) fn rerender_vocal_audio(
 ) -> Task<Message> {
     use resonance_audio::types::MidiNote;
 
+    if !super::track_exists(r, track_id) {
+        return Task::none();
+    }
     let Some(def) = r.compose.find_definition(definition_id).cloned() else {
         return Task::none();
     };

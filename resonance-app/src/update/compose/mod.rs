@@ -144,6 +144,68 @@ pub(crate) fn install_derived_midi_clip(
     clip_id
 }
 
+/// Whether `track_id` is a live track. Lane derivation checks this so a
+/// generator left pointing at a removed track never loads a clip onto it
+/// (the engine accepts any track id) — code review VIEW-12.
+pub(crate) fn track_exists(r: &crate::Resonance, track_id: resonance_audio::types::TrackId) -> bool {
+    r.registry.tracks.iter().any(|t| t.id == track_id)
+}
+
+/// Drop every Compose lane of a removed track (code review VIEW-12):
+/// its generator in each section, its derived MIDI clips (engine + app
+/// mirror — the engine's `RemoveTrack` only drops audio clips), its
+/// installed vocal audio, and the per-lane side tables. The render epoch
+/// is bumped rather than removed so a render still in flight for the
+/// lane is discarded on completion. Called from the track-removal echo;
+/// an undo of the delete restores the generators from the project
+/// snapshot.
+pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::types::TrackId) {
+    use resonance_audio::types::AudioCommand;
+
+    for def in r.compose.definitions.iter_mut() {
+        def.lane_generators.remove(&track_id);
+    }
+    let midi: Vec<_> = r
+        .compose
+        .derived_clips
+        .iter()
+        .filter(|((_, _, t), _)| *t == track_id)
+        .map(|(_, id)| *id)
+        .collect();
+    r.compose.derived_clips.retain(|(_, _, t), _| *t != track_id);
+    for clip_id in midi {
+        let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id });
+        r.midi_clips.retain(|c| c.id != clip_id);
+        r.compose.vocal_audio.clip_lyrics.remove(&clip_id);
+    }
+    let audio = &mut r.compose.vocal_audio;
+    let audio_ids: Vec<_> = audio
+        .clips
+        .iter()
+        .filter(|((_, _, t), _)| *t == track_id)
+        .map(|(_, (id, _))| *id)
+        .collect();
+    audio.clips.retain(|(_, _, t), _| *t != track_id);
+    for ((_, t), epoch) in audio.render_epoch.iter_mut() {
+        if *t == track_id {
+            *epoch += 1;
+        }
+    }
+    audio.render_cache.retain(|(_, t), _| *t != track_id);
+    for clip_id in audio_ids {
+        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
+        r.clips.retain(|c| c.id != clip_id);
+    }
+    r.compose.vocal_bulk_lyrics.retain(|(_, t), _| *t != track_id);
+    r.compose.expression_curves.retain(|(_, t), _| *t != track_id);
+    if r.compose.expanded_track_id == Some(track_id) {
+        r.compose.expanded_track_id = None;
+    }
+    if r.compose.details_track_id() == Some(track_id) {
+        r.compose.selected_lane = crate::compose::SelectedLane::Chords;
+    }
+}
+
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
     let time_sig_num = r.transport.time_sig_num;
 
