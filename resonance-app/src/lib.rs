@@ -624,6 +624,7 @@ impl Resonance {
                 browser: state::BrowserState::default(),
                 drag_placement: None,
                 relink: state::RelinkState::default(),
+                ids: state::ids::EntityIds::default(),
             },
             reference: reference::ReferenceState::default(),
             table_registry: TableRegistry::with_builtins(),

@@ -23,7 +23,7 @@
 use std::path::Path;
 
 use iced::Task;
-use resonance_audio::types::{AssetId, AudioCommand, ClipId, SamplePos, TrackId};
+use resonance_audio::types::{AssetId, AudioCommand, ClipId, PoolImportFile, SamplePos, TrackId};
 
 use crate::message::{DropTarget, Message};
 use crate::state::{PendingImport, PlacementTarget};
@@ -323,11 +323,22 @@ fn resolve_target(r: &mut Resonance, target: DropTarget) -> PlacementTarget {
     }
 }
 
-/// Kick off an import batch: queue each source file's placement, then send
-/// one `ImportAudioToPool` for the whole selection. A no-op on an empty
-/// selection. Importing requires a project directory (the engine copies /
-/// transcodes each file into `{project}/audio/`); without one the import
-/// is refused with a user-facing error rather than silently dropped.
+/// Kick off an import batch: allocate each file's asset id, queue its
+/// placement, then send one `ImportAudioToPool` for the whole selection. A
+/// no-op on an empty selection. Importing requires a project directory
+/// (the engine copies/transcodes each file into `{project}/audio/`);
+/// without one the import is refused with a user-facing error rather than
+/// silently dropped.
+///
+/// This runs inside `update()` (via `PoolMessage`), so a caller that needs
+/// to know which ids just got allocated — the control endpoints
+/// (`pool.import`, `clip.place`) build a `JobToken::PoolImport` from them —
+/// reads them back with `PendingImports::last_n_asset_ids` right after
+/// dispatching, rather than getting them as a return value: going around
+/// `update()` would skip the undo recording `PoolMessage::undo_action`
+/// expects to run before this dispatches (D-7a keys that job on asset id
+/// instead of source path, since two files can share a path across
+/// overlapping batches but never an id).
 fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: PlacementTarget) {
     if paths.is_empty() {
         return;
@@ -338,28 +349,30 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
         return;
     }
 
-    let path_strings: Vec<String> = paths
+    // Allocate an id per file up front (D-7a: the app is the pool's only
+    // asset-id allocator) and queue each file's placement. A place-drop of
+    // several files onto one lane queues the same (snapped) position for
+    // each — they land stacked at the drop point as independent,
+    // individually editable clips the user can then drag apart. The common
+    // case (a single-file drop, or the pool-only dialog import) needs no
+    // such spreading.
+    let files: Vec<PoolImportFile> = paths
         .iter()
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| PoolImportFile {
+            asset_id: r.media.ids.assets.allocate(),
+            path: p.to_string_lossy().into_owned(),
+        })
         .collect();
-
-    // Queue each file's placement. A place-drop of several files onto one
-    // lane queues the same (snapped) position for each — they land stacked
-    // at the drop point as independent, individually editable clips the
-    // user can then drag apart. The common case (a single-file drop, or the
-    // pool-only dialog import) needs no such spreading.
-    for source_path in &path_strings {
+    for file in &files {
         r.media.pool_import.push(PendingImport {
-            source_path: source_path.clone(),
+            asset_id: file.asset_id,
             target: placement,
             // The import's own undo entry was recorded before dispatch.
             history_depth: r.undo.undo_len(),
         });
     }
 
-    let _ = r.engine.send(AudioCommand::ImportAudioToPool {
-        paths: path_strings,
-    });
+    let _ = r.engine.send(AudioCommand::ImportAudioToPool { files });
 
     // Open (or re-open) the transcode-progress modal. Clearing the tracker
     // first means a second import gesture replaces the previous batch's

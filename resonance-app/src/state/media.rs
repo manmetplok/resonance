@@ -57,4 +57,14 @@ pub struct MediaState {
     /// lives on each pool asset; this only tracks the in-flight resolve.
     /// Not undoable, not persisted. See `state::relink`.
     pub relink: state::RelinkState,
+    /// The app's own id allocator for pool assets (D-6/D-7a,
+    /// `docs/design/D-6-engine-created-ids.md`): the engine invents no
+    /// asset ids any more, so every `pool.import` / drag-drop / dialog
+    /// import draws its ids from here before sending
+    /// `AudioCommand::ImportAudioToPool`. Session-monotonic — never
+    /// rewound by undo or a load — and seeded past every asset a loaded
+    /// project holds plus every `asset_<id>.wav` a disk scan finds (see
+    /// `Resonance::seed_asset_ids_on_disk`). Not persisted, not undoable in
+    /// its own right (its *effects*, the pool assets it names, are).
+    pub(crate) ids: state::ids::EntityIds,
 }

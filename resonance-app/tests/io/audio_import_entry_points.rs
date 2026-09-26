@@ -86,11 +86,14 @@ fn window_audio_drop_sends_import_command_and_queues_placement() {
 
     let cmds = drain(&rx);
 
-    // Exactly one ImportAudioToPool for the dropped file.
+    // Exactly one ImportAudioToPool for the dropped file, carrying the
+    // asset id the app allocated for it (D-7a).
     let import_paths = cmds
         .iter()
         .find_map(|c| match c {
-            AudioCommand::ImportAudioToPool { paths } => Some(paths.clone()),
+            AudioCommand::ImportAudioToPool { files } => {
+                Some(files.iter().map(|f| f.path.clone()).collect::<Vec<_>>())
+            }
             _ => None,
         })
         .expect("ImportAudioToPool was sent");

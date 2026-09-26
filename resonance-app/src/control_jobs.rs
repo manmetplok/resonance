@@ -23,6 +23,7 @@
 //! clients still don't leak entries.
 
 use crate::control_socket::ConnId;
+use resonance_audio::types::AssetId;
 use resonance_control::ids::JobId;
 use resonance_control::job::{JobError, JobStarted, JobState, JobStatus};
 use resonance_control::ErrorKind;
@@ -72,13 +73,16 @@ pub enum JobToken {
     /// or a `clip.place` whose file was not in the pool yet.
     ///
     /// The engine decodes/resamples/copies each source file on a worker
-    /// thread and reports back per file, so a batch resolves one path at a
-    /// time via [`JobBoard::tick_import_path`] and the job completes only
-    /// once the LAST of them has landed — the same "don't resolve on the
-    /// first sub-event" rule as [`JobToken::VocalRender`]. Entries are the
-    /// source paths exactly as they were handed to the engine, which is
-    /// what the import events echo back.
-    PoolImport { paths: Vec<String> },
+    /// thread and reports back per file, so a batch resolves one asset id
+    /// at a time via [`JobBoard::tick_import_asset`] and the job completes
+    /// only once the LAST of them has landed — the same "don't resolve on
+    /// the first sub-event" rule as [`JobToken::VocalRender`]. Entries are
+    /// the ids the app allocated for the batch before sending it to the
+    /// engine (D-7a) — the same ids `AssetImported` / `ImportFailed` echo
+    /// back. Keyed by id rather than source path: two files that share a
+    /// path across overlapping batches never share an id, so there is
+    /// nothing left to resolve out of order.
+    PoolImport { asset_ids: Vec<AssetId> },
     /// A mix measurement (todo #1219): completes on
     /// `AudioEvent::MixMeasured`, fails on `MixMeasureError`.
     ///
@@ -131,11 +135,11 @@ struct JobEntry {
     /// drained by [`JobBoard::complete_vocal_lane`]; the job completes
     /// when it empties. Always empty for every other token.
     remaining_lanes: HashSet<(u64, u64)>,
-    /// Source paths of a [`JobToken::PoolImport`] batch whose import
-    /// hasn't reported yet. Seeded from the token at [`JobBoard::start`]
-    /// and drained by [`JobBoard::tick_import_path`]; the job resolves
-    /// when it empties. Always empty for every other token.
-    remaining_paths: HashSet<String>,
+    /// Asset ids of a [`JobToken::PoolImport`] batch whose import hasn't
+    /// reported yet. Seeded from the token at [`JobBoard::start`] and
+    /// drained by [`JobBoard::tick_import_asset`]; the job resolves when
+    /// it empties. Always empty for every other token.
+    remaining_asset_ids: HashSet<AssetId>,
     /// First failure reported by any path of a [`JobToken::PoolImport`]
     /// batch. A batch with a failed file resolves as an error even when
     /// its other files imported fine — those assets are still in the pool
@@ -210,8 +214,8 @@ impl JobBoard {
             Some(JobToken::VocalRender { lanes }) => lanes.iter().copied().collect(),
             _ => HashSet::new(),
         };
-        let remaining_paths = match &token {
-            Some(JobToken::PoolImport { paths }) => paths.iter().cloned().collect(),
+        let remaining_asset_ids = match &token {
+            Some(JobToken::PoolImport { asset_ids }) => asset_ids.iter().copied().collect(),
             _ => HashSet::new(),
         };
         table.jobs.insert(
@@ -225,7 +229,7 @@ impl JobBoard {
                 error: None,
                 token,
                 remaining_lanes,
-                remaining_paths,
+                remaining_asset_ids,
                 import_error: None,
                 owner,
                 fetched: false,
@@ -335,40 +339,48 @@ impl JobBoard {
         self.oldest_live_with_token(token).is_some()
     }
 
-    /// Tick off one source path of ONE live [`JobToken::PoolImport`]
-    /// batch that covers it — the oldest still awaiting that path.
-    /// `error` is `Some` when that file failed to import.
+    /// Tick off one asset id of ONE live [`JobToken::PoolImport`] batch
+    /// that covers it — the oldest still awaiting that id (D-7a). `path`
+    /// is only for the error message text; `error` is `Some` when that
+    /// file failed to import.
     ///
     /// One batch, not every batch: the engine emits one import event per
-    /// file it was handed, so two overlapping batches naming the same
-    /// file get two events, in dispatch order. Ticking every batch let
-    /// the second batch resolve `done` off the *first* batch's event,
-    /// before its own copy of the file had imported.
+    /// file it was handed, and — since D-7a — every file of every batch
+    /// carries its own distinct asset id, so there is exactly one batch
+    /// that can be waiting on a given id to begin with (ticking every
+    /// batch that happened to share a *path* used to let a second batch
+    /// resolve `done` off the first batch's event, before its own copy of
+    /// the file had imported).
     ///
-    /// Returns the batch whose LAST path just landed, as
+    /// Returns the batch whose LAST id just landed, as
     /// `(job_id, batch_error)` — still un-resolved, because the result
     /// payload is built from app state (the pool assets that appeared, the
     /// clip that was placed) which this board cannot see. The caller
     /// completes or fails each returned id. A `Vec` that comes back empty
     /// is the normal case for a GUI-driven import.
-    pub fn tick_import_path(&self, path: &str, error: Option<&str>) -> Vec<(u64, Option<String>)> {
+    pub fn tick_import_asset(
+        &self,
+        asset_id: AssetId,
+        path: &str,
+        error: Option<&str>,
+    ) -> Vec<(u64, Option<String>)> {
         let mut finished = Vec::new();
         let mut table = self.table();
         let oldest = table
             .jobs
             .iter()
-            .filter(|(_, e)| !e.state.is_terminal() && e.remaining_paths.contains(path))
+            .filter(|(_, e)| !e.state.is_terminal() && e.remaining_asset_ids.contains(&asset_id))
             .map(|(id, _)| *id)
             .min();
         if let Some(id) = oldest {
             let entry = table.jobs.get_mut(&id).expect("id came from the table");
-            entry.remaining_paths.remove(path);
+            entry.remaining_asset_ids.remove(&asset_id);
             if let Some(error) = error {
                 entry
                     .import_error
                     .get_or_insert_with(|| format!("{path}: {error}"));
             }
-            if entry.remaining_paths.is_empty() {
+            if entry.remaining_asset_ids.is_empty() {
                 finished.push((id, entry.import_error.clone()));
             }
         }
@@ -383,13 +395,13 @@ impl JobBoard {
         table.jobs.get(&id).map(|e| e.kind.clone())
     }
 
-    /// The source paths of a [`JobToken::PoolImport`] job, so the caller
-    /// can collect exactly that batch's assets when building its result.
+    /// The asset ids of a [`JobToken::PoolImport`] job, so the caller can
+    /// collect exactly that batch's assets when building its result.
     /// Empty for any other job.
-    pub fn import_batch_paths(&self, id: u64) -> Vec<String> {
+    pub fn import_batch_asset_ids(&self, id: u64) -> Vec<AssetId> {
         let table = self.table();
         match table.jobs.get(&id).and_then(|e| e.token.as_ref()) {
-            Some(JobToken::PoolImport { paths }) => paths.clone(),
+            Some(JobToken::PoolImport { asset_ids }) => asset_ids.clone(),
             _ => Vec::new(),
         }
     }
@@ -409,9 +421,9 @@ impl JobBoard {
     /// `done` off audio the install then discarded as stale.
     ///
     /// Every covering batch, not the oldest — deliberately unlike
-    /// [`tick_import_path`](Self::tick_import_path). Two import batches
-    /// naming the same file get one engine event each, so events map to
-    /// batches in dispatch order; but two render jobs covering the same
+    /// [`tick_import_asset`](Self::tick_import_asset). Two import batches
+    /// naming the same file get one engine event each, keyed by each
+    /// file's own distinct asset id; but two render jobs covering the same
     /// lane share a SINGLE surviving event: the later request bumps the
     /// lane's epoch, the earlier render is discarded on arrival, and the
     /// one accepted install is current for every job that asked. Ticking

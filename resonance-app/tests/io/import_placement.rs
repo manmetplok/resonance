@@ -68,15 +68,28 @@ fn pool_only_import_sends_command_and_places_nothing() {
     ])));
 
     let cmds = drain(&rx);
-    // One batch import command for both files, no track spawned.
+    // One batch import command for both files, no track spawned. Each
+    // file carries the asset id the app already allocated for it (D-7a).
     let import = cmds
         .iter()
         .find_map(|c| match c {
-            AudioCommand::ImportAudioToPool { paths } => Some(paths.clone()),
+            AudioCommand::ImportAudioToPool { files } => Some(files.clone()),
             _ => None,
         })
         .expect("ImportAudioToPool sent");
-    assert_eq!(import, vec!["/imports/kick.wav", "/imports/snare.flac"]);
+    assert_eq!(
+        import,
+        vec![
+            resonance_audio::types::PoolImportFile {
+                asset_id: 1,
+                path: "/imports/kick.wav".to_string(),
+            },
+            resonance_audio::types::PoolImportFile {
+                asset_id: 2,
+                path: "/imports/snare.flac".to_string(),
+            },
+        ]
+    );
     assert_eq!(
         count_cmd(&cmds, |c| matches!(c, AudioCommand::AddTrack { .. })),
         0,
@@ -122,8 +135,10 @@ fn import_and_place_on_existing_track() {
     );
     assert_eq!(app.test_pending_import_count(), 1);
 
-    // The asset lands and is placed as a clip on the target track.
-    app.test_handle_engine_event(asset_imported(7, "/imports/loop.wav"));
+    // The asset lands and is placed as a clip on the target track. The app
+    // allocated the id itself (D-7a) — this is the first import in a fresh
+    // app, so it's 1.
+    app.test_handle_engine_event(asset_imported(1, "/imports/loop.wav"));
 
     let cmds = drain(&rx);
     let loaded = cmds
@@ -141,7 +156,7 @@ fn import_and_place_on_existing_track() {
     assert_eq!(loaded.0, 10, "clip loaded onto the target track");
     assert_eq!(
         loaded.1,
-        PathBuf::from("/proj/song.rproj/audio/asset_7.wav"),
+        PathBuf::from("/proj/song.rproj/audio/asset_1.wav"),
         "clip loads from the asset's engine-format WAV"
     );
 
@@ -152,10 +167,81 @@ fn import_and_place_on_existing_track() {
     assert_eq!(clip.name, "loop", "clip named from the source file stem");
     assert_eq!(
         clip.asset_ref.map(|a| a.asset_id),
-        Some(7),
+        Some(1),
         "clip tied to its pool asset"
     );
-    assert_eq!(app.test_pool().usage_count(7), 1, "asset now used by 1 clip");
+    assert_eq!(app.test_pool().usage_count(1), 1, "asset now used by 1 clip");
+    assert_eq!(app.test_pending_import_count(), 0);
+}
+
+// --------------------------------------------------------------------
+// Two imports of the SAME path, finishing out of order (D-7a)
+// --------------------------------------------------------------------
+
+/// Two separate drops of the SAME source path — each targeting a
+/// different track — must each place onto the track its OWN drop asked
+/// for, even when the engine reports the second drop's asset before the
+/// first's.
+///
+/// Before D-7a `PendingImports` matched an `AssetImported` back by its
+/// source path, so with two entries queued for the same path the FIRST
+/// one queued always resolved first, regardless of which asset actually
+/// landed. Each batch decodes on its own worker thread, so nothing
+/// guarantees they finish in send order — the second drop could (and,
+/// under load, did) report its asset before the first, silently placing
+/// it on the first drop's track and vice versa. D-7a keys each queued
+/// placement by its own asset id instead, so there is no shared key left
+/// to resolve out of order.
+#[test]
+fn two_drops_of_the_same_path_place_correctly_even_out_of_order() {
+    let (mut app, rx) = app();
+    app.test_add_track(10, TrackType::Audio);
+    app.test_add_track(20, TrackType::Audio);
+
+    // First drop: same path onto track 10. `ImportAndPlaceExact` (no grid
+    // snap) so the exact sample positions below are unambiguous.
+    let _ = app.update(Message::Pool(PoolMessage::ImportAndPlaceExact {
+        paths: vec![PathBuf::from("/imports/shared.wav")],
+        track_id: 10,
+        start_sample: 0,
+    }));
+    // Second drop: same path onto track 20.
+    let _ = app.update(Message::Pool(PoolMessage::ImportAndPlaceExact {
+        paths: vec![PathBuf::from("/imports/shared.wav")],
+        track_id: 20,
+        start_sample: 4_800,
+    }));
+    assert_eq!(app.test_pending_import_count(), 2, "both drops queued");
+
+    // The app allocated a distinct id per drop (D-7a), first drop = 1,
+    // second = 2, in send order — but the ENGINE reports them back out of
+    // order: id 2 (the second drop) lands first.
+    let _ = drain(&rx);
+    app.test_handle_engine_event(asset_imported(2, "/imports/shared.wav"));
+    app.test_handle_engine_event(asset_imported(1, "/imports/shared.wav"));
+
+    assert_eq!(app.test_clips().len(), 2);
+    let clip_for_track = |track_id: u64| {
+        app.test_clips()
+            .iter()
+            .find(|c| c.track_id == track_id)
+            .unwrap_or_else(|| panic!("no clip on track {track_id}"))
+            .clone()
+    };
+    let on_10 = clip_for_track(10);
+    let on_20 = clip_for_track(20);
+    assert_eq!(
+        on_10.asset_ref.map(|a| a.asset_id),
+        Some(1),
+        "track 10 got the FIRST drop's asset, not the one that happened to land first"
+    );
+    assert_eq!(
+        on_20.asset_ref.map(|a| a.asset_id),
+        Some(2),
+        "track 20 got the SECOND drop's asset"
+    );
+    assert_eq!(on_10.start_sample, 0);
+    assert_eq!(on_20.start_sample, 4_800);
     assert_eq!(app.test_pending_import_count(), 0);
 }
 
@@ -192,12 +278,13 @@ fn drop_on_new_track_zone_spawns_track_then_places() {
     app.test_handle_engine_event(AudioEvent::TrackAdded { track_id: new_id });
     assert_eq!(app.test_registry().tracks.len(), 1, "new track mirrored");
 
-    app.test_handle_engine_event(asset_imported(3, "/imports/vocal take.wav"));
+    // The app allocated the id itself (D-7a) — first import in a fresh app.
+    app.test_handle_engine_event(asset_imported(1, "/imports/vocal take.wav"));
 
     assert_eq!(app.test_clips().len(), 1);
     let clip = &app.test_clips()[0];
     assert_eq!(clip.track_id, new_id, "clip placed on the spawned track");
-    assert_eq!(clip.asset_ref.map(|a| a.asset_id), Some(3));
+    assert_eq!(clip.asset_ref.map(|a| a.asset_id), Some(1));
     assert_eq!(clip.name, "vocal take");
     assert_eq!(app.test_pending_import_count(), 0);
 }
@@ -224,7 +311,8 @@ fn import_and_place_is_one_undoable_action() {
             start_sample: 0,
         },
     }));
-    app.test_handle_engine_event(asset_imported(7, "/imports/loop.wav"));
+    // The app allocated the id itself (D-7a) — first import in a fresh app.
+    app.test_handle_engine_event(asset_imported(1, "/imports/loop.wav"));
 
     // The placement landed…
     assert_eq!(app.test_clips().len(), 1);
@@ -263,8 +351,9 @@ fn import_failure_drops_placement_and_reports() {
     }));
     assert_eq!(app.test_pending_import_count(), 1);
 
+    // The app allocated the id itself (D-7a) — first import in a fresh app.
     app.test_handle_engine_event(AudioEvent::ImportFailed {
-        asset_id: 9,
+        asset_id: 1,
         path: "/imports/broken.wav".to_string(),
         reason: "unsupported codec".to_string(),
     });

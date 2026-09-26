@@ -1211,3 +1211,120 @@ fn every_reference_load_gets_a_unique_app_id_including_across_undo_and_reload() 
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// ---------------------------------------------------------------------------
+// Pool assets (D-7a)
+// ---------------------------------------------------------------------------
+
+/// D-7a: the app is the pool's only asset-id allocator now — session-
+/// monotonic (never rewound by undo), and seeded past both a loaded
+/// project's assets AND any `audio/asset_<id>.wav` a disk scan finds.
+/// Self-contained (no base, no engine counter, not part of
+/// `Fixture`/`add_round`), the same shape as
+/// [`every_reference_load_gets_a_unique_app_id_including_across_undo_and_reload`]:
+/// an import, an undo of it (checking the next import does not reuse its
+/// id), a save + reload with an ORPHANED asset file sitting ABOVE the
+/// pool's own max id (one an undone import left behind before the save),
+/// and a further import — checking the new id lands above both.
+#[test]
+fn asset_ids_stay_unique_across_undo_and_above_an_orphaned_wav_after_reload() {
+    let root = std::env::temp_dir().join(format!(
+        "resonance-id-allocation-assets-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let project = root.join("fixture.rproj");
+    std::fs::create_dir_all(project.join("audio")).expect("create project dir");
+
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_set_active_project(true);
+    app.test_set_project_path(project.clone());
+
+    let asset_imported = |id: u64, path: &str| resonance_audio::types::AudioEvent::AssetImported {
+        asset_id: id,
+        project_relative_path: format!("audio/asset_{id}.wav"),
+        original_path: path.to_string(),
+        format: resonance_common::AudioFormat::Wav,
+        channels: 2,
+        source_sample_rate: 48_000,
+        duration_frames: 4_800,
+        peaks: vec![(-0.1, 0.1)],
+    };
+    let sent_asset_id = |rx: &Receiver<AudioCommand>| -> u64 {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .find_map(|c| match c {
+                AudioCommand::ImportAudioToPool { files } => files.first().map(|f| f.asset_id),
+                _ => None,
+            })
+            .expect("ImportAudioToPool sent")
+    };
+
+    // First import (via `update()`, not `test_dispatch`, so it records an
+    // undo entry): a fresh app's counter starts at 1.
+    let _ = app.update(Message::Pool(PoolMessage::ImportFilesToPool(vec![
+        PathBuf::from("/imports/first.wav"),
+    ])));
+    let first_id = sent_asset_id(&rx);
+    assert_eq!(first_id, 1);
+    app.test_apply_engine_event(asset_imported(first_id, "/imports/first.wav"));
+    assert_eq!(app.test_pool().max_asset_id(), Some(1));
+
+    // Undo the import: a pool asset add/remove is not structural
+    // (`structurally_compatible` never looks at `pool_assets`), so this
+    // takes the fast diff-replay path, not `ClearAll` + full restore — and
+    // the diff path leaves the (session-monotonic) counter alone.
+    let _ = app.update(Message::Undo);
+    assert!(app.test_pool().assets.is_empty(), "undo removed the imported asset");
+
+    // A further import must not reuse the undone import's id.
+    let _ = app.update(Message::Pool(PoolMessage::ImportFilesToPool(vec![
+        PathBuf::from("/imports/second.wav"),
+    ])));
+    let second_id = sent_asset_id(&rx);
+    assert_ne!(
+        second_id, first_id,
+        "undo must not rewind the allocator: the post-undo import reused \
+         the id the undone import held"
+    );
+    app.test_apply_engine_event(asset_imported(second_id, "/imports/second.wav"));
+    assert_eq!(app.test_pool().max_asset_id(), Some(second_id));
+
+    // An orphaned asset WAV above the pool's own max id: an import undone
+    // (or otherwise never saved into `pool_assets`) before the save below,
+    // whose file a backup or a stale worker still left on disk.
+    let orphan_id = second_id + 10;
+    std::fs::write(
+        project.join(format!("audio/asset_{orphan_id}.wav")),
+        b"orphaned",
+    )
+    .expect("write orphan");
+
+    // Save + reload: `restore_pool_assets` seeds past both the pool's own
+    // max id and the disk scan.
+    let file = app.test_build_project_file();
+    project::save_project(&project, &file, &[], &[]).expect("save");
+    let loaded = project::load_project(&project).expect("reload");
+    app.test_replay_loaded_project_from(loaded);
+    app.test_set_active_project(true);
+    app.test_set_project_path(project.clone());
+
+    // A further import after the reload must not reuse the orphan's id.
+    let rx = app.test_capture_engine();
+    app.test_dispatch(Message::Pool(PoolMessage::ImportFilesToPool(vec![
+        PathBuf::from("/imports/third.wav"),
+    ])));
+    let third_id = sent_asset_id(&rx);
+    assert!(
+        third_id > orphan_id,
+        "the post-reload import id {third_id} must be above the orphaned \
+         asset_{orphan_id}.wav"
+    );
+    app.test_apply_engine_event(asset_imported(third_id, "/imports/third.wav"));
+    assert_eq!(
+        app.test_pool().max_asset_id(),
+        Some(third_id),
+        "the new asset landed at the id the app allocated for it"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

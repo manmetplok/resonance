@@ -99,11 +99,6 @@ pub(crate) struct LoopRecordSession {
 /// CLAP bundles, and the bounded clip-import worker pool.
 pub(crate) struct HandlerState {
     pub next_clip_id: ClipId,
-    /// Monotonic id allocator for media-pool assets imported via
-    /// `AudioCommand::ImportAudioToPool`. Independent of `next_clip_id`:
-    /// asset WAVs are named `asset_{id}.wav`, clip WAVs `clip_{id}.wav`,
-    /// so the two counters never collide on disk.
-    pub next_asset_id: AssetId,
     /// Aux sends keyed by id, in insertion order. Engine-thread-local
     /// (never read from the audio callback), so plain data — see
     /// [`AuxSend`]. The source of truth for cyclic-route validation.
@@ -283,7 +278,6 @@ impl HandlerState {
     ) -> Self {
         Self {
             next_clip_id: 1,
-            next_asset_id: 1,
             aux_sends: IndexMap::new(),
             sidechain_routes: Default::default(),
             next_take_group_id: 1,

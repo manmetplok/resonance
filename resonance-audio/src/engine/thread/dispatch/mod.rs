@@ -80,7 +80,6 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
 
         // Audio clips + automation + project
         AudioCommand::ImportAudioToPool { .. }
-        | AudioCommand::ReserveAssetIds { .. }
         | AudioCommand::MoveClip { .. }
         | AudioCommand::TrimClip { .. }
         | AudioCommand::DeleteClip { .. }

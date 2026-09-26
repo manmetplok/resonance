@@ -58,6 +58,11 @@ pub struct EngineHandlerHarness {
     /// drains it.
     _cmd_rx_retry: Receiver<AudioCommand>,
     state: HandlerState,
+    /// Test-only convenience counter for [`Self::import_audio_to_pool`]'s
+    /// `Vec<String>` shorthand (D-7a moved asset-id allocation to the app,
+    /// so the engine's own `HandlerState` has nowhere left to keep one).
+    /// Never reset, so repeated calls on one harness never reissue an id.
+    next_test_asset_id: AssetId,
 }
 
 impl Default for EngineHandlerHarness {
@@ -108,6 +113,7 @@ impl EngineHandlerHarness {
             cmd_tx_retry,
             _cmd_rx_retry,
             state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
+            next_test_asset_id: 1,
         }
     }
 
@@ -235,9 +241,30 @@ impl EngineHandlerHarness {
 
     /// Run the real `AudioCommand::ImportAudioToPool` handler: spawns the
     /// pool-import worker, whose events arrive asynchronously.
+    ///
+    /// D-7a: the real app allocates each file's asset id before sending the
+    /// command; this shorthand plays that part for a test, handing out
+    /// [`Self::next_test_asset_id`] in order so repeated calls on one
+    /// harness never collide. Use [`Self::import_audio_to_pool_with_ids`]
+    /// when a test needs to name specific ids (e.g. to provoke a
+    /// collision).
     pub fn import_audio_to_pool(&mut self, paths: Vec<String>) {
+        let files = paths
+            .into_iter()
+            .map(|path| {
+                let asset_id = self.next_test_asset_id;
+                self.next_test_asset_id += 1;
+                PoolImportFile { asset_id, path }
+            })
+            .collect();
+        self.import_audio_to_pool_with_ids(files);
+    }
+
+    /// [`Self::import_audio_to_pool`] with the caller naming each file's
+    /// asset id explicitly.
+    pub fn import_audio_to_pool_with_ids(&mut self, files: Vec<PoolImportFile>) {
         self.with_ctx(|ctx, state| {
-            crate::engine::import_pool::handle_import_audio_to_pool(ctx, state, paths)
+            crate::engine::import_pool::handle_import_audio_to_pool(ctx, state, files)
         });
     }
 

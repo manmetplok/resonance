@@ -40,8 +40,19 @@ pub enum AudioCommand {
     /// on error. Requires a project directory (set via
     /// [`AudioCommand::SetProjectDir`]); decoupled from clip placement,
     /// so it needs no `track_id`.
+    ///
+    /// Each file's asset id is allocated by the APP up front (D-7a: the
+    /// app is the only allocator of the asset id space) rather than by the
+    /// engine, so the app can key its pending-placement bookkeeping and
+    /// any control-API import job on the id from the moment the command is
+    /// sent, instead of matching a later echo back by source path — two
+    /// imports of the same path finishing out of order used to be able to
+    /// swap their placements (ba doc #276 / D-6 design §8.2). The engine
+    /// refuses a file whose `asset_{id}.wav` already exists (`ImportFailed`
+    /// with a typed reason) rather than overwrite it — it keeps no id
+    /// registry of its own, so this is the only collision check it can do.
     ImportAudioToPool {
-        paths: Vec<String>,
+        files: Vec<PoolImportFile>,
     },
     /// Route `source`'s audio into `plugin`'s external sidechain (key)
     /// input, replacing any route that instance already had. The plugin
@@ -74,21 +85,6 @@ pub enum AudioCommand {
     },
     DeleteClip {
         clip_id: ClipId,
-    },
-    /// Raise the engine's media-pool id allocator above `above`, so a
-    /// later `ImportAudioToPool` cannot hand out an id a loaded project
-    /// already uses.
-    ///
-    /// The allocator is engine-thread-local and starts at 1 each
-    /// session; a project's assets keep the ids they were saved with,
-    /// and the engine is never told about them (the app restores the
-    /// pool itself). Without this the first import after opening a
-    /// project took id 1 — which some existing asset already had — and
-    /// every clip referencing that id silently started playing the new
-    /// file (ba doc #276 BUG 2). Clip ids have always had this
-    /// high-water treatment via `LoadClipFromWav`; assets did not.
-    ReserveAssetIds {
-        above: crate::types::AssetId,
     },
     /// Cut `clip_id` in two at `at_sample` (an absolute timeline
     /// position). The original keeps the head and its id; the tail
@@ -490,15 +486,16 @@ pub enum AudioCommand {
     /// `audio/clip_N.wav`, and take clips never travel the
     /// [`AudioCommand::LoadClipFromWav`] path that would otherwise reserve
     /// it, so without the bump the next recording or import **overwrote a
-    /// restored take's WAV**. Pool assets get it from
-    /// [`AudioCommand::ReserveAssetIds`]. Take ids inside a restored
-    /// group need no reservation of their own: `push_take` derives them
-    /// from the group's own contents, so they are correct the moment the
-    /// group is present.
+    /// restored take's WAV**. Pool assets need no such command any more
+    /// (D-7a): the app is their only allocator and seeds its own counter
+    /// past every restored asset id, on the app side. Take ids inside a
+    /// restored group need no reservation of their own: `push_take`
+    /// derives them from the group's own contents, so they are correct
+    /// the moment the group is present.
     ///
     /// Deliberately silent — no echo. The sender is restoring state it
     /// already holds, so an echo would only invite it to re-apply its own
-    /// input, exactly as [`AudioCommand::ReserveAssetIds`] does.
+    /// input.
     RestoreTakeGroups {
         groups: Vec<TakeGroup>,
     },
@@ -1426,4 +1423,13 @@ pub enum AudioCommand {
     /// from ever returning `Disconnected` even after every external
     /// sender has dropped. Sent by `AudioEngine::shutdown` / `Drop`.
     ShutDown,
+}
+
+/// One file of an [`AudioCommand::ImportAudioToPool`] batch: the asset id
+/// the app already allocated for it (D-7a — the app is the pool's only id
+/// allocator, the engine invents none) and its source path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolImportFile {
+    pub asset_id: crate::types::AssetId,
+    pub path: String,
 }
