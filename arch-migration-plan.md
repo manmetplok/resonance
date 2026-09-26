@@ -790,6 +790,8 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 - Device-param resolution is shared as `ProjectExternalInstrument::device_params` (embedded user definition first, then registry). The fast path used to consult the registry only — the paths differ only if a user device definition was rescanned with different params between snapshot and undo.
 - `Resonance::test_snapshot_undo_extras` has no callers left; delete with `UndoExtras` in A-7.
 
+**E landed (A7-3) @ 38d66942.** `dirs` and `time` stay unconditional deps, not optional under `model`: the ungated `registry` module (used by drums) calls `dirs::data_dir()` and `time::OffsetDateTime`. `symphonia` is optional under `decode`. amp and `resonance-plugin` use no features; drums and ir use `decode`. `arch-invariants::plugins_disable_default_features_on_resonance_common` guards it.
+
 
 
 ---
