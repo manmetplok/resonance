@@ -104,6 +104,22 @@ pub enum CoalesceKey {
     /// Typing in one draft lyric line's text field, keyed by the lane and
     /// the 1-based line number (FU-A10a).
     VocalLineText(u64, TrackId, u8),
+    /// Dragging one of the lane inspector's numeric sliders (bass/melody/
+    /// pad velocity & register knobs, vocal delivery params), keyed by the
+    /// lane (definition + track) and which knob, so switching knob or lane
+    /// breaks the run but repeated steps on the same knob merge (FU-A10b;
+    /// was one undo entry per slider step).
+    LaneParam(u64, TrackId, LaneParamKnob),
+    /// Dragging one of the chord inspector's numeric sliders (motif
+    /// complexity/leap chance, schema substitution), keyed by the section
+    /// definition and which knob (FU-A10b; was one undo entry per step).
+    ChordParam(u64, ChordParamKnob),
+    /// Editing the bulk-lyrics text editor, keyed by the lane (definition +
+    /// track). Non-edit actions (cursor moves, selection, scroll) classify
+    /// `Skip` and never reach this key — see
+    /// `LaneInspectorMsg::undo_action` (FU-A10b; every action, including a
+    /// bare cursor move, used to record its own entry).
+    VocalBulkLyrics(u64, TrackId),
 }
 
 /// Which of a drum group's right-rail generator knobs a coalesce run is
@@ -115,6 +131,40 @@ pub enum DrumGroupKnob {
     Accent,
     Humanize,
     Fills,
+}
+
+/// Which of the lane inspector's numeric sliders a coalesce run is for —
+/// see [`CoalesceKey::LaneParam`] (FU-A10b). One variant per `slider(...)`
+/// site in `view/compose/lane_inspector/{instrument,vocal}/*.rs`; the
+/// register/note pickers next to some of these are `pick_list`s (discrete
+/// picks) and stay plain `Record`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneParamKnob {
+    BassVelocity,
+    MelodyRestDensity,
+    MelodyVelocity,
+    MelodyArticulation,
+    PadVelocity,
+    VocalChordToneAnchor,
+    VocalLeapRange,
+    VocalBreath,
+    VocalVibrato,
+    VocalVibratoRate,
+    VocalTension,
+    VocalTensionVelocityAmount,
+    VocalTensionContourAmount,
+    VocalPortamentoMs,
+    VocalArticulation,
+    VocalConsonantEmphasis,
+}
+
+/// Which of the chord inspector's numeric sliders a coalesce run is for —
+/// see [`CoalesceKey::ChordParam`] (FU-A10b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChordParamKnob {
+    MotifComplexity,
+    MotifLeapChance,
+    SchemaSubstitution,
 }
 
 // -------------------------------------------------------------------------

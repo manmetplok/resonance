@@ -402,6 +402,10 @@ impl ComposeMessage {
                 track_id,
                 msg,
             } => msg.undo_action(*definition_id, *track_id),
+            // Keyed by section definition so a chord-inspector slider can
+            // coalesce (FU-A10b) — `ChordInspectorMsg` itself doesn't carry
+            // the section identity.
+            Self::ChordInspector { definition_id, msg } => msg.undo_action(*definition_id),
             // Everything else in Compose mutates project state.
             Self::CreateMidiClipInSection { .. }
             | Self::ConfirmCreateSection
@@ -429,8 +433,7 @@ impl ComposeMessage {
             | Self::ControlSetVocalLine { .. }
             | Self::ControlSetPronunciation { .. }
             | Self::ControlClearPronunciation { .. }
-            | Self::ControlRenderVocal { .. }
-            | Self::ChordInspector { .. } => UndoAction::Record,
+            | Self::ControlRenderVocal { .. } => UndoAction::Record,
         }
     }
 }
@@ -604,6 +607,64 @@ pub enum ChordInspectorMsg {
     ClearManualMotif,
 }
 
+impl ChordInspectorMsg {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here via `ComposeMessage::ChordInspector`). Exhaustive on
+    /// purpose — no `_` arm — so a new variant does not compile until
+    /// someone decides what undo does with it (ARCH-06 A6-4).
+    ///
+    /// Takes `definition_id` — the enclosing `ComposeMessage::ChordInspector`'s
+    /// section identity — because the sliders below coalesce per section,
+    /// and `ChordInspectorMsg` itself doesn't carry that identity (FU-A10b,
+    /// the `LaneInspectorMsg::undo_action` template).
+    pub(crate) fn undo_action(&self, definition_id: u64) -> crate::undo::UndoAction {
+        use crate::undo::{ChordParamKnob, CoalesceKey, UndoAction};
+        match self {
+            // The motif/schema sliders deliver one message per step with no
+            // begin/commit pair; coalesce per section *and* per knob so
+            // dragging complexity then leap chance is two entries, not one,
+            // but repeated steps on the same slider merge (FU-A10b; was one
+            // entry per step).
+            Self::SetMotifComplexity(..) => UndoAction::RecordCoalesced(CoalesceKey::ChordParam(
+                definition_id,
+                ChordParamKnob::MotifComplexity,
+            )),
+            Self::SetMotifLeapChance(..) => UndoAction::RecordCoalesced(CoalesceKey::ChordParam(
+                definition_id,
+                ChordParamKnob::MotifLeapChance,
+            )),
+            Self::SetSchemaSubstitution(..) => {
+                UndoAction::RecordCoalesced(CoalesceKey::ChordParam(
+                    definition_id,
+                    ChordParamKnob::SchemaSubstitution,
+                ))
+            }
+            // Every other chord-inspector edit is a discrete pick, toggle
+            // or action — not a slider drag — and records atomically like
+            // the rest of Compose.
+            Self::SetGeneratorKind(..)
+            | Self::SetTable(..)
+            | Self::SetSchemaKind(..)
+            | Self::SetSchemaRotation(..)
+            | Self::SetLength(..)
+            | Self::SetBeatsPerChord(..)
+            | Self::SetSeventhChords(..)
+            | Self::SetStartDegree(..)
+            | Self::SetEndDegree(..)
+            | Self::Generate
+            | Self::Regenerate
+            | Self::SetMotifLen(..)
+            | Self::RegenerateMotif
+            | Self::SetMotifSourceKind(..)
+            | Self::ToggleManualMotifCell { .. }
+            | Self::ToggleManualMotifRest { .. }
+            | Self::CycleManualMotifNoteDuration { .. }
+            | Self::ToggleManualMotifAccent { .. }
+            | Self::ClearManualMotif => UndoAction::Record,
+        }
+    }
+}
+
 /// Which kind of motif a section is using. Drives a radio in the chord
 /// inspector and decides whether the manual-motif canvas is editable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -774,7 +835,7 @@ impl LaneInspectorMsg {
         definition_id: u64,
         track_id: TrackId,
     ) -> crate::undo::UndoAction {
-        use crate::undo::{CoalesceKey, UndoAction};
+        use crate::undo::{CoalesceKey, LaneParamKnob, UndoAction};
         match self {
             // Typed straight into the project on every keystroke, with no
             // begin/commit pair — coalesce per lane (FU-A10a; was one
@@ -788,28 +849,135 @@ impl LaneInspectorMsg {
             Self::SetVocalLineText(line_n, _) => UndoAction::RecordCoalesced(
                 CoalesceKey::VocalLineText(definition_id, track_id, *line_n),
             ),
+            // The bulk-lyrics text editor delivers one message per
+            // interaction, including cursor moves and selection that
+            // never touch the draft — those are no edit at all (FU-A10b;
+            // every action used to record, so clicking around the editor
+            // filled the undo history with no-op entries). An edit
+            // action coalesces per lane, same idiom as the two fields
+            // above.
+            Self::VocalBulkLyricsAction(action) => {
+                if action.is_edit() {
+                    UndoAction::RecordCoalesced(CoalesceKey::VocalBulkLyrics(
+                        definition_id,
+                        track_id,
+                    ))
+                } else {
+                    UndoAction::Skip
+                }
+            }
+            // The lane inspector's numeric sliders deliver one message per
+            // step with no begin/commit pair; coalesce per lane *and* per
+            // knob so dragging one slider then another on the same lane is
+            // two entries, not one, but repeated steps on the same slider
+            // merge (FU-A10b; was one entry per step). The register/note
+            // pickers beside some of these are `pick_list`s — discrete
+            // picks, not a drag — and stay plain `Record` below.
+            Self::SetBassVelocity(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::BassVelocity,
+            )),
+            Self::SetMelodyRestDensity(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::MelodyRestDensity,
+            )),
+            Self::SetMelodyVelocity(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::MelodyVelocity,
+            )),
+            Self::SetMelodyArticulation(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::MelodyArticulation,
+            )),
+            Self::SetPadVelocity(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::PadVelocity,
+            )),
+            Self::SetVocalChordToneAnchor(..) => {
+                UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                    definition_id,
+                    track_id,
+                    LaneParamKnob::VocalChordToneAnchor,
+                ))
+            }
+            Self::SetVocalLeapRange(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::VocalLeapRange,
+            )),
+            Self::SetVocalBreath(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::VocalBreath,
+            )),
+            Self::SetVocalVibrato(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::VocalVibrato,
+            )),
+            Self::SetVocalVibratoRate(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::VocalVibratoRate,
+            )),
+            Self::SetVocalTension(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::VocalTension,
+            )),
+            Self::SetVocalTensionVelocityAmount(..) => {
+                UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                    definition_id,
+                    track_id,
+                    LaneParamKnob::VocalTensionVelocityAmount,
+                ))
+            }
+            Self::SetVocalTensionContourAmount(..) => {
+                UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                    definition_id,
+                    track_id,
+                    LaneParamKnob::VocalTensionContourAmount,
+                ))
+            }
+            Self::SetVocalPortamentoMs(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::VocalPortamentoMs,
+            )),
+            Self::SetVocalArticulation(..) => UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                definition_id,
+                track_id,
+                LaneParamKnob::VocalArticulation,
+            )),
+            Self::SetVocalConsonantEmphasis(..) => {
+                UndoAction::RecordCoalesced(CoalesceKey::LaneParam(
+                    definition_id,
+                    track_id,
+                    LaneParamKnob::VocalConsonantEmphasis,
+                ))
+            }
             // Every other lane-inspector edit is a discrete pick, toggle
             // or action — not a keystroke/knob burst — and records
             // atomically like the rest of Compose.
             Self::SetGenerator(..)
             | Self::SetBassStyle(..)
             | Self::SetBassBaseNote(..)
-            | Self::SetBassVelocity(..)
             | Self::SetBassMotifMode(..)
             | Self::SetBassMotifPhrase(..)
             | Self::SetMelodyStyle(..)
             | Self::SetMelodyRegisterLow(..)
             | Self::SetMelodyRegisterHigh(..)
             | Self::SetMelodyNoteValue(..)
-            | Self::SetMelodyRestDensity(..)
-            | Self::SetMelodyVelocity(..)
-            | Self::SetMelodyArticulation(..)
             | Self::SetMelodyContour(..)
             | Self::SetMelodyPhraseLen(..)
             | Self::ToggleMelodyFillVocalGaps
             | Self::SetPadRegisterLow(..)
             | Self::SetPadRegisterHigh(..)
-            | Self::SetPadVelocity(..)
             | Self::SetVocalMood(..)
             | Self::SetVocalPov(..)
             | Self::SetVocalRhyme(..)
@@ -819,7 +987,6 @@ impl LaneInspectorMsg {
             | Self::ToggleVocalMatchSyllables
             | Self::ToggleVocalAvoidCliches
             | Self::ToggleVocalLockLine(..)
-            | Self::VocalBulkLyricsAction(..)
             | Self::RerollUnlockedLyrics
             | Self::AutoSyllabifyLyrics
             | Self::SetVocalVoiceType(..)
@@ -828,10 +995,7 @@ impl LaneInspectorMsg {
             | Self::SetVocalStyle(..)
             | Self::SetVocalContour(..)
             | Self::SetVocalSyllableMode(..)
-            | Self::SetVocalChordToneAnchor(..)
-            | Self::SetVocalLeapRange(..)
             | Self::SetVocalPhraseLength(..)
-            | Self::SetVocalBreath(..)
             | Self::ToggleVocalStayInScale
             | Self::ToggleVocalAvoidClashes
             | Self::ToggleVocalUseSectionMotif
@@ -839,14 +1003,6 @@ impl LaneInspectorMsg {
             | Self::SetVocalVoicebank(..)
             | Self::SetVocalSinger(..)
             | Self::SetVocalSingerMeiji(..)
-            | Self::SetVocalVibrato(..)
-            | Self::SetVocalVibratoRate(..)
-            | Self::SetVocalTension(..)
-            | Self::SetVocalTensionVelocityAmount(..)
-            | Self::SetVocalTensionContourAmount(..)
-            | Self::SetVocalPortamentoMs(..)
-            | Self::SetVocalArticulation(..)
-            | Self::SetVocalConsonantEmphasis(..)
             | Self::GenerateVocalAll
             | Self::GenerateVocalLyricsOnly
             | Self::GenerateVocalMelodyOnly
