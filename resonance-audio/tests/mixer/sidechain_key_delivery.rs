@@ -25,7 +25,7 @@
 //! So every assertion here is on RENDERED AUDIO with a plugin that
 //! reports the key it was handed, never on the route table.
 
-mod multi_out_harness;
+use crate::multi_out_harness;
 
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;

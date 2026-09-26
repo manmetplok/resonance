@@ -8,7 +8,7 @@
 //! PARENT's instrument, fanned out while the parent renders, and
 //! `in_filter` drops a track before its instrument runs.
 
-mod multi_out_harness;
+use crate::multi_out_harness;
 
 use multi_out_harness::{
     at_master, peak, EngineState, FRAMES, PARENT, PORT_LEVELS, SIBLING, SIBLING_TAP, TAP_A,

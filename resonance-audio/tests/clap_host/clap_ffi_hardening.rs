@@ -9,7 +9,7 @@
 //! -1 (`write`: bytes written or -1; `read`: bytes read, 0 = EOF, -1 =
 //! error). These tests drive the real host callbacks end-to-end through
 //! a hand-rolled fake CLAP plugin (same harness as
-//! `tests/plugin_output_scrub.rs` / `tests/clap_latency_tracking.rs`)
+//! `tests/clap_host/plugin_output_scrub.rs` / `tests/clap_host/clap_latency_tracking.rs`)
 //! whose `save()`/`load()` misuse the stream on purpose and record what
 //! the host returned.
 //!

@@ -11,7 +11,7 @@
 //!
 //! Needs a real `.clap` to instantiate `ClapInstance`, so this skips
 //! (rather than failing) when `target/bundled/` hasn't been built —
-//! same pattern as `tests/clap_plugin_drop_order.rs`.
+//! same pattern as `tests/clap_host/clap_plugin_drop_order.rs`.
 
 use std::path::PathBuf;
 

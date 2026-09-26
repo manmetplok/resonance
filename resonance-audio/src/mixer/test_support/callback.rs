@@ -2,7 +2,7 @@
 //!
 //! Mirrors the engine's `make_mixer` closure — the same locks, the same
 //! pre-allocated scratch, the same monitor ring and live-MIDI channels —
-//! so `tests/mix_audio_parity.rs` can drive every branch of
+//! so `tests/mixer/mix_audio_parity.rs` can drive every branch of
 //! [`mix_audio`] (reference monitor, count-in, stopped-monitor, playing,
 //! loop seam, lock contention, audition overlay) without an audio device,
 //! a CLAP plugin or the engine thread.
@@ -88,7 +88,7 @@ pub struct MixAudioHarness {
     /// `Arc` rather than inline so a test can hand a clone to a second
     /// thread and reposition the playhead *while* a block renders — the
     /// engine control thread's Seek / Stop race against the callback
-    /// (`tests/playhead_seek_race.rs`).
+    /// (`tests/engine/playhead_seek_race.rs`).
     shared: Arc<SharedState>,
     tracks: RwLock<IndexMap<TrackId, Track>>,
     busses: RwLock<IndexMap<BusId, Bus>>,

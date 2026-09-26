@@ -10,7 +10,7 @@
 //! The fader is now the kit's GROUP TRIM: volume only, applied to every
 //! tap. Pan is deliberately not folded in — see `auto_volume_ramp`.
 
-mod multi_out_harness;
+use crate::multi_out_harness;
 
 use multi_out_harness::{at_master, peak, EngineState, PARENT, PORT_LEVELS, TAP_A};
 use resonance_audio::test_support::StemSource;

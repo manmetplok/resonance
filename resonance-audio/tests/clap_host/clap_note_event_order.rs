@@ -13,7 +13,7 @@
 //! - timeline notes appended after live ones arrived out of order.
 //!
 //! These tests drive `ClapInstance::process` against a hand-rolled fake
-//! plugin (same harness as `tests/plugin_output_scrub.rs`) that records
+//! plugin (same harness as `tests/clap_host/plugin_output_scrub.rs`) that records
 //! every input event it is handed.
 
 use std::ffi::c_void;

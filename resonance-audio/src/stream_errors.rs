@@ -15,7 +15,7 @@
 //! `BackendSpecific`) are rare and load-bearing — those still go
 //! through `eprintln!` directly.
 //!
-//! See `tests/underrun_rate_limiter.rs` for behaviour coverage.
+//! See `tests/mixer/underrun_rate_limiter.rs` for behaviour coverage.
 //!
 //! ALSA itself also recovers silently (`PCM.try_recover(silent=true)`)
 //! since cpal 0.17, so we do *not* need to forward to cpal — the

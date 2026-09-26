@@ -6,7 +6,7 @@
 //! `if let Some(clip) = ...` branch so a missing clip lookup never
 //! emits a ghost event. The pure inner helpers (`move_midi_clip_in_place`,
 //! `trim_midi_clip_in_place`) are re-exported under `test_support` so
-//! the regression test in `tests/midi_clip_handlers.rs` can drive them
+//! the regression test in `tests/engine/midi_clip_handlers.rs` can drive them
 //! without bringing up the engine thread.
 
 use crossbeam_channel::Sender;

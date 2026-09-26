@@ -18,7 +18,7 @@
 //! They drive a hand-rolled fake CLAP plugin built straight from
 //! `clap_sys` vtables through the `__instance_from_raw_for_test` hook —
 //! no shared library and no compositor involved, so the whole matrix
-//! runs headless. See `tests/clap_latency_tracking.rs` for the same
+//! runs headless. See `tests/clap_host/clap_latency_tracking.rs` for the same
 //! harness applied to the latency callbacks.
 
 use std::ffi::{c_char, c_void, CStr};

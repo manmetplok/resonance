@@ -9,7 +9,7 @@
 //!
 //! The chunk walk ([`locate_wav_float_data`]) is a pure function over a
 //! byte slice with no I/O of its own, so every malformed-header case is
-//! directly testable (`tests/wav_chunk_parse.rs`).
+//! directly testable (`tests/io/wav_chunk_parse.rs`).
 
 use std::path::Path;
 

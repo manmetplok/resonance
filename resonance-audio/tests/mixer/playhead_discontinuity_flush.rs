@@ -16,7 +16,7 @@
 //! a seek, a MIDI-clock relocate, a lock-contended or reference block, a
 //! lost `commit_playhead` — and when the transport stops.
 
-mod note_recorder;
+use crate::note_recorder;
 
 use std::sync::atomic::Ordering;
 

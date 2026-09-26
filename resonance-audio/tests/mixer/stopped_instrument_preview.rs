@@ -9,7 +9,7 @@
 //! and the whole backlog fired at once on the next Play, with any note
 //! whose note-off was dropped left hanging.
 
-mod note_recorder;
+use crate::note_recorder;
 
 use std::sync::atomic::Ordering;
 use std::time::Instant;

@@ -7,7 +7,7 @@
 //! boundary, inside `process_multi_with_key`, before the buffer re-enters
 //! the graph. These tests drive that boundary end-to-end through a
 //! hand-rolled fake CLAP plugin (no shared library; same harness as
-//! `tests/clap_latency_tracking.rs`) whose `process()` writes whatever
+//! `tests/clap_host/clap_latency_tracking.rs`) whose `process()` writes whatever
 //! pattern the test stages, and assert:
 //!
 //! - non-finite samples (NaN, +Inf, -Inf) come out as 0.0,

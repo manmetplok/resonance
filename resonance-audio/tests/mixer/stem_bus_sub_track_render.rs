@@ -14,7 +14,7 @@
 //! same plugin for the `StemSource::Track` arm); see that module for why
 //! sub-track audio cannot be produced with plain clips.
 
-mod multi_out_harness;
+use crate::multi_out_harness;
 
 use multi_out_harness::{peak, EngineState, FRAMES};
 use resonance_audio::test_support::{stem_filter, StemSource};

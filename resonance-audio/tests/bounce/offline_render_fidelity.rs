@@ -7,7 +7,7 @@
 //! Drives the real renderers (`export_for_test` → `run_export`,
 //! `to_freeze_cache`, `export_stems`) over engine state built by hand,
 //! with a hand-rolled fake CLAP plugin (same `__instance_from_raw_for_test`
-//! hook as `tests/plugin_output_scrub.rs`) that is a single-tap echo with
+//! hook as `tests/clap_host/plugin_output_scrub.rs`) that is a single-tap echo with
 //! an automatable gain parameter, and whose `reset` clears the echo line.
 
 use std::ffi::c_void;
