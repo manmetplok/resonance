@@ -7,7 +7,8 @@ slice (A-13a, roadmap group 1); §7 records the second (A-13b, group 2,
 written against master `c325335a`), §8 the third (A-13c, group 4, against
 master `d538d5cf`; group 3 waits for D-2/D-3), §9 the fourth (A-13d, group
 5, against master `85b38b32`), §10 the fifth (A-13e, group 3, against
-master `1853dd1e`). Later slices move one group at a time.
+master `1853dd1e`), §11 the sixth (A-13f, group 6 step 1, against
+master `fde89f24`). Later slices move one group at a time.
 
 ## 1. The problem
 
@@ -857,3 +858,190 @@ D-4** (which re-keys track add sites in `replay/entity.rs`):
 Each of 3–5 changes engine traffic on structural undo (no `ClearAll`), so
 each needs a capture test for the new commands and a fixed-point run over
 an add/remove of the entity it covers.
+
+## 11. Group (6), step 1: A-13f
+
+Written against master `fde89f24` (after D-4, A-12e, FU-A6d).
+
+### Domains
+
+`Stage` is now `Globals, Timeline, Entities, Routing, Clips, Content,
+Tail`; 31 domains (`reconcile_order::the_table_is_the_agreed_order`). Code:
+`reconcile/entities.rs` (the old `replay/entity.rs` bodies plus the diff
+arms from `replay_diff.rs`) and `reconcile/plugin_state.rs`.
+
+| Stage | Domain | Body by origin |
+|---|---|---|
+| Entities (1st) | `tracks` | after `ClearAll`: empty `registry.tracks`, `next_track_order`, `plugin_mirror.index`; bump `next_track_id` past every saved id; per track `replay_track` (add command + every scalar + `AddPlugin` per slot + placeholder slots seeded with name and bypass); then `migrate_old_generate_params`. Diff: `apply_track` — changed scalars only; the mirror takes every field and the slot names. |
+| Entities | `busses` | after `ClearAll`: empty `registry.busses`, `next_bus_order`; `replay_bus` per bus. Diff: `apply_bus`. |
+| Entities | `master` | after `ClearAll`: `SetMasterFxBypass` + `AddPluginToMaster` per slot. Diff: `SetMasterFxBypass` when changed, slot names. |
+| Entities | `track_outputs` | `SetTrackOutput` — after `ClearAll` for every track routed to a bus; diff for every track whose `output_bus` differs from `old`'s (incl. back to the master). The mirror (`TrackState::output`) stays with `tracks`. |
+| Entities | `plugin_state` | three phases on every origin: **blobs** (`LoadPluginState` + `state_cache`; after `ClearAll` all of them, diff only when not `Arc::ptr_eq` with the live cache — FU-A2b), **bypass** (after `ClearAll` `SetPluginBypass` per bypassed slot; diff `apply_plugin_bypass` per changed slot), **params** (after `ClearAll` parked in `pending_plugin_param_overrides`; diff `apply_all_plugin_params`). |
+| Entities (last) | `entity_order` | every origin: `resort_tracks`, `resort_busses`, `rebuild_output`, `refresh_track_count`. After `ClearAll` also each chain sorted into the target file's saved order, then `rebuild_plugin_index`. |
+
+Deleted: `wipe_registry`, `replay_tracks_and_busses`, `SavedPluginOrder`,
+`finalize_plugin_chains` (`replay/mod.rs`); `apply_tracks`,
+`apply_busses`, `push_all_plugin_states`, `push_plugin_states` and the
+trailing resort (`replay_diff.rs`); `reconcile_stage` (replaced by
+`reconcile_all_stages`). `ReconcileCtx` gains `plugin_states`, the target
+`LoadedProject`'s blobs, for the same reason it carries `midi_notes`: the
+`ProjectFile` does not hold them. `wipe_registry`'s entity clears moved
+into the `old = None` arms (`master`'s is an assignment).
+`structurally_compatible` and the `ClearAll` fallback stay.
+
+### Where the stages sit now
+
+```
+Full path (replay_loaded_project)
+  vocal_audio.clear, SetProjectDir, reconcile_all_stages(old = None)
+
+Diff path (try_diff_replay)
+  structurally_compatible?, reconcile_all_stages(old = Some(current))
+```
+
+No per-path restore code is left between two stages, so the stage calls
+became one `reconcile_all_stages` (the table in order). The disk-load
+tail stays in `all_cleared`.
+
+### Proof 1: the diff path's plugin blobs and params move before `Routing`
+
+Diff order before: entity scalars (incl. `SetPluginBypass`), `Routing`
+(`RemoveAuxSend` / `SetAuxSend` / `AddAuxSend`, `ClearSidechainRoute` /
+`SetSidechainRoute`), `LoadPluginState`, `SetPluginParam`. Now the blobs
+and params precede `Routing`.
+
+* **Engine.** `handle_load_plugin_state` (`engine/plugins.rs`) reads and
+  locks only `ctx.plugins[instance_id]` and reloads that instance
+  (re-queued on `cmd_tx_retry` if the audio thread holds the lock, as
+  before). `handle_set_plugin_param` likewise touches one instance. The
+  routing handlers (§10: `handle_add/set/remove_aux_send`,
+  `sidechain::handle_set/clear`) read `ctx.tracks` / `ctx.busses` and
+  write `state.aux_sends` / `state.sidechain_routes` only;
+  `sidechain::handle_set` does not even check the plugin exists.
+  Disjoint engine state on one FIFO control thread: they commute. A state
+  load can change a plugin's latency; the PDC republish after it is
+  independent of the route tables.
+* **App.** `plugin_state` writes `state_cache`, slot `params`, slot
+  `bypassed`; the routing domains read `r.registry` track/bus ids and the
+  file's plugin ids, and write `r.aux` / `r.sidechain`. Disjoint.
+* **Echoes.** A load echoes nothing on success (`PluginStateSaved` only
+  follows `SavePluginState`); `AuxSendChanged` / `SidechainRouteChanged`
+  update mirrors `plugin_state` does not touch.
+
+Guard: `reconcile_order::a_diff_undo_restores_plugin_state_before_routing`
+(fails on the old order, where `SetAuxSend` preceded `LoadPluginState`).
+
+### Proof 2: the diff path's resort moves from after `Tail` to before `Routing`
+
+`entity_order` runs `resort_tracks`, `resort_busses`, `rebuild_output`,
+`refresh_track_count`. Between the old and new positions run `Routing`,
+`Clips`, `Content` and `Tail`. Before, those saw the registry in its
+pre-undo vector order (with the target `.order` values already written
+by `apply_track` / `apply_bus`); now they see it sorted. Every reader of
+`registry.tracks` / `registry.busses` in those domains and what they
+call:
+
+* `routing::source_exists` and the dest-bus check — `iter().any(id)`.
+* `clips::VocalAudioClips` — collects a `HashSet` of vocal track ids.
+* `restore_derived_clips` — `drum_track_ids`, a `HashSet` (legacy branch
+  only).
+* `restore_track_groups` — bumps `next_track_id`; no iteration.
+* `apply_freeze_restore` / `reconcile_freeze_statuses` /
+  `attach_freeze_cache` (`update/freeze.rs`) — `find(id)` / `any(id)`.
+* `restore_external_instruments`, `restore_automation_lanes` — iterate
+  the *target file*, not the registry.
+* references, pool, quantize, performance, take groups — do not read the
+  registry.
+
+None depends on vector order, and none writes it (no domain after
+`Entities` pushes, removes or reorders a track or bus), so sorting
+earlier can be neither undone nor observed. `rebuild_output` reads bus
+names, which `busses` has already written; `output_choices` and
+`compose.track_count` are read only by views. No engine command is
+involved. Guards: `a_diff_undo_resorts_the_registry` (behaviour) and the
+trace tests (position).
+
+Full path, same domain: `finalize_plugin_chains` moves from after `Clips`
+to before `Routing`, and `resort_tracks` / `refresh_track_count` /
+`resort_busses` / `rebuild_output` from right after their replay loops to
+the end of `Entities`. Readers in between: `replay_bus` (reads
+`next_bus_order`), `migrate_old_generate_params` (keys lane generators by
+track id — order-insensitive, and it stayed in `tracks`), `master`,
+`track_outputs` and `plugin_state`'s full arm (iterate the file),
+`Routing` and `Clips` (read the file's plugin ids, never
+`plugin_mirror.index`; nothing in either calls `with_plugin_mut`). The
+chain sort is stable and, since every `PluginAdded` echo is handled only
+after the synchronous replay returns, it still runs before any echo can
+have appended a slot — as before.
+
+### Proof 3: the full path's `SetPluginBypass` leaves the add body
+
+It moves into `plugin_state`, after the blob; the placeholder's
+`bypassed` seed stays in the add body.
+
+* **Why it cannot stay.** Once `LoadPluginState` leaves the add loop, a
+  bypass left there would precede the blob. A slot whose plugin declares
+  its own bypass parameter is bypassed by the render path pushing that
+  parameter (`PluginSlot::sync_own_bypass`), edge-triggered on
+  `own_bypass_sent`. If the audio thread renders between
+  `SetPluginBypass` and `LoadPluginState`, it pushes `1`; the reload can
+  then put the plugin's own parameter back to the blob's value, and the
+  host never re-sends it — the slot shows bypassed and plays wet. With
+  the blob first, the bypass target is set after the reload, as before.
+  (The diff path had exactly the inverted order — `apply_plugin_bypass`
+  inside the entity scalars, blobs after them — and now shares the fixed
+  one.)
+* **The echo still overwrites the placeholder.** Per instance the engine
+  sees `AddPlugin*` (emits `PluginAdded`) before `SetPluginBypass` (emits
+  `PluginBypassChanged`), on one FIFO thread, so the events keep their
+  order. `track_added` / `bus_added` / `master_added` find the placeholder
+  by instance id — it exists from the add body on — and
+  `adopt_live_instance` overwrites only `params` / `has_gui` /
+  `has_sidechain_input` / availability, never `bypassed`. The seed stays
+  in the add body so the placeholder is right the moment it exists.
+* **Parked params.** `apply_pending_param_overrides` runs from the echo
+  handler, i.e. after the replay returns, so the overrides are parked and
+  `LoadPluginState` queued before it whatever the order inside the
+  replay; the per-param sends still land after the blob (comment in
+  `engine_events/plugins.rs` updated).
+* **Per-instance order kept.** Full path before: `Add, Load, Bypass` per
+  plugin, interleaved; now every `Add` (with the other entity commands
+  and the `SetTrackOutput`s), then every `Load`, then every `Bypass`.
+  Different instances are independent engine state.
+
+Guard:
+`the_full_path_restores_plugin_state_after_every_entity_and_before_routing`
+(fails on the old order, where `LoadPluginState` preceded
+`SetTrackOutput`; it also checks the override is parked, then applied on
+the echo).
+
+### Other ordering changes
+
+Diff path: `SetTrackOutput` moves from inside each track's scalars to
+after every track, bus and the master (`track_outputs`).
+`handle_set_track_output` writes one track's output atomic; the bus and
+master scalars and the other tracks' scalars touch other state. Full
+path: none besides the above — `SetTrackOutput` already followed the
+master chain.
+
+Every existing guard passed unchanged at each commit (fixed-point,
+`undo_restore_flag`, `io::replay`, `id_allocation`, the plugin / bus /
+track undo tests, the `io`, `plugins`, `mixer` and `timeline` groups).
+
+### What this changes for A-13g–j
+
+* **A-13h (busses, plugin instances).** The add bodies are now the
+  `old = None` arms of `tracks` / `busses` / `master` (`replay_bus`,
+  `replay_plugins`); a diff arm that adds what `old` lacks can call them
+  per entity. A diff-added plugin then needs its blob pushed *and* its
+  overrides parked (it has no params until its echo), so `plugin_state`'s
+  phases must switch per instance ("fresh" vs "live"), not per origin.
+  Removals must still run before `Routing` re-sends against a removed
+  endpoint — §10's routing-removal pre-pass stands. `entity_order`'s
+  chain sort then has to run on the diff arm too (a reorder becomes
+  `MovePluginIn*`).
+* **A-13i (tracks).** `tracks`' `old = None` arm clears the whole
+  registry and the plugin index; a per-track add/remove on the diff arm
+  must keep `plugin_mirror.index` consistent itself, or `entity_order`
+  rebuilds it on every origin (cheap).
+* `LiveCarry` is unchanged; nothing in `Entities` needed a carry.

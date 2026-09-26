@@ -141,9 +141,10 @@ impl Reconcile for Sends {
 
 /// Every plugin instance id `file` carries, across track, bus and master
 /// chains: the membership test for a key route's target. Read from the
-/// file rather than `r.plugin_mirror.index`, which the full path rebuilds
-/// only in `finalize_plugin_chains`, after this stage; the replayed chains
-/// hand the engine these same ids as `id_hint`s.
+/// file rather than `r.plugin_mirror.index` (which `EntityOrder` rebuilds
+/// just before this stage on the full path since A-13f): the file is the
+/// target on every origin, and the replayed chains hand the engine these
+/// same ids as `id_hint`s.
 fn plugin_instance_ids(file: &ProjectFile) -> HashSet<u64> {
     file.tracks
         .iter()

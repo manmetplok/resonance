@@ -2,27 +2,34 @@
 //!
 //! A project reaches the app through two restore paths: the full replay
 //! after `ClearAll` (`replay_loaded_project` — a disk load or an undo's
-//! structural fallback) and the undo diff replay (`try_diff_replay`). A
-//! domain migrated here is restored by one [`Reconcile`] impl that both
-//! paths run through [`reconcile_stage`], in the one order [`DOMAINS`]
+//! structural fallback) and the undo diff replay (`try_diff_replay`). Every
+//! project domain is restored by one [`Reconcile`] impl that both paths
+//! run through [`reconcile_all_stages`], in the one order [`DOMAINS`]
 //! lists.
 //!
-//! Domains not yet migrated are still restored inline by each path. The
-//! [`Stage`]s mark the points in that inline code where a group of
-//! migrated domains is valid; both paths call the stages in the same
-//! sequence, and `DOMAINS` is sorted by stage, so both run the migrated
-//! domains in table order.
+//! Since A-13f no domain is restored inline by either path: each entry
+//! point is its setup (the ctx; on the full path the vocal side-table
+//! clear and `SetProjectDir`), then `reconcile_all_stages`. What still
+//! differs is how they get there — `structurally_compatible` picks the
+//! diff path, else `ClearAll` and the full path (A-13g..j remove that).
+//! The [`Stage`]s group the table and document why each group sits where
+//! it does; `DOMAINS` is sorted by stage.
 
 mod app_side;
 mod clips;
+mod entities;
 mod globals;
+mod plugin_state;
 mod restored;
 mod routing;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use resonance_audio::types::{ClipId, MidiNote};
+use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
+
+pub use entities::{migrate_auto_name, sort_plugins_by_saved_order};
 
 use crate::project::ProjectFile;
 use crate::Resonance;
@@ -65,6 +72,10 @@ pub struct ReconcileCtx<'a> {
     /// The target's MIDI notes per clip id (`LoadedProject::midi_notes`),
     /// which the `ProjectFile` does not carry. Read by `MidiClips`.
     pub midi_notes: &'a HashMap<ClipId, Vec<MidiNote>>,
+    /// The target's plugin state blobs per instance id
+    /// (`LoadedProject::plugin_states`), which the `ProjectFile` does not
+    /// carry either. Read by the entity domains' plugin chains.
+    pub plugin_states: &'a HashMap<PluginInstanceId, Arc<[u8]>>,
     /// Live state an undo keeps, captured by the entry point before
     /// anything is restored.
     pub live: LiveCarry<'a>,
@@ -118,8 +129,10 @@ pub(crate) trait Reconcile {
     );
 }
 
-/// Points in the not-yet-migrated inline code at which a group of
-/// migrated domains runs. Declared in the order both paths reach them.
+/// Groups of [`DOMAINS`], declared in the order both paths run them.
+/// They used to mark the points in each path's inline code where a group
+/// was valid; since A-13f nothing runs between two stages, so they only
+/// group the table (collapsing them is A-13j's).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
     /// Transport / master scalars, the transient UI a full replay resets,
@@ -130,21 +143,22 @@ pub enum Stage {
     /// (reads the meter). Right after `Globals` on both paths, before any
     /// track or clip is restored.
     Timeline,
+    /// The entities: tracks, busses, the master chain, the track outputs,
+    /// then each plugin's state (blob, bypass, params), then the registry
+    /// order. Right after `Timeline` on both paths. After a `ClearAll`
+    /// every entity is added; on the diff path only changed scalars are
+    /// sent.
+    Entities,
     /// The routing edges between entities: aux sends, then sidechain key
-    /// routes. Both paths: right after every track, bus and the master
-    /// chain are restored (the engine rejects a send naming an unregistered
-    /// endpoint; a key route names a plugin instance id). Full path: after
-    /// the track outputs, before the clips. Diff path: after the master,
-    /// before the plugin state blobs and params.
+    /// routes. Right after `Entities` (the engine rejects a send naming an
+    /// unregistered endpoint; a key route names a plugin instance id).
     Routing,
     /// The audio and MIDI clips, then state derived from them: the lyric
-    /// side-table, the derived-clip map and the vocal audio-clip map. Full
-    /// path: right after `Routing`. Diff path: right after the plugin
-    /// params are applied.
+    /// side-table, the derived-clip map and the vocal audio-clip map.
+    /// Right after `Routing`, on every track the clips sit on.
     Clips,
-    /// App-side content restored whole, and the references. Full path:
-    /// after the plugin chains are finalised (the pool counts the clips'
-    /// asset refs). Diff path: after `Clips`.
+    /// App-side content restored whole, and the references. After `Clips`
+    /// (the pool counts the clips' asset refs).
     Content,
     /// Domains that must see everything else restored: external
     /// instruments, then the automation lanes (a `DeviceParam` lane needs
@@ -190,6 +204,18 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::Markers>(Stage::Timeline),
     // Reads the meter (tempo events) and the sections.
     domain::<globals::SectionChordTrim>(Stage::Timeline),
+    // Tracks before busses (as both paths always had it), the master
+    // chain, then the track outputs once every bus they name exists.
+    domain::<entities::Tracks>(Stage::Entities),
+    domain::<entities::Busses>(Stage::Entities),
+    domain::<entities::Master>(Stage::Entities),
+    domain::<entities::TrackOutputs>(Stage::Entities),
+    // After every chain it names is added / matched: blobs, then per-slot
+    // bypass, then params (which win over the blob).
+    domain::<plugin_state::PluginState>(Stage::Entities),
+    // Last: resorts every registry the domains above filled or re-ordered,
+    // and (after a `ClearAll`) the plugin chains + side-index.
+    domain::<entities::EntityOrder>(Stage::Entities),
     // After every entity they connect. Sends before key routes, as both
     // paths always had it (the two are independent tables in the engine).
     domain::<routing::Sends>(Stage::Routing),
@@ -223,15 +249,16 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<restored::Freeze>(Stage::Tail),
 ];
 
-/// Run every [`DOMAINS`] entry of `stage`, in table order.
-pub(crate) fn reconcile_stage(
+/// Run every [`DOMAINS`] entry, in table order — every [`Stage`] in
+/// sequence. The whole restore on both paths since A-13f: no per-path
+/// code is left between two stages.
+pub(crate) fn reconcile_all_stages(
     r: &mut Resonance,
-    stage: Stage,
     old: Option<&ProjectFile>,
     new: &ProjectFile,
     ctx: &ReconcileCtx<'_>,
 ) {
-    for d in DOMAINS.iter().filter(|d| d.stage == stage) {
+    for d in DOMAINS {
         r.io.reconcile_trace.push((ctx.origin, d.name));
         (d.run)(r, old, new, ctx);
     }

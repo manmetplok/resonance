@@ -82,8 +82,8 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.io.restoring_undo = false;
     r.undo.clear();
     r.plugin_mirror.state_cache.clear();
-    // Re-seeded from the template's own file by `replay_plugins`; see the
-    // matching clear on the project-open path.
+    // Re-seeded from the template's own file by the `PluginState`
+    // reconcile domain; see the matching clear on the project-open path.
     r.presets.pending_plugin_param_overrides.clear();
     // Placements queued against the old project (code review UPD-04).
     r.media.pool_import.clear();

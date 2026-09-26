@@ -21,7 +21,7 @@
 //! snapshot; either way the snapshot's param values are then driven
 //! explicitly (all of them the blob may have reset, or just those that
 //! differ from the live mirror when no blob was pushed), so plugin param
-//! undo works without a full re-instantiation.
+//! undo works without a full re-instantiation (`reconcile::plugin_state`).
 
 use std::collections::HashMap;
 
@@ -31,10 +31,9 @@ use crate::project::{
     LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
     ProjectTrack,
 };
-use crate::util::db_to_gain;
 use crate::Resonance;
 
-use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
+use super::reconcile::{reconcile_all_stages, LiveCarry, Origin, ReconcileCtx};
 use super::serialize::build_project_file;
 
 /// Attempt a structure-preserving replay. Returns `true` when the diff
@@ -61,88 +60,22 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
         origin: Origin::UndoDiff,
         project_dir: project_path.as_deref(),
         midi_notes: &target.midi_notes,
+        plugin_states: &target.plugin_states,
         live: LiveCarry {
             project_path: project_path.as_deref(),
             derived_counter_floor: LiveCarry::derived_counter_floor(r, Origin::UndoDiff),
         },
     };
 
-    // -- Migrated domains, head (ARCH-01 A-13) -------------------------
-    // Transport / master scalars that changed, compose sections and the
-    // drum-pattern bank (`Globals`); then tempo / signature events, chord
-    // track and markers (`Timeline`) — before any track or clip, as on the
-    // full path (A-13c: tempo used to go out after the clips here; nothing
-    // in between reads the tempo map, app- or engine-side).
-    reconcile_stage(r, Stage::Globals, Some(&current), target_file, &ctx);
-    reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
-
-    // -- Tracks --------------------------------------------------------
-    apply_tracks(r, &current, target_file);
-
-    // -- Busses --------------------------------------------------------
-    apply_busses(r, &current, target_file);
-
-    // -- Master FX -----------------------------------------------------
-    apply_master(r, &current, target_file);
-
-    // -- Migrated domains: routing (ARCH-01 A-13e) ----------------------
-    // Aux sends, then sidechain key routes, by diff against `current`
-    // (removals first). Both are plain routing edges with surgical add /
-    // edit / remove commands, so adding or removing one never forces the
-    // slow path. After the master as on the full path (A-13e: they used to
-    // go out between the busses and the master; the engine's send and
-    // route tables are independent of the master bypass and plugin bypass
-    // flags `apply_master` writes).
-    reconcile_stage(r, Stage::Routing, Some(&current), target_file, &ctx);
-
-    // -- Plugin state blobs --------------------------------------------
-    // Re-push a snapshot's blob only when the cache moved on since it was
-    // taken (editor close, preset capture, save): then the plugin's
-    // internal state may differ from the snapshot's. When the snapshot
-    // holds the very blob still cached (`Arc::ptr_eq`), nothing but the
-    // params can have drifted — the blob is refreshed at every point that
-    // changes anything else — so pushing it would only reset the params
-    // the next step has to repair (FU-A2b).
-    let pushed = push_all_plugin_states(r, target);
-
-    // -- Plugin parameter values ---------------------------------------
-    // The blob just pushed is only as fresh as its last refresh (plugin
-    // add, editor close, save) — never a param edit — so the snapshot's
-    // own values are re-applied after it, to the mirror and the engine,
-    // exactly as a load does. Without this an undone knob kept its value
-    // on screen and in the next save while the engine sat on the stale
-    // blob (STATE-03). A plugin whose blob was not pushed only needs the
-    // params that differ from the live mirror (FU-A2b).
-    apply_all_plugin_params(r, target_file, &pushed);
-
-    // -- Migrated domains, tail (ARCH-01 A-13) -------------------------
-    // The audio clips (scalar reposition / retrim / fade / gain) and MIDI
-    // clips (reposition, or notes replaced by delete + reload) by diff
-    // against `current`; then the lyric side-table (padded to the note
-    // counts just installed), the derived-clip map (the snapshot's with
-    // every entry, pending echoes included — FU-H2a, A-6; after
-    // `ComposeSections` reset it) and the vocal audio-clip map.
-    reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
-    // References (reconciled against the engine's live ones, no
-    // `ClearAll` here), then pool, quantize, performance, track groups,
-    // take lanes: app-side content the structural check ignores, restored
-    // verbatim. The pool counts the clips' asset refs `AudioClips`
-    // mirrored; the take lanes' `RestoreTakeGroups` replaces the engine's
-    // store wholesale, so an undo that deleted a take does not resurrect it
-    // (no `ClearAll` here).
-    reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
-
-    // External instruments, then the automation lanes (a `DeviceParam`
-    // lane lands on known bindings), freeze last (detach/delete caches no
-    // longer frozen). None alters the project shape, so the structural
-    // check ignores them.
-    reconcile_stage(r, Stage::Tail, Some(&current), target_file, &ctx);
-
-    // -- Sort track / bus registry so view-layer invariant holds -------
-    r.registry.resort_tracks();
-    r.registry.resort_busses();
-    r.ui.view_caches.rebuild_output(&r.registry.busses);
-    r.compose.refresh_track_count(&r.registry.tracks);
+    // Every domain, in table order, by diff against `current` (ARCH-01
+    // A-13): the transport / compose globals and the tempo map before any
+    // entity; the track, bus and master scalars that changed, the track
+    // outputs, each plugin's blob (only when the cache moved on — FU-A2b),
+    // bypass and params, the registry resort; the routing edges (removals
+    // first); the clips and what derives from them; the app-side content;
+    // external instruments, lanes and freeze last. See
+    // `docs/design/A-13-reconcile.md` for why each sits where it does.
+    reconcile_all_stages(r, Some(&current), target_file, &ctx);
 
     true
 }
@@ -321,346 +254,6 @@ fn midi_clip_set_matches(a: &[ProjectMidiClip], b: &[ProjectMidiClip]) -> bool {
 // Apply layer
 // =====================================================================
 
-fn apply_tracks(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
-    let a_by_id: HashMap<u64, &ProjectTrack> = a.tracks.iter().map(|t| (t.id, t)).collect();
-    for tb in &b.tracks {
-        let ta = a_by_id
-            .get(&tb.id)
-            .copied();
-        let Some(ta) = ta else {
-            // Defence in depth: `structurally_compatible` should have
-            // gated us here, but if it ever drifts we'd rather skip an
-            // unmatched id than crash on undo. The caller may detect
-            // a stale slot and fall back to a full replay.
-            continue;
-        };
-        apply_track(r, ta, tb);
-    }
-}
-
-fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
-    let track_id = b.id;
-    if a.volume != b.volume {
-        let _ = r.engine.send(AudioCommand::SetTrackVolume {
-            track_id,
-            volume: db_to_gain(b.volume),
-        });
-    }
-    if a.pan != b.pan {
-        let _ = r.engine.send(AudioCommand::SetTrackPan {
-            track_id,
-            pan: b.pan,
-        });
-    }
-    if a.muted != b.muted {
-        let _ = r.engine.send(AudioCommand::SetTrackMute {
-            track_id,
-            muted: b.muted,
-        });
-    }
-    if a.soloed != b.soloed {
-        let _ = r.engine.send(AudioCommand::SetTrackSolo {
-            track_id,
-            soloed: b.soloed,
-        });
-    }
-    if a.record_armed != b.record_armed {
-        let _ = r.engine.send(AudioCommand::SetTrackRecordArm {
-            track_id,
-            armed: b.record_armed,
-        });
-    }
-    if a.monitor_enabled != b.monitor_enabled {
-        let _ = r.engine.send(AudioCommand::SetTrackMonitor {
-            track_id,
-            enabled: b.monitor_enabled,
-        });
-    }
-    if a.playback_source != b.playback_source {
-        let _ = r.engine.send(AudioCommand::SetTrackPlaybackSource {
-            track_id,
-            source: b.playback_source,
-        });
-    }
-    if a.mono != b.mono {
-        let _ = r.engine.send(AudioCommand::SetTrackMono {
-            track_id,
-            mono: b.mono,
-        });
-    }
-    if a.fx_bypassed != b.fx_bypassed {
-        let _ = r.engine.send(AudioCommand::SetTrackFxBypass {
-            track_id,
-            bypassed: b.fx_bypassed,
-        });
-    }
-    if a.input_device_name != b.input_device_name {
-        let _ = r.engine.send(AudioCommand::SetTrackInputDevice {
-            track_id,
-            device_name: b.input_device_name.clone(),
-        });
-    }
-    if a.input_port_index != b.input_port_index {
-        if let Some(port_index) = b.input_port_index {
-            let _ = r.engine.send(AudioCommand::SetTrackInputPort {
-                track_id,
-                port_index,
-            });
-        }
-    }
-    if a.midi_input_device != b.midi_input_device || a.midi_input_channel != b.midi_input_channel {
-        let _ = r.engine.send(AudioCommand::SetTrackMidiInput {
-            track_id,
-            device: b.midi_input_device.clone(),
-            channel: b.midi_input_channel,
-        });
-    }
-    if a.midi_output_device != b.midi_output_device || a.midi_output_channel != b.midi_output_channel
-    {
-        let _ = r.engine.send(AudioCommand::SetTrackMidiOutput {
-            track_id,
-            device: b.midi_output_device.clone(),
-            channel: b.midi_output_channel,
-        });
-    }
-    if a.output_bus != b.output_bus {
-        let output = b
-            .output_bus
-            .map(TrackOutput::Bus)
-            .unwrap_or(TrackOutput::Master);
-        let _ = r.engine.send(AudioCommand::SetTrackOutput {
-            track_id,
-            output,
-        });
-    }
-
-    // Mirror onto GUI track state. The structural check guarantees the
-    // track exists in `r.registry.tracks`.
-    if let Some(t) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-        t.name = b.name.clone();
-        t.order = b.order;
-        t.volume = b.volume;
-        t.pan = b.pan;
-        t.muted = b.muted;
-        t.soloed = b.soloed;
-        t.fx_bypassed = b.fx_bypassed;
-        t.record_armed = b.record_armed;
-        t.monitor_enabled = b.monitor_enabled;
-        t.playback_source = b.playback_source;
-        t.mono = b.mono;
-        t.input_device_name = b.input_device_name.clone();
-        t.input_port_index = b.input_port_index.unwrap_or(0);
-        t.output = b
-            .output_bus
-            .map(TrackOutput::Bus)
-            .unwrap_or(TrackOutput::Master);
-        t.instrument_type = b.instrument_type;
-        t.instrument_icon = b.instrument_icon;
-        t.role = b.role;
-        t.midi_input_device = b.midi_input_device.clone();
-        t.midi_input_channel = b.midi_input_channel;
-        t.midi_output_device = b.midi_output_device.clone();
-        t.midi_output_channel = b.midi_output_channel;
-        // Plugin slot metadata: instance_id/clap identity are
-        // guaranteed stable by the structural check, but the
-        // human-visible name may change.
-        for (slot, pp) in t.plugins.iter_mut().zip(b.plugins.iter()) {
-            slot.plugin_name = pp.plugin_name.clone();
-        }
-        apply_plugin_bypass(&r.engine, &mut t.plugins, &b.plugins);
-    }
-}
-
-fn apply_busses(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
-    let a_by_id: HashMap<u64, &ProjectBus> = a.busses.iter().map(|x| (x.id, x)).collect();
-    for bb in &b.busses {
-        let ba = a_by_id
-            .get(&bb.id)
-            .copied();
-        let Some(ba) = ba else {
-            // Defence in depth — see the note in `apply_tracks`.
-            continue;
-        };
-        apply_bus(r, ba, bb);
-    }
-}
-
-fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
-    let bus_id = b.id;
-    if a.volume != b.volume {
-        let _ = r.engine.send(AudioCommand::SetBusVolume {
-            bus_id,
-            volume: db_to_gain(b.volume),
-        });
-    }
-    if a.pan != b.pan {
-        let _ = r.engine.send(AudioCommand::SetBusPan { bus_id, pan: b.pan });
-    }
-    if a.muted != b.muted {
-        let _ = r.engine.send(AudioCommand::SetBusMute {
-            bus_id,
-            muted: b.muted,
-        });
-    }
-    if a.fx_bypassed != b.fx_bypassed {
-        let _ = r.engine.send(AudioCommand::SetBusFxBypass {
-            bus_id,
-            bypassed: b.fx_bypassed,
-        });
-    }
-    if a.name != b.name {
-        let _ = r.engine.send(AudioCommand::SetBusName {
-            bus_id,
-            name: b.name.clone(),
-        });
-    }
-    if a.is_return != b.is_return {
-        let _ = r.engine.send(AudioCommand::SetBusRole {
-            bus_id,
-            is_return: b.is_return,
-        });
-    }
-    if let Some(bus) = r.registry.busses.iter_mut().find(|x| x.id == bus_id) {
-        bus.name = b.name.clone();
-        bus.order = b.order;
-        bus.volume = b.volume;
-        bus.pan = b.pan;
-        bus.muted = b.muted;
-        bus.fx_bypassed = b.fx_bypassed;
-        bus.is_return = b.is_return;
-        for (slot, pp) in bus.plugins.iter_mut().zip(b.plugins.iter()) {
-            slot.plugin_name = pp.plugin_name.clone();
-        }
-        apply_plugin_bypass(&r.engine, &mut bus.plugins, &b.plugins);
-    }
-}
-
-fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
-    if a.master_fx_bypassed != b.master_fx_bypassed {
-        r.master.fx_bypassed = b.master_fx_bypassed;
-        let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
-            bypassed: b.master_fx_bypassed,
-        });
-    }
-    for (slot, pp) in r.master.plugins.iter_mut().zip(b.master_plugins.iter()) {
-        slot.plugin_name = pp.plugin_name.clone();
-    }
-    let master_saved = b.master_plugins.clone();
-    apply_plugin_bypass(&r.engine, &mut r.master.plugins, &master_saved);
-}
-
-fn push_all_plugin_states(
-    r: &mut Resonance,
-    target: &LoadedProject,
-) -> std::collections::HashSet<PluginInstanceId> {
-    // Walk every (track, bus, master) plugin in the target snapshot and
-    // re-push the cached blob to the engine if it differs from the live
-    // cache. Returns the instances whose blob was pushed.
-    let mut pushed = std::collections::HashSet::new();
-    for pt in &target.file.tracks {
-        push_plugin_states(r, target, &pt.plugins, &mut pushed);
-    }
-    for pb in &target.file.busses {
-        push_plugin_states(r, target, &pb.plugins, &mut pushed);
-    }
-    push_plugin_states(r, target, &target.file.master_plugins, &mut pushed);
-    pushed
-}
-
-fn push_plugin_states(
-    r: &mut Resonance,
-    target: &LoadedProject,
-    plugins: &[ProjectPlugin],
-    pushed: &mut std::collections::HashSet<PluginInstanceId>,
-) {
-    for pp in plugins {
-        if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
-            if r
-                .plugin_mirror
-                .state_cache
-                .get(&pp.instance_id)
-                .is_some_and(|live| std::sync::Arc::ptr_eq(live, blob))
-            {
-                continue;
-            }
-            let _ = r.engine.send(AudioCommand::LoadPluginState {
-                instance_id: pp.instance_id,
-                data: blob.to_vec(),
-            });
-            pushed.insert(pp.instance_id);
-            // Track what was just pushed, so the cache matches the state
-            // the engine now holds. For an instance that isn't live (a
-            // missing `.clap`) this is the only copy that exists, and it
-            // has to survive undo/redo as well as save (ba doc #275, P5).
-            r.plugin_mirror
-                .state_cache
-                .insert(pp.instance_id, std::sync::Arc::clone(blob));
-        }
-    }
-}
-
-fn apply_all_plugin_params(
-    r: &mut Resonance,
-    b: &ProjectFile,
-    pushed: &std::collections::HashSet<PluginInstanceId>,
-) {
-    for track in r.registry.tracks.iter_mut() {
-        if let Some(pt) = b.tracks.iter().find(|t| t.id == track.id) {
-            apply_plugin_params(&r.engine, &mut track.plugins, &pt.plugins, pushed);
-        }
-    }
-    for bus in r.registry.busses.iter_mut() {
-        if let Some(pb) = b.busses.iter().find(|x| x.id == bus.id) {
-            apply_plugin_params(&r.engine, &mut bus.plugins, &pb.plugins, pushed);
-        }
-    }
-    apply_plugin_params(&r.engine, &mut r.master.plugins, &b.master_plugins, pushed);
-}
-
-/// Drive every live slot's params to the snapshot's values: the saved
-/// override where there is one, the plugin's default otherwise (only
-/// non-defaults are saved). For a slot whose blob was just `pushed`, a
-/// param is re-sent when it is non-default on either side — that covers
-/// every changed value, and every value the stale blob may have reset.
-/// For any other slot the engine still holds the live values the mirror
-/// shows, so only the params that differ from the mirror are sent
-/// (FU-A2b). A slot with no live params (a missing `.clap`) has nothing
-/// to drive.
-fn apply_plugin_params(
-    engine: &resonance_audio::AudioEngine,
-    slots: &mut [crate::state::PluginSlotState],
-    saved: &[ProjectPlugin],
-    pushed: &std::collections::HashSet<PluginInstanceId>,
-) {
-    for slot in slots.iter_mut() {
-        let Some(pp) = saved.iter().find(|p| p.instance_id == slot.instance_id) else {
-            continue;
-        };
-        let blob_pushed = pushed.contains(&slot.instance_id);
-        for param in slot.params.iter_mut() {
-            let target = pp
-                .params
-                .iter()
-                .find(|p| p.id == param.id)
-                .map_or(param.default_value, |p| p.value);
-            let unchanged = if blob_pushed {
-                param.current_value == param.default_value && target == param.default_value
-            } else {
-                param.current_value == target
-            };
-            if unchanged {
-                continue;
-            }
-            param.current_value = target;
-            let _ = engine.send(AudioCommand::SetPluginParam {
-                instance_id: slot.instance_id,
-                param_id: param.id,
-                value: target,
-            });
-        }
-    }
-}
-
 /// `MidiNote` is a plain bag of `u8/f32/u64` fields but does not derive
 /// `PartialEq` (the engine has no need for it). Comparing field-wise
 /// here keeps the diff replay self-contained without touching the
@@ -675,35 +268,4 @@ pub fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
             && x.start_tick == y.start_tick
             && x.duration_ticks == y.duration_ticks
     })
-}
-
-/// Apply the saved per-slot bypass to one chain, telling the engine about
-/// every slot that actually moved (ba todo #1305).
-///
-/// This is what makes bypass UNDOABLE rather than merely persisted. Undo
-/// restores through the diff replay, not through a reload, and the diff
-/// used to copy only `plugin_name` per slot — so an undo of a bypass
-/// recorded its entry, replayed, and changed nothing. `plugin_set_matches`
-/// compares slot IDENTITY only, deliberately: a bypass-only change is not
-/// a structural change and must not force the whole project to reload.
-/// That means the difference has to be applied here, or nowhere.
-///
-/// Sends only on a real change. The engine crossfades a bypass, and
-/// re-asserting the state a slot is already in would start a fade for a
-/// value that is not moving.
-fn apply_plugin_bypass(
-    engine: &resonance_audio::AudioEngine,
-    slots: &mut [crate::state::PluginSlotState],
-    saved: &[ProjectPlugin],
-) {
-    for (slot, pp) in slots.iter_mut().zip(saved.iter()) {
-        if slot.bypassed == pp.bypassed {
-            continue;
-        }
-        slot.bypassed = pp.bypassed;
-        let _ = engine.send(AudioCommand::SetPluginBypass {
-            instance_id: slot.instance_id,
-            bypassed: pp.bypassed,
-        });
-    }
 }

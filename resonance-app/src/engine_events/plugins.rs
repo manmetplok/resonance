@@ -190,9 +190,11 @@ fn restore_after_recovery(
 /// `track.plugin_params` / the mixer panel / automation read, and the
 /// engine, via the same `SetPluginParam` command a live edit uses — so
 /// the restored value reaches the DSP on exactly the same terms as one
-/// the user just typed. Ordering is safe: the load already queued
-/// `LoadPluginState` before this event could be produced, so the
-/// per-param sends land after the state blob and win over it.
+/// the user just typed. Ordering is safe: the load queues
+/// `LoadPluginState` (the `PluginState` reconcile domain) inside the same
+/// synchronous restore that parks these values, and this event is only
+/// handled after that restore returns, so the per-param sends land after
+/// the state blob and win over it.
 ///
 /// Ids not present on the instantiated plugin are skipped: a plugin that
 /// dropped or renumbered a parameter between versions must not have a
