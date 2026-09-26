@@ -42,7 +42,7 @@
 //!
 //! See `tests/mixer/cycle_load.rs` for behaviour coverage.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::{RwLock, RwLockReadGuard};
@@ -270,6 +270,51 @@ impl CycleReportSlot {
                 return Some(report);
             }
         }
+    }
+}
+
+/// The callback's one-shot "the backend asked for more frames than the
+/// scratch holds" warning, handed to the engine loop to log (code
+/// review ARCH-05 A5-2): the audio thread only stores two atomics.
+///
+/// Latches on the first oversize block — later ones are clamped
+/// silently, exactly as before — and [`take_unreported`] hands it out
+/// once.
+///
+/// [`take_unreported`]: OversizeBufferLatch::take_unreported
+#[derive(Debug, Default)]
+pub struct OversizeBufferLatch {
+    /// Frames the backend requested; 0 until the first oversize block.
+    requested: AtomicU64,
+    /// Frames the pre-allocated scratch holds.
+    scratch: AtomicU64,
+    reported: AtomicBool,
+}
+
+impl OversizeBufferLatch {
+    /// Record an oversize block. Audio-thread side: atomics only, and
+    /// only the first call stores anything.
+    pub fn record(&self, requested: usize, scratch: usize) {
+        if self.requested.load(Ordering::Relaxed) != 0 {
+            return;
+        }
+        self.scratch.store(scratch as u64, Ordering::Relaxed);
+        let _ = self.requested.compare_exchange(
+            0,
+            requested as u64,
+            Ordering::Release,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// `(requested, scratch)` the first time it is called after an
+    /// oversize block was recorded, `None` otherwise. Engine-loop side.
+    pub fn take_unreported(&self) -> Option<(u64, u64)> {
+        let requested = self.requested.load(Ordering::Acquire);
+        if requested == 0 || self.reported.swap(true, Ordering::Relaxed) {
+            return None;
+        }
+        Some((requested, self.scratch.load(Ordering::Relaxed)))
     }
 }
 

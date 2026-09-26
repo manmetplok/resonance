@@ -597,7 +597,14 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // the last tick (it only stores atomics; formatting and stderr
         // are this thread's job — code review ARCH-02 A2-1 / ARCH-05).
         if let Some(report) = ctx.shared.cycle_report.take_new(&mut cycle_report_seen) {
-            eprintln!("{}", crate::cycle_load::format_cycle_load_line(&report));
+            tracing::info!("{}", crate::cycle_load::format_cycle_load_line(&report));
+        }
+        // Same hand-off for the callback's one-shot oversize-buffer
+        // warning (ARCH-05 A5-2).
+        if let Some((requested, scratch)) = ctx.shared.oversize_buffer.take_unreported() {
+            tracing::warn!(
+                "audio: cpal requested buf={requested} frames but scratch is {scratch} — clamping; audio will run slow"
+            );
         }
 
         // Audition preview housekeeping: emit AuditionStopped on a natural

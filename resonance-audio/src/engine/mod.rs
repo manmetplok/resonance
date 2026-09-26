@@ -283,6 +283,9 @@ pub struct SharedState {
     /// The load meter's report hand-off to the engine loop, which
     /// formats and prints it — never the audio thread.
     pub cycle_report: crate::cycle_load::CycleReportSlot,
+    /// The callback's one-shot oversize-buffer warning, logged by the
+    /// engine loop — never the audio thread (code review ARCH-05 A5-2).
+    pub oversize_buffer: crate::cycle_load::OversizeBufferLatch,
     /// Replaced snapshots kept alive until the engine loop's sweep finds
     /// no reader pinning them (code review MIX-04 / ARCH-02 A2-2). Every
     /// `ArcSwap` the callback reads is published through
@@ -430,6 +433,7 @@ impl Default for SharedState {
             render_skip_cycles: AtomicU64::new(0),
             lock_misses: crate::cycle_load::LockMissCounters::new(),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
+            oversize_buffer: crate::cycle_load::OversizeBufferLatch::default(),
             retired: retire::Retired::new(),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
@@ -479,7 +483,7 @@ impl std::fmt::Display for EngineSendError {
 
 impl std::error::Error for EngineSendError {}
 
-/// One-shot eprintln when the command channel first disconnects, as a
+/// One-shot error log when the command channel first disconnects, as a
 /// safety net for call sites that intentionally `let _ =` the
 /// `EngineSendError` returned by `AudioEngine::send`. Uses an atomic
 /// latch so a stuck app doesn't flood stderr. Lives at module scope
@@ -488,7 +492,7 @@ impl std::error::Error for EngineSendError {}
 fn report_engine_disconnect_once() {
     use std::sync::atomic::Ordering;
     if !ENGINE_DISCONNECT_REPORTED.swap(true, Ordering::Relaxed) {
-        eprintln!(
+        tracing::error!(
             "audio: engine command channel disconnected — subsequent send() calls will return EngineSendError"
         );
     }
@@ -850,7 +854,7 @@ impl AudioEngine {
                         if let Some(report) =
                             underrun_limiter.record(std::time::Instant::now())
                         {
-                            eprintln!("{}", format_underrun_line("output", &report));
+                            tracing::warn!("{}", format_underrun_line("output", &report));
                         }
                     }
                     other => {
@@ -864,7 +868,7 @@ impl AudioEngine {
                         shared_err
                             .output_stream_lost
                             .store(true, std::sync::atomic::Ordering::Release);
-                        eprintln!("Audio stream error: {}", other);
+                        tracing::error!("Audio stream error: {}", other);
                     }
                 },
                 None,
@@ -879,7 +883,7 @@ impl AudioEngine {
                 fallback_config.buffer_size = cpal::BufferSize::Default;
                 match build_cpal(&fallback_config) {
                     Ok((stream, prod)) => {
-                        eprintln!(
+                        tracing::warn!(
                                 "audio: Fixed({}) rejected ({}) — falling back to BufferSize::Default (HIGH LATENCY)",
                                 quantum, fixed_err
                             );
@@ -902,7 +906,7 @@ impl AudioEngine {
         #[cfg(not(target_os = "linux"))]
         let (stream, monitor_prod_raw, used_fixed_buffer) = {
             if force_cpal {
-                eprintln!(
+                tracing::info!(
                     "audio: RESONANCE_FORCE_CPAL_OUTPUT set — cpal is already the only output backend on this platform"
                 );
             }
@@ -911,7 +915,7 @@ impl AudioEngine {
         };
         #[cfg(target_os = "linux")]
         let (stream, monitor_prod_raw, used_fixed_buffer) = if force_cpal {
-            eprintln!("audio: RESONANCE_FORCE_CPAL_OUTPUT set — skipping native PipeWire output");
+            tracing::info!("audio: RESONANCE_FORCE_CPAL_OUTPUT set — skipping native PipeWire output");
             let (s, p, fixed) = build_cpal_with_fallback()?;
             (Some(s), p, fixed)
         } else {
@@ -926,7 +930,7 @@ impl AudioEngine {
                 mix,
             ) {
                 Ok((handle, pw_rate, pw_channels)) => {
-                    eprintln!(
+                    tracing::info!(
                         "audio: native PipeWire output up: rate={} channels={} latency_vote={}/{}",
                         pw_rate, pw_channels, quantum, sample_rate
                     );
@@ -934,7 +938,7 @@ impl AudioEngine {
                     (None, prod, true)
                 }
                 Err(e) => {
-                    eprintln!(
+                    tracing::warn!(
                         "audio: native PipeWire output unavailable ({e}) — falling back to cpal (ALSA shim, higher latency)"
                     );
                     let (s, p, fixed) = build_cpal_with_fallback()?;
@@ -952,7 +956,7 @@ impl AudioEngine {
         // subprocess failed and we're running on the conservative fallback
         // numbers, which is usually the cause of "why is latency higher than
         // the pipewire quantum".
-        eprintln!(
+        tracing::info!(
             "audio: backend={} device={:?} sample_rate={} (cpal_default={}, graph_forced={:?}) quantum={} (probed={:?}) max_quantum={} (probed={:?}) buf_frames={} fixed_buffer={}",
             backend,
             device_name,

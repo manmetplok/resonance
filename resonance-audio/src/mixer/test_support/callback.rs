@@ -313,6 +313,13 @@ impl MixAudioHarness {
         &self.data
     }
 
+    /// Make every later callback's host buffer `frames` long — larger than
+    /// the pre-allocated scratch is the `BufferSize::Default` fallback
+    /// shape the callback clamps (and reports) rather than renders.
+    pub fn set_host_buffer_frames(&mut self, frames: usize) {
+        self.data = vec![0.0; frames * self.channels];
+    }
+
     /// Run one audio callback while a UI edit "holds" the clips write
     /// lock, so the arrangement render takes its lock-contended branch
     /// (silence out, playhead advanced, `render_skip_cycles` bumped).
