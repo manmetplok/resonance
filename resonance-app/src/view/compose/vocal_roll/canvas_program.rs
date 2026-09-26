@@ -29,6 +29,13 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
         let grid_h = bounds.height - HEADER_TOTAL_HEIGHT - VR_VELOCITY_LANE_HEIGHT;
         let grid_bottom = grid_top + grid_h;
 
+        state.key_focus.track(event, bounds, cursor);
+        if matches!(event, iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }))
+            && !state.key_focus.owns_keys()
+        {
+            return None;
+        }
+
         match event {
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 cursor.position_in(bounds)?;

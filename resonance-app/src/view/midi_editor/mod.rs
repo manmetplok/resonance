@@ -132,6 +132,10 @@ pub struct PianoRollState {
     /// Latest keyboard modifier state, tracked from `ModifiersChanged`
     /// events so mouse presses can tell shift/ctrl-click from a plain click.
     pub(crate) modifiers: iced::keyboard::Modifiers,
+    /// Whether the piano roll owns the keyboard (last mouse press landed
+    /// on it) — gates Delete / Ctrl+A so they never fire from another
+    /// surface or while a text field is being typed into.
+    pub(crate) key_focus: crate::focus::KeyFocus,
     /// Cached drawn geometry — invalidated only when the fingerprint of the
     /// inputs (notes / scroll / zoom / selection / clip identity) changes.
     pub(crate) cache: canvas::Cache,

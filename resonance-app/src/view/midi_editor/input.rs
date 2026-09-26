@@ -96,6 +96,13 @@ pub(super) fn handle_event(
     let grid_x = layout.grid_x();
     let grid_h = layout.grid_h;
 
+    state.key_focus.track(event, bounds, cursor);
+    if matches!(event, iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }))
+        && !state.key_focus.owns_keys()
+    {
+        return None;
+    }
+
     match event {
         // --- Scroll ---
         iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {

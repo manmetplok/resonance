@@ -209,6 +209,10 @@ pub(super) enum DragMode {
 pub struct VocalRollState {
     pub(super) drag: Option<DragMode>,
     pub(super) previewing_note: Option<u8>,
+    /// Whether the vocal roll owns the keyboard (last mouse press landed
+    /// on it) — gates Delete and the `s`/`+` slur toggle so typing into a
+    /// lyric field never edits the selected note.
+    pub(super) key_focus: crate::focus::KeyFocus,
     pub(super) cache: canvas::Cache,
     pub(super) cache_fingerprint: std::cell::Cell<VocalRollFingerprint>,
 }

@@ -105,3 +105,5 @@ mod track_header_freeze_button;
 mod undo_coalesce;
 #[path = "timeline/undo_history.rs"]
 mod undo_history;
+#[path = "timeline/editor_key_focus.rs"]
+mod editor_key_focus;

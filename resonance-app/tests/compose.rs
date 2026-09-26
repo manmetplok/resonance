@@ -85,3 +85,5 @@ mod template_instantiate;
 mod templates_save;
 #[path = "compose/templates_scan.rs"]
 mod templates_scan;
+#[path = "compose/vocal_roll_key_focus.rs"]
+mod vocal_roll_key_focus;
