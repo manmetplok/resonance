@@ -31,7 +31,7 @@ master and updates this table. Agents do **not** edit this file.
 | M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | merged | 7701e28a |
 | M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | merged | d3b41d37 |
 | M6 theory + small plugins | LIB-02..LIB-09 | opus | merged | 26e1e316 |
-| V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | in progress | |
+| V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | merged | 0a8cf2fa |
 | V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | in progress | |
 | M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | in progress | |
 | M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | in progress | |
@@ -94,6 +94,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M4a** (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
 - [ ] **FU-M4b** (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
 - [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
+- [ ] **FU-V1a** (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
+- [ ] **FU-V1b** (low, test infra) `app.update(Message::Browser(SetFilter))` didn't apply the filter in tests while `test_dispatch` did — investigate.
+- [ ] **FU-V1c** note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
 
 ## How to use this file
 
@@ -622,7 +625,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Remove `r.viewport.scroll_offset` from every pointer-to-sample conversion, since pointer x is already in content space. Either delete `auto_follow_playhead` or re-implement it with `scrollable::scroll_to` on the outer scrollable's id.
 - **Verification:** Add a module to the `timeline` group binary: set `r.viewport.scroll_offset = 500.0`, send `StartClipDrag`/`UpdateClipDrag` with an x delta of 0, and assert the clip's start is unchanged.
 
-### [ ] VIEW-11 — Compose instrument-track canvas is shifted by the Arrange timeline's vertical scroll
+### [x] VIEW-11 — Compose instrument-track canvas is shifted by the Arrange timeline's vertical scroll — fixed @b8ebe088
 - **Severity:** medium
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
@@ -661,7 +664,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Resolve the signature and tempo from `tempo_map` at each placement's `start_bar`. Never read `r.transport.*` in compose code.
 - **Verification:** Add a `compose` group-binary test with a two-signature tempo map: move the playhead past the change and regenerate the bar-1 section. Assert `duration_ticks == length_bars * 4 * TPQ`.
 
-### [ ] VIEW-14 — Media-browser drop lands on the wrong track when rows have different heights
+### [x] VIEW-14 — Media-browser drop lands on the wrong track when rows have different heights — fixed @8ea80ee9 (drops onto non-track rows now refused)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -737,7 +740,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add `(chord_id, pending_start_beat, pending_duration_beats)` to `ChordLaneFingerprint`, or draw the dragged chord in an uncached overlay layer.
 - **Verification:** Add a unit test in the `compose` group binary: the fingerprint must change as `pending_start_beat` changes.
 
-### [ ] VIEW-21 — The bottom rows can't be reached when automation or take lanes are expanded (vertical scroll clamp)
+### [x] VIEW-21 — The bottom rows can't be reached when automation or take lanes are expanded (vertical scroll clamp) — fixed @9c12db23
 - **Severity:** medium
 - **Confidence:** high (spot-checked)
 - **Category:** ux
@@ -747,7 +750,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Clamp to `timeline_content_height - viewport_height`.
 - **Verification:** Add a `timeline` group-binary test: expand lanes, send `ScrollY(1e6)`, and assert `scroll_offset_y == content_h - viewport_h`.
 
-### [ ] VIEW-22 — Clip drag snaps to a flat grid that ignores the tempo map
+### [x] VIEW-22 — Clip drag snaps to a flat grid that ignores the tempo map — fixed @6072e123
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -759,7 +762,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Use `snap_sample_to_grid_tempo(..., &r.tempo_map)` in all four reducers.
 - **Verification:** Add a `timeline` group-binary test with a 6/8 map: drag a clip to near bar 2 and assert the snapped sample equals `bar_to_sample(2)`.
 
-### [ ] VIEW-23 — Pan-knob drag stops at the knob's 28 px edge, so full pan takes several gestures
+### [x] VIEW-23 — Pan-knob drag stops at the knob's 28 px edge, so full pan takes several gestures — fixed @a32e9cc3
 - **Severity:** medium
 - **Confidence:** high (spot-checked)
 - **Category:** ux
@@ -789,7 +792,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Spawn the parse task (with a stale-path guard) and add a chooser, or hide both entry points until the pipeline exists.
 - **Verification:** Add a `control` group-binary test: `FileDropped` must eventually yield `ParseCompleted`, or the entry points must be absent from the rendered golden.
 
-### [ ] VIEW-26 — Plugin parameter panel clones every parameter on every frame
+### [x] VIEW-26 — Plugin parameter panel clones every parameter on every frame — fixed @6e62a839
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** performance
@@ -799,7 +802,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Wrap the panel in `lazy`, keyed on `instance_id`, a hash of the parameter values and text, `editor_open`, `has_gui` and availability.
 - **Verification:** Existing mixer goldens must still pass (`RESONANCE_BLESS=1` only if the pixels legitimately change). Add a fingerprint unit test in the `mixer` binary.
 
-### [ ] VIEW-27 — Browser Files tab rebuilds the whole folder listing every frame, with uncached thumbnails
+### [x] VIEW-27 — Browser Files tab rebuilds the whole folder listing every frame, with uncached thumbnails — fixed @c1c0dfbe
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** performance
@@ -809,7 +812,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Put the listing in `lazy`, keyed on scan identity, filter and selected/playing path, and keep the transport outside it. Precompute the display strings once per scan. Give `WaveThumbnail` a `canvas::Cache`.
 - **Verification:** Existing browser goldens (`control` binary) must stay unchanged. Add a unit test of the fingerprint key.
 
-### [ ] VIEW-28 — Arrange redraw tessellates every waveform and MIDI column of a partly visible clip
+### [x] VIEW-28 — Arrange redraw tessellates every waveform and MIDI column of a partly visible clip — fixed @2fc9eaf0
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** performance
