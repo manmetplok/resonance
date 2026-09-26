@@ -42,6 +42,11 @@ pub(super) fn handle_vocal_audio_ready(
     }
 
     for (placement_id, start_sample) in placements {
+        // The placement was deleted while the render ran — installing
+        // audio for it would resurrect the section's vocal (VIEW-04).
+        if r.compose.find_placement(placement_id).is_none() {
+            continue;
+        }
         if let Some((old_id, old_path)) = r
             .compose
             .vocal_audio

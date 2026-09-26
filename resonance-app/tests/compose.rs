@@ -67,6 +67,8 @@ mod compose_workspace_collapse;
 mod drum_kit_pads;
 #[path = "compose/drum_pattern_library.rs"]
 mod drum_pattern_library;
+#[path = "compose/drum_cell_click_phase.rs"]
+mod drum_cell_click_phase;
 #[path = "compose/drum_section_coverage.rs"]
 mod drum_section_coverage;
 #[path = "compose/fresh_project_tempo_map.rs"]
@@ -77,6 +79,10 @@ mod generator_section;
 mod global_tracks_edit_cycle;
 #[path = "compose/global_tracks_shelf.rs"]
 mod global_tracks_shelf;
+#[path = "compose/section_delete_cleanup.rs"]
+mod section_delete_cleanup;
+#[path = "compose/section_resize_rederive.rs"]
+mod section_resize_rederive;
 #[path = "compose/seed_markers_from_sections.rs"]
 mod seed_markers_from_sections;
 #[path = "compose/template_instantiate.rs"]

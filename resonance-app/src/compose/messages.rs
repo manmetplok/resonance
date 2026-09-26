@@ -730,9 +730,9 @@ pub enum DrumGroupsMessage {
     /// Run the generator on every group at once.
     GenerateAllGroups,
     /// Flip a single pattern step on / off for one pad. Used by the
-    /// drum lane's cell click. `step` is relative to the visible 1-bar
-    /// preview (0..BEATS_IN_LANE × grid) and gets mapped to the underlying
-    /// pattern index modulo cycle inside the handler.
+    /// drum lane's cell click. `step` is the visible, section-relative
+    /// step (`bar × steps_per_bar + step_in_bar`); the handler adds the
+    /// group's phase and wraps modulo its cycle to get the pattern index.
     TogglePadStep {
         group_id: u64,
         pad_index: usize,

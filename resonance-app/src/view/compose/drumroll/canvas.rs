@@ -424,8 +424,10 @@ impl<'a> ComposeDrumCanvas<'a> {
                     for s in 0..cells_in_bar {
                         let cx = bar_x + s as f32 * cell_w;
                         let global_step = bar_idx as usize * cells_in_bar + s;
+                        // Same index the TogglePadStep handler and
+                        // materialization use: the resolved group's phase.
                         let pattern_step =
-                            (global_step + group.phase as usize) % cycle;
+                            (global_step + resolved_group.phase as usize) % cycle;
 
                         let is_beat_start = (s % group.grid as usize) == 0;
                         let bg = if is_beat_start {
@@ -575,8 +577,6 @@ impl<'a> ComposeDrumCanvas<'a> {
                             );
                         }
 
-                        let cycle = resolved_group.pattern_len().max(1);
-
                         let cells_in_bar =
                             (group.grid as u32 * BEATS_PER_BAR) as usize;
                         let cells_in_bar = cells_in_bar.max(1);
@@ -585,28 +585,27 @@ impl<'a> ComposeDrumCanvas<'a> {
                             ((pos.x - bar_x) / cell_w).max(0.0).floor() as usize;
                         let step_in_bar = step_in_bar.min(cells_in_bar - 1);
 
+                        // Send the raw visible step: the handler applies the
+                        // resolved group's phase + cycle (applying the phase
+                        // here too toggled the wrong cell, VIEW-03).
                         let global_step = bar_idx * cells_in_bar + step_in_bar;
-                        let pattern_step =
-                            (global_step + group.phase as usize) % cycle;
 
-                        if pattern_step < cycle {
-                            return Some(
-                                canvas::Action::publish(Message::Compose(
-                                    ComposeMessage::DrumGroups(
-                                        DrumGroupsMessage::TogglePadStep {
-                                            // Use the resolved group's id so
-                                            // the edit lands on the pattern
-                                            // that actually owns this bar's
-                                            // cells, not the primary pattern.
-                                            group_id: resolved_group.id,
-                                            pad_index,
-                                            step: pattern_step,
-                                        },
-                                    ),
-                                ))
-                                .and_capture(),
-                            );
-                        }
+                        return Some(
+                            canvas::Action::publish(Message::Compose(
+                                ComposeMessage::DrumGroups(
+                                    DrumGroupsMessage::TogglePadStep {
+                                        // Use the resolved group's id so
+                                        // the edit lands on the pattern
+                                        // that actually owns this bar's
+                                        // cells, not the primary pattern.
+                                        group_id: resolved_group.id,
+                                        pad_index,
+                                        step: global_step,
+                                    },
+                                ),
+                            ))
+                            .and_capture(),
+                        );
                     }
                 }
 
