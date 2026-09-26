@@ -72,7 +72,7 @@ impl FreezeMessage {
         match self {
             // Freeze edits. Freeze / unfreeze / refreeze / batch-freeze are
             // discrete, atomic transitions worth an undo entry; the rendered
-            // cache is deliberately excluded from history (see `UndoExtras` and
+            // cache is deliberately excluded from history (see `ProjectTrack::freeze` and
             // `apply_freeze_restore`). Cancelling an in-flight render is a
             // transient abort, not a project mutation — skip it.
             Self::CancelFreeze => UndoAction::Skip,
