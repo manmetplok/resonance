@@ -334,6 +334,17 @@ pub enum ComposeMessage {
         render_epoch: u64,
         error: String,
     },
+    /// SVS render finished with nothing to install: no voicebank is
+    /// installed, so the lane falls back to playing its MIDI. Not an
+    /// error for the GUI (no banner), but a `vocal.render` job waiting on
+    /// the lane must still resolve and the lane's in-flight entry clear
+    /// (code review FU-M11a). Same lane identity + epoch as
+    /// [`Self::VocalAudioFailed`].
+    VocalAudioUnavailable {
+        definition_id: u64,
+        track_id: TrackId,
+        render_epoch: u64,
+    },
 }
 
 /// Payload dispatched when the background SVS render finishes. Carries

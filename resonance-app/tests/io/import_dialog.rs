@@ -56,6 +56,7 @@ fn parsed(rows: Vec<TrackImportRow>, tempo_conflict: bool) -> ParsedImport {
             tempo_conflict,
         },
         rows,
+        source: None,
     }
 }
 

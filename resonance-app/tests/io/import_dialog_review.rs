@@ -29,7 +29,9 @@ use resonance_app::message::{ImportMessage, Message};
 use resonance_app::state::{
     ImportStage, ImportSummary, ImportTrackKind, ParsedImport, TrackImportRow, ViewMode,
 };
+use resonance_app::state::ImportSource;
 use resonance_app::{demo, theme, Resonance};
+use resonance_audio::midi_io::{encode_midi, parse_smf_bytes};
 
 /// Window size matches the app's default & minimum window per the design
 /// guidelines, same as the other `iced_test` snapshots.
@@ -111,6 +113,11 @@ fn parsed() -> ParsedImport {
             tempo_conflict: false,
         },
         rows,
+        // A real parse behind the review, so the golden shows the Import
+        // button enabled as it is in the app (Confirm only needs one).
+        source: Some(ImportSource(std::sync::Arc::new(
+            parse_smf_bytes(&encode_midi(&[]).expect("encode")).expect("parse"),
+        ))),
     }
 }
 
@@ -159,4 +166,34 @@ fn import_dialog_review_stage() {
         .snapshot(&theme::resonance_theme())
         .expect("snapshot should render");
     common::assert_golden(&snap, "tests/snapshots/import_dialog_review.png");
+}
+
+/// TempoConflict stage (code review FU-V2a): the three ways to reconcile a
+/// file tempo that differs from the project's, the current choice washed,
+/// and Continue.
+#[test]
+fn import_dialog_tempo_conflict_stage() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Compose);
+    demo::seed_demo_content(&mut app);
+    let _ = app.update(Message::Import(ImportMessage::Open));
+    let _ = app.update(Message::Import(ImportMessage::FileChosen(
+        "/tmp/ballad_in_6-8.mid".into(),
+    )));
+    let mut conflicted = parsed();
+    conflicted.summary.tempo_conflict = true;
+    let _ = app.update(Message::Import(ImportMessage::ParseCompleted(Ok(conflicted))));
+    assert_eq!(
+        app.test_import_dialog().map(|d| d.stage),
+        Some(ImportStage::TempoConflict)
+    );
+
+    let mut ui = Simulator::with_size(
+        sim_settings(),
+        Size::new(WINDOW.0, WINDOW.1),
+        app.view(),
+    );
+    let snap = ui
+        .snapshot(&theme::resonance_theme())
+        .expect("snapshot should render");
+    common::assert_golden(&snap, "tests/snapshots/import_dialog_tempo_conflict.png");
 }

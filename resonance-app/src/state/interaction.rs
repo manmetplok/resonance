@@ -159,6 +159,13 @@ pub struct ClipInteractionState {
     pub editing_pitch_clip: Option<ClipId>,
     /// Currently selected event on a global track (tempo or signature).
     pub selected_global_event: Option<SelectedGlobalEvent>,
+    /// Bumped whenever a GUI message changes the timeline's Delete targets
+    /// (`selected_clip` / `selected_midi_clip` / `selected_global_event`)
+    /// to a new selection. The timeline canvas takes the keyboard when it
+    /// sees a new value (`focus::KeyFocus::sync_grant`), so a selection
+    /// made without a press on the canvas is deletable at once (code
+    /// review FU-C2). Control-API calls never bump it.
+    pub timeline_key_grant: u64,
     /// Active drag-and-drop group-membership edit, if any (todo #685).
     pub membership_drag: Option<MembershipDragState>,
     /// Currently selected arrangement marker, if any. Threaded into the

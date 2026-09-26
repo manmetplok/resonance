@@ -390,7 +390,11 @@ fn spawn_render(
                     bpm,
                 })),
             ),
-            Ok(None) => Message::Tick,
+            Ok(None) => Message::Compose(ComposeMessage::VocalAudioUnavailable {
+                definition_id,
+                track_id,
+                render_epoch,
+            }),
             Err(error) => Message::Compose(ComposeMessage::VocalAudioFailed {
                 definition_id,
                 track_id,

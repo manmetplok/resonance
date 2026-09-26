@@ -1285,6 +1285,9 @@ pub enum UiMessage {
     /// the takes persist, whether their folder is open does not. The comp
     /// ribbon on the track lane stays visible either way.
     ToggleTakeLane(TrackId),
+    /// Switch arrange-view playhead follow on/off (persisted in settings,
+    /// code review FU-V3b).
+    ToggleFollowPlayhead,
     /// Toggle MIDI clock send (engine acts as clock master).
     ToggleMidiClockSend,
     /// Pick the hardware port for MIDI clock send. `None` clears.
@@ -1403,9 +1406,7 @@ pub enum GlobalTrackMessage {
 /// User actions for the MIDI Import modal (see [`crate::state::ImportDialogState`]
 /// and [`crate::view::import_dialog`]). Lifecycle: `Open` → file
 /// chosen/parsed → review / tempo-conflict → `Confirm`, or `Cancel` to
-/// dismiss. The interactions beyond open/close drive the dialog's review
-/// state; the parse task and the actual import land in the follow-up
-/// todos (doc #158), so their orchestration is not wired here yet.
+/// dismiss. Everything before `Confirm` is transient dialog state.
 #[derive(Debug, Clone)]
 pub enum ImportMessage {
     /// Open the modal at the Drop stage.
@@ -1456,7 +1457,13 @@ pub enum ImportMessage {
     SetMergeTarget(Option<TrackId>),
     /// Choose bar- vs time-aligned tempo-conflict resolution.
     SetConflictAlignment(TempoAlignment),
-    /// Confirm and start the import.
+    /// Pick one TempoConflict option: the tempo choice together with its
+    /// alignment (the alignment only matters when keeping the project's).
+    ChooseTempo(TempoChoice, TempoAlignment),
+    /// Accept the TempoConflict stage's choice and move on to Review.
+    ResolveTempo,
+    /// Import the selected tracks — the one message of the flow that
+    /// edits the project, recorded as a single undo entry.
     Confirm,
 }
 

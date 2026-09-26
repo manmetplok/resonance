@@ -99,6 +99,19 @@ impl Resonance {
             .and_then(|d| d.primary_pattern_id())
     }
 
+    /// Test-only: a section definition's chords as `(start_beat,
+    /// duration_beats)`, in grid order.
+    #[doc(hidden)]
+    pub fn test_section_chord_spans(&self, definition_id: u64) -> Vec<(u32, u32)> {
+        let mut spans: Vec<(u32, u32)> = self
+            .compose
+            .find_definition(definition_id)
+            .map(|d| d.chords.iter().map(|c| (c.start_beat, c.duration_beats)).collect())
+            .unwrap_or_default();
+        spans.sort_unstable();
+        spans
+    }
+
     /// Test-only: push a drum instrument track (the default
     /// [`test_add_track`](Self::test_add_track) makes a synth). Needed by
     /// the `generate.drums` control tests, which require an
@@ -172,6 +185,20 @@ impl Resonance {
             .vocal_audio
             .in_flight_render
             .insert((definition_id, track_id), epoch);
+    }
+
+    /// Test-only: whether a render is still recorded as in flight for the
+    /// lane (code review FU-M11a).
+    #[doc(hidden)]
+    pub fn test_vocal_render_in_flight(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> bool {
+        self.compose
+            .vocal_audio
+            .in_flight_render
+            .contains_key(&(definition_id, track_id))
     }
 
     /// Test-only: install a rendered-vocal-audio clip entry for a lane,

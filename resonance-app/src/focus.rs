@@ -68,9 +68,25 @@ pub fn any_text_input_focused() -> iced::Task<bool> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct KeyFocus {
     owned: bool,
+    /// The app-side grant generation last seen; `None` until the first
+    /// event, so a freshly built canvas adopts the current value instead
+    /// of treating an old selection as new.
+    seen_grant: Option<u64>,
 }
 
 impl KeyFocus {
+    /// Take the keys when the app's grant generation moved since the last
+    /// event: a selection aimed at this surface was made without a press
+    /// on it (code review FU-C2). Call before [`track`](Self::track), so a
+    /// press elsewhere in the same event still releases them.
+    pub fn sync_grant(&mut self, grant: u64) {
+        match self.seen_grant {
+            Some(seen) if seen != grant => self.owned = true,
+            _ => {}
+        }
+        self.seen_grant = Some(grant);
+    }
+
     /// Feed every event the canvas receives; a mouse press moves ownership.
     pub fn track(&mut self, event: &iced::Event, bounds: Rectangle, cursor: iced::mouse::Cursor) {
         if let iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) = event {

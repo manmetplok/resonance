@@ -122,6 +122,9 @@ pub(super) enum DragMode {
 pub struct ExpandedEditorState {
     pub(super) drag: Option<DragMode>,
     pub(super) previewing_note: Option<u8>,
+    /// Whether the editor owns the keyboard (last mouse press landed on
+    /// it) — gates `+` / `-` / Escape (code review FU-C3).
+    pub(super) key_focus: crate::focus::KeyFocus,
     /// Geometry cache for the static layers (toolbar, rows, beat grid,
     /// notes, keyboard). The hover tooltip is the only live element and
     /// draws in its own uncached layer on top, so cursor movement never
@@ -326,6 +329,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        state.key_focus.track(event, bounds, cursor);
         let layout = self.layout(bounds);
         let viewport = self.viewport(&layout, bounds);
         let grid_x = layout.grid_x();
@@ -402,10 +406,13 @@ impl<'a> ExpandedEditorCanvas<'a> {
             }
 
             // -- Keyboard shortcuts --
+            // Only while the editor was the last surface pressed, not
+            // while the cursor merely hovers it or a text field has the
+            // keys (code review FU-C3).
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Character(ref ch),
                 ..
-            }) if cursor.position_in(bounds).is_some() => {
+            }) if state.key_focus.owns_keys() => {
                 let s = ch.as_str();
                 if s == "+" || s == "=" {
                     return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandedZoomY(2.0))).and_capture());
@@ -418,7 +425,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                 ..
-            }) => {
+            }) if state.key_focus.owns_keys() => {
                 return Some(canvas::Action::publish(Message::Compose(ComposeMessage::CollapseTrack)).and_capture());
             }
 

@@ -6,7 +6,7 @@
 //! `scroll_to`) when the playhead leaves the visible range — only while
 //! playing, and never while the user scrolls or drags by hand.
 
-use resonance_app::message::{ClipMessage, Message, TransportMessage, ViewportMessage};
+use resonance_app::message::{ClipMessage, Message, TransportMessage, UiMessage, ViewportMessage};
 use resonance_app::state::{ClipState, ViewMode};
 use resonance_app::Resonance;
 use resonance_audio::types::FadeCurve;
@@ -150,4 +150,43 @@ fn no_follow_outside_the_arrange_view() {
     app.test_set_transport_playing(true);
     seek_seconds(&mut app, 12);
     assert!(!tick(&mut app));
+}
+
+// ---------------- FU-V3b: on/off switch + resume ----------------
+
+#[test]
+fn follow_can_be_switched_off_and_the_choice_is_a_setting() {
+    let mut app = app();
+    assert!(app.test_settings().arrange.follow_playhead, "on by default");
+    app.test_dispatch(Message::Ui(UiMessage::ToggleFollowPlayhead));
+    assert!(!app.test_settings().arrange.follow_playhead);
+
+    app.test_set_transport_playing(true);
+    seek_seconds(&mut app, 12);
+    assert!(!tick(&mut app), "follow is off: the view stays put");
+    assert_eq!(app.test_arrange_scroll_x(), 0.0);
+
+    app.test_dispatch(Message::Ui(UiMessage::ToggleFollowPlayhead));
+    assert!(tick(&mut app), "switched back on, it pages again");
+}
+
+#[test]
+fn follow_resumes_when_the_playhead_reenters_the_view() {
+    let mut app = app();
+    app.test_set_transport_playing(true);
+    seek_seconds(&mut app, 5);
+    tick(&mut app);
+    // The user scrolls ahead of the playhead: follow pauses.
+    scrolled(&mut app, 4000.0);
+    assert!(app.test_follow_paused());
+
+    // The playhead catches up into the visible range [4000, 5000)...
+    seek_seconds(&mut app, 42);
+    assert!(!tick(&mut app), "it is visible: nothing to scroll");
+    assert!(!app.test_follow_paused(), "follow resumes once it is back in view");
+
+    // ...so when it runs off the right edge, the view pages with it.
+    seek_seconds(&mut app, 52);
+    assert!(tick(&mut app));
+    assert_eq!(app.test_arrange_scroll_x(), 5200.0 - 50.0);
 }

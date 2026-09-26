@@ -88,6 +88,7 @@ pub fn describe(message: &Message) -> String {
             TakeMessage::DeleteTake { .. } => "delete take",
         },
         Message::Freeze(_) => "freeze",
+        Message::Import(ImportMessage::Confirm) => "import MIDI",
         Message::Marker(_) | Message::MarkerUi(_) => "marker edit",
         Message::Arrangement(crate::message::ArrangementMessage::InsertBars { .. }) => {
             "insert bars"

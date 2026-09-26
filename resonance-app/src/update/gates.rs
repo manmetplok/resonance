@@ -88,6 +88,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::CloseMarkersOverview)
         | Message::Ui(UiMessage::ToggleMixerInspectorGroup(_))
         | Message::Ui(UiMessage::ToggleTakeLane(_))
+        | Message::Ui(UiMessage::ToggleFollowPlayhead)
         | Message::Ui(UiMessage::ToggleMidiClockSend)
         | Message::Ui(UiMessage::SetMidiClockSendDevice(_))
         | Message::Ui(UiMessage::ToggleMidiClockRecv)
@@ -498,7 +499,24 @@ impl crate::Resonance {
         if self.take_edit_is_refused(message) {
             return true;
         }
+        if self.import_confirm_is_refused(message) {
+            return true;
+        }
         false
+    }
+
+    /// A MIDI Import Confirm that cannot import (code review FU-V2a): no
+    /// tracks selected, a tempo conflict not yet resolved, a merge target
+    /// that is gone or frozen. Gated for the reason spelled out on
+    /// [`take_edit_is_refused`](Self::take_edit_is_refused) — Confirm
+    /// records its undo entry before dispatch — and decided by
+    /// `update::import::confirm_blocker`, the same predicate that
+    /// disables the dialog's Import button.
+    fn import_confirm_is_refused(&self, message: &crate::message::Message) -> bool {
+        matches!(
+            message,
+            crate::message::Message::Import(crate::message::ImportMessage::Confirm)
+        ) && crate::update::import::confirm_blocker(self).is_some()
     }
 
     /// A take-lane comp edit that would change nothing (epic #15, todo

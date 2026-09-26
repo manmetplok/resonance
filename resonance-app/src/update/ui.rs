@@ -165,6 +165,14 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 set.insert(track_id);
             }
         }
+        UiMessage::ToggleFollowPlayhead => {
+            let follow = &mut r.settings.arrange.follow_playhead;
+            *follow = !*follow;
+            // Switching it (back) on means "follow now", not "follow
+            // once the current manual-scroll pause ends".
+            r.viewport.follow_paused = false;
+            crate::settings::persist(&r.settings);
+        }
         UiMessage::ToggleMidiClockSend => {
             r.midi_clock_send_enabled = !r.midi_clock_send_enabled;
             let _ = r.engine.send(AudioCommand::SetMidiClockOutput {

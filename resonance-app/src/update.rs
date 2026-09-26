@@ -54,13 +54,54 @@ impl crate::Resonance {
     /// gate and undo/redo early returns — keeping `view()` strictly
     /// read-only.
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // A GUI message that changes what Delete on the timeline would
+        // remove grants the timeline the keyboard (code review FU-C2).
+        // Decided at the outermost call only; a control call (which may
+        // select a global event as an internal step) never grants — a
+        // remote client must not aim the user's next Backspace.
+        let outermost = self.update_depth == 0;
+        let grants = outermost && !matches!(message, Message::Control(_));
+        let before = grants.then(|| self.timeline_delete_targets());
+        self.update_depth += 1;
         let task = self.update_inner(message);
+        self.update_depth -= 1;
+        if let Some(before) = before {
+            let after = self.timeline_delete_targets();
+            let selected = after.0.is_some() || after.1.is_some() || after.2.is_some();
+            if selected && after != before {
+                self.interaction.timeline_key_grant =
+                    self.interaction.timeline_key_grant.wrapping_add(1);
+            }
+        }
         // Iced repaints after each update, so refreshing here means the
         // labels are always exact at paint time (no one-frame staleness)
         // without the view layer ever writing state. No-op when the
         // label inputs (playhead, sig, key, loop, bpm) are unchanged.
         self.refresh_transport_labels();
         task
+    }
+
+    /// The signature track, comparable.
+    fn signature_fingerprint(&self) -> Vec<(u32, u8, u8)> {
+        self.signature_events
+            .iter()
+            .map(|e| (e.bar, e.numerator, e.denominator))
+            .collect()
+    }
+
+    /// What Delete on the timeline acts on.
+    fn timeline_delete_targets(
+        &self,
+    ) -> (
+        Option<resonance_audio::types::ClipId>,
+        Option<resonance_audio::types::ClipId>,
+        Option<crate::state::SelectedGlobalEvent>,
+    ) {
+        (
+            self.interaction.selected_clip,
+            self.interaction.selected_midi_clip,
+            self.interaction.selected_global_event,
+        )
     }
 
     /// The actual orchestrator: pre-dispatch gates, meta-message
@@ -95,7 +136,16 @@ impl crate::Resonance {
             }
         }
         let commit_after = self.record_undo(&message);
-        let task = self.dispatch(message);
+        // A signature change re-measures every section; its chords are
+        // revalidated against the new length in the same dispatch
+        // (code review FU-V2b).
+        let meter_before = matches!(message, Message::Transport(_) | Message::GlobalTrack(_))
+            .then(|| self.signature_fingerprint());
+        let mut task = self.dispatch(message);
+        if meter_before.is_some_and(|before| before != self.signature_fingerprint()) {
+            let revalidate = crate::update::compose::revalidate_chords_after_meter_change(self);
+            task = Task::batch([task, revalidate]);
+        }
         if commit_after {
             self.commit_undo_gesture();
         }
