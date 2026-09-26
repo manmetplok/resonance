@@ -742,7 +742,7 @@ fn a_drawn_clip_never_shares_an_id_with_a_derived_clip_including_across_undo_and
 
     // STATE-08: undo the draw (a structural change — `midi_clip_set_matches`
     // is part of `structurally_compatible`, so this takes the `ClearAll` ->
-    // replay path, same as a plugin/bus/track add-undo above) *immediately*,
+    // replay path, same as a track add-undo below) *immediately*,
     // so it's the draw's own snapshot that's undone rather than whatever
     // came after it, and draw again: the allocator must not rewind and
     // reuse the undone id.
@@ -859,18 +859,15 @@ fn every_plugin_add_path_gets_a_unique_app_id_including_across_undo() {
         .0;
 
     let _ = f.app.update(Message::Undo);
-    // A plugin add is a structural change, so undo takes the
-    // ClearAll -> replay path (same as
-    // `control_track_remove_effect::the_removal_is_recorded_on_the_undo_stack`)
-    // rather than the fast fader/knob diff-replay: it only STARTS the
-    // restore, asynchronously, by sending `ClearAll` and stashing the
-    // pre-add snapshot in `io.pending_load`. Play the engine's
-    // `AllCleared` echo back to actually finish it.
+    // Since A-13h a plugin add undoes on the diff path: `RemovePlugin`
+    // for that instance, synchronously inside `update()`.
     assert!(
-        std::iter::from_fn(|| f.rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find the add and start restoring the pre-add snapshot"
+        std::iter::from_fn(|| f.rx.try_recv().ok()).any(|c| matches!(
+            c,
+            AudioCommand::RemovePlugin { instance_id, .. } if instance_id == first_id
+        )),
+        "undo must find the add and remove the instance it created"
     );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
     assert!(
         f.app
             .test_chain_slots(TestChain::Track(target_track))
@@ -965,10 +962,10 @@ fn every_bus_add_path_gets_a_unique_app_id_including_across_undo() {
 /// ARCH-04 D-2: every send add path — the plain GUI "Add send",
 /// `track.add_send`, and the send half of `CreateReturnFromSend` — now
 /// goes through the same app allocator (`AuxSendState::allocate_send_id`).
-/// Unlike a plugin or bus add, a send add is NOT structural (`apply_sends`
-/// reconciles it on the fast diff-replay path, `structurally_compatible`
-/// never looks at `ProjectFile::sends`), so undo here never sends
-/// `ClearAll` — `RemoveAuxSend` lands directly, and the mirror drops the
+/// A send add is not structural (`RoutingRemovals` / `Sends` reconcile it
+/// on the diff path, `structurally_compatible` never looks at
+/// `ProjectFile::sends`), so undo here never sends `ClearAll` —
+/// `RemoveAuxSend` lands directly, and the mirror drops the
 /// send synchronously inside `update()`.
 #[test]
 fn every_send_add_path_gets_a_unique_app_id_including_across_undo() {
@@ -1026,8 +1023,8 @@ fn every_send_add_path_gets_a_unique_app_id_including_across_undo() {
 /// adds the undo-monotonicity half `every_bus_add_path_gets_a_unique_app_id_including_across_undo`
 /// pins for busses: undoing a track add must not let the next add reuse
 /// the id undo just freed. A track add is structural
-/// (`replay_diff::added_track_forces_fallback`), so undo takes the same
-/// `ClearAll` -> replay path as a plugin or bus add.
+/// (`replay_diff::added_track_forces_fallback`), so undo takes the
+/// `ClearAll` -> replay path (a plugin or bus add no longer does, A-13h).
 #[test]
 fn every_track_add_path_gets_a_unique_app_id_including_across_undo() {
     let mut f = fixture("track-paths");

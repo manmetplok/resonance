@@ -247,13 +247,22 @@ fn the_removal_is_recorded_on_the_undo_stack() {
     });
     assert_eq!(chain(&mut app).plugins.len(), 1);
 
-    // Removing a plugin is a structural change, so undo takes the
-    // ClearAll -> replay path; the engine round-trip that finishes it is
-    // asynchronous, so assert the restore actually starts.
+    // A-13h: undo re-adds that one instance, under its id, on the diff
+    // path — no `ClearAll`, the instrument left running.
     let rx = app.test_capture_engine();
     let _ = app.update(Message::Undo);
+    let cmds: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(
-        std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find the removal and start restoring the pre-removal snapshot"
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a removal undoes on the diff path: {cmds:?}"
     );
+    let adds: Vec<_> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            AudioCommand::AddPlugin { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(adds, vec![11], "only the removed instance comes back");
+    assert_eq!(chain(&mut app).plugins.len(), 2);
 }

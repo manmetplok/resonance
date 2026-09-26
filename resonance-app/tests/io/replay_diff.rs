@@ -121,19 +121,25 @@ fn track_type_change_forces_fallback() {
     assert!(!structurally_compatible(&a, &b));
 }
 
+/// Plugin chains are not part of the shape (A-13h): the diff arms add,
+/// remove, reorder and re-instantiate (an identity change under the same
+/// id) plugin instances one at a time.
 #[test]
-fn added_plugin_forces_fallback() {
+fn added_plugin_is_compatible() {
     let mut a = empty_file();
     let mut b = empty_file();
     a.tracks = vec![track(1, 0.0)];
     let mut t = track(1, 0.0);
     t.plugins = vec![plugin(10)];
     b.tracks = vec![t];
-    assert!(!structurally_compatible(&a, &b));
+    assert!(structurally_compatible(&a, &b));
+    assert!(structurally_compatible(&b, &a), "and removed");
+    a.master_plugins = vec![plugin(11)];
+    assert!(structurally_compatible(&a, &b), "and on the master");
 }
 
 #[test]
-fn plugin_reorder_forces_fallback() {
+fn plugin_reorder_is_compatible() {
     let mut a = empty_file();
     let mut b = empty_file();
     let mut t_a = track(1, 0.0);
@@ -142,11 +148,11 @@ fn plugin_reorder_forces_fallback() {
     t_b.plugins = vec![plugin(11), plugin(10)];
     a.tracks = vec![t_a];
     b.tracks = vec![t_b];
-    assert!(!structurally_compatible(&a, &b));
+    assert!(structurally_compatible(&a, &b));
 }
 
 #[test]
-fn plugin_clap_identity_change_forces_fallback() {
+fn plugin_clap_identity_change_is_compatible() {
     let mut a = empty_file();
     let mut b = empty_file();
     let mut t_a = track(1, 0.0);
@@ -157,7 +163,7 @@ fn plugin_clap_identity_change_forces_fallback() {
     t_b.plugins = vec![p];
     a.tracks = vec![t_a];
     b.tracks = vec![t_b];
-    assert!(!structurally_compatible(&a, &b));
+    assert!(structurally_compatible(&a, &b));
 }
 
 #[test]
@@ -274,8 +280,7 @@ fn bus(id: u64, plugins: Vec<ProjectPlugin>) -> ProjectBus {
 }
 
 /// The bus set is not part of the shape (A-13h): the diff arms add a bus
-/// `a` lacks (with its chain) and remove one `b` lacks. A chain change on
-/// a bus both hold still is, until the plugin checks go too.
+/// `a` lacks (with its chain) and remove one `b` lacks.
 #[test]
 fn bus_set_change_is_compatible() {
     let mut a = empty_file();
@@ -285,4 +290,6 @@ fn bus_set_change_is_compatible() {
     assert!(structurally_compatible(&a, &b));
     b.busses = vec![bus(100, vec![plugin(10)]), bus(101, Vec::new())];
     assert!(structurally_compatible(&a, &b));
+    b.busses = vec![bus(100, vec![plugin(12), plugin(10)])];
+    assert!(structurally_compatible(&a, &b), "a bus chain change too");
 }

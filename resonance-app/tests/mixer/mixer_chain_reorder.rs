@@ -297,10 +297,8 @@ fn pressing_a_caret_reorders_the_master_chain() {
 /// handler with — not two (the remove + insert it is implemented as) and
 /// not zero.
 ///
-/// Chain order is structural, so the restore itself takes the
-/// `ClearAll` → replay path and finishes asynchronously; as in
-/// `control_track_move_effect.rs` the synchronous assertion is that undo
-/// finds the entry and starts restoring the pre-move snapshot.
+/// Since A-13h the undo is the diff path's one `MovePlugin` back, no
+/// `ClearAll`, finished synchronously inside `update()`.
 #[test]
 fn a_gui_reorder_is_exactly_one_undo_step() {
     let mut app = app();
@@ -322,10 +320,19 @@ fn a_gui_reorder_is_exactly_one_undo_step() {
 
     let rx = app.test_capture_engine();
     let _ = app.update(Message::Undo);
+    let cmds: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(
-        std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find the reorder and start restoring the pre-move snapshot"
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a reorder undoes on the diff path: {cmds:?}"
     );
+    assert_eq!(
+        cmds.iter()
+            .filter(|c| matches!(c, AudioCommand::MovePlugin { .. }))
+            .count(),
+        1,
+        "one move back, nothing re-instantiated: {cmds:?}"
+    );
+    assert_eq!(track_order(&mut app), vec!["eq", "compressor", "reverb"]);
 }
 
 /// The echo the engine sends back replays a move the app already

@@ -580,12 +580,25 @@ fn a_reorder_is_undoable_and_persisted_in_order() {
         .collect();
     assert_eq!(saved, vec!["eq", "mastering"]);
 
+    // A-13h: the undo is one `MovePluginInMaster` back on the diff path.
     let rx = app.test_capture_engine();
     let _ = app.update(Message::Undo);
+    let cmds: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(
-        std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find an entry and start restoring the pre-reorder snapshot"
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a reorder undoes on the diff path: {cmds:?}"
     );
+    assert!(
+        cmds.iter().any(|c| matches!(c, AudioCommand::MovePluginInMaster { .. })),
+        "undo must move the chain back: {cmds:?}"
+    );
+    let file = app.test_build_project_file();
+    let restored: Vec<&str> = file
+        .master_plugins
+        .iter()
+        .map(|p| p.clap_plugin_id.rsplit('.').next().unwrap_or(""))
+        .collect();
+    assert_eq!(restored, vec!["mastering", "eq"]);
 }
 
 // ---------------------------------------------------------------------------

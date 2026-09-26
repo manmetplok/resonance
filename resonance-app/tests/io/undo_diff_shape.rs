@@ -21,14 +21,14 @@ use resonance_app::compose::messages::DrumGroupsMessage;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::demo;
 use resonance_app::message::{
-    BusMessage, GroupMessage, MarkerMessage, Message, MixerMessage, PluginMessage,
+    BusMessage, GroupMessage, MarkerMessage, MasterMessage, Message, MixerMessage, PluginMessage,
 };
 use resonance_app::project::ProjectFile;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::reconcile::{domain_order, Origin};
-use resonance_app::Resonance;
+use resonance_app::{Resonance, TestChain};
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, SendSource};
+use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, SendSource};
 
 struct Fixture {
     app: Resonance,
@@ -93,7 +93,18 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, mut cmds: Vec<AudioCom
 /// drive. The removals and moves are answered for any id, as the engine
 /// does.
 fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
-    let plugin_params = Vec::new;
+    // Every fake plugin has one parameter, at its default.
+    let plugin_params = || {
+        vec![ParamInfo {
+            id: GAIN,
+            name: "Gain".to_owned(),
+            min_value: 0.0,
+            max_value: 1.0,
+            default_value: 0.0,
+            current_value: 0.0,
+            ..Default::default()
+        }]
+    };
     Some(match cmd {
         AudioCommand::LoadMidiClipDirect {
             clip_id,
@@ -233,6 +244,14 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
             enabled,
         },
         AudioCommand::RemoveAuxSend { send_id } => AudioEvent::AuxSendRemoved { send_id },
+        AudioCommand::SetPluginBypass {
+            instance_id,
+            bypassed,
+        } => AudioEvent::PluginBypassChanged {
+            instance_id,
+            bypassed,
+            own_bypass_param: false,
+        },
         AudioCommand::SetSidechainRoute {
             plugin,
             source,
@@ -790,4 +809,349 @@ fn a_bus_restore_survives_the_previous_restores_late_echoes() {
     let back = step_lands_on(&mut f, Message::Undo, &s0, "and undo it once more");
     let late: Vec<_> = undo.into_iter().chain(redo).chain(back).collect();
     settle(&mut f, late, &s0, "undo bus add, then three restores' echoes");
+}
+
+// ---------------------------------------------------------------------------
+// Plugin instances on a track, a bus and the master (A-13h)
+// ---------------------------------------------------------------------------
+
+/// The fake plugins' one parameter (`echo_of`).
+const GAIN: u32 = 1;
+/// The demo's audio track, which carries no plugin.
+const AUDIO_TRACK: u64 = 5;
+/// The demo's first bus, which carries `DRUM_BUS_COMP`.
+const DRUM_BUS: u64 = 100;
+
+fn scanned(id: &str) -> ScannedPlugin {
+    ScannedPlugin {
+        clap_file_path: format!("/plugins/{id}.clap"),
+        clap_plugin_id: format!("com.resonance.{id}"),
+        name: id.to_owned(),
+        vendor: "Resonance".to_owned(),
+        is_instrument: false,
+        ..Default::default()
+    }
+}
+
+/// The GUI add / remove / move of the chain `chain` names.
+fn add_to(chain: TestChain, plugin: ScannedPlugin) -> Message {
+    match chain {
+        TestChain::Track(id) => Message::Plugin(PluginMessage::AddPluginToTrack(id, plugin)),
+        TestChain::Bus(id) => Message::Bus(BusMessage::AddPluginToBus(id, plugin)),
+        TestChain::Master => Message::Master(MasterMessage::AddPluginToMaster(plugin)),
+    }
+}
+
+fn remove_from(chain: TestChain, instance_id: u64) -> Message {
+    match chain {
+        TestChain::Track(id) => {
+            Message::Plugin(PluginMessage::RemovePluginFromTrack(id, instance_id))
+        }
+        TestChain::Bus(id) => Message::Bus(BusMessage::RemovePluginFromBus(id, instance_id)),
+        TestChain::Master => Message::Master(MasterMessage::RemovePluginFromMaster(instance_id)),
+    }
+}
+
+fn move_in(chain: TestChain, instance_id: u64, to_index: usize) -> Message {
+    match chain {
+        TestChain::Track(track_id) => Message::Plugin(PluginMessage::MovePluginInTrack {
+            track_id,
+            instance_id,
+            to_index,
+        }),
+        TestChain::Bus(bus_id) => Message::Bus(BusMessage::MovePluginInBus {
+            bus_id,
+            instance_id,
+            to_index,
+        }),
+        TestChain::Master => Message::Master(MasterMessage::MovePluginInMaster {
+            instance_id,
+            to_index,
+        }),
+    }
+}
+
+/// How the engine names a remove / move on `chain`, for the pinned
+/// command lists.
+fn remove_cmd(chain: TestChain, instance_id: u64) -> String {
+    match chain {
+        TestChain::Track(track_id) => {
+            format!("RemovePlugin {{ track_id: {track_id}, instance_id: {instance_id} }}")
+        }
+        TestChain::Bus(bus_id) => {
+            format!("RemovePluginFromBus {{ bus_id: {bus_id}, instance_id: {instance_id} }}")
+        }
+        TestChain::Master => format!("RemovePluginFromMaster {{ instance_id: {instance_id} }}"),
+    }
+}
+
+fn move_cmd(chain: TestChain, instance_id: u64, to_index: usize) -> String {
+    match chain {
+        TestChain::Track(track_id) => format!(
+            "MovePlugin {{ track_id: {track_id}, instance_id: {instance_id}, to_index: {to_index} }}"
+        ),
+        TestChain::Bus(bus_id) => format!(
+            "MovePluginInBus {{ bus_id: {bus_id}, instance_id: {instance_id}, to_index: {to_index} }}"
+        ),
+        TestChain::Master => {
+            format!("MovePluginInMaster {{ instance_id: {instance_id}, to_index: {to_index} }}")
+        }
+    }
+}
+
+fn add_cmd(chain: TestChain, instance_id: u64, id: &str) -> String {
+    let (path, clap) = (format!("/plugins/{id}.clap"), format!("com.resonance.{id}"));
+    match chain {
+        TestChain::Track(track_id) => format!(
+            "AddPlugin {{ track_id: {track_id}, clap_file_path: {path:?}, clap_plugin_id: \
+             {clap:?}, id: {instance_id} }}"
+        ),
+        TestChain::Bus(bus_id) => format!(
+            "AddPluginToBus {{ bus_id: {bus_id}, clap_file_path: {path:?}, clap_plugin_id: \
+             {clap:?}, id: {instance_id} }}"
+        ),
+        TestChain::Master => format!(
+            "AddPluginToMaster {{ clap_file_path: {path:?}, clap_plugin_id: {clap:?}, id: \
+             {instance_id} }}"
+        ),
+    }
+}
+
+fn chain_ids(app: &Resonance, chain: TestChain) -> Vec<u64> {
+    app.test_chain_slots(chain).into_iter().map(|s| s.0).collect()
+}
+
+/// On `chain`: add an EQ and a compressor (GUI adds, mirrored on the
+/// echo), key the compressor from the drums, turn its gain up and bypass
+/// it, move it in front of the EQ, then remove it. Every undo and redo
+/// over the seven edits takes the diff path; the pinned steps are the
+/// structural ones:
+///
+/// * undo the remove — the compressor is re-added (appended, as the
+///   engine does), its bypass sent after the add, its gain parked for the
+///   `PluginAdded` echo, then moved back in front of the EQ; its key
+///   route after all of that;
+/// * undo the move — one `MovePlugin*`, nothing re-instantiated;
+/// * undo the add — one `RemovePlugin*`, no other plugin touched;
+/// * redo the remove — the key route, then the instance.
+///
+/// Each step's echoes are played back and must change nothing.
+fn plugin_chain_undo_walk(tag: &str, chain: TestChain) {
+    let mut f = fixture(tag);
+    let before = chain_ids(&f.app, chain);
+    let s0 = f.app.test_snapshot_for_undo();
+    let s1 = edit(&mut f, add_to(chain, scanned("eq")));
+    let eq = *chain_ids(&f.app, chain).last().expect("the EQ landed");
+    let s2 = edit(&mut f, add_to(chain, scanned("comp")));
+    let comp = *chain_ids(&f.app, chain).last().expect("the compressor landed");
+    let s3 = edit(
+        &mut f,
+        Message::Plugin(PluginMessage::SetPluginSidechain {
+            instance_id: comp,
+            source: Some(SendSource::Track(DRUMS)),
+            enabled: true,
+        }),
+    );
+    let s4 = edit(&mut f, Message::Plugin(PluginMessage::SetPluginParam(comp, GAIN, 0.5)));
+    let s5 = edit(
+        &mut f,
+        Message::Plugin(PluginMessage::SetPluginBypass {
+            instance_id: comp,
+            bypassed: true,
+        }),
+    );
+    let eq_at = before.len();
+    let s6 = edit(&mut f, move_in(chain, comp, eq_at));
+    assert_eq!(
+        chain_ids(&f.app, chain)[eq_at..],
+        [comp, eq],
+        "the move put the compressor in front of the EQ"
+    );
+    let s7 = edit(&mut f, remove_from(chain, comp));
+    assert_eq!(chain_ids(&f.app, chain)[eq_at..], [eq], "the remove landed");
+    assert!(s7.project.file.sidechain_routes.is_empty(), "and took its key route");
+
+    // Undo the remove.
+    let cmds = step_lands_on(&mut f, Message::Undo, &s6, "undo plugin remove");
+    assert_eq!(
+        sent(&cmds),
+        [
+            "PersistClipWavs".to_owned(),
+            TEMPO.to_owned(),
+            add_cmd(chain, comp, "comp"),
+            format!("SetPluginBypass {{ instance_id: {comp}, bypassed: true }}"),
+            move_cmd(chain, comp, eq_at),
+            format!(
+                "SetSidechainRoute {{ plugin: {comp}, source: Track({DRUMS}), enabled: true }}"
+            ),
+            NO_TAKES.to_owned(),
+        ],
+        "undo plugin remove: add, bypass, reorder, then the key route"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::SetPluginParam { .. })),
+        "the re-added instance's params wait for its PluginAdded echo"
+    );
+    settle(&mut f, cmds, &s6, "undo plugin remove");
+    let gain = f
+        .app
+        .test_chain_slots(chain)
+        .iter()
+        .position(|s| s.0 == comp)
+        .expect("the compressor is back");
+    assert_eq!(gain, eq_at, "in front of the EQ");
+
+    // Undo the move.
+    let cmds = step_lands_on(&mut f, Message::Undo, &s5, "undo plugin move");
+    assert_eq!(
+        sent(&cmds),
+        [
+            "PersistClipWavs".to_owned(),
+            TEMPO.to_owned(),
+            move_cmd(chain, eq, eq_at),
+            NO_TAKES.to_owned(),
+        ],
+        "undo plugin move: one move, nothing re-instantiated"
+    );
+    settle(&mut f, cmds, &s5, "undo plugin move");
+    for (target, what) in [
+        (&s4, "undo plugin bypass"),
+        (&s3, "undo plugin param"),
+        (&s2, "undo key route"),
+    ] {
+        let cmds = step_lands_on(&mut f, Message::Undo, target, what);
+        settle(&mut f, cmds, target, what);
+    }
+
+    // Undo the adds.
+    let cmds = step_lands_on(&mut f, Message::Undo, &s1, "undo compressor add");
+    assert_eq!(
+        sent(&cmds),
+        [
+            "PersistClipWavs".to_owned(),
+            TEMPO.to_owned(),
+            remove_cmd(chain, comp),
+            NO_TAKES.to_owned(),
+        ],
+        "undo compressor add: that instance only"
+    );
+    settle(&mut f, cmds, &s1, "undo compressor add");
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo EQ add");
+    settle(&mut f, cmds, &s0, "undo EQ add");
+    assert_eq!(chain_ids(&f.app, chain), before, "back to the demo's chain");
+
+    for (target, what) in [
+        (&s1, "redo EQ add"),
+        (&s2, "redo compressor add"),
+        (&s3, "redo key route"),
+        (&s4, "redo plugin param"),
+        (&s5, "redo plugin bypass"),
+        (&s6, "redo plugin move"),
+    ] {
+        let cmds = step_lands_on(&mut f, Message::Redo, target, what);
+        settle(&mut f, cmds, target, what);
+    }
+    let cmds = step_lands_on(&mut f, Message::Redo, &s7, "redo plugin remove");
+    assert_eq!(
+        sent(&cmds),
+        [
+            "PersistClipWavs".to_owned(),
+            TEMPO.to_owned(),
+            format!("ClearSidechainRoute {{ plugin: {comp} }}"),
+            remove_cmd(chain, comp),
+            NO_TAKES.to_owned(),
+        ],
+        "redo plugin remove: the key route, then the instance"
+    );
+    settle(&mut f, cmds, &s7, "redo plugin remove");
+    assert_eq!(
+        f.app.test_plugin_index(comp),
+        None,
+        "the removed instance left the side-index"
+    );
+}
+
+#[test]
+fn adding_removing_and_reordering_a_track_plugin_undoes_through_the_diff_path() {
+    plugin_chain_undo_walk("track-plugin", TestChain::Track(AUDIO_TRACK));
+}
+
+#[test]
+fn adding_removing_and_reordering_a_bus_plugin_undoes_through_the_diff_path() {
+    plugin_chain_undo_walk("bus-plugin", TestChain::Bus(DRUM_BUS));
+}
+
+#[test]
+fn adding_removing_and_reordering_a_master_plugin_undoes_through_the_diff_path() {
+    plugin_chain_undo_walk("master-plugin", TestChain::Master);
+}
+
+/// A removed plugin that was selected in the mixer is not left selected.
+#[test]
+fn undoing_a_plugin_add_drops_its_selection() {
+    let mut f = fixture("plugin-selection");
+    let chain = TestChain::Track(AUDIO_TRACK);
+    let s0 = f.app.test_snapshot_for_undo();
+    let _ = edit(&mut f, add_to(chain, scanned("eq")));
+    let eq = chain_ids(&f.app, chain)[0];
+    let _ = f.app.update(Message::Plugin(PluginMessage::TogglePluginPanel(eq)));
+    assert_eq!(f.app.test_selected_plugin(), Some(eq), "the panel selected it");
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo EQ add");
+    assert_eq!(f.app.test_selected_plugin(), None);
+    settle(&mut f, cmds, &s0, "undo EQ add");
+}
+
+/// Undo/redo bursts whose echoes land late, on a chain (a held Ctrl+Z, a
+/// control client's burst). Without `io.restore_echoes` both halves fail:
+///
+/// * two reorders undone back to back: replaying the first undo's
+///   `PluginMoved` on the chain the second undo left scrambles it (the
+///   echo is an absolute "move X to i", and the second undo skipped the
+///   slots that were already in place when it ran);
+/// * a remove undone, redone and undone again: the redo's `PluginRemoved`
+///   lands on the instance the last undo re-added and drops it with its
+///   parked params, and the `PluginAdded` after it pushes a bare slot.
+#[test]
+fn a_plugin_restore_survives_the_previous_restores_late_echoes() {
+    let mut f = fixture("plugin-late-echo");
+    let chain = TestChain::Track(AUDIO_TRACK);
+    let _ = edit(&mut f, add_to(chain, scanned("eq")));
+    let eq = chain_ids(&f.app, chain)[0];
+    let _ = edit(&mut f, Message::Plugin(PluginMessage::SetPluginParam(eq, GAIN, 0.5)));
+    let _ = edit(
+        &mut f,
+        Message::Plugin(PluginMessage::SetPluginBypass {
+            instance_id: eq,
+            bypassed: true,
+        }),
+    );
+    let _ = edit(&mut f, add_to(chain, scanned("comp")));
+    let in_order = edit(&mut f, add_to(chain, scanned("gate")));
+    let [_, comp, gate] = chain_ids(&f.app, chain)[..] else {
+        panic!("three plugins on the chain");
+    };
+    let eq_last = edit(&mut f, move_in(chain, eq, 2));
+    let eq_middle = edit(&mut f, move_in(chain, eq, 1));
+    assert_eq!(chain_ids(&f.app, chain), [comp, eq, gate]);
+
+    let mut late = Vec::new();
+    late.extend(step_lands_on(&mut f, Message::Undo, &eq_last, "undo second move"));
+    late.extend(step_lands_on(&mut f, Message::Undo, &in_order, "undo first move"));
+    settle(&mut f, late, &in_order, "two undone moves, then their echoes");
+    assert_eq!(chain_ids(&f.app, chain), [eq, comp, gate]);
+
+    let mut late = Vec::new();
+    late.extend(step_lands_on(&mut f, Message::Redo, &eq_last, "redo first move"));
+    late.extend(step_lands_on(&mut f, Message::Redo, &eq_middle, "redo second move"));
+    settle(&mut f, late, &eq_middle, "two redone moves, then their echoes");
+
+    let removed = edit(&mut f, remove_from(chain, eq));
+    let mut late = Vec::new();
+    late.extend(step_lands_on(&mut f, Message::Undo, &eq_middle, "undo remove"));
+    late.extend(step_lands_on(&mut f, Message::Redo, &removed, "redo remove"));
+    late.extend(step_lands_on(&mut f, Message::Undo, &eq_middle, "undo remove again"));
+    settle(&mut f, late, &eq_middle, "remove undone, redone, undone, then the echoes");
+    // `settle` compared the whole file: the EQ is back in the middle,
+    // bypassed, its gain at 0.5.
+    assert_eq!(chain_ids(&f.app, chain), [comp, eq, gate]);
 }
