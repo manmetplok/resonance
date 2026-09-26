@@ -35,7 +35,7 @@ use crate::theme;
 use crate::Resonance;
 
 pub(crate) fn view_import_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    let Some(dialog) = r.import_dialog.as_ref() else {
+    let Some(dialog) = r.modals.import_dialog.as_ref() else {
         return Space::new()
             .width(Length::Fixed(0.0))
             .height(Length::Fixed(0.0))

@@ -38,7 +38,7 @@ use crate::Resonance;
 fn project_plugin(r: &Resonance, p: &crate::state::PluginSlotState) -> ProjectPlugin {
     // Present only while an instance is still unaccounted for; consumed
     // by `PluginAdded`, after which the live mirror is authoritative.
-    let params = match r.pending_plugin_param_overrides.get(&p.instance_id) {
+    let params = match r.presets.pending_plugin_param_overrides.get(&p.instance_id) {
         Some(parked) => parked.clone(),
         None => p
             .params

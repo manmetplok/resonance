@@ -272,20 +272,20 @@ pub fn is_midi_path(path: &Path) -> bool {
 pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
     match message {
         ImportMessage::Open => {
-            app.import_dialog = Some(ImportDialogState::new());
+            app.modals.import_dialog = Some(ImportDialogState::new());
         }
         ImportMessage::Cancel => {
-            app.import_dialog = None;
+            app.modals.import_dialog = None;
         }
         // A MIDI file is being dragged over the window: surface the drop
         // target by opening the modal at the Drop stage. A no-op when a
         // dialog is already open, so it never disturbs an in-flight review.
         // Tagged `opened_by_hover` so a stray drag-out can dismiss it.
         ImportMessage::HoverFile => {
-            if app.import_dialog.is_none() {
+            if app.modals.import_dialog.is_none() {
                 let mut dialog = ImportDialogState::new();
                 dialog.opened_by_hover = true;
-                app.import_dialog = Some(dialog);
+                app.modals.import_dialog = Some(dialog);
             }
         }
         // The drag left the window without a drop: close the dialog only if
@@ -293,12 +293,12 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
         // empty at the Drop stage). A dialog the user opened deliberately —
         // or one already parsing a dropped file — is left untouched.
         ImportMessage::HoverLeft => {
-            if let Some(d) = app.import_dialog.as_ref() {
+            if let Some(d) = app.modals.import_dialog.as_ref() {
                 if d.opened_by_hover
                     && d.stage == ImportStage::Drop
                     && d.source_path.is_none()
                 {
-                    app.import_dialog = None;
+                    app.modals.import_dialog = None;
                 }
             }
         }
@@ -307,7 +307,7 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
         // parse it off-thread. A drop can arrive before the modal is open
         // (dropped straight onto the arrangement), so open it on demand.
         ImportMessage::FileChosen(path) | ImportMessage::FileDropped(path) => {
-            let d = app.import_dialog.get_or_insert_with(ImportDialogState::new);
+            let d = app.modals.import_dialog.get_or_insert_with(ImportDialogState::new);
             d.source_path = Some(path.clone());
             d.stage = ImportStage::Parsing;
             d.error = None;
@@ -321,7 +321,7 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
         }
         // Only the parse of the file the dialog is still waiting on counts.
         ImportMessage::Parsed { path, result } => {
-            let current = app.import_dialog.as_ref().is_some_and(|d| {
+            let current = app.modals.import_dialog.as_ref().is_some_and(|d| {
                 d.stage == ImportStage::Parsing && d.source_path.as_deref() == Some(&*path)
             });
             if current {
@@ -329,7 +329,7 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
             }
         }
         ImportMessage::ParseCompleted(result) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 match result {
                     Ok(parsed) => {
                         // A tempo mismatch routes through the conflict
@@ -352,59 +352,59 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
             }
         }
         ImportMessage::ToggleTrack(index) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 if let Some(row) = d.rows.get_mut(index) {
                     row.selected = !row.selected;
                 }
             }
         }
         ImportMessage::SetAllTracks(selected) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 for row in &mut d.rows {
                     row.selected = selected;
                 }
             }
         }
         ImportMessage::RenameTrack(index, name) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 if let Some(row) = d.rows.get_mut(index) {
                     row.name = name;
                 }
             }
         }
         ImportMessage::SetTempoChoice(choice) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 d.tempo_choice = choice;
             }
         }
         ImportMessage::SetPlacementStart(start) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 d.placement.start = start;
             }
         }
         ImportMessage::SetPlacementMode(mode) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 d.placement.mode = mode;
             }
         }
         ImportMessage::SetMergeTarget(target) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 d.placement.merge_target = target;
             }
         }
         ImportMessage::SetConflictAlignment(alignment) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 d.tempo_alignment = alignment;
             }
         }
         ImportMessage::ChooseTempo(choice, alignment) => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 d.tempo_choice = choice;
                 d.tempo_alignment = alignment;
             }
         }
         ImportMessage::ResolveTempo => {
-            if let Some(d) = app.import_dialog.as_mut() {
+            if let Some(d) = app.modals.import_dialog.as_mut() {
                 if d.stage == ImportStage::TempoConflict {
                     d.stage = ImportStage::Review;
                 }
@@ -419,7 +419,7 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
 /// predicate behind both the `gates_message` refusal and the Import
 /// button's enabled state, so the two never disagree.
 pub(crate) fn confirm_blocker(app: &Resonance) -> Option<String> {
-    let Some(d) = app.import_dialog.as_ref() else {
+    let Some(d) = app.modals.import_dialog.as_ref() else {
         return Some("No import in progress.".to_owned());
     };
     if d.stage != ImportStage::Review {
@@ -452,7 +452,7 @@ pub(crate) fn confirm_blocker(app: &Resonance) -> Option<String> {
 /// objection (the gate drops it otherwise), and the Confirm message has
 /// already recorded the pre-import undo snapshot.
 fn confirm(app: &mut Resonance) -> Task<Message> {
-    let Some(d) = app.import_dialog.as_ref() else {
+    let Some(d) = app.modals.import_dialog.as_ref() else {
         return Task::none();
     };
     let Some(ImportSource(smf)) = d.source.clone() else {
@@ -557,7 +557,7 @@ fn confirm(app: &mut Resonance) -> Task<Message> {
             }
         }
 
-        if let Some(d) = app.import_dialog.as_mut() {
+        if let Some(d) = app.modals.import_dialog.as_mut() {
             d.stage = ImportStage::Imported;
             d.result = Some(result);
             d.error = None;

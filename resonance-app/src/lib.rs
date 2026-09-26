@@ -50,8 +50,8 @@ use undo::UndoHistory;
 /// A track-preset save waiting for the engine to hand back its plugins'
 /// state blobs (ba todo #1303).
 ///
-/// See [`Resonance::pending_preset_save`] for why the save is split in
-/// two.
+/// See [`state::PresetState::pending_preset_save`] for why the save is
+/// split in two.
 #[derive(Debug, Clone)]
 pub struct PendingPresetSave {
     /// The track being captured.
@@ -280,27 +280,6 @@ pub struct Resonance {
     /// into the `SetTrackDeviceParams` command. Read-only after
     /// construction (a rescan/reload is a later todo).
     pub(crate) device_registry: resonance_common::DeviceDefinitionRegistry,
-    /// When set, the confirmation dialog for deleting a track with
-    /// content is shown. Holds the track id that the user wants to remove.
-    pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
-    /// When set, the "Bounce in place" dialog is shown for an external
-    /// MIDI track. Holds the source track id plus the user's current
-    /// device/port selection.
-    pub(crate) bounce_dialog: Option<crate::state::BounceDialogState>,
-    /// When set, the "Import MIDI" modal is shown. Holds the import
-    /// flow's stage, the parsed per-track rows, and the user's tempo /
-    /// placement choices. `None` when the modal is closed.
-    pub(crate) import_dialog: Option<crate::state::ImportDialogState>,
-    /// When set, a bounce-in-place run is in flight. Drives the modal
-    /// progress overlay and gates transport / mutating UI so the user
-    /// can't disturb the render mid-flight. Cleared by
-    /// `TrackBounceCompleted`, `TrackBounceError`, or
-    /// `TrackBounceCancelled`.
-    pub(crate) bounce_in_progress: Option<crate::state::BounceProgressState>,
-    /// When set, the Export modal is open. Holds the shared shell state
-    /// (mode tab, source selection, range, format, destination) - see
-    /// `state::ExportDialogState` and `view::export_dialog`.
-    pub(crate) export_dialog: Option<crate::state::ExportDialogState>,
     /// App-side track-freeze orchestration: per-track freeze status plus
     /// the active "freeze selected / all" batch queue. Driven by the
     /// `FreezeMessage` handlers (ba todo #574) and the engine freeze-event
@@ -318,12 +297,9 @@ pub struct Resonance {
     /// lifecycle handle plus per-connection handshake sessions. Transient
     /// — never persisted, never in the undo snapshot.
     pub(crate) control: crate::state::ControlEndpointState,
-    /// When set, the "unsaved changes" quit-confirmation dialog is shown.
-    /// Holds the window id so we can close it if the user confirms.
-    pub(crate) confirm_quit: Option<iced::window::Id>,
-    /// When set, the app should quit after the current save completes.
-    /// Set by the "Save & Quit" flow in the unsaved-changes dialog.
-    pub(crate) quit_after_save: Option<iced::window::Id>,
+    /// Open-modal / confirmation-dialog flags and their transient input
+    /// (ARCH-06 A6-2). See `state::ModalState`.
+    pub(crate) modals: state::ModalState,
     /// Cache of the most recently observed CLAP state blob per plugin
     /// instance. Populated from `PluginStateSaved` / `AllPluginStatesSaved`
     /// engine events and read into undo snapshots so restores can replay
@@ -380,73 +356,9 @@ pub struct Resonance {
     /// concurrent app instances never collide (epic #32 / doc #171).
     pub(crate) session_id: String,
 
-    // ---- Track presets ----
-    /// Built-in default track presets (baked into the binary).
-    pub(crate) default_presets: Vec<presets::TrackPreset>,
-    /// User-saved track presets (loaded from disk on startup).
-    pub(crate) user_presets: Vec<presets::TrackPreset>,
-    /// When set, the next `TrackAdded` / `InstrumentTrackAdded` engine
-    /// event will apply this preset to the newly created track.
-    pub(crate) pending_track_preset: Option<presets::TrackPreset>,
-    /// When set, the next `AllPluginStatesSaved` event will capture
-    /// plugin states for this track and save it as a user preset under
-    /// this name (ba todo #1303).
-    ///
-    /// The capture cannot be synchronous: a preset carries each plugin's
-    /// opaque CLAP state blob, and only the engine can ask a plugin for
-    /// one. So the save is armed here, `SaveAllPluginStates` goes out,
-    /// and the echo finishes it — which is also why the name has to be
-    /// carried along rather than re-derived from the track (it may have
-    /// been renamed, and the user may have typed something else).
-    pub(crate) pending_preset_save: Option<PendingPresetSave>,
-    /// A `*.save_plugin_preset` waiting for the plugin to hand back its
-    /// state (ba todo #1333).
-    ///
-    /// The plugin is the only thing that knows its current sound — the
-    /// app's parameter mirror does not see edits made in the plugin's own
-    /// window (ba todo #1294) — so the request is acknowledged when the
-    /// capture is armed and the file is written on the engine's
-    /// `PluginStateSaved` echo, one cycle later. Same shape, and the same
-    /// honest gap, as the track-preset capture above.
-    pub(crate) pending_plugin_preset_save: Option<PendingPluginPresetSave>,
-    /// Root the plugin-preset directories are read from and written to,
-    /// when it is not the user's real data directory.
-    ///
-    /// A test seam, and the only one available: the alternative override
-    /// is `RESONANCE_PLUGIN_PRESET_DIR`, and an env var is process-global
-    /// — which is a race as soon as two tests sharing a binary want
-    /// different roots, and `set_var` is unsafe in a threaded process
-    /// besides (ba doc #285).
-    pub(crate) plugin_preset_root: Option<std::path::PathBuf>,
-    /// Plugin state blobs to apply as PluginAdded events arrive for a
-    /// preset-created track. Tuple of (target track id, ordered list of
-    /// state blobs matching the preset's plugin chain).
-    pub(crate) pending_preset_plugin_states:
-        Option<(resonance_audio::types::TrackId, Vec<Option<Vec<u8>>>)>,
-    /// Saved plugin-parameter overrides waiting for their plugin's
-    /// `PluginAdded` event, keyed by plugin instance id.
-    ///
-    /// Project load sends `AddPlugin` and gets a `PluginAdded` back
-    /// carrying the plugin's parameter list *as instantiated* — i.e. at
-    /// its defaults. Writing the restored values into the slot before
-    /// that event lands would simply be overwritten by it, so they wait
-    /// here and `engine_events::plugins::apply_pending_param_overrides`
-    /// applies them (to the app-side mirror and to the engine) the moment
-    /// the event arrives. Entries are consumed on use.
-    ///
-    /// An entry that is *never* consumed is the signature of a plugin the
-    /// host could not instantiate — a missing `.clap`. Its slot's
-    /// `params` mirror stays empty forever, so serialization reads the
-    /// parked list back out instead (see
-    /// `update::project_io::serialize::project_plugin`) rather than
-    /// writing an empty `params` array and destroying the user's settings
-    /// on the first Save As (ba doc #275, P5). That is why the values are
-    /// held in their on-disk [`crate::project::ProjectPluginParam`] shape,
-    /// names included: what comes off disk is written back verbatim.
-    pub(crate) pending_plugin_param_overrides: std::collections::HashMap<
-        resonance_audio::types::PluginInstanceId,
-        Vec<crate::project::ProjectPluginParam>,
-    >,
+    /// Track- and plugin-preset save/apply state (ARCH-06 A6-2). See
+    /// `state::PresetState`.
+    pub(crate) presets: state::PresetState,
 }
 
 /// Startup tab requested via `--tab arrange|mixer|compose|performance`. Read
@@ -862,30 +774,21 @@ impl Resonance {
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),
             next_control_plugin_id: state::ids::CONTROL_PLUGIN_ID_BASE,
-            confirm_delete_track: None,
-            bounce_dialog: None,
-            import_dialog: None,
-            bounce_in_progress: None,
-            export_dialog: None,
             freeze: crate::state::FreezeState::default(),
             dirty: false,
             revision: 0,
             control: crate::state::ControlEndpointState::default(),
-            confirm_quit: None,
-            quit_after_save: None,
+            modals: state::ModalState::default(),
             settings,
             session_id,
-            default_presets: presets::default_presets(),
-            user_presets: match host {
-                Host::Machine => presets::load_user_presets(),
-                Host::None => Vec::new(),
+            presets: state::PresetState {
+                default_presets: presets::default_presets(),
+                user_presets: match host {
+                    Host::Machine => presets::load_user_presets(),
+                    Host::None => Vec::new(),
+                },
+                ..state::PresetState::default()
             },
-            pending_track_preset: None,
-            pending_preset_save: None,
-            pending_plugin_preset_save: None,
-            plugin_preset_root: None,
-            pending_preset_plugin_states: None,
-            pending_plugin_param_overrides: std::collections::HashMap::new(),
         };
 
         // Derive the transport label strings once so the very first

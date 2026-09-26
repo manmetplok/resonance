@@ -190,7 +190,7 @@ pub(super) fn save(
         return reject(request, e);
     }
 
-    app.pending_plugin_preset_save = Some(crate::PendingPluginPresetSave {
+    app.presets.pending_plugin_preset_save = Some(crate::PendingPluginPresetSave {
         instance_id,
         clap_id,
         name: name.trim().to_string(),

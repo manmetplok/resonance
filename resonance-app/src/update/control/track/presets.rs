@@ -192,7 +192,7 @@ pub(super) fn save_plugin_preset(
         return reject(request, e);
     }
 
-    app.pending_plugin_preset_save = Some(crate::PendingPluginPresetSave {
+    app.presets.pending_plugin_preset_save = Some(crate::PendingPluginPresetSave {
         instance_id,
         clap_id,
         name: params.name.trim().to_string(),
@@ -281,10 +281,10 @@ pub(super) fn presets(app: &Resonance, request: &Request) -> Response {
             .collect(),
     };
     let presets: Vec<PresetView> = app
-        .default_presets
+        .presets.default_presets
         .iter()
         .map(|p| view(p, true))
-        .chain(app.user_presets.iter().map(|p| view(p, false)))
+        .chain(app.presets.user_presets.iter().map(|p| view(p, false)))
         .collect();
     success(request, &PresetsView { presets })
 }
@@ -303,16 +303,16 @@ pub(super) fn apply_preset(app: &mut Resonance, request: &Request) -> (Response,
     };
     let wanted = params.preset.trim();
     let preset = app
-        .default_presets
+        .presets.default_presets
         .iter()
-        .chain(app.user_presets.iter())
+        .chain(app.presets.user_presets.iter())
         .find(|p| p.name.eq_ignore_ascii_case(wanted))
         .cloned();
     let Some(preset) = preset else {
         let known: Vec<&str> = app
-            .default_presets
+            .presets.default_presets
             .iter()
-            .chain(app.user_presets.iter())
+            .chain(app.presets.user_presets.iter())
             .map(|p| p.name.as_str())
             .collect();
         return reject(

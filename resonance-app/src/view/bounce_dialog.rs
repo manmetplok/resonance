@@ -15,7 +15,7 @@ use crate::view::mixer::picks::PortChoice;
 use crate::Resonance;
 
 pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    let Some(dialog) = r.bounce_dialog.as_ref() else {
+    let Some(dialog) = r.modals.bounce_dialog.as_ref() else {
         return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
     };
 

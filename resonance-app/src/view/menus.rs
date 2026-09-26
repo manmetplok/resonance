@@ -151,25 +151,25 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
     .spacing(2);
 
     // Default presets section.
-    if !r.default_presets.is_empty() {
+    if !r.presets.default_presets.is_empty() {
         menu = menu
             .push(Space::new().height(4))
             .push(container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg))
             .push(Space::new().height(4))
             .push(text("Presets").size(10).color(theme::TEXT_DIM));
-        for preset in &r.default_presets {
+        for preset in &r.presets.default_presets {
             menu = menu.push(preset_button(preset, false));
         }
     }
 
     // User presets section.
-    if !r.user_presets.is_empty() {
+    if !r.presets.user_presets.is_empty() {
         menu = menu
             .push(Space::new().height(4))
             .push(container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg))
             .push(Space::new().height(4))
             .push(text("User Presets").size(10).color(theme::TEXT_DIM));
-        for preset in &r.user_presets {
+        for preset in &r.presets.user_presets {
             menu = menu.push(preset_button(preset, true));
         }
     }

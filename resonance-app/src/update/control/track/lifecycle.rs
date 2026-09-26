@@ -117,7 +117,7 @@ pub(super) fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<
         app,
         Message::Track(TrackMessage::RequestRemoveTrack(params.track_id.0)),
     );
-    let confirm_task = if app.confirm_delete_track == Some(params.track_id.0) {
+    let confirm_task = if app.modals.confirm_delete_track == Some(params.track_id.0) {
         run_via_update(app, Message::Track(TrackMessage::ConfirmRemoveTrack))
     } else {
         Task::none()

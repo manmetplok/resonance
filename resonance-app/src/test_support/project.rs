@@ -12,7 +12,7 @@ impl Resonance {
     /// overlay.
     #[doc(hidden)]
     pub fn test_import_dialog(&self) -> Option<&state::ImportDialogState> {
-        self.import_dialog.as_ref()
+        self.modals.import_dialog.as_ref()
     }
 
     /// Test-only: borrow the open Export-modal state (`None` when the
@@ -21,7 +21,7 @@ impl Resonance {
     /// reducer without poking at the `pub(crate)` field.
     #[doc(hidden)]
     pub fn test_export_dialog(&self) -> Option<&state::ExportDialogState> {
-        self.export_dialog.as_ref()
+        self.modals.export_dialog.as_ref()
     }
 
     /// Test-only: feed an engine event through the real dispatch so
@@ -146,7 +146,7 @@ impl Resonance {
     /// hermeticity rule in ba doc #285).
     #[doc(hidden)]
     pub fn test_set_plugin_preset_root(&mut self, root: std::path::PathBuf) {
-        self.plugin_preset_root = Some(root);
+        self.presets.plugin_preset_root = Some(root);
     }
 
     /// Test-only: mark the open project dirty (or clean) so the
@@ -303,7 +303,7 @@ impl Resonance {
     /// `default_presets` and are unaffected.
     #[doc(hidden)]
     pub fn test_user_presets(&self) -> &[crate::presets::TrackPreset] {
-        &self.user_presets
+        &self.presets.user_presets
     }
 
     /// Test-only: list the device definitions the registry resolved. Used to

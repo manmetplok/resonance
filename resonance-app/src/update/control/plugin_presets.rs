@@ -58,7 +58,7 @@ fn bank_for(app: &Resonance, clap_id: &str) -> PresetBank {
     // at runtime, so it is kept beside the bank in
     // [`factory_presets`] rather than forced into it.
     let bank = PresetBank::new(clap_id, &[]);
-    match &app.plugin_preset_root {
+    match &app.presets.plugin_preset_root {
         Some(root) => bank.with_root(root.clone()),
         None => bank,
     }

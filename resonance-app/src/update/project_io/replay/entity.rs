@@ -339,7 +339,7 @@ pub(super) fn replay_plugins(
         // defaults) and overwrites `slot.params` wholesale. See
         // `Resonance::pending_plugin_param_overrides`.
         if !pp.params.is_empty() {
-            r.pending_plugin_param_overrides
+            r.presets.pending_plugin_param_overrides
                 .insert(pp.instance_id, pp.params.clone());
         }
         // Restore a bypassed slot through the very same command a user

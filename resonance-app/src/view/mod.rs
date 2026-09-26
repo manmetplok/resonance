@@ -112,7 +112,7 @@ impl crate::Resonance {
             }
         } else if !self.io.has_active_project {
             stack![base, startup::view_startup_overlay(self)].into()
-        } else if self.bounce_in_progress.is_some() {
+        } else if self.modals.bounce_in_progress.is_some() {
             // The bounce progress modal sits above any other overlay
             // because it gates user input until the engine finishes the
             // current bounce — letting the quit-confirm or delete-track
@@ -143,19 +143,19 @@ impl crate::Resonance {
                 bounce_progress::view_freeze_progress_overlay(self)
             ]
             .into()
-        } else if self.confirm_quit.is_some() {
+        } else if self.modals.confirm_quit.is_some() {
             stack![base, confirm_quit::view_confirm_quit_overlay(self)].into()
-        } else if let Some(track_id) = self.confirm_delete_track {
+        } else if let Some(track_id) = self.modals.confirm_delete_track {
             stack![
                 base,
                 confirm_delete_track::view_confirm_delete_track_overlay(self, track_id)
             ]
             .into()
-        } else if self.bounce_dialog.is_some() {
+        } else if self.modals.bounce_dialog.is_some() {
             stack![base, bounce_dialog::view_bounce_dialog_overlay(self)].into()
-        } else if self.export_dialog.is_some() {
+        } else if self.modals.export_dialog.is_some() {
             stack![base, export_dialog::view_export_dialog_overlay(self)].into()
-        } else if self.import_dialog.is_some() {
+        } else if self.modals.import_dialog.is_some() {
             stack![base, import_dialog::view_import_dialog_overlay(self)].into()
         } else if self.import_progress_modal_open {
             // Audio-import transcode-progress modal (doc #175, todo #606):

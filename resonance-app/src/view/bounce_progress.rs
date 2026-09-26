@@ -34,7 +34,7 @@ use crate::theme::{self, fa};
 use crate::Resonance;
 
 pub(crate) fn view_bounce_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    let Some(state) = r.bounce_in_progress.as_ref() else {
+    let Some(state) = r.modals.bounce_in_progress.as_ref() else {
         return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
     };
 

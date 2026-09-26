@@ -385,7 +385,7 @@ impl crate::Resonance {
     /// measurement.
     pub(crate) fn offline_render_in_progress(&self) -> bool {
         self.io.bouncing
-            || self.bounce_in_progress.is_some()
+            || self.modals.bounce_in_progress.is_some()
             || self.freeze.any_in_flight()
             || self.offline_measure_in_progress()
     }
@@ -487,7 +487,7 @@ impl crate::Resonance {
         // instances as a bounce in place, so it gates the same traffic
         // (code review UPD-06; the engine refuses Play / Record on its
         // own — `resonance_audio` MIX-02 — this keeps the GUI honest).
-        if (self.bounce_in_progress.is_some() || self.io.bouncing)
+        if (self.modals.bounce_in_progress.is_some() || self.io.bouncing)
             && bounce_blocks_message(message)
         {
             return true;
