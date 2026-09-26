@@ -292,6 +292,9 @@ fn a_panicking_import_fails_that_file_and_the_batch_continues() {
 /// A pool-import batch still running when the project is replaced
 /// (`ClearAll`) must never report an asset after `AllCleared`: the app
 /// would add it, unplaced, to the new project's pool (code review FU-M4a).
+/// What it does send after `AllCleared` is exactly one final
+/// `ImportFailed` ("cancelled") per file, so the import modal's rows and a
+/// control import job waiting on them resolve (FU-A4b).
 #[test]
 fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
     let dir = make_tempdir("stale-batch");
@@ -304,7 +307,7 @@ fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
 
     let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.set_project_dir(project.clone());
-    engine.import_audio_to_pool(vec![long_a, long_b]);
+    engine.import_audio_to_pool(vec![long_a.clone(), long_b.clone()]);
     engine.clear_all();
     // A batch queued after the clear belongs to the new project and lands.
     engine.import_audio_to_pool(vec![short.clone()]);
@@ -330,9 +333,16 @@ fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
         .iter()
         .position(|e| matches!(e, AudioEvent::AllCleared))
         .expect("ClearAll echoed");
+    let mut cancelled: Vec<&str> = Vec::new();
     let stale: Vec<_> = events[cleared..]
         .iter()
         .filter(|e| match e {
+            AudioEvent::ImportFailed { path, reason, .. }
+                if *path != short && reason == resonance_audio::POOL_IMPORT_CANCELLED =>
+            {
+                cancelled.push(path);
+                false
+            }
             AudioEvent::AssetImported { original_path, .. }
             | AudioEvent::ImportFailed { path: original_path, .. }
             | AudioEvent::ImportProgress { path: original_path, .. } => *original_path != short,
@@ -340,5 +350,23 @@ fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
         })
         .collect();
     assert!(stale.is_empty(), "stale batch events after AllCleared: {stale:?}");
+    // Every file of the stale batch that had not finished before the clear
+    // is cancelled exactly once.
+    let finished_before: Vec<&str> = events[..cleared]
+        .iter()
+        .filter_map(|e| match e {
+            AudioEvent::AssetImported { original_path, .. } => Some(original_path.as_str()),
+            AudioEvent::ImportFailed { path, .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut expected: Vec<&str> = [long_a.as_str(), long_b.as_str()]
+        .into_iter()
+        .filter(|p| !finished_before.contains(p))
+        .collect();
+    cancelled.sort_unstable();
+    expected.sort_unstable();
+    assert!(!expected.is_empty(), "the stale batch finished before the clear");
+    assert_eq!(cancelled, expected, "one cancellation per unfinished file");
     let _ = std::fs::remove_dir_all(&dir);
 }

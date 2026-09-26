@@ -54,6 +54,13 @@ pub struct TrackRecordingBuf {
     /// take still becomes a clip; later drains skip the track until the
     /// next pass opens a fresh writer (code review ENG-03).
     pub write_failed: bool,
+    /// After a write failure whose header repair ALSO failed (e.g. a
+    /// copy-on-write filesystem that cannot rewrite a block on a full
+    /// disk): the salvaged frames, read back into memory. The take then
+    /// becomes a `ClipSource::Memory` clip instead of mapping the file
+    /// whose header is stale, and the next project save writes it out
+    /// (FU-F2b).
+    pub salvaged_audio: Option<Vec<f32>>,
 
     /// 0-indexed starting channel in the interleaved input stream.
     pub input_port: u16,
@@ -252,6 +259,7 @@ impl RecordingState {
             peak_frames: 0,
             frames_written: 0,
             write_failed: false,
+            salvaged_audio: None,
             input_port,
             mono,
         })
@@ -403,8 +411,9 @@ impl RecordingState {
             let (clip_start_sample, trim_start_frames) =
                 apply_take_shift(clip_start_sample, trim_start_frames, self.take_shift_samples);
 
-            // Memory-map the finalized WAV file.
-            let source = match ClipSource::open_wav(&track_buf.path) {
+            // Memory-map the finalized WAV file (or adopt the in-memory
+            // salvage of one whose header could not be repaired).
+            let source = match take_clip_source(&track_buf.path, &mut track_buf.salvaged_audio) {
                 Ok(src) => src,
                 Err(e) => {
                     tracing::error!("recording: mmap {} failed: {e}", track_buf.path.display());
@@ -505,6 +514,7 @@ impl RecordingState {
             let finished_clip_id = track_buf.clip_id;
             let finished_frames = track_buf.frames_written;
             let finished_peaks = std::mem::take(&mut track_buf.peaks);
+            let mut finished_salvage = track_buf.salvaged_audio.take();
 
             // Reopen a fresh writer for the next pass (seam only).
             if reopen {
@@ -542,7 +552,7 @@ impl RecordingState {
                 continue;
             }
 
-            let source = match ClipSource::open_wav(&finished_path) {
+            let source = match take_clip_source(&finished_path, &mut finished_salvage) {
                 Ok(src) => src,
                 Err(e) => {
                     tracing::error!("recording: mmap {} failed: {e}", finished_path.display());
@@ -761,7 +771,11 @@ fn salvage_failed_take(track_buf: &mut TrackRecordingBuf, err: &str) -> String {
     }
     track_buf.write_failed = true;
     let salvaged = repair_wav_data_len(&track_buf.path);
-    let frames = *salvaged.as_ref().unwrap_or(&0);
+    let frames = match &salvaged {
+        Ok(WavRepair::Repaired { frames }) => *frames,
+        Ok(WavRepair::HeaderStale { samples, .. }) => (samples.len() / 2) as u64,
+        Err(_) => 0,
+    };
     track_buf.frames_written = frames;
 
     // Keep the peaks in step with the audio that survived.
@@ -783,10 +797,26 @@ fn salvage_failed_take(track_buf: &mut TrackRecordingBuf, err: &str) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     match salvaged {
-        Ok(frames) => format!(
+        Ok(WavRepair::Repaired { frames }) => format!(
             "Recording stopped on this track: writing {name} failed ({err}). The take was \
              kept up to the failure ({frames} frames)."
         ),
+        Ok(WavRepair::HeaderStale {
+            samples,
+            header_error,
+        }) => {
+            tracing::error!(
+                "recording: header repair of {} failed: {header_error}",
+                track_buf.path.display()
+            );
+            track_buf.salvaged_audio = Some(samples);
+            format!(
+                "Recording stopped on this track: writing {name} failed ({err}). The take was \
+                 kept up to the failure ({frames} frames), but its file header could not be \
+                 repaired ({header_error}), so it is held in memory only — free some disk \
+                 space and save the project to write it out."
+            )
+        }
         Err(e) => format!(
             "Recording stopped on this track: writing {name} failed ({err}), and the audio \
              captured so far could not be recovered ({e})."
@@ -794,20 +824,41 @@ fn salvage_failed_take(track_buf: &mut TrackRecordingBuf, err: &str) -> String {
     }
 }
 
+/// Outcome of [`repair_wav_data_len`] when the audio itself was found.
+enum WavRepair {
+    /// The file was cut back to whole frames and its header rewritten;
+    /// it maps as a valid WAV of `frames` frames.
+    Repaired { frames: u64 },
+    /// The in-place header rewrite failed (e.g. a copy-on-write
+    /// filesystem needs free space even to overwrite a block), so the
+    /// file's header is stale; the whole frames present were read back
+    /// into `samples` (stereo interleaved) instead (FU-F2b).
+    HeaderStale {
+        samples: Vec<f32>,
+        header_error: String,
+    },
+}
+
 /// Make a partially written stereo float WAV valid again: find its
 /// `data` chunk, cut the file back to the whole frames present (at most
 /// what a RIFF size field can describe), and rewrite the RIFF and `data`
 /// sizes. Only shrinks the file and overwrites header bytes in place, so
-/// it works on the full disk that caused the failure. Returns the frame
-/// count.
-fn repair_wav_data_len(path: &Path) -> Result<u64, String> {
+/// it works on the full disk that caused the failure on most
+/// filesystems. Where even that fails, the frames are read back into
+/// memory rather than lost ([`WavRepair::HeaderStale`]). `Err` only when
+/// the audio could not be located or read at all.
+fn repair_wav_data_len(path: &Path) -> Result<WavRepair, String> {
     const FRAME_BYTES: u64 = 2 * 4; // stereo f32
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    let mut file = std::fs::OpenOptions::new()
+    // Reading needs no free space; open for writing only if we can.
+    let (mut file, open_rw_error) = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(path)
-        .map_err(err)?;
+    {
+        Ok(f) => (f, None),
+        Err(e) => (File::open(path).map_err(err)?, Some(err(e))),
+    };
     let file_len = file.metadata().map_err(err)?.len();
 
     // Walk the chunk list after "RIFF....WAVE" to the data chunk. Every
@@ -829,15 +880,58 @@ fn repair_wav_data_len(path: &Path) -> Result<u64, String> {
 
     let max_data = (u32::MAX as u64 + 8).saturating_sub(data_start);
     let data_len = (file_len - data_start).min(max_data) / FRAME_BYTES * FRAME_BYTES;
-    file.set_len(data_start + data_len).map_err(err)?;
-    file.seek(SeekFrom::Start(4)).map_err(err)?;
-    file.write_all(&((data_start + data_len - 8) as u32).to_le_bytes())
-        .map_err(err)?;
-    file.seek(SeekFrom::Start(data_start - 4)).map_err(err)?;
-    file.write_all(&(data_len as u32).to_le_bytes())
-        .map_err(err)?;
-    file.sync_all().map_err(err)?;
-    Ok(data_len / FRAME_BYTES)
+
+    let rewrite = |file: &mut File| -> Result<(), String> {
+        if let Some(e) = &open_rw_error {
+            return Err(e.clone());
+        }
+        file.set_len(data_start + data_len).map_err(err)?;
+        file.seek(SeekFrom::Start(4)).map_err(err)?;
+        file.write_all(&((data_start + data_len - 8) as u32).to_le_bytes())
+            .map_err(err)?;
+        file.seek(SeekFrom::Start(data_start - 4)).map_err(err)?;
+        file.write_all(&(data_len as u32).to_le_bytes())
+            .map_err(err)?;
+        file.sync_all().map_err(err)
+    };
+    match rewrite(&mut file) {
+        Ok(()) => Ok(WavRepair::Repaired {
+            frames: data_len / FRAME_BYTES,
+        }),
+        Err(header_error) => {
+            // A failed set_len may or may not have shrunk the file; only
+            // read what is still there.
+            let present = file
+                .metadata()
+                .map_err(err)?
+                .len()
+                .saturating_sub(data_start)
+                .min(data_len)
+                / FRAME_BYTES
+                * FRAME_BYTES;
+            let mut bytes = vec![0u8; present as usize];
+            file.seek(SeekFrom::Start(data_start)).map_err(err)?;
+            file.read_exact(&mut bytes).map_err(err)?;
+            let samples = bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            Ok(WavRepair::HeaderStale {
+                samples,
+                header_error,
+            })
+        }
+    }
+}
+
+/// The clip source for a finished take: its in-memory salvage when the
+/// file's header could not be repaired (FU-F2b), otherwise the mapped
+/// file.
+fn take_clip_source(path: &Path, salvaged: &mut Option<Vec<f32>>) -> Result<ClipSource, String> {
+    match salvaged.take() {
+        Some(samples) => Ok(ClipSource::Memory(samples)),
+        None => ClipSource::open_wav(path),
+    }
 }
 
 /// Write stereo-interleaved samples to the track's WAV writer and

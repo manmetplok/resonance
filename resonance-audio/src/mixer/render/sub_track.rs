@@ -12,7 +12,7 @@ use crate::mixer::automation_apply::{auto_gain_ramp, auto_muted, auto_volume_ram
 use crate::mixer::common::ramped_stereo_peaks;
 use crate::types::*;
 
-use super::context::{run_fx_chain, BlockCtx, BlockScratch};
+use super::context::{key_consumed, run_fx_chain, BlockCtx, BlockScratch};
 use super::routing::route_post_fader;
 use super::strategy::{RenderStrategy, TrackDisposition};
 
@@ -112,7 +112,7 @@ fn render_sub_track_tap(
         parent_volume,
     ) {
         Some(gains) => (gains, false),
-        None if strategy.renders(sub_track.id) && scratch.sidechain.is_tapped(sub_tap) => {
+        None if strategy.renders(sub_track.id) && key_consumed(ctx, scratch.sidechain, sub_tap) => {
             (((0.0, 0.0), (0.0, 0.0)), true)
         }
         None => return,

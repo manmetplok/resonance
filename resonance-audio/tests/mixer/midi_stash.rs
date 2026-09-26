@@ -12,6 +12,8 @@ enum Call {
     On(u8, f32, u32),
     Off(u8, u32),
     AllOff,
+    /// A seam panic that keeps the instrument's carried events.
+    AllOffKeepCarried,
 }
 
 #[derive(Default)]
@@ -29,6 +31,39 @@ impl NoteSink for Recorder {
     fn all_notes_off(&mut self) {
         self.calls.push(Call::AllOff);
     }
+    fn all_notes_off_keep_carried(&mut self) {
+        self.calls.push(Call::AllOffKeepCarried);
+    }
+}
+
+/// A parked loop-seam panic keeps the note events the instrument carried
+/// past the seam — they are the loop's first notes, timed after the panic
+/// (FU-A4a). A parked Stop / relocate panic drops them (FU-F2a), and wins
+/// when both were parked.
+#[test]
+fn a_parked_seam_panic_keeps_carried_events_other_panics_drop_them() {
+    let mut stash = MidiStash::new();
+    stash.request_seam_panic(7);
+    let mut sink = Recorder::default();
+    stash.deliver(7, &mut sink);
+    assert_eq!(sink.calls, vec![Call::AllOffKeepCarried]);
+
+    stash.request_panic(7);
+    let mut sink = Recorder::default();
+    stash.deliver(7, &mut sink);
+    assert_eq!(sink.calls, vec![Call::AllOff]);
+
+    stash.request_panic(7);
+    stash.request_seam_panic(7);
+    let mut sink = Recorder::default();
+    stash.deliver(7, &mut sink);
+    assert_eq!(sink.calls, vec![Call::AllOff]);
+
+    // A delivered slot starts clean again.
+    stash.request_seam_panic(7);
+    let mut sink = Recorder::default();
+    stash.deliver(7, &mut sink);
+    assert_eq!(sink.calls, vec![Call::AllOffKeepCarried]);
 }
 
 fn on(note: u8, sample_offset: u32) -> PendingNoteEvent {

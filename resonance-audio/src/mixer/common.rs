@@ -84,6 +84,11 @@ pub(crate) struct TransportContinuity {
     /// A block skipped since the last render dropped a NoteOff (or a
     /// seam panic) the instruments never saw (FU-M3b).
     lost_events: bool,
+    /// The timeline span `[start, end)` skipped while the MIDI clips map
+    /// itself was contended, so its NoteOffs could not be checked then.
+    /// The next rendered block checks it against the clips it does hold
+    /// and flushes only if a NoteOff fell inside (FU-A4a).
+    unchecked: Option<(u64, u64)>,
 }
 
 impl TransportContinuity {
@@ -104,6 +109,7 @@ impl TransportContinuity {
         self.expected = Some(next);
         self.repositioned = !committed;
         self.lost_events = false;
+        self.unchecked = None;
     }
 
     /// A lock-contended playing block advanced `from` → `to` silently
@@ -113,11 +119,32 @@ impl TransportContinuity {
     /// Otherwise `expected` stays behind and the next block reads as a
     /// jump, as before. Every contended block used to flush, cutting
     /// sustained notes during heavy UI edits.
-    pub(crate) fn skipped(&mut self, from: u64, to: u64, committed: bool, lost: bool) {
+    ///
+    /// `unchecked`: the MIDI clips were the contended map, so whether a
+    /// NoteOff fell in `from..to` is not known yet — the span is kept for
+    /// the next rendered block to check ([`Self::take_unchecked`]).
+    pub(crate) fn skipped(
+        &mut self,
+        from: u64,
+        to: u64,
+        committed: bool,
+        lost: bool,
+        unchecked: bool,
+    ) {
         if committed && self.expected == Some(from) {
             self.expected = Some(to);
             self.lost_events |= lost;
+            if unchecked {
+                let start = self.unchecked.map_or(from, |(start, _)| start);
+                self.unchecked = Some((start, to));
+            }
         }
+    }
+
+    /// The skipped span whose NoteOffs are still to be checked, if any
+    /// (see [`Self::skipped`]); cleared by the call.
+    pub(crate) fn take_unchecked(&mut self) -> Option<(u64, u64)> {
+        self.unchecked.take()
     }
 
     /// Whether the transport was rolling when it stopped — the stopped
@@ -284,8 +311,9 @@ pub(super) fn ramped_stereo_peaks(
 ///
 /// `at_seam` keeps the note events an instrument carried past the head
 /// sub-block — they belong to the tail, after the seam. Every other
-/// panic (Stop, relocate) drops them too (FU-F2a); a parked panic always
-/// does (see `MidiStash::deliver`).
+/// panic (Stop, relocate) drops them too (FU-F2a) — also when it has to
+/// be parked; a parked seam panic keeps them (FU-A4a, see
+/// `MidiStash::request_seam_panic`).
 pub(super) fn panic_instrument_tracks(
     tracks_guard: &IndexMap<TrackId, Track>,
     plugins_guard: &PluginMap,
@@ -310,6 +338,8 @@ pub(super) fn panic_instrument_tracks(
             }
             // Stashed pre-seam events are superseded by the panic.
             midi_stash.discard(inst_id);
+        } else if at_seam {
+            midi_stash.request_seam_panic(inst_id);
         } else {
             midi_stash.request_panic(inst_id);
         }

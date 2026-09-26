@@ -221,6 +221,31 @@ fn tempo_and_meter_changes_resolve_to_bars() {
     assert!((smf.tempo_points[0].bpm - 120.0).abs() < 0.01);
     assert_eq!(smf.tempo_points[1].bar, 4);
     assert!((smf.tempo_points[1].bpm - 140.0).abs() < 0.01);
+    assert_eq!(smf.tempo_points_clamped, 0);
+}
+
+/// A file tempo beyond the supported range is clamped at import, and
+/// counted, rather than silently at the next bar-table rebuild (FU-D4).
+/// The raw events keep the file's own value.
+#[test]
+fn out_of_range_file_tempos_are_clamped_and_counted() {
+    use resonance_audio::types::{MAX_BPM, MIN_BPM};
+    let bytes = encode(
+        Format::Parallel,
+        480,
+        vec![vec![
+            (0, tempo(400)),
+            (7680, tempo(120)),
+            (7680, tempo(10)),
+        ]],
+    );
+    let smf = parse_smf_bytes(&bytes).unwrap();
+    assert_eq!(smf.tempo_points_clamped, 2);
+    assert_eq!(smf.tempo_points[0].bpm, MAX_BPM);
+    assert!((smf.tempo_points[1].bpm - 120.0).abs() < 0.01);
+    assert_eq!(smf.tempo_points[2].bpm, MIN_BPM);
+    assert!((smf.tempo_events[0].bpm - 400.0).abs() < 0.01);
+    assert!((smf.tempo_max_bpm - 400.0).abs() < 0.01);
 }
 
 #[test]

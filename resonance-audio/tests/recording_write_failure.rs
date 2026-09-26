@@ -199,3 +199,54 @@ fn write_failure_in_a_cycle_record_pass_keeps_that_take_and_the_next() {
     assert_eq!(clips.read().len(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// When even the in-place header repair fails (on a copy-on-write
+/// filesystem that is full, overwriting a header block needs free space
+/// too), the take must still survive: its frames are read back into
+/// memory, it becomes a clip, and the error says the header was not
+/// repaired (FU-F2b). The repair failure is made real by taking write
+/// permission away from the file: the recorder's own descriptor keeps
+/// writing, but the repair's fresh read-write open is refused.
+#[test]
+fn failed_header_repair_keeps_the_take_in_memory_and_says_so() {
+    use std::os::unix::fs::PermissionsExt;
+    let _g = FSIZE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = make_tempdir("header");
+    let (tx, rx) = unbounded();
+    let (mut rec, mut prod) = session(&dir, 1);
+    let wav = dir.join("audio").join("clip_1.wav");
+    std::fs::set_permissions(&wav, std::fs::Permissions::from_mode(0o444)).unwrap();
+    if std::fs::OpenOptions::new().write(true).open(&wav).is_ok() {
+        // Running as root: permissions do not bind, nothing to test.
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    with_file_cap(|| feed(&mut rec, &mut prod, 0, SR as usize));
+
+    rec.poll_write_errors(&tx);
+    let reported = errors(&rx);
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert!(
+        reported[0].contains("header could not be repaired"),
+        "{}",
+        reported[0]
+    );
+
+    let clips = parking_lot::RwLock::new(Vec::new());
+    let emitted = rec.finalize_recording(SR, &clips, &tx);
+    assert_eq!(emitted, 1, "the take must survive a failed header repair");
+    let clips = clips.read();
+    assert!(clips[0].source.mapped_path().is_none(), "held in memory");
+    let got = frames_of(&clips[0]);
+    assert!(
+        (9_000..=10_100).contains(&got.len()),
+        "clip should hold the ~10 000 frames that reached the disk, got {}",
+        got.len()
+    );
+    for (i, &(l, r)) in got.iter().enumerate() {
+        assert_eq!((l, r), (sample(i), -sample(i)), "frame {i} corrupted");
+    }
+    assert!(wav.exists(), "the raw file is never deleted");
+    let _ = std::fs::remove_dir_all(&dir);
+}

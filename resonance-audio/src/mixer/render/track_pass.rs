@@ -16,7 +16,7 @@ use crate::types::*;
 use crate::mixer::take_comp::mix_track_comp;
 
 use super::clips::{mix_track_clips_governed, recorded_monitor_gate};
-use super::context::{run_fx_chain, BlockCtx, BlockScratch};
+use super::context::{key_consumed, run_fx_chain, BlockCtx, BlockScratch};
 use super::frozen::fill_from_frozen_source;
 use super::ports::process_multi_port;
 use super::routing::{apply_track_aux_sends, route_post_fader};
@@ -186,16 +186,17 @@ fn render_one_track(
 }
 
 /// Whether a sidechain key is tapped from `track` or from one of its
-/// sub-tracks — the taps a silenced track must still render for. Only
+/// sub-tracks by a consumer that reads it ([`key_consumed`]) — the taps
+/// a silenced track must still render for. Only
 /// consulted for silenced tracks, so the sub-track scan costs nothing on
 /// the audible path.
 fn keys_from(track: &Track, ctx: &BlockCtx<'_>, sidechain: &SidechainTaps) -> bool {
-    if sidechain.is_tapped(SendSource::Track(track.id)) {
+    if key_consumed(ctx, sidechain, SendSource::Track(track.id)) {
         return true;
     }
     ctx.inputs.tracks.values().any(|t| {
         matches!(t.sub_track_of, Some((parent, _)) if parent == track.id)
-            && sidechain.is_tapped(SendSource::Track(t.id))
+            && key_consumed(ctx, sidechain, SendSource::Track(t.id))
     })
 }
 

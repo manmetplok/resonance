@@ -80,11 +80,13 @@ pub(super) fn render_playing_block(
             let new_playhead = advance_playhead_silent(shared, playhead, frames as u64);
             let committed = commit_playhead(shared, playhead, new_playhead);
             // Flush on the next block only if this one dropped something
-            // a held voice needed (FU-M3b): a seam's panic (it wrapped),
-            // a timeline NoteOff, or anything, when the MIDI clips
-            // themselves were the contended map.
-            let lost = new_playhead != playhead + frames as u64
-                || midi_clips_guard.as_deref().is_none_or(|clips| {
+            // a held voice needed (FU-M3b): a seam's panic (it wrapped) or
+            // a timeline NoteOff. When the MIDI clips themselves were the
+            // contended map, the NoteOff check waits for the next block
+            // that holds them (FU-A4a) instead of flushing blind.
+            let wrapped = new_playhead != playhead + frames as u64;
+            let lost = wrapped
+                || midi_clips_guard.as_deref().is_some_and(|clips| {
                     any_note_off_in(
                         clips,
                         playhead,
@@ -94,9 +96,10 @@ pub(super) fn render_playing_block(
                         scratch.note_event_buf,
                     )
                 });
+            let unchecked = !wrapped && midi_clips_guard.is_none();
             scratch
                 .continuity
-                .skipped(playhead, new_playhead, committed, lost);
+                .skipped(playhead, new_playhead, committed, lost, unchecked);
             return;
         }
     };
@@ -125,7 +128,25 @@ pub(super) fn render_playing_block(
     // MIDI stash, so a contended instrument gets the panic parked rather
     // than skipped — and drop captured keys, which belong to the old
     // position.
-    if scratch.continuity.jumped(playhead) {
+    //
+    // A span skipped while the MIDI clips were contended is checked now,
+    // against the clips this block holds (FU-A4a).
+    let unchecked_lost = scratch
+        .continuity
+        .take_unchecked()
+        .is_some_and(|(start, end)| {
+            usize::try_from(end - start).map_or(true, |span| {
+                any_note_off_in(
+                    &midi_clips_guard,
+                    start,
+                    span,
+                    timing.map,
+                    inputs.sample_rate,
+                    scratch.note_event_buf,
+                )
+            })
+        });
+    if unchecked_lost || scratch.continuity.jumped(playhead) {
         panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash, false);
         scratch.sidechain.clear();
     }
