@@ -400,3 +400,96 @@ fn process_updates_viz_snapshot() {
         snap.integrated_lufs
     );
 }
+
+/// Run `input` (both channels) through the plugin in `block`-sized
+/// chunks, returning the left output.
+fn run_mono(plugin: &mut ResonanceMastering, input: &[f32], block: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(input.len());
+    for chunk in input.chunks(block) {
+        let mut l = chunk.to_vec();
+        let mut r = chunk.to_vec();
+        let mut outs = [OutputBuffer {
+            left: &mut l,
+            right: &mut r,
+        }];
+        let mut ev = EventIterator::empty();
+        plugin.process(&mut outs, chunk.len(), &mut ev, None);
+        out.extend_from_slice(&l);
+    }
+    out
+}
+
+/// DSP-05: un-bypassing the whole plugin must not replay the audio that
+/// was in flight inside the chain (two linear-phase EQs, the multiband
+/// and the limiter lookahead — ~0.4 s at 48 kHz) when bypass engaged.
+#[test]
+fn unbypass_does_not_replay_stale_pre_bypass_audio() {
+    let sr = 48_000usize;
+    let mut plugin = ResonanceMastering::new();
+    plugin.initialize(sr as f32, 512);
+    plugin.params().limiter.on.set_value(true);
+
+    let tone: Vec<f32> = (0..sr)
+        .map(|i| (std::f32::consts::TAU * 1000.0 * i as f32 / sr as f32).sin() * 0.5)
+        .collect();
+    let silence = vec![0.0_f32; sr];
+
+    let out = run_mono(&mut plugin, &tone, 512);
+    let latency = plugin.latency_samples() as usize;
+    let peak = out[latency..].iter().fold(0.0_f32, |m, x| m.max(x.abs()));
+    assert!(peak > 0.1, "tone never reached the output (peak {peak})");
+
+    plugin.params().bypass.set_value(true);
+    run_mono(&mut plugin, &silence, 512);
+
+    plugin.params().bypass.set_value(false);
+    let after = run_mono(&mut plugin, &silence, 512);
+    let mut worst = (0usize, 0.0_f32);
+    for (i, x) in after.iter().enumerate() {
+        if x.abs() > worst.1 {
+            worst = (i, x.abs());
+        }
+    }
+    assert!(
+        worst.1 < 1e-6,
+        "stale pre-bypass audio after un-bypass: {:.1} dBFS at sample {}",
+        20.0 * worst.1.log10(),
+        worst.0
+    );
+}
+
+/// Toggling bypass on a sustained tone crossfades between the processed
+/// and the latency-matched dry path: no sample-to-sample jump beyond
+/// what the tone itself produces, in either direction.
+#[test]
+fn bypass_toggles_are_click_free() {
+    let sr = 48_000usize;
+    let mut plugin = ResonanceMastering::new();
+    plugin.initialize(sr as f32, 512);
+    // A stage that changes the level, so wet and dry really differ.
+    plugin.params().input_trim_db.set_value(-12.0);
+
+    let tone: Vec<f32> = (0..sr / 2)
+        .map(|i| (std::f32::consts::TAU * 100.0 * i as f32 / sr as f32).sin() * 0.5)
+        .collect();
+    let mut out = run_mono(&mut plugin, &tone, 512);
+    plugin.params().bypass.set_value(true);
+    out.extend(run_mono(&mut plugin, &tone, 512));
+    plugin.params().bypass.set_value(false);
+    out.extend(run_mono(&mut plugin, &tone, 512));
+
+    let latency = plugin.latency_samples() as usize;
+    let steady = &out[latency + 1000..sr / 2];
+    let steady_max = steady.windows(2).fold(0.0_f32, |m, w| m.max((w[1] - w[0]).abs()));
+    assert!(steady_max > 0.0, "output is silent");
+    let whole_max = out[latency + 1000..]
+        .windows(2)
+        .fold(0.0_f32, |m, w| m.max((w[1] - w[0]).abs()));
+    // The tone at full (bypassed) level has 4x the steady slope; a hard
+    // switch would add a jump of up to ~0.375 on top; a 10 ms ramp adds
+    // well under one steady slope.
+    assert!(
+        whole_max < 5.0 * steady_max,
+        "bypass toggle clicked: max delta {whole_max} vs steady {steady_max}"
+    );
+}

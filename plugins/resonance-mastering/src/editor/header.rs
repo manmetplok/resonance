@@ -4,7 +4,7 @@
 //! Two of these are controls, not readouts:
 //!
 //! * **Bypass** engages the chain's latency-matched dry path
-//!   ([`crate::chain::Chain::process_bypassed`]), so A/B-ing the master
+//!   ([`crate::chain::Chain::process`]), so A/B-ing the master
 //!   chain stays sample-aligned. The DSP has always honoured the
 //!   `bypass` param — until now nothing in the window could set it.
 //! * **Ref line** is the `target_lufs` param, the loudness target the

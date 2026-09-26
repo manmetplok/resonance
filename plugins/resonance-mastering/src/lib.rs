@@ -116,14 +116,8 @@ impl ResonancePlugin for ResonanceMastering {
         let right = &mut main.right[..frames];
         resonance_common::flush_denormals();
 
-        if self.params.bypass.value() {
-            // Latency-matched dry path: keeps the bypassed output
-            // aligned with `latency_samples()` and the meters live.
-            if let Some(chain) = &mut self.chain {
-                chain.process_bypassed(left, right, &self.viz);
-            }
-            return;
-        }
+        // `Chain::process` honours the bypass param itself: a
+        // latency-matched dry path, crossfaded, with the stages kept warm.
         if let Some(chain) = &mut self.chain {
             chain.process(left, right, &self.params, &self.viz);
         }
