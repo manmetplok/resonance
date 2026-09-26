@@ -467,25 +467,29 @@ impl Resonance {
         let Some(cache_ref) = status.cache_ref().cloned() else {
             return (status, false);
         };
-        let decoded = match dir {
-            Some(dir) => resonance_audio::read_freeze_cache(
+        let decoded = dir.map(|dir| {
+            resonance_audio::read_freeze_cache(
                 &dir.join(&cache_ref.cache_filename),
                 cache_ref.clone(),
-            ),
-            None => Err("no project path".to_string()),
-        };
+            )
+        });
         match decoded {
-            Ok(source) => {
+            Some(Ok(source)) => {
                 let _ = self.engine.send(AudioCommand::SetTrackFrozenSource {
                     track_id,
                     source: Some(source),
                 });
                 (status, true)
             }
-            Err(e) => {
-                tracing::warn!(
-                    "Freeze cache for track {track_id} unavailable ({e}); marking stale"
-                );
+            other => {
+                match other {
+                    Some(Err(e)) => tracing::warn!(
+                        "Freeze cache for track {track_id} unavailable ({e}); marking stale"
+                    ),
+                    _ => tracing::warn!(
+                        "Freeze cache for track {track_id}: no project path; marking stale"
+                    ),
+                }
                 let mut cache_ref = cache_ref;
                 cache_ref.status = FreezeCacheStatus::Stale;
                 (FreezeStatus::Stale { cache_ref }, false)
