@@ -116,7 +116,7 @@ fn reference_panel_populated_reference_active() {
     let _ = app.update(Message::Reference(ReferenceMessage::SetAbSource(
         ABSource::Reference,
     )));
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
 
     let mut ui = simulator(&app);
     ui.find("Reference Master")

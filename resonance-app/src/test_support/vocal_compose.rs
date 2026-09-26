@@ -349,7 +349,11 @@ impl Resonance {
     /// constructing a whole `LoadedProject`.
     #[doc(hidden)]
     pub fn test_restore_references(&mut self, file: &crate::project::ProjectFile) {
-        crate::update::project_io::restore_references(self, file);
+        crate::update::project_io::restore_references(
+            self,
+            file,
+            crate::update::project_io::ReferenceMonitorSource::File,
+        );
     }
 
     /// Test-only: replay the compose tab (section definitions + placements,

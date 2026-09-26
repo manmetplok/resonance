@@ -130,7 +130,7 @@ fn active_and_source_and_settings_fold_in() {
             source: ABSource::Reference,
         },
     );
-    assert_eq!(app.test_reference().ab_source, ABSource::Reference);
+    assert_eq!(app.test_reference().monitor.ab_source, ABSource::Reference);
 
     fold(
         &mut app,
@@ -140,13 +140,13 @@ fn active_and_source_and_settings_fold_in() {
         },
     );
     assert!(app.test_reference().loudness_match);
-    assert_eq!(app.test_reference().offset_db, -2.5);
+    assert_eq!(app.test_reference().monitor.offset_db, -2.5);
 
     fold(&mut app, AudioEvent::RefTrimChanged { db: -4.0 });
     assert_eq!(app.test_reference().trim_db, -4.0);
 
     fold(&mut app, AudioEvent::RefLoopToMixChanged { enabled: true });
-    assert!(app.test_reference().loop_to_mix);
+    assert!(app.test_reference().monitor.loop_to_mix);
 }
 
 #[test]
@@ -239,6 +239,6 @@ fn ab_meter_snapshot_is_stored() {
             reference: Some(resonance_metering::MeterSnapshot::default()),
         },
     );
-    let meters = app.test_reference().ab_meter.as_ref().unwrap();
+    let meters = app.test_reference().monitor.ab_meter.as_ref().unwrap();
     assert!(meters.reference.is_some());
 }

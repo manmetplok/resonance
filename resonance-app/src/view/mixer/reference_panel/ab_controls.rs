@@ -23,7 +23,7 @@ pub(super) fn ab_controls<'a>(
 ) -> Element<'a, Message> {
     container(
         column![
-            ab_switch(state.ab_source),
+            ab_switch(state.monitor.ab_source),
             Space::new().height(14),
             waveform::waveform(entry),
             Space::new().height(10),
@@ -137,7 +137,7 @@ fn marker_row<'a>(state: &'a ReferenceState, entry: &'a ReferenceEntry) -> Eleme
         .padding([6, 10])
         .on_press(Message::Reference(ReferenceMessage::ToggleLoopToMix))
         .style(move |_theme, status| {
-            theme::toggle_button_style(state.loop_to_mix, theme::ACCENT, true, status)
+            theme::toggle_button_style(state.monitor.loop_to_mix, theme::ACCENT, true, status)
         });
 
     let mut chips = row![].spacing(6).align_y(alignment::Vertical::Center);
@@ -189,7 +189,7 @@ fn marker_chip(ref_id: ReferenceId, mk: &ReferenceMarkerState) -> Element<'stati
 /// alongside once matching is engaged.
 fn loudness_row(state: &ReferenceState) -> Element<'static, Message> {
     let matched = state.loudness_match;
-    let offset_db = state.offset_db;
+    let offset_db = state.monitor.offset_db;
 
     let toggle = button(
         text("Match loudness")

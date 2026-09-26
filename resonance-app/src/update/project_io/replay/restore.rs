@@ -344,11 +344,23 @@ pub(crate) fn restore_pool(
     }
 }
 
-/// Restore the reference A/B block from a saved project. Wipes any prior
-/// project's references, then for each saved entry re-issues
-/// `LoadReferenceTrack` (so the PCM / waveform are rebuilt) and re-seeds
-/// the GUI mirror with the durable facts — name, path, cached loudness and
-/// the user's markers — that the re-decode does not itself carry back.
+/// Where [`restore_references`] takes the A/B *monitor* state from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReferenceMonitorSource {
+    /// A disk load: the monitor the project was saved with.
+    File,
+    /// An undo/redo: the live monitor, untouched (the snapshot carries it
+    /// cleared — monitor state is not undo state, ARCH-01 A-5).
+    Live,
+}
+
+/// Restore the reference A/B block after a `ClearAll` — a disk load or
+/// the full-replay undo path. Wipes the previous references, then for each
+/// saved entry re-issues `LoadReferenceTrack` (so the PCM / waveform are
+/// rebuilt) and re-seeds the GUI mirror with the durable facts — name,
+/// path, cached loudness and the user's markers — that the re-decode does
+/// not itself carry back. The content (entries, selection, loudness match,
+/// trim) comes from `project`; the monitor state from `monitor`.
 ///
 /// A reference whose file has gone missing is kept as a `Missing` entry
 /// (name + path preserved) and is *not* sent to the engine, so the panel
@@ -360,101 +372,206 @@ pub(crate) fn restore_pool(
 /// `LoadReferenceTrack`. Missing entries — which the engine never hears
 /// about — take ids from a high, disjoint base so a later in-session load
 /// can never collide with one.
-pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
-    use crate::reference::{ReferenceEntry, ReferenceMarkerState, ReferenceStatus};
-
+///
+/// Everything the engine's `ReferencePlayer` holds is re-sent, monitor
+/// state included: `ClearAll` reset it to its defaults.
+pub(crate) fn restore_references(
+    r: &mut Resonance,
+    project: &ProjectFile,
+    monitor: ReferenceMonitorSource,
+) {
     // Drop the previous project's references (entries + settings + any
-    // in-flight load bookkeeping). Nothing here talks to the engine — the
-    // engine's own reference state was already emptied by `ClearAll`.
+    // in-flight load bookkeeping), keeping only the live monitor state an
+    // undo leaves alone. The engine's own reference state was already
+    // emptied by `ClearAll`, allocator included.
+    let live_monitor = std::mem::take(&mut r.reference.monitor);
     r.reference = crate::reference::ReferenceState::default();
+    r.reference.next_engine_id = 1;
 
-    let settings = &project.reference_settings;
-
-    let mut next_present_id: u32 = 1;
     let mut next_missing_id: u32 = crate::state::ids::MISSING_REFERENCE_ID_BASE;
     for pr in &project.references {
-        let exists = std::path::Path::new(&pr.path).exists();
-        let markers: Vec<ReferenceMarkerState> = pr
-            .markers
-            .iter()
-            .map(|m| ReferenceMarkerState {
-                id: m.id,
-                position_samples: m.position_samples,
-                label: m.label.clone(),
-            })
-            .collect();
-
-        let (id, status) = if exists {
-            let id = ReferenceId(next_present_id);
-            next_present_id += 1;
-            // Re-decode: the engine registers the entry under this id
-            // synchronously and streams analysis + `ReferenceLoaded` back,
-            // which the folding layer reconciles onto the entry we seed
-            // below (preserving its markers).
-            let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
-                id_hint: Some(id),
-                path: std::path::PathBuf::from(&pr.path),
-            });
-            (id, ReferenceStatus::Analyzing(ReferenceAnalysisStage::Decoding))
-        } else {
-            let id = ReferenceId(next_missing_id);
-            next_missing_id += 1;
-            r.reference.last_error =
-                Some(format!("Reference file not found: {}", pr.path));
-            (id, ReferenceStatus::Missing)
-        };
-
-        r.reference.entries.push(ReferenceEntry {
-            id,
-            name: pr.name.clone(),
-            path: pr.path.clone(),
-            status,
-            integrated_lufs: pr.integrated_lufs,
-            waveform_peaks: Vec::new(),
-            markers,
-            position_samples: 0,
-            // Filled in by the re-decode's `ReferenceLoaded` echo; a
-            // missing file simply never reports one.
-            length_samples: 0,
-        });
+        let entry = seed_reference_entry(r, pr, &mut next_missing_id);
+        r.reference.entries.push(entry);
     }
 
-    // Restore the panel settings. The active selection was saved as an
-    // index into the (ordered) reference list; map it back to the entry's
-    // freshly-allocated id and only engage it on the engine when that
-    // reference actually loaded (a Missing one was never registered).
-    let active = settings
-        .active
-        .and_then(|idx| r.reference.entries.get(idx))
-        .map(|e| (e.id, e.status != ReferenceStatus::Missing));
-    r.reference.active_id = active.map(|(id, _)| id);
-    if let Some((id, present)) = active {
-        if present {
-            let _ = r.engine.send(AudioCommand::SetActiveReference { id });
-        }
-    }
-
-    r.reference.ab_source = if settings.ab_source_is_reference {
-        ABSource::Reference
-    } else {
-        ABSource::Mix
-    };
+    let settings = &project.reference_settings;
+    restore_reference_selection(r, settings.active, None);
     r.reference.loudness_match = settings.loudness_match;
     r.reference.trim_db = settings.trim_db;
-    r.reference.loop_to_mix = settings.loop_to_mix;
-
-    let _ = r.engine.send(AudioCommand::SetABSource {
-        source: r.reference.ab_source,
-    });
     let _ = r.engine.send(AudioCommand::SetRefLoudnessMatch {
         enabled: settings.loudness_match,
     });
     let _ = r.engine.send(AudioCommand::SetRefTrim {
         db: settings.trim_db,
     });
-    let _ = r.engine.send(AudioCommand::SetRefLoopToMix {
-        enabled: settings.loop_to_mix,
+
+    r.reference.monitor = match monitor {
+        ReferenceMonitorSource::Live => live_monitor,
+        ReferenceMonitorSource::File => crate::reference::ReferenceMonitorState {
+            ab_source: if settings.ab_source_is_reference {
+                ABSource::Reference
+            } else {
+                ABSource::Mix
+            },
+            loop_to_mix: settings.loop_to_mix,
+            ..Default::default()
+        },
+    };
+    let _ = r.engine.send(AudioCommand::SetABSource {
+        source: r.reference.monitor.ab_source,
     });
+    let _ = r.engine.send(AudioCommand::SetRefLoopToMix {
+        enabled: r.reference.monitor.loop_to_mix,
+    });
+}
+
+/// Reconcile the reference A/B *content* to `project` without a
+/// `ClearAll` — the diff-replay undo path, where the engine still holds
+/// every live reference. The monitor state is not touched (ARCH-01 A-5).
+///
+/// Live entries are matched to the saved ones by path, in order. A match
+/// keeps its engine id, decoded audio and analysis, and takes the saved
+/// name and markers (and the saved loudness while its own analysis is
+/// unfinished). A saved entry with no live match is loaded again, under an
+/// id from the app's copy of the engine's allocator; a live entry with no
+/// saved match is removed from the engine. The selection, loudness match
+/// and trim are re-sent only when they changed.
+pub(crate) fn reconcile_references(r: &mut Resonance, project: &ProjectFile) {
+    use crate::reference::ReferenceStatus;
+
+    let mut live = std::mem::take(&mut r.reference.entries);
+    let mut next_missing_id = live
+        .iter()
+        .map(|e| e.id.0)
+        .filter(|&id| id >= crate::state::ids::MISSING_REFERENCE_ID_BASE)
+        .max()
+        .map_or(crate::state::ids::MISSING_REFERENCE_ID_BASE, |id| id + 1);
+    let mut entries = Vec::with_capacity(project.references.len());
+    for pr in &project.references {
+        let entry = match live.iter().position(|e| e.path == pr.path) {
+            Some(i) => {
+                let mut e = live.remove(i);
+                e.name = pr.name.clone();
+                e.markers = reference_markers(pr);
+                if e.status != ReferenceStatus::Loaded {
+                    e.integrated_lufs = pr.integrated_lufs;
+                }
+                e
+            }
+            None => seed_reference_entry(r, pr, &mut next_missing_id),
+        };
+        entries.push(entry);
+    }
+    for gone in live {
+        if gone.status != ReferenceStatus::Missing {
+            let _ = r
+                .engine
+                .send(AudioCommand::RemoveReferenceTrack { id: gone.id });
+        }
+    }
+    r.reference.entries = entries;
+
+    let settings = &project.reference_settings;
+    let engine_active = r.reference.active_id;
+    restore_reference_selection(r, settings.active, engine_active);
+    if r.reference.loudness_match != settings.loudness_match {
+        r.reference.loudness_match = settings.loudness_match;
+        let _ = r.engine.send(AudioCommand::SetRefLoudnessMatch {
+            enabled: settings.loudness_match,
+        });
+    }
+    if r.reference.trim_db != settings.trim_db {
+        r.reference.trim_db = settings.trim_db;
+        let _ = r.engine.send(AudioCommand::SetRefTrim {
+            db: settings.trim_db,
+        });
+    }
+}
+
+/// The GUI entry for a saved reference that is not live: re-registered
+/// with the engine under a hinted id when its file exists, else a
+/// `Missing` entry the engine never hears about.
+fn seed_reference_entry(
+    r: &mut Resonance,
+    pr: &crate::project::ProjectReference,
+    next_missing_id: &mut u32,
+) -> crate::reference::ReferenceEntry {
+    use crate::reference::{ReferenceEntry, ReferenceStatus};
+
+    let (id, status) = if std::path::Path::new(&pr.path).exists() {
+        let id = r.reference.alloc_engine_id();
+        // Re-decode: the engine registers the entry under this id
+        // synchronously and streams analysis + `ReferenceLoaded` back,
+        // which the folding layer reconciles onto the entry seeded here
+        // (preserving its markers).
+        let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
+            id_hint: Some(id),
+            path: std::path::PathBuf::from(&pr.path),
+        });
+        (id, ReferenceStatus::Analyzing(ReferenceAnalysisStage::Decoding))
+    } else {
+        let id = ReferenceId(*next_missing_id);
+        *next_missing_id += 1;
+        r.reference.last_error = Some(format!("Reference file not found: {}", pr.path));
+        (id, ReferenceStatus::Missing)
+    };
+    ReferenceEntry {
+        id,
+        name: pr.name.clone(),
+        path: pr.path.clone(),
+        status,
+        integrated_lufs: pr.integrated_lufs,
+        waveform_peaks: Vec::new(),
+        markers: reference_markers(pr),
+        position_samples: 0,
+        // Filled in by the re-decode's `ReferenceLoaded` echo; a missing
+        // file simply never reports one.
+        length_samples: 0,
+    }
+}
+
+fn reference_markers(
+    pr: &crate::project::ProjectReference,
+) -> Vec<crate::reference::ReferenceMarkerState> {
+    pr.markers
+        .iter()
+        .map(|m| crate::reference::ReferenceMarkerState {
+            id: m.id,
+            position_samples: m.position_samples,
+            label: m.label.clone(),
+        })
+        .collect()
+}
+
+/// Select the saved active reference — an index into the (ordered)
+/// entries, mapped back to that entry's id — and bring the engine's
+/// selection along. `engine_active` is what the engine has selected now
+/// (`None` after a `ClearAll`). Only a reference that actually loaded is
+/// engaged on the engine (a Missing one was never registered); anything
+/// else leaves the engine with nothing selected.
+fn restore_reference_selection(
+    r: &mut Resonance,
+    active: Option<usize>,
+    engine_active: Option<ReferenceId>,
+) {
+    use crate::reference::ReferenceStatus;
+
+    let target = active
+        .and_then(|idx| r.reference.entries.get(idx))
+        .map(|e| (e.id, e.status != ReferenceStatus::Missing));
+    r.reference.active_id = target.map(|(id, _)| id);
+    let engine_target = target.and_then(|(id, present)| present.then_some(id));
+    if engine_target == engine_active {
+        return;
+    }
+    match engine_target {
+        Some(id) => {
+            let _ = r.engine.send(AudioCommand::SetActiveReference { id });
+        }
+        None => {
+            let _ = r.engine.send(AudioCommand::ClearActiveReference);
+        }
+    }
 }
 
 /// Restore the drum pattern bank from a saved project file (or undo

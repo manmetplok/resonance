@@ -221,6 +221,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::ReferenceAnalyzed { .. }
         | AudioCommand::RemoveReferenceTrack { .. }
         | AudioCommand::SetActiveReference { .. }
+        | AudioCommand::ClearActiveReference
         | AudioCommand::SetABSource { .. }
         | AudioCommand::SetRefLoudnessMatch { .. }
         | AudioCommand::SetRefTrim { .. }

@@ -29,7 +29,7 @@ pub use entity::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use restore::{
     replay_take_groups, restore_drum_patterns, restore_performance, restore_pool, restore_quantize,
     restore_track_groups,
-    restore_references, restore_tempo_events,
+    reconcile_references, restore_references, restore_tempo_events, ReferenceMonitorSource,
 };
 
 /// Snapshot of the saved plugin-chain ordering for every track, bus, and the
@@ -114,8 +114,14 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Re-impose the saved plugin-slot order and refresh the side-index.
     finalize_plugin_chains(r, &saved_plugin_order);
 
-    // Restore independent sub-states.
-    restore_references(r, project);
+    // Restore independent sub-states. An undo/redo keeps the live A/B
+    // monitor; a disk load takes the one the project was saved with.
+    let reference_monitor = if r.io.pending_undo_extras.is_some() {
+        ReferenceMonitorSource::Live
+    } else {
+        ReferenceMonitorSource::File
+    };
+    restore_references(r, project, reference_monitor);
     restore_pool(r, project, &loaded.project_dir);
     restore_quantize(r, project);
     restore_performance(r, project);

@@ -30,20 +30,16 @@ use resonance_audio::types::TrackId;
 /// once both paths restore it from the file, guarded by
 /// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain, the drum
 /// arrangements, the chord track, the external-instrument config, the
-/// vocal lyrics, the automation lanes and the track freeze status already
-/// went — `ProjectClip`, `ProjectSectionDefinition::arrangement`,
-/// `ProjectFile::chord_track`, `ProjectTrack::external_instrument`,
-/// `ProjectMidiClip::vocal_lyrics`, `ProjectFile::automation_lanes` and
-/// `ProjectTrack::freeze` carry them.
+/// vocal lyrics, the automation lanes, the track freeze status and the
+/// reference A/B content already went — `ProjectClip`,
+/// `ProjectSectionDefinition::arrangement`, `ProjectFile::chord_track`,
+/// `ProjectTrack::external_instrument`, `ProjectMidiClip::vocal_lyrics`,
+/// `ProjectFile::automation_lanes`, `ProjectTrack::freeze` and
+/// `ProjectFile::references` / `reference_settings` carry them.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
     pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
     pub compose_next_derived_clip_id: u64,
-    /// Reference-track (A/B) content. The durable facts are also in
-    /// `ProjectFile::references` / `reference_settings`, but the live
-    /// entries (engine ids, analysis status) are reapplied from here after
-    /// the replay on both paths, without yanking the monitor around.
-    pub reference: crate::reference::ReferenceUndo,
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -88,11 +84,6 @@ impl UndoSnapshot {
 fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
     a.compose_derived_clips == b.compose_derived_clips
         && a.compose_next_derived_clip_id == b.compose_next_derived_clip_id
-        && a.reference.entries == b.reference.entries
-        && a.reference.active_id == b.reference.active_id
-        && a.reference.loudness_match == b.reference.loudness_match
-        && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
-        && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
 }
 
 /// Identifies a continuous-edit source so that a stream of messages
@@ -147,7 +138,7 @@ impl crate::Resonance {
         if !self.clips.is_empty() && self.can_record_undo() {
             let _ = self.engine.send(AudioCommand::PersistClipWavs);
         }
-        let file = crate::update::build_project_file(self);
+        let file = self.undo_project_file();
         let midi_notes: HashMap<ClipId, Vec<MidiNote>> = self
             .midi_clips
             .iter()
@@ -209,8 +200,17 @@ impl crate::Resonance {
         if !notes_equal || !extras_equal(&before.extras, &self.undo_extras()) {
             return true;
         }
-        let file = crate::update::build_project_file(self);
-        before.project.file != file
+        before.project.file != self.undo_project_file()
+    }
+
+    /// The `ProjectFile` an undo snapshot carries: `build_project_file`
+    /// minus the reference A/B monitor state, which is saved with the
+    /// project but is not undo state — an undo leaves it alone, and
+    /// flipping the A/B switch is not an edit (ARCH-01 A-5).
+    fn undo_project_file(&self) -> crate::project::ProjectFile {
+        let mut file = crate::update::build_project_file(self);
+        file.reference_settings.clear_monitor_state();
+        file
     }
 
     /// The runtime-only state an undo snapshot carries beside its
@@ -219,7 +219,6 @@ impl crate::Resonance {
         UndoExtras {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
-            reference: self.reference.undo_snapshot(),
         }
     }
 
@@ -318,8 +317,9 @@ impl crate::Resonance {
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
     /// Clip fade/gain, the drum arrangements, the chord track, the
     /// external-instrument config, the vocal lyrics, the automation
-    /// lanes and the track freeze status need nothing here: the replay
-    /// restores them from the snapshot's `ProjectFile`.
+    /// lanes, the track freeze status and the reference A/B content need
+    /// nothing here: the replay restores them from the snapshot's
+    /// `ProjectFile`.
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         // `ClearAll` wiped any clip whose echo was still pending at
         // snapshot time; nothing will re-create it.
@@ -328,7 +328,6 @@ impl crate::Resonance {
             extras.compose_next_derived_clip_id,
             false,
         );
-        self.reference.restore_undo(extras.reference);
         // Take lanes are *not* reconciled here. `replay_loaded_project`
         // runs immediately before this and ends in `replay_take_groups`,
         // which sends `RestoreTakeGroups` — see the note on the fast path

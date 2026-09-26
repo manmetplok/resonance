@@ -320,7 +320,10 @@ pub struct ProjectReference {
     pub name: String,
     /// Cached integrated loudness (LUFS) measured during analysis, so the
     /// readout shows a value before the re-decode completes. May be
-    /// `-inf` if the original analysis never finished.
+    /// `-inf` if the original analysis never finished — which JSON
+    /// writes as `null`, so `null` reads back as `-inf` (before A-5 such
+    /// a project failed to load at all).
+    #[serde(deserialize_with = "lufs_or_neg_inf")]
     pub integrated_lufs: f32,
     /// User-placed comparison markers, in the order they were saved.
     #[serde(default)]
@@ -342,6 +345,12 @@ pub struct ProjectReferenceMarker {
 /// `reference::ReferenceState`, addressing the active reference by its
 /// index into [`ProjectFile::references`] rather than by engine id (ids
 /// are reallocated on load).
+///
+/// `active`, `loudness_match` and `trim_db` are reference *content*: a
+/// disk load and both undo paths restore them. `ab_source_is_reference`
+/// and `loop_to_mix` are *monitor* state: a disk load restores them, an
+/// undo does not, and the undo snapshot carries them cleared
+/// ([`Self::clear_monitor_state`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectReferenceSettings {
     /// Always `true`: a sentinel asserting (per design doc #198) that the
@@ -371,6 +380,27 @@ pub struct ProjectReferenceSettings {
 
 fn default_true() -> bool {
     true
+}
+
+/// A loudness written by `serde_json`, which turns a non-finite `f32`
+/// into `null`: `null` is an unmeasured (`-inf`) loudness.
+fn lufs_or_neg_inf<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f32>::deserialize(d)?.unwrap_or(f32::NEG_INFINITY))
+}
+
+impl ProjectReferenceSettings {
+    /// Reset the monitor half — `ab_source_is_reference`, `loop_to_mix` —
+    /// to its defaults, leaving the content (`active`, `loudness_match`,
+    /// `trim_db`). The undo snapshot's form: monitor state is saved with
+    /// the project but is not undo state, so an undo neither restores it
+    /// nor counts a change to it as an edit (ARCH-01 A-5).
+    pub fn clear_monitor_state(&mut self) {
+        self.ab_source_is_reference = false;
+        self.loop_to_mix = false;
+    }
 }
 
 impl Default for ProjectReferenceSettings {

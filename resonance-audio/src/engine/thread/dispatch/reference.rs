@@ -41,6 +41,11 @@ pub(super) fn dispatch_reference(
             // New active reference: swap PCM + restart from its cursor.
             state.reference.publish(ctx.shared, true);
         }
+        AudioCommand::ClearActiveReference => {
+            reference::handle_clear_active_reference(&mut state.reference);
+            // Nothing active: drop the monitor PCM.
+            state.reference.publish(ctx.shared, false);
+        }
         AudioCommand::SetABSource { source } => {
             reference::handle_set_ab_source(&mut state.reference, ctx.event_tx, source);
             state.reference.publish(ctx.shared, false);

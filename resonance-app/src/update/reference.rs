@@ -79,6 +79,7 @@ fn load_requested(r: &mut Resonance, path: PathBuf) {
     r.reference
         .pending_loads
         .push_back(path.to_string_lossy().into_owned());
+    r.reference.saw_unhinted_load();
     let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
         id_hint: None,
         path,
@@ -110,12 +111,12 @@ fn set_active(r: &mut Resonance, id: ReferenceId) {
 }
 
 fn set_ab_source(r: &mut Resonance, source: ABSource) {
-    r.reference.ab_source = source;
+    r.reference.monitor.ab_source = source;
     let _ = r.engine.send(AudioCommand::SetABSource { source });
 }
 
 fn toggle_ab_source(r: &mut Resonance) {
-    let next = match r.reference.ab_source {
+    let next = match r.reference.monitor.ab_source {
         ABSource::Mix => ABSource::Reference,
         ABSource::Reference => ABSource::Mix,
     };
@@ -126,11 +127,11 @@ fn momentary_audition(r: &mut Resonance, pressed: bool) {
     if pressed {
         // Remember the source to return to, then audition the reference.
         // Guard against a double-press leaking the restore target.
-        if r.reference.momentary_restore.is_none() {
-            r.reference.momentary_restore = Some(r.reference.ab_source);
+        if r.reference.monitor.momentary_restore.is_none() {
+            r.reference.monitor.momentary_restore = Some(r.reference.monitor.ab_source);
         }
         set_ab_source(r, ABSource::Reference);
-    } else if let Some(restore) = r.reference.momentary_restore.take() {
+    } else if let Some(restore) = r.reference.monitor.momentary_restore.take() {
         // Only a release whose press was seen restores anything. The press
         // is focus-gated (typing "b" into a field never auditions) but the
         // release cannot be, and "restoring" the default would knock a
@@ -184,7 +185,7 @@ fn scrub(r: &mut Resonance, ref_id: ReferenceId, position_samples: SamplePos) {
 }
 
 fn toggle_loop_to_mix(r: &mut Resonance) {
-    let enabled = !r.reference.loop_to_mix;
-    r.reference.loop_to_mix = enabled;
+    let enabled = !r.reference.monitor.loop_to_mix;
+    r.reference.monitor.loop_to_mix = enabled;
     let _ = r.engine.send(AudioCommand::SetRefLoopToMix { enabled });
 }

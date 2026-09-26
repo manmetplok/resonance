@@ -369,10 +369,10 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             .reference
             .active_id
             .and_then(|id| r.reference.index_of(id)),
-        ab_source_is_reference: r.reference.ab_source == ABSource::Reference,
+        ab_source_is_reference: r.reference.monitor.ab_source == ABSource::Reference,
         loudness_match: r.reference.loudness_match,
         trim_db: r.reference.trim_db,
-        loop_to_mix: r.reference.loop_to_mix,
+        loop_to_mix: r.reference.monitor.loop_to_mix,
     };
 
     // Media pool (doc #175). Persist the durable facts about each

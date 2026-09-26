@@ -238,7 +238,7 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
         r.io.loading = false;
         // If this clear/replay came from an undo or redo, apply the
         // runtime-only state that replay can't recover (currently: the
-        // compose derived-clip cache + the reference entries).
+        // compose derived-clip cache).
         if let Some(extras) = r.io.pending_undo_extras.take() {
             r.finalize_undo_restore(extras);
         } else {
