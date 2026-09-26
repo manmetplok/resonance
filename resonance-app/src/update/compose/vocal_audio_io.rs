@@ -30,6 +30,14 @@ use crate::compose::ExpressionCurves;
 /// its own `audio/` — not a sibling `audio/` shared with every other
 /// project in the same parent folder, which is where renders used to
 /// land (FU-B3).
+///
+/// Takes rendered before that fix are still sitting in those sibling
+/// `audio/` folders, and they are deliberately never cleaned up
+/// (FU-C1b): the folder is shared by every project in the parent
+/// directory, so a `vocal_*.wav` there may be the audio a *different*
+/// project's older save still plays, and nothing in this project can
+/// tell which. Only the project's own `audio/` is ever reaped
+/// ([`reap_orphaned_takes`]); deleting the strays is left to the user.
 pub fn vocal_audio_dir(project_path: Option<&Path>) -> PathBuf {
     project_path
         .map(|p| p.join("audio"))
