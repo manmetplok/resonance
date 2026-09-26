@@ -42,6 +42,7 @@ master and updates this table. Agents do **not** edit this file.
 | M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | merged | 213505c2 |
 | H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | merged | d1cdaa66 |
 | H5 plan ARCH-04/05/06/07/09 | planning (read-only) | fable | in progress | |
+| V4 import dialog + app follow-ups | VIEW-25/FU-V2a, FU-M11a, FU-M4b, FU-C2, FU-C3, FU-V2b, FU-V3a, FU-V3b | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | in progress | |
