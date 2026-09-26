@@ -134,6 +134,9 @@ pub(crate) struct HandlerState {
     /// never lands in the project that replaced its own (code review
     /// UPD-09). Shared with the import workers.
     pub clear_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The `SetProjectDir` clip-id reservation scan still running on its
+    /// worker (FU-M12b); see `clips::settle_clip_id_scan`.
+    pub clip_id_scan: Option<std::thread::JoinHandle<Option<ClipId>>>,
     /// Current project directory. Set via `AudioCommand::SetProjectDir`
     /// whenever the app opens, creates, or saves-as a project.
     /// Recording and import refuse to run when this is `None`.
@@ -291,6 +294,7 @@ impl HandlerState {
             bundles: Vec::new(),
             imports: ImportQueue::default(),
             clear_generation: Default::default(),
+            clip_id_scan: None,
             project_dir: None,
             midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
             midi_recording: HashMap::new(),
@@ -611,6 +615,8 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
                 "audio: cpal requested buf={requested} frames but scratch is {scratch} — clamping; audio will run slow"
             );
         }
+
+        super::clips::settle_clip_id_scan(&mut state, false);
 
         // The cpal streams' error callbacks only count (FU-H6b).
         for (label, latch, limiter) in [

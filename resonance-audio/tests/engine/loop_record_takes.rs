@@ -2452,3 +2452,22 @@ fn an_import_finishing_after_clear_all_is_dropped() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The `SetProjectDir` handler runs that folder scan on a worker (code
+/// review FU-M12b), yet the first clip id allocated after it — here by
+/// an import — still waits for the reservation.
+#[test]
+fn the_project_dir_scan_runs_off_thread_but_lands_before_the_next_id() {
+    let dir = std::env::temp_dir().join(format!("resonance_fu_m12b_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("audio")).unwrap();
+    std::fs::write(dir.join("audio/clip_41.wav"), b"").unwrap();
+
+    let mut h = EngineHandlerHarness::new();
+    h.set_project_dir_async(dir.clone());
+    // Allocates an id synchronously; the decode of the (missing) file
+    // fails later on the import worker.
+    h.import_clip(1, dir.join("missing.wav").display().to_string(), 0);
+
+    assert_eq!(h.next_clip_id(), 43, "the import took id 42, past the reserved 41");
+    let _ = std::fs::remove_dir_all(&dir);
+}

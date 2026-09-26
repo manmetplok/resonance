@@ -149,6 +149,14 @@ impl EngineHandlerHarness {
         self.state.project_dir = Some(dir);
     }
 
+    /// What the `SetProjectDir` handler itself does (FU-M12b): start the
+    /// reservation scan on its worker and return; the reservation lands
+    /// at the next clip-id allocation (or engine-loop poll).
+    pub fn set_project_dir_async(&mut self, dir: std::path::PathBuf) {
+        crate::engine::clips::start_clip_id_scan(&mut self.state, &dir);
+        self.state.project_dir = Some(dir);
+    }
+
     /// Run the real `AudioCommand::ImportClip` handler: queues a decode on
     /// the import worker, which lands the clip asynchronously.
     pub fn import_clip(&mut self, track_id: TrackId, path: String, start_sample: u64) {

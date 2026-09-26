@@ -76,6 +76,7 @@ pub(crate) fn handle_create_midi_clip(
     duration_ticks: u64,
     name: String,
 ) {
+    crate::engine::clips::settle_clip_id_scan(state, true);
     let clip_id = state.next_clip_id;
     state.next_clip_id += 1;
     let clip = MidiClip {

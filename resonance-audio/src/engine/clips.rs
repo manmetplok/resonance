@@ -34,23 +34,59 @@ pub struct DeferredClipCommand {
 /// Raise the clip-id allocator past every `audio/clip_{id}.wav` in a
 /// project dir the engine is pointed at, so a new clip never overwrites
 /// the WAV of a clip deleted before the last save — one a versioned
-/// backup can still reference (code review STATE-08). Runs on the
-/// control thread; a missing dir reserves nothing.
+/// backup can still reference (code review STATE-08). Synchronous; the
+/// `SetProjectDir` handler uses [`start_clip_id_scan`] instead. A missing
+/// dir reserves nothing.
 pub(crate) fn reserve_clip_ids_in_project_dir(state: &mut HandlerState, dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
-        return;
-    };
-    let highest = entries
+    reserve_clip_ids_up_to(state, highest_clip_id_on_disk(dir));
+}
+
+fn highest_clip_id_on_disk(dir: &Path) -> Option<ClipId> {
+    std::fs::read_dir(dir.join("audio"))
+        .ok()?
         .flatten()
         .filter_map(|e| {
             let name = e.file_name();
             let name = name.to_str()?;
             name.strip_prefix("clip_")?.strip_suffix(".wav")?.parse::<ClipId>().ok()
         })
-        .max();
+        .max()
+}
+
+fn reserve_clip_ids_up_to(state: &mut HandlerState, highest: Option<ClipId>) {
     if let Some(id) = highest {
         state.next_clip_id = state.next_clip_id.max(id.saturating_add(1));
     }
+}
+
+/// `SetProjectDir`: run the STATE-08 folder scan on a worker (FU-M12b) —
+/// a project on a slow or network disk with thousands of WAVs used to
+/// stall the engine command thread. The reservation lands through
+/// [`settle_clip_id_scan`]: from the engine loop once the scan is done,
+/// or — waiting for it — from any clip-id allocation that comes first,
+/// so an id is never issued before the scan could reserve it.
+pub(crate) fn start_clip_id_scan(state: &mut HandlerState, dir: &Path) {
+    settle_clip_id_scan(state, true);
+    let owned = dir.to_path_buf();
+    match std::thread::Builder::new()
+        .name("clip-id-scan".into())
+        .spawn(move || highest_clip_id_on_disk(&owned))
+    {
+        Ok(handle) => state.clip_id_scan = Some(handle),
+        Err(_) => reserve_clip_ids_in_project_dir(state, dir),
+    }
+}
+
+/// Apply a finished [`start_clip_id_scan`]. With `wait`, join one still
+/// running first — every clip-id allocation site calls this before it
+/// allocates; the engine loop polls without waiting.
+pub(crate) fn settle_clip_id_scan(state: &mut HandlerState, wait: bool) {
+    let Some(handle) = state.clip_id_scan.take_if(|h| wait || h.is_finished()) else {
+        return;
+    };
+    // A panicked scan reserves nothing, like a missing dir.
+    let highest = handle.join().ok().flatten();
+    reserve_clip_ids_up_to(state, highest);
 }
 
 /// Park `command` until `clip_id` shows up, instead of dropping it.
@@ -201,6 +237,7 @@ pub(crate) fn handle_import_clip(
 
     let clips_arc = Arc::clone(ctx.clips);
     let thread_event_tx = ctx.event_tx.clone();
+    settle_clip_id_scan(state, true);
     let clip_id = state.next_clip_id;
     state.next_clip_id += 1;
     let sr = ctx.sample_rate;

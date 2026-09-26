@@ -287,6 +287,7 @@ pub(crate) fn begin_recording_stream(
     // — file a second, spurious take for every loop pass (ba doc #292).
     // They stay in `armed_tracks` so the transport still enters recording
     // and opens the cycle-record session for their MIDI.
+    super::clips::settle_clip_id_scan(state, true);
     for info in armed_tracks.iter().filter(|i| i.captures_audio) {
         let clip_id = state.next_clip_id;
         state.next_clip_id += 1;
@@ -592,6 +593,7 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     }
 
     // -- Audio takes --
+    super::clips::settle_clip_id_scan(state, true);
     let rolled = state.rec.roll_audio_pass(
         ctx.sample_rate,
         clip_start,
