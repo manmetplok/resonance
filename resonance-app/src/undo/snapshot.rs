@@ -220,7 +220,7 @@ impl crate::Resonance {
     ///
     /// Both paths end in `replay_take_groups`, which sends
     /// `AudioCommand::RestoreTakeGroups` — on the fast path from
-    /// `apply_take_groups` inside [`crate::update::try_diff_replay`], on
+    /// the `TakeGroups` reconcile domain inside [`crate::update::try_diff_replay`], on
     /// the slow path from `replay_loaded_project`, which the `AllCleared`
     /// handler runs for the pending undo load. That
     /// command replaces the engine's take-group store wholesale (comp and

@@ -118,40 +118,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
 
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file);
-    apply_track_groups(r, target_file);
-
-    // -- Media pool (doc #175) -----------------------------------------
-    // The pool is pure app-side data (no engine instances), so an
-    // undo/redo that added / removed / relinked an asset is restored
-    // verbatim here — the structural check ignores the pool entirely.
-    // Asset-ref changes on clips were already mirrored in
-    // `apply_audio_clips`; this rebuilds the asset list and usage tally.
-    apply_pool(r, target_file);
-
-    // -- Cycle-record take lanes (epic #15, todo #412/#1394) -----------
-    // An undo/redo that promoted a segment, soloed a take or deleted one
-    // is reconciled verbatim here: the mirror is rebuilt from the target
-    // snapshot and `replay_take_groups` pushes the result into the engine
-    // with `RestoreTakeGroups`. That command replaces the engine's store
-    // wholesale, which is what this path needs — unlike a project load it
-    // sends no `ClearAll`, so a merge would resurrect the very takes an
-    // undo just deleted. Take groups never alter the project shape, so,
-    // like the pool and the quantize state, they are absent from
-    // `structurally_compatible` and always take this fast path.
-    apply_take_groups(r, target_file);
-
-    // -- Quantize state (ba todo #395) ---------------------------------
-    // The groove library + last-used quantize settings are pure app-side
-    // data (no engine instances), so an undo/redo that edited them is
-    // restored verbatim. They never alter the project shape, so this
-    // always takes the fast path.
-    super::replay::restore_quantize(r, target_file);
-
-    // -- Performance footer (tuning + capo) ----------------------------
-    // Pure app-side, persisted in the `ProjectFile`: restored verbatim as
-    // the slow path's `replay_loaded_project` does, so both paths land on
-    // the same state (FU-H2c).
-    super::replay::restore_performance(r, target_file);
 
     // -- Reference (A/B) content ---------------------------------------
     // From `ProjectFile::references` / `reference_settings`, reconciled
@@ -175,6 +141,13 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // the diff path always sent it (the full path sends it before the
     // clips; roadmap group (4) moves it there on this path too).
     reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
+    // Pool, quantize, performance, track groups, take lanes: app-side
+    // content the structural check ignores, restored verbatim. The pool
+    // counts the clips' asset refs `apply_audio_clips` mirrored; the take
+    // lanes' `RestoreTakeGroups` replaces the engine's store wholesale, so
+    // an undo that deleted a take does not resurrect it (no `ClearAll`
+    // here).
+    reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
 
     // -- Automation lanes ----------------------------------------------
     // From `ProjectFile::automation_lanes`, as `replay_loaded_project`
@@ -1100,96 +1073,6 @@ pub fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
             && x.start_tick == y.start_tick
             && x.duration_ticks == y.duration_ticks
     })
-}
-
-/// Restore the track group registry from a saved project file. The
-/// group id set is guaranteed equal by `structurally_compatible`, but
-/// the per-group contents (membership, collapse state, nesting, macros)
-/// may differ, so the registry is rebuilt wholesale from the snapshot.
-/// `add_group` drops membership edges that would close a nested-group
-/// cycle, so a corrupted `track_groups` array loads with the cycle
-/// broken rather than aborting the flattening walks downstream.
-fn apply_track_groups(r: &mut Resonance, b: &ProjectFile) {
-    r.track_groups = crate::state::TrackGroupRegistry::new();
-    for tg in &b.track_groups {
-        r.track_groups.add_group(tg.clone());
-        // Same counter bump as the slow path (code review STATE-04).
-        if tg.id >= r.registry.next_sub_track_id {
-            r.registry.next_sub_track_id = tg.id + 1;
-        }
-    }
-}
-
-/// Restore the media pool from a snapshot on the fast (diff) path (doc
-/// #175). Mirrors the slow-path [`super::replay::restore_pool`] but uses
-/// `r.io.project_path` as the directory to resolve relative asset paths
-/// against — it's still set during an in-session undo/redo (the slow path
-/// has to thread the dir explicitly because replay clears it). Rebuilds
-/// the asset list (flagging missing files) and recomputes usage from the
-/// clips' already-mirrored asset refs.
-fn apply_pool(r: &mut Resonance, b: &ProjectFile) {
-    use crate::state::pool::PoolAsset;
-
-    r.pool.clear_assets();
-    let project_dir = r.io.project_path.clone();
-    for pa in &b.pool_assets {
-        let missing = match &project_dir {
-            Some(dir) => !dir.join(&pa.project_relative_path).exists(),
-            // No anchored path (shouldn't happen on the undo path, which
-            // only records with a saved project) — assume present rather
-            // than spuriously flag everything missing.
-            None => false,
-        };
-        r.pool.add(PoolAsset {
-            id: pa.id,
-            project_relative_path: pa.project_relative_path.clone(),
-            original_path: pa.original_path.clone(),
-            format: crate::project::audio_format_from_tag(&pa.format),
-            channels: pa.channels,
-            source_sample_rate: pa.source_sample_rate,
-            duration_frames: pa.duration_frames,
-            thumbnail_peaks: Vec::new(),
-            missing,
-        });
-    }
-    r.recompute_pool_usage();
-}
-
-/// Restore the cycle-record take lanes from a snapshot on the fast (diff)
-/// path (epic #15, todo #412).
-///
-/// Same split as the slow path, just with the clear inlined: the wipe that
-/// `wipe_registry` performs there has no counterpart on this path (nothing
-/// is cleared at all), so it happens here immediately before the shared
-/// [`super::replay::replay_take_groups`] re-seeds.
-///
-/// The project directory comes from `r.io.project_path`, still set during
-/// an in-session undo/redo — exactly as [`apply_pool`] resolves its assets
-/// — so a take whose WAV was deleted mid-session is re-flagged on every
-/// history step rather than going quiet.
-///
-/// **The clear is [`clear_for_snapshot`], not [`clear`]** (ba todo #1400):
-/// it keeps the waveform peaks. This function runs on *every* history
-/// step, a fader undo included, and since #1400 `replay_take_groups`
-/// reads each take's WAV rather than stat-ing it — so throwing the tables
-/// away here would put an mmap and a full scan of every take in the
-/// project on a hold-to-repeat gesture (~3.2 ms per recorded minute).
-/// With them kept, `replay_take_groups` skips every already-read take and
-/// an undo costs no filesystem access at all. Safe because a recording is
-/// immutable and a cached table records the `clip_ref` it came from, so a
-/// snapshot naming a different recording under the same key misses and
-/// re-reads.
-///
-/// [`clear_for_snapshot`]: crate::state::TakeGroupState::clear_for_snapshot
-/// [`clear`]: crate::state::TakeGroupState::clear
-fn apply_take_groups(r: &mut Resonance, b: &ProjectFile) {
-    // No anchored path (can't happen on the undo path, which only records
-    // with a saved project): an empty dir joins to a bare relative path
-    // that won't exist, which flags rather than hides — the safe way round
-    // for takes, where "present" is the claim that could mislead.
-    let project_dir = r.io.project_path.clone().unwrap_or_default();
-    r.take_groups.clear_for_snapshot();
-    super::replay::replay_take_groups(r, b, &project_dir);
 }
 
 /// Apply the saved per-slot bypass to one chain, telling the engine about

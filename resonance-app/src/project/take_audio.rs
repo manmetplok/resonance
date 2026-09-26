@@ -17,7 +17,7 @@
 //! Two of them are the moments the app *learns* of a take —
 //! `engine_events::takes::take_captured` on the `TakeCaptured` echo, and
 //! `replay::restore::replay_take_groups` on a project load. The third is
-//! not: `replay_diff::apply_take_groups` calls `replay_take_groups` again
+//! not: the diff replay (`reconcile::app_side::TakeGroups`) calls it again
 //! on **every undo and every redo**, a step that touches no take
 //! included, because that is how the diff replay rebuilds the take mirror
 //! from a snapshot.

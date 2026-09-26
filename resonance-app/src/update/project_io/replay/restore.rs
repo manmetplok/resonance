@@ -1,8 +1,8 @@
-//! Domain-specific restore helpers called at the end of
-//! [`super::replay_loaded_project`]: performance, quantize, media pool,
-//! reference A/B, drum patterns, and tempo events. Each function is a
-//! self-contained side-effecting unit with no cross-dependencies, making
-//! them straightforward to call from the undo diff-replay path as well.
+//! Domain-specific restore helpers: performance, quantize, media pool,
+//! track groups, take lanes, reference A/B, drum patterns, and tempo
+//! events. Each is a self-contained side-effecting unit; the ones both
+//! restore paths share whole are driven through the `Reconcile` domains in
+//! `super::super::reconcile` (ARCH-01 A-13).
 
 use crate::compose::ComposeState;
 use crate::project::ProjectFile;
@@ -32,9 +32,9 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 ///
 /// **Additive on purpose.** Like `replay_sends` this only pushes what the
 /// file carries; emptying the previous project's mirror is
-/// `wipe_registry`'s job (via
+/// the `TakeGroups` reconcile domain's job, just before it (via
 /// [`TakeGroupState::clear`](crate::state::TakeGroupState::clear)). Keeping
-/// the two apart is what makes the wipe the single place a project load
+/// the two apart is what makes that clear the single place a project load
 /// drops stale take lanes, rather than a rebuild that happens to overwrite
 /// them.
 ///
@@ -100,7 +100,7 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// memory-maps the very same file to play the take, so a file this read
 /// rejects is one the comp would render silent anyway.
 ///
-/// **This is not only the load path.** `apply_take_groups` on the
+/// **This is not only the load path.** The `TakeGroups` domain on the
 /// undo/redo diff-replay path re-runs this function on *every* history
 /// step, including one that touches no take, so the expensive half has to
 /// be skippable — otherwise a hold-to-repeat undo re-mmaps and re-scans
@@ -111,7 +111,7 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// It does **not** skip the cheap half. The step still `exists()`-checks
 /// the file, which is exactly what this path cost before todo #1400, so
 /// a WAV deleted mid-session still lights the hatch on the next history
-/// step rather than going quiet — the property `apply_take_groups` was
+/// step rather than going quiet — the property the diff-path restore was
 /// written for. The saving is precisely the mmap and the scan, and
 /// nothing else changes hands.
 pub(crate) fn replay_take_groups(
@@ -299,6 +299,21 @@ pub(crate) fn restore_pool(
     project: &ProjectFile,
     project_dir: &std::path::Path,
 ) {
+    restore_pool_assets(r, project, Some(project_dir), true);
+}
+
+/// [`restore_pool`] for every origin (the `Pool` reconcile domain).
+/// `project_dir` is `None` for an untitled project on the undo diff path
+/// (which only records with a saved project, so not expected): no asset
+/// is flagged missing then, rather than all of them. `reserve_engine_ids`
+/// is set after a `ClearAll`, which reset the engine's allocator; the
+/// diff path leaves the live allocator alone.
+pub(crate) fn restore_pool_assets(
+    r: &mut Resonance,
+    project: &ProjectFile,
+    project_dir: Option<&std::path::Path>,
+    reserve_engine_ids: bool,
+) {
     use crate::state::pool::PoolAsset;
 
     // Drop the prior project's assets + usage; keep favourites / recent.
@@ -308,8 +323,10 @@ pub(crate) fn restore_pool(
         // Resolve the project-relative WAV path against the project dir.
         // An absolute `project_relative_path` (shouldn't happen, but be
         // defensive) is used as-is by `Path::join`.
-        let abs_path = project_dir.join(&pa.project_relative_path);
-        let missing = !abs_path.exists();
+        let missing = match project_dir {
+            Some(dir) => !dir.join(&pa.project_relative_path).exists(),
+            None => false,
+        };
 
         r.pool.add(PoolAsset {
             id: pa.id,
@@ -337,6 +354,9 @@ pub(crate) fn restore_pool(
     // without this the first `pool.import` after opening a project
     // handed out an id the project was already using, and every clip
     // referencing it silently started playing the newly imported file.
+    if !reserve_engine_ids {
+        return;
+    }
     if let Some(above) = r.pool.max_asset_id() {
         let _ = r
             .engine

@@ -119,7 +119,8 @@ tempo lines in `replay_globals`, the five restore calls at the end of
 (moved into `TakeGroups`; nothing between the wipe and the Content stage
 reads or writes `r.take_groups`).
 
-`restore_pool` / `restore_quantize` / `restore_performance` stay as the
+`restore_pool` (now a wrapper over `restore_pool_assets`, which takes the
+optional dir and the reserve flag) / `restore_quantize` / `restore_performance` stay as the
 shared bodies because `test_support` calls them directly.
 
 ### Where the stages sit

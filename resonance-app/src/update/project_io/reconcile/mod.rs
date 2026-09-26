@@ -113,6 +113,13 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::TempoEvents>(Stage::Timeline),
     domain::<app_side::ChordTrack>(Stage::Timeline),
     domain::<app_side::Markers>(Stage::Timeline),
+    // After the clips: the pool counts their asset refs. The full path's
+    // order.
+    domain::<app_side::Pool>(Stage::Content),
+    domain::<app_side::Quantize>(Stage::Content),
+    domain::<app_side::Performance>(Stage::Content),
+    domain::<app_side::TrackGroups>(Stage::Content),
+    domain::<app_side::TakeGroups>(Stage::Content),
 ];
 
 /// Run every [`DOMAINS`] entry of `stage`, in table order.
