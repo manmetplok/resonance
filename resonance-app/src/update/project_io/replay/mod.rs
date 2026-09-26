@@ -5,7 +5,7 @@
 //!
 //! ## Module layout
 //! - `mod.rs` (this file): public entry point [`replay_loaded_project`] and
-//!   the seven per-domain helpers that structure it.
+//!   the per-domain helpers that structure it.
 //! - `entity.rs`: per-entity replay (`replay_track`, `replay_bus`,
 //!   `replay_master`, `replay_plugins`) plus `sort_plugins_by_saved_order`
 //!   and `migrate_auto_name`.
@@ -15,10 +15,11 @@
 //!   used both here and by the diff-based undo replay path.
 //!
 //! Domains migrated to the `Reconcile` driver (`super::reconcile`, ARCH-01
-//! A-13) are not restored inline here: `replay_globals` runs
-//! `Stage::Timeline`, `replay_vocal` runs `Stage::Clips` and the end of
-//! [`replay_loaded_project`] runs `Stage::Content` and `Stage::Tail` — the
-//! same stages, in the same sequence, `try_diff_replay` runs.
+//! A-13) are not restored inline here: [`replay_loaded_project`] opens
+//! with `Stage::Globals` and `Stage::Timeline`, `replay_vocal` runs
+//! `Stage::Clips` and the end of [`replay_loaded_project`] runs
+//! `Stage::Content` and `Stage::Tail` — the same stages, in the same
+//! sequence, `try_diff_replay` runs.
 
 mod entity;
 mod restore;
@@ -28,7 +29,6 @@ use resonance_audio::types::*;
 use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
 use crate::project::{LoadedProject, ProjectFile};
 use crate::state::*;
-use crate::util::db_to_gain;
 use crate::Resonance;
 
 // Re-export helpers consumed by sibling modules (undo replay, diff replay).
@@ -93,8 +93,12 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let _ = r.engine
         .send(AudioCommand::SetProjectDir(loaded.project_dir.clone()));
 
-    // Restore global transport, compose sections, and engine settings.
-    replay_globals(r, project, &ctx);
+    // Transport / master scalars (every one sent: `old` is `None`), the
+    // transient UI reset, compose sections and the drum-pattern bank;
+    // then tempo / signature events (+ `SetTempoEvents`), chord track,
+    // markers and the section chord trim — all before any track or clip.
+    reconcile_stage(r, Stage::Globals, None, project, &ctx);
+    reconcile_stage(r, Stage::Timeline, None, project, &ctx);
 
     // Wipe the runtime registry and collect the saved plugin-chain order so
     // we can re-impose it after all async PluginAdded events have settled.
@@ -130,102 +134,6 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 // ---------------------------------------------------------------------------
 // Per-domain helpers
 // ---------------------------------------------------------------------------
-
-/// Restore global transport state (BPM, time signature, metronome, master
-/// volume, MIDI clock, loop range), compose/section state (definitions,
-/// placements, drum patterns), and the [`Stage::Timeline`] domains (tempo
-/// events, chord track, markers). Sends all corresponding engine commands
-/// so the engine is in sync before tracks and clips are replayed.
-fn replay_globals(r: &mut Resonance, project: &ProjectFile, ctx: &ReconcileCtx<'_>) {
-    // Transport scalars.
-    r.transport.bpm = project.bpm;
-    r.transport.time_sig_num = project.time_sig_num;
-    r.transport.time_sig_den = project.time_sig_den;
-    r.transport.metronome_enabled = project.metronome_enabled;
-    r.master_volume = project.master_volume;
-    r.transport.loop_enabled = project.loop_enabled;
-    r.transport.loop_in = project.loop_in;
-    r.transport.loop_out = project.loop_out;
-    r.transport.playhead = 0;
-
-    // Reset transient UI state so the new project starts clean. The
-    // scroll position is NOT reset here: this replay also serves a
-    // slow-path undo, which must not move the view, and the horizontal
-    // offset belongs to the outer `Scrollable` — a disk load scrolls that
-    // for real in `engine_events::project_io::all_cleared` (code review
-    // FU-V3a).
-    r.interaction.selected_clip = None;
-    r.mixer.selected_plugin = None;
-    r.interaction.clip_drag = None;
-    r.interaction.clip_trim = None;
-    r.modals.confirm_delete_track = None;
-    r.modals.confirm_quit = None;
-
-    // Sections / compose.
-    r.compose
-        .load_from_project(&project.section_definitions, &project.section_placements);
-
-    // Restore the project's drum pattern bank (with legacy promotion),
-    // keeping the `ComposeState::default()` bank in place when the
-    // project predates drum groups entirely. Afterwards point the
-    // right-rail / modal focus at a pattern that actually exists.
-    restore_drum_patterns(&mut r.compose, project, false);
-    let first_group_id = r
-        .compose
-        .drum_patterns
-        .first()
-        .and_then(|p| p.groups.first().map(|g| g.id));
-    r.compose.drumroll.selected_group_id = first_group_id;
-    r.compose.drumroll.managing_group_id = first_group_id;
-    r.compose.drumroll.managing_pattern_id = r.compose.default_drum_pattern_id;
-
-    // Engine commands: tempo, signature, metronome, master volume.
-    let _ = r.engine.send(AudioCommand::SetBpm {
-        bpm: r.transport.bpm,
-    });
-    // Tempo / signature events (+ `SetTempoEvents`), chord track, markers.
-    // After `SetBpm`, before the chord trim below (it reads the meter) and
-    // before any clip is replayed.
-    reconcile_stage(r, Stage::Timeline, None, project, ctx);
-    // Chords past a section's end are refused by every edit; hold a
-    // file to the same once the meter is known (code review FU-V4b).
-    let trimmed = crate::update::compose::trim_chords_to_sections(r);
-    if !trimmed.is_empty() {
-        tracing::warn!("trimmed chords past the end of section(s) {trimmed:?} on load");
-    }
-    let _ = r.engine.send(AudioCommand::SetTimeSignature {
-        numerator: r.transport.time_sig_num,
-        denominator: r.transport.time_sig_den,
-    });
-    let _ = r.engine.send(AudioCommand::SetMetronomeEnabled {
-        enabled: r.transport.metronome_enabled,
-    });
-    let _ = r.engine.send(AudioCommand::SetMasterVolume {
-        volume: db_to_gain(r.master_volume),
-    });
-
-    // Restore MIDI clock settings. The engine treats `enabled=false`
-    // as a no-op port-wise, so it's safe to send for legacy projects.
-    r.midi_devices.midi_clock_send_enabled = project.midi_clock_send_enabled;
-    r.midi_devices.midi_clock_send_device = project.midi_clock_send_device.clone();
-    r.midi_devices.midi_clock_recv_enabled = project.midi_clock_recv_enabled;
-    r.midi_devices.midi_clock_recv_device = project.midi_clock_recv_device.clone();
-    let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
-        device: r.midi_devices.midi_clock_send_device.clone(),
-        enabled: r.midi_devices.midi_clock_send_enabled,
-    });
-    let _ = r.engine.send(AudioCommand::SetMidiClockInput {
-        device: r.midi_devices.midi_clock_recv_device.clone(),
-        enabled: r.midi_devices.midi_clock_recv_enabled,
-    });
-
-    // Loop range.
-    let _ = r.engine.send(AudioCommand::SetLoopRange {
-        enabled: r.transport.loop_enabled,
-        loop_in: r.transport.loop_in,
-        loop_out: r.transport.loop_out,
-    });
-}
 
 /// Wipe the GUI registry (tracks, busses, clips, plugins) and collect the
 /// saved plugin-chain order from the project file. Returns the saved order
@@ -568,8 +476,8 @@ fn replay_audio_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedP
     }
 }
 
-/// Replay MIDI clips from the parsed `.mid` files and restore the vocal
-/// lyric side-table for each clip that carries lyrics.
+/// Replay MIDI clips from the parsed `.mid` files. Their lyric side-table
+/// is the `ClipLyrics` domain ([`Stage::Clips`]).
 fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedProject) {
     for pmc in &project.midi_clips {
         let notes: Vec<MidiNote> = loaded.midi_notes.get(&pmc.id).cloned().unwrap_or_default();
@@ -585,7 +493,6 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
             trim_end_ticks: pmc.trim_end_ticks,
         });
 
-        let note_count = notes.len();
         r.midi_clips.push(MidiClipState {
             id: pmc.id,
             track_id: pmc.track_id,
@@ -596,19 +503,12 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
             trim_start_ticks: pmc.trim_start_ticks,
             trim_end_ticks: pmc.trim_end_ticks,
         });
-
-        // Re-install the lyric side-table in its live form: padded to
-        // the clip's note count, no entry when the saved vec is empty
-        // (legacy projects + non-vocal clips).
-        r.compose
-            .vocal_audio
-            .restore_clip_lyrics(pmc.id, &pmc.vocal_lyrics, note_count);
     }
 }
 
 /// Rebuild vocal-derived state that depends on the already-restored MIDI and
-/// audio clips: the [`Stage::Clips`] domains (the `derived_clips`
-/// section→clip map the compose view uses) and the vocal-audio clip map (so the next Generate Vocal correctly
+/// audio clips: the [`Stage::Clips`] domains (the lyric side-table and the
+/// `derived_clips` section→clip map the compose view uses) and the vocal-audio clip map (so the next Generate Vocal correctly
 /// tears down old clips rather than stacking on top of them).
 fn replay_vocal(
     r: &mut Resonance,
@@ -616,8 +516,9 @@ fn replay_vocal(
     loaded: &LoadedProject,
     ctx: &ReconcileCtx<'_>,
 ) {
-    // The derived-clip map (ARCH-01 A-6), keeping only entries whose clip
-    // this replay installed — `ClearAll` wiped anything else.
+    // The lyric side-table (padded to the replayed note counts) and the
+    // derived-clip map (ARCH-01 A-6), keeping only entries whose clip this
+    // replay installed — `ClearAll` wiped anything else.
     reconcile_stage(r, Stage::Clips, None, project, ctx);
 
     // Rebuild the vocal audio clip map so subsequent regen tear-downs
@@ -643,8 +544,6 @@ fn replay_vocal(
         &vocal_track_ids,
         &r.tempo_map,
     );
-
-    r.transport.loop_range_set = r.transport.loop_enabled;
 }
 
 /// Re-impose the saved plugin-chain order on every track, bus, and the

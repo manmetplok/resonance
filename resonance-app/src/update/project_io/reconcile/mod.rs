@@ -14,6 +14,7 @@
 //! domains in table order.
 
 mod app_side;
+mod globals;
 mod restored;
 
 use std::path::Path;
@@ -64,8 +65,8 @@ pub struct ReconcileCtx<'a> {
 /// Live state an undo/redo restore keeps but the restore itself would
 /// overwrite before the domain that needs it runs (ARCH-01 A-13b). Each
 /// entry point captures it at its top — before `replay_loaded_project`
-/// takes `io.project_path` and `ComposeState::load_from_project` resets the
-/// derived counter — and hands it to every domain through the ctx.
+/// takes `io.project_path` and `ComposeSections` resets the derived
+/// counter — and hands it to every domain through the ctx.
 ///
 /// Live state a restore does *not* overwrite before its domain runs stays
 /// in `Resonance` and is read there under the origin: the freeze statuses
@@ -113,14 +114,17 @@ pub(crate) trait Reconcile {
 /// migrated domains runs. Declared in the order both paths reach them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
-    /// Tempo events, chord track, markers. Full path: inside
-    /// `replay_globals`, after `SetBpm` and before the chord trim (which
-    /// reads the meter). Diff path: after `apply_compose`, the first of
-    /// the four stages it runs back to back.
+    /// Transport / master scalars, the transient UI a full replay resets,
+    /// compose sections and the drum-pattern bank. The first thing both
+    /// paths restore (the full path after `SetProjectDir`).
+    Globals,
+    /// Tempo events, chord track, markers, and the section chord trim
+    /// (reads the meter). Right after `Globals` on both paths, before any
+    /// track or clip is restored.
     Timeline,
-    /// State derived from the restored clips: the derived-clip map. Full
-    /// path: right after the MIDI clips are replayed. Diff path: after
-    /// `Timeline`.
+    /// State derived from the restored clips: the lyric side-table and
+    /// the derived-clip map. Full path: right after the MIDI clips are
+    /// replayed. Diff path: right after the MIDI clips are applied.
     Clips,
     /// App-side content restored whole, and the references. Full path:
     /// after the plugin chains are finalised (the pool counts the clips'
@@ -155,12 +159,23 @@ const fn domain<D: Reconcile>(stage: Stage) -> Domain {
 /// Every migrated domain, in the order both restore paths run them.
 /// Sorted by [`Stage`].
 pub(crate) const DOMAINS: &[Domain] = &[
+    // Before `Timeline`: the tempo map is rebuilt from the transport
+    // scalars, and `SetBpm` must precede `SetTempoEvents`.
+    domain::<globals::Transport>(Stage::Globals),
+    domain::<globals::TransientUi>(Stage::Globals),
+    // Before `Clips`: the load resets the derived map `DerivedClips`
+    // restores. The drum bank's legacy promotion edits the definitions.
+    domain::<globals::ComposeSections>(Stage::Globals),
+    domain::<globals::DrumPatterns>(Stage::Globals),
     // Before the chord trim and every clip (derived-clip bar recovery
     // reads the tempo map).
     domain::<app_side::TempoEvents>(Stage::Timeline),
     domain::<app_side::ChordTrack>(Stage::Timeline),
     domain::<app_side::Markers>(Stage::Timeline),
-    // After the MIDI and audio clips it filters against.
+    // Reads the meter (tempo events) and the sections.
+    domain::<globals::SectionChordTrim>(Stage::Timeline),
+    // After the MIDI and audio clips they read / filter against.
+    domain::<globals::ClipLyrics>(Stage::Clips),
     domain::<restored::DerivedClips>(Stage::Clips),
     // After the clips: the pool counts their asset refs. The full path's
     // order.

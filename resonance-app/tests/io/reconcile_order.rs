@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use resonance_app::message::{ExternalInstrumentMessage as Eim, Message, ProjectIoMessage};
 use resonance_app::project::{LoadedProject, ProjectFile};
-use resonance_app::state::TrackState;
+use resonance_app::state::{MidiClipState, TempoEvent, TrackState};
 use resonance_app::update::project_io::reconcile::{domain_order, Origin, Stage};
 use resonance_app::update::project_io::replay_loaded_project;
 use resonance_app::Resonance;
@@ -118,26 +118,84 @@ fn a_full_undo_runs_every_domain_in_table_order() {
     assert_eq!(l.app.test_reconcile_trace(), expected(Origin::UndoFull).as_slice());
 }
 
-/// The full path's `Timeline` stage sits after `SetBpm` and before
-/// `SetTimeSignature`: the engine sees the same tempo sequence it did when
-/// the tempo events were restored inline.
+/// `Globals` runs before `Timeline` on the full path: every transport
+/// scalar goes out before `SetTempoEvents` (A-13c; `SetTimeSignature` used
+/// to follow it — the two write independent fields of the engine's tempo
+/// map, see `globals::Transport`). `SetBpm` still precedes the events, whose
+/// first point must win the map's `bpm`.
 #[test]
-fn the_full_path_sends_bpm_then_tempo_events_then_meter() {
+fn the_full_path_sends_the_transport_scalars_then_tempo_events() {
     let l = disk_load();
     let pos = |pred: fn(&AudioCommand) -> bool| {
         l.load_cmds
             .iter()
             .position(pred)
-            .expect("the replay sends every tempo command")
+            .expect("the replay sends every transport command")
     };
     let bpm = pos(|c| matches!(c, AudioCommand::SetBpm { .. }));
-    let events = pos(|c| matches!(c, AudioCommand::SetTempoEvents { .. }));
     let meter = pos(|c| matches!(c, AudioCommand::SetTimeSignature { .. }));
-    assert!(bpm < events && events < meter, "{bpm} < {events} < {meter}");
+    let lp = pos(|c| matches!(c, AudioCommand::SetLoopRange { .. }));
+    let events = pos(|c| matches!(c, AudioCommand::SetTempoEvents { .. }));
+    assert!(
+        bpm < meter && meter < lp && lp < events,
+        "{bpm} < {meter} < {lp} < {events}"
+    );
+}
+
+/// The diff path's tempo converged on the full path's position (A-13c):
+/// `SetTempoEvents` goes out before any clip command, not after the clips
+/// as it did through A-13b. And only the scalars that changed are sent.
+#[test]
+fn a_diff_undo_sends_tempo_before_the_clips_and_only_changed_scalars() {
+    let mut l = disk_load();
+    l.app.test_push_track(TrackState::new_instrument(1, 0));
+    l.app.test_push_midi_clip(MidiClipState {
+        id: 10,
+        track_id: 1,
+        start_sample: 0,
+        duration_ticks: 3840,
+        name: "clip".to_string(),
+        notes: Vec::new(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+    let mut target = l.app.test_snapshot_for_undo();
+    target.project.file.midi_clips[0].start_sample = 96_000;
+    target.project.file.bpm = 90.0;
+    target.project.file.tempo_events = vec![TempoEvent { bar: 0, bpm: 90.0 }];
+    let _ = drain(&l.rx);
+    l.app.test_begin_restore_from_snapshot(target);
+    let cmds = drain(&l.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "an unchanged shape takes the diff path"
+    );
+    let pos = |pred: fn(&AudioCommand) -> bool| {
+        cmds.iter().position(pred).expect("the diff replay sends it")
+    };
+    let bpm = pos(|c| matches!(c, AudioCommand::SetBpm { bpm } if *bpm == 90.0));
+    let events = pos(|c| matches!(c, AudioCommand::SetTempoEvents { .. }));
+    let moved = pos(|c| {
+        matches!(c, AudioCommand::MoveMidiClip { clip_id: 10, new_start_sample: 96_000, .. })
+    });
+    assert!(bpm < events && events < moved, "{bpm} < {events} < {moved}");
+    assert!(
+        !cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::SetTimeSignature { .. }
+                | AudioCommand::SetLoopRange { .. }
+                | AudioCommand::SetMasterVolume { .. }
+        )),
+        "unchanged scalars are not re-sent on the diff path: {cmds:?}"
+    );
+    assert_eq!(l.app.test_transport_bpm(), 90.0);
 }
 
 /// The table itself, pinned: a domain added, dropped or moved is a
-/// decision, recorded in `docs/design/A-13-reconcile.md`. Within `Tail`,
+/// decision, recorded in `docs/design/A-13-reconcile.md`. `Globals` feeds
+/// `Timeline` (the tempo map is rebuilt from the transport scalars) and
+/// the compose load precedes `Clips` (it resets the derived map). Within
+/// `Tail`,
 /// external instruments come before the lanes (a `DeviceParam` lane needs
 /// the device bindings) and freeze is last (a disk load's baseline
 /// fingerprints the lanes); derived clips follow the clips.
@@ -146,9 +204,15 @@ fn the_table_is_the_agreed_order() {
     assert_eq!(
         domain_order(),
         vec![
+            (Stage::Globals, "transport"),
+            (Stage::Globals, "transient_ui"),
+            (Stage::Globals, "compose_sections"),
+            (Stage::Globals, "drum_patterns"),
             (Stage::Timeline, "tempo_events"),
             (Stage::Timeline, "chord_track"),
             (Stage::Timeline, "markers"),
+            (Stage::Timeline, "section_chord_trim"),
+            (Stage::Clips, "clip_lyrics"),
             (Stage::Clips, "derived_clips"),
             (Stage::Content, "references"),
             (Stage::Content, "pool"),

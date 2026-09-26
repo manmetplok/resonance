@@ -35,7 +35,6 @@ use crate::util::db_to_gain;
 use crate::Resonance;
 
 use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
-use super::replay::restore_drum_patterns;
 use super::serialize::build_project_file;
 
 /// Attempt a structure-preserving replay. Returns `true` when the diff
@@ -67,8 +66,14 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
         },
     };
 
-    // -- Global transport / master -------------------------------------
-    apply_global(r, &current, target_file);
+    // -- Migrated domains, head (ARCH-01 A-13) -------------------------
+    // Transport / master scalars that changed, compose sections and the
+    // drum-pattern bank (`Globals`); then tempo / signature events, chord
+    // track and markers (`Timeline`) — before any track or clip, as on the
+    // full path (A-13c: tempo used to go out after the clips here; nothing
+    // in between reads the tempo map, app- or engine-side).
+    reconcile_stage(r, Stage::Globals, Some(&current), target_file, &ctx);
+    reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
 
     // -- Tracks --------------------------------------------------------
     apply_tracks(r, &current, target_file);
@@ -120,17 +125,11 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // -- MIDI clips: reposition + replace notes via delete+reload ------
     apply_midi_clips(r, &current, target_file, &target.midi_notes);
 
-    // -- Compose state (definitions, placements, drum groups, lyrics) --
-    apply_compose(r, target_file);
-
-    // -- Migrated domains (ARCH-01 A-13) -------------------------------
-    // All four stages, back to back: this path has no inline code left
-    // between them. Tempo / signature events, chord track, markers. Tempo
-    // is still sent after the clips here (the full path sends it before
-    // them; roadmap group (4) moves it there on this path too).
-    reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
-    // The derived-clip map: the snapshot's with every entry, pending
-    // echoes included (FU-H2a, A-6). After `apply_compose` reset it.
+    // -- Migrated domains, tail (ARCH-01 A-13) -------------------------
+    // The lyric side-table (padded to the note counts `apply_midi_clips`
+    // just installed) and the derived-clip map: the snapshot's with every
+    // entry, pending echoes included (FU-H2a, A-6). After
+    // `ComposeSections` reset it.
     reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
     // References (reconciled against the engine's live ones, no
     // `ClearAll` here), then pool, quantize, performance, track groups,
@@ -353,67 +352,6 @@ fn midi_clip_set_matches(a: &[ProjectMidiClip], b: &[ProjectMidiClip]) -> bool {
 // =====================================================================
 // Apply layer
 // =====================================================================
-
-fn apply_global(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
-    if a.bpm != b.bpm {
-        r.transport.bpm = b.bpm;
-        let _ = r.engine.send(AudioCommand::SetBpm { bpm: b.bpm });
-    }
-    if a.time_sig_num != b.time_sig_num || a.time_sig_den != b.time_sig_den {
-        r.transport.time_sig_num = b.time_sig_num;
-        r.transport.time_sig_den = b.time_sig_den;
-        let _ = r.engine.send(AudioCommand::SetTimeSignature {
-            numerator: b.time_sig_num,
-            denominator: b.time_sig_den,
-        });
-    }
-    if a.metronome_enabled != b.metronome_enabled {
-        r.transport.metronome_enabled = b.metronome_enabled;
-        let _ = r.engine.send(AudioCommand::SetMetronomeEnabled {
-            enabled: b.metronome_enabled,
-        });
-    }
-    if a.master_volume != b.master_volume {
-        r.master_volume = b.master_volume;
-        let _ = r.engine.send(AudioCommand::SetMasterVolume {
-            volume: db_to_gain(b.master_volume),
-        });
-    }
-    if a.loop_enabled != b.loop_enabled
-        || a.loop_in != b.loop_in
-        || a.loop_out != b.loop_out
-    {
-        r.transport.loop_enabled = b.loop_enabled;
-        r.transport.loop_in = b.loop_in;
-        r.transport.loop_out = b.loop_out;
-        r.transport.loop_range_set = b.loop_enabled;
-        let _ = r.engine.send(AudioCommand::SetLoopRange {
-            enabled: b.loop_enabled,
-            loop_in: b.loop_in,
-            loop_out: b.loop_out,
-        });
-    }
-    if a.midi_clock_send_enabled != b.midi_clock_send_enabled
-        || a.midi_clock_send_device != b.midi_clock_send_device
-    {
-        r.midi_devices.midi_clock_send_enabled = b.midi_clock_send_enabled;
-        r.midi_devices.midi_clock_send_device = b.midi_clock_send_device.clone();
-        let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
-            device: b.midi_clock_send_device.clone(),
-            enabled: b.midi_clock_send_enabled,
-        });
-    }
-    if a.midi_clock_recv_enabled != b.midi_clock_recv_enabled
-        || a.midi_clock_recv_device != b.midi_clock_recv_device
-    {
-        r.midi_devices.midi_clock_recv_enabled = b.midi_clock_recv_enabled;
-        r.midi_devices.midi_clock_recv_device = b.midi_clock_recv_device.clone();
-        let _ = r.engine.send(AudioCommand::SetMidiClockInput {
-            device: b.midi_clock_recv_device.clone(),
-            enabled: b.midi_clock_recv_enabled,
-        });
-    }
-}
 
 fn apply_tracks(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     let a_by_id: HashMap<u64, &ProjectTrack> = a.tracks.iter().map(|t| (t.id, t)).collect();
@@ -1011,38 +949,6 @@ fn apply_midi_clips(
             mc.name = cb.name.clone();
             mc.notes = target_for_clip;
         }
-    }
-}
-
-fn apply_compose(r: &mut Resonance, b: &ProjectFile) {
-    // Section definitions / placements — drum arrangements included, from
-    // `ProjectSectionDefinition::arrangement` — come back through
-    // `load_from_project`, which clears runtime-only sub-state — the
-    // derived-clip map and counter included; the `DerivedClips` domain
-    // restores both afterwards, the counter from the floor the ctx carries
-    // (ARCH-01 A-6).
-    r.compose
-        .load_from_project(&b.section_definitions, &b.section_placements);
-    // Restore the drum pattern bank. Modern snapshots persist
-    // `drum_patterns`; older snapshots still in the undo stack only have
-    // the legacy `drum_groups` field, so promote it the same way the
-    // project loader does. Unlike the full load, an all-empty snapshot
-    // clears the bank rather than keeping the seeded default.
-    restore_drum_patterns(&mut r.compose, b, true);
-    // Lyrics from `ProjectMidiClip::vocal_lyrics`, installed exactly as
-    // the full replay does (`replay_midi_clips`). After `apply_midi_clips`,
-    // so the note counts they are padded to are the snapshot's; the clip
-    // id set is the snapshot's too (`structurally_compatible`).
-    r.compose.vocal_audio.clip_lyrics.clear();
-    for pmc in &b.midi_clips {
-        let note_count = r
-            .midi_clips
-            .iter()
-            .find(|mc| mc.id == pmc.id)
-            .map_or(0, |mc| mc.notes.len());
-        r.compose
-            .vocal_audio
-            .restore_clip_lyrics(pmc.id, &pmc.vocal_lyrics, note_count);
     }
 }
 
