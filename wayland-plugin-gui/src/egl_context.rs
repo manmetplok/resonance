@@ -20,6 +20,10 @@ pub type Egl = egl::DynamicInstance<egl::EGL1_5>;
 /// extensions. `khronos-egl 6` does not expose this constant directly, so we define it locally.
 const EGL_PLATFORM_WAYLAND_KHR: egl::Enum = 0x31D8;
 
+/// What [`EglContext::build`] makes: config, context, window surface, the
+/// `wl_egl_window` behind it, and its physical size.
+type Built = (egl::Config, egl::Context, egl::Surface, WlEglSurface, (i32, i32));
+
 pub struct EglContext {
     egl: Egl,
     display: egl::Display,
@@ -69,6 +73,36 @@ impl EglContext {
         egl.initialize(display)
             .map_err(|e| EditorError::EglInit(format!("initialize: {e}")))?;
 
+        // From here on the display is initialized and owns driver state (a
+        // render-node fd, the DRI screen, an event queue and proxies on our
+        // `wl_display`), so a failure must terminate it again — see `Drop`.
+        match Self::build(&egl, display, wl_surface, logical_size, scale) {
+            Ok((config, context, surface, wl_egl_surface, current_size)) => Ok(Self {
+                egl,
+                display,
+                _config: config,
+                context,
+                surface,
+                wl_egl_surface,
+                current_size,
+            }),
+            Err(err) => {
+                let _ = egl.terminate(display);
+                Err(err)
+            }
+        }
+    }
+
+    /// Everything after `eglInitialize`: config, context and window
+    /// surface. Cleans up the context itself if the surface fails; the
+    /// caller terminates the display on any error.
+    fn build(
+        egl: &Egl,
+        display: egl::Display,
+        wl_surface: &WlSurface,
+        logical_size: (u32, u32),
+        scale: i32,
+    ) -> Result<Built, EditorError> {
         egl.bind_api(egl::OPENGL_API)
             .map_err(|e| EditorError::EglInit(format!("bind_api: {e}")))?;
 
@@ -123,38 +157,41 @@ impl EglContext {
         let phys_h = logical_size.1 as i32 * scale.max(1);
         wl_surface.set_buffer_scale(scale.max(1));
 
-        // Wrap the wl_surface in a wl_egl_window at the physical buffer size.
-        let wl_egl_surface = WlEglSurface::new(wl_surface.id(), phys_w, phys_h)
-            .map_err(|e| EditorError::EglSurface(e.to_string()))?;
+        // The window surface stage; on failure the context goes too.
+        let surfaces = (|| {
+            // Wrap the wl_surface in a wl_egl_window at the physical buffer size.
+            let wl_egl_surface = WlEglSurface::new(wl_surface.id(), phys_w, phys_h)
+                .map_err(|e| EditorError::EglSurface(e.to_string()))?;
 
-        // SAFETY: `create_window_surface` takes a `NativeWindowType` raw
-        // pointer it treats as a native window handle. On Wayland the
-        // platform-specific native window is a `wl_egl_window*`, which
-        // `wl_egl_surface.ptr()` returns from a `WlEglSurface` whose
-        // lifetime is tied to `self.wl_egl_surface` below. The EGL
-        // surface borrows that handle for its lifetime, and `Drop` for
-        // `EglContext` destroys the surface before `wl_egl_surface`
-        // itself is dropped (field declaration order: `surface` before
-        // `wl_egl_surface`, and drop runs in declaration order).
-        let surface = unsafe {
-            egl.create_window_surface(
-                display,
-                config,
-                wl_egl_surface.ptr() as egl::NativeWindowType,
-                None,
-            )
-            .map_err(|e| EditorError::EglSurface(e.to_string()))?
+            // SAFETY: `create_window_surface` takes a `NativeWindowType` raw
+            // pointer it treats as a native window handle. On Wayland the
+            // platform-specific native window is a `wl_egl_window*`, which
+            // `wl_egl_surface.ptr()` returns from a `WlEglSurface` whose
+            // lifetime is tied to `self.wl_egl_surface` below. The EGL
+            // surface borrows that handle for its lifetime, and `Drop` for
+            // `EglContext` destroys the surface before `wl_egl_surface`
+            // itself is dropped (field declaration order: `surface` before
+            // `wl_egl_surface`, and drop runs in declaration order).
+            let surface = unsafe {
+                egl.create_window_surface(
+                    display,
+                    config,
+                    wl_egl_surface.ptr() as egl::NativeWindowType,
+                    None,
+                )
+                .map_err(|e| EditorError::EglSurface(e.to_string()))?
+            };
+            Ok((surface, wl_egl_surface))
+        })();
+        let (surface, wl_egl_surface) = match surfaces {
+            Ok(s) => s,
+            Err(err) => {
+                let _ = egl.destroy_context(display, context);
+                return Err(err);
+            }
         };
 
-        Ok(Self {
-            egl,
-            display,
-            _config: config,
-            context,
-            surface,
-            wl_egl_surface,
-            current_size: (phys_w, phys_h),
-        })
+        Ok((config, context, surface, wl_egl_surface, (phys_w, phys_h)))
     }
 
     pub fn make_current(&self) -> Result<(), EditorError> {
@@ -214,13 +251,25 @@ impl Drop for EglContext {
         let _ = self.egl.make_current(self.display, None, None, None);
         let _ = self.egl.destroy_surface(self.display, self.surface);
         let _ = self.egl.destroy_context(self.display, self.context);
-        // Intentionally do NOT call `eglTerminate` here. The EGL display
-        // is process-wide shared state: the same display handle is
-        // returned by `get_platform_display` for any subsequent editor
-        // (and possibly by the host's own EGL/GLES code). `eglTerminate`
-        // tears down that shared state regardless of who else still
-        // depends on it, which can crash a second plugin editor or any
-        // other GL surface in the host. Letting the display live until
-        // process exit is the conventional workaround.
+        // Terminate the display (PLG-02). It is NOT shared: EGL keys a
+        // platform display on the native display pointer, and that is this
+        // editor's private `wl_display` — every editor thread opens its own
+        // `Connection`, and the host's own GL (if any) runs on a different
+        // one. Leaving it initialized leaked a DRM render-node fd and the
+        // driver's screen per editor open, and left Mesa holding an
+        // initialized display keyed by a pointer that is about to be
+        // disconnected; a later editor whose `wl_display` landed at the same
+        // address got that stale display back, proxies and event queue from
+        // a dead connection included.
+        //
+        // Order matters: the driver's event queue and proxies live on our
+        // `wl_display`, so this must run before the `Connection` drops.
+        // `EditorThread::run_inner` guarantees that on every exit path:
+        // `egl_ctx` is declared after (so dropped before) the connection,
+        // the event loop and the state that hold it.
+        let _ = self.egl.terminate(self.display);
+        // Drop this thread's EGL bookkeeping too, so the editor thread
+        // leaves nothing bound to the terminated display behind.
+        let _ = self.egl.release_thread();
     }
 }
