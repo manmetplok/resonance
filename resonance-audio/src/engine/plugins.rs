@@ -276,43 +276,35 @@ pub fn service_host_restart_request(
     )
 }
 
-/// The engine's plugin instance-id allocation rule, shared by the track,
-/// bus and master add paths so the three cannot drift.
+/// Refuse an add whose id is already live in `ctx.plugins`, rather than
+/// silently replacing the instance it names — shared by the track, bus
+/// and master add paths (ARCH-04 D-1).
 ///
-/// Without a hint, hand out `*next_plugin_id` and advance it.
+/// Every add now carries an app-allocated id
+/// (`Resonance::allocate_plugin_id`); the engine has no allocator of its
+/// own left to fall back on, so a collision here is not a legitimate
+/// retry to smooth over — it means the app's mirror and the engine's
+/// live set have drifted (a bug in the app's id bookkeeping, or the
+/// GUI's own `PluginAdded` echo still in flight when the same slot is
+/// re-armed). `EngineErrorKind::Internal`, not `Busy`: nothing about
+/// retrying the identical command would make it succeed, which is what
+/// distinguishes this from `AddBus`'s `MAX_BUSSES` refusal.
 ///
-/// With a hint, honour it — and advance the counter past it ONLY when the
-/// hint is below [`CONTROL_PLUGIN_ID_BASE`]. Hints below the base are
-/// engine-allocated ids coming back on the project-load replay path, and
-/// the counter has to move past those or a later add would reuse one.
-/// Hints at or above the base come from the app's own allocator (ba doc
-/// #273, todo #1234), and advancing for those is what BREAKS the split:
-/// it drags `next_plugin_id` up into the control range, so the next
-/// engine-allocated add — `master.add_effect` still is one — takes an id
-/// the app also believes is free. The app can only skip ids it already
-/// mirrors, so it cannot skip one whose `PluginAdded` echo is still in
-/// flight (dlopen + `create_instance` + `query_params`), and the two
-/// plugins end up sharing one live CLAP instance in `ctx.plugins`, driven
-/// from two chains.
-///
-/// Ignoring control-range hints here is safe precisely because the app
-/// owns that range exclusively.
-pub fn allocate_plugin_instance_id(
-    next_plugin_id: &mut PluginInstanceId,
-    id_hint: Option<PluginInstanceId>,
-) -> PluginInstanceId {
-    match id_hint {
-        Some(hint) => {
-            if hint < CONTROL_PLUGIN_ID_BASE {
-                *next_plugin_id = (*next_plugin_id).max(hint + 1);
-            }
-            hint
-        }
-        None => {
-            let id = *next_plugin_id;
-            *next_plugin_id += 1;
-            id
-        }
+/// Returns `true` (and has already reported the error) when the add must
+/// stop here.
+pub(crate) fn reject_if_plugin_id_in_use(
+    ctx: &HandlerCtx,
+    id: PluginInstanceId,
+    clap_plugin_id: &str,
+) -> bool {
+    if ctx.plugins.read().contains_key(&id) {
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            "plugin instance id {id} ({clap_plugin_id}) is already in use; refusing the add \
+             rather than replacing the live instance"
+        ))));
+        true
+    } else {
+        false
     }
 }
 
@@ -322,23 +314,27 @@ pub(crate) fn handle_add_plugin(
     track_id: TrackId,
     clap_file_path: String,
     clap_plugin_id: String,
-    id_hint: Option<PluginInstanceId>,
+    id: PluginInstanceId,
 ) {
+    if reject_if_plugin_id_in_use(ctx, id, &clap_plugin_id) {
+        return;
+    }
+
     let path = Path::new(&clap_file_path);
 
     let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
         Ok(idx) => idx,
         Err(reason) => {
-            report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
             return;
         }
     };
 
     let actual_plugin_id = match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id.clone())
     {
-        Ok(id) => id,
+        Ok(resolved) => resolved,
         Err(reason) => {
-            report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
             return;
         }
     };
@@ -352,7 +348,7 @@ pub(crate) fn handle_add_plugin(
 
     match state.bundles[bundle_idx].create_instance(&actual_plugin_id, ctx.sample_rate) {
         Ok(instance) => {
-            let instance_id = allocate_plugin_instance_id(&mut state.next_plugin_id, id_hint);
+            let instance_id = id;
 
             // Query params + has_gui + output port layout before moving
             // instance into shared map.
@@ -389,7 +385,7 @@ pub(crate) fn handle_add_plugin(
         }
         Err(e) => report_plugin_load_failure(
             ctx,
-            id_hint,
+            Some(id),
             &actual_plugin_id,
             &clap_file_path,
             format!("Failed to create plugin instance: {}", e),

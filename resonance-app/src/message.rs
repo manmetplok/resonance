@@ -132,22 +132,19 @@ pub enum PluginMessage {
         bypassed: bool,
     },
     AddPluginToTrack(TrackId, ScannedPlugin),
-    /// Add a plugin whose instance id the *app* chose up front, and
-    /// mirror a placeholder slot into `TrackState.plugins` immediately,
-    /// so the caller can address the plugin without waiting for the
-    /// engine's `PluginAdded` echo (ba doc #273, todo #1234). Same hint
-    /// pattern as [`BusMessage::AddBusWithId`] and the project-load
-    /// replay; the engine bumps its own allocator past a hinted id only
-    /// when that hint is BELOW
-    /// [`CONTROL_PLUGIN_ID_BASE`](crate::state::plugin_index::CONTROL_PLUGIN_ID_BASE)
-    /// — hints from the control range deliberately leave the engine
-    /// allocator untouched, which is what keeps the two ranges from
-    /// colliding. `engine_events::plugins::track_added` is idempotent,
-    /// so the echo fills the placeholder's params in rather than pushing
-    /// a duplicate.
+    /// Add a plugin and mirror a placeholder slot into `TrackState.plugins`
+    /// immediately, so the caller can address the plugin without waiting
+    /// for the engine's `PluginAdded` echo (ba doc #273, todo #1234).
+    /// `engine_events::plugins::track_added` is idempotent, so the echo
+    /// fills the placeholder's params in rather than pushing a duplicate.
     ///
-    /// The GUI never sends this — its adds stay engine-allocated via
-    /// [`AddPluginToTrack`](Self::AddPluginToTrack).
+    /// Since ARCH-04 D-1 the instance id is app-allocated
+    /// (`Resonance::allocate_plugin_id`) for
+    /// [`AddPluginToTrack`](Self::AddPluginToTrack) too — the engine has
+    /// no allocator of its own left for plugins. What distinguishes this
+    /// variant from that one is only the eager mirror: the GUI never
+    /// sends `AddPluginToTrackWithId`, because it has no reply to answer
+    /// synchronously and is content to wait for the echo like before.
     AddPluginToTrackWithId {
         track_id: TrackId,
         instance_id: PluginInstanceId,

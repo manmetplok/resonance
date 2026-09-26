@@ -126,16 +126,15 @@ fn params_at_defaults() -> Vec<ParamInfo> {
     ]
 }
 
-/// The instance id the app hinted on the most recent add.
+/// The instance id the app allocated on the most recent add.
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToBus { id_hint, .. }
-            | AudioCommand::AddPluginToMaster { id_hint, .. } => Some(id_hint),
+            AudioCommand::AddPluginToBus { id, .. }
+            | AudioCommand::AddPluginToMaster { id, .. } => Some(id),
             _ => None,
         })
         .expect("an add reached the engine")
-        .expect("the control path hints the instance id")
 }
 
 fn create_bus(app: &mut Resonance) -> u64 {

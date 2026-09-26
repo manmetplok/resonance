@@ -106,7 +106,6 @@ pub(crate) struct HandlerState {
     /// asset WAVs are named `asset_{id}.wav`, clip WAVs `clip_{id}.wav`,
     /// so the two counters never collide on disk.
     pub next_asset_id: AssetId,
-    pub next_plugin_id: PluginInstanceId,
     pub next_send_id: SendId,
     /// Aux sends keyed by id, in insertion order. Engine-thread-local
     /// (never read from the audio callback), so plain data — see
@@ -288,7 +287,6 @@ impl HandlerState {
             next_bus_id: 1,
             next_clip_id: 1,
             next_asset_id: 1,
-            next_plugin_id: 1,
             next_send_id: 1,
             aux_sends: IndexMap::new(),
             sidechain_routes: Default::default(),

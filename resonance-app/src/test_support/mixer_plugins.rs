@@ -81,11 +81,12 @@ impl Resonance {
         self.aux.next_control_send_id
     }
 
-    /// Test-only: the app-side plugin-instance id counter, for the same
+    /// Test-only: the app-side plugin-instance id counter — the only
+    /// plugin-id allocator left since ARCH-04 D-1 — for the same
     /// invariant check on the plugin space.
     #[doc(hidden)]
-    pub fn test_next_control_plugin_id(&self) -> resonance_audio::types::PluginInstanceId {
-        self.next_control_plugin_id
+    pub fn test_next_plugin_id(&self) -> resonance_audio::types::PluginInstanceId {
+        self.next_plugin_id
     }
 
     /// Test-only: read the mirrored aux-send graph. Driven from

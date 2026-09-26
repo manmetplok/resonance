@@ -270,16 +270,18 @@ fn add_plugin(
         )
     };
 
-    // The GUI's add is asynchronous: the engine allocates the instance
-    // id, instantiates the plugin and echoes `PluginAdded`, and only
-    // then does the app mirror a slot. A control client that issued
-    // `track.set_plugin_param` immediately afterwards therefore got
-    // "... it carries: []", which reads as "the add failed" (ba doc
-    // #273, todo #1234). So allocate the id app-side, pass it as
-    // `id_hint`, and let the message handler mirror a placeholder slot —
-    // the plugin is addressable in the SAME update cycle as this reply.
-    // The GUI path is untouched and stays engine-allocated.
-    let instance_id = app.allocate_control_plugin_id();
+    // The GUI's add is asynchronous: it sends `AddPlugin` and waits for
+    // the engine to instantiate the plugin and echo `PluginAdded` before
+    // mirroring a slot (the id itself is app-allocated too since ARCH-04
+    // D-1, but nothing is mirrored until the echo lands). A control
+    // client that issued `track.set_plugin_param` immediately afterwards
+    // therefore got "... it carries: []", which reads as "the add
+    // failed" (ba doc #273, todo #1234). So mirror a placeholder slot
+    // right here instead of waiting for the echo — the plugin is
+    // addressable in the SAME update cycle as this reply. The GUI path
+    // is untouched: it still waits, via `AddPluginToTrack` rather than
+    // this `...WithId` variant.
+    let instance_id = app.allocate_plugin_id();
     let task = run_via_update(
         app,
         Message::Plugin(PluginMessage::AddPluginToTrackWithId {

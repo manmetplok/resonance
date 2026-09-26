@@ -16,23 +16,18 @@
 //!
 //! Because this module already owns the "every live plugin instance,
 //! wherever it lives" view, it is also where
-//! [`Resonance::allocate_control_plugin_id`] lives — the app-side
-//! instance-id allocator the control API needs to add a plugin
-//! synchronously (ba doc #273, todo #1234).
+//! [`Resonance::allocate_plugin_id`] lives — the app-side instance-id
+//! allocator every plugin add (GUI, control API, presets, templates,
+//! project-load replay) draws from (ARCH-04 D-1, ba doc #273, todo
+//! #1234). There is no engine-side counter to stay clear of any more:
+//! the engine only ever honours the id it is given, and refuses a
+//! collision (`resonance-audio/src/engine/plugins.rs::handle_add_plugin`
+//! and its bus/master siblings) rather than allocating around it.
 
 use resonance_audio::types::PluginInstanceId;
 
 use crate::state::{PluginLocator, PluginSlotState};
 use crate::Resonance;
-
-/// First plugin instance id the app may allocate for itself.
-///
-/// Re-exported from `resonance-audio` rather than declared here: the
-/// engine has to know the same boundary, because it must NOT advance its
-/// own allocator past a hint from this range (see
-/// `engine::plugins::allocate_plugin_instance_id`). One definition, both
-/// sides.
-pub use super::ids::CONTROL_PLUGIN_ID_BASE;
 
 impl Resonance {
     /// Locate a plugin slot on any track, bus, or master by instance id
@@ -124,46 +119,34 @@ impl Resonance {
         self.plugin_index.remove(&instance_id);
     }
 
-    /// Allocate a plugin instance id the APP chose, for a control-API
-    /// add that has to report `occurrence`/`slot` in its reply (ba doc
-    /// #273, todo #1234).
+    /// Allocate a plugin instance id, for EVERY plugin add — GUI, control
+    /// API, presets, templates, project-load replay (ARCH-04 D-1). The
+    /// id is sent to the engine as `AudioCommand::AddPlugin`/
+    /// `AddPluginToBus`/`AddPluginToMaster`'s `id` field, which the
+    /// engine honours unconditionally and refuses to reuse
+    /// (`resonance-audio/src/engine/plugins.rs::handle_add_plugin` and
+    /// its bus/master siblings reject a collision with
+    /// `EngineErrorKind::Internal` rather than replacing the live
+    /// instance).
     ///
-    /// The engine normally allocates instance ids and echoes them back
-    /// with `PluginAdded`, which is too late for a synchronous reply.
-    /// The id is passed to the engine as `id_hint`, which the engine
-    /// honours (`resonance-audio/src/engine/plugins.rs`), exactly as the
-    /// project-load replay path already relies on.
+    /// Before D-1 this only ran for control-API adds that had to report
+    /// their id synchronously (ba doc #273, todo #1234), from a base
+    /// (`CONTROL_PLUGIN_ID_BASE`) chosen to sit above the engine's own
+    /// counter so a GUI add's engine-allocated id could never land here.
+    /// Now that the engine has no allocator of its own left for plugins,
+    /// that partition is gone: this is the ONLY plugin-id allocator in
+    /// the app, so there is no neighbouring range to stay clear of, and
+    /// it starts at 1.
     ///
-    /// Same distinct-range convention as
-    /// [`Resonance::allocate_track_id`](crate::Resonance::allocate_track_id)
-    /// (1e9) and
-    /// [`allocate_return_bus_id`](crate::state::TrackRegistry::allocate_return_bus_id)
-    /// (2e9): control-allocated plugin ids count up from
-    /// [`CONTROL_PLUGIN_ID_BASE`], above anything the engine's own
-    /// allocator will reach.
-    ///
-    /// What makes that a guarantee rather than a hope is the engine side
-    /// of the same constant:
-    /// `engine::plugins::allocate_plugin_instance_id`
-    /// advances `next_plugin_id` past a hint only when the hint is BELOW
-    /// the base. Without that, the first control add would drag the
-    /// engine's counter into this range and the next engine-allocated
-    /// add (every GUI add still is one) could take an id this allocator
-    /// also considers free.
-    ///
-    /// The in-use scan below is belt-and-braces on top of the range
-    /// split, not the thing that makes it safe: it can only see ids the
-    /// app already mirrors, so an engine-allocated plugin whose
-    /// `PluginAdded` echo is still in flight is invisible to it.
-    pub(crate) fn allocate_control_plugin_id(&mut self) -> PluginInstanceId {
-        if self.next_control_plugin_id < CONTROL_PLUGIN_ID_BASE {
-            self.next_control_plugin_id = CONTROL_PLUGIN_ID_BASE;
-        }
-        // The in-use scan checks the chains themselves, not
-        // `plugin_index`: that is a cache, and a stale one must never
-        // hand out a live id.
+    /// The in-use scan checks the chains themselves, not `plugin_index`
+    /// (a cache — a stale one must never hand out a live id), so it is
+    /// what actually keeps two calls from returning the same id even
+    /// though the counter alone cannot: a project loaded with ids the
+    /// counter hasn't caught up to yet is exactly the case that scan is
+    /// for.
+    pub(crate) fn allocate_plugin_id(&mut self) -> PluginInstanceId {
         let (registry, master) = (&self.registry, &self.master_plugins);
-        super::ids::allocate_unused(&mut self.next_control_plugin_id, |id| {
+        super::ids::allocate_unused(&mut self.next_plugin_id, |id| {
             registry
                 .tracks
                 .iter()

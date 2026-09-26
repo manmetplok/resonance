@@ -98,15 +98,14 @@ fn ids(view: &PluginParamsView) -> Vec<&str> {
         .collect()
 }
 
-/// The instance id the app hinted on the most recent bus add.
+/// The instance id the app allocated on the most recent bus add.
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToBus { id_hint, .. } => Some(id_hint),
+            AudioCommand::AddPluginToBus { id, .. } => Some(id),
             _ => None,
         })
         .expect("an AddPluginToBus reached the engine")
-        .expect("the control path hints the instance id")
 }
 
 /// The engine echo that supplies a bus plugin's parameter list.

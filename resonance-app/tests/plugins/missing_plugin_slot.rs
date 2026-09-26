@@ -304,15 +304,15 @@ fn relocating_re_adds_under_the_same_instance_id_and_keeps_the_position() {
         .filter_map(|c| match c {
             AudioCommand::AddPlugin {
                 clap_plugin_id,
-                id_hint,
+                id,
                 ..
-            } => Some((clap_plugin_id, id_hint)),
+            } => Some((clap_plugin_id, id)),
             _ => None,
         })
         .collect();
     assert_eq!(
         adds,
-        vec![(EQ_ID.to_owned(), Some(VERB))],
+        vec![(EQ_ID.to_owned(), VERB)],
         "re-added under the SAME instance id — that id is what the preserved settings are keyed by"
     );
     assert_eq!(
@@ -487,9 +487,9 @@ fn swapping_a_missing_plugin_keeps_its_place_in_the_chain() {
     let added = cmds.iter().find_map(|c| match c {
         AudioCommand::AddPlugin {
             clap_plugin_id,
-            id_hint,
+            id,
             ..
-        } if clap_plugin_id == EQ_ID => Some(id_hint.expect("app-allocated id")),
+        } if clap_plugin_id == EQ_ID => Some(*id),
         _ => None,
     });
     assert_eq!(added, Some(slots[1].0));
@@ -582,7 +582,7 @@ fn replacement_move_index(
 ) -> Option<usize> {
     let cmds: Vec<AudioCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     let added = cmds.iter().find_map(|c| match c {
-        AudioCommand::AddPlugin { id_hint, .. } => *id_hint,
+        AudioCommand::AddPlugin { id, .. } => Some(*id),
         _ => None,
     })?;
     cmds.iter().find_map(|c| match c {

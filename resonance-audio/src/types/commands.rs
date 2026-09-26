@@ -280,9 +280,12 @@ pub enum AudioCommand {
         track_id: TrackId,
         clap_file_path: String,
         clap_plugin_id: String,
-        /// If provided, the engine uses this id instead of allocating a
-        /// new one and bumps its allocator past it. Set by project load.
-        id_hint: Option<PluginInstanceId>,
+        /// The app allocates every plugin instance id
+        /// (`Resonance::allocate_plugin_id`, ARCH-04 D-1); the engine
+        /// only ever honours it. Rejected with `EngineError::internal`
+        /// (`AudioEvent::Error`) if `id` is already live, rather than
+        /// silently re-numbering the add.
+        id: PluginInstanceId,
     },
     RemovePlugin {
         track_id: TrackId,
@@ -1048,9 +1051,12 @@ pub enum AudioCommand {
         bus_id: BusId,
         clap_file_path: String,
         clap_plugin_id: String,
-        /// If provided, the engine uses this id instead of allocating a
-        /// new one and bumps its allocator past it. Set by project load.
-        id_hint: Option<PluginInstanceId>,
+        /// The app allocates every plugin instance id
+        /// (`Resonance::allocate_plugin_id`, ARCH-04 D-1); the engine
+        /// only ever honours it. Rejected with `EngineError::internal`
+        /// (`AudioEvent::Error`) if `id` is already live, rather than
+        /// silently re-numbering the add.
+        id: PluginInstanceId,
     },
     RemovePluginFromBus {
         bus_id: BusId,
@@ -1116,9 +1122,12 @@ pub enum AudioCommand {
     AddPluginToMaster {
         clap_file_path: String,
         clap_plugin_id: String,
-        /// If provided, the engine uses this id instead of allocating a
-        /// new one and bumps its allocator past it. Set by project load.
-        id_hint: Option<PluginInstanceId>,
+        /// The app allocates every plugin instance id
+        /// (`Resonance::allocate_plugin_id`, ARCH-04 D-1); the engine
+        /// only ever honours it. Rejected with `EngineError::internal`
+        /// (`AudioEvent::Error`) if `id` is already live, rather than
+        /// silently re-numbering the add.
+        id: PluginInstanceId,
     },
     RemovePluginFromMaster {
         instance_id: PluginInstanceId,

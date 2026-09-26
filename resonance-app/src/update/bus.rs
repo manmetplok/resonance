@@ -145,11 +145,14 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
             }
         }
         BusMessage::AddPluginToBus(bus_id, plugin) => {
+            // App-allocated (ARCH-04 D-1); still no eager mirror, same as
+            // the track GUI add — the bus chain waits for `BusPluginAdded`.
+            let id = r.allocate_plugin_id();
             let _ = r.engine.send(AudioCommand::AddPluginToBus {
                 bus_id,
                 clap_file_path: plugin.clap_file_path,
                 clap_plugin_id: plugin.clap_plugin_id,
-                id_hint: None,
+                id,
             });
         }
         BusMessage::AddPluginToBusWithId {
@@ -161,7 +164,7 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
                 bus_id,
                 clap_file_path: plugin.clap_file_path.clone(),
                 clap_plugin_id: plugin.clap_plugin_id.clone(),
-                id_hint: Some(instance_id),
+                id: instance_id,
             });
             // Mirror the slot NOW with an empty param list, as the
             // project-load replay does; `bus_added` finds it by

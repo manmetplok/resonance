@@ -69,16 +69,14 @@ fn chain(app: &mut Resonance) -> PluginParamsView {
     .expect("track.plugin_params succeeds")
 }
 
-/// The instance id the app handed the engine as `id_hint` on the most
-/// recent add.
+/// The instance id the app allocated on the most recent add.
 fn hinted_instance(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPlugin { id_hint, .. } => Some(id_hint),
+            AudioCommand::AddPlugin { id, .. } => Some(id),
             _ => None,
         })
         .expect("an AddPlugin command reached the engine")
-        .expect("the control path must hint the instance id, not let the engine allocate")
 }
 
 #[test]
@@ -170,7 +168,7 @@ fn the_engine_echo_fills_the_placeholder_instead_of_duplicating_it() {
 }
 
 #[test]
-fn the_gui_add_path_stays_engine_allocated() {
+fn the_gui_add_now_carries_an_app_allocated_id_but_still_waits_for_the_echo() {
     use resonance_app::message::PluginMessage;
     let mut app = app();
     let rx = app.test_capture_engine();
@@ -183,16 +181,19 @@ fn the_gui_add_path_stays_engine_allocated() {
     ..Default::default()
 };
     let _ = app.update(Message::Plugin(PluginMessage::AddPluginToTrack(TRACK, eq)));
-    let hint = std::iter::from_fn(|| rx.try_recv().ok())
+    // ARCH-04 D-1: the command's `id` field is mandatory now (no more
+    // `Option`), so simply matching it out here is the proof that the
+    // app supplied a concrete id up front rather than the engine.
+    let _id = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPlugin { id_hint, .. } => Some(id_hint),
+            AudioCommand::AddPlugin { id, .. } => Some(id),
             _ => None,
         })
         .expect("an AddPlugin command reached the engine");
-    assert_eq!(hint, None, "the GUI add is unchanged: the engine allocates");
     assert!(
         chain(&mut app).plugins.is_empty(),
-        "and it mirrors nothing until the echo lands"
+        "but nothing is mirrored until the echo lands — same as before D-1, \
+         only the id's origin changed"
     );
 }
 

@@ -122,7 +122,7 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
         track_id,
         clap_file_path: pp.clap_file_path.clone(),
         clap_plugin_id: pp.clap_plugin_id.clone(),
-        id_hint: Some(pp.instance_id),
+        id: pp.instance_id,
     });
 
     let order = r.registry.next_track_order;
@@ -259,7 +259,7 @@ pub(super) fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProj
             bus_id: pb.id,
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
-            id_hint: Some(pp.instance_id),
+            id: pp.instance_id,
         },
     );
 
@@ -288,7 +288,7 @@ pub(super) fn replay_master(
         AudioCommand::AddPluginToMaster {
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
-            id_hint: Some(pp.instance_id),
+            id: pp.instance_id,
         }
     });
 }

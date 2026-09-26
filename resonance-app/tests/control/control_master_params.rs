@@ -86,15 +86,14 @@ fn value_of(view: &PluginParamsView, slot: usize, param: &str) -> f64 {
         .value
 }
 
-/// The instance id the app hinted on the most recent master add.
+/// The instance id the app allocated on the most recent master add.
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToMaster { id_hint, .. } => Some(id_hint),
+            AudioCommand::AddPluginToMaster { id, .. } => Some(id),
             _ => None,
         })
         .expect("an AddPluginToMaster reached the engine")
-        .expect("the control path hints the instance id")
 }
 
 /// Add an effect and play the engine's echo back, which is what supplies

@@ -63,10 +63,14 @@ pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
             });
         }
         MasterMessage::AddPluginToMaster(plugin) => {
+            // App-allocated (ARCH-04 D-1); still no eager mirror, same as
+            // the track/bus GUI adds — the chain waits for
+            // `MasterPluginAdded`.
+            let id = r.allocate_plugin_id();
             let _ = r.engine.send(AudioCommand::AddPluginToMaster {
                 clap_file_path: plugin.clap_file_path,
                 clap_plugin_id: plugin.clap_plugin_id,
-                id_hint: None,
+                id,
             });
         }
         MasterMessage::AddPluginToMasterWithId {
@@ -76,7 +80,7 @@ pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
             let _ = r.engine.send(AudioCommand::AddPluginToMaster {
                 clap_file_path: plugin.clap_file_path.clone(),
                 clap_plugin_id: plugin.clap_plugin_id.clone(),
-                id_hint: Some(instance_id),
+                id: instance_id,
             });
             // Mirror the slot NOW with an empty param list, as the
             // project-load replay does; `master_added` finds it by

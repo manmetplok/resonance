@@ -23,8 +23,8 @@ use resonance_common::{CompSegment, TakeGroup, TakeGroupId, TakeId};
 
 use crate::clap_host::PluginMap;
 use crate::engine::{
-    automation::AutomationSnapshot, busses, master, takes, tracks, transport, OfflineRenderGuard,
-    SharedState,
+    automation::AutomationSnapshot, busses, master, plugins, takes, tracks, transport,
+    OfflineRenderGuard, SharedState,
 };
 use crate::mixer::CompRenderTable;
 use crate::types::*;
@@ -257,6 +257,62 @@ impl EngineHandlerHarness {
     /// guard: past `MAX_BUSSES`, the engine refuses rather than adding).
     pub fn add_bus(&mut self, id_hint: Option<BusId>, name: Option<String>) {
         self.with_ctx(|ctx, state| busses::handle_add_bus(ctx, state, id_hint, name));
+    }
+
+    /// Run the real `AddPlugin` handler (ARCH-04 D-1's
+    /// `EngineErrorKind::Internal` guard: `id` already live in
+    /// `ctx.plugins` refuses the add rather than replacing the instance).
+    pub fn add_plugin(
+        &mut self,
+        track_id: TrackId,
+        clap_file_path: String,
+        clap_plugin_id: String,
+        id: PluginInstanceId,
+    ) {
+        self.with_ctx(|ctx, state| {
+            plugins::handle_add_plugin(ctx, state, track_id, clap_file_path, clap_plugin_id, id)
+        });
+    }
+
+    /// Run the real `AddPluginToBus` handler — the bus twin of
+    /// [`Self::add_plugin`], for the ARCH-04 D-1 guard that the
+    /// duplicate-id refusal isn't a track-only special case.
+    pub fn add_plugin_to_bus(
+        &mut self,
+        bus_id: BusId,
+        clap_file_path: String,
+        clap_plugin_id: String,
+        id: PluginInstanceId,
+    ) -> Vec<AudioEvent> {
+        self.with_ctx(|ctx, state| {
+            busses::handle_add_plugin_to_bus(
+                ctx,
+                state,
+                bus_id,
+                clap_file_path,
+                clap_plugin_id,
+                id,
+            )
+        });
+        self.drain_events()
+    }
+
+    /// The plugin ids on `track_id`'s chain, in order — what `push_plugin`
+    /// has appended. Used to confirm a refused duplicate-id add left the
+    /// chain exactly as it was.
+    pub fn track_plugin_ids(&self, track_id: TrackId) -> Vec<PluginInstanceId> {
+        self.tracks
+            .read()
+            .get(&track_id)
+            .map(|t| t.plugins().as_ref().clone())
+            .unwrap_or_default()
+    }
+
+    /// How many live CLAP instances `ctx.plugins` holds, across every
+    /// track/bus/master chain. Used to confirm a refused duplicate-id add
+    /// did not insert (or replace) an instance.
+    pub fn plugin_instance_count(&self) -> usize {
+        self.plugins.read().len()
     }
 
     /// The frozen source the callback would read for `track_id`.

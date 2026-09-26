@@ -155,7 +155,7 @@ fn swap(
     index: usize,
     plugin: ScannedPlugin,
 ) -> PluginInstanceId {
-    let new_id = r.allocate_control_plugin_id();
+    let new_id = r.allocate_plugin_id();
 
     // Drop the outgoing instance first. For a missing plugin the engine
     // has nothing to drop and this is only its echo; for a live one it
@@ -281,28 +281,27 @@ fn add_command(
     locator: PluginLocator,
     clap_plugin_id: &str,
     clap_file_path: &str,
-    id_hint: PluginInstanceId,
+    id: PluginInstanceId,
 ) -> AudioCommand {
     let clap_plugin_id = clap_plugin_id.to_owned();
     let clap_file_path = clap_file_path.to_owned();
-    let id_hint = Some(id_hint);
     match locator {
         PluginLocator::Track(track_id) => AudioCommand::AddPlugin {
             track_id,
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         },
         PluginLocator::Bus(bus_id) => AudioCommand::AddPluginToBus {
             bus_id,
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         },
         PluginLocator::Master => AudioCommand::AddPluginToMaster {
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         },
     }
 }
