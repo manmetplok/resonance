@@ -94,6 +94,15 @@ pub fn try_diff_replay(
     // bytes match (knob-burst coalescing captures the pre-burst blob).
     push_all_plugin_states(r, target);
 
+    // -- Plugin parameter values ---------------------------------------
+    // The blob just pushed is only as fresh as its last refresh (plugin
+    // add, editor close, save) — never a param edit — so the snapshot's
+    // own values are re-applied after it, to the mirror and the engine,
+    // exactly as a load does. Without this an undone knob kept its value
+    // on screen and in the next save while the engine sat on the stale
+    // blob (STATE-03).
+    apply_all_plugin_params(r, target_file);
+
     // -- Audio clips: scalar reposition / retrim only ------------------
     apply_audio_clips(r, &current, target_file);
 
@@ -795,6 +804,54 @@ fn push_plugin_states(r: &mut Resonance, target: &LoadedProject, plugins: &[Proj
             // missing `.clap`) this is the only copy that exists, and it
             // has to survive undo/redo as well as save (ba doc #275, P5).
             r.plugin_state_cache.insert(pp.instance_id, blob.clone());
+        }
+    }
+}
+
+fn apply_all_plugin_params(r: &mut Resonance, b: &ProjectFile) {
+    for track in r.registry.tracks.iter_mut() {
+        if let Some(pt) = b.tracks.iter().find(|t| t.id == track.id) {
+            apply_plugin_params(&r.engine, &mut track.plugins, &pt.plugins);
+        }
+    }
+    for bus in r.registry.busses.iter_mut() {
+        if let Some(pb) = b.busses.iter().find(|x| x.id == bus.id) {
+            apply_plugin_params(&r.engine, &mut bus.plugins, &pb.plugins);
+        }
+    }
+    apply_plugin_params(&r.engine, &mut r.master_plugins, &b.master_plugins);
+}
+
+/// Drive every live slot's params to the snapshot's values: the saved
+/// override where there is one, the plugin's default otherwise (only
+/// non-defaults are saved). A param is re-sent when it is non-default on
+/// either side — that covers every changed value, and every value the
+/// stale blob pushed just before may have reset. A slot with no live
+/// params (a missing `.clap`) has nothing to drive.
+fn apply_plugin_params(
+    engine: &resonance_audio::AudioEngine,
+    slots: &mut [crate::state::PluginSlotState],
+    saved: &[ProjectPlugin],
+) {
+    for slot in slots.iter_mut() {
+        let Some(pp) = saved.iter().find(|p| p.instance_id == slot.instance_id) else {
+            continue;
+        };
+        for param in slot.params.iter_mut() {
+            let target = pp
+                .params
+                .iter()
+                .find(|p| p.id == param.id)
+                .map_or(param.default_value, |p| p.value);
+            if param.current_value == param.default_value && target == param.default_value {
+                continue;
+            }
+            param.current_value = target;
+            let _ = engine.send(AudioCommand::SetPluginParam {
+                instance_id: slot.instance_id,
+                param_id: param.id,
+                value: target,
+            });
         }
     }
 }
