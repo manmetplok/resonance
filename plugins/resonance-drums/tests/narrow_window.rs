@@ -34,7 +34,9 @@
 //! a non-positive width by itself. So a **shipped bundle never panicked**
 //! — this killed debug builds, which is to say developers and anyone
 //! running the editors from a dev tree.
+#![cfg(feature = "editor")]
 
+use plugin_gui_core::egui;
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::ResonancePlugin;
 

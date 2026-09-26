@@ -12,10 +12,8 @@ crate-type = ["cdylib", "lib"]
 # Turn it off (`--no-default-features`) for headless builds.
 default = ["editor"]
 editor = [
-    "dep:wayland-plugin-gui",
     "dep:plugin-gui-core",
     "resonance-plugin/editor-widgets",
-    "dep:egui",
     "dep:rfd",
     "dep:ureq",
     "dep:tiny_http",
@@ -40,9 +38,12 @@ serde_json.workspace = true
 dirs.workspace = true
 
 # Editor dependencies — only pulled in when the `editor` feature is on.
-wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+# Only the platform-neutral half of the editor stack is named here. The
+# platform GUI runtime (Wayland today, Cocoa on macOS) is selected by
+# `resonance-plugin`'s `editor-widgets` feature and reached through
+# `resonance_plugin::editor_host`; `egui` comes via `plugin_gui_core::egui`
+# (ARCH-08).
 plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
-egui = { workspace = true, optional = true }
 rfd = { workspace = true, optional = true }
 
 # Tone3000 browser — all optional and gated behind the `editor` feature
