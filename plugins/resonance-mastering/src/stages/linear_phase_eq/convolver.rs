@@ -140,6 +140,17 @@ impl OverlapSaveConvolver {
         self.inner.crossfade_to_impulse_response(h);
     }
 
+    /// Replace the filter with a one-hop crossfade, given its spectrum
+    /// (see [`FftConvolver::crossfade_to_spectrum`]).
+    pub fn crossfade_to_spectrum(&mut self, spectrum: &[rustfft::num_complex::Complex<f32>]) {
+        self.inner.crossfade_to_spectrum(spectrum);
+    }
+
+    /// Samples to push before the next FFT iteration runs.
+    pub fn samples_until_iteration(&self) -> usize {
+        self.inner.samples_until_iteration()
+    }
+
     /// True while a crossfaded filter change has not landed yet.
     pub fn crossfade_pending(&self) -> bool {
         self.inner.crossfade_pending()

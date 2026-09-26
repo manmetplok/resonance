@@ -261,9 +261,40 @@ impl FftConvolver {
         self.xfade_pending = true;
     }
 
+    /// Like [`Self::crossfade_to_impulse_response`], but takes the new
+    /// filter already transformed: `spectrum` is the forward FFT
+    /// (`2 * hop` bins, unnormalised) of the zero-padded single-partition
+    /// IR. Lets a caller design and transform the filter off the audio
+    /// thread, leaving only a copy here. Allocation-free.
+    ///
+    /// Panics unless the convolver holds a single partition and
+    /// `spectrum.len() == 2 * hop`.
+    pub fn crossfade_to_spectrum(&mut self, spectrum: &[Complex<f32>]) {
+        assert!(
+            self.segments.len() == 1 && spectrum.len() == self.fft_size,
+            "crossfade_to_spectrum needs a single partition of {} bins",
+            self.fft_size
+        );
+        if !self.primed {
+            self.xfade_pending = false;
+            self.segments[0].copy_from_slice(spectrum);
+            return;
+        }
+        self.xfade_segment.copy_from_slice(spectrum);
+        self.xfade_pending = true;
+    }
+
     /// True while a crossfaded IR change is staged and has not landed.
     pub fn crossfade_pending(&self) -> bool {
         self.xfade_pending
+    }
+
+    /// Samples still to be pushed before the next FFT iteration runs
+    /// (`1..=hop`): the iteration runs inside the push of the last of
+    /// them. A caller that stages a filter change right before that push
+    /// knows exactly which hop the change lands on.
+    pub fn samples_until_iteration(&self) -> usize {
+        self.hop - self.input_pending.len()
     }
 
     /// Clear the streaming state (history, FIFOs, FDL); keeps the

@@ -17,7 +17,7 @@ use crate::stages::dither::Dither;
 use crate::stages::glue_compressor::GlueCompressor;
 use crate::stages::imager::Imager;
 use crate::stages::limiter::Limiter;
-use crate::stages::linear_phase_eq::LinearPhaseEq;
+use crate::stages::linear_phase_eq::{DesignWorker, LinearPhaseEq};
 use crate::stages::multiband::Multiband;
 use crate::stages::saturator::Saturator;
 use crate::viz::MasteringViz;
@@ -61,8 +61,11 @@ pub const BYPASS_XFADE_SECONDS: f32 = 0.010;
 
 impl Chain {
     pub fn new(sample_rate: f32, max_buffer: usize, viz: &MasteringViz) -> Self {
-        let corrective_eq = LinearPhaseEq::new(sample_rate);
-        let tonal_eq = LinearPhaseEq::new(sample_rate);
+        // One background FIR designer for both EQs (FU-M2a); dropped
+        // with the chain, off the audio thread.
+        let worker = DesignWorker::spawn();
+        let corrective_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
+        let tonal_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
         let limiter = Limiter::new(sample_rate);
         let max_latency = corrective_eq.latency()
             + tonal_eq.latency()

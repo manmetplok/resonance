@@ -263,3 +263,46 @@ fn crossfade_before_first_iteration_is_instant() {
     let out: Vec<f32> = (0..3 * HOP).map(|_| c.process_sample(1.0)).collect();
     assert!((out[2 * HOP] - 0.5).abs() < 1e-4, "got {}", out[2 * HOP]);
 }
+
+/// FU-M2a: handing the convolver a pre-transformed spectrum is the same
+/// change as handing it the IR — bit for bit — so a caller can do the
+/// FFT off the audio thread.
+#[test]
+fn crossfade_to_spectrum_matches_crossfade_to_impulse_response() {
+    use rustfft::num_complex::Complex;
+    let a = noise(HOP + 1, 3);
+    let b = noise(HOP + 1, 4);
+    let mut spectrum: Vec<Complex<f32>> = (0..2 * HOP)
+        .map(|i| Complex::new(b.get(i).copied().unwrap_or(0.0), 0.0))
+        .collect();
+    rustfft::FftPlanner::new()
+        .plan_fft_forward(2 * HOP)
+        .process(&mut spectrum);
+
+    let input = noise(6 * HOP, 5);
+    let mut by_ir = FftConvolver::new(&a, HOP);
+    let mut by_spectrum = FftConvolver::new(&a, HOP);
+    let (mut out_ir, mut out_spec) = (input.clone(), input.clone());
+    by_ir.process_in_place(&mut out_ir[..2 * HOP + 7]);
+    by_spectrum.process_in_place(&mut out_spec[..2 * HOP + 7]);
+    by_ir.crossfade_to_impulse_response(&b);
+    by_spectrum.crossfade_to_spectrum(&spectrum);
+    by_ir.process_in_place(&mut out_ir[2 * HOP + 7..]);
+    by_spectrum.process_in_place(&mut out_spec[2 * HOP + 7..]);
+    assert!(out_ir.iter().any(|v| v.abs() > 1e-3));
+    assert_eq!(out_ir, out_spec);
+}
+
+/// `samples_until_iteration` counts down to the push that runs the next
+/// FFT iteration.
+#[test]
+fn samples_until_iteration_counts_down_to_the_hop_boundary() {
+    let mut c = FftConvolver::new(&[1.0], HOP);
+    assert_eq!(c.samples_until_iteration(), HOP);
+    for k in 1..HOP {
+        c.process_sample(0.0);
+        assert_eq!(c.samples_until_iteration(), HOP - k);
+    }
+    c.process_sample(0.0);
+    assert_eq!(c.samples_until_iteration(), HOP);
+}
