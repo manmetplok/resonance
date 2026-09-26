@@ -15,14 +15,18 @@
 
 mod app_side;
 mod clips;
+mod entities;
 mod globals;
 mod restored;
 mod routing;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use resonance_audio::types::{ClipId, MidiNote};
+use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
+
+pub use entities::{migrate_auto_name, sort_plugins_by_saved_order};
 
 use crate::project::ProjectFile;
 use crate::Resonance;
@@ -65,6 +69,10 @@ pub struct ReconcileCtx<'a> {
     /// The target's MIDI notes per clip id (`LoadedProject::midi_notes`),
     /// which the `ProjectFile` does not carry. Read by `MidiClips`.
     pub midi_notes: &'a HashMap<ClipId, Vec<MidiNote>>,
+    /// The target's plugin state blobs per instance id
+    /// (`LoadedProject::plugin_states`), which the `ProjectFile` does not
+    /// carry either. Read by the entity domains' plugin chains.
+    pub plugin_states: &'a HashMap<PluginInstanceId, Arc<[u8]>>,
     /// Live state an undo keeps, captured by the entry point before
     /// anything is restored.
     pub live: LiveCarry<'a>,
@@ -130,6 +138,10 @@ pub enum Stage {
     /// (reads the meter). Right after `Globals` on both paths, before any
     /// track or clip is restored.
     Timeline,
+    /// The entities: tracks, busses, the master chain, the track outputs.
+    /// Right after `Timeline` on both paths. After a `ClearAll` every
+    /// entity is added; on the diff path only changed scalars are sent.
+    Entities,
     /// The routing edges between entities: aux sends, then sidechain key
     /// routes. Both paths: right after every track, bus and the master
     /// chain are restored (the engine rejects a send naming an unregistered
@@ -190,6 +202,12 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::Markers>(Stage::Timeline),
     // Reads the meter (tempo events) and the sections.
     domain::<globals::SectionChordTrim>(Stage::Timeline),
+    // Tracks before busses (as both paths always had it), the master
+    // chain, then the track outputs once every bus they name exists.
+    domain::<entities::Tracks>(Stage::Entities),
+    domain::<entities::Busses>(Stage::Entities),
+    domain::<entities::Master>(Stage::Entities),
+    domain::<entities::TrackOutputs>(Stage::Entities),
     // After every entity they connect. Sends before key routes, as both
     // paths always had it (the two are independent tables in the engine).
     domain::<routing::Sends>(Stage::Routing),

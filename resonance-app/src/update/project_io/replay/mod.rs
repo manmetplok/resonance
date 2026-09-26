@@ -6,9 +6,6 @@
 //! ## Module layout
 //! - `mod.rs` (this file): public entry point [`replay_loaded_project`] and
 //!   the per-domain helpers that structure it.
-//! - `entity.rs`: per-entity replay (`replay_track`, `replay_bus`,
-//!   `replay_master`, `replay_plugins`) plus `sort_plugins_by_saved_order`
-//!   and `migrate_auto_name`.
 //! - `restore.rs`: standalone restore helpers (`restore_performance`,
 //!   `restore_quantize`, `restore_pool`, `restore_references`,
 //!   `restore_drum_patterns`, `restore_tempo_events`, `replay_take_groups`)
@@ -21,7 +18,6 @@
 //! `Stage::Content` and `Stage::Tail` — the same stages, in the same
 //! sequence, `try_diff_replay` runs.
 
-mod entity;
 mod restore;
 
 use resonance_audio::types::*;
@@ -31,7 +27,7 @@ use crate::project::{LoadedProject, ProjectFile};
 use crate::Resonance;
 
 // Re-export helpers consumed by sibling modules (undo replay, diff replay).
-pub use entity::{migrate_auto_name, sort_plugins_by_saved_order};
+pub use super::reconcile::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use restore::{
     replay_take_groups, restore_drum_patterns, restore_performance, restore_pool,
     restore_pool_assets, restore_quantize, restore_track_groups,
@@ -73,6 +69,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         origin,
         project_dir: Some(&loaded.project_dir),
         midi_notes: &loaded.midi_notes,
+        plugin_states: &loaded.plugin_states,
         live: LiveCarry {
             project_path: live_project_path.as_deref(),
             // An undo/redo never lowers the derived-clip id counter
@@ -100,12 +97,14 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     reconcile_stage(r, Stage::Globals, None, project, &ctx);
     reconcile_stage(r, Stage::Timeline, None, project, &ctx);
 
-    // Wipe the runtime registry and collect the saved plugin-chain order so
-    // we can re-impose it after all async PluginAdded events have settled.
-    let saved_plugin_order = wipe_registry(r, project);
+    // Collect the saved plugin-chain order so we can re-impose it after
+    // all async PluginAdded events have settled.
+    let saved_plugin_order = saved_plugin_order(project);
 
-    // Replay tracks, busses, master FX chain and the track outputs.
-    replay_tracks_and_busses(r, project, &loaded);
+    // Tracks (with their plugin chains), busses, the master chain, then
+    // the track outputs once every bus exists — each registry emptied by
+    // its own domain first (every entity added: `old` is `None`).
+    reconcile_stage(r, Stage::Entities, None, project, &ctx);
 
     // The aux sends, then the sidechain key routes (every one sent: `old`
     // is `None`), once every endpoint they name — tracks, busses and the
@@ -140,44 +139,16 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 // Per-domain helpers
 // ---------------------------------------------------------------------------
 
-/// Wipe the GUI registry (tracks, busses, clips, plugins) and collect the
-/// saved plugin-chain order from the project file. Returns the saved order
-/// so [`finalize_plugin_chains`] can re-impose it after replay.
-fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
-    r.registry.tracks.clear();
-    r.registry.busses.clear();
-    r.master.plugins.clear();
-    r.master.fx_bypassed = false;
-    // The audio and MIDI clip mirrors are emptied by their own reconcile
-    // domains (`AudioClips`, `MidiClips`), just before they reload them;
-    // nothing in between reads them.
-    r.registry.next_track_order = 0;
-    r.registry.next_bus_order = 0;
-    r.plugin_mirror.index.clear();
-    // The aux-send and key-route mirrors are emptied by their own reconcile
-    // domains (`Sends`, `SidechainRoutes`, `Stage::Routing`), just before
-    // they re-seed them; nothing in between reads them.
-    // External-instrument mode is dropped and re-asserted by its own
-    // reconcile domain (`ExternalInstruments`, `Stage::Tail`); nothing in
-    // between reads it.
-    // The cycle-record take lanes are cleared by their own reconcile
-    // domain (`reconcile::app_side::TakeGroups`), just before it re-seeds
-    // them; nothing in between reads them.
-
-    // Bump the app-side track id counter past every persisted id so a
-    // fresh add after this load doesn't collide with a restored track
-    // (ARCH-04 D-4: this is the ONLY track-id counter now, so this bump
-    // matters for every track, not only ones in the old sub-track range).
-    // `replay_track` (via `entity::replay_track`) mirrors each track
-    // eagerly as it replays, so this pre-loop bump is belt and braces on
-    // top of that eager mirror, not the only thing keeping the next
-    // `allocate_track_id` skip loop short.
-    for pt in &project.tracks {
-        if pt.id >= r.registry.next_track_id {
-            r.registry.next_track_id = pt.id + 1;
-        }
-    }
-
+/// Collect the saved plugin-chain order from the project file, so
+/// [`finalize_plugin_chains`] can re-impose it after replay.
+///
+/// The registry mirrors this used to wipe are emptied by their own
+/// reconcile domains, each just before it re-seeds its mirror: tracks,
+/// busses, master and the plugin side-index by `Stage::Entities`; audio
+/// and MIDI clips by `AudioClips` / `MidiClips`; aux sends and key routes
+/// by `Stage::Routing`; external instruments by `ExternalInstruments`;
+/// take lanes by `TakeGroups`. Nothing in between reads them.
+fn saved_plugin_order(project: &ProjectFile) -> SavedPluginOrder {
     // Stash saved plugin-slot order per track / bus / master so we can
     // re-apply it after all replays + late `PluginAdded` events have
     // resolved. See [`finalize_plugin_chains`] for the sort that restores it.
@@ -198,52 +169,6 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
         .collect();
 
     SavedPluginOrder { tracks, busses, master }
-}
-
-/// Replay tracks, busses, master FX chain, and resolve the track→bus main
-/// outputs. The aux sends and key routes follow in `Stage::Routing`.
-/// Tracks must be replayed before busses (the engine tracks must exist when
-/// routing is set), and busses must exist before `SetTrackOutput` is sent.
-fn replay_tracks_and_busses(
-    r: &mut Resonance,
-    project: &ProjectFile,
-    loaded: &LoadedProject,
-) {
-    for pt in &project.tracks {
-        entity::replay_track(r, pt, loaded);
-    }
-    // Defensive: older project files weren't guaranteed to be saved in
-    // .order sequence, and replay relies on the registry staying sorted
-    // by .order for the view layer's invariant.
-    r.registry.resort_tracks();
-    r.compose.refresh_track_count(&r.registry.tracks);
-
-    // Migrate old generate_params + track roles to lane_generators for
-    // projects predating the unified lane generator system.
-    r.compose.migrate_old_generate_params(&r.registry.tracks);
-
-    // Replay busses (must come before SetTrackOutput so the target bus
-    // exists at the time the routing is set).
-    for pb in &project.busses {
-        entity::replay_bus(r, pb, loaded);
-    }
-    r.registry.resort_busses();
-    // Output-destination picker depends on the bus list.
-    r.ui.view_caches.rebuild_output(&r.registry.busses);
-
-    // Replay master FX chain + bypass state.
-    entity::replay_master(r, project, loaded);
-
-    // Now that all busses exist, resolve track → bus routing.
-    for pt in &project.tracks {
-        if let Some(bus_id) = pt.output_bus {
-            let _ = r.engine.send(AudioCommand::SetTrackOutput {
-                track_id: pt.id,
-                output: TrackOutput::Bus(bus_id),
-            });
-        }
-    }
-
 }
 
 /// Re-impose the saved plugin-chain order on every track, bus, and the
