@@ -165,6 +165,14 @@ impl Resonance {
             .copied()
     }
 
+    /// Test-only: `(rendered_bpm, other_bpm)` when a section's one vocal
+    /// render doesn't fit every placed bar's tempo (FU-M11b).
+    #[doc(hidden)]
+    pub fn test_vocal_tempo_mismatch(&self, definition_id: u64) -> Option<(f32, f32)> {
+        crate::update::compose::vocal_tempo_mismatch(self, definition_id)
+            .map(|m| (m.rendered_bpm, m.other_bpm))
+    }
+
     /// Test-only: pin a vocal lane's in-flight render epoch, standing in
     /// for the bump `enqueue_vocal_render` performs when a render is
     /// queued. Lets a test stage the supersede race — a `VocalAudioReady`

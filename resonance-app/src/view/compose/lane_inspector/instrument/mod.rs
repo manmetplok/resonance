@@ -126,6 +126,7 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
     track: &'a TrackState,
     vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
     collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
+    vocal_tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
 ) -> Element<'a, Message> {
     let definition_id = definition.id;
     let track_id = track.id;
@@ -208,6 +209,7 @@ pub(in crate::view::compose::lane_inspector) fn instrument_body<'a>(
                 cfg.seed,
                 vocal_bulk_lyrics.get(&(definition_id, track_id)),
                 collapsed_panels,
+                vocal_tempo_warning,
             ),
         },
         None => manual_hint(),

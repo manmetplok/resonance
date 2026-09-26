@@ -172,6 +172,18 @@ impl crate::Resonance {
                 };
 
                 let section_drum_groups = self.compose.groups_for_definition(definition);
+                // A vocal lane whose one render can't fit every placed
+                // bar's tempo gets a warning in its inspector (FU-M11b).
+                let vocal_tempo_warning = match &self.compose.selected_lane {
+                    SelectedLane::Instrument(track_id)
+                        if definition.lane_generators.get(track_id).is_some_and(|g| {
+                            matches!(g.kind, crate::compose::LaneGeneratorKind::Vocal(_))
+                        }) =>
+                    {
+                        crate::update::compose::vocal_tempo_mismatch(self, definition.id)
+                    }
+                    _ => None,
+                };
                 let right_panel = lane_inspector::view(
                     definition,
                     &self.compose.selected_lane,
@@ -183,6 +195,7 @@ impl crate::Resonance {
                     &self.table_registry,
                     &self.compose.vocal_bulk_lyrics,
                     &self.compose.collapsed_rail_panels,
+                    vocal_tempo_warning,
                 );
 
                 row![left_column, right_panel]

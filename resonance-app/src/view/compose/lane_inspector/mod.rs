@@ -134,6 +134,7 @@ pub fn view<'a>(
     table_registry: &'a TableRegistry,
     vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
     collapsed_panels: &'a HashSet<RailPanelKey>,
+    vocal_tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
 ) -> Element<'a, Message> {
     // EDITING context header — large, unmistakable. Tells the user whether
     // they're editing the section (lavender) or a track (warm amber) and
@@ -165,6 +166,7 @@ pub fn view<'a>(
                     t,
                     vocal_bulk_lyrics,
                     collapsed_panels,
+                    vocal_tempo_warning,
                 ),
                 None => text("Track not found")
                     .size(12)
