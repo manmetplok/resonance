@@ -30,7 +30,7 @@ master and updates this table. Agents do **not** edit this file.
 | M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | merged | f7ad84e2 |
 | M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
 | M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | merged | d3b41d37 |
-| M6 theory + small plugins | LIB-02..LIB-09 | opus | in progress | |
+| M6 theory + small plugins | LIB-02..LIB-09 | opus | merged | 26e1e316 |
 | V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | in progress | |
 | V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | in progress (+ MIX-04, FU-F2d) | |
@@ -85,6 +85,10 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M5a** (low) CTL-05: repeated `insert_bars` can still push content past MAX_BARS (per-call check only).
 - [ ] **FU-M5b** (low) CTL-12 remainder: lockstep doesn't check param / plugin-param ids in skills.
 - [ ] **FU-M5c** (low) control API: accept string param `key` ids for plugin params (mastering skill currently uses display names).
+- [ ] **FU-M6a** (medium) `resonance-app/src/project/io.rs` has its own `atomic_write` copy with the fixed `.tmp` name + leak — make it call `resonance_common`'s.
+- [ ] **FU-M6b** (low) svs: unknown phonemes now fail the render (was: silent token 0); g2p paths that skip voicebank substitution will surface errors.
+- [ ] **FU-M6c** (low) EQ band kind change restarts its stages from zero (can click on loud material); optional ~5 ms crossfade.
+- [ ] **FU-M6d** (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
 
 ## How to use this file
 
@@ -1589,7 +1593,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   - Resample a 15 kHz sine from 44.1 k to 48 k and assert the output RMS is within 0.1 dB of the input.
   - Resample a 30 kHz sine from 96 k to 48 k and assert the output RMS is < −80 dBFS. Also assert a companion 1 kHz sine rendered in the same buffer is non-silent, so the check is not vacuous.
 
-### [ ] LIB-02 — `Mode::Chromatic` keys produce nonsense diatonic chords and cadence degrees (the 12-note table is indexed as a 7-note one)
+### [x] LIB-02 — `Mode::Chromatic` keys produce nonsense diatonic chords and cadence degrees (the 12-note table is indexed as a 7-note one) — fixed @8b595d06
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1607,7 +1611,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   Also guard `scale_degree_pc` against `degree == 0` (`degree as usize - 1` underflows).
 - **Verification:** Add `resonance-music-theory/tests/chromatic_degrees.rs`. For `Scale::new(C, Chromatic)`, assert that `diatonic_chord(s, 5, false)` is G major (or an error, per the chosen policy) and that `Degree::V.to_chord(s).root == G`. Add a control-API test in the `control` group binary for `harmony.apply_progression` in a chromatic key.
 
-### [ ] LIB-03 — The delay's "tempo-synced" wet gate free-runs and is never locked to the transport
+### [x] LIB-03 — The delay's "tempo-synced" wet gate free-runs and is never locked to the transport — fixed @86e683a2
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** dsp
@@ -1625,7 +1629,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   - Render two blocks with `song_pos_beats` = 0.0 and then = 0.5 (a jump). Assert the gate gain at sample 0 of the second block equals `gate_gain(fract(0.5/div), …)`.
   - Feed a constant non-zero wet signal and assert the output is non-silent in the open window and attenuated in the closed one, so the test cannot pass on silence.
 
-### [ ] LIB-04 — IR swap crossfade also fades the dry path, so switching IRs punches a hole in a fully dry signal; `reset()` leaves stale audio in the bypass delay
+### [x] LIB-04 — IR swap crossfade also fades the dry path, so switching IRs punches a hole in a fully dry signal; `reset()` leaves stale audio in the bypass delay — fixed @6823239c
 - **Severity:** low
 - **Confidence:** high
 - **Category:** dsp
@@ -1641,7 +1645,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   - Clear both bypass delay lines in `IrEngine::reset`.
 - **Verification:** In `plugins/resonance-ir/tests/dsp_block.rs`, set dry_wet = 0, feed a non-silent sine, call `begin_swap` mid-block, and assert that no output sample in the fade window drops below 0.99× the latency-aligned input. Add a reset test asserting that the first `block_size` outputs after `reset()` are exactly 0 when the input is 0.
 
-### [ ] LIB-05 — EQ stages that leave and re-enter the active set resume with stale delay-line state
+### [x] LIB-05 — EQ stages that leave and re-enter the active set resume with stale delay-line state — fixed @440ad818
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** dsp
@@ -1658,7 +1662,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   - Assert the first 64 output samples after re-enable are exactly 0.
   - Separately assert the enabled band's output is non-silent on non-silent input.
 
-### [ ] LIB-06 — Compressor release is applied twice (the peak detector and the GR envelope both use `release_coef`)
+### [x] LIB-06 — Compressor release is applied twice (the peak detector and the GR envelope both use `release_coef`) — fixed @cea54427 (AUDIBLE: compressor release now matches knob — golden re-blessed; revert if unwanted)
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** dsp
@@ -1673,7 +1677,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Give the peak detector its own short fixed release, as the gate does with `DETECTOR_RELEASE_MS` (5–10 ms, enough to bridge zero crossings), so the user's release acts once, on the GR envelope. Alternatively, use a branching or decoupled peak detector on the gain signal only (Giannoulis/Massberg/Reiss 2012, "smooth decoupled").
 - **Verification:** In `plugins/resonance-compressor/tests/` (e.g. `release_time.rs`), step a 0 dBFS sine to −60 dBFS. Measure the time for `viz` GR (or the output-envelope ratio) to fall from its steady value to 1/e of it, and assert it is within ±15% of `release_ms`. Assert the pre-step output is non-silent.
 
-### [ ] LIB-07 — Gate: 0.05 ms attack floor silently becomes 0.1 ms; `GateSettings::ratio` doc contradicts the implementation
+### [x] LIB-07 — Gate: 0.05 ms attack floor silently becomes 0.1 ms; `GateSettings::ratio` doc contradicts the implementation — fixed @5d2cbe62
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -1685,7 +1689,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Compute the gate's opening coefficient directly, `(-1/(attack_ms.max(0.01)*1e-3*sr).max(1.0)).exp()`, or add a floor parameter to `Ballistics::from_times`. Correct the `GateSettings::ratio` doc to "1.0 = no expansion (pass-through); higher = steeper; ~20 ≈ hard gate".
 - **Verification:** In `plugins/resonance-gate/tests/ballistics.rs`, assert that the opening time at attack 0.05 ms is measurably shorter than at 0.1 ms (samples to reach −1 dB of unity after a step from closed), with a non-silent input tone.
 
-### [ ] LIB-08 — `atomic_write` uses a fixed `.tmp` name and leaks it on write/fsync failure
+### [x] LIB-08 — `atomic_write` uses a fixed `.tmp` name and leaks it on write/fsync failure — fixed @e544e8a2
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** error-handling
@@ -1699,7 +1703,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   - Simulate a write failure (target dir made read-only after create, or a tiny `RLIMIT_FSIZE` in a child process) and assert no `*.tmp` remains.
   - Race two threads writing distinct payloads 1,000× and assert the final file always parses as one of the two payloads.
 
-### [ ] LIB-09 — resonance-svs: `SampleCurve::resample` panics on a zero timestep; unknown phonemes silently become token 0
+### [x] LIB-09 — resonance-svs: `SampleCurve::resample` panics on a zero timestep; unknown phonemes silently become token 0 — fixed @767d5db0
 - **Severity:** low
 - **Confidence:** high
 - **Category:** error-handling
