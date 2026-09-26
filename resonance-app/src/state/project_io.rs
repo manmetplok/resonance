@@ -66,6 +66,13 @@ pub struct ProjectIoState {
     /// tail (`ResendExternalInstrumentPatches`, scroll reset, relink modal,
     /// control-job completion). ARCH-01 A-7: was `pending_undo_extras`.
     pub restoring_undo: bool,
+    /// The `Reconcile` domains the last restore ran, in order, with the
+    /// origin it ran them under (ARCH-01 A-13). Cleared at the start of
+    /// each restore; read by the order guard test.
+    pub reconcile_trace: Vec<(
+        crate::update::project_io::reconcile::Origin,
+        &'static str,
+    )>,
     pub bouncing: bool,
     /// Progress `[0.0, 1.0]` of the in-flight WAV mixdown (`bouncing`),
     /// from the engine's `BounceProgress` events; drives the blocking

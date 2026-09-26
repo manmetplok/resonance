@@ -270,6 +270,15 @@ impl Resonance {
         self.io.restoring_undo
     }
 
+    /// Test-only: the `Reconcile` domains the last restore ran, in order,
+    /// with its origin (ARCH-01 A-13).
+    #[doc(hidden)]
+    pub fn test_reconcile_trace(
+        &self,
+    ) -> &[(crate::update::project_io::reconcile::Origin, &'static str)] {
+        &self.io.reconcile_trace
+    }
+
     /// Test-only: the current project path. `None` for an untitled project
     /// (including one freshly instantiated from a template).
     #[doc(hidden)]

@@ -10,8 +10,8 @@
 //!   `ProjectFile` and ride the normal replay / replay-diff path (the
 //!   same channel tracks, clips, and markers use). Serialized in
 //!   `update::project_io::serialize`, rebuilt in
-//!   `update::project_io::replay` (`restore_pool`) and
-//!   `update::project_io::replay_diff` (`apply_pool`). An asset whose
+//!   `update::project_io::reconcile` (the `Pool` domain, over
+//!   `replay::restore_pool_assets`) on every restore. An asset whose
 //!   backing WAV is absent on load is flagged [`PoolAsset::missing`] —
 //!   kept, not dropped — so its clips can be relinked later.
 //! * **Favourites + recent folders** are *project-independent* user
