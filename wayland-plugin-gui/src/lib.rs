@@ -101,3 +101,8 @@ pub use join::join_with_timeout;
 #[doc(hidden)]
 pub use join::{await_startup, Startup};
 
+/// The SCTK → egui input translator, exposed for headless tests of its
+/// button bookkeeping (a button held across a hide, FU-M1c).
+#[doc(hidden)]
+pub use input::InputState;
+

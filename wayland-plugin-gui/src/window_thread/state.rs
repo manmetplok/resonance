@@ -119,7 +119,9 @@ impl State {
         self.visible = true;
         self.needs_redraw = true;
         // Whatever egui last knew about the pointer is stale: it left (or
-        // never entered) while we were hidden.
+        // never entered) while we were hidden, and a button held across
+        // the hide was released where we could not see it (FU-M1c).
+        self.input.release_all(&mut self.pending_events);
         self.pending_events.push(egui::Event::PointerGone);
         if self.needs_remap {
             self.needs_remap = false;
