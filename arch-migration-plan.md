@@ -850,6 +850,8 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 
 **C-4 landed @ 0d8a7504.** `AtomicWriteError`, `RegistryError`, `MidiMapError`, `DeviceJsonError`, `DeviceLoadError`/`DeviceSaveError`, `WavDecodeError`, `AudioProbeError`; messages verbatim. `From<WavDecodeError|AudioProbeError> for EngineError` (Io) in resonance-audio. All four feature combos and standalone drums/ir/amp builds pass. resonance-common has no `Result<_, String>` left.
 
+**C-3b + C-5 landed @ 82469dbd — Epic C done.** `AuditionError`, `ImportQueueError`, `TranscodeError`, `ImportError`, `PluginBundleError`, `PartialFileError`, `FreezeError`/`FrozenCacheError` (`freeze_terminal_event` now matches `FreezeError::Cancelled`, not a string compare), `StemError`, `EngineInitError`, `PwInputError`/`PwOutputError`, test-only `TestEncodeError`. Only private `recording.rs::take_clip_source` keeps `String`. `arch-invariants::engine_common_public_fns_dont_return_result_string` walks audio + common `pub fn` signatures; both allow-lists empty. `ImportFailed.reason` is still a `String` (via `to_string()`).
+
 **E landed (A7-3) @ 38d66942.** `dirs` and `time` stay unconditional deps, not optional under `model`: the ungated `registry` module (used by drums) calls `dirs::data_dir()` and `time::OffsetDateTime`. `symphonia` is optional under `decode`. amp and `resonance-plugin` use no features; drums and ir use `decode`. `arch-invariants::plugins_disable_default_features_on_resonance_common` guards it.
 
 

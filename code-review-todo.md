@@ -82,6 +82,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent C-2 (ARCH-05) | A5-3 second half: BounceError carries ExportErrorKind, Track/Stem bounce errors carry EngineError; `JobStatus.error` = `{message, kind?}` | sonnet | merged | 4f3342dd |
 | refactor-intent C-3 (ARCH-05) | A5-4 part 1: `thiserror` in 8 resonance-audio modules; 12 pub fns still `Result<_, String>` | sonnet | merged | 4ef24291 |
 | refactor-intent C-4 (ARCH-05) | A5-4 resonance-common: 7 `thiserror` types, 18 sites; zero `Result<_, String>` left | sonnet | merged | 0d8a7504 |
+| refactor-intent C-3b + C-5 (ARCH-05) | 11 more `thiserror` types in resonance-audio; zero pub `Result<_, String>`; invariant `engine_common_public_fns_dont_return_result_string` (empty allow-lists). **Epic C done.** | sonnet | merged | 82469dbd |
 | refactor-intent D-1 (ARCH-04) | A4-4 plugins: mandatory `id` on plugin adds; engine rejects duplicates (`Internal`); `next_plugin_id` / `CONTROL_PLUGIN_ID_BASE` gone | sonnet | merged | 630b5197 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
