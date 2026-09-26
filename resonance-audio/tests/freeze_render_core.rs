@@ -14,7 +14,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{run_supervised, to_freeze_cache, PluginMap, SharedState};
+use resonance_audio::__test_support::{AutomationSnapshot, run_supervised, to_freeze_cache, PluginMap, SharedState};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -128,6 +128,7 @@ fn known_track_renders_non_silent_wav() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |f| fractions.push(f),
     )
@@ -185,6 +186,7 @@ fn freeze_does_not_mutate_source_clips() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     )
@@ -248,6 +250,7 @@ fn fingerprint_changes_when_notes_change() {
             &state.midi_clips,
             &state.plugins,
             &state.tempo_map,
+            &AutomationSnapshot::default(),
             SR,
             &mut |_| {},
         )
@@ -287,6 +290,7 @@ fn cancel_aborts_and_removes_partial_file() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| cancel_from_progress.store(true, Ordering::SeqCst),
     );
@@ -327,6 +331,7 @@ fn cancelling_another_renders_token_does_not_abort_the_freeze() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         // Mid-render, cancel the OTHER render — this freeze must not care.
         &mut |_| flip_other.store(true, Ordering::SeqCst),
@@ -369,6 +374,7 @@ fn a_pending_cancel_survives_another_render_starting() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     )
@@ -395,6 +401,7 @@ fn a_pending_cancel_survives_another_render_starting() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     );
@@ -423,6 +430,7 @@ fn freeze_refuses_while_transport_playing() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     );
@@ -451,6 +459,7 @@ fn missing_source_track_errors() {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     );

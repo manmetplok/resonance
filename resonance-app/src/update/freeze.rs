@@ -600,7 +600,8 @@ impl Resonance {
     /// the arrangement side: every MIDI clip on the track (position,
     /// length, trims, notes, lyrics — in position order, ids excluded so a
     /// re-derived clip with the same content matches) plus the tempo and
-    /// meter maps, which move ticks in time. Plugin params are left out:
+    /// meter maps, which move ticks in time, and the plugin-param
+    /// automation lanes on the track's chain. Plugin params are left out:
     /// they arrive asynchronously after a load and are already covered by
     /// the pre-dispatch freeze gate. `None` when the track is gone
     /// (code review UPD-05).
@@ -635,6 +636,38 @@ impl Resonance {
                 .hash(&mut h);
         }
         format!("{:?}{:?}", self.tempo_events, self.signature_events).hash(&mut h);
+        // The enabled plugin-param automation lanes on the track's chain,
+        // which the freeze bakes into the cache (code review ENG-08).
+        // Keyed by slot position, not instance id, so a reload that
+        // re-issues ids reads as the same content.
+        if let Some(track) = self.registry.tracks.iter().find(|t| t.id == track_id) {
+            for (slot_index, slot) in track.plugins.iter().enumerate() {
+                let mut lanes: Vec<_> = self
+                    .automation
+                    .lanes
+                    .values()
+                    .filter(|l| l.enabled)
+                    .filter_map(|l| match l.target {
+                        resonance_common::AutomationTarget::PluginParam { instance, param_id }
+                            if instance == slot.instance_id =>
+                        {
+                            Some((param_id, l))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                lanes.sort_by_key(|(param_id, _)| *param_id);
+                for (param_id, lane) in lanes {
+                    slot_index.hash(&mut h);
+                    param_id.hash(&mut h);
+                    for p in &lane.points {
+                        p.time_frames.hash(&mut h);
+                        p.value.to_bits().hash(&mut h);
+                        p.curve.hash(&mut h);
+                    }
+                }
+            }
+        }
         Some(h.finish())
     }
 

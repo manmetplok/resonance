@@ -60,6 +60,8 @@ pub(super) fn imported(
 
 pub(crate) fn deleted(r: &mut Resonance, clip_id: ClipId) {
     r.clips.retain(|c| c.id != clip_id);
+    // The Pool "used ×N" badge / `pool.list` count (review VIEW-30).
+    r.recompute_pool_usage();
     // Drop any vocal-audio-clip side-table entries that reference
     // this clip. Without this, an engine-side delete would leave a
     // dangling `(ClipId, PathBuf)` in `vocal_audio.clips` that the

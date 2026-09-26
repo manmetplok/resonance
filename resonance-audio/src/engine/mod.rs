@@ -30,7 +30,8 @@ use crate::types::*;
 
 mod bounce;
 pub use bounce::{
-    chunk_span, encode_buffer_for_test, export_stems, freeze_terminal_event, measure_mix,
+    chunk_span, encode_buffer_for_test, export_for_test, export_stems, freeze_terminal_event,
+    measure_mix,
     measure_rendered_buffer, normalize_buffer_for_test, read_freeze_cache, render_stem,
     stem_filter, stem_project_range, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
     try_lock_with_backoff, write_stem_wav, OfflineRenderGuard, BOUNCE_CHUNK,
@@ -86,7 +87,7 @@ pub use clips::{
     set_clip_warp_in_place, set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 mod import_pool;
-pub use import_pool::{import_one_to_pool, run_pool_import, PoolImportOutcome};
+pub use import_pool::{import_one_to_pool, run_pool_import, run_pool_import_with, PoolImportOutcome};
 mod import_queue;
 pub use import_queue::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 mod master;

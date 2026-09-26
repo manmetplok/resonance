@@ -42,11 +42,11 @@ impl crate::Resonance {
                 iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
                     let plugin_element = match &plugin.custom {
                         PluginCustomState::Generic => {
-                            resonance_plugin::ui::view_generic_params(&ui_params(plugin))
+                            crate::plugin_ui::view_generic_params(&ui_params(plugin))
                         }
                     };
                     plugin_element.map(move |event| {
-                        use resonance_plugin::ui::PluginUiEvent;
+                        use crate::plugin_ui::PluginUiEvent;
                         match event {
                             PluginUiEvent::SetParam(param_id, value) => Message::Plugin(
                                 PluginMessage::SetPluginParam(inst_id, param_id, value),
@@ -208,12 +208,12 @@ impl crate::Resonance {
 /// than drawn: CLAP's IS_HIDDEN is the plugin asking that a parameter not
 /// be presented as a control (it stays in the app's mirror because it is
 /// still automatable and still saved — ba todo #1290).
-fn ui_params(plugin: &PluginSlotState) -> Vec<resonance_plugin::ui::UiParam> {
+fn ui_params(plugin: &PluginSlotState) -> Vec<crate::plugin_ui::UiParam> {
     plugin
         .params
         .iter()
         .filter(|p| !p.hidden)
-        .map(|p| resonance_plugin::ui::UiParam {
+        .map(|p| crate::plugin_ui::UiParam {
             id: p.id,
             name: p.name.clone(),
             min_value: p.min_value,

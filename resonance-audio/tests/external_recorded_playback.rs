@@ -15,7 +15,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{PluginMap, SharedState, to_freeze_cache};
+use resonance_audio::__test_support::{AutomationSnapshot, PluginMap, SharedState, to_freeze_cache};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -101,6 +101,7 @@ fn peak_of_render(track: Track, name: &str) -> f32 {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     )

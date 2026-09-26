@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use hound::{SampleFormat, WavSpec, WavWriter};
 
 use resonance_audio::types::{AudioEvent, ImportStage};
-use resonance_audio::{import_one_to_pool, run_pool_import, AudioFormat, ClipSource};
+use resonance_audio::{import_one_to_pool, run_pool_import, run_pool_import_with, AudioFormat, ClipSource};
 
 const PROJECT_RATE: u32 = 48_000;
 
@@ -232,5 +232,59 @@ fn batch_emits_ordered_lifecycle_with_failures_interleaved() {
     assert!(!dir.join("audio/asset_11.wav").exists());
     assert!(dir.join("audio/asset_12.wav").exists());
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A decoder panic on one file is that file's failure, not the batch's
+/// (code review ENG-09): the panicking file reports `ImportFailed`, and
+/// every later file still imports.
+#[test]
+fn a_panicking_import_fails_that_file_and_the_batch_continues() {
+    let dir = make_tempdir("panic");
+    let good_a = write_wav(&dir, "a.wav", PROJECT_RATE, 2, 4_800);
+    let good_b = write_wav(&dir, "b.wav", PROJECT_RATE, 2, 4_800);
+    let jobs = vec![
+        (1u64, good_a),
+        (2u64, "crafted.mp3".to_string()),
+        (3u64, good_b),
+    ];
+
+    let mut events = Vec::new();
+    run_pool_import_with(
+        &jobs,
+        &dir,
+        PROJECT_RATE,
+        |id, path, dir, rate| {
+            if id == 2 {
+                panic!("symphonia: index out of bounds");
+            }
+            import_one_to_pool(id, path, dir, rate)
+        },
+        |ev| events.push(ev),
+    );
+
+    let failed: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AudioEvent::ImportFailed { asset_id, reason, .. } => Some((*asset_id, reason.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failed.len(), 1, "exactly the panicking file fails: {events:?}");
+    assert_eq!(failed[0].0, 2);
+    assert!(failed[0].1.contains("index out of bounds"), "reason carries the panic: {}", failed[0].1);
+
+    let done: Vec<u64> = events
+        .iter()
+        .filter_map(|e| match e {
+            AudioEvent::ImportProgress {
+                asset_id,
+                stage: ImportStage::Done,
+                ..
+            } => Some(*asset_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(done, vec![1, 3], "the files around the panic still import");
     let _ = std::fs::remove_dir_all(&dir);
 }

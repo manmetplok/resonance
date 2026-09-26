@@ -61,6 +61,8 @@ mod marker_ui_reducers;
 mod markers_overview_snapshot;
 #[path = "timeline/markers_overview_ui.rs"]
 mod markers_overview_ui;
+#[path = "timeline/playhead_follow.rs"]
+mod playhead_follow;
 #[path = "timeline/quantize_persistence.rs"]
 mod quantize_persistence;
 #[path = "timeline/recording_undo.rs"]
@@ -79,6 +81,8 @@ mod undo_view_state_keeps_redo;
 mod render_cache;
 #[path = "timeline/selection_bar.rs"]
 mod selection_bar;
+#[path = "timeline/snap_signature_map.rs"]
+mod snap_signature_map;
 #[path = "timeline/take_comp_edits.rs"]
 mod take_comp_edits;
 #[path = "timeline/take_group_mirror.rs"]
@@ -125,6 +129,8 @@ mod undo_coalesce;
 mod undo_history;
 #[path = "timeline/editor_key_focus.rs"]
 mod editor_key_focus;
+#[path = "timeline/vertical_scrollbar_visible.rs"]
+mod vertical_scrollbar_visible;
 #[path = "timeline/vertical_scroll_clamp.rs"]
 mod vertical_scroll_clamp;
 #[path = "timeline/clip_drag_tempo_snap.rs"]

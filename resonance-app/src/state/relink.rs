@@ -15,8 +15,41 @@
 //! is undoable; see `update::relink`.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use resonance_audio::types::AssetId;
+
+/// Shared between the UI and a background "Search a folder…" walk
+/// (review VIEW-29 / UPD-10): the walk bumps `dirs_scanned` as it goes
+/// (the modal shows it) and stops at the next directory once `cancel`
+/// is set.
+#[derive(Debug, Default)]
+pub struct ScanControl {
+    pub cancel: AtomicBool,
+    pub dirs_scanned: AtomicUsize,
+}
+
+impl ScanControl {
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    pub fn dirs_scanned(&self) -> usize {
+        self.dirs_scanned.load(Ordering::Relaxed)
+    }
+}
+
+/// A batch-relink folder walk running on a worker thread.
+#[derive(Debug, Clone)]
+pub struct RelinkScan {
+    /// Matches the walk's `ScanFinished` result to this scan; a result
+    /// whose token doesn't match (cancelled, superseded) is dropped.
+    pub token: u64,
+    pub folder: PathBuf,
+    pub control: Arc<ScanControl>,
+}
 
 /// Session-level relink bookkeeping held on [`crate::Resonance`].
 #[derive(Debug, Clone, Default)]
@@ -51,6 +84,11 @@ pub struct RelinkState {
     /// lets the modal show the just-relinked rows as resolved instead of
     /// making them vanish, and drives the "N of M relinked" counter.
     pub modal_targets: Vec<AssetId>,
+    /// The "Search a folder…" walk in flight, if any. Only one runs at a
+    /// time; the imports it finds start when its result arrives.
+    pub scan: Option<RelinkScan>,
+    /// Token source for [`RelinkScan::token`].
+    pub next_scan_token: u64,
 }
 
 impl RelinkState {
@@ -73,8 +111,23 @@ impl RelinkState {
     }
 
     /// Close the relink modal and forget which assets it was tracking.
+    /// A folder search in flight is cancelled with it.
     pub fn close_modal(&mut self) {
         self.modal_open = false;
         self.modal_targets.clear();
+        self.cancel_scan();
+    }
+
+    /// Stop the folder search in flight (if any) and forget it, so its
+    /// result — whenever the worker notices — is ignored.
+    pub fn cancel_scan(&mut self) {
+        if let Some(scan) = self.scan.take() {
+            scan.control.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// True while a "Search a folder…" walk is running.
+    pub fn scanning(&self) -> bool {
+        self.scan.is_some()
     }
 }

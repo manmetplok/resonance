@@ -11,7 +11,11 @@ pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {
         ViewportMessage::ZoomIn => zoom_in(r),
         ViewportMessage::ZoomOut => zoom_out(r),
         ViewportMessage::ScrollY(delta) => scroll_y_delta(r, delta),
-        ViewportMessage::ScrollToX(x) => scroll_to_x(r, x),
+        ViewportMessage::ArrangeScrolled {
+            offset_x,
+            visible_width,
+            content_width,
+        } => arrange_scrolled(r, offset_x, visible_width, content_width),
         ViewportMessage::ScrollToY(y) => scroll_to_y(r, y),
         ViewportMessage::ViewportWidth(w) => viewport_width(r, w),
         ViewportMessage::ViewportHeight(h) => viewport_height(r, h),
@@ -37,9 +41,25 @@ pub fn scroll_y_delta(r: &mut Resonance, delta: f32) {
     scroll_to_y(r, y);
 }
 
-pub fn scroll_to_x(r: &mut Resonance, x: f32) {
-    let max_x = (r.viewport.timeline_content_width - r.viewport.viewport_width).max(0.0);
-    r.viewport.scroll_offset = x.clamp(0.0, max_x);
+/// Mirror the arrange `Scrollable`'s viewport into state. An offset
+/// change that isn't the echo of follow's own `scroll_to` is the user
+/// scrolling by hand: during playback that pauses follow until the
+/// transport next stops (see `update::tick::follow_playhead`).
+pub fn arrange_scrolled(r: &mut Resonance, offset_x: f32, visible_width: f32, content_width: f32) {
+    let vp = &mut r.viewport;
+    let moved = (offset_x - vp.scroll_offset).abs() > 0.5;
+    let is_echo = vp
+        .follow_pending_x
+        .is_some_and(|target| (offset_x - target).abs() <= 1.0);
+    if is_echo {
+        vp.follow_pending_x = None;
+    } else if moved && r.transport.playing {
+        vp.follow_paused = true;
+        vp.follow_pending_x = None;
+    }
+    vp.scroll_offset = offset_x;
+    vp.visible_width = visible_width;
+    vp.scroll_content_width = content_width;
 }
 
 pub fn scroll_to_y(r: &mut Resonance, y: f32) {
@@ -57,11 +77,8 @@ pub fn viewport_height(r: &mut Resonance, h: f32) {
 pub fn timeline_content_size(r: &mut Resonance, w: f32, h: f32) {
     r.viewport.timeline_content_width = w;
     r.viewport.timeline_content_height = h;
-    // Re-clamp scroll offsets if content shrank.
-    let max_x = (w - r.viewport.viewport_width).max(0.0);
-    if r.viewport.scroll_offset > max_x {
-        r.viewport.scroll_offset = max_x;
-    }
+    // Re-clamp the vertical offset if content shrank. (Horizontal scroll
+    // is owned — and clamped — by the outer `Scrollable`.)
     let max_y = max_scroll_y(r);
     if r.viewport.scroll_offset_y > max_y {
         r.viewport.scroll_offset_y = max_y;

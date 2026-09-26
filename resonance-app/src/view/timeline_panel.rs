@@ -134,6 +134,14 @@ impl crate::Resonance {
                 iced::widget::scrollable::Scrollbar::default(),
             ),
         )
+        .id(crate::state::ARRANGE_SCROLL_ID)
+        .on_scroll(|vp| {
+            Message::Viewport(ViewportMessage::ArrangeScrolled {
+                offset_x: vp.absolute_offset().x,
+                visible_width: vp.bounds().width,
+                content_width: vp.content_bounds().width,
+            })
+        })
         .width(Length::Fill)
         .height(Length::Fill);
 

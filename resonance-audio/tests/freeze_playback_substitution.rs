@@ -22,7 +22,7 @@ use crossbeam_channel::unbounded;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{PluginMap, SharedState, to_freeze_cache, to_wav};
+use resonance_audio::__test_support::{AutomationSnapshot, PluginMap, SharedState, to_freeze_cache, to_wav};
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
@@ -161,6 +161,7 @@ fn freeze_track1(state: &EngineState, name: &str) -> FrozenSource {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     )
@@ -240,8 +241,10 @@ fn frozen_track_plays_cache_not_live_source() {
     // Centre pan is unity on a stereo-balance track (ba doc #276 BUG 3),
     // so a unity-volume track passes the DC cache through untouched.
     let expected = DC;
+    // The export renders the shared FX tail past the project end (code
+    // review ENG-07); the cache covers the project range only.
     assert!(
-        frozen.iter().all(|&s| (s - expected).abs() < 1e-4),
+        frozen[..frames * 2].iter().all(|&s| (s - expected).abs() < 1e-4),
         "frozen bounce must carry the DC cache (~{expected}), got e.g. {}",
         frozen[0]
     );

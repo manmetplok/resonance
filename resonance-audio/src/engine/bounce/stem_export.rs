@@ -37,10 +37,6 @@ use crate::types::*;
 use super::super::SharedState;
 use super::stem::{render_stem, stem_project_range, write_stem_wav};
 
-/// Seconds of extra render past the range end so reverb / delay tails
-/// decay into the stem instead of being cut off (when `include_fx_tail`).
-const FX_TAIL_SECONDS: u64 = 2;
-
 /// Render `targets` to WAV files and stream the export event queue.
 ///
 /// Synchronous core, called on the worker thread spawned by
@@ -95,9 +91,11 @@ pub fn export_stems(
     }
 
     // Extend the shared end by an FX tail when asked; every target uses
-    // the SAME extended end so the stems stay sample-aligned.
+    // the SAME extended end so the stems stay sample-aligned. It is the
+    // master export's tail too (code review ENG-07), so the stems and the
+    // mix come out the same length.
     let tail = if include_fx_tail {
-        FX_TAIL_SECONDS * engine_rate as u64
+        super::super::bounce_common::offline_tail_frames(engine_rate)
     } else {
         0
     };

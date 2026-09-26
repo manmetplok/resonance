@@ -18,7 +18,10 @@ use super::{
 };
 
 impl VocalRollCanvas<'_> {
-    pub(super) fn fingerprint(&self, state: &VocalRollState) -> VocalRollFingerprint {
+    /// Everything the cached layer paints, hashed. `pub` so the
+    /// invalidation contract is testable from the `compose` binary.
+    #[doc(hidden)]
+    pub fn fingerprint(&self, state: &VocalRollState) -> VocalRollFingerprint {
         use std::hash::{Hash, Hasher};
         let mut nh = std::collections::hash_map::DefaultHasher::new();
         for n in &self.clip.notes {
@@ -31,7 +34,10 @@ impl VocalRollCanvas<'_> {
         for c in self.chords {
             c.start_beat.hash(&mut ch);
             c.duration_beats.hash(&mut ch);
-            c.chord.root.to_semitone().hash(&mut ch);
+            // The strip paints root + quality (VIEW-31); bass too, so a
+            // slash-chord edit can never leave a stale label behind.
+            super::chord_label(&c.chord).hash(&mut ch);
+            c.chord.bass.map(|b| b.to_semitone()).hash(&mut ch);
         }
         let mut dh = std::collections::hash_map::DefaultHasher::new();
         for l in &self.params.draft {
@@ -42,6 +48,11 @@ impl VocalRollCanvas<'_> {
         for l in self.lyrics {
             l.hash(&mut lh);
         }
+        // The voice label is painted in the corner and the voicebank
+        // remaps the phoneme strip's symbols (VIEW-31).
+        let mut mh = std::collections::hash_map::DefaultHasher::new();
+        self.voice_label.hash(&mut mh);
+        <&'static str>::from(self.params.voicebank).hash(&mut mh);
         let (lo, hi) = self.params.range;
         VocalRollFingerprint {
             clip_id: self.clip.id,
@@ -60,6 +71,7 @@ impl VocalRollCanvas<'_> {
             chords_hash: ch.finish(),
             draft_hash: dh.finish(),
             lyrics_hash: lh.finish(),
+            meta_hash: mh.finish(),
             bpm_bits: self.bpm.to_bits(),
             portamento_ms_bits: self.params.portamento_ms.to_bits(),
             vibrato_bits: self.params.vibrato.to_bits(),

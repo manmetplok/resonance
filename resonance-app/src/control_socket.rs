@@ -116,18 +116,15 @@ pub fn control_disabled() -> bool {
 /// `resonance-mcp` client side can never disagree on it (doc #265).
 pub use resonance_control::socket::socket_path;
 
-/// Create the socket's parent directory with `0700` permissions. If it
-/// already exists, tighten it to `0700` defensively (it is per-user
-/// private state).
+/// Create the socket's parent directory private (`0700`), or refuse an
+/// existing one that is a symlink, someone else's, or open to group /
+/// other (code review CTL-11 / UPD-12). Never `chmod`s anything — see
+/// [`resonance_control::socket::prepare_socket_dir`].
 fn prepare_parent_dir(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let Some(dir) = path.parent() else {
-        return Ok(());
-    };
-    if !dir.exists() {
-        std::fs::create_dir_all(dir)?;
+    match path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(dir) => resonance_control::socket::prepare_socket_dir(dir),
+        None => Ok(()),
     }
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
 }
 
 /// The instance lock guarding the socket path: `<socket>.lock`, held

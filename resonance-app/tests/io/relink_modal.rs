@@ -211,3 +211,18 @@ fn relink_modal_one_resolved() {
 
     snapshot_to(&app, "tests/snapshots/relink_modal_one_resolved.png");
 }
+
+/// A "Search a folder…" walk in flight (review VIEW-29 / UPD-10): the
+/// modal names the folder with a scanned-folders count, and the search
+/// action becomes "Cancel search". The walk task itself never runs here
+/// (`test_dispatch` drops tasks), so the count stays a deterministic 0.
+#[test]
+fn relink_modal_searching() {
+    let mut app = build_app_with_relink_open();
+    app.test_set_project_path(PathBuf::from("/Users/max/Projects/Song"));
+    app.test_dispatch(Message::Relink(RelinkMessage::FolderChosen(Some(
+        PathBuf::from("/Users/max/Samples"),
+    ))));
+    assert!(app.test_relink().scanning());
+    snapshot_to(&app, "tests/snapshots/relink_modal_searching.png");
+}

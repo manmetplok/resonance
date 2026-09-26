@@ -17,6 +17,17 @@ use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::time::{Duration, Instant};
 
+/// A temp dir the server will accept as a socket dir: private (0700).
+/// `tempfile` creates its dirs with the umask's default mode, and the
+/// server refuses an open socket dir rather than chmodding it (CTL-11).
+pub(crate) fn private_tempdir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("make temp dir private");
+    dir
+}
+
 /// Wait (bounded) for the next socket-thread event on the bridge.
 fn next_event(rx: &mut UnboundedReceiver<ControlMessage>) -> ControlMessage {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -38,7 +49,7 @@ fn next_event(rx: &mut UnboundedReceiver<ControlMessage>) -> ControlMessage {
 
 #[test]
 fn socket_hello_and_stub_method_round_trip() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = private_tempdir();
     let path = dir.path().join("control.sock");
 
     let (tx, mut rx) = iced::futures::channel::mpsc::unbounded();
@@ -121,7 +132,7 @@ fn socket_hello_and_stub_method_round_trip() {
 
 #[test]
 fn stale_socket_is_replaced_on_bind() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = private_tempdir();
     let path = dir.path().join("control.sock");
 
     // Simulate a crashed instance: a socket file nobody accepts on.
@@ -160,7 +171,7 @@ fn spawn_server(
 
 #[test]
 fn second_instance_is_refused_while_lock_held() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = private_tempdir();
     let path = dir.path().join("control.sock");
 
     let (winner, _winner_rx) = spawn_server(&path);
@@ -192,7 +203,7 @@ fn second_instance_is_refused_while_lock_held() {
 
 #[test]
 fn superseded_drop_leaves_successor_socket_alone() {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = private_tempdir();
     let path = dir.path().join("control.sock");
 
     let (first, _first_rx) = spawn_server(&path);
@@ -224,4 +235,58 @@ fn superseded_drop_leaves_successor_socket_alone() {
     // The live owner's own drop still cleans up.
     drop(second);
     assert!(!path.exists(), "owner's drop removes its socket");
+}
+
+// ---- socket directory trust (code review CTL-11 / UPD-12) -----------------
+
+fn dir_mode(p: &std::path::Path) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(p).unwrap().mode() & 0o7777
+}
+
+/// `/tmp/resonance-<uid>` pre-planted as a symlink to a directory the
+/// user owns: the server must refuse, not chmod the target and bind in it.
+#[test]
+fn a_symlinked_socket_dir_is_refused_and_its_target_left_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = private_tempdir();
+    let target = root.path().join("project");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let link = root.path().join("resonance-1000");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let (server, _rx) = spawn_server(&link.join("control.sock"));
+    let err = server.err().expect("spawn must refuse a symlinked socket dir");
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    assert_eq!(dir_mode(&target), 0o755, "symlink target must not be chmodded");
+    assert!(!target.join("control.sock").exists(), "nothing bound in the target");
+}
+
+/// An existing directory with group/other access (a pre-created
+/// `/tmp/resonance-<uid>`, or an override pointing into a project dir)
+/// is refused rather than silently tightened.
+#[test]
+fn a_pre_existing_open_socket_dir_is_refused_not_chmodded() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = private_tempdir();
+    for mode in [0o755, 0o777] {
+        let dir = root.path().join(format!("d{mode:o}"));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        let (server, _rx) = spawn_server(&dir.join("control.sock"));
+        let err = server.err().expect("open socket dir refused");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+        assert_eq!(dir_mode(&dir), mode, "must not be chmodded");
+    }
+}
+
+/// A missing socket dir is created private and served from.
+#[test]
+fn a_missing_socket_dir_is_created_0700() {
+    let root = private_tempdir();
+    let dir = root.path().join("run/resonance");
+    let (server, _rx) = spawn_server(&dir.join("control.sock"));
+    let _server = server.expect("spawn creates its dir");
+    assert_eq!(dir_mode(&dir), 0o700);
 }

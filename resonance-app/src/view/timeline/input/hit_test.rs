@@ -15,29 +15,34 @@ use super::super::snap::snap_sample_to_grid_tempo;
 use super::super::TimelineCanvas;
 
 impl TimelineCanvas<'_> {
-    /// Returns both scrollbar rects with each bar's visibility informed by
-    /// the other (the vertical bar's track shrinks when the horizontal bar
-    /// is shown, and vice versa).
+    /// The vertical scrollbar's rects, `None` when the lanes fit. There
+    /// is no in-canvas horizontal bar: horizontal scroll is owned by the
+    /// outer `Scrollable` that wraps the canvas (see `view_timeline`).
+    /// The vertical bar stays — tracks scroll inside the canvas so the
+    /// ruler / section band / global-tracks header line up with their
+    /// lanes. It hugs the right edge of the part of the canvas that is on
+    /// screen (the [`ViewportProbe`](crate::view::timeline::viewport_probe)
+    /// window), not the song's end; with no probe write yet it falls back
+    /// to the canvas edge (review VIEW-33).
     pub(in crate::view::timeline) fn scrollbar_rects(
         &self,
         bounds: Rectangle,
-    ) -> (Option<ScrollbarRects>, Option<ScrollbarRects>) {
+    ) -> Option<ScrollbarRects> {
         use crate::view::timeline::scrollbar;
-        // Horizontal scroll is now owned by the outer `Scrollable` that
-        // wraps the timeline canvas (see `view_timeline`), so we no
-        // longer draw an in-canvas horizontal scrollbar. The vertical
-        // bar stays — tracks scroll inside the canvas so the ruler
-        // / section band / global-tracks header line up with their lanes.
         let content_h = self.content_height_px();
         let header_h = self.fixed_header_height();
-        let v = scrollbar::v_rects(
-            bounds,
-            content_h,
-            self.scroll_offset_y,
-            header_h,
-            false,
-        );
-        (None, v)
+        let right_edge = self
+            .visible_viewport
+            .get()
+            .map_or(bounds.width, |v| v.x + v.width);
+        scrollbar::v_rects(bounds, right_edge, content_h, self.scroll_offset_y, header_h)
+    }
+
+    /// Test-only: [`scrollbar_rects`](Self::scrollbar_rects) for
+    /// `test_support` (VIEW-33).
+    #[doc(hidden)]
+    pub(crate) fn test_scrollbar_rects(&self, bounds: Rectangle) -> Option<ScrollbarRects> {
+        self.scrollbar_rects(bounds)
     }
 
     /// Hit-test a pointer press against a clip lane (MIDI or audio).

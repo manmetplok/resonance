@@ -78,7 +78,8 @@ pub mod __test_support {
     /// so `tests/clap_bundle_path.rs` can drive it with temp dirs.
     pub use crate::clap_host::bundle_binary_path;
     pub use crate::engine::{
-        chunk_span, encode_buffer_for_test, freeze_terminal_event, midi_render_range,
+        chunk_span, encode_buffer_for_test, export_for_test, freeze_terminal_event,
+        midi_render_range,
         normalize_buffer_for_test, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
         try_lock_with_backoff, AutomationSnapshot, ResolvedParamLane, BOUNCE_CHUNK,
         FREEZE_CANCELLED_MSG, MIN_CLAP_FRAMES, SharedState,
@@ -367,7 +368,7 @@ pub use midi_hardware::MidiOutputRegistry;
 /// event lifecycle (`run_pool_import`) without bringing up the engine
 /// thread or a real audio device.
 #[doc(hidden)]
-pub use engine::{import_one_to_pool, run_pool_import, PoolImportOutcome};
+pub use engine::{import_one_to_pool, run_pool_import, run_pool_import_with, PoolImportOutcome};
 
 /// Test surface for the bounded clip import / project-load worker pool.
 /// Exposed so `tests/load_clip_offthread.rs` can drive the exact queue

@@ -132,6 +132,7 @@ pub(crate) fn removed(r: &mut Resonance, track_id: TrackId) {
     }
     r.registry.tracks.retain(|t| t.id != track_id);
     r.clips.retain(|c| c.track_id != track_id);
+    r.recompute_pool_usage(); // review VIEW-30
     // Also drop any sub-tracks whose parent just went away.
     r.registry.tracks.retain(|t| {
         t.sub_track

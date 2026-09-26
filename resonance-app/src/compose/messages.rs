@@ -365,6 +365,12 @@ pub struct VocalAudioReadyData {
     /// this to the current epoch and drops stale renders so the user
     /// doesn't end up with two audio clips stacked on the same lane.
     pub render_epoch: u64,
+    /// The section tempo the audio was sung at. A placement can move into
+    /// another tempo region (or the tempo can be edited) while the render
+    /// runs; the install compares this to the section's tempo *now* and
+    /// re-renders on a mismatch rather than installing audio at the wrong
+    /// tempo (FU-V2d).
+    pub bpm: f32,
 }
 
 // ---------------------------------------------------------------------------

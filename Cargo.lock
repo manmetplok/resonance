@@ -284,6 +284,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arch-invariants"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4844,7 +4851,6 @@ dependencies = [
  "clack-plugin",
  "criterion",
  "dirs",
- "egui",
  "parking_lot",
  "plugin-gui-core",
  "rand 0.10.1",
@@ -4859,7 +4865,6 @@ dependencies = [
  "sha2",
  "tiny_http",
  "ureq",
- "wayland-plugin-gui",
  "webbrowser",
 ]
 
@@ -4939,7 +4944,6 @@ name = "resonance-compressor"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "egui",
  "plugin-gui-core",
  "resonance-common",
  "resonance-dsp",
@@ -4947,7 +4951,6 @@ dependencies = [
  "resonance-metering",
  "resonance-plugin",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -4969,7 +4972,6 @@ dependencies = [
  "clack-host",
  "clack-plugin",
  "criterion",
- "egui",
  "plugin-gui-core",
  "resonance-common",
  "resonance-dsp",
@@ -4977,7 +4979,6 @@ dependencies = [
  "resonance-metering",
  "resonance-plugin",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -4987,7 +4988,6 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "dirs",
- "egui",
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
@@ -4998,7 +4998,6 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq",
- "wayland-plugin-gui",
  "zip",
 ]
 
@@ -5018,7 +5017,6 @@ name = "resonance-eq"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "egui",
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
@@ -5027,7 +5025,6 @@ dependencies = [
  "resonance-metering",
  "resonance-plugin",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -5038,7 +5035,6 @@ dependencies = [
  "clack-host",
  "clack-plugin",
  "cocoa-plugin-gui",
- "egui",
  "plugin-gui-core",
  "resonance-common",
  "resonance-dsp",
@@ -5046,7 +5042,6 @@ dependencies = [
  "resonance-metering",
  "resonance-plugin",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -5057,7 +5052,6 @@ dependencies = [
  "clack-host",
  "clack-plugin",
  "criterion",
- "egui",
  "plugin-gui-core",
  "resonance-common",
  "resonance-dsp",
@@ -5066,7 +5060,6 @@ dependencies = [
  "resonance-music-theory",
  "resonance-plugin",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -5077,7 +5070,6 @@ dependencies = [
  "clack-host",
  "clack-plugin",
  "criterion",
- "egui",
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
@@ -5088,7 +5080,6 @@ dependencies = [
  "rfd",
  "rustfft",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -5097,7 +5088,6 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "criterion",
- "egui",
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
@@ -5108,7 +5098,6 @@ dependencies = [
  "rustfft",
  "serde_json",
  "symphonia",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -5155,7 +5144,6 @@ dependencies = [
  "clack-plugin",
  "cocoa-plugin-gui",
  "dirs",
- "iced",
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
@@ -5173,7 +5161,6 @@ dependencies = [
  "clack-host",
  "clack-plugin",
  "criterion",
- "egui",
  "plugin-gui-core",
  "resonance-common",
  "resonance-dsp",
@@ -5181,7 +5168,6 @@ dependencies = [
  "resonance-metering",
  "resonance-plugin",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]
@@ -5210,14 +5196,12 @@ dependencies = [
  "clack-host",
  "clack-plugin",
  "criterion",
- "egui",
  "plugin-gui-core",
  "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-plugin",
  "serde_json",
- "wayland-plugin-gui",
 ]
 
 [[package]]

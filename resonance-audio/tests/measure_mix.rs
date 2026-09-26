@@ -201,7 +201,8 @@ fn measures_master_and_track_over_one_shared_range() {
         results[0].range_end - results[0].range_start,
         "frames match the reported range"
     );
-    assert_eq!(results[0].range_end, FRAMES as u64, "full project range");
+    // The project range plus the export's 2 s FX tail (code review ENG-07).
+    assert_eq!(results[0].range_end, (FRAMES + 2 * SR as usize) as u64, "full project range");
 
     for m in &results {
         assert_eq!(m.source, MeasureSource::Render);

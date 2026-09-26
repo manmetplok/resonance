@@ -15,7 +15,19 @@ use crate::types::*;
 /// Tail rendered past the last MIDI clip end on the source track when
 /// bouncing in place — captures FX / bus reverb decay so the bounce
 /// sounds self-contained. Applies to both offline and realtime bounce.
+///
+/// It is also the one tail policy of every offline render whose range is
+/// the project's own extent (code review ENG-07): the master export, the
+/// stems (with their FX tail on), the freeze cache and the default mix
+/// measurement all render this much past the last clip end, so a mix and
+/// its stems come out the same length and a reverb / delay / release
+/// decays into the file instead of being cut.
 pub(crate) const BOUNCE_TAIL_SECONDS: u32 = 2;
+
+/// [`BOUNCE_TAIL_SECONDS`] in frames at `sample_rate`.
+pub(crate) fn offline_tail_frames(sample_rate: u32) -> u64 {
+    sample_rate as u64 * BOUNCE_TAIL_SECONDS as u64
+}
 
 /// Compute the sample range that needs to be rendered when bouncing
 /// the MIDI on `source_track_id`. Range is `[start, end)`.

@@ -41,6 +41,11 @@ Four things to know before adding tests (background in ba doc #285):
 - **Re-bless goldens with `RESONANCE_BLESS=1`**, e.g.
   `RESONANCE_BLESS=1 cargo test -p resonance-app --test mixer`. This machine is
   canonical for golden images.
+- **The layering and test-layout rules are tests.** `cargo test -p
+  arch-invariants` (`tools/arch-invariants`, builds in seconds, links nothing)
+  checks the crate DAG from ARCHITECTURE.md, that no plugin names a platform
+  GUI runtime, the two rules above, and a few grep-shaped app boundaries. A
+  new crate needs a row in its layering table.
 - **Tests that open a real plugin window are `#[ignore]`d.** They need a live
   Wayland session, so the default run — `./scripts/run-tests.py`, which passes
   no libtest flags — skips them and stays headless. Run them by hand from a
