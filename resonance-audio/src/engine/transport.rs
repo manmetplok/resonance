@@ -24,10 +24,10 @@ pub(crate) fn refuse_while_offline_render(ctx: &HandlerCtx, what: &str) -> bool 
     if !ctx.shared.offline_render_active() {
         return false;
     }
-    let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
         "Cannot {what}: {}",
         super::bounce::OFFLINE_RENDER_BUSY_MSG
-    )));
+    ))));
     true
 }
 
@@ -164,9 +164,9 @@ pub(crate) fn begin_recording_stream(
     let project_dir = match state.project_dir.clone() {
         Some(dir) => dir,
         None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(
-                "Cannot record: no project directory set. Open or create a project first.".into(),
-            ));
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(
+                "Cannot record: no project directory set. Open or create a project first.",
+            )));
             return;
         }
     };
@@ -257,10 +257,10 @@ pub(crate) fn begin_recording_stream(
             // Keep the legacy behaviour: the transport rolls even when
             // the recording stream could not be opened.
             ctx.shared.playing.store(true, Ordering::SeqCst);
-            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
                 "Failed to start recording: {}",
                 e
-            )));
+            ))));
             return;
         }
     };
@@ -306,9 +306,9 @@ pub(crate) fn begin_recording_stream(
             Err(e) => {
                 state.rec.buffers.clear();
                 state.rec.ring_consumer = None;
-                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
                     "Failed to open recording file: {e}"
-                )));
+                ))));
                 return;
             }
         }

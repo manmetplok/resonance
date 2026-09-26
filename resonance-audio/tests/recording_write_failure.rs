@@ -126,7 +126,7 @@ fn feed(rec: &mut RecordingState, prod: &mut HeapProd<f32>, first: usize, frames
 fn errors(rx: &Receiver<AudioEvent>) -> Vec<String> {
     rx.try_iter()
         .filter_map(|e| match e {
-            AudioEvent::Error(msg) => Some(msg),
+            AudioEvent::Error(err) => Some(err.message),
             _ => None,
         })
         .collect()

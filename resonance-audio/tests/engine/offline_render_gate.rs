@@ -187,7 +187,7 @@ fn play_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
     assert!(!h.is_playing(), "Play must not start under an offline render");
     let events = h.drain_events();
     assert!(
-        events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.contains(OFFLINE_RENDER_BUSY_MSG))),
+        events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.message.contains(OFFLINE_RENDER_BUSY_MSG))),
         "the refusal must be surfaced as an error event, got {events:?}"
     );
     // ...and as the event that resets the app's optimistic `playing`
@@ -213,7 +213,7 @@ fn record_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
     assert!(!h.count_in_active(), "no count-in may be armed either");
     let events = h.drain_events();
     assert!(
-        events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.contains(OFFLINE_RENDER_BUSY_MSG))),
+        events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.message.contains(OFFLINE_RENDER_BUSY_MSG))),
         "the refusal must be surfaced as an error event, got {events:?}"
     );
 
@@ -221,7 +221,7 @@ fn record_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
     assert!(!h.is_playing());
     let events = h.drain_events();
     assert!(
-        events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.contains(OFFLINE_RENDER_BUSY_MSG))),
+        events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.message.contains(OFFLINE_RENDER_BUSY_MSG))),
         "a precount-less Record is refused the same way, got {events:?}"
     );
 
@@ -234,7 +234,7 @@ fn record_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, AudioEvent::Error(m) if !m.contains(OFFLINE_RENDER_BUSY_MSG))),
+            .any(|e| matches!(e, AudioEvent::Error(m) if !m.message.contains(OFFLINE_RENDER_BUSY_MSG))),
         "expected the ordinary record path's own error, got {events:?}"
     );
 }

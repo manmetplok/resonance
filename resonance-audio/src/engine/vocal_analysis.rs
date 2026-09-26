@@ -41,9 +41,9 @@ pub(crate) fn handle_analyze_clip_pitch(
             analyze_clip_pitch_in_place(&clips_arc, &event_tx, clip_id, sample_rate);
         });
     if let Err(e) = spawn_result {
-        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "Failed to spawn pitch-analysis thread: {e}"
-        )));
+        ))));
     }
 }
 

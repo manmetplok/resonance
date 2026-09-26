@@ -36,7 +36,7 @@ pub(crate) fn handle_set_midi_clock_output(
     enabled: bool,
 ) {
     if let Err(e) = state.midi_clock_sender.configure(device, enabled) {
-        let _ = ctx.event_tx.send(AudioEvent::Error(e));
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(e)));
     }
 }
 
@@ -47,7 +47,7 @@ pub(crate) fn handle_set_midi_clock_input(
     enabled: bool,
 ) {
     if let Err(e) = state.midi_clock_receiver.configure(device, enabled) {
-        let _ = ctx.event_tx.send(AudioEvent::Error(e));
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(e)));
     }
     // Resetting the tempo tracker on every reconfigure avoids a stale
     // average being applied to a freshly opened device.

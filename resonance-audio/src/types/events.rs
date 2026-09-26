@@ -9,9 +9,10 @@ use resonance_metering::MeterSnapshot;
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    ABSource, AssetId, BusId, ClipId, F0Frame, FadeCurve, InputDeviceInfo, MidiNote, MixMeasurement,
-    NoteBlob, ParamInfo, PluginInstanceId, PluginScanFailure, ReferenceAnalysisStage, ReferenceId,
-    SamplePos, ScannedPlugin, SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
+    ABSource, AssetId, BusId, ClipId, EngineError, F0Frame, FadeCurve, InputDeviceInfo, MidiNote,
+    MixMeasurement, NoteBlob, ParamInfo, PluginInstanceId, PluginScanFailure,
+    ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId, SendSource, TrackId,
+    WarpAlgorithm, WarpMarker,
 };
 use crate::quantize::GrooveTemplate;
 use resonance_common::FreezeCacheRef;
@@ -295,7 +296,7 @@ pub enum AudioEvent {
     /// false. Unlike [`AudioEvent::Stopped`] the playhead is untouched —
     /// nothing moved it (FU-F1a).
     TransportRefused,
-    Error(String),
+    Error(EngineError),
     InputDevicesListed {
         devices: Vec<InputDeviceInfo>,
         default_name: Option<String>,

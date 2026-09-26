@@ -128,9 +128,9 @@ pub(crate) fn poll_deferred_clip_commands(ctx: &HandlerCtx, state: &mut HandlerS
         )
     };
     for clip_id in expired {
-        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "clip {clip_id} never finished loading; an edit aimed at it was dropped"
-        )));
+        ))));
     }
     for command in ready {
         apply_clip_command(ctx, command);
@@ -228,9 +228,9 @@ pub(crate) fn handle_import_clip(
     let project_dir = match state.project_dir.clone() {
         Some(dir) => dir,
         None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(
-                "Cannot import clip: no project directory set.".into(),
-            ));
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(
+                "Cannot import clip: no project directory set.",
+            )));
             return;
         }
     };
@@ -307,28 +307,28 @@ pub(crate) fn handle_import_clip(
                             drop(clips);
                         }
                         Err(e) => {
-                            let _ = thread_event_tx.send(AudioEvent::Error(format!(
+                            let _ = thread_event_tx.send(AudioEvent::Error(EngineError::internal(format!(
                                 "Failed to mmap imported clip: {e}"
-                            )));
+                            ))));
                         }
                     },
                     Err(e) => {
-                        let _ = thread_event_tx.send(AudioEvent::Error(format!(
+                        let _ = thread_event_tx.send(AudioEvent::Error(EngineError::internal(format!(
                             "Failed to transcode imported clip to WAV: {e}"
-                        )));
+                        ))));
                     }
                 }
             }
             Err(e) => {
                 let _ = thread_event_tx
-                    .send(AudioEvent::Error(format!("Failed to import clip: {}", e)));
+                    .send(AudioEvent::Error(EngineError::internal(format!("Failed to import clip: {}", e))));
             }
         });
     if let Err(e) = submit_result {
-        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "Failed to spawn decode thread: {}",
             e
-        )));
+        ))));
     }
 }
 
@@ -872,15 +872,15 @@ fn submit_clip_load(
             }
             Err(e) => {
                 let _ = thread_event_tx
-                    .send(AudioEvent::Error(format!("Failed to load clip WAV: {e}")));
+                    .send(AudioEvent::Error(EngineError::internal(format!("Failed to load clip WAV: {e}"))));
             }
         }
     });
     if let Err(e) = submit_result {
-        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "Failed to spawn clip-load thread: {}",
             e
-        )));
+        ))));
     }
 }
 
@@ -892,9 +892,9 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
     let project_dir = match state.project_dir.clone() {
         Some(dir) => dir,
         None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(
-                "Cannot save clips: no project directory set.".into(),
-            ));
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(
+                "Cannot save clips: no project directory set.",
+            )));
             return;
         }
     };
@@ -946,23 +946,23 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
                     if let Err(e) = std::fs::create_dir_all(parent) {
                         let _ = ctx
                             .event_tx
-                            .send(AudioEvent::Error(format!("Create audio dir: {e}")));
+                            .send(AudioEvent::Error(EngineError::internal(format!("Create audio dir: {e}"))));
                         return;
                     }
                 }
                 if let Err(e) = std::fs::copy(src_path, &target) {
                     let _ = ctx
                         .event_tx
-                        .send(AudioEvent::Error(format!("Copy clip {clip_id} WAV: {e}")));
+                        .send(AudioEvent::Error(EngineError::internal(format!("Copy clip {clip_id} WAV: {e}"))));
                     return;
                 }
                 needs_remap.push(*clip_id);
             }
             Action::Encode(samples) => {
                 if let Err(e) = transcode_to_wav(&target, samples, sr) {
-                    let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
                         "Transcode clip {clip_id} to WAV: {e}"
-                    )));
+                    ))));
                     return;
                 }
                 needs_remap.push(*clip_id);

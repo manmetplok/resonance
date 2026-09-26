@@ -104,11 +104,11 @@ pub(crate) fn handle_move_plugin_in_master(
             });
         }
         None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
                 "Cannot reorder plugin {} on the master: it is not on the \
                  master chain",
                 instance_id
-            )));
+            ))));
         }
     }
 }

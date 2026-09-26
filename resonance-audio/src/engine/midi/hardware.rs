@@ -68,7 +68,7 @@ pub(crate) fn handle_set_track_midi_input(
         .midi_inputs
         .set_track_input(track_id, device, channel)
     {
-        let _ = ctx.event_tx.send(AudioEvent::Error(e));
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(e)));
     }
 }
 
@@ -94,7 +94,7 @@ pub(crate) fn handle_set_track_midi_output(
         }
     }
     if let Err(e) = state.midi_hw.midi_outputs.set_track_output(track_id, device) {
-        let _ = ctx.event_tx.send(AudioEvent::Error(e));
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(e)));
     }
 }
 
