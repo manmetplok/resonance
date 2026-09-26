@@ -57,7 +57,10 @@ fn eq_output_is_identical_with_and_without_the_worker() {
     let (with_worker, eq) = render_eq(LinearPhaseEq::new(SR), &input);
     let (inline, _) = render_eq(LinearPhaseEq::with_worker(SR, None), &input);
     let (from_worker, inline_designs) = eq.design_counts();
-    assert!(from_worker + inline_designs > 5, "automation never redesigned");
+    assert!(
+        from_worker + inline_designs > 5,
+        "automation never redesigned"
+    );
     assert!(
         with_worker.iter().any(|v| v.abs() > 0.1),
         "EQ output is silent"
@@ -83,7 +86,10 @@ fn eq_uses_the_worker_when_it_has_time() {
     }
     let (from_worker, inline) = eq.design_counts();
     assert_eq!(from_worker + inline, 4);
-    assert!(from_worker >= 3, "worker designs {from_worker}, inline {inline}");
+    assert!(
+        from_worker >= 3,
+        "worker designs {from_worker}, inline {inline}"
+    );
 }
 
 fn crossover_cfg(block: usize) -> MultibandConfig {
@@ -107,7 +113,11 @@ fn render_multiband(mut mb: Multiband, input: &[f32]) -> Vec<f32> {
     let mut block = 0;
     while pos < l.len() {
         let n = 128.min(l.len() - pos);
-        mb.process_stereo(&mut l[pos..pos + n], &mut r[pos..pos + n], &crossover_cfg(block));
+        mb.process_stereo(
+            &mut l[pos..pos + n],
+            &mut r[pos..pos + n],
+            &crossover_cfg(block),
+        );
         pos += n;
         block += 1;
     }
@@ -124,8 +134,14 @@ fn crossover_output_is_identical_with_and_without_the_worker() {
     let worker = DesignWorker::spawn();
     let with_worker = render_multiband(Multiband::with_worker(SR, 128, Some(&worker)), &input);
     let inline = render_multiband(Multiband::with_worker(SR, 128, None), &input);
-    assert!(with_worker.iter().any(|v| v.abs() > 0.1), "multiband output is silent");
-    assert!(with_worker == inline, "worker-designed crossover output differs");
+    assert!(
+        with_worker.iter().any(|v| v.abs() > 0.1),
+        "multiband output is silent"
+    );
+    assert!(
+        with_worker == inline,
+        "worker-designed crossover output differs"
+    );
 }
 
 /// DSP-12: a crossover move crossfades instead of swapping the FIR hard.
@@ -143,7 +159,11 @@ fn crossover_move_is_continuous() {
     lp.set_cutoff(500.0);
     lp.process_stereo(&mut l[switch..], &mut r[switch..]);
 
-    let max_delta = |s: &[f32]| s.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let max_delta = |s: &[f32]| {
+        s.windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max)
+    };
     let steady = max_delta(&l[latency + 1000..switch]);
     let after = max_delta(&l[switch..]);
     assert!(steady > 1e-3, "steady-state output is silent");
@@ -153,7 +173,10 @@ fn crossover_move_is_continuous() {
     );
     // And the move did take effect.
     let tail_peak = l[n - 2000..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
-    assert!(tail_peak < 0.4 * 0.5, "cutoff move never landed: tail peak {tail_peak}");
+    assert!(
+        tail_peak < 0.4 * 0.5,
+        "cutoff move never landed: tail peak {tail_peak}"
+    );
 }
 
 /// DSP-12 / FU-M2b: the crossover FIR scales with the sample rate like
@@ -165,7 +188,10 @@ fn crossover_fir_scales_with_sample_rate() {
         LinearPhaseLowpass::latency_for(96_000.0),
         2 * LinearPhaseLowpass::latency_for(48_000.0)
     );
-    assert_eq!(Multiband::latency_for(96_000.0), Multiband::new(96_000.0, 64).latency());
+    assert_eq!(
+        Multiband::latency_for(96_000.0),
+        Multiband::new(96_000.0, 64).latency()
+    );
 
     // A low crossover still separates at 96 kHz: 400 Hz is two octaves
     // over a 100 Hz LR4 cutoff (~ −24 dB ideal).
@@ -182,5 +208,8 @@ fn crossover_fir_scales_with_sample_rate() {
     let tail = &l[n - 20_000..];
     let rms = (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt();
     let db = 20.0 * (rms / (0.5 / 2f32.sqrt())).log10();
-    assert!(db < -18.0, "400 Hz through a 100 Hz crossover at 96 kHz: {db:.1} dB");
+    assert!(
+        db < -18.0,
+        "400 Hz through a 100 Hz crossover at 96 kHz: {db:.1} dB"
+    );
 }

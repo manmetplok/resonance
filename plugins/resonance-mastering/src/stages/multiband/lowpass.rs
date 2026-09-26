@@ -37,7 +37,11 @@ impl LinearPhaseLowpass {
 
     /// A lowpass designing through `worker`, or always inline with
     /// `None`. The output is identical either way.
-    pub fn with_worker(sample_rate: f32, cutoff_hz: f32, worker: Option<&Arc<DesignWorker>>) -> Self {
+    pub fn with_worker(
+        sample_rate: f32,
+        cutoff_hz: f32,
+        worker: Option<&Arc<DesignWorker>>,
+    ) -> Self {
         let mut fir = StereoFir::new(sample_rate, worker);
         fir.design_now(&cascade(cutoff_hz));
         Self { cutoff_hz, fir }

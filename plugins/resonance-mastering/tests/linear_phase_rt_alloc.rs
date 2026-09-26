@@ -116,7 +116,10 @@ fn automating_linear_phase_filters_never_allocates() {
         .chain(mbs.iter().map(|m| m.design_counts()))
         .map(|(w, i)| w + i)
         .sum();
-    assert!(designs > 50, "the sweep barely redesigned ({designs} designs)");
+    assert!(
+        designs > 50,
+        "the sweep barely redesigned ({designs} designs)"
+    );
     assert!(l.iter().any(|v| v.abs() > 1e-3), "output is silent");
     assert_eq!(allocs, 0, "{allocs} allocations on the audio thread");
 }
