@@ -4,6 +4,7 @@
 //! a controller reaches its instrument within one quantum whichever branch
 //! renders the block (doc #260 finding #16).
 
+use crate::cycle_load::{try_read_counted, LockMissCounters, StateMap};
 use crate::midi_hardware::LiveMidiEvent;
 use crate::types::*;
 
@@ -44,6 +45,7 @@ pub(super) fn pickup_live_midi(
     live_midi_fwd: &crossbeam_channel::Sender<LiveMidiEvent>,
     tracks: &parking_lot::RwLock<indexmap::IndexMap<TrackId, Track>>,
     plugins: &parking_lot::RwLock<crate::clap_host::PluginMap>,
+    misses: &LockMissCounters,
     midi_stash: &mut MidiStash,
     sample_rate: u32,
     frames: usize,
@@ -51,7 +53,9 @@ pub(super) fn pickup_live_midi(
     if live_midi_rx.is_empty() {
         return;
     }
-    let (Some(tracks_guard), Some(plugins_guard)) = (tracks.try_read(), plugins.try_read()) else {
+    let tracks_guard = try_read_counted(tracks, StateMap::Tracks, misses);
+    let plugins_guard = try_read_counted(plugins, StateMap::Plugins, misses);
+    let (Some(tracks_guard), Some(plugins_guard)) = (tracks_guard, plugins_guard) else {
         // Contended: leave the events queued; the next callback (one
         // quantum away) picks them up — still far inside the old
         // engine-cadence latency budget.

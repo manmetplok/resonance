@@ -7,8 +7,9 @@
 //! (`pw-top` busy times). [`CycleLoadMeter`] times every mix call,
 //! publishes a smoothed load + window peak into [`SharedState`] for
 //! lock-free UI reads, counts over-budget cycles (a mix call that
-//! outruns its cycle budget *is* an xrun), and emits a rate-limited
-//! stderr summary alongside the graph's own numbers:
+//! outruns its cycle budget *is* an xrun), and hands a rate-limited
+//! summary to the engine thread, which prints it alongside the graph's
+//! own numbers:
 //!
 //! - default: one line per [`QUIET_REPORT_INTERVAL`], but only when the
 //!   window contained something worth reporting (an over-budget cycle,
@@ -24,14 +25,27 @@
 //! stream still met its deadline); the meter only folds the counter
 //! into its report line.
 //!
-//! RT-safety: `record` does arithmetic, relaxed atomic stores and — at
-//! most once per report interval — formats one `String`. That matches
-//! the existing callback logging discipline (`stream_errors`).
+//! State-lock contention is attributed per map (code review ARCH-02,
+//! A2-1): every `try_read` the callback makes on `tracks` / `busses` /
+//! `master` / `clips` / `midi_clips` / `plugins` goes through
+//! [`try_read_counted`], so a miss bumps that map's slot in
+//! [`LockMissCounters`] whichever branch (playing, stopped, count-in,
+//! live-MIDI pickup, master FX) made it. `render_skip_cycles` stays the
+//! "a playing block was dropped" total; the per-map counters say *which*
+//! lock a UI edit or worker thread was holding at the time.
+//!
+//! RT-safety: `record` does arithmetic and relaxed atomic stores only.
+//! The summary line is *not* formatted or printed on the audio thread:
+//! the mix closure publishes the report into [`CycleReportSlot`] (a
+//! seqlock of plain atomics on `SharedState`) and the engine control
+//! loop formats + prints it on its next tick.
 //!
 //! See `tests/cycle_load.rs` for behaviour coverage.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+use parking_lot::{RwLock, RwLockReadGuard};
 
 use crate::engine::SharedState;
 
@@ -51,6 +65,104 @@ pub const QUIET_PEAK_THRESHOLD: f32 = 0.75;
 /// a second — steady enough for a UI meter, quick enough to track a
 /// load spike.
 pub const LOAD_EMA_ALPHA: f32 = 0.05;
+
+/// The six `RwLock`-guarded project maps the audio callback `try_read`s.
+/// Index into [`LockMissCounters`]; the order is the one every report
+/// line and `[u64; STATE_MAP_COUNT]` snapshot uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum StateMap {
+    Tracks = 0,
+    Busses = 1,
+    Master = 2,
+    Clips = 3,
+    MidiClips = 4,
+    Plugins = 5,
+}
+
+/// Number of [`StateMap`] variants.
+pub const STATE_MAP_COUNT: usize = 6;
+
+impl StateMap {
+    /// Every map, in counter order.
+    pub const ALL: [StateMap; STATE_MAP_COUNT] = [
+        StateMap::Tracks,
+        StateMap::Busses,
+        StateMap::Master,
+        StateMap::Clips,
+        StateMap::MidiClips,
+        StateMap::Plugins,
+    ];
+
+    /// Short name for the report line.
+    pub fn name(self) -> &'static str {
+        match self {
+            StateMap::Tracks => "tracks",
+            StateMap::Busses => "busses",
+            StateMap::Master => "master",
+            StateMap::Clips => "clips",
+            StateMap::MidiClips => "midi-clips",
+            StateMap::Plugins => "plugins",
+        }
+    }
+}
+
+/// Lifetime `try_read` misses per state map, bumped by the audio thread
+/// through [`try_read_counted`] and read by the load meter / the UI. A
+/// miss means the map was write-held, or a writer was queued behind a
+/// long-lived reader (parking_lot's task-fair policy fails `try_read`
+/// in that state too), at the instant the callback asked.
+#[derive(Debug, Default)]
+pub struct LockMissCounters {
+    counts: [AtomicU64; STATE_MAP_COUNT],
+}
+
+impl LockMissCounters {
+    pub const fn new() -> Self {
+        Self {
+            counts: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+            ],
+        }
+    }
+
+    /// One more miss on `map`. Relaxed: the counters are diagnostics.
+    #[inline]
+    pub fn record(&self, map: StateMap) {
+        self.counts[map as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Lifetime misses on `map`.
+    pub fn get(&self, map: StateMap) -> u64 {
+        self.counts[map as usize].load(Ordering::Relaxed)
+    }
+
+    /// Every counter, in [`StateMap`] order.
+    pub fn snapshot(&self) -> [u64; STATE_MAP_COUNT] {
+        std::array::from_fn(|i| self.counts[i].load(Ordering::Relaxed))
+    }
+}
+
+/// `RwLock::try_read` that attributes a miss to `map`. The one way the
+/// audio callback takes a state-map read guard, so no miss goes
+/// uncounted. Never blocks, never allocates.
+#[inline]
+pub(crate) fn try_read_counted<'a, T>(
+    lock: &'a RwLock<T>,
+    map: StateMap,
+    misses: &LockMissCounters,
+) -> Option<RwLockReadGuard<'a, T>> {
+    let guard = lock.try_read();
+    if guard.is_none() {
+        misses.record(map);
+    }
+    guard
+}
 
 /// One report-window summary, ready for formatting.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +184,93 @@ pub struct CycleLoadReport {
     pub lock_skips_window: u64,
     /// Lifetime lock-skipped render cycles.
     pub lock_skips_lifetime: u64,
+    /// `try_read` misses per state map in the window, in [`StateMap`]
+    /// order — which lock the skips (and the softer stopped / count-in /
+    /// live-MIDI / master-FX drop-outs) are attributable to.
+    pub lock_misses_window: [u64; STATE_MAP_COUNT],
+    /// Lifetime `try_read` misses per state map.
+    pub lock_misses_lifetime: [u64; STATE_MAP_COUNT],
+}
+
+/// The audio thread's hand-off of a [`CycleLoadReport`] to the engine
+/// loop, which formats and prints it — so the realtime thread never
+/// formats a `String` or writes to stderr.
+///
+/// A seqlock over plain atomics: `publish` bumps `seq` to odd, stores
+/// the fields, bumps it to even; `take_new` returns nothing while a
+/// publish is in flight and retries if one landed mid-read. Reports are
+/// seconds apart and the reader polls every 16 ms, so both are
+/// theoretical.
+#[derive(Debug, Default)]
+pub struct CycleReportSlot {
+    seq: AtomicU64,
+    avg_bits: AtomicU32,
+    peak_bits: AtomicU32,
+    overruns_window: AtomicU64,
+    overruns_lifetime: AtomicU64,
+    shortfalls_window: AtomicU64,
+    shortfalls_lifetime: AtomicU64,
+    lock_skips_window: AtomicU64,
+    lock_skips_lifetime: AtomicU64,
+    lock_misses_window: LockMissCounters,
+    lock_misses_lifetime: LockMissCounters,
+}
+
+impl CycleReportSlot {
+    /// Store `report` for the engine loop. Audio-thread side: atomics
+    /// only.
+    pub fn publish(&self, report: &CycleLoadReport) {
+        self.seq.fetch_add(1, Ordering::Release);
+        self.avg_bits.store(report.avg.to_bits(), Ordering::Relaxed);
+        self.peak_bits.store(report.peak.to_bits(), Ordering::Relaxed);
+        self.overruns_window
+            .store(report.overruns_window, Ordering::Relaxed);
+        self.overruns_lifetime
+            .store(report.overruns_lifetime, Ordering::Relaxed);
+        self.shortfalls_window
+            .store(report.shortfalls_window, Ordering::Relaxed);
+        self.shortfalls_lifetime
+            .store(report.shortfalls_lifetime, Ordering::Relaxed);
+        self.lock_skips_window
+            .store(report.lock_skips_window, Ordering::Relaxed);
+        self.lock_skips_lifetime
+            .store(report.lock_skips_lifetime, Ordering::Relaxed);
+        for i in 0..STATE_MAP_COUNT {
+            self.lock_misses_window.counts[i]
+                .store(report.lock_misses_window[i], Ordering::Relaxed);
+            self.lock_misses_lifetime.counts[i]
+                .store(report.lock_misses_lifetime[i], Ordering::Relaxed);
+        }
+        self.seq.fetch_add(1, Ordering::Release);
+    }
+
+    /// The report published since `last_seen` (the value this call
+    /// wrote there last time; start at 0), or `None` if there is none.
+    /// Engine-loop side.
+    pub fn take_new(&self, last_seen: &mut u64) -> Option<CycleLoadReport> {
+        loop {
+            let before = self.seq.load(Ordering::Acquire);
+            if before == *last_seen || before & 1 == 1 {
+                return None;
+            }
+            let report = CycleLoadReport {
+                avg: f32::from_bits(self.avg_bits.load(Ordering::Relaxed)),
+                peak: f32::from_bits(self.peak_bits.load(Ordering::Relaxed)),
+                overruns_window: self.overruns_window.load(Ordering::Relaxed),
+                overruns_lifetime: self.overruns_lifetime.load(Ordering::Relaxed),
+                shortfalls_window: self.shortfalls_window.load(Ordering::Relaxed),
+                shortfalls_lifetime: self.shortfalls_lifetime.load(Ordering::Relaxed),
+                lock_skips_window: self.lock_skips_window.load(Ordering::Relaxed),
+                lock_skips_lifetime: self.lock_skips_lifetime.load(Ordering::Relaxed),
+                lock_misses_window: self.lock_misses_window.snapshot(),
+                lock_misses_lifetime: self.lock_misses_lifetime.snapshot(),
+            };
+            if self.seq.load(Ordering::Acquire) == before {
+                *last_seen = before;
+                return Some(report);
+            }
+        }
+    }
 }
 
 /// Owned by the mix closure; not shared. All cross-thread publication
@@ -88,6 +287,8 @@ pub struct CycleLoadMeter {
     shortfalls_seen: u64,
     /// Lifetime lock-skip count as of the last report, for the window delta.
     lock_skips_seen: u64,
+    /// Lifetime per-map miss counts as of the last report.
+    lock_misses_seen: [u64; STATE_MAP_COUNT],
     last_report: Option<Instant>,
 }
 
@@ -107,6 +308,7 @@ impl CycleLoadMeter {
             window_overruns: 0,
             shortfalls_seen: 0,
             lock_skips_seen: 0,
+            lock_misses_seen: [0; STATE_MAP_COUNT],
             last_report: None,
         }
     }
@@ -157,6 +359,10 @@ impl CycleLoadMeter {
 
         let shortfalls_lifetime = shared.monitor_shortfall_cycles.load(Ordering::Relaxed);
         let lock_skips_lifetime = shared.render_skip_cycles.load(Ordering::Relaxed);
+        let lock_misses_lifetime = shared.lock_misses.snapshot();
+        let lock_misses_window: [u64; STATE_MAP_COUNT] = std::array::from_fn(|i| {
+            lock_misses_lifetime[i].saturating_sub(self.lock_misses_seen[i])
+        });
         let report = CycleLoadReport {
             avg: (self.window_sum / self.window_cycles as f64) as f32,
             peak: self.window_peak,
@@ -166,6 +372,8 @@ impl CycleLoadMeter {
             shortfalls_lifetime,
             lock_skips_window: lock_skips_lifetime.saturating_sub(self.lock_skips_seen),
             lock_skips_lifetime,
+            lock_misses_window,
+            lock_misses_lifetime,
         };
         self.last_report = Some(now);
         self.window_peak = 0.0;
@@ -174,10 +382,12 @@ impl CycleLoadMeter {
         self.window_overruns = 0;
         self.shortfalls_seen = shortfalls_lifetime;
         self.lock_skips_seen = lock_skips_lifetime;
+        self.lock_misses_seen = lock_misses_lifetime;
 
         let noteworthy = report.overruns_window > 0
             || report.shortfalls_window > 0
             || report.lock_skips_window > 0
+            || report.lock_misses_window.iter().any(|&n| n > 0)
             || report.peak >= QUIET_PEAK_THRESHOLD;
         (self.verbose || noteworthy).then_some(report)
     }
@@ -186,8 +396,18 @@ impl CycleLoadMeter {
 /// Format a load summary for stderr. Kept separate so tests can assert
 /// on the exact wording without driving a real audio stream.
 pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
+    let misses: Vec<String> = StateMap::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, map)| format!("{} {}", map.name(), report.lock_misses_window[i]))
+        .collect();
+    let misses_lifetime: Vec<String> = report
+        .lock_misses_lifetime
+        .iter()
+        .map(u64::to_string)
+        .collect();
     format!(
-        "audio: dsp load avg {:.1}% peak {:.1}% | over-budget cycles {} (lifetime {}) | monitor shortfalls {} (lifetime {}) | render lock-skips {} (lifetime {})",
+        "audio: dsp load avg {:.1}% peak {:.1}% | over-budget cycles {} (lifetime {}) | monitor shortfalls {} (lifetime {}) | render lock-skips {} (lifetime {}) | lock misses {} (lifetime {})",
         report.avg * 100.0,
         report.peak * 100.0,
         report.overruns_window,
@@ -196,5 +416,7 @@ pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
         report.shortfalls_lifetime,
         report.lock_skips_window,
         report.lock_skips_lifetime,
+        misses.join(" "),
+        misses_lifetime.join("/"),
     )
 }

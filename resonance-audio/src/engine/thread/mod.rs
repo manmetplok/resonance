@@ -409,6 +409,8 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
 
     let mut last_playhead_report = std::time::Instant::now();
     let mut last_audition_report = std::time::Instant::now();
+    // Sequence of the last DSP-load report printed (see `cycle_load`).
+    let mut cycle_report_seen = 0u64;
     // Live automated-value emission (todo #377): throttle clock + the
     // per-target "last value sent" memo. Reset whenever the transport
     // isn't rolling so a fresh play re-tints the controls.
@@ -579,6 +581,13 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // drain above, a cycle-record seam or the trailing pass at stop,
         // so polled every tick rather than only while recording.
         state.rec.poll_write_errors(ctx.event_tx);
+
+        // Print the DSP-load summary the audio thread published since
+        // the last tick (it only stores atomics; formatting and stderr
+        // are this thread's job — code review ARCH-02 A2-1 / ARCH-05).
+        if let Some(report) = ctx.shared.cycle_report.take_new(&mut cycle_report_seen) {
+            eprintln!("{}", crate::cycle_load::format_cycle_load_line(&report));
+        }
 
         // Audition preview housekeeping: emit AuditionStopped on a natural
         // finish, keep the sync-to-tempo ratio current, and throttle the

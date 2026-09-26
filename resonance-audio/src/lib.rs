@@ -201,8 +201,9 @@ pub mod __test_support {
     /// panic.
     pub use crate::supervise::{panic_message, run_supervised};
     pub use crate::cycle_load::{
-        format_cycle_load_line, CycleLoadMeter, CycleLoadReport, LOAD_EMA_ALPHA,
-        QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, VERBOSE_REPORT_INTERVAL,
+        format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot,
+        LockMissCounters, StateMap, LOAD_EMA_ALPHA, QUIET_PEAK_THRESHOLD,
+        QUIET_REPORT_INTERVAL, STATE_MAP_COUNT, VERBOSE_REPORT_INTERVAL,
     };
     /// Re-exported so app-side handler tests can name the command receiver
     /// returned by [`AudioEngine::for_test_capture`](crate::AudioEngine::for_test_capture).

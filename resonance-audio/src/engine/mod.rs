@@ -273,6 +273,15 @@ pub struct SharedState {
     /// the mix each, audible as a stutter with no graph xrun. Counted
     /// by `mix_audio`'s contended branch, folded into the load report.
     pub render_skip_cycles: AtomicU64,
+    /// Lifetime `try_read` misses per state map (code review ARCH-02,
+    /// A2-1): which of the six locks the callback found write-held or
+    /// writer-queued, across every branch that takes one. Read by the
+    /// load meter for the per-window report; a UI meter can read them
+    /// next to `dsp_load_ema_bits`.
+    pub lock_misses: crate::cycle_load::LockMissCounters,
+    /// The load meter's report hand-off to the engine loop, which
+    /// formats and prints it — never the audio thread.
+    pub cycle_report: crate::cycle_load::CycleReportSlot,
     /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
     /// (the comp clamp is engaging and alignment for that chain is
     /// degraded). Used to emit the warning once per engagement instead
@@ -413,6 +422,8 @@ impl Default for SharedState {
             dsp_overrun_cycles: AtomicU64::new(0),
             monitor_shortfall_cycles: AtomicU64::new(0),
             render_skip_cycles: AtomicU64::new(0),
+            lock_misses: crate::cycle_load::LockMissCounters::new(),
+            cycle_report: crate::cycle_load::CycleReportSlot::default(),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
             capture_latency_samples: AtomicU64::new(0),
@@ -756,8 +767,10 @@ impl AudioEngine {
             prefault_f32(&mut monitor_temp);
             // Per-cycle DSP load meter (see `cycle_load`): quiet by
             // default (reports only over-budget cycles / monitor
-            // shortfalls / near-budget peaks), verbose with
-            // RESONANCE_AUDIO_STATS=1.
+            // shortfalls / lock misses / near-budget peaks), verbose
+            // with RESONANCE_AUDIO_STATS=1. The report is published
+            // into `SharedState::cycle_report`; the engine loop prints
+            // it, so this closure never formats or writes to stderr.
             let mut load_meter = crate::cycle_load::CycleLoadMeter::new(
                 std::env::var_os("RESONANCE_AUDIO_STATS").is_some(),
             );
@@ -808,7 +821,7 @@ impl AudioEngine {
                         audio_sample_rate,
                         &shared_audio,
                     ) {
-                        eprintln!("{}", crate::cycle_load::format_cycle_load_line(&report));
+                        shared_audio.cycle_report.publish(&report);
                     }
                 });
             (mix, prod)

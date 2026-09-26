@@ -1,15 +1,19 @@
 //! Behaviour coverage for the per-cycle DSP load meter
 //! (`src/cycle_load.rs`): load math against the cycle budget,
 //! over-budget counting, quiet-mode report gating, monitor-shortfall
-//! window deltas, and the stderr line format.
+//! window deltas, the per-map lock-miss attribution (code review
+//! ARCH-02 A2-1), the audio→engine report hand-off, and the stderr
+//! line format.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use resonance_audio::__test_support::{
-    format_cycle_load_line, CycleLoadMeter, CycleLoadReport, SharedState, QUIET_PEAK_THRESHOLD,
-    QUIET_REPORT_INTERVAL, VERBOSE_REPORT_INTERVAL,
+    format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot, MixAudioHarness,
+    SharedState, StateMap, QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, STATE_MAP_COUNT,
+    VERBOSE_REPORT_INTERVAL,
 };
+use resonance_audio::types::*;
 
 /// 128 frames @ 48 kHz — the pinned engine cycle. Budget = 2.667 ms.
 const FRAMES: usize = 128;
@@ -130,6 +134,168 @@ fn quiet_mode_reports_render_lock_skips_as_window_delta() {
 }
 
 #[test]
+fn quiet_mode_reports_per_map_lock_misses_as_window_delta() {
+    let shared = SharedState::default();
+    let mut meter = CycleLoadMeter::new(false);
+    let start = Instant::now();
+    let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
+    shared.lock_misses.record(StateMap::Plugins);
+    shared.lock_misses.record(StateMap::Plugins);
+    shared.lock_misses.record(StateMap::Clips);
+    // A miss alone (no render skip: e.g. the stopped branch's monitor
+    // pass) is noteworthy — it is a dropout the graph never reports.
+    let report = drive(&mut meter, &shared, start, cycles, budget() / 100).expect("report");
+    assert_eq!(report.lock_skips_window, 0);
+    assert_eq!(report.lock_misses_window, [0, 0, 0, 1, 0, 2]);
+    assert_eq!(report.lock_misses_lifetime, [0, 0, 0, 1, 0, 2]);
+
+    // Next window: one more on tracks only; the others read zero.
+    shared.lock_misses.record(StateMap::Tracks);
+    let start2 = start + budget() * (cycles as u32 + 1);
+    let report = drive(&mut meter, &shared, start2, cycles, budget() / 100).expect("report");
+    assert_eq!(report.lock_misses_window, [1, 0, 0, 0, 0, 0]);
+    assert_eq!(report.lock_misses_lifetime, [1, 0, 0, 1, 0, 2]);
+
+    // And silent again once nothing moves.
+    let start3 = start2 + budget() * (cycles as u32 + 1);
+    assert_eq!(drive(&mut meter, &shared, start3, cycles, budget() / 100), None);
+}
+
+#[test]
+fn report_slot_hands_each_report_to_the_engine_loop_once() {
+    let slot = CycleReportSlot::default();
+    let mut seen = 0u64;
+    assert_eq!(slot.take_new(&mut seen), None, "nothing published yet");
+
+    let report = CycleLoadReport {
+        avg: 0.25,
+        peak: 0.9,
+        overruns_window: 1,
+        overruns_lifetime: 2,
+        shortfalls_window: 3,
+        shortfalls_lifetime: 4,
+        lock_skips_window: 5,
+        lock_skips_lifetime: 6,
+        lock_misses_window: [1, 2, 3, 4, 5, 6],
+        lock_misses_lifetime: [7, 8, 9, 10, 11, 12],
+    };
+    slot.publish(&report);
+    assert_eq!(slot.take_new(&mut seen), Some(report.clone()));
+    assert_eq!(slot.take_new(&mut seen), None, "same report is not re-printed");
+
+    let mut next = report.clone();
+    next.lock_misses_window = [0; STATE_MAP_COUNT];
+    slot.publish(&next);
+    assert_eq!(slot.take_new(&mut seen), Some(next));
+    assert_eq!(slot.take_new(&mut seen), None);
+}
+
+/// A minimal playing project: one track, one clip, so the playing
+/// branch takes all five map read guards.
+fn playing_harness() -> MixAudioHarness {
+    let track = Track::new(1, "clips".into());
+    track.set_output(TrackOutput::Master);
+    let clip = AudioClip {
+        id: 1,
+        track_id: 1,
+        start_sample: 0,
+        source: ClipSource::Memory(vec![0.1; 64 * FRAMES * 2]),
+        name: "c1".into(),
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::Linear,
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::Linear,
+        gain_db: 0.0,
+        vocal_tuning: None,
+        warp_enabled: false,
+        original_bpm: None,
+        transpose_semitones: 0.0,
+        warp_algorithm: WarpAlgorithm::default(),
+        warp_markers: Vec::new(),
+        tuning_render_cache: None,
+    };
+    let mut tempo = TempoMap::default();
+    tempo.rebuild_bar_table(RATE);
+    let h = MixAudioHarness::new(
+        vec![track],
+        Vec::new(),
+        vec![clip],
+        Vec::new(),
+        Vec::new(),
+        tempo,
+        FRAMES,
+        2,
+        RATE,
+        true,
+    );
+    h.shared().playing.store(true, Ordering::Relaxed);
+    h
+}
+
+#[test]
+fn callback_attributes_a_contended_block_to_the_map_that_missed() {
+    let mut h = playing_harness();
+
+    // Uncontended: the block renders, nothing is counted.
+    assert!(h.render().iter().any(|&s| s != 0.0));
+    assert_eq!(h.shared().lock_misses.snapshot(), [0; STATE_MAP_COUNT]);
+    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
+
+    // A write-held clips map (the UI-edit shape).
+    assert!(h.render_lock_contended().iter().all(|&s| s == 0.0));
+    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 1);
+    assert_eq!(h.shared().lock_misses.snapshot(), [0, 0, 0, 1, 0, 0]);
+    assert_eq!(h.shared().lock_misses.get(StateMap::Clips), 1);
+
+    // The ARCH-02 shape: a read guard held on a worker thread with a
+    // writer queued behind it. Only that map's counter moves, and the
+    // block is still skipped as a whole.
+    for (i, map) in StateMap::ALL.iter().enumerate() {
+        if *map == StateMap::Master {
+            // The master lock is taken by the master pass, after the
+            // arrangement rendered; a miss there drops the master FX
+            // for the block, not the render.
+            continue;
+        }
+        let before = h.shared().lock_misses.snapshot();
+        let skips_before = h.shared().render_skip_cycles.load(Ordering::Relaxed);
+        assert!(h.render_with_queued_writer(*map).iter().all(|&s| s == 0.0));
+        let after = h.shared().lock_misses.snapshot();
+        let mut expected = before;
+        expected[i] += 1;
+        assert_eq!(after, expected, "only {} should have missed", map.name());
+        assert_eq!(
+            h.shared().render_skip_cycles.load(Ordering::Relaxed),
+            skips_before + 1
+        );
+    }
+
+    // Master: the render goes through (audio out), the master-FX pass
+    // counts its miss.
+    let before = h.shared().lock_misses.get(StateMap::Master);
+    let skips_before = h.shared().render_skip_cycles.load(Ordering::Relaxed);
+    assert!(h.render_with_queued_writer(StateMap::Master).iter().any(|&s| s != 0.0));
+    assert_eq!(h.shared().lock_misses.get(StateMap::Master), before + 1);
+    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), skips_before);
+
+    // Back to uncontended: the counters hold, nothing new.
+    let before = h.shared().lock_misses.snapshot();
+    assert!(h.render().iter().any(|&s| s != 0.0));
+    assert_eq!(h.shared().lock_misses.snapshot(), before);
+}
+
+#[test]
+fn stopped_branch_counts_its_misses_without_a_render_skip() {
+    let mut h = playing_harness();
+    h.shared().playing.store(false, Ordering::Relaxed);
+    h.render_with_queued_writer(StateMap::Plugins);
+    assert_eq!(h.shared().lock_misses.snapshot(), [0, 0, 0, 0, 0, 1]);
+    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn verbose_mode_reports_unconditionally_on_its_interval() {
     let shared = SharedState::default();
     let mut meter = CycleLoadMeter::new(true);
@@ -161,9 +327,11 @@ fn line_format_is_stable() {
         shortfalls_lifetime: 3,
         lock_skips_window: 1,
         lock_skips_lifetime: 6,
+        lock_misses_window: [0, 0, 0, 1, 0, 0],
+        lock_misses_lifetime: [2, 0, 0, 4, 0, 1],
     });
     assert_eq!(
         line,
-        "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3) | render lock-skips 1 (lifetime 6)"
+        "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3) | render lock-skips 1 (lifetime 6) | lock misses tracks 0 busses 0 master 0 clips 1 midi-clips 0 plugins 0 (lifetime 2/0/0/4/0/1)"
     );
 }

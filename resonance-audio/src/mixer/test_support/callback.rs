@@ -308,6 +308,43 @@ impl MixAudioHarness {
         &self.data
     }
 
+    /// Run one audio callback while `map` is *read*-held on a worker
+    /// thread with a writer queued behind it — the offline-render / load-
+    /// worker shape from code review ARCH-02: parking_lot's task-fair
+    /// policy fails the callback's `try_read` on that one map only. The
+    /// writer is released after the block.
+    pub fn render_with_queued_writer(&mut self, map: crate::cycle_load::StateMap) -> &[f32] {
+        use crate::cycle_load::StateMap;
+        macro_rules! with_map {
+            ($lock:expr) => {{
+                let lock = &$lock;
+                let reader = lock.read();
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let _w = lock.write();
+                    });
+                    // A queued writer is exactly what makes `try_read`
+                    // fail, so this is the deterministic "writer parked"
+                    // signal, not a sleep.
+                    while lock.try_read().is_some() {
+                        std::thread::yield_now();
+                    }
+                    run_callback!(self);
+                    drop(reader);
+                });
+            }};
+        }
+        match map {
+            StateMap::Tracks => with_map!(self.tracks),
+            StateMap::Busses => with_map!(self.busses),
+            StateMap::Master => with_map!(self.master),
+            StateMap::Clips => with_map!(self.clips),
+            StateMap::MidiClips => with_map!(self.midi_clips),
+            StateMap::Plugins => with_map!(self.plugins),
+        }
+        &self.data
+    }
+
     /// Every scalar the callback publishes back into shared state, in a
     /// fixed order, so a parity test can fold them into its hash: playhead,
     /// master peaks, the two stutter counters, the audition playhead, and
