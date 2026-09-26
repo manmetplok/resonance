@@ -844,6 +844,8 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 
 **C-3 part 1 landed @ 4ef24291.** `MidiClockError`, `MidiHardwareError`, `InputStreamError` (`.kind()`), `MidiIoError`, `RecordingError`, `WavParseError`/`WavIoError`, `ClipError`, `ClapBundleError`, each with `From<…> for EngineError`. Messages textually unchanged. Of C-1's 12 `Internal` sites, 6 now carry real kinds (2 input-stream, 4 MIDI hw/clock); 6 stay `Internal` by design (4 "no project directory" preconditions, 2 worker panics — no `Result` source). **Remaining (C-3b):** 12 pub fns — `audition::load_audition_source`, `import_queue::submit`, `AudioEngine::new`, `clips::transcode_to_wav`, `bounce/freeze::read_freeze_cache`, `plugins::ensure_bundle`, `bounce/stem::{render_stem,write_stem_wav}`, `import_pool::{import_one_to_pool,run_pool_import_with}`, 2 `#[doc(hidden)]` bounce test helpers; plus pub(crate) PipeWire `build`s and `plugins::resolve_plugin_id`.
 
+**C-4 landed @ 0d8a7504.** `AtomicWriteError`, `RegistryError`, `MidiMapError`, `DeviceJsonError`, `DeviceLoadError`/`DeviceSaveError`, `WavDecodeError`, `AudioProbeError`; messages verbatim. `From<WavDecodeError|AudioProbeError> for EngineError` (Io) in resonance-audio. All four feature combos and standalone drums/ir/amp builds pass. resonance-common has no `Result<_, String>` left.
+
 **E landed (A7-3) @ 38d66942.** `dirs` and `time` stay unconditional deps, not optional under `model`: the ungated `registry` module (used by drums) calls `dirs::data_dir()` and `time::OffsetDateTime`. `symphonia` is optional under `decode`. amp and `resonance-plugin` use no features; drums and ir use `decode`. `arch-invariants::plugins_disable_default_features_on_resonance_common` guards it.
 
 
