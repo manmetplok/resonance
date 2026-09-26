@@ -15,13 +15,13 @@ master and updates this table. Agents do **not** edit this file.
 |---|---|---|---|---|
 | A1 project open/load | STATE-01/UPD-01, UPD-02, STATE-04 | opus | merged | 46c87319 |
 | A2 recording+plugin undo | STATE-02, STATE-03 | opus | in progress |  |
-| B compose sections | VIEW-03, VIEW-04, VIEW-05 | opus | in progress | |
+| B compose sections | VIEW-03, VIEW-04, VIEW-05 | opus | merged | 1f1ae03d |
 | C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | in progress | |
-| D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | queued | |
-| E control beat units | CTL-01 | opus | queued | |
+| D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | in progress |  |
+| E control beat units | CTL-01 | opus | in progress |  |
 | F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | in progress | |
-| F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | in progress | |
-| G1 drums timing | DSP-01 | opus | queued | |
+| F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | merged | eac3b10c |
+| G1 drums timing | DSP-01 | opus | in progress |  |
 | G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
 | G3 resampler | LIB-01 | opus | queued | |
 | H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | queued (after bug batches, cross-cutting) | |
@@ -35,6 +35,13 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-G2b** (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
 - [ ] **FU-G2c** (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
 - [ ] **FU-G2d** (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
+- [ ] **FU-B1** (low) section resize re-rolls chord/vocal lanes from seed → hand edits to generated notes are lost (same as a chord change); vocal lanes re-render.
+- [ ] **FU-B2** (low) `remove_bars` leaves stale vocal-audio map entries for placements it deletes (clips themselves are removed).
+- [ ] **FU-B3** (low) vocal WAVs are never garbage-collected after section/placement delete.
+- [ ] **FU-F2a** (low) carried CLAP note events wait for the instrument's next `process()`; if the tail sub-block skips that instrument the note is late, and a carried note-on can land after a Stop panic.
+- [ ] **FU-F2b** (low) ENG-03 salvage rewrites the WAV header in place — may fail on CoW filesystems (btrfs) when the disk is full; then no clip.
+- [ ] **FU-F2c** (low) ENG-12 should reuse the new `activate_and_start()` in `clap_host/state.rs`; `restart()` still bails on inactive instances.
+- [ ] **FU-F2d** (low) flaky timing test `bounce_plugin_lock::bounce_helper_does_not_block_long_audio_holder` under load.
 
 ## How to use this file
 
@@ -475,7 +482,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   Apply the fix to all three editors.
 - **Verification:** Add a `timeline` or `compose` group-binary module with a two-note clip. Send `MoveNote(0 → tick 600)` and then `MoveNote(0 → tick 700)` the way the canvas does, and assert that B still sits at tick 480. Also drive the canvas `update` with synthetic CursorMoved events.
 
-### [ ] VIEW-03 — Clicking a drum cell toggles the wrong step when the group's phase is non-zero (phase applied twice)
+### [x] VIEW-03 — Clicking a drum cell toggles the wrong step when the group's phase is non-zero (phase applied twice) — fixed @aa57955c
 - **Severity:** high
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
@@ -485,7 +492,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Have the canvas send the raw `global_step` (per the message contract) and let the handler apply the resolved group's phase. Keep the cycle modulo in the handler only.
 - **Verification:** Add a module to the `compose` group binary: a group with phase=4, cycle=16. Send the `TogglePadStep` the canvas would emit for a click at step 0 (build it through the canvas `update` with a synthetic press), and assert that `pad.pattern[4]` flipped.
 
-### [ ] VIEW-04 — Deleting a placement or section leaves its generated MIDI and vocal clips playing
+### [x] VIEW-04 — Deleting a placement or section leaves its generated MIDI and vocal clips playing — fixed @493bdcb9
 - **Severity:** high
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
@@ -495,7 +502,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Factor the `remove_bars` cleanup into a `purge_placement_outputs(r, placement_id)` helper that removes the derived and vocal entries, sends `DeleteMidiClip`/`DeleteClip`, retains `r.midi_clips`/`r.clips`, and unlinks the vocal WAV. Call it from both handlers. For a definition delete, also drop its side tables.
 - **Verification:** Add a module to the `compose` group binary using `new_for_test_with_capture()`: generate a lane, delete the placement, then assert a `DeleteMidiClip` was captured and `r.midi_clips` holds no clip for that key.
 
-### [ ] VIEW-05 — Resizing a section never re-derives its clips: shrinking leaves overlapping clips, growing leaves silent drums
+### [x] VIEW-05 — Resizing a section never re-derives its clips: shrinking leaves overlapping clips, growing leaves silent drums — fixed @0b84e135
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
@@ -1071,7 +1078,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Clamp at the source: refuse or cap stream channel counts to `MAX_INPUT_CHANNELS` in `build_input_stream` (both backends) and clamp track `input_port` accordingly; and defensively clamp in `read_monitor_input`: `let to_read = to_read.min(scratch.monitor_temp.len() / frame_stride * frame_stride);` (and bail out if `frame_stride > MAX_INPUT_CHANNELS`, skipping the backlog so the ring does not fill).
 - **Verification:** `resonance-audio/tests/monitor_ring_alignment.rs`: drive `MixAudioHarness` with `shared.input_channels = 40` and a full ring; assert no panic and a whole-frame read. Unit-test the clamp in `monitor_read_len`'s neighbourhood.
 
-### [ ] MIX-10 — Zero-length notes are emitted Off-before-On in the same block (stuck note)
+### [x] MIX-10 — Zero-length notes are emitted Off-before-On in the same block (stuck note) — fixed @1f925f2c (with F2)
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -1095,7 +1102,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 
 ## Audio engine / CLAP host / I/O
 
-### [ ] ENG-01 — CLAP note events are neither sorted nor clamped to `frames_count`; loop-seam sub-blocks drop live notes (stuck notes)
+### [x] ENG-01 — CLAP note events are neither sorted nor clamped to `frames_count`; loop-seam sub-blocks drop live notes (stuck notes) — fixed @214f64f1
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
@@ -1107,7 +1114,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `process_multi_with_key`, after building `note_event_buf`: (a) clamp each `header.time` to `frames - 1` (or better, keep events with `time >= frames` in `pending_notes` re-based by `-frames` for the next call — keep a fixed-capacity carry so it stays allocation-free); (b) `sort_unstable_by_key(|e| (e.header.time, e.header.type_ == CLAP_EVENT_NOTE_ON))` (in-place, no allocation; note-offs before note-ons at equal time, matching `collect_midi_events`). Params stay at time 0 first. Fix the misleading doc comment on `MixedEventListCtx`.
 - **Verification:** New test module in an existing `resonance-audio/tests/` binary (e.g. extend `tests/clap_all_notes_off.rs` style) using `__instance_from_raw_for_test` with a fake plugin whose `process` records `(time, type)` of each input event: queue `note_on(key, v, 100)`, then `note_on(key2, v, 5)`, call `process(.., frames=20)`; assert events arrive sorted and every `time < 20` (or the out-of-range one arrives in the next call).
 
-### [ ] ENG-02 — A failed `LoadPluginState` leaves the plugin permanently deactivated (silent) with no error; later loads never reactivate it
+### [x] ENG-02 — A failed `LoadPluginState` leaves the plugin permanently deactivated (silent) with no error; later loads never reactivate it — fixed @3001d761
 - **Severity:** high
 - **Confidence:** high
 - **Category:** error-handling
@@ -1117,7 +1124,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `cycle_activation`, always attempt reactivation after `while_deactivated` regardless of its result (the plugin's previous state is still valid when `load` fails), and return `load_ok && reactivated`. In `reload_with_state`, when `!self.active` (a previously failed instance) try the full activate → requery_latency → start sequence after loading. Have `handle_load_plugin_state` emit `AudioEvent::Error` (naming the instance) when the load or reactivation fails; mirror the wording used in `poll_plugin_host_requests`.
 - **Verification:** Test via `__instance_from_raw_for_test` with a fake plugin whose `state.load` returns false and which counts activate/deactivate calls: after `reload_with_state(bad)` assert the instance is still active and `process()` reaches the plugin; after a subsequent good load assert it is active. Put it in an existing clap test binary (e.g. alongside `tests/clap_latency_tracking.rs`).
 
-### [ ] ENG-03 — A WAV write error mid-recording silently discards the whole take
+### [x] ENG-03 — A WAV write error mid-recording silently discards the whole take — fixed @d64cecc3
 - **Severity:** high
 - **Confidence:** high
 - **Category:** error-handling
