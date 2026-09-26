@@ -19,7 +19,19 @@
 //!    closing steps (normalization, threshold pick, interpolation) run
 //!    on the call that finishes the last lag, which then reports
 //!    `(hz, confidence)`.
+//!
+//! ## Sample rate
+//!
+//! The tracker runs at ~44.1–48 kHz whatever the host rate: above that,
+//! input is lowpassed and decimated by an integer factor before it
+//! reaches the ring, so the frame's span in ms and the lag range in Hz
+//! stay put. A fixed frame in samples used to shrink the reach to
+//! 94 Hz at 96 kHz and 188 Hz at 192 kHz, losing the low strings
+//! (DSP-11).
 
+use resonance_dsp::Biquad;
+
+/// Analysis frame length in (decimated) samples.
 #[doc(hidden)]
 pub const FRAME_LEN: usize = 2048;
 
@@ -42,8 +54,22 @@ const YIN_THRESHOLD: f32 = 0.15;
 /// ~12 blocks — a few tens of milliseconds, plenty fast for a tuner.
 const LAGS_PER_CALL: usize = 64;
 
+/// Rate the tracker is designed for; faster hosts are decimated to it.
+const ANALYSIS_RATE_HZ: f32 = 48_000.0;
+
+/// Anti-alias cutoff ahead of decimation: well above the highest
+/// tracked pitch's useful partials, well below the decimated Nyquist.
+const DECIMATION_CUTOFF_HZ: f32 = 5_000.0;
+
 pub struct Tuner {
+    /// Rate of the decimated stream the tracker analyses.
     sample_rate: f32,
+    /// Integer decimation factor from the host rate (1 = none).
+    decimation: usize,
+    /// Host-rate samples seen since the last one kept.
+    decimation_phase: usize,
+    /// Two-section anti-alias lowpass, run only when decimating.
+    aa: [Biquad; 2],
     /// Ring buffer of the most recent `FRAME_LEN` samples.
     ring: [f32; FRAME_LEN],
     write_pos: usize,
@@ -62,12 +88,21 @@ pub struct Tuner {
 }
 
 impl Tuner {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(host_rate: f32) -> Self {
+        let decimation = ((host_rate / ANALYSIS_RATE_HZ).round() as usize).max(1);
+        let sample_rate = host_rate / decimation as f32;
+        let mut aa = [Biquad::default(), Biquad::default()];
+        for bq in &mut aa {
+            bq.set_low_pass(host_rate, DECIMATION_CUTOFF_HZ, std::f32::consts::FRAC_1_SQRT_2);
+        }
         let tau_min = ((sample_rate / PITCH_MAX_HZ).floor() as usize).max(2);
         let tau_max = ((sample_rate / PITCH_MIN_HZ).ceil() as usize).min(FRAME_LEN / 2 - 1);
         let buf_len = tau_max + 1;
         Self {
             sample_rate,
+            decimation,
+            decimation_phase: 0,
+            aa,
             ring: [0.0; FRAME_LEN],
             write_pos: 0,
             fill_since_analyze: 0,
@@ -80,13 +115,39 @@ impl Tuner {
         }
     }
 
-    /// Append a block of samples to the ring. Cheap — plain copy.
+    /// Append a block of mono samples to the ring. Cheap — a copy, plus
+    /// a lowpass/decimate at host rates above 48 kHz.
     pub fn feed(&mut self, samples: &[f32]) {
         for &s in samples {
-            self.ring[self.write_pos] = s;
-            self.write_pos = (self.write_pos + 1) % FRAME_LEN;
+            self.push(s);
         }
-        self.fill_since_analyze = (self.fill_since_analyze + samples.len()).min(FRAME_LEN);
+    }
+
+    /// Append a stereo block as its mono sum — what a guitar on either
+    /// input (or both) sounds like to the tracker.
+    pub fn feed_stereo(&mut self, left: &[f32], right: &[f32]) {
+        for (&l, &r) in left.iter().zip(right) {
+            self.push(0.5 * (l + r));
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, s: f32) {
+        let s = if self.decimation > 1 {
+            let y = self.aa[0].process(s);
+            let y = self.aa[1].process(y);
+            self.decimation_phase += 1;
+            if self.decimation_phase < self.decimation {
+                return;
+            }
+            self.decimation_phase = 0;
+            y
+        } else {
+            s
+        };
+        self.ring[self.write_pos] = s;
+        self.write_pos = (self.write_pos + 1) % FRAME_LEN;
+        self.fill_since_analyze = (self.fill_since_analyze + 1).min(FRAME_LEN);
     }
 
     /// Advance the YIN pass by a bounded slice of work and return
