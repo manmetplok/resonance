@@ -29,6 +29,13 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
         let grid_h = bounds.height - HEADER_TOTAL_HEIGHT - VR_VELOCITY_LANE_HEIGHT;
         let grid_bottom = grid_top + grid_h;
 
+        state.key_focus.track(event, bounds, cursor);
+        if matches!(event, iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }))
+            && !state.key_focus.owns_keys()
+        {
+            return None;
+        }
+
         match event {
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 cursor.position_in(bounds)?;
@@ -96,6 +103,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                                 state.drag = Some(DragMode::MoveNote {
                                     note_index: i,
                                     start_tick_offset: tick_offset,
+                                    notes: self.clip.notes.clone(),
                                 });
                                 return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::SelectNote {
                                         note_index: Some(i),
@@ -143,22 +151,29 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                 if let Some(pos) = cursor.position_in(bounds) {
                     let rel_x = pos.x - grid_x;
                     let rel_y = pos.y - grid_top;
-                    match &state.drag {
+                    match &mut state.drag {
                         Some(DragMode::MoveNote {
                             note_index,
                             start_tick_offset,
-                            ..
+                            notes,
                         }) if pos.x >= grid_x && pos.y >= grid_top && pos.y < grid_bottom => {
                             let tick = self.x_to_tick(rel_x);
-                            let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
+                            let raw_tick = (tick as i64 + *start_tick_offset).max(0) as u64;
                             let snapped_tick = self.snap(raw_tick);
                             let note = self.y_to_note(rel_y, grid_h)?;
-                            return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::MoveNote {
-                                    clip_id: self.clip.id,
-                                    note_index: *note_index,
-                                    new_start_tick: snapped_tick,
-                                    new_note: note,
-                                })).and_capture());
+                            let msg = MidiEditorMessage::MoveNote {
+                                clip_id: self.clip.id,
+                                note_index: *note_index,
+                                new_start_tick: snapped_tick,
+                                new_note: note,
+                            };
+                            *note_index = resonance_audio::types::move_note_resorted(
+                                notes,
+                                *note_index,
+                                snapped_tick,
+                                note,
+                            );
+                            return Some(canvas::Action::publish(Message::MidiEditor(msg)).and_capture());
                         }
                         Some(DragMode::ResizeNote {
                             note_index,

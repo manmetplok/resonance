@@ -400,6 +400,9 @@ pub struct TimelineState {
     pub(super) marker_drag: Option<MarkerDrag>,
     /// Most recent click on a marker flag, for double-click (rename) detection.
     pub(super) last_marker_click: Option<(Instant, u64)>,
+    /// Whether the timeline owns the keyboard (last mouse press landed on
+    /// it) — gates Delete so it never fires from another surface.
+    pub(super) key_focus: crate::focus::KeyFocus,
     /// Geometry cache — re-runs the draw closure only when the cached
     /// fingerprint mismatches. Skips a full redraw on every hover /
     /// sibling-update event, which is most of them.
@@ -864,6 +867,7 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        state.key_focus.track(event, bounds, cursor);
         let result = match event {
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 self.handle_wheel(*delta, bounds, cursor)

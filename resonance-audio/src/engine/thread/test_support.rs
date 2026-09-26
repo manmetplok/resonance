@@ -340,6 +340,49 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, state| takes::handle_restore_take_groups(ctx, state, groups));
     }
 
+    // -- MIDI note edits (code review VIEW-02 / CTL-02) ------------------
+
+    /// Push a MIDI clip into the shared MIDI clip list.
+    pub fn push_midi_clip(&mut self, clip: MidiClip) {
+        self.midi_clips.write().push(clip);
+    }
+
+    /// The engine's notes for `clip_id`, in stored order.
+    pub fn midi_notes(&self, clip_id: ClipId) -> Vec<MidiNote> {
+        self.midi_clips
+            .read()
+            .iter()
+            .find(|c| c.id == clip_id)
+            .map(|c| c.notes.clone())
+            .unwrap_or_default()
+    }
+
+    /// Run the real `MoveMidiNote` / `ResizeMidiNote` /
+    /// `SetMidiNoteVelocity` handler for `cmd`; any other command is
+    /// ignored and returns `false`.
+    pub fn replay_midi_note_command(&mut self, cmd: &AudioCommand) -> bool {
+        use crate::engine::midi;
+        match *cmd {
+            AudioCommand::MoveMidiNote { clip_id, note_index, new_start_tick, new_note } => {
+                self.with_ctx(|ctx, _| {
+                    midi::handle_move_midi_note(ctx, clip_id, note_index, new_start_tick, new_note)
+                });
+            }
+            AudioCommand::ResizeMidiNote { clip_id, note_index, new_duration_ticks } => {
+                self.with_ctx(|ctx, _| {
+                    midi::handle_resize_midi_note(ctx, clip_id, note_index, new_duration_ticks)
+                });
+            }
+            AudioCommand::SetMidiNoteVelocity { clip_id, note_index, velocity } => {
+                self.with_ctx(|ctx, _| {
+                    midi::handle_set_midi_note_velocity(ctx, clip_id, note_index, velocity)
+                });
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Every echo the handlers have emitted since the last drain.
     pub fn drain_events(&mut self) -> Vec<AudioEvent> {
         self.event_rx.try_iter().collect()

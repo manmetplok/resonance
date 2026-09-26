@@ -28,3 +28,5 @@ mod midi_quantize_handlers;
 mod midi_quantize_overlay;
 #[path = "midi/midi_quantize_panel.rs"]
 mod midi_quantize_panel;
+#[path = "midi/note_drag_reorder.rs"]
+mod note_drag_reorder;

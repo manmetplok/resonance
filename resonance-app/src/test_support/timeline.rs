@@ -22,6 +22,16 @@ impl Resonance {
         self.midi_clips.push(clip);
     }
 
+    /// Test-only: the note selection of the clip open in the MIDI editor,
+    /// or `None` when no editor is open.
+    #[doc(hidden)]
+    pub fn test_editing_selected_notes(&self) -> Option<std::collections::BTreeSet<usize>> {
+        self.interaction
+            .editing_midi_clip
+            .as_ref()
+            .map(|e| e.selected_notes.clone())
+    }
+
     /// Test-only: overwrite the arrange-view zoom (pixels per second).
     /// MIDI clip trim translates a pointer-pixel delta into samples via
     /// `delta_px / zoom`, so the reducer test fixes a known zoom value

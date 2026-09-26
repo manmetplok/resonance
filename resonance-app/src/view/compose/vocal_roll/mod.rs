@@ -196,6 +196,12 @@ pub(super) enum DragMode {
     MoveNote {
         note_index: usize,
         start_tick_offset: i64,
+        /// The clip's notes as the engine holds them, replayed through
+        /// every move this drag sent (`move_note_resorted`). A move
+        /// re-sorts the clip, so after crossing a neighbour `note_index`
+        /// is re-read from here — the pressed index would name the
+        /// neighbour (code review VIEW-02).
+        notes: Vec<resonance_audio::types::MidiNote>,
     },
     ResizeNote {
         note_index: usize,
@@ -209,6 +215,10 @@ pub(super) enum DragMode {
 pub struct VocalRollState {
     pub(super) drag: Option<DragMode>,
     pub(super) previewing_note: Option<u8>,
+    /// Whether the vocal roll owns the keyboard (last mouse press landed
+    /// on it) — gates Delete and the `s`/`+` slur toggle so typing into a
+    /// lyric field never edits the selected note.
+    pub(super) key_focus: crate::focus::KeyFocus,
     pub(super) cache: canvas::Cache,
     pub(super) cache_fingerprint: std::cell::Cell<VocalRollFingerprint>,
 }

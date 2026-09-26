@@ -268,10 +268,9 @@ pub(crate) fn handle_move_midi_note(
     let mut guard = ctx.midi_clips.write();
     if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
-            clip.notes[note_index].start_tick = new_start_tick;
-            clip.notes[note_index].note = new_note;
-            // Re-sort
-            clip.notes.sort_by_key(|n| n.start_tick);
+            // The echo carries the ORIGINAL index: the app mirror replays
+            // the same `move_note_resorted`, landing on the same order.
+            move_note_resorted(&mut clip.notes, note_index, new_start_tick, new_note);
             let _ = ctx.event_tx.send(AudioEvent::MidiNoteMoved {
                 clip_id,
                 note_index,

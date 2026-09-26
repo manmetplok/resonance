@@ -96,6 +96,13 @@ pub(super) fn handle_event(
     let grid_x = layout.grid_x();
     let grid_h = layout.grid_h;
 
+    state.key_focus.track(event, bounds, cursor);
+    if matches!(event, iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }))
+        && !state.key_focus.owns_keys()
+    {
+        return None;
+    }
+
     match event {
         // --- Scroll ---
         iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -187,6 +194,7 @@ pub(super) fn handle_event(
                                     super::DragMode::MoveNote {
                                         note_index: i,
                                         start_tick_offset: tick_offset,
+                                        notes: canvas.clip.notes.clone(),
                                     }
                                 }
                             });
@@ -247,26 +255,30 @@ pub(super) fn handle_event(
                     ed.current = pos;
                     return Some(canvas::Action::capture());
                 }
-                match &state.drag {
+                match &mut state.drag {
                     Some(super::DragMode::MoveNote {
                         note_index,
                         start_tick_offset,
-                        ..
+                        notes,
                     }) if pos.x >= grid_x && pos.y < grid_h => {
                         let tick = viewport.x_local_to_tick(pos.x - grid_x);
-                        let raw_tick = (tick as i64 + start_tick_offset).max(0) as u64;
+                        let raw_tick = (tick as i64 + *start_tick_offset).max(0) as u64;
                         let snapped_tick = canvas.snap(raw_tick);
                         let note = viewport.y_local_to_note(pos.y);
+                        let msg = MidiEditorMessage::MoveNote {
+                            clip_id: canvas.clip.id,
+                            note_index: *note_index,
+                            new_start_tick: snapped_tick,
+                            new_note: note,
+                        };
+                        *note_index = resonance_audio::types::move_note_resorted(
+                            notes,
+                            *note_index,
+                            snapped_tick,
+                            note,
+                        );
                         return Some(
-                            canvas::Action::publish(Message::MidiEditor(
-                                MidiEditorMessage::MoveNote {
-                                    clip_id: canvas.clip.id,
-                                    note_index: *note_index,
-                                    new_start_tick: snapped_tick,
-                                    new_note: note,
-                                },
-                            ))
-                            .and_capture(),
+                            canvas::Action::publish(Message::MidiEditor(msg)).and_capture(),
                         );
                     }
                     Some(super::DragMode::ResizeNote {

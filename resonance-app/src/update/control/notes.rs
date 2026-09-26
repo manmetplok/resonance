@@ -264,28 +264,16 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     // synchronously (Bug 2b) so the change is visible to the next
     // `song.notes`; the matching echo is suppressed. The mirror uses the
     // same `note_index` as the dispatched message, faithful to the engine
-    // command (multi-field edits address the note by its original index,
-    // exactly as the engine does).
+    // command.
+    //
+    // The move goes LAST: it re-sorts the clip by start tick (engine and
+    // mirror alike, `move_note_resorted`), after which `index` may name a
+    // different note. Resize and velocity therefore address the note
+    // while `index` is still its own (code review CTL-02).
     use crate::engine_events::midi;
 
     app.with_compound_undo(|app| {
         let mut tasks = Vec::new();
-        let want_pitch = params.pitch.unwrap_or(existing.note);
-        let want_start = start_tick.unwrap_or(existing.start_tick);
-        if (params.pitch.is_some() || start_tick.is_some())
-            && (want_pitch != existing.note || want_start != existing.start_tick)
-        {
-            tasks.push(super::run_via_update(
-                app,
-                Message::MidiEditor(MidiEditorMessage::MoveNote {
-                    clip_id,
-                    note_index: index,
-                    new_start_tick: want_start,
-                    new_note: want_pitch,
-                }),
-            ));
-            midi::optimistic_move_note(app, clip_id, index, want_start, want_pitch);
-        }
         if let Some(dur) = duration_ticks {
             if dur != existing.duration_ticks {
                 tasks.push(super::run_via_update(
@@ -312,6 +300,22 @@ fn edit(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
                 ));
                 midi::optimistic_set_velocity(app, clip_id, index, want);
             }
+        }
+        let want_pitch = params.pitch.unwrap_or(existing.note);
+        let want_start = start_tick.unwrap_or(existing.start_tick);
+        if (params.pitch.is_some() || start_tick.is_some())
+            && (want_pitch != existing.note || want_start != existing.start_tick)
+        {
+            tasks.push(super::run_via_update(
+                app,
+                Message::MidiEditor(MidiEditorMessage::MoveNote {
+                    clip_id,
+                    note_index: index,
+                    new_start_tick: want_start,
+                    new_note: want_pitch,
+                }),
+            ));
+            midi::optimistic_move_note(app, clip_id, index, want_start, want_pitch);
         }
 
         (ack(app, request), Task::batch(tasks))

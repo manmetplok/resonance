@@ -55,6 +55,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
                                 note_index: i,
                                 start_tick_offset: tick_offset,
                                 clip_id: clip.id,
+                                notes: clip.notes.clone(),
                             }
                         }
                     });
@@ -121,25 +122,32 @@ impl<'a> ExpandedEditorCanvas<'a> {
         pos: Point,
         grid_x: f32,
     ) -> Option<Message> {
-        match &state.drag {
+        match &mut state.drag {
             Some(DragMode::MoveNote {
                 note_index,
                 start_tick_offset,
                 clip_id,
-                ..
+                notes,
             }) => {
                 if pos.x >= grid_x && pos.y > TOOLBAR_HEIGHT {
                     let gy = pos.y - TOOLBAR_HEIGHT;
                     let tick = viewport.x_local_to_tick(pos.x - grid_x);
-                    let raw = (tick as i64 + start_tick_offset).max(0) as u64;
+                    let raw = (tick as i64 + *start_tick_offset).max(0) as u64;
                     let snapped = snap_tick(raw, SNAP_TICKS);
                     let note = viewport.y_local_to_note(gy);
-                    return Some(Message::MidiEditor(MidiEditorMessage::MoveNote {
+                    let msg = Message::MidiEditor(MidiEditorMessage::MoveNote {
                         clip_id: *clip_id,
                         note_index: *note_index,
                         new_start_tick: snapped,
                         new_note: note,
-                    }));
+                    });
+                    *note_index = resonance_audio::types::move_note_resorted(
+                        notes,
+                        *note_index,
+                        snapped,
+                        note,
+                    );
+                    return Some(msg);
                 }
                 None
             }

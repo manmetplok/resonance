@@ -304,25 +304,42 @@ pub(crate) fn apply_note_move(
 ) {
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
-            clip.notes[note_index].start_tick = new_start_tick;
-            clip.notes[note_index].note = new_note;
-            // The notes vec needs to stay sorted by start_tick. The
-            // lyric side-table is indexed parallel to `notes`, so we
-            // permute it the same way. Build an index permutation
-            // from the pre-sort order, sort, then apply it.
-            let pre: Vec<(u64, u8)> =
-                clip.notes.iter().map(|n| (n.start_tick, n.note)).collect();
-            clip.notes.sort_by_key(|n| n.start_tick);
+            // The notes vec needs to stay sorted by start_tick, exactly as
+            // the engine re-sorts it (`move_note_resorted`). The lyric
+            // side-table and the editor's note selection are indexed
+            // parallel to `notes`, so we permute them the same way: the
+            // same stable sort over the post-move start ticks.
+            let mut ticks: Vec<u64> = clip.notes.iter().map(|n| n.start_tick).collect();
+            ticks[note_index] = new_start_tick;
+            move_note_resorted(&mut clip.notes, note_index, new_start_tick, new_note);
+            let mut perm: Vec<usize> = (0..ticks.len()).collect();
+            perm.sort_by_key(|&i| ticks[i]);
+            // perm[new_i] == old_i.
             if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
-                if lyrics.len() == pre.len() {
-                    let mut perm: Vec<usize> = (0..pre.len()).collect();
-                    perm.sort_by_key(|&i| pre[i].0);
-                    // perm[new_i] == old_i. Build new lyrics vec via
-                    // gather.
+                if lyrics.len() == perm.len() {
+                    // Build new lyrics vec via gather.
                     let new_lyrics: Vec<String> =
                         perm.iter().map(|&i| lyrics[i].clone()).collect();
                     *lyrics = new_lyrics;
                 }
+            }
+            // Keep the selection on the same notes, so the dragged note
+            // stays highlighted and Delete removes it, not its neighbour.
+            if let Some(editor) = r
+                .interaction
+                .editing_midi_clip
+                .as_mut()
+                .filter(|e| e.clip_id == clip_id)
+            {
+                let mut old_to_new = vec![0; perm.len()];
+                for (new_i, &old_i) in perm.iter().enumerate() {
+                    old_to_new[old_i] = new_i;
+                }
+                editor.selected_notes = editor
+                    .selected_notes
+                    .iter()
+                    .filter_map(|&old| old_to_new.get(old).copied())
+                    .collect();
             }
         }
     }

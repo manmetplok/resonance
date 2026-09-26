@@ -19,6 +19,41 @@ pub struct MidiNote {
     pub duration_ticks: u64,
 }
 
+/// Move `notes[index]` to `(new_start_tick, new_note)` and restore the
+/// start-tick order with a *stable* sort, returning the index the moved
+/// note now sits at.
+///
+/// This is the one definition of a note move: the engine's
+/// `MoveMidiNote` handler, the app's echo mirror and every drag in the
+/// note editors go through it, so they agree on where the note went. A
+/// caller that keeps addressing the note (the next drag step, a follow-up
+/// resize) must use the returned index — the old one may now name a
+/// neighbour. Out-of-range `index` is a no-op that returns `index`.
+pub fn move_note_resorted(
+    notes: &mut [MidiNote],
+    index: usize,
+    new_start_tick: u64,
+    new_note: u8,
+) -> usize {
+    if index >= notes.len() {
+        return index;
+    }
+    // A stable sort puts the moved note after every note that starts
+    // earlier, and after the equal-start notes that preceded it.
+    let new_index = notes
+        .iter()
+        .enumerate()
+        .filter(|&(i, n)| {
+            i != index
+                && (n.start_tick < new_start_tick || (n.start_tick == new_start_tick && i < index))
+        })
+        .count();
+    notes[index].start_tick = new_start_tick;
+    notes[index].note = new_note;
+    notes.sort_by_key(|n| n.start_tick);
+    new_index
+}
+
 /// A MIDI clip containing note data, placed on the timeline.
 #[derive(Debug)]
 pub struct MidiClip {

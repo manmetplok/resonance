@@ -82,6 +82,12 @@ pub(crate) enum DragMode {
     MoveNote {
         note_index: usize,
         start_tick_offset: i64,
+        /// The clip's notes as the engine holds them, replayed through
+        /// every move this drag sent (`move_note_resorted`). A move
+        /// re-sorts the clip, so after crossing a neighbour `note_index`
+        /// is re-read from here — the pressed index would name the
+        /// neighbour (code review VIEW-02).
+        notes: Vec<resonance_audio::types::MidiNote>,
     },
     /// Resizing a note from its right edge.
     ResizeNote { note_index: usize, anchor_tick: u64 },
@@ -132,6 +138,10 @@ pub struct PianoRollState {
     /// Latest keyboard modifier state, tracked from `ModifiersChanged`
     /// events so mouse presses can tell shift/ctrl-click from a plain click.
     pub(crate) modifiers: iced::keyboard::Modifiers,
+    /// Whether the piano roll owns the keyboard (last mouse press landed
+    /// on it) — gates Delete / Ctrl+A so they never fire from another
+    /// surface or while a text field is being typed into.
+    pub(crate) key_focus: crate::focus::KeyFocus,
     /// Cached drawn geometry — invalidated only when the fingerprint of the
     /// inputs (notes / scroll / zoom / selection / clip identity) changes.
     pub(crate) cache: canvas::Cache,

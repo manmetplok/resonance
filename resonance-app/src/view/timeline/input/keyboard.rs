@@ -21,7 +21,9 @@ impl TimelineCanvas<'_> {
             key,
             keyboard::Key::Named(Named::Delete) | keyboard::Key::Named(Named::Backspace)
         );
-        if !is_delete {
+        // Delete only acts when the timeline was the last surface pressed,
+        // not while the user works in the piano roll or a text field.
+        if !is_delete || !state.key_focus.owns_keys() {
             return None;
         }
         // Delete the breakpoint last clicked/dragged (most specific, and the
