@@ -368,7 +368,7 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
             asset_id: file.asset_id,
             target: placement,
             // The import's own undo entry was recorded before dispatch.
-            history_depth: r.undo.undo_len(),
+            history_depth: r.session.undo.undo_len(),
         });
     }
 

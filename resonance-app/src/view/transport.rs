@@ -62,7 +62,7 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .color(theme::TEXT_1)
         .line_height(LineHeight::Relative(1.0));
 
-    let dirty = if r.dirty { "· unsaved" } else { "· saved" };
+    let dirty = if r.session.dirty { "· unsaved" } else { "· saved" };
     let dirty_label = text(dirty)
         .size(12)
         .color(theme::TEXT_3)

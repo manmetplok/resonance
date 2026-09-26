@@ -290,7 +290,7 @@ impl crate::Resonance {
             && !self.io.bouncing
             && self.io.save_state.is_none()
             && !self.transport.recording
-            && !self.undo.has_pending()
+            && !self.session.undo.has_pending()
             && !self.freeze.any_in_flight()
     }
 
@@ -559,37 +559,37 @@ impl crate::Resonance {
     /// state is pushed onto the redo stack before the snapshot is
     /// restored.
     pub(crate) fn try_undo(&mut self) -> Option<String> {
-        if !self.can_undo_redo_now() || !self.undo.can_undo() {
+        if !self.can_undo_redo_now() || !self.session.undo.can_undo() {
             return None;
         }
-        let (snapshot, label) = self.undo.pop_undo()?;
+        let (snapshot, label) = self.session.undo.pop_undo()?;
         // An import whose entry this undo pops must not place its clip
         // when the file lands later (code review UPD-04).
-        self.media.pool_import.drop_undone(self.undo.undo_len());
+        self.media.pool_import.drop_undone(self.session.undo.undo_len());
         let current = self.snapshot_for_undo();
         // The action just undone is what a redo would re-apply, so its
         // label travels with the state pushed onto the redo stack.
-        self.undo.push_redo(current, label.clone());
+        self.session.undo.push_redo(current, label.clone());
         self.begin_restore_from_snapshot(snapshot);
         // An undo changes the song like any committed edit — remote
         // control clients detect it through the revision counter
         // (doc #265, todo #1147).
-        self.revision = self.revision.wrapping_add(1);
+        self.bump_revision();
         Some(label)
     }
 
     /// Symmetric counterpart to `try_undo`.
     pub(crate) fn try_redo(&mut self) -> Option<String> {
-        if !self.can_undo_redo_now() || !self.undo.can_redo() {
+        if !self.can_undo_redo_now() || !self.session.undo.can_redo() {
             return None;
         }
-        let (snapshot, label) = self.undo.pop_redo()?;
+        let (snapshot, label) = self.session.undo.pop_redo()?;
         let current = self.snapshot_for_undo();
-        self.undo.push_undo(current, label.clone());
+        self.session.undo.push_undo(current, label.clone());
         self.begin_restore_from_snapshot(snapshot);
         // Symmetric to `try_undo`: a redo is a committed edit for remote
         // revision-tracking purposes.
-        self.revision = self.revision.wrapping_add(1);
+        self.bump_revision();
         Some(label)
     }
 }

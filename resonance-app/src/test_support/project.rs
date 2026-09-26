@@ -155,7 +155,7 @@ impl Resonance {
     /// be exercised without performing a real edit.
     #[doc(hidden)]
     pub fn test_set_dirty(&mut self, dirty: bool) {
-        self.dirty = dirty;
+        self.session.dirty = dirty;
     }
 
     /// Test-only: serialize the current GUI state to the on-disk
@@ -216,7 +216,7 @@ impl Resonance {
     /// can assert a single pre-import entry was recorded (ba todo #598).
     #[doc(hidden)]
     pub fn test_undo_history(&self) -> &crate::undo::UndoHistory {
-        &self.undo
+        &self.session.undo
     }
 
     /// Test-only: drop the undo history and the dirty flag, so a fixture
@@ -224,8 +224,8 @@ impl Resonance {
     /// edits, STATE-02) starts its test from a clean history.
     #[doc(hidden)]
     pub fn test_forget_history(&mut self) {
-        self.undo.clear();
-        self.dirty = false;
+        self.session.undo.clear();
+        self.session.dirty = false;
     }
 
     /// Test-only: restore a previously captured snapshot, exercising the
@@ -252,14 +252,14 @@ impl Resonance {
     /// mutated state or recorded undo.
     #[doc(hidden)]
     pub fn test_dirty(&self) -> bool {
-        self.dirty
+        self.session.dirty
     }
 
     /// Test-only: whether the undo stack has a restorable snapshot. A
     /// blocked frozen-input edit must not grow it.
     #[doc(hidden)]
     pub fn test_can_undo(&self) -> bool {
-        self.undo.can_undo()
+        self.session.undo.can_undo()
     }
 
     /// Test-only: whether the pending `AllCleared` replay is an undo/redo's
