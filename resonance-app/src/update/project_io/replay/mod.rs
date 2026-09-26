@@ -276,11 +276,9 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // leave the new one keying plugins from the old one's tracks.
     // `replay_sidechain_routes` re-seeds it from the project file.
     r.sidechain.clear();
-    // Drop external-instrument mode so the load starts clean. A fresh
-    // project load re-asserts it per-track from `ProjectTrack.external_instrument`
-    // in `replay_track`; an undo restore re-asserts it from `UndoExtras`
-    // right after this runs (and its snapshot project file carries the same
-    // config, so the two agree idempotently).
+    // Drop external-instrument mode so the load starts clean. Both a fresh
+    // project load and an undo's full replay re-assert it per-track from
+    // `ProjectTrack.external_instrument` in `replay_track`.
     r.external_instruments.clear();
     // Likewise the cycle-record take lanes (epic #15, todo #412). The
     // mirror is built purely from `TakeCaptured` echoes, and `ClearAll`

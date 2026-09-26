@@ -508,6 +508,37 @@ pub struct ProjectExternalInstrument {
     pub latency_offset_samples: i64,
 }
 
+impl ProjectExternalInstrument {
+    /// The engine-side config form (the track id comes from the owning
+    /// [`ProjectTrack`]).
+    pub fn config(&self, track_id: u64) -> resonance_common::ExternalInstrument {
+        resonance_common::ExternalInstrument {
+            track_id,
+            bank: self.bank,
+            program: self.program,
+            latency_offset_samples: self.latency_offset_samples,
+        }
+    }
+
+    /// The selected device preset's automatable params, re-sent to the
+    /// engine as `SetTrackDeviceParams`: the embedded user-authored copy
+    /// first (portable projects carry it), else the registry. Empty when no
+    /// device is selected or the id no longer resolves.
+    pub fn device_params(
+        &self,
+        registry: &resonance_common::DeviceDefinitionRegistry,
+    ) -> Vec<resonance_common::DeviceParam> {
+        let Some(device_id) = &self.device_id else {
+            return Vec::new();
+        };
+        self.device_definition
+            .as_ref()
+            .map(|def| def.params.clone())
+            .or_else(|| registry.get(device_id).map(|def| def.params.clone()))
+            .unwrap_or_default()
+    }
+}
+
 /// On-disk bus state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectBus {

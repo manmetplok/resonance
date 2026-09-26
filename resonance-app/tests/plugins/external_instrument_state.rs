@@ -306,7 +306,7 @@ fn undo_classifies_config_edits_but_skips_runtime_pings() {
 }
 
 #[test]
-fn undo_extras_round_trip_external_config() {
+fn undo_snapshot_round_trip_external_config() {
     let mut app = app_with_track();
     dispatch(&mut app, Eim::Enable(TRACK));
     dispatch(&mut app, Eim::SetBank(TRACK, Some(0x0102)));
@@ -314,14 +314,19 @@ fn undo_extras_round_trip_external_config() {
     dispatch(&mut app, Eim::SetLatencyOffset(TRACK, 64));
 
     // Snapshot the reversible config, then mutate away from it.
-    let extras = app.test_snapshot_undo_extras();
-    assert_eq!(extras.external_instruments.len(), 1);
+    let file = app.test_snapshot_for_undo().project.file;
+    let externals = file
+        .tracks
+        .iter()
+        .filter(|t| t.external_instrument.is_some())
+        .count();
+    assert_eq!(externals, 1);
 
     dispatch(&mut app, Eim::Disable(TRACK));
     assert!(app.test_external_instrument(TRACK).is_none());
 
     // Restoring the snapshot brings the external config back exactly.
-    app.test_restore_external_instruments(&extras);
+    app.test_restore_external_instruments(&file);
     let ext = app.test_external_instrument(TRACK).unwrap();
     assert_eq!(ext.bank, Some(0x0102));
     assert_eq!(ext.program, Some(12));
@@ -332,8 +337,8 @@ fn undo_extras_round_trip_external_config() {
 fn restore_clears_externals_absent_from_snapshot() {
     let mut app = app_with_track();
     // Empty snapshot: nothing was external at capture time.
-    let empty = app.test_snapshot_undo_extras();
-    assert!(empty.external_instruments.is_empty());
+    let empty = app.test_snapshot_for_undo().project.file;
+    assert!(empty.tracks.iter().all(|t| t.external_instrument.is_none()));
 
     dispatch(&mut app, Eim::Enable(TRACK));
     assert!(app.test_external_instrument(TRACK).is_some());

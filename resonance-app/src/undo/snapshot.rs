@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
-use resonance_common::{AutomationLane, AutomationTarget, ExternalInstrument};
+use resonance_common::{AutomationLane, AutomationTarget};
 
 use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
@@ -29,8 +29,9 @@ use resonance_audio::types::TrackId;
 /// is being folded away field by field (ARCH-01 A1-2): a field leaves
 /// once both paths restore it from the file, guarded by
 /// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain, the drum
-/// arrangements and the chord track already went — `ProjectClip`,
-/// `ProjectSectionDefinition::arrangement` and `ProjectFile::chord_track`
+/// arrangements, the chord track and the external-instrument config
+/// already went — `ProjectClip`, `ProjectSectionDefinition::arrangement`,
+/// `ProjectFile::chord_track` and `ProjectTrack::external_instrument`
 /// carry them.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
@@ -58,23 +59,6 @@ pub struct UndoExtras {
     /// cache of any track that is no longer frozen and downgrades a
     /// re-frozen track whose cache file is gone to stale.
     pub track_freeze: HashMap<TrackId, crate::state::FreezeStatus>,
-    /// External-instrument config per track (bank/program/latency + the
-    /// external-mode marker). Also persisted as
-    /// `ProjectTrack::external_instrument`; the restore paths re-assert
-    /// it from here. The runtime device-offline flags are *not* captured:
-    /// they reflect live hardware, not project state.
-    pub external_instruments: HashMap<TrackId, ExternalInstrument>,
-    /// Selected device-preset id per external-instrument track (epic #40,
-    /// doc #201 §5). Snapshotted alongside `external_instruments` because the
-    /// selection is app-side project state that isn't part of the engine
-    /// `ExternalInstrument` config (it is persisted as
-    /// `ProjectExternalInstrument::device_id`). `None` means the track is
-    /// external but has no preset selected. On restore the id is re-applied
-    /// and the resolved params are re-sent via `SetTrackDeviceParams`, so
-    /// device selection is fully reversible. Runtime device-param echoes
-    /// (`applied_param_ids`) are *not* captured — they reflect the engine's
-    /// live state, not project state.
-    pub external_instrument_devices: HashMap<TrackId, Option<String>>,
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -125,8 +109,6 @@ fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
         && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
         && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
         && a.track_freeze == b.track_freeze
-        && a.external_instruments == b.external_instruments
-        && a.external_instrument_devices == b.external_instrument_devices
 }
 
 /// Compare two project files through their serialized form: the tree
@@ -268,16 +250,6 @@ impl crate::Resonance {
             automation_lanes: self.automation.lanes.clone(),
             reference: self.reference.undo_snapshot(),
             track_freeze: self.freeze.statuses.clone(),
-            external_instruments: self
-                .external_instruments
-                .iter()
-                .map(|(id, st)| (*id, st.config()))
-                .collect(),
-            external_instrument_devices: self
-                .external_instruments
-                .iter()
-                .map(|(id, st)| (*id, st.device_id.clone()))
-                .collect(),
         }
     }
 
@@ -374,12 +346,11 @@ impl crate::Resonance {
     /// `AllCleared` engine-event handler immediately after
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
-    /// Clip fade/gain, the drum arrangements and the chord track need
-    /// nothing here: the replay restores them from the snapshot's
-    /// `ProjectFile`.
+    /// Clip fade/gain, the drum arrangements, the chord track and the
+    /// external-instrument config need nothing here: the replay restores
+    /// them from the snapshot's `ProjectFile`.
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         self.restore_automation_lanes(&extras.automation_lanes);
-        self.restore_external_instruments(&extras);
         // `ClearAll` wiped any clip whose echo was still pending at
         // snapshot time; nothing will re-create it.
         self.restore_derived_clips(
@@ -423,10 +394,10 @@ impl crate::Resonance {
             .reserve_derived_clip_ids(self.midi_clips.iter().map(|mc| mc.id));
     }
 
-    /// Drive the engine + GUI external-instrument state back to `extras`.
-    /// Shared by both undo restore paths (the diff replay in
-    /// `try_diff_replay` and the full `AllCleared` replay via
-    /// `finalize_undo_restore`).
+    /// Drive the engine + GUI external-instrument state back to `target`'s
+    /// `ProjectTrack::external_instrument`s — the diff replay's
+    /// (`try_diff_replay`) restore. The full replay restores the same
+    /// state per track in `replay_track`, after `ClearAll` wiped it.
     ///
     /// Clears tracks that are no longer external, then (re-)asserts every
     /// target config via `SetExternalInstrument` — idempotent on the engine
@@ -438,7 +409,12 @@ impl crate::Resonance {
     /// that stay external (live hardware status survives an undo); a track
     /// returning to external mode starts online and is re-checked on the next
     /// ping.
-    pub(crate) fn restore_external_instruments(&mut self, extras: &UndoExtras) {
+    pub(crate) fn restore_external_instruments(&mut self, target: &crate::project::ProjectFile) {
+        let externals: HashMap<TrackId, &crate::project::ProjectExternalInstrument> = target
+            .tracks
+            .iter()
+            .filter_map(|pt| pt.external_instrument.as_ref().map(|ext| (pt.id, ext)))
+            .collect();
         // Drop external mode from tracks absent in the target snapshot. Clear
         // their engine device-param map too, so a track leaving external mode
         // doesn't leave stale bindings behind on the engine side.
@@ -446,7 +422,7 @@ impl crate::Resonance {
             .external_instruments
             .keys()
             .copied()
-            .filter(|id| !extras.external_instruments.contains_key(id))
+            .filter(|id| !externals.contains_key(id))
             .collect();
         for id in stale {
             self.external_instruments.remove(&id);
@@ -459,36 +435,24 @@ impl crate::Resonance {
             });
         }
         // Re-assert every target config, keeping live offline flags.
-        for (id, config) in &extras.external_instruments {
-            let _ = self.engine.send(AudioCommand::SetExternalInstrument {
-                config: *config,
-            });
-            // Restore the selected device preset and re-send its params. The
-            // registry lookup is a temporary immutable borrow whose result is
-            // cloned, so it doesn't overlap the engine send or the map entry.
-            let device_id = extras
-                .external_instrument_devices
-                .get(id)
-                .cloned()
-                .flatten();
-            let params = match &device_id {
-                Some(did) => self
-                    .device_registry
-                    .get(did)
-                    .map(|def| def.params.clone())
-                    .unwrap_or_default(),
-                None => Vec::new(),
-            };
+        for (&id, ext) in &externals {
+            let config = ext.config(id);
+            let _ = self
+                .engine
+                .send(AudioCommand::SetExternalInstrument { config });
+            // Restore the selected device preset and re-send its params
+            // (an empty map when none is selected).
+            let params = ext.device_params(&self.device_registry);
             let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
-                track_id: *id,
+                track_id: id,
                 params,
             });
             let state = self
                 .external_instruments
-                .entry(*id)
-                .or_insert_with(|| crate::state::ExternalInstrumentState::new(*id));
-            state.apply_config(config);
-            state.device_id = device_id;
+                .entry(id)
+                .or_insert_with(|| crate::state::ExternalInstrumentState::new(id));
+            state.apply_config(&config);
+            state.device_id = ext.device_id.clone();
         }
     }
 

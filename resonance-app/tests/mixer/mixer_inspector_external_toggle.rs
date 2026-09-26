@@ -125,7 +125,8 @@ fn disable_returns_plain_routing() {
 
 /// Enable → Disable round-trips through undo / redo: undo restores the
 /// external group + onboarding card, redo removes it again. The undo
-/// classifier records Enable/Disable via `UndoExtras.external_instruments`.
+/// classifier records Enable/Disable; the snapshot carries the config as
+/// `ProjectTrack::external_instrument`.
 #[test]
 fn enable_disable_undo_redo_round_trip() {
     let mut app = app_with_instrument_track();

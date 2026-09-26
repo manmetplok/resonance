@@ -713,11 +713,12 @@ impl Resonance {
     }
 
     /// Test-only: drive the GUI external-instrument map (and engine) back to
-    /// `extras`, the same restore path both undo replays use. Pairs with
-    /// [`Self::test_snapshot_undo_extras`] to exercise a config round-trip.
+    /// `target`'s tracks, the diff replay's restore. Pairs with
+    /// `test_snapshot_for_undo().project.file` to exercise a config
+    /// round-trip.
     #[doc(hidden)]
-    pub fn test_restore_external_instruments(&mut self, extras: &crate::undo::UndoExtras) {
-        self.restore_external_instruments(extras);
+    pub fn test_restore_external_instruments(&mut self, target: &crate::project::ProjectFile) {
+        self.restore_external_instruments(target);
     }
 
     /// Test-only: the ordered automation-parameter-picker labels the mixer

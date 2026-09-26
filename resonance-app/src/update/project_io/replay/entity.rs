@@ -189,6 +189,8 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
     // `engine_events::project_io::all_cleared`), so a freshly-powered synth
     // lands on its saved patch and any offline device is reported then. The
     // runtime offline flags start clear and are re-checked on the next ping.
+    // This is also the undo slow path's only restore of external state; the
+    // fast path's is `Resonance::restore_external_instruments`.
     if let Some(ext) = &pt.external_instrument {
         let mut state = ExternalInstrumentState::new(track_id);
         state.bank = ext.bank;
@@ -208,13 +210,8 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
         // map — harmless, and the selection is kept so a later rescan can
         // recover it. No selection ⇒ no command (back-compat: identical to a
         // plain external track).
-        if let Some(device_id) = &ext.device_id {
-            let params = ext
-                .device_definition
-                .as_ref()
-                .map(|def| def.params.clone())
-                .or_else(|| r.device_registry.get(device_id).map(|def| def.params.clone()))
-                .unwrap_or_default();
+        if ext.device_id.is_some() {
+            let params = ext.device_params(&r.device_registry);
             let _ = r
                 .engine
                 .send(AudioCommand::SetTrackDeviceParams { track_id, params });
