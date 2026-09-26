@@ -374,8 +374,13 @@ pub struct Resonance {
     /// via [`crate::update::project_io::plugin_states_for_save`], template
     /// capture, "save track as preset", and the undo snapshot — so the
     /// blob survives all of them.
+    ///
+    /// Blobs are `Arc<[u8]>` so an undo snapshot shares them instead of
+    /// deep-copying KB–MB of NAM/IR/wavetable state per history entry
+    /// (ARCH-09 A9-2); a blob is immutable once cached, and a refresh
+    /// replaces the entry.
     pub(crate) plugin_state_cache:
-        std::collections::HashMap<resonance_audio::types::PluginInstanceId, Vec<u8>>,
+        std::collections::HashMap<resonance_audio::types::PluginInstanceId, std::sync::Arc<[u8]>>,
 
     /// Side-index mapping every live plugin instance to the slot that
     /// owns it (a track, a bus, or master). Kept in sync with

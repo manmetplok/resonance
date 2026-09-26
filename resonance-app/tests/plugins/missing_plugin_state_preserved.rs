@@ -142,7 +142,7 @@ fn author_project_on_machine_a(dir: &Path) -> ProjectFile {
 fn open_on_machine_without_the_plugin(dir: &Path) -> (Resonance, LoadedProject) {
     let loaded = project::load_project(dir).expect("load project");
     assert_eq!(
-        loaded.plugin_states.get(&INSTANCE).map(Vec::as_slice),
+        loaded.plugin_states.get(&INSTANCE).map(|b| &b[..]),
         Some(BLOB),
         "precondition: the blob is on disk and was read back"
     );
@@ -193,7 +193,7 @@ fn opaque_state_of_a_missing_plugin_survives_save_as_byte_for_byte() {
     // Back on machine A, where the plugin exists.
     let reopened = project::load_project(saved_as.path()).expect("reopen the saved-as copy");
     assert_eq!(
-        reopened.plugin_states.get(&INSTANCE).map(Vec::as_slice),
+        reopened.plugin_states.get(&INSTANCE).map(|b| &b[..]),
         Some(BLOB),
         "the missing plugin's opaque state must round-trip byte-identically"
     );
@@ -236,7 +236,7 @@ fn the_blob_survives_repeated_save_reopen_cycles_without_the_plugin() {
 
     let final_load = project::load_project(&source).expect("load the last hop");
     assert_eq!(
-        final_load.plugin_states.get(&INSTANCE).map(Vec::as_slice),
+        final_load.plugin_states.get(&INSTANCE).map(|b| &b[..]),
         Some(BLOB),
         "three save/reopen cycles on a machine without the plugin must not erode the blob"
     );

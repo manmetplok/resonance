@@ -12,6 +12,7 @@
 //!   applying a restored snapshot back to the live engine.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use resonance_audio::types::{AudioCommand, ClipId, MidiNote, PluginInstanceId};
 use resonance_common::{AutomationLane, AutomationTarget, ExternalInstrument};
@@ -99,7 +100,6 @@ impl UndoSnapshot {
     /// whole file tree; `serde_json` objects are key-sorted, so map order
     /// can't differ), notes field by field, and the extras directly.
     pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
-        let (a, b) = (&self.extras, &other.extras);
         let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
             && self.project.midi_notes.iter().all(|(id, notes)| {
                 other
@@ -108,29 +108,35 @@ impl UndoSnapshot {
                     .get(id)
                     .is_some_and(|o| crate::update::project_io::replay_diff::midi_notes_equal(notes, o))
             });
-        let extras_equal = a.compose_derived_clips == b.compose_derived_clips
-            && a.compose_next_derived_clip_id == b.compose_next_derived_clip_id
-            && a.vocal_clip_lyrics == b.vocal_clip_lyrics
-            && a.automation_lanes == b.automation_lanes
-            && a.reference.entries == b.reference.entries
-            && a.reference.active_id == b.reference.active_id
-            && a.reference.loudness_match == b.reference.loudness_match
-            && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
-            && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
-            && a.track_freeze == b.track_freeze
-            && a.external_instruments == b.external_instruments
-            && a.external_instrument_devices == b.external_instrument_devices;
-        if !(notes_equal && extras_equal) {
-            return false;
-        }
-        match (
-            serde_json::to_value(&self.project.file),
-            serde_json::to_value(&other.project.file),
-        ) {
-            (Ok(x), Ok(y)) => x == y,
-            // Unserializable: can't prove equality, so treat it as changed.
-            _ => false,
-        }
+        notes_equal
+            && extras_equal(&self.extras, &other.extras)
+            && files_equal(&self.project.file, &other.project.file)
+    }
+}
+
+fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
+    a.compose_derived_clips == b.compose_derived_clips
+        && a.compose_next_derived_clip_id == b.compose_next_derived_clip_id
+        && a.vocal_clip_lyrics == b.vocal_clip_lyrics
+        && a.automation_lanes == b.automation_lanes
+        && a.reference.entries == b.reference.entries
+        && a.reference.active_id == b.reference.active_id
+        && a.reference.loudness_match == b.reference.loudness_match
+        && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
+        && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
+        && a.track_freeze == b.track_freeze
+        && a.external_instruments == b.external_instruments
+        && a.external_instrument_devices == b.external_instrument_devices
+}
+
+/// Compare two project files through their serialized form: the tree
+/// has no `PartialEq`, and `serde_json` objects are key-sorted, so map
+/// order can't differ. Unserializable means "can't prove equality", so
+/// it counts as changed.
+fn files_equal(a: &crate::project::ProjectFile, b: &crate::project::ProjectFile) -> bool {
+    match (serde_json::to_value(a), serde_json::to_value(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
     }
 }
 
@@ -182,34 +188,18 @@ impl crate::Resonance {
             .iter()
             .map(|mc| (mc.id, mc.notes.clone()))
             .collect();
-        let extras = UndoExtras {
-            compose_derived_clips: self.compose.derived_clips.clone(),
-            compose_next_derived_clip_id: self.compose.next_derived_clip_id,
-            vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
-            automation_lanes: self.automation.lanes.clone(),
-            reference: self.reference.undo_snapshot(),
-            track_freeze: self.freeze.statuses.clone(),
-            external_instruments: self
-                .external_instruments
-                .iter()
-                .map(|(id, st)| (*id, st.config()))
-                .collect(),
-            external_instrument_devices: self
-                .external_instruments
-                .iter()
-                .map(|(id, st)| (*id, st.device_id.clone()))
-                .collect(),
-        };
+        let extras = self.undo_extras();
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
-        // never consumed anyway.
-        let mut plugin_states: HashMap<PluginInstanceId, Vec<u8>> = HashMap::new();
+        // never consumed anyway. Each entry is a refcount bump on the
+        // cache's `Arc`, not a copy of the blob (ARCH-09 A9-2).
+        let mut plugin_states: HashMap<PluginInstanceId, Arc<[u8]>> = HashMap::new();
         let collect = |slots: &[crate::state::PluginSlotState],
-                       out: &mut HashMap<PluginInstanceId, Vec<u8>>,
-                       cache: &HashMap<PluginInstanceId, Vec<u8>>| {
+                       out: &mut HashMap<PluginInstanceId, Arc<[u8]>>,
+                       cache: &HashMap<PluginInstanceId, Arc<[u8]>>| {
             for slot in slots {
                 if let Some(blob) = cache.get(&slot.instance_id) {
-                    out.insert(slot.instance_id, blob.clone());
+                    out.insert(slot.instance_id, Arc::clone(blob));
                 }
             }
         };
@@ -233,6 +223,51 @@ impl crate::Resonance {
                 plugin_states,
             },
             extras,
+        }
+    }
+
+    /// Whether the live state differs from `before`, the snapshot a
+    /// gesture opened with — the question `commit_undo_gesture` asks
+    /// (code review STATE-07). Answered without building a second full
+    /// snapshot: the notes are compared in place against `midi_clips`,
+    /// the extras against a fresh (small) capture, and only the
+    /// `ProjectFile` is rebuilt for the serialized comparison — no note
+    /// vectors, plugin blobs or project path are copied. Same verdict as
+    /// `before.same_state(&self.snapshot_for_undo())`, cheaper.
+    pub(crate) fn gesture_changed_since(&self, before: &UndoSnapshot) -> bool {
+        let notes_equal = before.project.midi_notes.len() == self.midi_clips.len()
+            && self.midi_clips.iter().all(|mc| {
+                before.project.midi_notes.get(&mc.id).is_some_and(|o| {
+                    crate::update::project_io::replay_diff::midi_notes_equal(&mc.notes, o)
+                })
+            });
+        if !notes_equal || !extras_equal(&before.extras, &self.undo_extras()) {
+            return true;
+        }
+        let file = crate::update::build_project_file(self);
+        !files_equal(&before.project.file, &file)
+    }
+
+    /// The runtime-only state an undo snapshot carries beside its
+    /// `ProjectFile`; see [`UndoExtras`].
+    fn undo_extras(&self) -> UndoExtras {
+        UndoExtras {
+            compose_derived_clips: self.compose.derived_clips.clone(),
+            compose_next_derived_clip_id: self.compose.next_derived_clip_id,
+            vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
+            automation_lanes: self.automation.lanes.clone(),
+            reference: self.reference.undo_snapshot(),
+            track_freeze: self.freeze.statuses.clone(),
+            external_instruments: self
+                .external_instruments
+                .iter()
+                .map(|(id, st)| (*id, st.config()))
+                .collect(),
+            external_instrument_devices: self
+                .external_instruments
+                .iter()
+                .map(|(id, st)| (*id, st.device_id.clone()))
+                .collect(),
         }
     }
 

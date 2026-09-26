@@ -326,7 +326,7 @@ pub(super) fn replay_plugins(
         if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
             let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
-                data: state_data.clone(),
+                data: state_data.to_vec(),
             });
             // Keep the blob app-side, byte for byte, as the plugin's
             // last known state. A live plugin overwrites this entry with
@@ -334,7 +334,7 @@ pub(super) fn replay_plugins(
             // follows `PluginAdded`; a missing one never does, and this
             // copy is what the next save writes.
             r.plugin_state_cache
-                .insert(pp.instance_id, state_data.clone());
+                .insert(pp.instance_id, std::sync::Arc::clone(state_data));
         }
         // Park the saved parameter overrides until `PluginAdded` reports
         // this instance's param list. Applying them here would be undone:

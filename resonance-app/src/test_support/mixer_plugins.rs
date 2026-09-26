@@ -293,7 +293,7 @@ impl Resonance {
         instance_id: resonance_audio::types::PluginInstanceId,
         data: Vec<u8>,
     ) {
-        self.plugin_state_cache.insert(instance_id, data);
+        self.plugin_state_cache.insert(instance_id, data.into());
     }
 
     /// Test-only: the chain as `(instance_id, clap_plugin_id, missing)`

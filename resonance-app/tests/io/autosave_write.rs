@@ -317,7 +317,7 @@ fn autosave_leaves_the_canonical_midi_and_plugin_files_alone() {
     assert_eq!(std::fs::read(dir.path().join("midi/clip_1.mid")).unwrap(), mid);
     assert_eq!(std::fs::read(dir.path().join("plugins/plugin_5.bin")).unwrap(), saved_state);
     let reopened = project::load_project(dir.path()).expect("reopen");
-    assert_eq!(reopened.plugin_states[&5], saved_state);
+    assert_eq!(&reopened.plugin_states[&5][..], &saved_state[..]);
     assert_eq!(reopened.midi_notes[&1][0].note, 60);
 
     // The snapshot is complete on its own: its side files live in the

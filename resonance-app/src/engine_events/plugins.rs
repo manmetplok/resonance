@@ -163,10 +163,11 @@ fn restore_after_recovery(
     instance_id: PluginInstanceId,
     reposition: Option<AudioCommand>,
 ) {
-    if let Some(data) = r.plugin_state_cache.get(&instance_id).cloned() {
-        let _ = r
-            .engine
-            .send(AudioCommand::LoadPluginState { instance_id, data });
+    if let Some(data) = r.plugin_state_cache.get(&instance_id) {
+        let _ = r.engine.send(AudioCommand::LoadPluginState {
+            instance_id,
+            data: data.to_vec(),
+        });
     }
     if let Some(cmd) = reposition {
         let _ = r.engine.send(cmd);
@@ -540,7 +541,7 @@ pub(super) fn state_saved(
         }
     }
 
-    r.plugin_state_cache.insert(instance_id, data);
+    r.plugin_state_cache.insert(instance_id, data.into());
 }
 
 #[allow(clippy::too_many_arguments)]

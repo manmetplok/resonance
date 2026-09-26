@@ -153,7 +153,7 @@ impl crate::Resonance {
     /// record history at all, where the edit still counts as one.
     pub(crate) fn commit_undo_gesture(&mut self) {
         let changed = match self.undo.pending_snapshot() {
-            Some(before) => !before.same_state(&self.snapshot_for_undo()),
+            Some(before) => self.gesture_changed_since(before),
             None => !self.can_record_undo(),
         };
         if !changed {
