@@ -198,6 +198,16 @@ impl SynthEngine {
         let spread = params.unison.spread.value();
 
         let voice = &mut self.voices[voice_idx];
+        // Mono legato (FU-G2d): a note pressed while the voice's key is
+        // still held takes the voice over without restarting it — the
+        // envelopes, LFOs, filter state and oscillator phases carry on,
+        // and only the pitch moves (gliding if glide is on). A note after
+        // the key was released (`Releasing`) is detached and retriggers.
+        if max_v == 1 && voice.state == VoiceState::Playing {
+            voice.legato(note, self.voice_counter, glide);
+            self.last_note = Some(note);
+            return;
+        }
         voice.trigger(
             note,
             velocity,
