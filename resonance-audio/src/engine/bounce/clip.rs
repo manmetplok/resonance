@@ -153,6 +153,7 @@ pub fn to_audio_clip(
         master_vol,
         latency_comp: &latency_comp,
         automation,
+        hard_clip: true,
     };
     let mut scratch = ChunkScratch::new();
 

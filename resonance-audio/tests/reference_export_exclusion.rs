@@ -128,7 +128,8 @@ fn bounce_excludes_the_reference_and_renders_the_mix() {
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_dir(&dir);
 
-    assert_eq!(samples.len(), FRAMES * 2, "stereo frame count");
+    // The project range plus the shared 2 s FX tail (code review ENG-07).
+    assert_eq!(samples.len(), (FRAMES + 2 * SR as usize) * 2, "stereo frame count");
     // The clip pans to centre, which is unity on a stereo-balance track
     // (ba doc #276 BUG 3), so each channel carries the DC as-is. The
     // exact value doesn't matter — what matters is that it's the *mix*,
