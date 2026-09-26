@@ -278,9 +278,16 @@ fn start_freeze(r: &mut Resonance, track_id: TrackId) -> bool {
 /// Detach a frozen track's cache from the engine and remove the cache file
 /// from disk. Used by unfreeze and by the undo-restore reconciliation.
 fn detach_and_delete_cache(r: &mut Resonance, track_id: TrackId) {
+    let dir = freeze_dir(r);
+    detach_and_delete_cache_in(r, track_id, dir.as_deref());
+}
+
+/// [`detach_and_delete_cache`] with the freeze-cache directory given — a
+/// full-replay undo runs while `io.project_path` is unset.
+fn detach_and_delete_cache_in(r: &mut Resonance, track_id: TrackId, dir: Option<&Path>) {
     let _ = r.engine.send(AudioCommand::UnfreezeTrack { track_id });
     if let (Some(dir), Some(name)) = (
-        freeze_dir(r),
+        dir,
         r.freeze
             .status(track_id)
             .cache_ref()
@@ -396,13 +403,13 @@ impl Resonance {
         let dir = freeze_cache_dir_for(project_dir);
         for (track_id, state) in freezes {
             let track_id = *track_id;
-            // Live / not-frozen tracks carry no cache to restore.
-            let Some(cache_ref) = state.cache_ref.clone() else {
+            // Live / not-frozen tracks carry no cache to restore. A project
+            // saved while a track was stale stays stale (so the UI keeps
+            // offering a refreeze) but still plays the cache it has.
+            let status = FreezeStatus::from_persisted(state);
+            let Some(cache_ref) = status.cache_ref().cloned() else {
                 continue;
             };
-            if !state.is_frozen {
-                continue;
-            }
             let path = dir.join(&cache_ref.cache_filename);
             match resonance_audio::read_freeze_cache(&path, cache_ref.clone()) {
                 Ok(source) => {
@@ -412,13 +419,6 @@ impl Resonance {
                         track_id,
                         source: Some(source),
                     });
-                    // Mirror the persisted status. A project saved while a
-                    // track was stale stays stale (so the UI keeps offering
-                    // a refreeze) but still plays the cache it has.
-                    let status = match cache_ref.status {
-                        FreezeCacheStatus::Stale => FreezeStatus::Stale { cache_ref },
-                        _ => FreezeStatus::Frozen { cache_ref },
-                    };
                     self.freeze.set(track_id, status);
                     // The project was saved with this cache valid, so the
                     // content just replayed is what it was rendered from.
@@ -452,19 +452,46 @@ impl Resonance {
     }
 
     /// Reconcile freeze state after an undo/redo restore drove the project
-    /// back to `target`. The rendered cache is not part of undo history, so:
+    /// back to `tracks` — the snapshot's `ProjectTrack.freeze`, read through
+    /// [`FreezeStatus::from_persisted`] (ARCH-01 A-4). Both restore paths
+    /// call it with the live statuses still in place, so it can see which
+    /// caches the restore retires. The rendered cache is not part of undo
+    /// history, so:
     ///
-    /// - a track that was frozen but is idle in `target` (undo of a freeze)
-    ///   has its cache detached from the engine and deleted from disk;
-    /// - a track that becomes frozen in `target` (redo of a freeze) keeps
+    /// - a track that was frozen but is not in the target (undo of a
+    ///   freeze) has its cache detached from the engine and deleted from
+    ///   disk;
+    /// - a track that is `Frozen` in the target (redo of a freeze) keeps
     ///   that status only if its cache file still exists, otherwise it is
     ///   downgraded to `Stale` (the cache was removed by the matching undo).
     ///
+    /// The UPD-05 content baselines are left alone: a track restored
+    /// `Frozen` must still go stale on its next content edit (FU-H2b).
     /// Any in-flight batch is abandoned — a restore stops the engine.
+    ///
+    /// `project_path` is the live project's `.rproj` path, whose sibling
+    /// freeze directory holds the caches.
     pub(crate) fn apply_freeze_restore(
         &mut self,
-        target: std::collections::HashMap<TrackId, FreezeStatus>,
+        tracks: &[crate::project::ProjectTrack],
+        project_path: Option<&Path>,
     ) {
+        let target = tracks
+            .iter()
+            .map(|t| (t.id, FreezeStatus::from_persisted(&t.freeze)))
+            .filter(|(_, status)| *status != FreezeStatus::Idle)
+            .collect();
+        self.reconcile_freeze_statuses(target, project_path);
+    }
+
+    /// The body of [`Self::apply_freeze_restore`], on a target already in
+    /// live form.
+    pub(crate) fn reconcile_freeze_statuses(
+        &mut self,
+        target: std::collections::HashMap<TrackId, FreezeStatus>,
+        project_path: Option<&Path>,
+    ) {
+        let dir = project_path.map(freeze_cache_dir_for);
         // Detach + delete caches for tracks that are no longer frozen.
         let no_longer_frozen: Vec<TrackId> = self
             .freeze
@@ -476,29 +503,27 @@ impl Resonance {
             .map(|(id, _)| *id)
             .collect();
         for id in no_longer_frozen {
-            detach_and_delete_cache(self, id);
+            detach_and_delete_cache_in(self, id, dir.as_deref());
         }
 
         // Apply the target, downgrading any restored-frozen track whose
         // cache file is gone to `Stale`.
-        let dir = freeze_dir(self);
         let reconciled = target
             .into_iter()
             .map(|(id, status)| {
-                let resolved = match &status {
-                    FreezeStatus::Frozen { cache_ref } => {
+                let resolved = match status {
+                    FreezeStatus::Frozen { mut cache_ref } => {
                         let exists = dir
                             .as_ref()
                             .is_some_and(|d| d.join(&cache_ref.cache_filename).exists());
-                        if exists {
-                            status
+                        if !exists {
+                            cache_ref.status = FreezeCacheStatus::Stale;
+                            FreezeStatus::Stale { cache_ref }
                         } else {
-                            FreezeStatus::Stale {
-                                cache_ref: cache_ref.clone(),
-                            }
+                            FreezeStatus::Frozen { cache_ref }
                         }
                     }
-                    _ => status,
+                    other => other,
                 };
                 (id, resolved)
             })

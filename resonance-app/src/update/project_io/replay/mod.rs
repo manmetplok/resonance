@@ -50,7 +50,9 @@ struct SavedPluginOrder {
 /// after `AudioEvent::AllCleared` confirms the engine is empty.
 pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let project = &loaded.file;
-    r.io.project_path = None; // Will be set by the caller (OpenPathSelected)
+    // Will be set by the caller (OpenPathSelected); an undo/redo's caller
+    // puts this one back, which the freeze restore needs meanwhile.
+    let live_project_path = r.io.project_path.take();
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
     // before re-installing entries from the project. Without this,
@@ -58,22 +60,21 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // for clips that no longer exist.
     r.compose.vocal_audio.clear();
 
-    // Drop any stale per-track freeze status / in-flight batch from a
-    // previously open project. A disk load re-attaches frozen caches
-    // afterwards from the project file (see `Resonance::rehydrate_frozen_tracks`,
-    // ba todo #577); an undo/redo restore instead reinstates the snapshot's
-    // statuses via `apply_freeze_restore`. That restore keeps the UPD-05
-    // content baselines too: a track it brings back `Frozen` must still
-    // go stale on its next content edit, and the baseline it was frozen
-    // with is not in the snapshot (FU-H2b). The fingerprint is keyed by
-    // track id and slot position, both stable across the replay.
-    let baselines = if r.io.pending_undo_extras.is_some() {
-        std::mem::take(&mut r.freeze.content_baselines)
+    // Freeze status is restored from `ProjectTrack.freeze` at the end of
+    // the replay (`replay_freeze`). A disk load drops the previously open
+    // project's statuses, batch and UPD-05 baselines now. An undo/redo
+    // keeps the live statuses until then, so `apply_freeze_restore` can
+    // see which caches the restore retires, and keeps the baselines: a
+    // track it brings back `Frozen` must still go stale on its next
+    // content edit, and the baseline it was frozen with is not in the
+    // snapshot (FU-H2b). The fingerprint is keyed by track id and slot
+    // position, both stable across the replay. Nothing in the replay
+    // reads the statuses.
+    if r.io.pending_undo_extras.is_some() {
+        r.freeze.queue = None;
     } else {
-        Default::default()
-    };
-    r.freeze.reset();
-    r.freeze.content_baselines = baselines;
+        r.freeze.reset();
+    }
 
     // Missing-plugin warning (ba doc #275 P5, todo #1309). A genuine
     // disk load starts with a clean slate: every slot is re-added
@@ -135,6 +136,35 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // projects carry no lanes, so this reduces to clearing stale ones and is
     // otherwise a no-op. An undo's diff replay makes the same call.
     r.restore_automation_lanes(&project.automation_lanes);
+
+    // Last: a disk load's freeze baseline fingerprints the replayed
+    // content, automation lanes included.
+    replay_freeze(r, project, &loaded.project_dir, live_project_path.as_deref());
+}
+
+/// Restore every track's freeze status from `ProjectTrack.freeze` (ARCH-01
+/// A-4). A disk load re-attaches each frozen track's cache to the engine
+/// (ba todo #577); an undo/redo reconciles against the live statuses the
+/// way the diff replay does, deleting the cache of a freeze it undoes —
+/// against the live project path, which the undo caller restores after the
+/// replay (`engine_events::project_io::all_cleared`).
+fn replay_freeze(
+    r: &mut Resonance,
+    project: &ProjectFile,
+    project_dir: &std::path::Path,
+    live_project_path: Option<&std::path::Path>,
+) {
+    if r.io.pending_undo_extras.is_some() {
+        r.apply_freeze_restore(&project.tracks, live_project_path);
+    } else {
+        let freezes: Vec<_> = project
+            .tracks
+            .iter()
+            .filter(|t| t.freeze.is_frozen)
+            .map(|t| (t.id, t.freeze.clone()))
+            .collect();
+        r.rehydrate_frozen_tracks(project_dir, &freezes);
+    }
 }
 
 // ---------------------------------------------------------------------------

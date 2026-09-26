@@ -251,6 +251,68 @@ fn rehydrate_attaches_present_cache_as_frozen() {
     );
 }
 
+/// The full disk-load pipeline — `ProjectLoaded` → `ClearAll` →
+/// `AllCleared` → `replay_loaded_project` — re-attaches a frozen track's
+/// cache, keeps a saved-stale track stale, and records the UPD-05 content
+/// baseline of the valid one. The rehydrate runs from inside the replay
+/// since A-4 (it used to be a special case in `all_cleared`).
+#[test]
+fn a_disk_load_rehydrates_frozen_tracks() {
+    use resonance_app::message::ProjectIoMessage;
+    use resonance_app::project::LoadedProject;
+    use resonance_audio::types::AudioEvent;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, rx) = capturing_app(tmp.path());
+    let project_dir = tmp.path().join("project.rproj");
+    let freeze_dir = tmp.path().join("project.freeze");
+    write_cache_wav(&freeze_dir.join("freeze_1.wav"), 48_000, 64);
+    write_cache_wav(&freeze_dir.join("freeze_2.wav"), 48_000, 64);
+    let file = ProjectFile {
+        tracks: vec![
+            project_track(
+                1,
+                TrackFreezeState::frozen(frozen_ref("freeze_1.wav", 1, FreezeCacheStatus::Frozen)),
+            ),
+            project_track(
+                2,
+                TrackFreezeState::frozen(frozen_ref("freeze_2.wav", 2, FreezeCacheStatus::Stale)),
+            ),
+            project_track(3, TrackFreezeState::unfrozen()),
+        ],
+        ..ProjectFile::default()
+    };
+    let loaded = LoadedProject {
+        file,
+        project_dir,
+        midi_notes: Default::default(),
+        plugin_states: Default::default(),
+    };
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
+        Box::new(loaded),
+    ))));
+    let _ = drain(&rx);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    let cmds = drain(&rx);
+
+    let attached = |id: u64| {
+        cmds.iter().any(|c| {
+            matches!(c, AudioCommand::SetTrackFrozenSource { track_id, source: Some(_) }
+                if *track_id == id)
+        })
+    };
+    assert!(matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
+    assert!(attached(1), "the frozen track's cache is attached");
+    assert!(
+        app.test_freeze_content_baseline(1).is_some(),
+        "the valid cache's content baseline is recorded"
+    );
+    assert!(matches!(app.test_freeze_status(2), FreezeStatus::Stale { .. }));
+    assert!(attached(2), "a saved-stale track still plays its cache");
+    assert_eq!(app.test_freeze_status(3), FreezeStatus::Idle);
+    assert!(!attached(3), "a live track attaches nothing");
+}
+
 #[test]
 fn rehydrate_missing_cache_loads_stale() {
     let tmp = tempfile::tempdir().unwrap();

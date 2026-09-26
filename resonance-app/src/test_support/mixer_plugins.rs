@@ -586,6 +586,16 @@ impl Resonance {
         self.freeze.status(track_id)
     }
 
+    /// Test-only: the UPD-05 content fingerprint a track's valid cache was
+    /// rendered from, if one is recorded (code review FU-H2b).
+    #[doc(hidden)]
+    pub fn test_freeze_content_baseline(
+        &self,
+        track_id: resonance_audio::types::TrackId,
+    ) -> Option<u64> {
+        self.freeze.content_baselines.get(&track_id).copied()
+    }
+
     /// Test-only: force a track's freeze status, mirroring what the engine
     /// freeze-event mirror (ba todo #575) would set on completion.
     #[doc(hidden)]
@@ -619,7 +629,8 @@ impl Resonance {
 
     /// Test-only: drive an undo-restore reconciliation directly with a
     /// target freeze map, exercising `apply_freeze_restore` without the
-    /// full snapshot/replay pipeline.
+    /// full snapshot/replay pipeline. The map goes through the file form
+    /// first, as a snapshot's `ProjectTrack.freeze` would.
     #[doc(hidden)]
     pub fn test_apply_freeze_restore(
         &mut self,
@@ -628,7 +639,18 @@ impl Resonance {
             crate::state::FreezeStatus,
         >,
     ) {
-        self.apply_freeze_restore(target);
+        let target = target
+            .into_iter()
+            .map(|(id, status)| {
+                (
+                    id,
+                    crate::state::FreezeStatus::from_persisted(&status.to_persisted()),
+                )
+            })
+            .filter(|(_, status)| *status != crate::state::FreezeStatus::Idle)
+            .collect();
+        let project_path = self.io.project_path.clone();
+        self.reconcile_freeze_statuses(target, project_path.as_deref());
     }
 
     /// Test-only: read the external-instrument state mirror for a track, if

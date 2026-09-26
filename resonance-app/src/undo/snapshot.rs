@@ -30,10 +30,11 @@ use resonance_audio::types::TrackId;
 /// once both paths restore it from the file, guarded by
 /// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain, the drum
 /// arrangements, the chord track, the external-instrument config, the
-/// vocal lyrics and the automation lanes already went — `ProjectClip`,
-/// `ProjectSectionDefinition::arrangement`, `ProjectFile::chord_track`,
-/// `ProjectTrack::external_instrument`, `ProjectMidiClip::vocal_lyrics`
-/// and `ProjectFile::automation_lanes` carry them.
+/// vocal lyrics, the automation lanes and the track freeze status already
+/// went — `ProjectClip`, `ProjectSectionDefinition::arrangement`,
+/// `ProjectFile::chord_track`, `ProjectTrack::external_instrument`,
+/// `ProjectMidiClip::vocal_lyrics`, `ProjectFile::automation_lanes` and
+/// `ProjectTrack::freeze` carry them.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
     pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
@@ -43,12 +44,6 @@ pub struct UndoExtras {
     /// entries (engine ids, analysis status) are reapplied from here after
     /// the replay on both paths, without yanking the monitor around.
     pub reference: crate::reference::ReferenceUndo,
-    /// Per-track freeze status at snapshot time. The rendered cache is not
-    /// part of undo history, so on restore
-    /// [`crate::Resonance::apply_freeze_restore`] detaches + deletes the
-    /// cache of any track that is no longer frozen and downgrades a
-    /// re-frozen track whose cache file is gone to stale.
-    pub track_freeze: HashMap<TrackId, crate::state::FreezeStatus>,
 }
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
@@ -96,7 +91,6 @@ fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
         && a.reference.loudness_match == b.reference.loudness_match
         && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
         && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
-        && a.track_freeze == b.track_freeze
 }
 
 /// Compare two project files through their serialized form: the tree
@@ -235,7 +229,6 @@ impl crate::Resonance {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
             reference: self.reference.undo_snapshot(),
-            track_freeze: self.freeze.statuses.clone(),
         }
     }
 
@@ -333,9 +326,9 @@ impl crate::Resonance {
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
     /// Clip fade/gain, the drum arrangements, the chord track, the
-    /// external-instrument config, the vocal lyrics and the automation
-    /// lanes need nothing here: the replay restores them from the
-    /// snapshot's `ProjectFile`.
+    /// external-instrument config, the vocal lyrics, the automation
+    /// lanes and the track freeze status need nothing here: the replay
+    /// restores them from the snapshot's `ProjectFile`.
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         // `ClearAll` wiped any clip whose echo was still pending at
         // snapshot time; nothing will re-create it.
@@ -345,7 +338,6 @@ impl crate::Resonance {
             false,
         );
         self.reference.restore_undo(extras.reference);
-        self.apply_freeze_restore(extras.track_freeze);
         // Take lanes are *not* reconciled here. `replay_loaded_project`
         // runs immediately before this and ends in `replay_take_groups`,
         // which sends `RestoreTakeGroups` — see the note on the fast path

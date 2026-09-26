@@ -167,7 +167,10 @@ pub fn try_diff_replay(
     r.chord_track = target_file.chord_track.to_chord_track();
 
     // -- Track freeze status (detach/delete caches no longer frozen) ----
-    r.apply_freeze_restore(extras.track_freeze.clone());
+    // From `ProjectTrack::freeze`, as `replay_loaded_project` does on the
+    // slow path (A-4).
+    let project_path = r.io.project_path.clone();
+    r.apply_freeze_restore(&target_file.tracks, project_path.as_deref());
 
     // -- External-instrument config -----------------------------------
     // From `ProjectTrack::external_instrument`, as `replay_track` does on

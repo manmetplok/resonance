@@ -83,6 +83,32 @@ impl FreezeStatus {
             }
         }
     }
+
+    /// The live status a persisted [`TrackFreezeState`] stands for — the
+    /// inverse of [`Self::to_persisted`], and the one reading of
+    /// `ProjectTrack.freeze` that a disk load and both undo restore paths
+    /// share (ARCH-01 A-4).
+    ///
+    /// Canonical form: the file form. `Frozen` / `Stale` round-trip
+    /// exactly, with the cache ref's own `status` set to match the variant
+    /// (the live code never reads it, the serializer rewrites it). The
+    /// transient `Freezing` / `Failed` have no file form and come back
+    /// `Idle`: an in-flight render or a failure message is not project
+    /// state, so undo does not bring it back.
+    pub fn from_persisted(state: &TrackFreezeState) -> FreezeStatus {
+        match (&state.cache_ref, state.is_frozen) {
+            (Some(cache_ref), true) => {
+                let mut cache_ref = cache_ref.clone();
+                if cache_ref.status == FreezeCacheStatus::Stale {
+                    FreezeStatus::Stale { cache_ref }
+                } else {
+                    cache_ref.status = FreezeCacheStatus::Frozen;
+                    FreezeStatus::Frozen { cache_ref }
+                }
+            }
+            _ => FreezeStatus::Idle,
+        }
+    }
 }
 
 /// A sequential "freeze selected" / "freeze all" batch.

@@ -229,40 +229,19 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
         // Extract project_path before replay (replay clears it)
         let path = r.io.project_path.clone();
         // A pending undo/redo extras bundle marks this clear/replay as a
-        // history restore rather than a fresh disk load. Capture the
-        // per-track freeze refs now, before `replay_loaded_project`
-        // consumes `loaded`, so a disk load can re-attach frozen caches
-        // afterwards (ba todo #577). Undo/redo restores reconcile freeze
-        // via `apply_freeze_restore` in `finalize_undo_restore` instead.
-        let freeze_rehydrate = r.io.pending_undo_extras.is_none().then(|| {
-            (
-                loaded.project_dir.clone(),
-                loaded
-                    .file
-                    .tracks
-                    .iter()
-                    .map(|t| (t.id, t.freeze.clone()))
-                    .collect::<Vec<_>>(),
-            )
-        });
+        // history restore rather than a fresh disk load. The replay
+        // restores freeze status from the file on both (a disk load
+        // re-attaches each frozen track's cache, ba todo #577; an undo
+        // reconciles, ARCH-01 A-4).
         crate::update::replay_loaded_project(r, loaded);
         r.io.project_path = path;
         r.io.loading = false;
         // If this clear/replay came from an undo or redo, apply the
         // runtime-only state that replay can't recover (currently: the
-        // compose derived-clip cache + freeze status). Otherwise it's a
-        // disk load: re-attach each frozen track's cache so reopening
-        // replays the cache without re-rendering.
+        // compose derived-clip cache + the reference entries).
         if let Some(extras) = r.io.pending_undo_extras.take() {
             r.finalize_undo_restore(extras);
         } else {
-            // Disk load (not an undo): re-attach each frozen track's cache
-            // so reopening replays the cache without re-rendering (ba todo
-            // #577).
-            if let Some((dir, freezes)) = freeze_rehydrate {
-                r.rehydrate_frozen_tracks(&dir, &freezes);
-            }
-
             // Fresh project load (not an undo): re-send Bank Select +
             // Program Change for every external-instrument track from its
             // restored config, so a freshly-powered synth lands on its saved

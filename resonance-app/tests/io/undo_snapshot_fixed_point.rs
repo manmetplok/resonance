@@ -473,7 +473,6 @@ fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
             && x.reference.loudness_match == y.reference.loudness_match
             && x.reference.trim_db.to_bits() == y.reference.trim_db.to_bits(),
     );
-    check("track_freeze", x.track_freeze == y.track_freeze);
     out
 }
 
@@ -566,7 +565,10 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     }
     if let Some(&t) = h.tracks.get(1) {
         assert!(
-            matches!(x.track_freeze.get(&t), Some(FreezeStatus::Frozen { .. })),
+            file.tracks
+                .iter()
+                .find(|pt| pt.id == t)
+                .is_some_and(|pt| pt.freeze.is_validly_frozen()),
             "freeze landed"
         );
     }
@@ -1222,5 +1224,242 @@ fn automation_lanes_restore_identically_through_both_paths() {
         fast,
         f.app.test_automation().lanes,
         "both paths restore the same lanes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Track freeze (A-4)
+// ---------------------------------------------------------------------------
+
+/// The five freeze shapes the restore test drives, one track each.
+struct FreezeTracks {
+    /// Frozen at the snapshot and still frozen, cache present.
+    kept: TrackId,
+    /// Live at the snapshot, frozen since (undo of a freeze): the restore
+    /// detaches and deletes its cache.
+    undone: TrackId,
+    /// Frozen at the snapshot, unfrozen since (which deleted its cache):
+    /// the restore can only bring it back `Stale`.
+    missing: TrackId,
+    /// Stale at the snapshot, cache present: stays `Stale`.
+    stale: TrackId,
+    /// `Failed` at the snapshot — a transient status, not project state.
+    failed: TrackId,
+}
+
+fn freeze_ref(t: TrackId, status: FreezeCacheStatus) -> FreezeCacheRef {
+    FreezeCacheRef {
+        cache_filename: format!("freeze_{t}.wav"),
+        sample_rate: 48_000,
+        bit_depth: 24,
+        render_fingerprint: 7,
+        status,
+    }
+}
+
+fn freeze_cache(f: &Fixture, t: TrackId) -> PathBuf {
+    f.project
+        .with_extension("freeze")
+        .join(format!("freeze_{t}.wav"))
+}
+
+fn write_freeze_cache(f: &Fixture, t: TrackId) {
+    std::fs::write(freeze_cache(f, t), b"").expect("write freeze cache");
+}
+
+fn set_frozen(f: &mut Fixture, t: TrackId) {
+    f.app.test_set_freeze_status(
+        t,
+        FreezeStatus::Frozen {
+            cache_ref: freeze_ref(t, FreezeCacheStatus::Frozen),
+        },
+    );
+}
+
+/// The state the snapshot captures.
+fn seed_freeze(f: &mut Fixture, t: &FreezeTracks) {
+    for id in [t.kept, t.missing, t.stale] {
+        write_freeze_cache(f, id);
+    }
+    set_frozen(f, t.kept);
+    set_frozen(f, t.missing);
+    f.app.test_set_freeze_status(
+        t.stale,
+        FreezeStatus::Stale {
+            cache_ref: freeze_ref(t.stale, FreezeCacheStatus::Stale),
+        },
+    );
+    f.app.test_set_freeze_status(
+        t.failed,
+        FreezeStatus::Failed {
+            message: "render failed".into(),
+        },
+    );
+}
+
+/// The edits between snapshot and restore: freeze `undone` (a real cache
+/// file), unfreeze `missing` (deleting its cache, as `UnfreezeTrack`
+/// does), clear the failure.
+fn edit_freeze(f: &mut Fixture, t: &FreezeTracks) {
+    write_freeze_cache(f, t.undone);
+    set_frozen(f, t.undone);
+    let _ = std::fs::remove_file(freeze_cache(f, t.missing));
+    f.app.test_set_freeze_status(t.missing, FreezeStatus::Idle);
+    f.app.test_set_freeze_status(t.failed, FreezeStatus::Idle);
+}
+
+/// The live freeze state a restore must leave, whichever path ran.
+fn assert_freeze_restored(
+    f: &mut Fixture,
+    path: &str,
+    t: &FreezeTracks,
+    cmds: &[AudioCommand],
+    kept_baseline: Option<u64>,
+) {
+    let app = &f.app;
+    assert_eq!(
+        app.test_freeze_status(t.kept),
+        FreezeStatus::Frozen {
+            cache_ref: freeze_ref(t.kept, FreezeCacheStatus::Frozen)
+        },
+        "{path}: a track frozen throughout stays frozen"
+    );
+    assert!(freeze_cache(f, t.kept).exists(), "{path}: its cache is kept");
+    assert_eq!(
+        app.test_freeze_content_baseline(t.kept),
+        kept_baseline,
+        "{path}: its UPD-05 content baseline survives the restore (FU-H2b)"
+    );
+
+    assert_eq!(
+        app.test_freeze_status(t.undone),
+        FreezeStatus::Idle,
+        "{path}: undoing a freeze leaves the track live"
+    );
+    assert!(
+        !freeze_cache(f, t.undone).exists(),
+        "{path}: undoing a freeze deletes its cache"
+    );
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::UnfreezeTrack { track_id } if *track_id == t.undone
+        )),
+        "{path}: undoing a freeze detaches its cache from the engine"
+    );
+
+    assert_eq!(
+        app.test_freeze_status(t.missing),
+        FreezeStatus::Stale {
+            cache_ref: freeze_ref(t.missing, FreezeCacheStatus::Stale)
+        },
+        "{path}: a re-frozen track whose cache is gone comes back stale"
+    );
+    assert_eq!(
+        app.test_freeze_status(t.stale),
+        FreezeStatus::Stale {
+            cache_ref: freeze_ref(t.stale, FreezeCacheStatus::Stale)
+        },
+        "{path}: a stale track stays stale"
+    );
+    assert!(freeze_cache(f, t.stale).exists(), "{path}: its cache is kept");
+    assert_eq!(
+        app.test_freeze_status(t.failed),
+        FreezeStatus::Idle,
+        "{path}: a failed freeze is not project state; the file form restores it live"
+    );
+
+    // No content edit happened, so the post-dispatch UPD-05 check must
+    // leave the kept track frozen.
+    f.app.test_update(Message::Tick);
+    assert!(
+        matches!(
+            f.app.test_freeze_status(t.kept),
+            FreezeStatus::Frozen { .. }
+        ),
+        "{path}: the restored baseline matches the restored content"
+    );
+}
+
+fn freeze_statuses(app: &Resonance, t: &FreezeTracks) -> Vec<FreezeStatus> {
+    [t.kept, t.undone, t.missing, t.stale, t.failed]
+        .into_iter()
+        .map(|id| app.test_freeze_status(id))
+        .collect()
+}
+
+/// Every freeze shape — frozen throughout, a freeze undone, a freeze
+/// re-established whose cache is gone, stale, failed — restores to the
+/// same live state through BOTH restore paths, derived from the snapshot's
+/// `ProjectTrack.freeze` alone, with the cache of the undone freeze
+/// deleted and the UPD-05 content baseline of the kept one intact.
+#[test]
+fn freeze_states_restore_identically_through_both_paths() {
+    let mut f = fixture("freeze", load_demo);
+    let t = FreezeTracks {
+        kept: 800,
+        undone: 801,
+        missing: 802,
+        stale: 803,
+        failed: 804,
+    };
+    for id in 800..=804 {
+        f.app.test_add_track(id, TrackType::Instrument);
+    }
+    seed_freeze(&mut f, &t);
+    let kept_baseline = f.app.test_freeze_content_baseline(t.kept);
+    assert!(
+        kept_baseline.is_some(),
+        "the frozen track has a content baseline"
+    );
+    let snapshot = f.app.test_snapshot_for_undo();
+    let frozen_in_file = |id: TrackId| {
+        snapshot
+            .project
+            .file
+            .tracks
+            .iter()
+            .find(|pt| pt.id == id)
+            .is_some_and(|pt| pt.freeze.is_frozen)
+    };
+    assert!(
+        frozen_in_file(t.kept) && frozen_in_file(t.missing) && frozen_in_file(t.stale),
+        "the snapshot file carries the frozen tracks"
+    );
+
+    // -- Fast path. --
+    edit_freeze(&mut f, &t);
+    f.app
+        .test_dispatch(Message::Track(TrackMessage::SetTrackVolume(t.kept, -9.0)));
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "freeze + scalar edits take the diff replay"
+    );
+    assert_freeze_restored(&mut f, "fast path", &t, &cmds, kept_baseline);
+    let fast = freeze_statuses(&f.app, &t);
+
+    // -- Slow path: the same edits plus an extra track. --
+    write_freeze_cache(&f, t.missing);
+    set_frozen(&mut f, t.missing);
+    edit_freeze(&mut f, &t);
+    f.app.test_add_track(9_999, TrackType::Audio);
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let mut cmds = drain(&f.rx);
+    assert!(
+        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a structural change forces the full clear-and-replay"
+    );
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    cmds.extend(drain(&f.rx));
+    assert_freeze_restored(&mut f, "slow path", &t, &cmds, kept_baseline);
+
+    assert_eq!(
+        fast,
+        freeze_statuses(&f.app, &t),
+        "both paths restore the same freeze state"
     );
 }
