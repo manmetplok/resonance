@@ -23,8 +23,8 @@ use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use resonance_audio::__test_support::{
-    __instance_from_raw_for_test, export_for_test, AutomationSnapshot, PluginMap, PluginSlot,
-    SharedState, CLIP_DECLICK_FRAMES,
+    __instance_from_raw_for_test, export_for_test, export_stems, AutomationSnapshot, PluginMap,
+    PluginSlot, SharedState, StemBitDepth, StemSource, StemTarget, CLIP_DECLICK_FRAMES,
 };
 use resonance_audio::types::*;
 
@@ -373,5 +373,66 @@ fn normalized_export_does_not_hard_clip_overs_before_gain() {
         (crest - std::f32::consts::SQRT_2).abs() < 0.02,
         "crest {crest}: a sine's is sqrt(2); lower means the overs were hard-clipped"
     );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// ENG-07 — master export renders the FX tail, same length as the stems
+// ---------------------------------------------------------------------------
+
+#[test]
+fn master_export_keeps_fx_tail_and_matches_stem_length() {
+    // A 250 ms clip into a 500 ms master echo: the echo sounds entirely
+    // after the last clip ends, so a render that stops at the clip end
+    // loses it.
+    let clip_frames = SR as usize / 4;
+    let delay = SR as usize / 2;
+    let e = Engine::with_clip(tone(clip_frames, 0.25));
+    let (slot, _state) = fake_fx(delay);
+    e.add_master_fx(slot);
+
+    let path = tmp("eng07");
+    assert_completed(&e.export(&path, &ExportSettings::default_wav(), false));
+    let out = read_f32_wav(&path);
+    let frames = out.len() / 2;
+    assert!(
+        frames >= clip_frames + 2 * SR as usize,
+        "export is {frames} frames: the tail past the last clip end was cut"
+    );
+    let echo = &out[delay * 2..(delay + clip_frames) * 2];
+    assert!(peak(echo) > 0.1, "the echo after the last clip end must be in the file");
+
+    // The master stem over the default range (with its FX tail) is the
+    // same length as the master export.
+    let stem_path = path.with_file_name("master_stem.wav");
+    let (tx, rx) = crossbeam_channel::unbounded();
+    export_stems(
+        vec![StemTarget {
+            source: StemSource::Master,
+            path: stem_path.to_string_lossy().into_owned(),
+        }],
+        None,
+        SR,
+        StemBitDepth::Float32,
+        true,
+        &e.shared,
+        &AtomicBool::new(false),
+        &e.tracks,
+        &e.busses,
+        &e.master,
+        &e.clips,
+        &e.midi_clips,
+        &e.plugins,
+        &e.tempo_map,
+        SR,
+        &tx,
+    );
+    drop(tx);
+    let events: Vec<AudioEvent> = rx.try_iter().collect();
+    assert!(
+        events.iter().any(|e| matches!(e, AudioEvent::StemExportComplete { .. })),
+        "stem export must complete: {events:?}"
+    );
+    assert_eq!(read_f32_wav(&stem_path).len(), out.len(), "stem and master lengths differ");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

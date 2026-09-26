@@ -45,8 +45,9 @@ pub const FREEZE_CANCELLED_MSG: &str = "Freeze cancelled";
 /// 32-bit float stereo WAV at `path`, returning a [`FreezeCacheRef`] on
 /// success.
 ///
-/// The render range is `[0, project_end]` where `project_end` is the
-/// latest end across every audio and MIDI clip in the project, so the
+/// The render range is `[0, project_end + tail]` where `project_end` is
+/// the latest end across every audio and MIDI clip in the project and
+/// `tail` the shared offline FX tail (`BOUNCE_TAIL_SECONDS`), so the
 /// cache is timeline-aligned and can be played back from sample 0
 /// without a stored offset. Audio clips on the track (e.g. SVS-rendered
 /// vocals) and MIDI driving the track's instrument are both included.
@@ -140,6 +141,9 @@ pub fn to_freeze_cache(
     if render_end <= render_start {
         return Err("Nothing to freeze".into());
     }
+    // The shared offline FX tail (code review ENG-07): the frozen track's
+    // reverb / delay / release past the last clip end stays audible.
+    let render_end = render_end + super::super::bounce_common::offline_tail_frames(sample_rate);
 
     let spec = hound::WavSpec {
         channels: 2,

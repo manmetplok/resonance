@@ -362,6 +362,10 @@ pub(crate) fn run_export(
         reporter.error(event_tx, ExportErrorKind::NoAudio, "No audio to bounce".into());
         return;
     }
+    // Render the shared FX tail past the last clip end, like the stems,
+    // so reverb / delay / release tails land in the file (code review
+    // ENG-07).
+    let render_end = render_end + super::super::bounce_common::offline_tail_frames(sample_rate);
 
     // Build the export-time resampler first (allocates nothing on disk) so
     // that if it fails we haven't created an output file to clean up.
