@@ -140,6 +140,14 @@ impl Resonance {
         self.snapshot_for_undo()
     }
 
+    /// Test-only: whether two snapshots describe the same undoable state
+    /// (project file, notes and extras) — the fixed-point check the
+    /// snapshot/restore invariant test runs after each restore path.
+    #[doc(hidden)]
+    pub fn test_snapshot_same_state(a: &crate::undo::UndoSnapshot, b: &crate::undo::UndoSnapshot) -> bool {
+        a.same_state(b)
+    }
+
     /// Test-only: borrow the undo history, so the import-placement tests
     /// can assert a single pre-import entry was recorded (ba todo #598).
     #[doc(hidden)]

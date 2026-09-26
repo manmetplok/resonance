@@ -73,5 +73,7 @@ mod replay_diff;
 mod save_keeps_dirty_for_late_edit;
 #[path = "io/take_lanes_persistence.rs"]
 mod take_lanes_persistence;
+#[path = "io/undo_snapshot_fixed_point.rs"]
+mod undo_snapshot_fixed_point;
 #[path = "io/user_definitions_rescan.rs"]
 mod user_definitions_rescan;
