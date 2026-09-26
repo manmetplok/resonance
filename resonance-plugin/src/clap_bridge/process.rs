@@ -2,6 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
+use clack_extensions::latency::HostLatency;
 use clack_plugin::events::event_types::NoteExpressionType;
 use clack_plugin::prelude::*;
 
@@ -50,6 +51,17 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         main_thread
             .host_handle
             .store_latency(plugin.latency_samples());
+        // A change the plugin reported while inactive is announced here,
+        // during activation — where CLAP allows `clap_host_latency.changed()`
+        // and where the host re-reads the latency anyway — and taken, so
+        // the main-thread callback the report also asked for finds nothing
+        // left to say. Otherwise that late callback made the host run a
+        // second, redundant restart cycle (FU-M1b).
+        if main_thread.host_handle.take_latency_dirty() {
+            if let Some(latency) = main_thread.host.shared().get_extension::<HostLatency>() {
+                latency.changed(&mut main_thread.host);
+            }
+        }
         // From here on the plugin is active, so a further latency change
         // needs a restart request rather than a bare notification.
         main_thread.host_handle.set_active(true);
