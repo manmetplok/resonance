@@ -252,3 +252,17 @@ fn known_traps_stay_documented() {
         );
     }
 }
+
+/// FU-E2: `clip_split`'s `at` is a `PositionSpec`, which is `{bar, beat}`
+/// or `{sample}` — there is no seconds form, and the plural `samples`
+/// key is silently ignored by serde, leaving an empty position.
+#[test]
+fn clip_split_documents_the_position_keys_that_exist() {
+    let by_name: std::collections::BTreeMap<String, String> = descriptions().into_iter().collect();
+    let split = &by_name["clip_split"];
+    assert!(
+        !split.contains("{seconds}") && !split.contains("{samples}"),
+        "clip_split advertises position keys PositionSpec does not have: {split}"
+    );
+    assert!(split.contains("{sample}"), "clip_split should document {{sample}}: {split}");
+}
