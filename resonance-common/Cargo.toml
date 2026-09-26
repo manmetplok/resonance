@@ -29,3 +29,4 @@ serde_json.workspace = true
 dirs.workspace = true
 time.workspace = true
 tracing.workspace = true
+thiserror.workspace = true

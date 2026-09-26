@@ -329,6 +329,6 @@ fn write_store(store: &ControllerMapStore, path: &Path) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(store)
         .map_err(|e| format!("serialize controller maps: {e}"))?;
-    atomic_write(path, json.as_bytes())?;
+    atomic_write(path, json.as_bytes()).map_err(|e| e.to_string())?;
     Ok(())
 }

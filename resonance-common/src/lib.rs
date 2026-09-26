@@ -33,7 +33,7 @@ pub mod track_group;
 #[cfg(feature = "decode")]
 mod wav;
 
-pub use atomic_file::{atomic_write, quarantine_corrupt};
+pub use atomic_file::{atomic_write, quarantine_corrupt, AtomicWriteError};
 #[cfg(feature = "model")]
 pub use automation::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value,

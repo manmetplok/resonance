@@ -116,7 +116,7 @@ pub fn save_registry_to(registry: &InstalledRegistry, path: &Path) -> Result<(),
     }
     let json =
         serde_json::to_string_pretty(registry).map_err(|e| format!("serialize registry: {e}"))?;
-    atomic_write(path, json.as_bytes())?;
+    atomic_write(path, json.as_bytes()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
