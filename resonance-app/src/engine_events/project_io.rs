@@ -268,6 +268,7 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
             // template instantiation always lands with no path, while a
             // disk load restores one. No-op when no control job carries
             // the token.
+            let recovery = crate::update::project_io::recovery::finish_load(r);
             match r.io.project_path.as_ref() {
                 None => {
                     r.control.jobs.complete_token(
@@ -277,10 +278,18 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
                 }
                 Some(path) => {
                     let path = path.display().to_string();
-                    r.control.jobs.complete_token(
-                        &crate::control_jobs::JobToken::ProjectLoad,
-                        serde_json::json!({ "path": path, "revision": r.revision() }),
-                    );
+                    let mut result = serde_json::json!({ "path": path, "revision": r.revision() });
+                    // Code review FU-M12a: say whether the autosave was
+                    // recovered, or merely exists (`recover_autosave`).
+                    if recovery.recovered {
+                        result["recovered_autosave"] = true.into();
+                    }
+                    if recovery.autosave_available {
+                        result["autosave_available"] = true.into();
+                    }
+                    r.control
+                        .jobs
+                        .complete_token(&crate::control_jobs::JobToken::ProjectLoad, result);
                 }
             }
         }

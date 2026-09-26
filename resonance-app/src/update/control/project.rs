@@ -2,7 +2,7 @@
 //! save / save-as with EXPLICIT paths, as jobs.
 //!
 //! All four route through the existing project-I/O internals — the
-//! path-carrying messages (`OpenPathSelected` / `SavePathSelected` /
+//! path-carrying messages (`OpenResolved` / `SavePathSelected` /
 //! `SaveProject`) and the `instantiate.rs` fresh-project/template path.
 //! The rfd dialog variants (`OpenProject` / `SaveProjectAs`) are never
 //! reachable from control.
@@ -150,9 +150,15 @@ fn open(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task
         JobToken::ProjectLoad,
         Some(conn),
     );
+    // Never the GUI's recovery prompt: a client can't answer a modal. The
+    // last saved version opens unless the client asked for the autosave,
+    // and the job result says whether one exists (code review FU-M12a).
     let task = super::run_via_update(
         app,
-        Message::ProjectIo(ProjectIoMessage::OpenPathSelected(Some(params.path))),
+        Message::ProjectIo(ProjectIoMessage::OpenResolved {
+            path: PathBuf::from(params.path),
+            recover: params.recover_autosave,
+        }),
     );
     (super::success(request, &started), task)
 }

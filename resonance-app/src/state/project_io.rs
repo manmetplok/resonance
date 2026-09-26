@@ -94,4 +94,33 @@ pub struct ProjectIoState {
     /// open project's dir, or the untitled autosave scratch dir
     /// (`update::project_io::recovery`, code review FU-M12a).
     pub session_marker_dir: Option<std::path::PathBuf>,
+    /// The autosave-recovery prompt, while it is open.
+    pub recovery_prompt: Option<RecoveryPrompt>,
+    /// What the in-flight disk load means for recovery; consumed when the
+    /// loaded project has replayed.
+    pub load_recovery: Option<LoadRecovery>,
+    /// A crashed untitled session's scratch dir this session recovered
+    /// from. Its files stay until the next successful save or a clean
+    /// quit.
+    pub recovered_scratch_dir: Option<std::path::PathBuf>,
+}
+
+/// The autosave-recovery prompt's subject (code review FU-M12a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryPrompt {
+    pub offer: crate::project::session::RecoveryOffer,
+    /// A never-saved session found in the scratch root at startup, rather
+    /// than a project being opened: there is no "last saved" version.
+    pub untitled: bool,
+}
+
+/// Recovery facts about a disk load in flight.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoadRecovery {
+    /// The load is of the autosave: the project lands dirty.
+    pub recovered: bool,
+    /// A recoverable autosave exists (reported to a control client).
+    pub autosave_available: bool,
+    /// The crashed untitled session's scratch dir being recovered.
+    pub scratch_dir: Option<std::path::PathBuf>,
 }

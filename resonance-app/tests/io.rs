@@ -15,6 +15,8 @@ mod common;
 
 #[path = "io/audio_import_entry_points.rs"]
 mod audio_import_entry_points;
+#[path = "io/autosave_recovery.rs"]
+mod autosave_recovery;
 #[path = "io/autosave_settings.rs"]
 mod autosave_settings;
 #[path = "io/autosave_trigger.rs"]

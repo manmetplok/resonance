@@ -689,6 +689,26 @@ pub enum ProjectIoMessage {
     TemplateLoaded(Result<Box<LoadedProject>, String>),
     ExportChordSheet,
     ChordSheetPathSelected(Option<String>, Vec<u8>),
+    /// The user's answer to the autosave-recovery prompt (code review
+    /// FU-M12a).
+    RecoveryChoice(RecoveryChoice),
+    /// Open `path` without the recovery prompt; `recover` loads its
+    /// autosave (when one is recoverable) instead of `project.json`. The
+    /// control `project.open` path: a client can't answer a modal.
+    OpenResolved {
+        path: std::path::PathBuf,
+        recover: bool,
+    },
+}
+
+/// A button on the autosave-recovery prompt. `OpenLastSaved` is offered
+/// for a saved project, `Discard` for a crashed untitled session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryChoice {
+    RecoverAutosave,
+    OpenLastSaved,
+    Discard,
+    Cancel,
 }
 
 #[derive(Debug, Clone)]

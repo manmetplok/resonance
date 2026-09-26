@@ -684,7 +684,11 @@ impl Resonance {
         let _ = engine.send(AudioCommand::ListMidiOutputDevices);
         let _ = engine.send(AudioCommand::ScanPlugins);
 
-        (Self::assemble(engine, Host::Machine), iced::Task::none())
+        let mut app = Self::assemble(engine, Host::Machine);
+        // An untitled session that crashed leaves its autosave in the
+        // scratch root: offer it over the startup screen (FU-M12a).
+        crate::update::project_io::recovery::offer_orphaned_session(&mut app);
+        (app, iced::Task::none())
     }
 
     /// Construct the application state with nothing of the host machine

@@ -128,6 +128,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // succeeds (`ProjectLoaded(Ok)`): a failed open must leave
             // the still-open project tied to its own folder.
             let path = std::path::PathBuf::from(path);
+            if recovery::prompt_before_open(r, &path) {
+                return Task::none();
+            }
             r.io.pending_open_path = Some(path.clone());
             return dialogs::load_project_task(path);
         }
@@ -147,6 +150,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                     path.display()
                 ));
                 crate::recent::remove(&mut r.io.recent_projects, &path);
+                return Task::none();
+            }
+            if recovery::prompt_before_open(r, &path) {
                 return Task::none();
             }
             r.io.pending_open_path = Some(path.clone());
@@ -257,6 +263,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::ProjectLoaded(Err(e)) => {
             r.io.pending_open_path = None;
+            r.io.load_recovery = None;
             r.control.jobs.fail_token(
                 &crate::control_jobs::JobToken::ProjectLoad,
                 e.clone(),
@@ -285,6 +292,12 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::ChordSheetPathSelected(None, _) => {}
+        ProjectIoMessage::RecoveryChoice(choice) => {
+            return recovery::handle_choice(r, choice);
+        }
+        ProjectIoMessage::OpenResolved { path, recover } => {
+            return recovery::open_resolved(r, path, recover);
+        }
     }
     Task::none()
 }

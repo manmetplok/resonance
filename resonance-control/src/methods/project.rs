@@ -50,6 +50,13 @@ pub struct OpenParams {
     /// Required (`true`) when the current project has unsaved changes.
     #[serde(default)]
     pub confirm: bool,
+    /// Open the project's autosave instead of its last saved version when
+    /// an unclean exit left a newer one behind (the job result's
+    /// `autosave_available` says so). The recovered project opens with
+    /// unsaved changes; `project.save` writes it. Default `false`: the last
+    /// saved version opens.
+    #[serde(default)]
+    pub recover_autosave: bool,
 }
 
 /// Params for `project.save`.
@@ -83,4 +90,12 @@ pub struct ProjectResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     pub revision: u64,
+    /// `project.open` only: the project's autosave was opened
+    /// (`recover_autosave`), so the project has unsaved changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recovered_autosave: bool,
+    /// `project.open` only: an unclean exit left an autosave newer than
+    /// the saved project. Absent when there is none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autosave_available: bool,
 }

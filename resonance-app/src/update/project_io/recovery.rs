@@ -7,8 +7,161 @@
 //! once an untitled project has an autosave, and is removed on a clean
 //! quit.
 
+use std::path::{Path, PathBuf};
+
+use iced::Task;
+
+use crate::message::{Message, RecoveryChoice};
 use crate::project::session;
+use crate::state::{LoadRecovery, RecoveryPrompt};
 use crate::Resonance;
+
+/// The directory an open targets: a project dir, or the dir of a JSON
+/// file inside it.
+fn project_dir_of(path: &Path) -> PathBuf {
+    if path.is_file() {
+        path.parent().map(Path::to_path_buf).unwrap_or_else(|| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// A GUI open of `path`: when the project holds an autosave an unclean
+/// exit left behind, open the recovery prompt instead of loading, and
+/// return `true`. The prompt's answer arrives as
+/// [`crate::message::ProjectIoMessage::RecoveryChoice`].
+pub(crate) fn prompt_before_open(r: &mut Resonance, path: &Path) -> bool {
+    match session::probe(&project_dir_of(path), r.session_id()) {
+        Some(offer) => {
+            r.io.recovery_prompt = Some(RecoveryPrompt {
+                offer,
+                untitled: false,
+            });
+            true
+        }
+        None => false,
+    }
+}
+
+/// At startup: offer the newest crashed untitled session found in the
+/// autosave scratch root, if any. Nothing else is open yet, so the prompt
+/// sits over the startup screen.
+pub(crate) fn offer_orphaned_session(r: &mut Resonance) {
+    let Some(root) = super::autosave_scratch_root() else {
+        return;
+    };
+    if let Some(offer) = session::scan_scratch_root(&root, r.session_id()) {
+        r.io.recovery_prompt = Some(RecoveryPrompt {
+            offer,
+            untitled: true,
+        });
+    }
+}
+
+/// Start the async load of `target`, recording what it means for
+/// recovery. `open_dir` becomes the project path once it succeeds (`None`
+/// for an untitled recovery).
+fn start_load(
+    r: &mut Resonance,
+    target: PathBuf,
+    open_dir: Option<PathBuf>,
+    recovery: LoadRecovery,
+) -> Task<Message> {
+    r.io.pending_open_path = open_dir;
+    r.io.load_recovery = Some(recovery);
+    super::dialogs::load_project_task(target)
+}
+
+/// The user's answer to the recovery prompt.
+pub(crate) fn handle_choice(r: &mut Resonance, choice: RecoveryChoice) -> Task<Message> {
+    let Some(prompt) = r.io.recovery_prompt.take() else {
+        return Task::none();
+    };
+    let offer = prompt.offer;
+    match (choice, prompt.untitled) {
+        (RecoveryChoice::Cancel, _) => Task::none(),
+        (_, _) if r.refuse_project_switch_during_render() => Task::none(),
+        (RecoveryChoice::RecoverAutosave, false) => {
+            let recovery = LoadRecovery {
+                recovered: true,
+                autosave_available: true,
+                scratch_dir: None,
+            };
+            start_load(r, offer.autosave_json(), Some(offer.dir.clone()), recovery)
+        }
+        (RecoveryChoice::RecoverAutosave, true) => {
+            // Offered only at startup, before anything is open: the
+            // recovered session lands untitled.
+            r.io.project_path = None;
+            let recovery = LoadRecovery {
+                recovered: true,
+                autosave_available: true,
+                scratch_dir: Some(offer.dir.clone()),
+            };
+            start_load(r, offer.autosave_json(), None, recovery)
+        }
+        (RecoveryChoice::OpenLastSaved, false) => {
+            let recovery = LoadRecovery {
+                recovered: false,
+                autosave_available: true,
+                scratch_dir: None,
+            };
+            start_load(r, offer.dir.clone(), Some(offer.dir.clone()), recovery)
+        }
+        (RecoveryChoice::Discard, true) => {
+            remove_scratch_dir(&offer.dir);
+            Task::none()
+        }
+        // A button the prompt doesn't show for this subject.
+        (RecoveryChoice::OpenLastSaved, true) | (RecoveryChoice::Discard, false) => Task::none(),
+    }
+}
+
+/// Open `path` with the recovery decision already made (control
+/// `project.open`): `recover` loads a recoverable autosave; otherwise, or
+/// when there is none, the last saved version loads. The job result
+/// reports both facts (see [`finish_load`]).
+pub(crate) fn open_resolved(r: &mut Resonance, path: PathBuf, recover: bool) -> Task<Message> {
+    if r.refuse_project_switch_during_render() {
+        return Task::none();
+    }
+    match session::probe(&project_dir_of(&path), r.session_id()) {
+        Some(offer) if recover => {
+            let recovery = LoadRecovery {
+                recovered: true,
+                autosave_available: true,
+                scratch_dir: None,
+            };
+            start_load(r, offer.autosave_json(), Some(offer.dir.clone()), recovery)
+        }
+        offer => {
+            let recovery = LoadRecovery {
+                recovered: false,
+                autosave_available: offer.is_some(),
+                scratch_dir: None,
+            };
+            start_load(r, path.clone(), Some(path), recovery)
+        }
+    }
+}
+
+/// A disk load has replayed: apply what its [`LoadRecovery`] says and
+/// return it for the control job's result. A recovered autosave lands
+/// dirty, so a normal save writes it to the canonical files; the autosave
+/// itself is left alone.
+pub(crate) fn finish_load(r: &mut Resonance) -> LoadRecovery {
+    let recovery = r.io.load_recovery.take().unwrap_or_default();
+    if recovery.recovered {
+        r.dirty = true;
+    }
+    if let Some(scratch) = &recovery.scratch_dir {
+        // Claim the crashed session's marker: a second crash before the
+        // next save offers it again.
+        session::write_marker(scratch, r.session_id());
+        r.io.recovered_scratch_dir = Some(scratch.clone());
+    }
+    recovery
+}
 
 /// Where this session's marker belongs right now: the project dir, or —
 /// for an untitled project that has autosaved — its scratch dir.
@@ -50,16 +203,23 @@ pub(crate) fn close_session(r: &mut Resonance) {
     if let Some(scratch) = super::autosave_scratch_dir(r) {
         remove_scratch_dir(&scratch);
     }
+    if let Some(recovered) = r.io.recovered_scratch_dir.take() {
+        remove_scratch_dir(&recovered);
+    }
 }
 
 /// A completed save (`autosave` false) or autosave. A manual save that
 /// gave an untitled project its path leaves the scratch dir's autosave
-/// superseded, so it is deleted.
+/// superseded, so it is deleted — as is a recovered crashed session's,
+/// whose work is now saved.
 pub(crate) fn after_save(r: &mut Resonance, autosave: bool) {
     sync_session_marker(r);
     if !autosave && r.io.project_path.is_some() {
         if let Some(scratch) = super::autosave_scratch_dir(r) {
             remove_scratch_dir(&scratch);
+        }
+        if let Some(recovered) = r.io.recovered_scratch_dir.take() {
+            remove_scratch_dir(&recovered);
         }
     }
 }
