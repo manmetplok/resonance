@@ -79,6 +79,8 @@ mod generator_section;
 mod global_tracks_edit_cycle;
 #[path = "compose/global_tracks_shelf.rs"]
 mod global_tracks_shelf;
+#[path = "compose/section_delete_cleanup.rs"]
+mod section_delete_cleanup;
 #[path = "compose/seed_markers_from_sections.rs"]
 mod seed_markers_from_sections;
 #[path = "compose/template_instantiate.rs"]

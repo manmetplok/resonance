@@ -363,6 +363,16 @@ pub(super) fn handle_delete_with_placements(r: &mut crate::Resonance, definition
     if r.compose.find_definition(definition_id).is_none() {
         return;
     }
+    let doomed: Vec<u64> = r
+        .compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .map(|p| p.id)
+        .collect();
+    for placement_id in doomed {
+        purge_placement_outputs(r, placement_id);
+    }
     r.compose.placements.retain(|p| p.definition_id != definition_id);
     if r
         .compose
@@ -381,7 +391,66 @@ pub(super) fn handle_delete_with_placements(r: &mut crate::Resonance, definition
         }
     }
     r.compose.definitions.retain(|d| d.id != definition_id);
+    purge_definition_side_tables(r, definition_id);
     r.compose.last_error = None;
+}
+
+/// Tear down everything generated for one placement: its derived MIDI
+/// clips and its installed vocal audio clips, from the engine, the
+/// project's clip lists and the compose maps (code review VIEW-04).
+/// Called by every path that deletes a placement so the lane stops
+/// playing a section that no longer exists. The vocal WAV is left on
+/// disk: it is shared by the definition's other placements, and an undo
+/// of this delete restores a clip that still points at it.
+fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u64) {
+    let midi: Vec<_> = r
+        .compose
+        .derived_clips
+        .iter()
+        .filter(|((_, p, _), _)| *p == placement_id)
+        .map(|(_, id)| *id)
+        .collect();
+    r.compose
+        .derived_clips
+        .retain(|(_, p, _), _| *p != placement_id);
+    for clip_id in midi {
+        let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id });
+        r.midi_clips.retain(|c| c.id != clip_id);
+        r.compose.vocal_audio.clip_lyrics.remove(&clip_id);
+    }
+
+    let audio: Vec<_> = r
+        .compose
+        .vocal_audio
+        .clips
+        .iter()
+        .filter(|((_, p, _), _)| *p == placement_id)
+        .map(|(_, (id, _))| *id)
+        .collect();
+    r.compose
+        .vocal_audio
+        .clips
+        .retain(|(_, p, _), _| *p != placement_id);
+    for clip_id in audio {
+        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
+        r.clips.retain(|c| c.id != clip_id);
+    }
+}
+
+/// Drop the per-`(definition, track)` runtime tables of a deleted
+/// definition. The render epoch is bumped rather than removed so a vocal
+/// render still in flight for it is discarded on completion instead of
+/// installing audio for a section that is gone.
+fn purge_definition_side_tables(r: &mut crate::Resonance, definition_id: u64) {
+    let compose = &mut r.compose;
+    for ((d, _), epoch) in compose.vocal_audio.render_epoch.iter_mut() {
+        if *d == definition_id {
+            *epoch += 1;
+        }
+    }
+    compose.vocal_audio.render_cache.retain(|(d, _), _| *d != definition_id);
+    compose.vocal_bulk_lyrics.retain(|(d, _), _| *d != definition_id);
+    compose.expression_curves.retain(|(d, _), _| *d != definition_id);
 }
 
 pub(super) fn handle_delete_definition(r: &mut crate::Resonance, definition_id: u64) {
@@ -396,6 +465,7 @@ pub(super) fn handle_delete_definition(r: &mut crate::Resonance, definition_id: 
         return;
     }
     r.compose.definitions.retain(|d| d.id != definition_id);
+    purge_definition_side_tables(r, definition_id);
     r.compose.last_error = None;
 }
 
@@ -430,6 +500,10 @@ pub(super) fn handle_place(r: &mut crate::Resonance, definition_id: u64, start_b
 }
 
 pub(super) fn handle_delete_placement(r: &mut crate::Resonance, placement_id: u64) {
+    if r.compose.find_placement(placement_id).is_none() {
+        return;
+    }
+    purge_placement_outputs(r, placement_id);
     r.compose.placements.retain(|p| p.id != placement_id);
     if r.compose.selected_placement_id == Some(placement_id) {
         r.compose.selected_placement_id = r.compose.placements.first().map(|p| p.id);
