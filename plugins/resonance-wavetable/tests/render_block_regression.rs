@@ -327,7 +327,7 @@ fn render_block_output_is_bit_exact() {
 
     let path = golden_path();
 
-    if golden::blessed(&["RESONANCE_BLESS_RENDER_BLOCK"]) {
+    if golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_RENDER_BLOCK"]) {
         golden::bless_f32(&path, &rendered);
         return;
     }

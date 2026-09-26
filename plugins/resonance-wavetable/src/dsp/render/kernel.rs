@@ -243,7 +243,7 @@ fn refresh_osc_setups(
             let (pan_l, pan_r) = constant_power_pan(pan);
             sub.osc1_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
-                tap: oscillator::plan_tap(wt, pos, freq),
+                tap: oscillator::plan_tap(wt, pos, freq, plan.sample_rate),
                 level: osc1_level,
                 pan_l,
                 pan_r,
@@ -263,7 +263,7 @@ fn refresh_osc_setups(
             let (pan_l, pan_r) = constant_power_pan(pan);
             sub.osc2_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
-                tap: oscillator::plan_tap(wt, pos, freq),
+                tap: oscillator::plan_tap(wt, pos, freq, plan.sample_rate),
                 level: osc2_level,
                 pan_l,
                 pan_r,

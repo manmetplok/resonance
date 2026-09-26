@@ -39,13 +39,67 @@ pub struct TableTap {
     pub valid: bool,
 }
 
+/// Sample rate the bundled mip levels are band-limited for (see `build.rs`):
+/// level `k` holds partials up to `TABLE_SAMPLE_RATE / (2 * f_k)`, with
+/// `f_k = MIP_BASE_HZ * 2^k`.
+const TABLE_SAMPLE_RATE: f32 = 44_100.0;
+
+/// Highest sample rate the selection scales its band limit to. Above it the
+/// selection stays where it is at 48 kHz: the extra levels would only add
+/// partials above 24 kHz, which nobody hears, and would read denser tables
+/// whose cubic-interpolation images are the one remaining source of
+/// inharmonic energy at low notes.
+const MAX_BAND_SAMPLE_RATE: f32 = 48_000.0;
+
+/// Width, in octaves, of the crossfade into the next (darker) level at the
+/// top of each level's range. Keeps the timbre continuous across a level
+/// boundary — during a glide or a pitch bend — instead of stepping.
+const MIP_CROSSFADE_OCTAVES: f32 = 0.25;
+
+/// Pick the mip levels for a fundamental of `freq_hz` at `sample_rate`:
+/// `(level, weight)` — read `level`, blended with `level + 1` by `weight`.
+///
+/// Both levels are always band-limited for the playing frequency: no partial
+/// lands above Nyquist. With `x = log2(f / f_0)` scaled to the table's
+/// sample rate, level `L` is alias-free iff `L >= x`, so the selection rounds
+/// *up* to `ceil(x)` and, over the last [`MIP_CROSSFADE_OCTAVES`] below each
+/// boundary, fades into `ceil(x) + 1` — which is where the next octave's
+/// selection starts, so the weight is continuous in frequency.
+///
+/// This used to be `floor(x)` blended toward `floor(x) + 1` by the fraction,
+/// i.e. the level *below* the playing pitch, whose top partials reach up to
+/// twice Nyquist and fold back as inharmonic "birdies" (review finding
+/// DSP-03). The price of alias-free selection is bandwidth: the top partial
+/// now sits between half and all of Nyquist rather than above it.
+#[inline]
+pub fn select_mip(freq_hz: f32, sample_rate: f32) -> (usize, f32) {
+    let band_sr = sample_rate.min(MAX_BAND_SAMPLE_RATE);
+    // Frequency as seen by the tables: at a higher sample rate a level stays
+    // alias-free up to a proportionally higher fundamental.
+    let ratio = freq_hz * (TABLE_SAMPLE_RATE / band_sr) / MIP_BASE_HZ;
+    let x = if ratio > 0.0 { ratio.log2() } else { f32::NEG_INFINITY };
+
+    let top = NUM_OCTAVES - 1;
+    let lo = x.ceil().clamp(0.0, top as f32);
+    let weight = ((x - lo) / MIP_CROSSFADE_OCTAVES + 1.0).clamp(0.0, 1.0);
+    let lo = lo as usize;
+    if lo >= top {
+        // Above the top level's range nothing darker exists; the top level
+        // (two partials) is what there is.
+        (top, 0.0)
+    } else {
+        (lo, weight)
+    }
+}
+
 /// Resolve the mip/frame blend for a given scan position and frequency.
 ///
 /// - `table`: the wavetable to read from
 /// - `position`: wavetable scan position (0.0..1.0)
 /// - `freq_hz`: current oscillator frequency (for mip-map selection)
+/// - `sample_rate`: the rate the oscillator runs at (for the band limit)
 #[inline]
-pub fn plan_tap(table: &Wavetable, position: f32, freq_hz: f32) -> TableTap {
+pub fn plan_tap(table: &Wavetable, position: f32, freq_hz: f32, sample_rate: f32) -> TableTap {
     let num_frames = table.num_frames();
     if num_frames == 0 {
         return TableTap::default();
@@ -60,15 +114,8 @@ pub fn plan_tap(table: &Wavetable, position: f32, freq_hz: f32) -> TableTap {
     // for static-position presets.
     let frame_hi_needed = frame_frac > 0.0 && frame_lo + 1 < num_frames;
 
-    // Mip-map level selection based on frequency
-    let octave_f = if freq_hz > MIP_BASE_HZ {
-        (freq_hz / MIP_BASE_HZ).log2()
-    } else {
-        0.0
-    };
-    let oct_lo = (octave_f as usize).min(NUM_OCTAVES - 2);
-    let oct_frac = (octave_f - oct_lo as f32).clamp(0.0, 1.0);
-    let oct_hi_needed = oct_frac > 0.0;
+    let (oct_lo, oct_frac) = select_mip(freq_hz, sample_rate);
+    let oct_hi_needed = oct_frac > 0.0 && oct_lo + 1 < NUM_OCTAVES;
 
     TableTap {
         frame_lo: frame_lo as u32,
@@ -166,8 +213,14 @@ impl PhaseIndex {
 /// non-realtime callers (viz); the audio path uses the split form so the
 /// planning stays off the per-sample loop.
 #[inline]
-pub fn read_wavetable(table: &Wavetable, phase: f64, position: f32, freq_hz: f32) -> f32 {
-    read_tap(table, &plan_tap(table, position, freq_hz), phase)
+pub fn read_wavetable(
+    table: &Wavetable,
+    phase: f64,
+    position: f32,
+    freq_hz: f32,
+    sample_rate: f32,
+) -> f32 {
+    read_tap(table, &plan_tap(table, position, freq_hz, sample_rate), phase)
 }
 
 /// Convert MIDI note (fractional) to frequency in Hz.

@@ -246,7 +246,7 @@ fn output_matches_golden() {
 
     let path = golden_path();
 
-    if std::env::var("RESONANCE_BLESS_NULL_TEST").is_ok() {
+    if golden::blessed(&["RESONANCE_BLESS", "RESONANCE_BLESS_NULL_TEST"]) {
         golden::bless_f32(&path, &rendered);
         return;
     }
@@ -263,6 +263,18 @@ fn output_matches_golden() {
     // was the only thing keeping `lfo_sh_hpf`'s highpass from removing the
     // whole signal, and the default depths were what made four mod slots in
     // `full_chain_u5` audible.)
+    //
+    // Re-captured again for review finding DSP-02: `find_free_voice` now
+    // enforces `max_voices` (stealing used to pick idle slots), which moved
+    // exactly the two scenarios that exceed their ceiling — `glide_u3`
+    // (mono: legato notes now glide on the held voice) and
+    // `voice_stealing_u7` (4 voices sound, not 9).
+    //
+    // And for DSP-03: mip selection now rounds up to a level that is
+    // band-limited at the playing pitch and sample rate instead of down to
+    // one that aliases. Every scenario reading more than a sine moved
+    // (peak delta <= 0.05); `init_single` (a sine, identical in every level)
+    // did not.
     //
     // Every transform applied to the DSP itself is a caching or hoisting
     // change that re-uses the identical expression, so all of those are
