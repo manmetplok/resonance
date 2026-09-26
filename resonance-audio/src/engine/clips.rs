@@ -992,6 +992,82 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
         .send(AudioEvent::ClipsSavedToProjectDir { clip_files });
 }
 
+/// Give every in-engine audio clip its `{project_dir}/audio/clip_{id}.wav`
+/// now rather than at the next save (code review FU-V5b).
+///
+/// An undo snapshot names a clip's audio only by that path, and the
+/// slow-path (full-reload) restore reloads it from there — so a clip that
+/// lived only in RAM or in a render's `vocal_*.wav` came back silent when
+/// undone before a save. The app sends this whenever it captures an undo
+/// snapshot, ahead of the edit's own commands, so every clip a snapshot
+/// can reference has its file before anything can remove the clip.
+///
+/// Silent (no event, unlike [`handle_save_clips_to_project_dir`]); a
+/// no-op without a project dir. Per clip, only when the file is missing:
+/// hard-link a mapped source inside the project dir, else encode the PCM
+/// the engine already holds (so a source file unlinked meanwhile still
+/// persists), write-then-rename. The clip is then remapped onto the new
+/// file, which keeps the next save from copying over a hard link it
+/// shares an inode with and frees an in-RAM clip's buffer. An existing
+/// `clip_{id}.wav` is never touched — ids are never reused (STATE-08).
+pub(crate) fn handle_persist_clip_wavs(ctx: &HandlerCtx, state: &HandlerState) {
+    let Some(project_dir) = state.project_dir.clone() else {
+        return;
+    };
+    let audio_dir = project_dir.join("audio");
+    let pending: Vec<(ClipId, PathBuf, ClipSource)> = {
+        let clips = ctx.clips.read();
+        clips
+            .iter()
+            .filter_map(|clip| {
+                let target = audio_dir.join(format!("clip_{}.wav", clip.id));
+                let ready = clip.source.mapped_path() == Some(target.as_path());
+                (!ready && !target.exists()).then(|| (clip.id, target, clip.source.share()))
+            })
+            .collect()
+    };
+    if pending.is_empty() {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&audio_dir) {
+        tracing::warn!("[clips] persist clip WAVs: create {}: {e}", audio_dir.display());
+        return;
+    }
+    for (clip_id, target, source) in pending {
+        let linked = match &source {
+            ClipSource::Mapped { path, .. } if path.starts_with(&project_dir) => {
+                std::fs::hard_link(path, &target).is_ok()
+            }
+            _ => false,
+        };
+        if !linked {
+            let tmp = target.with_extension("wav.tmp");
+            let written = transcode_to_wav(&tmp, source.as_frames(), ctx.sample_rate)
+                .and_then(|()| std::fs::rename(&tmp, &target).map_err(|e| e.to_string()));
+            if let Err(e) = written {
+                let _ = std::fs::remove_file(&tmp);
+                tracing::warn!("[clips] persist clip {clip_id} WAV: {e}");
+                continue;
+            }
+        }
+        drop(source);
+        match ClipSource::open_wav(&target) {
+            Ok(mapped) => {
+                let mut clips = ctx.clips.write();
+                if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+                    clip.source = mapped;
+                }
+            }
+            Err(e) => {
+                // Never leave a file the clip isn't mapped to: a later
+                // save would copy the old source over it in place.
+                let _ = std::fs::remove_file(&target);
+                tracing::warn!("[clips] map persisted clip {clip_id} WAV: {e}");
+            }
+        }
+    }
+}
+
 /// Write a stereo-interleaved f32 buffer to a 32-bit float WAV.
 /// Creates the target directory if needed. Used by both the import
 /// transcode path and the save-time fallback for in-RAM clips.

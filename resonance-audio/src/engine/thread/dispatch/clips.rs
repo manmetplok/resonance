@@ -152,6 +152,7 @@ pub(super) fn dispatch_clips(
         AudioCommand::SaveClipsToProjectDir => {
             clips::handle_save_clips_to_project_dir(ctx, state)
         }
+        AudioCommand::PersistClipWavs => clips::handle_persist_clip_wavs(ctx, state),
         _ => unreachable!("dispatch_clips: unexpected command"),
     }
 }

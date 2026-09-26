@@ -44,6 +44,8 @@ mod midi_clip_handlers;
 mod midi_map_command_plumbing;
 #[path = "engine/offline_render_gate.rs"]
 mod offline_render_gate;
+#[path = "engine/persist_clip_wavs.rs"]
+mod persist_clip_wavs;
 #[path = "engine/playback_source_handler.rs"]
 mod playback_source_handler;
 #[path = "engine/playhead_seek_race.rs"]

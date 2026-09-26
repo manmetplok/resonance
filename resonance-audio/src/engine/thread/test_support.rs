@@ -183,6 +183,11 @@ impl EngineHandlerHarness {
         self.tempo_map.load().bpm
     }
 
+    /// Run the real `AudioCommand::PersistClipWavs` handler (FU-V5b).
+    pub fn persist_clip_wavs(&mut self) {
+        self.with_ctx(|ctx, state| crate::engine::clips::handle_persist_clip_wavs(ctx, state));
+    }
+
     /// Run the real `AudioCommand::ClearAll` handler.
     pub fn clear_all(&mut self) {
         self.with_ctx(tracks::handle_clear_all);

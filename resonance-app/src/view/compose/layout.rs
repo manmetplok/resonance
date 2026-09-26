@@ -14,14 +14,40 @@ use super::tracks::NAME_COLUMN_WIDTH;
 /// stretching when the OS window grows.
 pub const BEAT_PX_COMPOSE: f32 = 56.0;
 
+/// Beats and ticks spanned by the 0-based bars `from..to` (empty when
+/// `to <= from`), summed per run of constant meter: the signature — and so
+/// a bar's size — changes only at a signature point, so this is
+/// O(signature changes), not O(bars) (code review FU-V2c).
+pub fn bars_span(tempo_map: &TempoMap, from: u32, to: u32) -> (u64, u64) {
+    if to <= from {
+        return (0, 0);
+    }
+    let mut bounds: Vec<u32> = tempo_map
+        .signature_points
+        .iter()
+        .map(|p| p.bar)
+        .filter(|&b| b > from && b < to)
+        .collect();
+    bounds.sort_unstable();
+    bounds.dedup();
+    bounds.push(to);
+    let (mut beats, mut ticks, mut start) = (0u64, 0u64, from);
+    for end in bounds {
+        let len = u64::from(end - start);
+        beats += len * u64::from(tempo_map.numerator_at_bar(start));
+        ticks += len * tempo_map.bar_len_ticks_at(start);
+        start = end;
+    }
+    (beats, ticks)
+}
+
 /// Total beat count across the section, summing each bar's numerator from
 /// the tempo map. Bars with different time signatures contribute different
 /// beat counts — mirrors the per-canvas math but lets the layout decide
-/// the workspace width up front.
+/// the workspace width up front. O(signature changes) ([`bars_span`]).
 pub fn section_total_beats(tempo_map: &TempoMap, start_bar: u32, length_bars: u32) -> u32 {
-    (0..length_bars)
-        .map(|b| tempo_map.numerator_at_bar(start_bar + b) as u32)
-        .sum()
+    let beats = bars_span(tempo_map, start_bar, start_bar.saturating_add(length_bars)).0;
+    u32::try_from(beats).unwrap_or(u32::MAX)
 }
 
 /// Total tick span across the section, summing each bar's length from the
@@ -32,17 +58,27 @@ pub fn section_total_beats(tempo_map: &TempoMap, start_bar: u32, length_bars: u3
 /// 6/8 bar is six beats but only three quarter notes — 1440 ticks, not
 /// 2880. Canvases that place notes (which carry real ticks) must use this;
 /// canvases that only lay out equal-width beat cells use
-/// [`section_total_beats`] (ba todo #1389).
+/// [`section_total_beats`] (ba todo #1389). O(signature changes).
 pub fn section_total_ticks(tempo_map: &TempoMap, start_bar: u32, length_bars: u32) -> u64 {
-    (0..length_bars)
-        .map(|b| tempo_map.bar_len_ticks_at(start_bar + b))
-        .sum()
+    bars_span(tempo_map, start_bar, start_bar.saturating_add(length_bars)).1
+}
+
+/// Section-relative tick of the start of 0-based `bar`, for a section
+/// that starts at `start_bar`; negative before the section.
+/// O(signature changes).
+pub fn bar_to_section_tick(tempo_map: &TempoMap, start_bar: u32, bar: u32) -> f64 {
+    if bar >= start_bar {
+        bars_span(tempo_map, start_bar, bar).1 as f64
+    } else {
+        -(bars_span(tempo_map, bar, start_bar).1 as f64)
+    }
 }
 
 /// Section-relative tick of an absolute sample position, for a section
-/// that starts at 0-based `start_bar`. Negative before the section. Walks
-/// the per-bar tick lengths, so meter changes inside or before the
-/// section are honoured.
+/// that starts at 0-based `start_bar`. Negative before the section. Sums
+/// the bar lengths in between per meter run ([`bars_span`]), so meter
+/// changes inside or before the section are honoured at O(signature
+/// changes) per call — it runs once per clip per repaint.
 pub fn sample_to_section_tick(
     tempo_map: &TempoMap,
     sample_rate: u32,
@@ -50,17 +86,8 @@ pub fn sample_to_section_tick(
     sample: u64,
 ) -> f64 {
     let (bar, frac) = tempo_map.sample_to_bar(sample, sample_rate);
-    let mut tick: f64 = 0.0;
-    if bar > start_bar {
-        for b in start_bar..bar {
-            tick += tempo_map.bar_len_ticks_at(b) as f64;
-        }
-    } else if bar < start_bar {
-        for b in bar..start_bar {
-            tick -= tempo_map.bar_len_ticks_at(b) as f64;
-        }
-    }
-    tick + frac * tempo_map.bar_len_ticks_at(bar) as f64
+    bar_to_section_tick(tempo_map, start_bar, bar)
+        + frac * tempo_map.bar_len_ticks_at(bar) as f64
 }
 
 /// Pixel width of every Compose-tab lane (chord lane, track lane, drum
@@ -163,6 +190,25 @@ pub fn section_bars_in_range(
     lo: f64,
     hi: f64,
 ) -> Vec<SectionBar> {
+    section_bars_in_range_every(tempo_map, start_bar, length_bars, unit, lo, hi, 1)
+}
+
+/// [`section_bars_in_range`], keeping only every `stride`-th bar (those
+/// whose offset is a multiple of `stride`). For a view that fits the whole
+/// section on screen (the expanded editor): at 100 000 bars every bar is
+/// "visible", so it thins the bar lines to what the pixels can show
+/// instead of walking them all. Work is bounded by the signature changes
+/// plus the bars returned.
+pub fn section_bars_in_range_every(
+    tempo_map: &TempoMap,
+    start_bar: u32,
+    length_bars: u32,
+    unit: BarUnit,
+    lo: f64,
+    hi: f64,
+    stride: u32,
+) -> Vec<SectionBar> {
+    let stride = stride.max(1);
     let mut out = Vec::new();
     let (mut beat, mut tick, mut offset) = (0u64, 0u64, 0u32);
     while offset < length_bars {
@@ -192,7 +238,9 @@ pub fn section_bars_in_range(
             } else {
                 (((lo - pos) / size).floor() as u32).min(run_len)
             };
-            for k in first..run_len {
+            // First k at or after `first` whose bar offset is on the stride.
+            let first = first + (stride - (offset + first) % stride) % stride;
+            for k in (first..run_len).step_by(stride as usize) {
                 if pos + k as f64 * size > hi {
                     break;
                 }

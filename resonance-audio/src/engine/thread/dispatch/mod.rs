@@ -97,7 +97,8 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::SetAutomationReadEnabled { .. }
         | AudioCommand::SetProjectDir(..)
         | AudioCommand::LoadClipFromWav { .. }
-        | AudioCommand::SaveClipsToProjectDir => clips::dispatch_clips(ctx, state, cmd),
+        | AudioCommand::SaveClipsToProjectDir
+        | AudioCommand::PersistClipWavs => clips::dispatch_clips(ctx, state, cmd),
 
         // Tracks
         AudioCommand::SetTrackVolume { .. }
