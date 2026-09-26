@@ -682,3 +682,120 @@ fn control_view_model_has_no_wildcard_arms() {
         &violations,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Logging (code review ARCH-05: one facade, nothing on the audio thread)
+// ---------------------------------------------------------------------------
+
+/// True if `code` names the path `prefix` (e.g. `log::`) as a whole path
+/// segment — `log::warn!` yes, `catalog::find` no.
+fn names_path(code: &str, prefix: &str) -> bool {
+    code.match_indices(prefix).any(|(i, _)| {
+        !code[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
+/// A file only a binary, a build script or tests compile: `src/main.rs`,
+/// `src/bin/**`, and any `test_support` module.
+fn is_binary_or_test_support(rel: &str) -> bool {
+    rel.ends_with("/src/main.rs")
+        || rel.contains("/src/bin/")
+        || rel.split('/').any(|seg| seg.starts_with("test_support"))
+}
+
+/// ARCH-05 A5-1: library code logs through `tracing`, so `RUST_LOG`
+/// filters it and a binary chooses where it goes; a bare `eprintln!` /
+/// `println!` bypasses both. Binaries (`main.rs`, `src/bin/`), build
+/// scripts (not under `src/`) and `test_support` modules may print.
+///
+/// Allowed for now, each a later step: `resonance-app` (its own sweep,
+/// after M12), `resonance-dsp-test-support` (a test-only crate: the bless
+/// notice), and the plugin files below — plugin crates keep stderr until
+/// their own sweep; none of these sites is reachable from `process()`.
+///
+/// Exercised 2026-09-26: added `eprintln!("x");` to
+/// `resonance-common/src/scan.rs` → failed on that line; reverted.
+#[test]
+fn library_crates_log_through_tracing_not_stderr() {
+    let root = workspace_root();
+    let allowed_crates: BTreeSet<&str> = ["resonance-app", "resonance-dsp-test-support"]
+        .into_iter()
+        .collect();
+    let allowed_files: BTreeSet<&str> = [
+        "plugins/resonance-amp/src/lib.rs",
+        "plugins/resonance-amp/src/loader.rs",
+        "plugins/resonance-amp/src/nam/parse/weights.rs",
+        "plugins/resonance-drums/src/articulation.rs",
+        "plugins/resonance-drums/src/dsp/sampler.rs",
+        "plugins/resonance-ir/src/loader.rs",
+    ]
+    .into_iter()
+    .collect();
+    let mut violations = Vec::new();
+    for p in packages() {
+        if allowed_crates.contains(p.name.as_str()) {
+            continue;
+        }
+        let mut files = Vec::new();
+        rust_files(&p.dir.join("src"), &mut files);
+        for file in files {
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            if is_binary_or_test_support(&rel) || allowed_files.contains(rel.as_str()) {
+                continue;
+            }
+            for (n, code) in code_lines(&file) {
+                if code.contains("println!") {
+                    violations.push(format!(
+                        "{rel}:{n}: stderr/stdout print in library code — use tracing::{{error,warn,info,debug}}!"
+                    ));
+                }
+            }
+        }
+    }
+    report(
+        "ARCH-05: library crates log through `tracing`, not `eprintln!`/`println!`",
+        &violations,
+    );
+}
+
+/// ARCH-05 A5-2: "Rule for the RT thread: no logging — increment an
+/// atomic and let the tick handler log." Everything under
+/// `resonance-audio/src/mixer/` runs on (or is only called from) the
+/// audio callback, so no logging macro, facade or print may appear
+/// there; latch the value into `SharedState` and log it from the engine
+/// loop instead (`cycle_load::OversizeBufferLatch`, `CycleReportSlot`).
+///
+/// Exercised 2026-09-26: added `tracing::warn!("x");` to
+/// `resonance-audio/src/mixer/callback/mod.rs` → failed on that line;
+/// reverted.
+#[test]
+fn audio_callback_never_logs() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-audio/src/mixer"), &mut files);
+    assert!(!files.is_empty(), "resonance-audio/src/mixer moved? update this test");
+    let mut violations = Vec::new();
+    for file in files {
+        for (n, code) in code_lines(&file) {
+            let logs = names_path(&code, "tracing::")
+                || names_path(&code, "log::")
+                || code.contains("println!")
+                || code.contains("eprint!")
+                || names_path(&code, "print!")
+                || names_path(&code, "dbg!");
+            if logs {
+                violations.push(format!(
+                    "{}:{n}: logging on the audio thread — store an atomic in SharedState and log it from the engine loop",
+                    file.strip_prefix(&root).unwrap_or(&file).display()
+                ));
+            }
+        }
+    }
+    report(
+        "ARCH-05: nothing under resonance-audio/src/mixer/ logs or prints (audio thread)",
+        &violations,
+    );
+}
