@@ -20,7 +20,23 @@ pub struct EqDsp {
     active_stages: [usize; NUM_BANDS],
     /// Last-applied snapshots, used to skip coefficient work when nothing changed.
     last_snapshot: [Option<BandSnapshot>; NUM_BANDS],
+    /// The stages a band ran *before* its last kind change, still on their
+    /// old coefficients and state, crossfaded out while the restarted new
+    /// stages fade in (FU-M6c): [channel][band][stage].
+    fade_stages: [[[Biquad; MAX_STAGES_PER_BAND]; NUM_BANDS]; 2],
+    /// Active stage count of `fade_stages` per band.
+    fade_active: [usize; NUM_BANDS],
+    /// Samples left in each band's kind-change crossfade; 0 = none running.
+    fade_remaining: [u32; NUM_BANDS],
+    /// Crossfade length in samples (~5 ms at the current rate).
+    fade_len: u32,
 }
+
+/// Length of the crossfade a band runs when its kind changes. Long enough
+/// that the old-to-new difference (up to the signal's own size) is spread
+/// into a ramp well under the steady tone's own slope; short enough to read
+/// as an instant switch.
+const KIND_FADE_MS: f32 = 5.0;
 
 impl EqDsp {
     pub fn new(sample_rate: f32) -> Self {
@@ -29,6 +45,10 @@ impl EqDsp {
             channels: [[[Biquad::identity(); MAX_STAGES_PER_BAND]; NUM_BANDS]; 2],
             active_stages: [0; NUM_BANDS],
             last_snapshot: [None; NUM_BANDS],
+            fade_stages: [[[Biquad::identity(); MAX_STAGES_PER_BAND]; NUM_BANDS]; 2],
+            fade_active: [0; NUM_BANDS],
+            fade_remaining: [0; NUM_BANDS],
+            fade_len: ((KIND_FADE_MS * 0.001 * sample_rate).round() as u32).max(1),
         }
     }
 
@@ -40,6 +60,7 @@ impl EqDsp {
                 }
             }
         }
+        self.fade_remaining = [0; NUM_BANDS];
     }
 
     /// Refresh coefficients from the current parameter values for any band
@@ -52,6 +73,21 @@ impl EqDsp {
                 None => true,
             };
             if changed {
+                // A kind change restarts the band's stages from zero (below),
+                // which on loud material is a click. Keep the old stages
+                // running as they are and crossfade out of them. Only when
+                // they were producing something: from a bypassed band there
+                // is nothing to fade from. A second change mid-fade starts
+                // over from the current (new) stages.
+                let kind_changed = self.last_snapshot[i].is_some_and(|p| p.kind != snapshot.kind);
+                let prev_n = self.active_stages[i];
+                if kind_changed && prev_n > 0 {
+                    for ch in 0..2 {
+                        self.fade_stages[ch][i] = self.channels[ch][i];
+                    }
+                    self.fade_active[i] = prev_n;
+                    self.fade_remaining[i] = self.fade_len;
+                }
                 // Write coefficients into both channels (L and R share coeffs
                 // but carry independent delay-line state).
                 let n = configure_stages(&snapshot, self.sample_rate, &mut self.channels[0][i]);
@@ -60,8 +96,6 @@ impl EqDsp {
                 // another input (and maybe other coefficients); TDF-II
                 // injects that straight into the output. Start them clean.
                 // A kind change repurposes every stage, so clear them all.
-                let prev_n = self.active_stages[i];
-                let kind_changed = self.last_snapshot[i].is_some_and(|p| p.kind != snapshot.kind);
                 let fresh_from = if kind_changed { 0 } else { prev_n.min(n) };
                 for ch in self.channels.iter_mut() {
                     for stage in &mut ch[i][fresh_from..n] {
@@ -89,10 +123,24 @@ impl EqDsp {
             let mut l = left[i];
             let mut r = right[i];
             for b in 0..NUM_BANDS {
+                let (in_l, in_r) = (l, r);
                 let n = self.active_stages[b];
                 for s in 0..n {
                     l = self.channels[0][b][s].process(l);
                     r = self.channels[1][b][s].process(r);
+                }
+                let left_in_fade = self.fade_remaining[b];
+                if left_in_fade > 0 {
+                    let (mut ol, mut or) = (in_l, in_r);
+                    for s in 0..self.fade_active[b] {
+                        ol = self.fade_stages[0][b][s].process(ol);
+                        or = self.fade_stages[1][b][s].process(or);
+                    }
+                    // Weight of the old stages: 1 -> 0 over the fade.
+                    let w = left_in_fade as f32 / self.fade_len as f32;
+                    l += w * (ol - l);
+                    r += w * (or - r);
+                    self.fade_remaining[b] = left_in_fade - 1;
                 }
             }
             let gain_lin = output_gain.next();
