@@ -108,6 +108,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent D-5 (ARCH-04) | Mandatory reference id; engine `next_ref_id` gone, collision refused; arrangement markers were already app-only | sonnet | merged | 32a81629 |
 | refactor-intent D-6 (ARCH-04) | Design `docs/design/D-6-engine-created-ids.md`: one app clip allocator (`CLIP_ID_BASE`), standing `GrantIds` for recording/take ids, app-owned asset ids; D-7a–f; 4 open human decisions | opus | merged (design) | a215818c |
 | refactor-intent D-7c (ARCH-04) | `CreateMidiClip { clip_id }` from `fresh_derived_clip_id`; engine rejects clip-id collisions across audio+MIDI; dead `ImportClip` deleted | sonnet | merged | 37b049a4 |
+| refactor-intent D-7a (ARCH-04) | App-owned asset ids (`ImportAudioToPool { files }`); `next_asset_id`/`ReserveAssetIds` gone; imports keyed by asset id (fixes same-path swap); `create_new` refuses overwrite; on-disk `asset_*.wav` seeding | sonnet | merged | 75986451 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
