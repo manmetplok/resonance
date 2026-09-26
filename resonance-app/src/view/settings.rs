@@ -166,6 +166,25 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         );
     }
 
+    // Autosave (code review FU-M12a, ba todo #471): the trigger reads
+    // both on every tick, so a change applies straight away.
+    let autosave_cfg = &r.settings.autosave;
+    let autosave_toggle = toggle_button(
+        "Autosave",
+        autosave_cfg.enabled,
+        Message::Ui(UiMessage::ToggleAutosave),
+    );
+    let interval_picker = pick_list(
+        AUTOSAVE_INTERVALS,
+        Some(AutosaveInterval(autosave_cfg.interval_secs)),
+        |choice| Message::Ui(UiMessage::SetAutosaveInterval(choice.0)),
+    )
+    .text_size(12)
+    .width(130);
+    let autosave_row = row![autosave_toggle, interval_picker]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center);
+
     let follow_toggle = toggle_button(
         "Follow playhead",
         r.settings.arrange.follow_playhead,
@@ -180,6 +199,8 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         open_btn,
         save_btn,
         save_as_btn,
+        Space::new().height(8),
+        autosave_row,
         Space::new().height(20),
         section("Arrange"),
         Space::new().height(6),
@@ -219,6 +240,30 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
 
     stack![backdrop, centered].into()
 }
+
+/// An autosave interval in seconds, labelled for the picker. A stored
+/// value off the preset list still shows as itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AutosaveInterval(u32);
+
+impl std::fmt::Display for AutosaveInterval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            s if s >= 60 && s % 60 == 0 => write!(f, "Every {} min", s / 60),
+            s => write!(f, "Every {s} s"),
+        }
+    }
+}
+
+/// The picker's presets; static, so the overlay never rebuilds them.
+const AUTOSAVE_INTERVALS: &[AutosaveInterval] = &[
+    AutosaveInterval(15),
+    AutosaveInterval(30),
+    AutosaveInterval(60),
+    AutosaveInterval(120),
+    AutosaveInterval(300),
+    AutosaveInterval(600),
+];
 
 fn wide_button<'a>(
     icon: char,

@@ -166,6 +166,17 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 set.insert(track_id);
             }
         }
+        UiMessage::ToggleAutosave => {
+            let enabled = &mut r.settings.autosave.enabled;
+            *enabled = !*enabled;
+            crate::settings::persist(&r.settings);
+        }
+        UiMessage::SetAutosaveInterval(secs) => {
+            // The trigger reads the setting on every tick, so the new
+            // spacing applies from the next one.
+            r.settings.autosave.interval_secs = secs.max(1);
+            crate::settings::persist(&r.settings);
+        }
         UiMessage::ToggleFollowPlayhead => {
             let follow = &mut r.settings.arrange.follow_playhead;
             *follow = !*follow;

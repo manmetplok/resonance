@@ -19,6 +19,8 @@ mod audio_import_entry_points;
 mod autosave_recovery;
 #[path = "io/autosave_settings.rs"]
 mod autosave_settings;
+#[path = "io/autosave_settings_ui.rs"]
+mod autosave_settings_ui;
 #[path = "io/autosave_trigger.rs"]
 mod autosave_trigger;
 #[path = "io/autosave_write.rs"]

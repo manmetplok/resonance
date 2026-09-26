@@ -778,6 +778,11 @@ pub enum UiMessage {
     /// Switch arrange-view playhead follow on/off (persisted in settings,
     /// code review FU-V3b).
     ToggleFollowPlayhead,
+    /// Switch periodic autosave on/off (persisted in settings, code review
+    /// FU-M12a / ba todo #471).
+    ToggleAutosave,
+    /// Set the autosave interval in seconds (persisted in settings).
+    SetAutosaveInterval(u32),
     /// Toggle MIDI clock send (engine acts as clock master).
     ToggleMidiClockSend,
     /// Pick the hardware port for MIDI clock send. `None` clears.
