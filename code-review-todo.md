@@ -29,7 +29,7 @@ master and updates this table. Agents do **not** edit this file.
 | M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | merged | c28a8a5c |
 | M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | merged | f7ad84e2 |
 | M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
-| M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | in progress | |
+| M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | merged | d3b41d37 |
 | M6 theory + small plugins | LIB-02..LIB-09 | opus | in progress | |
 | V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | in progress (+ MIX-04, FU-F2d) | |
@@ -54,7 +54,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-E1** (medium) `update/control/import_midi.rs:275` rounds imported clip length with `time_sig_num * TICKS_PER_QUARTER_NOTE` — wrong for x/8 meters; use `tempo_map.bar_len_ticks_at(bar)`.
 - [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
 - [ ] **FU-G1** (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
-- [ ] **FU-C1** (medium, = UPD-11) global `keyboard::listen()` shortcuts (Enter, B, Cmd-Z) still fire while typing; use the `any_text_input_focused` probe pattern.
+- [x] **FU-C1** (medium, = UPD-11) — fixed @b1357803; global `keyboard::listen()` shortcuts (Enter, B, Cmd-Z) still fire while typing; use the `any_text_input_focused` probe pattern.
 - [ ] **FU-C2** (low) timeline Delete now needs a prior click on the timeline (KeyFocus); a clip selected via control API/other widget isn't deletable by key until clicked.
 - [ ] **FU-C3** (low) expanded compose editor's `+`/`-`/Escape still use hover gating, not KeyFocus.
 - [ ] **FU-A2a** (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
@@ -78,6 +78,12 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M3b** (low) MIX-06: every lock-contended block causes a flush on the next block → sustained notes can be cut during heavy UI edits.
 - [ ] **FU-M3c** (low) MIX-05: muted key sources keep rendering (CPU cost while muted).
 - [ ] **FU-F2d** (medium, upgraded) `bounce_plugin_lock` timing test fails 3/5 standalone — make it deterministic.
+- [ ] **FU-M2a** (medium) DSP-10 partial: linear-phase EQ FIR design still runs on the audio thread (≤1/hop, now crossfaded). Plan: per-EQ design worker + lock-free request slot + double-buffered spectrum; fall back to inline design at hop boundary if result not ready (deterministic for bounce).
+- [ ] **FU-M2b** (medium) mastering multiband crossover lowpass: fixed 4097-tap FIR, hard swap, allocates a Vec on the audio thread on crossover move (= DSP-12) — give it the EQ treatment.
+- [ ] **FU-M2c** (low, perf) granular HQ sinc read ≈80 taps/grain-sample at +24 st (vs 6) — benchmark; bypassed mastering now costs full CPU.
+- [ ] **FU-M5a** (low) CTL-05: repeated `insert_bars` can still push content past MAX_BARS (per-call check only).
+- [ ] **FU-M5b** (low) CTL-12 remainder: lockstep doesn't check param / plugin-param ids in skills.
+- [ ] **FU-M5c** (low) control API: accept string param `key` ids for plugin params (mastering skill currently uses display names).
 
 ## How to use this file
 
@@ -467,7 +473,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Run the scan in `Task::perform(spawn_blocking(scan_folder_for_names(..)))` and return a new `RelinkMessage::ScanFinished(found)` that starts the imports. Mark the wanted assets in flight before spawning so a second click doesn't start a duplicate scan.
 - **Verification:** Add a unit-level test in the existing relink test module that `start_batch_relink` returns without having called `read_dir`, for example by asserting no assets were started before the `ScanFinished` message is fed.
 
-### [ ] UPD-11 — Global shortcuts that aren't focus-gated fire while typing (Enter, B, Cmd-Z)
+### [x] UPD-11 — Global shortcuts that aren't focus-gated fire while typing (Enter, B, Cmd-Z) — fixed @b1357803
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -920,7 +926,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Wrap every multi-dispatch handler in `app.with_compound_undo`: at least `section.create`, `track.delete` and `transport.set_tempo`, and audit the others listed by `grep run_via_update` with more than one call per function. For coalescing, either break the coalesce run at the start of each control request (e.g. `app.undo.break_coalesce()` in `control::execute` before dispatching a mutating method) or run each control mutation in a compound group, which already records its opening edit plain (`undo/mod.rs:96-103`). Update the `set_plugin_param` doc comment (`track/params.rs:17`), which currently documents the coalescing as intended. Handler-only change.
 - **Verification:** `control` group (`control_edit_undo.rs`): assert `revision == before + 1` and a single undo entry for `section.create` with scale and for `track.delete` of a track with a MIDI clip. Assert that two `mixer.set_volume_db` calls produce two undo entries and that one `edit.undo` restores the first call's value.
 
-### [ ] CTL-04 — `track_add_instrument` is described as "set" and marked idempotent, but it appends a second instrument
+### [x] CTL-04 — `track_add_instrument` is described as "set" and marked idempotent, but it appends a second instrument — fixed @2fc4faf5 (set semantics, swap in place)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** api-design
@@ -930,7 +936,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `add_plugin` with `PluginRole::Instrument`, reject with `invalid_params` when the track already has an instrument, and point the error at `track.replace_effect {slot: 0}`. Or make `add_instrument` replace slot 0 through the `replace` path. Update the wire doc and the tool description to match, and drop `idempotent_hint` unless the call becomes a true set. One vertical slice: handler, doc and tool together.
 - **Verification:** `control` group (`control_track_add_plugin_result.rs`): a second `track.add_instrument` on a track that has one either fails with the pointer to `replace_effect` or leaves exactly one instrument, depending on the chosen semantics.
 
-### [ ] CTL-05 — Unbounded bar counts overflow u32: debug panic in the update loop, or a release-mode wrap that bypasses `remove_bars`' confirm
+### [x] CTL-05 — Unbounded bar counts overflow u32: debug panic in the update loop, or a release-mode wrap that bypasses `remove_bars`' confirm — fixed @30939036 (MAX_BARS=100000)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -940,7 +946,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add a `MAX_BARS` constant in `resonance-control` (e.g. 100_000, next to `MAX_BEATS`) and enforce it in `arrangement::check_range` (`at_bar`, `count` and `at_bar + count`), `section.create` / `resize` (`length_bars`), `section.place` (`start_bar`), `notes.create_clip.start_bar` and `global.*` `bar` / `new_bar`. Use checked arithmetic in the confirm message. Document the bound on the params structs so the MCP schema shows it. One slice: constant, handler checks and schema doc.
 - **Verification:** `control` group (`control_arrangement_bars.rs`, `control_section_harmony.rs`): huge `count` / `start_bar` / `length_bars` values return `invalid_params`, and the project is unchanged.
 
-### [ ] CTL-06 — Two skills tell the agent to "repair" tempo/meter events after insert/remove bars; that defect was fixed, so following them double-shifts the global tracks
+### [x] CTL-06 — Two skills tell the agent to "repair" tempo/meter events after insert/remove bars; that defect was fixed, so following them double-shifts the global tracks — fixed @f77148d3
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** docs
@@ -950,7 +956,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Replace both passages with the current behaviour: events move by `±count`, bar 1 stays pinned, events inside a removed span clamp to the cut, and the later event wins on collision. Tell the agent to verify with `ShiftResult.tempo_events_moved` / `signature_events_*` and `global_list_events` rather than repair by hand. Bump the plugin `version`.
 - **Verification:** Covered by CTL-12. Until then, grep `resonance-agent-plugin` for `1388` in review.
 
-### [ ] CTL-07 — The MCP client holds its single connection mutex for the whole `job.wait`, so every other tool call stalls for up to 5–10 minutes
+### [x] CTL-07 — The MCP client holds its single connection mutex for the whole `job.wait`, so every other tool call stalls for up to 5–10 minutes — fixed @515b6fde (250 ms job.wait slices)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** api-design
@@ -960,7 +966,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Keep the blocking wait off the shared connection. Either open a dedicated short-lived connection for each `job.wait` in `invoke_job` / `job_wait` (job ids are global, and `JobBoard` checks no ownership), or poll `job.status` with a short sleep outside the lock. Clamp the tool's `timeout_ms` to 600 000 and say "at most 10 minutes" in the description. MCP-side only.
 - **Verification:** `resonance-mcp/tests/client_timeout.rs`: against a fake server whose `job.wait` blocks, a concurrent `song.summary` call returns promptly.
 
-### [ ] CTL-08 — The `ii-V-I` progression preset can never match (the lookup lowercases, the table key is mixed-case)
+### [x] CTL-08 — The `ii-V-I` progression preset can never match (the lookup lowercases, the table key is mixed-case) — fixed @eeaf49a3
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -970,7 +976,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Compare with `name.eq_ignore_ascii_case(&wanted)`, or lowercase the table key. Then drop the workaround line from `skills/arranging/SKILL.md`.
 - **Verification:** `control` group (`control_section_harmony.rs`): apply `preset: "ii-V-I"` and `"II-v-i"`, and assert three chords ii, V, I.
 
-### [ ] CTL-09 — The mastering skill calls string parameter ids (`glue_on`, `lim_ceiling`, …) addressable, but `*_set_plugin_param` resolves only display names or numeric ids
+### [x] CTL-09 — The mastering skill calls string parameter ids (`glue_on`, `lim_ceiling`, …) addressable, but `*_set_plugin_param` resolves only display names or numeric ids — fixed @bfc5ac27 (docs: display names)
 - **Severity:** low
 - **Confidence:** high
 - **Category:** docs
@@ -980,7 +986,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Either rewrite the skill in display names ("Glue On", "Limiter On", "Ceiling"…) or, better, add a `key` (string id) to `PluginParamView` and accept it in the `set_plugin_param` resolvers. The app already maps string id to CLAP id with `resonance_plugin::stable_hash` (`plugin_presets.rs:176`). As a wire change that is one slice across all three surfaces.
 - **Verification:** `control` group (`control_master_params.rs`): `param: "lim_on"` resolves, or the skill passes a new lockstep check on parameter names.
 
-### [ ] CTL-10 — Overwriting a user plugin preset is refused as `invalid_params`, not `needs_confirmation`
+### [x] CTL-10 — Overwriting a user plugin preset is refused as `invalid_params`, not `needs_confirmation` — fixed @75e42520
 - **Severity:** low
 - **Confidence:** high
 - **Category:** error-handling
@@ -1000,7 +1006,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Only chmod a directory the app created itself. For an existing directory, verify it is owned by the current uid and is not group- or world-writable, and otherwise refuse with a clear error. On the client, check `SO_PEERCRED` / `getpeereid` uid before sending the handshake, or check the socket's parent ownership.
 - **Verification:** A `resonance-control/tests/socket_path.rs`-style unit test for an ownership-check helper, plus an app test (control group) that a pre-existing foreign-mode parent directory is refused rather than chmodded.
 
-### [ ] CTL-12 — The lockstep test checks only `mcp__resonance__`-prefixed tool names; bare tool names, parameter names and behavioural claims in skills are unchecked
+### [x] CTL-12 — The lockstep test checks only `mcp__resonance__`-prefixed tool names; bare tool names, parameter names and behavioural claims in skills are unchecked — partial @add1fb65 (bare tool names checked; param ids not)
 - **Severity:** low
 - **Confidence:** high
 - **Category:** test-coverage
@@ -1010,7 +1016,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Also extract backticked `` `[a-z]+_[a-z_]+` `` tokens whose prefix is a known namespace (`track_`, `section_`, `notes_`, …) and require them to be published tools. Optionally add a small allow-list file for known wire field names and plugin param ids, checked against the schemars schema and the plugins' `::new("id", …)` declarations. Add a `ba`-referenced "known defect" marker convention (e.g. `<!-- defect: #1388 -->`) that the test cross-checks against a list of still-open todos, so fixed-defect prose fails the suite.
 - **Verification:** Temporarily rename a bare-referenced tool locally and confirm the new check fails.
 
-### [ ] CTL-13 — `generate.part` accepts `chord_count` / `beats_per_chord` / `sevenths` and silently ignores them
+### [x] CTL-13 — `generate.part` accepts `chord_count` / `beats_per_chord` / `sevenths` and silently ignores them — fixed @d3404b84 (rejected with pointer)
 - **Severity:** low
 - **Confidence:** high
 - **Category:** api-design
