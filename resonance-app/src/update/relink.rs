@@ -9,9 +9,11 @@
 //! * [`RelinkMessage::Locate`] opens an OS file picker for one asset; the
 //!   chosen file comes back as [`RelinkMessage::Located`].
 //! * [`RelinkMessage::SearchFolder`] opens a folder picker; the chosen
-//!   folder ([`RelinkMessage::FolderChosen`]) is scanned recursively and
-//!   *every* missing asset whose original filename is found is relinked in
-//!   one shot.
+//!   folder ([`RelinkMessage::FolderChosen`]) is scanned recursively on a
+//!   worker thread (cancellable via [`RelinkMessage::CancelScan`]) and,
+//!   when the walk reports back ([`RelinkMessage::ScanFinished`]), *every*
+//!   missing asset whose original filename was found is relinked in one
+//!   shot.
 //!
 //! Resolving an asset copies/transcodes the source back into the project's
 //! `audio/` folder under the asset's stable `asset_{id}.wav` name — reusing
@@ -30,8 +32,10 @@
 //! the asset's recorded source path/metadata but does not re-hide the
 //! now-present file — the project stays self-contained.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use iced::Task;
 use resonance_audio::types::AudioCommand;
@@ -39,6 +43,7 @@ use resonance_audio::PoolImportOutcome;
 
 use crate::message::{Message, RelinkError, RelinkMessage};
 use crate::state::pool::PoolAsset;
+use crate::state::{RelinkScan, ScanControl};
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: RelinkMessage) -> Task<Message> {
@@ -55,6 +60,8 @@ pub fn handle(r: &mut Resonance, m: RelinkMessage) -> Task<Message> {
                 return start_batch_relink(r, &folder);
             }
         }
+        RelinkMessage::ScanFinished(token, found) => return finish_batch_relink(r, token, found),
+        RelinkMessage::CancelScan => r.relink.cancel_scan(),
         RelinkMessage::Imported(result) => apply_import(r, result),
         RelinkMessage::ShowModal => {
             // Snapshot the currently-missing assets so the modal can show
@@ -133,36 +140,85 @@ pub(crate) fn start_relink(
     spawn_import(asset_id, src_path, project_dir, r.sample_rate)
 }
 
-/// Resolve every missing asset whose original filename is found somewhere
-/// under `folder` (recursive, case-insensitive), and start a relink
-/// import for each. Files not found are left missing. Returns a batch of
-/// the spawned import tasks.
+/// Start the batch relink for `folder`: every missing asset whose original
+/// filename is found somewhere under it (recursive, case-insensitive) gets
+/// a relink import. The directory walk runs on a blocking worker — it can
+/// cover a whole sample library — and reports back as
+/// [`RelinkMessage::ScanFinished`], which starts the imports
+/// ([`finish_batch_relink`]); nothing is imported before that (review
+/// VIEW-29 / UPD-10). A second pick while a walk runs is ignored.
 pub(crate) fn start_batch_relink(r: &mut Resonance, folder: &Path) -> Task<Message> {
-    let Some(project_dir) = r.io.project_path.clone() else {
+    if r.relink.scanning() {
+        return Task::none();
+    }
+    if r.io.project_path.is_none() {
         r.relink.last_error =
             Some("Cannot relink: the project has not been saved to a folder yet.".into());
         return Task::none();
-    };
-
-    // Collect the filenames we're looking for, keyed by asset. An asset
-    // whose original path has no filename component (shouldn't happen) is
-    // simply skipped.
-    let wanted: Vec<(resonance_audio::types::AssetId, String)> = r
-        .pool
-        .missing_assets()
-        .filter(|a| !r.relink.is_in_flight(a.id))
-        .filter_map(|a| asset_file_name(a).map(|name| (a.id, name)))
-        .collect();
-    if wanted.is_empty() {
+    }
+    let names: Vec<String> = wanted_assets(r).into_iter().map(|(_, n)| n).collect();
+    if names.is_empty() {
         return Task::none();
     }
 
-    let names: Vec<String> = wanted.iter().map(|(_, n)| n.clone()).collect();
-    let found = scan_folder_for_names(folder, &names);
+    let control = Arc::new(ScanControl::default());
+    let token = r.relink.next_scan_token;
+    r.relink.next_scan_token += 1;
+    r.relink.scan = Some(RelinkScan {
+        token,
+        folder: folder.to_path_buf(),
+        control: control.clone(),
+    });
+    r.relink.last_error = None;
+
+    let folder = folder.to_path_buf();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                scan_folder_for_names_with(&folder, &names, &control)
+            })
+            .await
+            .unwrap_or(None)
+        },
+        move |found| Message::Relink(RelinkMessage::ScanFinished(token, found)),
+    )
+}
+
+/// The missing assets a batch relink looks for, with their original
+/// filenames. An asset already being relinked is skipped, as is one whose
+/// original path has no filename component (shouldn't happen).
+fn wanted_assets(r: &Resonance) -> Vec<(resonance_audio::types::AssetId, String)> {
+    r.pool
+        .missing_assets()
+        .filter(|a| !r.relink.is_in_flight(a.id))
+        .filter_map(|a| asset_file_name(a).map(|name| (a.id, name)))
+        .collect()
+}
+
+/// A batch-relink folder walk reported back: start a relink import for
+/// every still-missing asset it found. The result is dropped when it
+/// belongs to a scan that was cancelled or superseded (modal closed, Cancel
+/// pressed), or was cancelled itself (`found == None`). The wanted set is
+/// re-read here, so an asset relinked by hand during the walk isn't
+/// imported twice.
+fn finish_batch_relink(
+    r: &mut Resonance,
+    token: u64,
+    found: Option<HashMap<String, PathBuf>>,
+) -> Task<Message> {
+    let Some(scan) = r.relink.scan.take_if(|s| s.token == token) else {
+        return Task::none();
+    };
+    let Some(found) = found else {
+        return Task::none();
+    };
+    let Some(project_dir) = r.io.project_path.clone() else {
+        return Task::none();
+    };
 
     let sample_rate = r.sample_rate;
     let mut tasks = Vec::new();
-    for (asset_id, name) in wanted {
+    for (asset_id, name) in wanted_assets(r) {
         if let Some(src) = found.get(&name.to_ascii_lowercase()) {
             r.relink.in_flight.insert(asset_id);
             tasks.push(spawn_import(
@@ -174,9 +230,12 @@ pub(crate) fn start_batch_relink(r: &mut Resonance, folder: &Path) -> Task<Messa
         }
     }
     if tasks.is_empty() {
+        r.relink.last_error = Some(format!(
+            "No missing files were found in {}.",
+            scan.folder.display()
+        ));
         return Task::none();
     }
-    r.relink.last_error = None;
     Task::batch(tasks)
 }
 
@@ -290,10 +349,26 @@ pub(crate) fn apply_relinked_asset(r: &mut Resonance, outcome: PoolImportOutcome
 
 /// Recursively walk `folder` looking for files whose name (case-
 /// insensitive) is one of `names`. Returns a map from the lowercased
-/// filename to the first matching path found. The walk is bounded by a
-/// depth guard and never follows into unreadable directories, so a huge or
-/// permission-restricted tree can't hang or panic the search.
+/// filename to the matching path. See [`scan_folder_for_names_with`].
 pub fn scan_folder_for_names(folder: &Path, names: &[String]) -> HashMap<String, PathBuf> {
+    scan_folder_for_names_with(folder, names, &ScanControl::default()).unwrap_or_default()
+}
+
+/// The batch-relink folder walk, with progress and cancellation: bumps
+/// `control.dirs_scanned` per directory read and returns `None` as soon as
+/// `control.cancel` is seen.
+///
+/// Deterministic: the walk is breadth-first with each directory's entries
+/// in name order, so of several same-named files the shallowest — then
+/// the first by path — wins, whatever order the filesystem lists them in.
+/// The walk is bounded by a depth guard and never follows into unreadable
+/// directories, so a huge or permission-restricted tree can't hang or
+/// panic the search.
+pub fn scan_folder_for_names_with(
+    folder: &Path,
+    names: &[String],
+    control: &ScanControl,
+) -> Option<HashMap<String, PathBuf>> {
     /// Cap on directory-tree depth so a pathological / cyclic layout
     /// (symlink loops) can't spin forever.
     const MAX_DEPTH: usize = 24;
@@ -302,9 +377,11 @@ pub fn scan_folder_for_names(folder: &Path, names: &[String]) -> HashMap<String,
         names.iter().map(|n| n.to_ascii_lowercase()).collect();
     let mut found: HashMap<String, PathBuf> = HashMap::new();
 
-    // Iterative DFS with an explicit stack of (dir, depth).
-    let mut stack: Vec<(PathBuf, usize)> = vec![(folder.to_path_buf(), 0)];
-    while let Some((dir, depth)) = stack.pop() {
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::from([(folder.to_path_buf(), 0)]);
+    while let Some((dir, depth)) = queue.pop_front() {
+        if control.is_cancelled() {
+            return None;
+        }
         // Every wanted name already resolved — stop early.
         if found.len() == wanted.len() {
             break;
@@ -312,14 +389,17 @@ pub fn scan_folder_for_names(folder: &Path, names: &[String]) -> HashMap<String,
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
-        for entry in entries.flatten() {
+        control.dirs_scanned.fetch_add(1, Ordering::Relaxed);
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
             let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
             if file_type.is_dir() {
                 if depth < MAX_DEPTH {
-                    stack.push((path, depth + 1));
+                    queue.push_back((path, depth + 1));
                 }
             } else if let Some(name) = path.file_name() {
                 let key = name.to_string_lossy().to_ascii_lowercase();
@@ -329,5 +409,5 @@ pub fn scan_folder_for_names(folder: &Path, names: &[String]) -> HashMap<String,
             }
         }
     }
-    found
+    Some(found)
 }

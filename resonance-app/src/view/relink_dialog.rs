@@ -128,6 +128,21 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
     ]
     .spacing(0);
 
+    // A folder search running on its worker: where, and how far it got.
+    if let Some(scan) = r.relink.scan.as_ref() {
+        let dirs = scan.control.dirs_scanned();
+        body = body.push(Space::new().height(8));
+        body = body.push(
+            text(format!(
+                "Searching {}\u{2026} {dirs} folder{} scanned",
+                scan.folder.display(),
+                if dirs == 1 { "" } else { "s" },
+            ))
+            .size(11)
+            .color(theme::WARM),
+        );
+    }
+
     // Surface the most recent relink failure, if any, under the note.
     if let Some(err) = r.relink.last_error.as_deref() {
         body = body.push(Space::new().height(8));
@@ -151,17 +166,26 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
         .padding([8, 18])
         .style(|_theme, status| theme::ghost_button_style(status));
 
-    let search_btn = button(
-        row![
-            theme::icon(theme::fa::FOLDER_OPEN).size(12),
-            text("Search a folder\u{2026}").size(13),
-        ]
-        .spacing(8)
-        .align_y(alignment::Vertical::Center),
-    )
-    .on_press(Message::Relink(RelinkMessage::SearchFolder))
-    .padding([8, 18])
-    .style(|_theme, status| theme::primary_button_style(status));
+    // While a folder search runs, its slot becomes the Cancel action (and
+    // a second search can't be started).
+    let search_btn = if r.relink.scanning() {
+        button(text("Cancel search").size(13).color(theme::TEXT_1))
+            .on_press(Message::Relink(RelinkMessage::CancelScan))
+            .padding([8, 18])
+            .style(|_theme, status| theme::ghost_button_style(status))
+    } else {
+        button(
+            row![
+                theme::icon(theme::fa::FOLDER_OPEN).size(12),
+                text("Search a folder\u{2026}").size(13),
+            ]
+            .spacing(8)
+            .align_y(alignment::Vertical::Center),
+        )
+        .on_press(Message::Relink(RelinkMessage::SearchFolder))
+        .padding([8, 18])
+        .style(|_theme, status| theme::primary_button_style(status))
+    };
 
     let footer = row![
         count_label,

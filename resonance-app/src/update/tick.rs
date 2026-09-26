@@ -55,7 +55,8 @@ pub fn tick_interval(r: &Resonance) -> std::time::Duration {
 /// * tempo/time-signature sync + playhead auto-follow — playing only;
 /// * MIDI device re-enumeration — 2 s cadence; the idle tick suffices.
 ///
-/// Conservative by design: renders, freezes, bounces, plugin scans and
+/// Conservative by design: renders, freezes, bounces, plugin scans, relink
+/// folder searches (for their progress count) and
 /// live control jobs all hold the fast rate so their progress events are
 /// drained promptly. When in doubt, stay fast — the cost of a wrong
 /// `true` is the old always-on behavior.
@@ -72,6 +73,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || export_render_in_flight(r)
         || (r.mixer.reference_panel_open && !r.reference.entries.is_empty())
         || r.plugin_scan_in_progress
+        || r.relink.scanning()
         || !r.control.pending_tracks.is_empty()
         || r.control.jobs.has_live_offline_measure()
 }
