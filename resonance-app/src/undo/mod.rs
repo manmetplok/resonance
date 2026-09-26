@@ -19,8 +19,6 @@
 //! | [`classify`] | `UndoAction` enum and the `classify` function that maps messages to actions |
 //! | [`describe`] | Short human labels for history entries, reported by `edit.status` (todo #1196) |
 
-pub use resonance_audio::DEFAULT_HISTORY_CAPACITY;
-
 pub mod classify;
 pub mod describe;
 pub mod history;
@@ -28,7 +26,7 @@ pub mod snapshot;
 
 pub use classify::{classify, UndoAction};
 pub use describe::describe;
-pub use history::UndoHistory;
+pub use history::{UndoHistory, DEFAULT_HISTORY_CAPACITY};
 pub use snapshot::{CoalesceKey, UndoExtras, UndoSnapshot};
 
 // -------------------------------------------------------------------------
