@@ -198,6 +198,71 @@ fn edit_only_changes_requested_fields() {
     assert_eq!(app.revision(), before + 1);
 }
 
+/// Code review CTL-02: a move that reorders the clip re-sorts it, so the
+/// resize and velocity sub-edits must not address the note by its old
+/// index afterwards — they used to land on the neighbour that slid into
+/// it. Checked against both the app mirror (`song.notes`) and the real
+/// engine handlers replaying the captured commands.
+#[test]
+fn edit_that_reorders_the_note_changes_that_note_only() {
+    use resonance_audio::__test_support::EngineHandlerHarness;
+    use resonance_audio::types::MidiClip;
+    // C@0, D@1, E@2 (beats).
+    let start = vec![note(60, 0, 1, 0.8), note(62, 1, 1, 0.8), note(64, 2, 1, 0.8)];
+    let mut app = app_with_clip(start.clone());
+    let rx = app.test_capture_engine();
+
+    let response = call(
+        &mut app,
+        "notes.edit",
+        serde_json::json!({
+            "clip_id": CLIP,
+            "index": 0,
+            "start_beat": 3.0,
+            "duration_beats": 0.25,
+            "velocity": 30
+        }),
+    );
+    assert!(response.result::<MutationAck>().is_ok());
+
+    // (pitch, start_tick, duration_ticks, velocity 0..=127)
+    let want = vec![
+        (62, TPQ, TPQ, 102),
+        (64, 2 * TPQ, TPQ, 102),
+        (60, 3 * TPQ, TPQ / 4, 30),
+    ];
+    let view = notes_of(&mut app, CLIP);
+    let mirrored: Vec<_> = view
+        .notes
+        .iter()
+        .map(|n| (n.pitch, n.start_tick, n.duration_ticks, n.velocity))
+        .collect();
+    assert_eq!(mirrored, want, "app mirror");
+
+    let mut engine = EngineHandlerHarness::new();
+    engine.push_midi_clip(MidiClip {
+        id: CLIP,
+        track_id: TRACK,
+        start_sample: 0,
+        duration_ticks: 4 * TPQ,
+        notes: start,
+        name: "clip".into(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+    while let Ok(cmd) = rx.try_recv() {
+        engine.replay_midi_note_command(&cmd);
+    }
+    let played: Vec<_> = engine
+        .midi_notes(CLIP)
+        .iter()
+        .map(|n| {
+            (n.note, n.start_tick, n.duration_ticks, (n.velocity * 127.0).round() as u8)
+        })
+        .collect();
+    assert_eq!(played, want, "engine");
+}
+
 /// The wire contract (doc #265): one mutating call = one revision bump
 /// = one undoable transaction, however many sub-edits the call fans out
 /// into. Before the compound-undo fix a three-field `notes.edit` bumped
