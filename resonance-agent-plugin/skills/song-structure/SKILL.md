@@ -194,7 +194,7 @@ transport_set_time_signature   # the meter the song STARTS in — bar-1 event on
 transport_set_tempo            # the tempo it starts at
 global_add_signature_event     # ×N, every LATER meter change, addressed by bar
 global_add_tempo_event         # ×N, every later tempo change
-section_create {place: false}  # ×N, keep the section_ids
+section_create {place: false}  # ×N, keep each section_id
 section_place                  # ×M, at explicit start_bars
 section_set_scale              # per section, if the song modulates
 ```
