@@ -27,6 +27,7 @@ mod lane_inspector;
 pub(crate) mod regenerate;
 mod section;
 pub(crate) use section::revalidate_chords_after_meter_change;
+pub(crate) use section::trim_chords_to_sections;
 pub(crate) use section::purge_placement_outputs;
 mod vocal_audio_install;
 pub mod vocal_audio_io;

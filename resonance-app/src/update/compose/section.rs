@@ -423,8 +423,22 @@ pub(super) fn handle_resize(
 /// stop playing what is gone. A longer meter touches nothing. Runs inside
 /// the signature edit's own dispatch, so it rides that undo entry.
 pub(crate) fn revalidate_chords_after_meter_change(r: &mut crate::Resonance) -> Task<Message> {
+    let changed = trim_chords_to_sections(r);
+    let tasks: Vec<_> = changed
+        .into_iter()
+        .map(|id| rederive_section_clips(r, id))
+        .collect();
+    Task::batch(tasks)
+}
+
+/// Trim every section's chords to its end in the meter at its start — a
+/// straddling chord is shortened, one starting at or past the end
+/// dropped — and return the sections that changed. The load path calls
+/// this alone (code review FU-V4b): a file's derived clips are what was
+/// saved, so nothing is re-derived there.
+pub(crate) fn trim_chords_to_sections(r: &mut crate::Resonance) -> Vec<u64> {
     let ids: Vec<u64> = r.compose.definitions.iter().map(|d| d.id).collect();
-    let mut tasks = Vec::new();
+    let mut changed = Vec::new();
     for id in ids {
         let numerator = super::section_meter(r, id).numerator;
         let Some(def) = r.compose.find_definition_mut(id) else {
@@ -442,10 +456,10 @@ pub(crate) fn revalidate_chords_after_meter_change(r: &mut crate::Resonance) -> 
             }
         }
         if trimmed || def.chords.len() != before {
-            tasks.push(rederive_section_clips(r, id));
+            changed.push(id);
         }
     }
-    Task::batch(tasks)
+    changed
 }
 
 /// Re-derive every generated clip of a section after its length changed
