@@ -18,7 +18,7 @@ master and updates this table. Agents do **not** edit this file.
 | B compose sections | VIEW-03, VIEW-04, VIEW-05 | opus | merged | 1f1ae03d |
 | C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | in progress | |
 | D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | in progress |  |
-| E control beat units | CTL-01 | opus | in progress |  |
+| E control beat units | CTL-01 | opus | merged | 5f63160a |
 | F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | in progress | |
 | F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | merged | eac3b10c |
 | G1 drums timing | DSP-01 | opus | merged | 50dad7db |
@@ -42,6 +42,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-F2b** (low) ENG-03 salvage rewrites the WAV header in place — may fail on CoW filesystems (btrfs) when the disk is full; then no clip.
 - [ ] **FU-F2c** (low) ENG-12 should reuse the new `activate_and_start()` in `clap_host/state.rs`; `restart()` still bails on inactive instances.
 - [ ] **FU-F2d** (low) flaky timing test `bounce_plugin_lock::bounce_helper_does_not_block_long_audio_holder` under load.
+- [ ] **FU-E1** (medium) `update/control/import_midi.rs:275` rounds imported clip length with `time_sig_num * TICKS_PER_QUARTER_NOTE` — wrong for x/8 meters; use `tempo_map.bar_len_ticks_at(bar)`.
+- [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
+- [ ] **FU-G1** (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
 
 ## How to use this file
 
@@ -851,7 +854,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 
 ## Control API / MCP server / agent plugin
 
-### [ ] CTL-01 — Wire "beat" means two different units: views report meter beats, `PositionSpec` resolves quarter notes
+### [x] CTL-01 — Wire "beat" means two different units: views report meter beats, `PositionSpec` resolves quarter notes — fixed @102ec1da (meter beats in and out; beat past bar → invalid_params)
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
