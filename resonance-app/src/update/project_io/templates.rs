@@ -36,7 +36,7 @@ pub fn templates_dir() -> Option<PathBuf> {
 pub fn ensure_templates_dir() -> Option<PathBuf> {
     let dir = templates_dir()?;
     if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("Failed to create templates directory: {e}");
+        tracing::warn!("Failed to create templates directory: {e}");
         None
     } else {
         Some(dir)
@@ -194,7 +194,7 @@ pub fn scan_templates_in(dir: &std::path::Path) -> Vec<TemplateEntry> {
 
     // If it exists but isn't a directory, return empty.
     if !dir.is_dir() {
-        eprintln!("Templates path exists but is not a directory: {}", dir.display());
+        tracing::warn!("Templates path exists but is not a directory: {}", dir.display());
         return Vec::new();
     }
 
@@ -204,7 +204,7 @@ pub fn scan_templates_in(dir: &std::path::Path) -> Vec<TemplateEntry> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("Failed to read templates directory: {e}");
+            tracing::warn!("Failed to read templates directory: {e}");
             return Vec::new();
         }
     };
@@ -213,7 +213,7 @@ pub fn scan_templates_in(dir: &std::path::Path) -> Vec<TemplateEntry> {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("Failed to read templates directory entry: {e}");
+                tracing::warn!("Failed to read templates directory entry: {e}");
                 continue;
             }
         };
@@ -243,7 +243,7 @@ pub fn scan_templates_in(dir: &std::path::Path) -> Vec<TemplateEntry> {
                 }
             },
             Err(e) => {
-                eprintln!(
+                tracing::warn!(
                     "Failed to read template.json at {}: {e}",
                     template_json_path.display()
                 );
@@ -283,7 +283,7 @@ pub fn scan_templates_in(dir: &std::path::Path) -> Vec<TemplateEntry> {
                 }
             },
             Err(e) => {
-                eprintln!(
+                tracing::warn!(
                     "Failed to read project.json at {}: {e}",
                     project_json_path.display()
                 );

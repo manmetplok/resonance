@@ -20,8 +20,10 @@ use tracing_subscriber::EnvFilter;
 /// `RUST_LOG` unset: warnings from everything, `info` from the workspace
 /// crates (a target prefix: `resonance` covers every `resonance_*`) —
 /// the lowest level any former `eprintln!` maps to, so the default output
-/// is what it was. Keep in step with
-/// `resonance-app/src/main.rs`.
+/// is what it was. `resonance_svs` stays at `warn`: its per-segment `info`
+/// progress had no subscriber before and still prints nothing by default.
+/// The app binary (`resonance-app/src/main.rs`) installs this same filter
+/// via the crate-root re-export — the one definition (code review FU-H6c).
 pub const DEFAULT_LOG_FILTER: &str = "warn,resonance=info,resonance_svs=warn,\
      wayland_plugin_gui=info,cocoa_plugin_gui=info";
 

@@ -7,16 +7,10 @@
 use iced::Size;
 use resonance_app::{parse_startup_tab, theme, Resonance, STARTUP_TAB};
 
-/// `RUST_LOG` unset: warnings from everything, `info` from the workspace
-/// crates (a target prefix: `resonance` covers every `resonance_*`) whose
-/// `eprintln!`s became `tracing` calls, so the default stderr output is
-/// what it was (ARCH-05 A5-1). `resonance_svs` stays at `warn`: its
-/// per-segment `info` progress had no subscriber before and still prints
-/// nothing by default. Keep in step with
-/// `resonance-plugin/src/logging.rs`, which installs the same filter in
-/// each CLAP bundle (a cdylib has its own tracing dispatcher).
-const DEFAULT_LOG_FILTER: &str = "warn,resonance=info,resonance_svs=warn,\
-     wayland_plugin_gui=info,cocoa_plugin_gui=info";
+// `RUST_LOG` unset: `warn` everywhere, `info` from the workspace crates
+// (ARCH-05 A5-1). One definition, shared with every CLAP bundle's own
+// subscriber (a cdylib has its own tracing dispatcher).
+use resonance_plugin::DEFAULT_LOG_FILTER;
 
 /// The process's log subscriber: stderr, filtered by `RUST_LOG`. Only
 /// the binary installs one — library crates just emit `tracing` events,

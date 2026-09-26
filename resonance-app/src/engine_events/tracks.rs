@@ -15,7 +15,7 @@ use crate::Resonance;
 /// the slot here so a recovery click doesn't apply the wrong preset.
 fn drop_duplicate_track_added(r: &mut Resonance, track_id: TrackId) {
     if r.pending_track_preset.is_some() {
-        eprintln!(
+        tracing::warn!(
             "engine_events::tracks: dropped TrackAdded for id {} — id already in registry; \
              clearing pending preset to avoid leaking to next add",
             track_id

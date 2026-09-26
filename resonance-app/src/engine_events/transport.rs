@@ -14,7 +14,7 @@ pub(super) fn stopped(r: &mut Resonance) {
 }
 
 pub(super) fn error(r: &mut Resonance, e: String) {
-    eprintln!("Audio engine error: {}", e);
+    tracing::error!("Audio engine error: {}", e);
     r.error_message = Some(e);
 }
 
@@ -44,7 +44,7 @@ pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
 /// Surfaced on the standard error banner — before this event existed
 /// the take was silently corrupted with zero indication to the user.
 pub(super) fn recording_overflow(r: &mut Resonance, dropped_frames: u64) {
-    eprintln!("Audio engine: recording overflow — {dropped_frames} input frames dropped");
+    tracing::error!("Audio engine: recording overflow — {dropped_frames} input frames dropped");
     r.error_message = Some(format!(
         "Recording overflow: {dropped_frames} input frames were dropped — \
          this take is missing audio and may be out of sync"
@@ -64,7 +64,7 @@ pub(super) fn bounce_complete(r: &mut Resonance, path: String) {
         },
         result,
     );
-    eprintln!("Bounce complete: {path}");
+    tracing::info!("Bounce complete: {path}");
 }
 
 pub(super) fn bounce_error(r: &mut Resonance, e: String) {
@@ -116,7 +116,7 @@ pub(super) fn export_progress(
 
 pub(super) fn export_complete(r: &mut Resonance, path: String, bytes: u64) {
     r.io.bouncing = false;
-    eprintln!("Export complete: {path} ({bytes} bytes)");
+    tracing::info!("Export complete: {path} ({bytes} bytes)");
 }
 
 pub(super) fn export_error(

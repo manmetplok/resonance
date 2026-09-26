@@ -115,14 +115,14 @@ pub fn load_from(file: &std::path::Path) -> AppSettings {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AppSettings::default(),
         Err(e) => {
-            eprintln!("settings.json read failed: {e}");
+            tracing::warn!("settings.json read failed: {e}");
             return AppSettings::default();
         }
     };
     match serde_json::from_slice::<AppSettings>(&bytes) {
         Ok(settings) => settings,
         Err(e) => {
-            eprintln!(
+            tracing::warn!(
                 "settings.json parse failed: {e}; quarantining {} and starting from defaults",
                 file.display()
             );
@@ -146,16 +146,16 @@ pub fn persist(settings: &AppSettings) {
 pub fn persist_to(file: &std::path::Path, settings: &AppSettings) {
     if let Some(parent) = file.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("settings.json mkdir failed: {e}");
+            tracing::warn!("settings.json mkdir failed: {e}");
             return;
         }
     }
     match serde_json::to_vec_pretty(settings) {
         Ok(bytes) => {
             if let Err(e) = atomic_write(file, &bytes) {
-                eprintln!("settings.json write failed: {e}");
+                tracing::warn!("settings.json write failed: {e}");
             }
         }
-        Err(e) => eprintln!("settings.json serialize failed: {e}"),
+        Err(e) => tracing::warn!("settings.json serialize failed: {e}"),
     }
 }

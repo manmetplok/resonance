@@ -107,7 +107,7 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
             if backup_retention > 0 {
                 let timestamp = crate::project::backup_timestamp_now();
                 if let Err(e) = crate::project::write_backup(&path, &timestamp, backup_retention) {
-                    eprintln!("Versioned backup failed: {e}");
+                    tracing::warn!("Versioned backup failed: {e}");
                 }
             }
             Ok(())
@@ -177,7 +177,7 @@ fn report_clips_without_audio(r: &mut Resonance, save: &crate::project::SaveColl
         save.path.display(),
         names.join(", ")
     );
-    eprintln!("[save] {detail}");
+    tracing::warn!("[save] {detail}");
     if !save.autosave {
         r.error_message = Some(detail);
     }

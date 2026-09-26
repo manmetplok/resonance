@@ -159,7 +159,7 @@ impl MediaPool {
     pub fn add(&mut self, asset: PoolAsset) {
         if let Some(slot) = self.assets.iter_mut().find(|a| a.id == asset.id) {
             if slot.project_relative_path != asset.project_relative_path {
-                eprintln!(
+                tracing::warn!(
                     "pool: refusing to rebind asset id {} from {:?} to {:?} —                      clips referencing it would silently change audio",
                     asset.id, slot.project_relative_path, asset.project_relative_path
                 );

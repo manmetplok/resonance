@@ -853,19 +853,17 @@ fn is_binary_or_test_support(rel: &str) -> bool {
 /// `println!` bypasses both. Binaries (`main.rs`, `src/bin/`), build
 /// scripts (not under `src/`) and `test_support` modules may print.
 ///
-/// Allowed for now, each a later step: `resonance-app` (its own sweep,
-/// after M12), `resonance-dsp-test-support` (a test-only crate: the bless
-/// notice), and the plugin files below — plugin crates keep stderr until
-/// their own sweep; none of these sites is reachable from `process()`.
+/// Allowed for now, each a later step: `resonance-dsp-test-support` (a
+/// test-only crate: the bless notice), and the plugin files below —
+/// plugin crates keep stderr until their own sweep; none of these sites
+/// is reachable from `process()`. `resonance-app` swept in FU-H6a.
 ///
 /// Exercised 2026-09-26: added `eprintln!("x");` to
 /// `resonance-common/src/scan.rs` → failed on that line; reverted.
 #[test]
 fn library_crates_log_through_tracing_not_stderr() {
     let root = workspace_root();
-    let allowed_crates: BTreeSet<&str> = ["resonance-app", "resonance-dsp-test-support"]
-        .into_iter()
-        .collect();
+    let allowed_crates: BTreeSet<&str> = ["resonance-dsp-test-support"].into_iter().collect();
     let allowed_files: BTreeSet<&str> = [
         "plugins/resonance-amp/src/lib.rs",
         "plugins/resonance-amp/src/loader.rs",

@@ -31,6 +31,8 @@ pub use clap_bridge::ClapBridge;
 pub use formatters::*;
 pub use host::HostHandle;
 pub use loader::{rescan_directory, Mailbox};
+/// The `RUST_LOG`-unset filter, shared by the app binary and every bundle.
+pub use logging::DEFAULT_LOG_FILTER;
 pub use param::{BoolParam, FloatParam, IntParam, Param};
 pub use presets::{
     FactoryPreset, PresetBank, PresetEditor, PresetEvent, PresetRef, PresetSession, PresetSource,

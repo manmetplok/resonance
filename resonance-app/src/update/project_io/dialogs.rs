@@ -18,7 +18,7 @@ fn default_projects_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let dir = base.join("resonance");
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("Create default projects dir {}: {e}", dir.display());
+        tracing::warn!("Create default projects dir {}: {e}", dir.display());
     }
     dir
 }
