@@ -31,7 +31,7 @@ use resonance_app::compose::messages::ArrangementMessage;
 use resonance_app::compose::{ComposeMessage, EntryLength};
 use resonance_app::demo;
 use resonance_app::message::*;
-use resonance_app::project::{LoadedProject, ProjectFile};
+use resonance_app::project::{LoadedProject, ProjectExternalInstrument, ProjectFile};
 use resonance_app::reference::ReferenceMessage;
 use resonance_app::state::FreezeStatus;
 use resonance_app::undo::UndoSnapshot;
@@ -299,7 +299,8 @@ fn edit_every_domain(f: &mut Fixture, h: &Handles, variant: u8) {
         }
     }
 
-    // External instrument on the last track, with a bundled device.
+    // External instrument on the last track, with a bundled device that
+    // round 1 deselects, so the restore has to bring the device back.
     if let Some(&t) = h.tracks.last() {
         if variant == 0 {
             app.test_dispatch(Message::ExternalInstrument(
@@ -308,10 +309,24 @@ fn edit_every_domain(f: &mut Fixture, h: &Handles, variant: u8) {
             app.test_dispatch(Message::ExternalInstrument(
                 ExternalInstrumentMessage::SetDevice(t, h.device.clone()),
             ));
+        } else {
+            app.test_dispatch(Message::ExternalInstrument(
+                ExternalInstrumentMessage::SetDevice(t, None),
+            ));
         }
         app.test_dispatch(Message::ExternalInstrument(
             ExternalInstrumentMessage::SetProgram(t, Some(5 + variant)),
         ));
+    }
+    // A second external track, with no device, that round 1 takes out of
+    // external mode: the restore has to put it back.
+    if let Some(t) = second_external(h) {
+        let msg = if variant == 0 {
+            ExternalInstrumentMessage::Enable(t)
+        } else {
+            ExternalInstrumentMessage::Disable(t)
+        };
+        app.test_dispatch(Message::ExternalInstrument(msg));
     }
 
     // Reference A/B trim.
@@ -355,6 +370,12 @@ fn edit_every_domain(f: &mut Fixture, h: &Handles, variant: u8) {
     // engine; land its echo as the live engine would, so the snapshot
     // never captures a derived-clip entry whose mirror is still pending.
     echo_midi_clip_loads(app, &f.rx);
+}
+
+/// The track the second external instrument goes on: the first one, when
+/// it is not also the last (which carries the first external instrument).
+fn second_external(h: &Handles) -> Option<TrackId> {
+    (h.tracks.len() >= 2).then(|| h.tracks[0])
 }
 
 /// A lyric vector shorter than the clip's `n` notes (for `n >= 3`) that
@@ -454,14 +475,6 @@ fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
             && x.reference.trim_db.to_bits() == y.reference.trim_db.to_bits(),
     );
     check("track_freeze", x.track_freeze == y.track_freeze);
-    check(
-        "external_instruments",
-        x.external_instruments == y.external_instruments,
-    );
-    check(
-        "external_instrument_devices",
-        x.external_instrument_devices == y.external_instrument_devices,
-    );
     out
 }
 
@@ -521,15 +534,16 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
             "freeze landed"
         );
     }
+    assert!(h.device.is_some(), "the registry has a bundled device");
     if let Some(&t) = h.tracks.last() {
+        let ext = external_of(file, t).expect("external instrument landed");
+        assert_eq!(ext.device_id, h.device, "device selection landed");
+        assert_eq!(ext.program, Some(5), "program landed");
+    }
+    if let Some(t) = second_external(h) {
         assert!(
-            x.external_instruments.contains_key(&t),
-            "external instrument landed"
-        );
-        assert_eq!(
-            x.external_instrument_devices.get(&t).cloned().flatten(),
-            h.device,
-            "device selection landed"
+            external_of(file, t).is_some(),
+            "second external instrument landed"
         );
     }
     if let Some(c) = h.audio_clip {
@@ -556,6 +570,72 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     }
 }
 
+fn external_of(file: &ProjectFile, t: TrackId) -> Option<&ProjectExternalInstrument> {
+    file.tracks
+        .iter()
+        .find(|pt| pt.id == t)
+        .and_then(|pt| pt.external_instrument.as_ref())
+}
+
+/// Each restore path re-asserts the snapshot's external-instrument config
+/// exactly once per external track (A1-2 (3): the slow path used to do it
+/// twice, from the replay and again from `UndoExtras`), with the config
+/// the snapshot's `ProjectFile` carries, and binds the selected device's
+/// params once.
+fn assert_external_restored(path: &str, cmds: &[AudioCommand], snapshot: &ProjectFile) {
+    let mut externals = 0;
+    for pt in &snapshot.tracks {
+        let sets: Vec<_> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                AudioCommand::SetExternalInstrument { config } if config.track_id == pt.id => {
+                    Some(*config)
+                }
+                _ => None,
+            })
+            .collect();
+        let binds = cmds
+            .iter()
+            .filter(|c| {
+                matches!(c, AudioCommand::SetTrackDeviceParams { track_id, params }
+                    if *track_id == pt.id && !params.is_empty())
+            })
+            .count();
+        let Some(ext) = &pt.external_instrument else {
+            assert!(
+                sets.is_empty(),
+                "{path}: track {} is not external in the snapshot",
+                pt.id
+            );
+            continue;
+        };
+        externals += 1;
+        assert_eq!(
+            sets.len(),
+            1,
+            "{path}: track {} must be re-asserted external exactly once",
+            pt.id
+        );
+        let config = sets[0];
+        assert_eq!(
+            (config.bank, config.program, config.latency_offset_samples),
+            (ext.bank, ext.program, ext.latency_offset_samples),
+            "{path}: track {} restored with the snapshot's config",
+            pt.id
+        );
+        assert_eq!(
+            binds,
+            usize::from(ext.device_id.is_some()),
+            "{path}: track {} binds its device params once iff a device is selected",
+            pt.id
+        );
+    }
+    assert!(
+        externals > 0 || snapshot.tracks.is_empty(),
+        "{path}: the snapshot has an external track"
+    );
+}
+
 /// Run both restore paths against `f` and assert the fixed point after each.
 fn check_both_paths(mut f: Fixture) {
     let h = handles(&f.app);
@@ -577,6 +657,7 @@ fn check_both_paths(mut f: Fixture) {
         !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
         "scalar-only edits must take the diff replay, not the full clear"
     );
+    assert_external_restored("fast path", &cmds, &snapshot.project.file);
     assert_fixed_point(&f, "fast path (try_diff_replay)", &snapshot);
 
     // -- Slow path: an extra track forces the structural fallback. --
@@ -590,6 +671,8 @@ fn check_both_paths(mut f: Fixture) {
         "a structural change must fall back to the full clear-and-replay"
     );
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    let cmds = drain(&f.rx);
+    assert_external_restored("slow path", &cmds, &snapshot.project.file);
     assert!(
         f.app.test_project_path() == Some(f.project.as_path()),
         "the undo replay must keep the project path"

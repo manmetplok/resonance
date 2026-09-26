@@ -169,8 +169,11 @@ pub fn try_diff_replay(
     // -- Track freeze status (detach/delete caches no longer frozen) ----
     r.apply_freeze_restore(extras.track_freeze.clone());
 
-    // -- External-instrument config (not carried by ProjectFile) -------
-    r.restore_external_instruments(extras);
+    // -- External-instrument config -----------------------------------
+    // From `ProjectTrack::external_instrument`, as `replay_track` does on
+    // the slow path. Entering or leaving external mode never alters the
+    // project shape, so it always takes this fast path.
+    r.restore_external_instruments(target_file);
 
     // -- Tempo / signature events --------------------------------------
     apply_tempo(r, target_file);
