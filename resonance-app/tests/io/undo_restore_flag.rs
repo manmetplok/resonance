@@ -14,12 +14,25 @@
 //! The flag is set only where the undo slow path sends `ClearAll`, and
 //! cleared by the `AllCleared` handler after the replay; the diff replay
 //! never sets it.
+//!
+//! FU-A7a: a GUI `ProjectLoaded(Ok)` (there is no `io.loading` gate on
+//! Open / Open Recent / Ctrl+O — only `refuse_project_switch_during_render`,
+//! which checks an offline render, not an in-flight undo) or a template's
+//! `begin_instantiate` can land while an undo's slow-path `ClearAll` is
+//! still in flight. Both replace `io.pending_load` without touching
+//! `io.restoring_undo`, so the disk/template project would otherwise
+//! replay through the undo branches. The control API is not exposed to
+//! this: `busy_guard` (`update/control/project.rs`) refuses `project.open`
+//! / `project.new` while `io.loading` is set, and the undo slow path sets
+//! `io.loading` in the same statement as `io.restoring_undo`.
 
 use std::path::Path;
 
 use resonance_app::message::{Message, ProjectIoMessage};
 use resonance_app::project::{LoadedProject, ProjectFile, ProjectTrack};
 use resonance_app::state::FreezeStatus;
+use resonance_app::update::project_io::begin_instantiate;
+use resonance_app::update::project_io::reconcile::Origin;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
@@ -241,4 +254,138 @@ fn an_undo_slow_path_takes_the_undo_branches() {
     assert!(!l.app.test_restoring_undo());
     l.app.test_apply_engine_event(AudioEvent::AllCleared);
     assert!(resent_patches(&drain(&l.rx)));
+}
+
+/// Force the undo slow (structural) path and leave its `ClearAll` in
+/// flight: `io.loading` and `io.restoring_undo` are up, `AllCleared` has
+/// not been delivered yet. Mirrors the setup half of
+/// `an_undo_slow_path_takes_the_undo_branches`.
+fn start_undo_slow_path(l: &mut Loaded) {
+    let mut snapshot = l.app.test_snapshot_for_undo();
+    snapshot.project.file.tracks[0].freeze = TrackFreezeState::unfrozen();
+    l.app.test_add_track(9_999, TrackType::Audio);
+    let _ = drain(&l.rx);
+    l.app.test_begin_restore_from_snapshot(snapshot);
+    let cmds = drain(&l.rx);
+    assert!(
+        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "the structural change must take the slow path"
+    );
+    assert!(
+        l.app.test_restoring_undo(),
+        "the slow path's ClearAll must be in flight with the flag up"
+    );
+}
+
+/// A second, distinct on-disk project with one frozen track (id 3), used to
+/// prove which project's `AllCleared` branches actually ran.
+fn other_project(dir: &Path) -> LoadedProject {
+    let project_dir = dir.join("other.rproj");
+    let cache = dir.join("other.freeze").join("freeze_3.wav");
+    write_cache_wav(&cache);
+    let file = ProjectFile {
+        tracks: vec![project_track(
+            3,
+            TrackFreezeState::frozen(FreezeCacheRef::new(
+                "freeze_3.wav".to_string(),
+                48_000,
+                32,
+                1,
+                FreezeCacheStatus::Frozen,
+            )),
+        )],
+        ..ProjectFile::default()
+    };
+    LoadedProject {
+        file,
+        project_dir,
+        midi_notes: Default::default(),
+        plugin_states: Default::default(),
+    }
+}
+
+/// FU-A7a: a GUI `ProjectLoaded(Ok)` landing while an undo's slow-path
+/// `ClearAll` is still in flight replaces `pending_load` with the disk
+/// project. It must also clear `restoring_undo`, so the eventual
+/// `AllCleared` takes the disk-load branches (patch resend, rehydrate,
+/// `Origin::DiskLoad`) for the project that actually ends up loaded —
+/// never the undo branches.
+#[test]
+fn a_project_load_superseding_an_in_flight_undo_takes_the_disk_load_branches() {
+    let mut l = disk_load();
+    let _ = drain(&l.rx);
+    start_undo_slow_path(&mut l);
+
+    let tmp_dir = l.project.parent().unwrap().to_path_buf();
+    let other = other_project(&tmp_dir);
+    let _ = l.app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
+        Box::new(other),
+    ))));
+    let _ = drain(&l.rx); // the second ClearAll this handler sends
+
+    assert!(
+        !l.app.test_restoring_undo(),
+        "a disk load superseding an in-flight undo must clear the flag"
+    );
+
+    l.app.test_apply_engine_event(AudioEvent::AllCleared);
+    let cmds = drain(&l.rx);
+    assert!(
+        resent_patches(&cmds),
+        "the superseding disk load must re-send external-instrument patches"
+    );
+    assert!(
+        attached(&cmds, 3),
+        "the superseding disk load must rehydrate its own frozen track"
+    );
+    assert!(
+        l.app
+            .test_reconcile_trace()
+            .iter()
+            .all(|(origin, _)| *origin == Origin::DiskLoad),
+        "the replay that actually ran must be tagged DiskLoad, not UndoFull"
+    );
+}
+
+/// FU-A7a, template variant: `begin_instantiate` landing mid-undo must also
+/// clear the flag, so the template it loads (not the superseded undo
+/// snapshot) takes the disk-load branches.
+#[test]
+fn a_template_instantiate_superseding_an_in_flight_undo_takes_the_disk_load_branches() {
+    let mut l = disk_load();
+    let _ = drain(&l.rx);
+    start_undo_slow_path(&mut l);
+
+    let tmp_dir = l.project.parent().unwrap().to_path_buf();
+    let other = other_project(&tmp_dir);
+    begin_instantiate(&mut l.app, Box::new(other));
+    let _ = drain(&l.rx); // the second ClearAll `begin_instantiate` sends
+
+    assert!(
+        !l.app.test_restoring_undo(),
+        "a template instantiate superseding an in-flight undo must clear the flag"
+    );
+
+    l.app.test_apply_engine_event(AudioEvent::AllCleared);
+    let cmds = drain(&l.rx);
+    assert!(
+        resent_patches(&cmds),
+        "the superseding template must re-send external-instrument patches"
+    );
+    assert!(
+        attached(&cmds, 3),
+        "the superseding template must rehydrate its own frozen track"
+    );
+    assert!(
+        l.app
+            .test_reconcile_trace()
+            .iter()
+            .all(|(origin, _)| *origin == Origin::DiskLoad),
+        "the replay that actually ran must be tagged DiskLoad, not UndoFull"
+    );
+    assert_eq!(
+        l.app.test_project_path(),
+        None,
+        "a template always lands untitled"
+    );
 }

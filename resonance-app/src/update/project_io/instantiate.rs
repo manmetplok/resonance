@@ -73,6 +73,13 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     super::recovery::sync_session_marker(r);
     r.io.loading = true;
     r.io.pending_load = Some(loaded);
+    // FU-A7a: same reasoning as `ProjectLoaded(Ok)` — this may land while
+    // an undo/redo's slow path still has its own `ClearAll` in flight, and
+    // `pending_load` above already replaced its snapshot with the
+    // template. The flag must follow it so the eventual `AllCleared`
+    // replays the template through the disk-load branches, not the undo
+    // ones.
+    r.io.restoring_undo = false;
     r.undo.clear();
     r.plugin_state_cache.clear();
     // Re-seeded from the template's own file by `replay_plugins`; see the

@@ -66,6 +66,14 @@ pub struct ProjectIoState {
     /// handler right after the replay, where it also skips the disk-load
     /// tail (`ResendExternalInstrumentPatches`, scroll reset, relink modal,
     /// control-job completion). ARCH-01 A-7: was `pending_undo_extras`.
+    ///
+    /// FU-A7a: every other site that replaces `pending_load` — a GUI
+    /// `ProjectLoaded(Ok)` and a template's `begin_instantiate` — clears
+    /// this back to `false` in the same breath. Nothing gates those on
+    /// `io.loading`, so either can land while this flag and `ClearAll` are
+    /// still in flight for an undo's slow path; leaving the flag up would
+    /// replay the superseding disk/template project through the undo
+    /// branches instead of its own.
     pub restoring_undo: bool,
     /// The `Reconcile` domains the last restore ran, in order, with the
     /// origin it ran them under (ARCH-01 A-13). Cleared at the start of
