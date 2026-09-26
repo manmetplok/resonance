@@ -186,21 +186,33 @@ fn backup_file_name(timestamp: &str) -> String {
 ///
 /// Call this only after a successful save: it reads the canonical
 /// `project.json`, so a failed save (which never wrote it, or left the
-/// prior copy intact) is never captured as a fresh backup. The
-/// audio/MIDI/plugin blobs are *shared*, not copied — a backup is a
-/// metadata snapshot whose relative paths still resolve against the
-/// project directory.
+/// prior copy intact) is never captured as a fresh backup. Audio WAVs
+/// are shared (a clip's WAV never changes); the MIDI files and plugin
+/// blobs, which every save rewrites, are hard-linked into
+/// `backups/project-<timestamp>.files/` and the snapshot points there, so
+/// a backup restores its own versions (code review STATE-12). Pruning a
+/// snapshot removes its files dir too. [`load_project`] opens a backup
+/// file directly, resolving it against the bundle root.
 ///
 /// `timestamp` is the RFC3339 UTC stamp for the file name (see
 /// [`backup_timestamp_now`]). A `retention` of 0 prunes every snapshot,
 /// including the one just written; callers that want backups pass `>= 1`.
 pub fn write_backup(project_dir: &Path, timestamp: &str, retention: u32) -> Result<PathBuf, String> {
     let source = project_dir.join("project.json");
-    let bytes =
+    let mut bytes =
         std::fs::read(&source).map_err(|e| format!("Read project.json for backup: {e}"))?;
 
     let backups_dir = project_dir.join("backups");
     std::fs::create_dir_all(&backups_dir).map_err(|e| format!("Create backups dir: {e}"))?;
+
+    // Freeze the MIDI files and plugin blobs the snapshot references: a
+    // later save rewrites them in place (code review STATE-12). Anything
+    // that isn't a project JSON has nothing to freeze and is copied as is.
+    if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+        let files_rel = format!("backups/{}", backup_files_dir_name(timestamp));
+        freeze_backup_side_files(&mut json, project_dir, &files_rel)?;
+        bytes = serde_json::to_vec_pretty(&json).map_err(|e| format!("Serialize backup: {e}"))?;
+    }
 
     let dest = backups_dir.join(backup_file_name(timestamp));
     atomic_write(&dest, &bytes).map_err(|e| format!("Write backup: {e}"))?;
@@ -209,12 +221,82 @@ pub fn write_backup(project_dir: &Path, timestamp: &str, retention: u32) -> Resu
     Ok(dest)
 }
 
-/// Delete the oldest snapshots in `backups_dir` until at most `retention`
-/// remain. Newest-first ordering comes from [`scan_backups`].
+/// The directory beside `backups/project-<timestamp>.json` holding the
+/// side files that snapshot references.
+fn backup_files_dir_name(timestamp: &str) -> String {
+    format!("project-{timestamp}.files")
+}
+
+/// Hard-link (copy where linking fails, e.g. across filesystems) every
+/// plugin blob and MIDI file `json` references into `{files_rel}/` and
+/// repoint the references there. Saves replace those files by rename
+/// ([`atomic_write`]), so a hard link keeps the snapshot's version for
+/// free. A reference whose file is missing is left as it was.
+fn freeze_backup_side_files(
+    json: &mut serde_json::Value,
+    project_dir: &Path,
+    files_rel: &str,
+) -> Result<(), String> {
+    let mut refs: Vec<&mut serde_json::Value> = Vec::new();
+    let obj = match json.as_object_mut() {
+        Some(o) => o,
+        None => return Ok(()),
+    };
+    for (key, value) in obj.iter_mut() {
+        let (field, nested) = match key.as_str() {
+            "tracks" | "busses" => ("state_file", true),
+            "master_plugins" => ("state_file", false),
+            "midi_clips" => ("midi_file", false),
+            _ => continue,
+        };
+        let Some(items) = value.as_array_mut() else {
+            continue;
+        };
+        for item in items {
+            if nested {
+                let Some(ps) = item.get_mut("plugins").and_then(|p| p.as_array_mut()) else {
+                    continue;
+                };
+                refs.extend(ps.iter_mut().filter_map(|p| p.get_mut(field)));
+            } else if let Some(f) = item.get_mut(field) {
+                refs.push(f);
+            }
+        }
+    }
+
+    for r in refs {
+        let Some(rel) = r.as_str().map(str::to_string) else {
+            continue;
+        };
+        let src = project_dir.join(&rel);
+        if rel.starts_with("backups/") || !src.is_file() {
+            continue;
+        }
+        let dest = project_dir.join(files_rel).join(&rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Create backup dir: {e}"))?;
+        }
+        let _ = std::fs::remove_file(&dest);
+        if std::fs::hard_link(&src, &dest).is_err() {
+            std::fs::copy(&src, &dest).map_err(|e| format!("Copy {rel} into backup: {e}"))?;
+        }
+        *r = serde_json::Value::String(format!("{files_rel}/{rel}"));
+    }
+    Ok(())
+}
+
+/// Delete the oldest snapshots in `backups_dir` (and the side files each
+/// one owns) until at most `retention` remain. Newest-first ordering comes
+/// from [`scan_backups`].
 fn prune_backups(backups_dir: &Path, retention: u32) -> Result<(), String> {
     for entry in scan_backups(backups_dir).into_iter().skip(retention as usize) {
         std::fs::remove_file(&entry.path)
             .map_err(|e| format!("Prune backup {}: {e}", entry.path.display()))?;
+        let files = backups_dir.join(backup_files_dir_name(&entry.timestamp));
+        if files.exists() {
+            std::fs::remove_dir_all(&files)
+                .map_err(|e| format!("Prune backup files {}: {e}", files.display()))?;
+        }
     }
     Ok(())
 }
@@ -277,20 +359,24 @@ fn scan_backups(backups_dir: &Path) -> Vec<BackupEntry> {
 pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
     let json_path = if path.join("project.json").exists() {
         path.join("project.json")
-    } else if path
-        .file_name()
-        .map(|f| f == "project.json")
-        .unwrap_or(false)
-    {
+    } else if path.is_file() && path.extension().is_some_and(|e| e == "json") {
+        // `project.json`, `project.autosave.json` or a versioned backup
+        // (`backups/project-<timestamp>.json`, code review STATE-12).
         path.to_path_buf()
     } else {
         return Err("No project.json found".to_string());
     };
 
-    let project_dir = json_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| path.to_path_buf());
+    // A backup's references are relative to the bundle root, one level
+    // above `backups/`.
+    let parent = json_path.parent().map(|p| p.to_path_buf());
+    let project_dir = match parent {
+        Some(p) if p.file_name().is_some_and(|n| n == "backups") => {
+            p.parent().map(|g| g.to_path_buf()).unwrap_or(p)
+        }
+        Some(p) => p,
+        None => path.to_path_buf(),
+    };
 
     let json =
         std::fs::read_to_string(&json_path).map_err(|e| format!("Read project.json: {e}"))?;
