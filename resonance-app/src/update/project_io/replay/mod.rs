@@ -16,8 +16,9 @@
 //!
 //! Domains migrated to the `Reconcile` driver (`super::reconcile`, ARCH-01
 //! A-13) are not restored inline here: `replay_globals` runs
-//! `Stage::Timeline` and the tail of [`replay_loaded_project`] runs
-//! `Stage::Content`, the same stages `try_diff_replay` runs.
+//! `Stage::Timeline`, `replay_vocal` runs `Stage::Clips` and the end of
+//! [`replay_loaded_project`] runs `Stage::Content` and `Stage::Tail` — the
+//! same stages, in the same sequence, `try_diff_replay` runs.
 
 mod entity;
 mod restore;

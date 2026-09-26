@@ -59,9 +59,10 @@ pub struct ProjectIoState {
     /// The `pending_load` the next `AllCleared` replays is an undo/redo's
     /// full restore (the slow path of `begin_restore_from_snapshot`), not
     /// a disk load or template. Set together with `pending_load` when that
-    /// slow path sends `ClearAll`; read throughout `replay_loaded_project`
-    /// (freeze restore vs rehydrate, missing-plugin modal, reference A/B
-    /// monitor, derived-clip counter floor) and cleared by the `AllCleared`
+    /// slow path sends `ClearAll`; read once by `replay_loaded_project` into
+    /// its `ReconcileCtx::origin` (freeze restore vs rehydrate,
+    /// missing-plugin modal, reference A/B monitor, derived-clip counter
+    /// floor all read that, ARCH-01 A-13) and cleared by the `AllCleared`
     /// handler right after the replay, where it also skips the disk-load
     /// tail (`ResendExternalInstrumentPatches`, scroll reset, relink modal,
     /// control-job completion). ARCH-01 A-7: was `pending_undo_extras`.

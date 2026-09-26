@@ -124,9 +124,10 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     apply_compose(r, target_file);
 
     // -- Migrated domains (ARCH-01 A-13) -------------------------------
-    // Tempo / signature events, chord track, markers. Tempo stays where
-    // the diff path always sent it (the full path sends it before the
-    // clips; roadmap group (4) moves it there on this path too).
+    // All four stages, back to back: this path has no inline code left
+    // between them. Tempo / signature events, chord track, markers. Tempo
+    // is still sent after the clips here (the full path sends it before
+    // them; roadmap group (4) moves it there on this path too).
     reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
     // The derived-clip map: the snapshot's with every entry, pending
     // echoes included (FU-H2a, A-6). After `apply_compose` reset it.
@@ -134,11 +135,10 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // References (reconciled against the engine's live ones, no
     // `ClearAll` here), then pool, quantize, performance, track groups,
     // take lanes: app-side content the structural check ignores, restored
-    // verbatim. The pool
-    // counts the clips' asset refs `apply_audio_clips` mirrored; the take
-    // lanes' `RestoreTakeGroups` replaces the engine's store wholesale, so
-    // an undo that deleted a take does not resurrect it (no `ClearAll`
-    // here).
+    // verbatim. The pool counts the clips' asset refs `apply_audio_clips`
+    // mirrored; the take lanes' `RestoreTakeGroups` replaces the engine's
+    // store wholesale, so an undo that deleted a take does not resurrect it
+    // (no `ClearAll` here).
     reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
 
     // External instruments, then the automation lanes (a `DeviceParam`

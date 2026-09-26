@@ -115,7 +115,8 @@ pub(crate) trait Reconcile {
 pub enum Stage {
     /// Tempo events, chord track, markers. Full path: inside
     /// `replay_globals`, after `SetBpm` and before the chord trim (which
-    /// reads the meter). Diff path: after external instruments.
+    /// reads the meter). Diff path: after `apply_compose`, the first of
+    /// the four stages it runs back to back.
     Timeline,
     /// State derived from the restored clips: the derived-clip map. Full
     /// path: right after the MIDI clips are replayed. Diff path: after
