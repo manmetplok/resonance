@@ -21,9 +21,9 @@ master and updates this table. Agents do **not** edit this file.
 | E control beat units | CTL-01 | opus | in progress |  |
 | F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | in progress | |
 | F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | merged | eac3b10c |
-| G1 drums timing | DSP-01 | opus | in progress |  |
+| G1 drums timing | DSP-01 | opus | merged | 50dad7db |
 | G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
-| G3 resampler | LIB-01 | opus | queued | |
+| G3 resampler | LIB-01 | opus | in progress |  |
 | H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | queued (after bug batches, cross-cutting) | |
 
 ### Follow-ups found while fixing (new todos)
@@ -1342,7 +1342,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 
 ## DSP core + amp / wavetable / mastering / drums / granular-delay
 
-### [ ] DSP-01 — Drums ignore note-event timing: every hit in a block starts at frame 0
+### [x] DSP-01 — Drums ignore note-event timing: every hit in a block starts at frame 0 — fixed @141ffbb2
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
