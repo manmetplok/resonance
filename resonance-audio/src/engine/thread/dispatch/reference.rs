@@ -29,21 +29,21 @@ pub(super) fn dispatch_reference(
             reference::handle_reference_analyzed(&mut state.reference, id, pcm, integrated_lufs);
             // Decoded PCM just arrived: republish (cursor synced so the
             // active reference starts from the top of its decoded buffer).
-            state.reference.publish(&ctx.shared.reference, true);
+            state.reference.publish(ctx.shared, true);
         }
         AudioCommand::RemoveReferenceTrack { id } => {
             reference::handle_remove_reference_track(&mut state.reference, ctx.event_tx, id);
             // May have cleared the active selection — drop the monitor PCM.
-            state.reference.publish(&ctx.shared.reference, false);
+            state.reference.publish(ctx.shared, false);
         }
         AudioCommand::SetActiveReference { id } => {
             reference::handle_set_active_reference(&mut state.reference, ctx.event_tx, id);
             // New active reference: swap PCM + restart from its cursor.
-            state.reference.publish(&ctx.shared.reference, true);
+            state.reference.publish(ctx.shared, true);
         }
         AudioCommand::SetABSource { source } => {
             reference::handle_set_ab_source(&mut state.reference, ctx.event_tx, source);
-            state.reference.publish(&ctx.shared.reference, false);
+            state.reference.publish(ctx.shared, false);
         }
         AudioCommand::SetRefLoudnessMatch { enabled } => {
             reference::handle_set_ref_loudness_match(
@@ -51,11 +51,11 @@ pub(super) fn dispatch_reference(
                 ctx.event_tx,
                 enabled,
             );
-            state.reference.publish(&ctx.shared.reference, false);
+            state.reference.publish(ctx.shared, false);
         }
         AudioCommand::SetRefTrim { db } => {
             reference::handle_set_ref_trim(&mut state.reference, ctx.event_tx, db);
-            state.reference.publish(&ctx.shared.reference, false);
+            state.reference.publish(ctx.shared, false);
         }
         AudioCommand::AddRefMarker {
             ref_id,
@@ -87,11 +87,11 @@ pub(super) fn dispatch_reference(
                 position_samples,
             );
             // Explicit scrub: re-sync the live cursor to the new position.
-            state.reference.publish(&ctx.shared.reference, true);
+            state.reference.publish(ctx.shared, true);
         }
         AudioCommand::SetRefLoopToMix { enabled } => {
             reference::handle_set_ref_loop_to_mix(&mut state.reference, ctx.event_tx, enabled);
-            state.reference.publish(&ctx.shared.reference, false);
+            state.reference.publish(ctx.shared, false);
         }
         AudioCommand::PollABMeters => reference::handle_poll_ab_meters(
             &state.reference,

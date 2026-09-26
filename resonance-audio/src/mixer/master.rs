@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use crate::bypass::{run_faded, BypassFade, FadeStage, FxDryScratch};
 use crate::clap_host::{PluginMap, StereoBufMut};
+use crate::cycle_load::{try_read_counted, LockMissCounters, StateMap};
 use crate::engine::SharedState;
 use crate::types::*;
 
@@ -31,6 +32,7 @@ pub(super) fn apply_master_fx_chain(
     data: &mut [f32],
     channels: usize,
     master: &parking_lot::RwLock<MasterBus>,
+    misses: &LockMissCounters,
     plugins_guard: &PluginMap,
     scratch_l: &mut [f32],
     scratch_r: &mut [f32],
@@ -52,7 +54,7 @@ pub(super) fn apply_master_fx_chain(
     if chain_stage == FadeStage::Dry {
         return;
     }
-    let Some(master_guard) = master.try_read() else {
+    let Some(master_guard) = try_read_counted(master, StateMap::Master, misses) else {
         return;
     };
     if master_guard.plugin_ids.is_empty() {

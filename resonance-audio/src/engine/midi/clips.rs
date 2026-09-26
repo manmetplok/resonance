@@ -438,29 +438,66 @@ pub fn quantize_midi_notes_in_place(
     quantize_ends: bool,
     iterative: bool,
 ) {
-    let mut guard = midi_clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        let clip_start_tick = tempo
+    // Off-lock compute (code review ARCH-02 A2-3): copy the inputs under
+    // a short read, do the O(notes) work with no guard held, then swap
+    // the result in under a write that is one assignment. Every writer of
+    // `midi_clips` runs on the engine thread, so nothing interleaves
+    // between the two guards.
+    let Some((notes, clip_start_tick)) = read_notes(midi_clips, clip_id, |clip| {
+        tempo
             .sample_to_abs_tick(clip.start_sample, sample_rate)
-            .saturating_sub(clip.trim_start_ticks);
-        let new_notes = quantize_notes(
-            &clip.notes,
-            indices,
-            grid,
-            strength,
-            swing,
-            mode,
-            quantize_ends,
-            iterative,
-            tempo,
-            clip_start_tick,
-        );
-        clip.notes = new_notes.clone();
-        let _ = event_tx.send(AudioEvent::MidiNotesEdited {
-            clip_id,
-            notes: new_notes,
-        });
+            .saturating_sub(clip.trim_start_ticks)
+    }) else {
+        return;
+    };
+    let new_notes = quantize_notes(
+        &notes,
+        indices,
+        grid,
+        strength,
+        swing,
+        mode,
+        quantize_ends,
+        iterative,
+        tempo,
+        clip_start_tick,
+    );
+    replace_notes_and_echo(midi_clips, event_tx, clip_id, new_notes);
+}
+
+/// Copy `clip_id`'s notes (plus whatever `extra` reads off the clip)
+/// under a read guard. `None` if the clip is missing.
+fn read_notes<T>(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    clip_id: ClipId,
+    extra: impl FnOnce(&MidiClip) -> T,
+) -> Option<(Vec<MidiNote>, T)> {
+    let guard = midi_clips.read();
+    let clip = guard.iter().find(|c| c.id == clip_id)?;
+    Some((clip.notes.clone(), extra(clip)))
+}
+
+/// Install `notes` on `clip_id` — the write guard is held for the lookup
+/// and one assignment — then echo them as `MidiNotesEdited` with the
+/// guard released. No event if the clip vanished in between.
+fn replace_notes_and_echo(
+    midi_clips: &RwLock<Vec<MidiClip>>,
+    event_tx: &Sender<AudioEvent>,
+    clip_id: ClipId,
+    notes: Vec<MidiNote>,
+) {
+    let echo = notes.clone();
+    {
+        let mut guard = midi_clips.write();
+        let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
+            return;
+        };
+        clip.notes = notes;
     }
+    let _ = event_tx.send(AudioEvent::MidiNotesEdited {
+        clip_id,
+        notes: echo,
+    });
 }
 
 /// Engine-thread handler for [`AudioCommand::SetMidiClipNotes`]:
@@ -474,11 +511,9 @@ pub(crate) fn handle_set_midi_clip_notes(
     clip_id: ClipId,
     notes: Vec<MidiNote>,
 ) {
-    let mut guard = ctx.midi_clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        clip.notes = notes.clone();
-        let _ = ctx.event_tx.send(AudioEvent::MidiNotesEdited { clip_id, notes });
-    }
+    // The echo clone and the send both happen outside the write guard
+    // (code review ARCH-02 A2-3).
+    replace_notes_and_echo(ctx.midi_clips, ctx.event_tx, clip_id, notes);
 }
 
 /// Humanize the selected notes in `clip_id` and emit one bulk
@@ -492,15 +527,12 @@ pub fn humanize_midi_notes_in_place(
     vel_amt: f32,
     seed: u64,
 ) {
-    let mut guard = midi_clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        let new_notes = humanize_notes(&clip.notes, indices, timing_ticks, vel_amt, seed);
-        clip.notes = new_notes.clone();
-        let _ = event_tx.send(AudioEvent::MidiNotesEdited {
-            clip_id,
-            notes: new_notes,
-        });
-    }
+    // Off-lock compute; see `quantize_midi_notes_in_place`.
+    let Some((notes, ())) = read_notes(midi_clips, clip_id, |_| ()) else {
+        return;
+    };
+    let new_notes = humanize_notes(&notes, indices, timing_ticks, vel_amt, seed);
+    replace_notes_and_echo(midi_clips, event_tx, clip_id, new_notes);
 }
 
 /// Apply a groove template to the selected notes in `clip_id` and emit
@@ -515,15 +547,12 @@ pub fn apply_groove_to_clip_in_place(
     template: &GrooveTemplate,
     strength: f32,
 ) {
-    let mut guard = midi_clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        let new_notes = apply_groove(&clip.notes, indices, template, strength, tempo);
-        clip.notes = new_notes.clone();
-        let _ = event_tx.send(AudioEvent::MidiNotesEdited {
-            clip_id,
-            notes: new_notes,
-        });
-    }
+    // Off-lock compute; see `quantize_midi_notes_in_place`.
+    let Some((notes, ())) = read_notes(midi_clips, clip_id, |_| ()) else {
+        return;
+    };
+    let new_notes = apply_groove(&notes, indices, template, strength, tempo);
+    replace_notes_and_echo(midi_clips, event_tx, clip_id, new_notes);
 }
 
 /// Extract a groove template from `clip_id` at `grid` resolution and emit

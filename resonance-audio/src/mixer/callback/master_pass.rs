@@ -49,6 +49,7 @@ pub(super) fn run_master_passes(
         scratch.data,
         channels,
         inputs.master,
+        &shared.lock_misses,
         &tail.plugins_guard,
         scratch.track_buf_l,
         scratch.track_buf_r,

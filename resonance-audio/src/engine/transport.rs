@@ -83,7 +83,7 @@ pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount
         .count_in_remaining
         .store(precount_samples, Ordering::SeqCst);
     ctx.shared.count_in_active.store(true, Ordering::SeqCst);
-    super::rcu_tempo(ctx.tempo_map, |tm| tm.metronome_enabled = true);
+    super::rcu_tempo(ctx, |tm| tm.metronome_enabled = true);
     ctx.shared.playing.store(true, Ordering::SeqCst);
 
     state.rec.precount = Some(crate::recording::PrecountState {
@@ -98,7 +98,7 @@ pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount
 /// stuck on or the mixer stuck in its count-in branch.
 pub(crate) fn cancel_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     if let Some(pc) = state.rec.precount.take() {
-        super::rcu_tempo(ctx.tempo_map, |tm| {
+        super::rcu_tempo(ctx, |tm| {
             tm.metronome_enabled = pc.restore_metronome
         });
         ctx.shared.count_in_active.store(false, Ordering::SeqCst);
@@ -121,7 +121,7 @@ pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     // in, drop the precount without starting the stream.
     if !ctx.shared.playing.load(Ordering::Relaxed) {
         state.rec.precount = None;
-        super::rcu_tempo(ctx.tempo_map, |tm| {
+        super::rcu_tempo(ctx, |tm| {
             tm.metronome_enabled = pc.restore_metronome
         });
         ctx.shared.count_in_active.store(false, Ordering::SeqCst);
@@ -133,7 +133,7 @@ pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
         return;
     }
     state.rec.precount = None;
-    super::rcu_tempo(ctx.tempo_map, |tm| {
+    super::rcu_tempo(ctx, |tm| {
         tm.metronome_enabled = pc.restore_metronome
     });
     ctx.shared.count_in_total.store(0, Ordering::SeqCst);
@@ -472,7 +472,7 @@ pub(crate) fn handle_seek_to(ctx: &HandlerCtx, state: &mut HandlerState, pos: u6
 }
 
 pub(crate) fn handle_set_bpm(ctx: &HandlerCtx, bpm: f32) {
-    super::rcu_tempo(ctx.tempo_map, |tm| tm.bpm = bpm.clamp(20.0, 999.0));
+    super::rcu_tempo(ctx, |tm| tm.bpm = bpm.clamp(20.0, 999.0));
 }
 
 pub(crate) fn handle_set_tempo_events(
@@ -481,7 +481,7 @@ pub(crate) fn handle_set_tempo_events(
     signature: Vec<crate::types::SignaturePoint>,
 ) {
     let sample_rate = ctx.sample_rate;
-    super::rcu_tempo(ctx.tempo_map, |tm| {
+    super::rcu_tempo(ctx, |tm| {
         if let Some(first) = tempo.first() {
             tm.bpm = first.bpm;
         }
@@ -492,14 +492,14 @@ pub(crate) fn handle_set_tempo_events(
 }
 
 pub(crate) fn handle_set_time_signature(ctx: &HandlerCtx, numerator: u8, denominator: u8) {
-    super::rcu_tempo(ctx.tempo_map, |tm| {
+    super::rcu_tempo(ctx, |tm| {
         tm.numerator = numerator.max(1);
         tm.denominator = denominator.max(1);
     });
 }
 
 pub(crate) fn handle_set_metronome_enabled(ctx: &HandlerCtx, enabled: bool) {
-    super::rcu_tempo(ctx.tempo_map, |tm| tm.metronome_enabled = enabled);
+    super::rcu_tempo(ctx, |tm| tm.metronome_enabled = enabled);
 }
 
 pub(crate) fn handle_set_loop_range(

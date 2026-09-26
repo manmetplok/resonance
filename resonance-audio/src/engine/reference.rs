@@ -34,6 +34,7 @@ use arc_swap::ArcSwapOption;
 use crossbeam_channel::Sender;
 use resonance_metering::{LraMeter, LufsMeter, MeterSnapshot, PlrMeter, TruePeakMeter};
 
+use super::SharedState;
 use crate::decode::decode_file;
 use crate::types::{
     ABSource, AudioCommand, AudioEvent, ReferenceAnalysisStage, ReferenceId, ReferenceMarker,
@@ -167,13 +168,21 @@ impl ReferencePlayer {
     /// and decode completion. Control-only changes (source toggle, trim,
     /// loudness, loop) pass `false` so a free-running reference isn't
     /// yanked back to the start mid-audition.
-    pub fn publish(&self, monitor: &ReferenceMonitor, reset_cursor: bool) {
+    pub fn publish(&self, shared: &SharedState, reset_cursor: bool) {
+        let monitor = &shared.reference;
         let active = self.active_id.and_then(|id| self.entry(id));
         monitor
             .source_is_reference
             .store(self.ab_source == ABSource::Reference, Ordering::Relaxed);
         monitor.loop_to_mix.store(self.loop_to_mix, Ordering::Relaxed);
-        monitor.pcm.store(active.and_then(|e| e.pcm.clone()));
+        // The replaced PCM (a whole reference track) is retired, not
+        // dropped: the callback's `render` may hold it for the block
+        // (code review MIX-04).
+        super::retire::publish_opt(
+            &monitor.pcm,
+            active.and_then(|e| e.pcm.clone()),
+            &shared.retired,
+        );
         // gain = (loudness_match ? active offset : 0) + manual trim, dB->linear.
         let offset_db = if self.loudness_match {
             active.map(|e| e.offset_db).unwrap_or(0.0)

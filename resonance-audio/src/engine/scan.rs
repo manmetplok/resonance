@@ -59,7 +59,9 @@ pub(crate) fn scan_plugins(
     // here used to silence the audio callback for whatever block
     // straddled the scan.
     for track in tracks.read().values() {
-        track.clear_plugins();
+        // The old chain is dropped here on the scan thread, not by the
+        // callback: a tiny `Vec`, but the rule is uniform (MIX-04).
+        drop(track.clear_plugins());
     }
     // Clear previous scan results to avoid duplicates.
     bundles.clear();

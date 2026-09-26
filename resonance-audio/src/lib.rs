@@ -94,6 +94,12 @@ pub mod __test_support {
     /// `tests/offline_render_gate.rs` can hold the real guard over the
     /// mixer and engine harnesses.
     pub use crate::engine::{OfflineRenderGuard, OFFLINE_RENDER_BUSY_MSG};
+    /// The deferred-drop queue every callback-visible `ArcSwap` is
+    /// published through (code review MIX-04 / ARCH-02 A2-2), and the two
+    /// publish helpers, so `tests/retire_queue.rs` can pin the primitive
+    /// against a drop-tracking payload.
+    pub use crate::engine::retire::{publish as publish_retiring, publish_opt as publish_opt_retiring};
+    pub use crate::engine::Retired;
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
     /// The take-id allocator behind every captured cycle-record pass
@@ -157,7 +163,10 @@ pub mod __test_support {
         can_fade, crossfade_to_dry, fade_frames, fade_weight, run_faded, save_dry, BypassFade,
         FadeStage, FxDryScratch, BYPASS_FADE_MS,
     };
-    pub use crate::engine::vocal_render::{ensure_tuning_caches, pitch_ratio_curve, retune_clip};
+    pub use crate::engine::vocal_render::{
+        attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
+        retune_clip, snapshot_tuning_jobs, TuningJob,
+    };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::platform::{pw_delay_to_engine_samples, MonitorResampler};
     pub use crate::recording::apply_take_shift;
@@ -201,8 +210,9 @@ pub mod __test_support {
     /// panic.
     pub use crate::supervise::{panic_message, run_supervised};
     pub use crate::cycle_load::{
-        format_cycle_load_line, CycleLoadMeter, CycleLoadReport, LOAD_EMA_ALPHA,
-        QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, VERBOSE_REPORT_INTERVAL,
+        format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot,
+        LockMissCounters, StateMap, LOAD_EMA_ALPHA, QUIET_PEAK_THRESHOLD,
+        QUIET_REPORT_INTERVAL, STATE_MAP_COUNT, VERBOSE_REPORT_INTERVAL,
     };
     /// Re-exported so app-side handler tests can name the command receiver
     /// returned by [`AudioEngine::for_test_capture`](crate::AudioEngine::for_test_capture).

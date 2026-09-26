@@ -360,20 +360,31 @@ impl Track {
     /// Append `id` to the chain. Copy-on-write: clones the current
     /// chain, pushes, and publishes the new chain. Concurrent readers
     /// keep using the pre-push chain until they reload.
-    pub fn push_plugin(&self, id: PluginInstanceId) {
+    ///
+    /// Returns the chain it replaced. The engine hands that to its retire
+    /// queue rather than dropping it, so a callback block still reading
+    /// the old chain is never its last owner (code review MIX-04); a
+    /// caller with no such concern can simply drop it.
+    pub fn push_plugin(&self, id: PluginInstanceId) -> Arc<Vec<PluginInstanceId>> {
         let current = self.plugin_chain.load_full();
         let mut next = (*current).clone();
         next.push(id);
-        self.plugin_chain.store(Arc::new(next));
+        drop(current);
+        self.plugin_chain.swap(Arc::new(next))
     }
 
     /// Drop every plugin id where `pred` returns false. Copy-on-write
-    /// like [`push_plugin`](Self::push_plugin).
-    pub fn retain_plugins(&self, mut pred: impl FnMut(&PluginInstanceId) -> bool) {
+    /// like [`push_plugin`](Self::push_plugin), returning the replaced
+    /// chain the same way.
+    pub fn retain_plugins(
+        &self,
+        mut pred: impl FnMut(&PluginInstanceId) -> bool,
+    ) -> Arc<Vec<PluginInstanceId>> {
         let current = self.plugin_chain.load_full();
         let mut next = (*current).clone();
         next.retain(|id| pred(id));
-        self.plugin_chain.store(Arc::new(next));
+        drop(current);
+        self.plugin_chain.swap(Arc::new(next))
     }
 
     /// Move `instance_id` to `to_index`, shifting the plugins between its
@@ -389,6 +400,19 @@ impl Track {
     /// chain. A no-op move publishes nothing, so it cannot even cost
     /// readers a reload.
     pub fn move_plugin(&self, instance_id: PluginInstanceId, to_index: usize) -> Option<usize> {
+        self.move_plugin_into(instance_id, to_index, drop)
+    }
+
+    /// [`move_plugin`](Self::move_plugin) that hands the replaced chain to
+    /// `retire` instead of dropping it — the engine passes its retire
+    /// queue (code review MIX-04). `retire` is not called for a no-op
+    /// move, which publishes nothing.
+    pub fn move_plugin_into(
+        &self,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+        retire: impl FnOnce(Arc<Vec<PluginInstanceId>>),
+    ) -> Option<usize> {
         let current = self.plugin_chain.load_full();
         let from = current.iter().position(|&id| id == instance_id)?;
         // `from` was found, so the chain is non-empty and this cannot wrap.
@@ -399,22 +423,24 @@ impl Track {
         let mut next = (*current).clone();
         let id = next.remove(from);
         next.insert(to, id);
-        self.plugin_chain.store(Arc::new(next));
+        drop(current);
+        retire(self.plugin_chain.swap(Arc::new(next)));
         Some(to)
     }
 
     /// Replace the chain wholesale with `ids`. Used by project-load
     /// replay and by the plugin-scan path that clears every track's
-    /// chain before re-instantiating the saved instances.
-    pub fn set_plugin_chain(&self, ids: Vec<PluginInstanceId>) {
-        self.plugin_chain.store(Arc::new(ids));
+    /// chain before re-instantiating the saved instances. Returns the
+    /// replaced chain like [`push_plugin`](Self::push_plugin).
+    pub fn set_plugin_chain(&self, ids: Vec<PluginInstanceId>) -> Arc<Vec<PluginInstanceId>> {
+        self.plugin_chain.swap(Arc::new(ids))
     }
 
     /// Empty the chain. Convenience wrapper over
     /// [`set_plugin_chain`](Self::set_plugin_chain) for the common
     /// "wipe all FX" path.
-    pub fn clear_plugins(&self) {
-        self.plugin_chain.store(Arc::new(Vec::new()));
+    pub fn clear_plugins(&self) -> Arc<Vec<PluginInstanceId>> {
+        self.set_plugin_chain(Vec::new())
     }
 
     /// Borrow this track's device-parameter map (keyed by

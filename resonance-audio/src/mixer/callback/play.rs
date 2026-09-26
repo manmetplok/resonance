@@ -4,6 +4,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::cycle_load::{try_read_counted, StateMap};
 use crate::mixer::common::{advance_playhead_silent, commit_playhead, panic_instrument_tracks};
 use crate::mixer::render_core::BlockInputs;
 use crate::types::any_top_level_solo;
@@ -26,6 +27,15 @@ pub(super) fn render_playing_block(
 ) {
     let shared = inputs.shared;
 
+    // Every map is tried, so each one that misses is attributed
+    // (`SharedState::lock_misses`); the render decision stays
+    // all-or-nothing.
+    let misses = &shared.lock_misses;
+    let tracks_guard = try_read_counted(inputs.tracks, StateMap::Tracks, misses);
+    let busses_guard = try_read_counted(inputs.busses, StateMap::Busses, misses);
+    let clips_guard = try_read_counted(inputs.clips, StateMap::Clips, misses);
+    let midi_clips_guard = try_read_counted(inputs.midi_clips, StateMap::MidiClips, misses);
+    let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
     let (
         Some(tracks_guard),
         Some(busses_guard),
@@ -33,11 +43,11 @@ pub(super) fn render_playing_block(
         Some(midi_clips_guard),
         Some(plugins_guard),
     ) = (
-        inputs.tracks.try_read(),
-        inputs.busses.try_read(),
-        inputs.clips.try_read(),
-        inputs.midi_clips.try_read(),
-        inputs.plugins.try_read(),
+        tracks_guard,
+        busses_guard,
+        clips_guard,
+        midi_clips_guard,
+        plugins_guard,
     )
     else {
         // Lock contended -- advance playhead to avoid desync, output

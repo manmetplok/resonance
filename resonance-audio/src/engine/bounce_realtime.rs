@@ -324,7 +324,9 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
         for clip_id in removed_clip_ids {
             let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
         }
-        let _ = ctx.tracks.write().shift_remove(&bounce.target_track_id);
+        if let Some(track) = ctx.tracks.write().shift_remove(&bounce.target_track_id) {
+            super::tracks::retire_removed_track(track, &ctx.shared.retired);
+        }
         let _ = ctx.event_tx.send(AudioEvent::TrackRemoved {
             track_id: bounce.target_track_id,
         });

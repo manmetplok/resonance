@@ -72,6 +72,7 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
             inputs.live_midi_fwd,
             inputs.tracks,
             inputs.plugins,
+            &inputs.shared.lock_misses,
             scratch.midi_stash,
             inputs.sample_rate,
             scratch.data.len() / inputs.channels.max(1),

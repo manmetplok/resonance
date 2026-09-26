@@ -3,6 +3,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::cycle_load::{try_read_counted, StateMap};
 use crate::mixer::common::panic_instrument_tracks;
 use crate::mixer::master::apply_master_volume_and_peaks;
 use crate::mixer::monitor::{mix_idle_instruments, mix_monitor_passthrough};
@@ -23,9 +24,10 @@ pub(super) fn render_stopped_block(
     let shared = inputs.shared;
     let flush = scratch.continuity.was_rolling();
     let monitor_on = monitor.frames > 0 && shared.monitoring.load(Ordering::Relaxed);
-    let (Some(tracks_guard), Some(plugins_guard)) =
-        (inputs.tracks.try_read(), inputs.plugins.try_read())
-    else {
+    let misses = &shared.lock_misses;
+    let tracks_guard = try_read_counted(inputs.tracks, StateMap::Tracks, misses);
+    let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
+    let (Some(tracks_guard), Some(plugins_guard)) = (tracks_guard, plugins_guard) else {
         // Contended: a pending stop flush stays armed for the next block.
         return;
     };

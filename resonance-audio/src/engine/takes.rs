@@ -668,7 +668,7 @@ pub(crate) fn handle_remove_take_group(
 /// which an edit becomes audible, on both the live and the bounce path.
 pub(crate) fn publish_take_comp(ctx: &HandlerCtx, state: &HandlerState) {
     let table = crate::mixer::build_comp_table(&state.take_groups);
-    ctx.shared.take_comp.store(Arc::new(table));
+    super::retire::publish(&ctx.shared.take_comp, Arc::new(table), &ctx.shared.retired);
 }
 
 /// Replace the comp of take group `group_id`, republish the playback table

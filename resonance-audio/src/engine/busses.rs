@@ -246,7 +246,11 @@ const AUX_SEND_MAX_DB: f32 = 24.0;
 /// stale or partially-updated table.
 pub(crate) fn publish_aux_sends(ctx: &HandlerCtx, state: &HandlerState) {
     let snapshot: Vec<AuxSend> = state.aux_sends.values().copied().collect();
-    ctx.shared.aux_sends.store(std::sync::Arc::new(snapshot));
+    super::retire::publish(
+        &ctx.shared.aux_sends,
+        std::sync::Arc::new(snapshot),
+        &ctx.shared.retired,
+    );
 }
 
 pub(crate) fn handle_set_bus_role(ctx: &HandlerCtx, bus_id: BusId, is_return: bool) {

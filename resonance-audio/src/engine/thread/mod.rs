@@ -318,7 +318,7 @@ pub(crate) fn publish_automation_snapshot(
     lanes: &automation::AutomationLanes,
 ) {
     let snapshot = automation::AutomationSnapshot::build(lanes, &ctx.plugins.read());
-    ctx.automation.store(Arc::new(snapshot));
+    super::retire::publish(ctx.automation, Arc::new(snapshot), &ctx.shared.retired);
 }
 
 /// Construction parameters for [`engine_thread`].
@@ -409,6 +409,8 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
 
     let mut last_playhead_report = std::time::Instant::now();
     let mut last_audition_report = std::time::Instant::now();
+    // Sequence of the last DSP-load report printed (see `cycle_load`).
+    let mut cycle_report_seen = 0u64;
     // Live automated-value emission (todo #377): throttle clock + the
     // per-target "last value sent" memo. Reset whenever the transport
     // isn't rolling so a fresh play re-tints the controls.
@@ -539,9 +541,14 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
             if current.sync_bpm_would_change(playhead, ctx.sample_rate) {
                 let mut new_tm = (**current).clone();
                 new_tm.sync_bpm_at(playhead, ctx.sample_rate);
-                ctx.tempo_map.store(Arc::new(new_tm));
+                super::retire::publish(ctx.tempo_map, Arc::new(new_tm), &ctx.shared.retired);
             }
         }
+
+        // Free the snapshots replaced since the last tick that no reader
+        // pins any more — on this thread, never the audio thread (code
+        // review MIX-04).
+        ctx.shared.retired.sweep();
 
         // Apply the take start latched by the input callback's first
         // push (doc #260 finding #2) before anything is drained against
@@ -579,6 +586,13 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         // drain above, a cycle-record seam or the trailing pass at stop,
         // so polled every tick rather than only while recording.
         state.rec.poll_write_errors(ctx.event_tx);
+
+        // Print the DSP-load summary the audio thread published since
+        // the last tick (it only stores atomics; formatting and stderr
+        // are this thread's job — code review ARCH-02 A2-1 / ARCH-05).
+        if let Some(report) = ctx.shared.cycle_report.take_new(&mut cycle_report_seen) {
+            eprintln!("{}", crate::cycle_load::format_cycle_load_line(&report));
+        }
 
         // Audition preview housekeeping: emit AuditionStopped on a natural
         // finish, keep the sync-to-tempo ratio current, and throttle the

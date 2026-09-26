@@ -25,9 +25,11 @@ pub type SidechainRoutes = HashMap<PluginInstanceId, SidechainRoute>;
 /// mutation so the render path never sees a half-updated table.
 pub(crate) fn publish(ctx: &HandlerCtx, routes: &SidechainRoutes) {
     let snapshot: Vec<SidechainRoute> = routes.values().copied().collect();
-    ctx.shared
-        .sidechain_routes
-        .store(std::sync::Arc::new(snapshot));
+    super::retire::publish(
+        &ctx.shared.sidechain_routes,
+        std::sync::Arc::new(snapshot),
+        &ctx.shared.retired,
+    );
 }
 
 /// Store (or replace) `plugin`'s key route and echo the result.

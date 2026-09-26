@@ -146,7 +146,11 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
         .iter()
         .map(|(&id, c)| (id, c.latency_offset_samples))
         .collect();
-    ctx.shared.external_offsets.store(Arc::new(offsets));
+    super::retire::publish(
+        &ctx.shared.external_offsets,
+        Arc::new(offsets),
+        &ctx.shared.retired,
+    );
     // Surface the MAX_COMP_LATENCY clamp: beyond it, compensation
     // silently stops matching the real chain latency and alignment
     // degrades. Warn once per engagement (and re-arm when the chains
@@ -175,13 +179,19 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
     {
         return;
     }
-    ctx.latency_comp
-        .store(Arc::new(crate::latency::LatencyComp::new(
+    // The replaced table (delay lines of up to MAX_COMP_LATENCY floats
+    // each) is retired, not dropped: the callback may still be inside a
+    // block that loaded it (code review MIX-04).
+    super::retire::publish(
+        ctx.latency_comp,
+        Arc::new(crate::latency::LatencyComp::new(
             track_max,
             &track_delays,
             bus_max,
             &bus_delays,
-        )));
+        )),
+        &ctx.shared.retired,
+    );
 }
 
 /// Service plugin-initiated host callbacks (doc #260 finding #10):
@@ -334,7 +344,7 @@ pub(crate) fn handle_add_plugin(
             // so we only need a read guard — the audio thread is not
             // blocked while the chain edit happens.
             if let Some(track) = ctx.tracks.read().get(&track_id) {
-                track.push_plugin(instance_id);
+                ctx.shared.retired.retire(track.push_plugin(instance_id));
             }
 
             let _ = ctx.event_tx.send(AudioEvent::PluginAdded {
@@ -369,7 +379,9 @@ pub(crate) fn handle_remove_plugin(
     // we only need a read guard on the tracks map — the audio thread
     // is never blocked on the chain edit.
     if let Some(track) = ctx.tracks.read().get(&track_id) {
-        track.retain_plugins(|&id| id != instance_id);
+        ctx.shared
+            .retired
+            .retire(track.retain_plugins(|&id| id != instance_id));
     }
     // Remove from map then drop outside the write lock so the audio
     // callback isn't blocked during plugin deactivation.
@@ -397,7 +409,9 @@ pub(crate) fn handle_move_plugin(
         .tracks
         .read()
         .get(&track_id)
-        .and_then(|track| track.move_plugin(instance_id, to_index));
+        .and_then(|track| {
+            track.move_plugin_into(instance_id, to_index, |old| ctx.shared.retired.retire(old))
+        });
     match moved {
         // Report the *clamped* index so the app mirrors what the engine
         // actually did rather than what was requested.

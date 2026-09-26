@@ -88,7 +88,7 @@ fn engage_reference_monitor(shared: &SharedState) {
     handle_set_active_reference(&mut player, &tx, id);
     handle_reference_analyzed(&mut player, id, Arc::new(vec![REF_DC; FRAMES * 2]), -10.0);
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);
-    player.publish(&shared.reference, true);
+    player.publish(&shared, true);
     // Sanity: the live monitor really is engaged on the reference.
     assert!(shared.reference.is_reference_for_test());
 }
