@@ -9,10 +9,7 @@
 use crate::compose::ComposeMessage;
 use crate::control_socket::ControlMessage;
 use crate::reference::ReferenceMessage;
-use crate::state::{
-    MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, TempoAlignment, TempoChoice,
-    ViewMode,
-};
+use crate::state::{MixerInspectorGroup, ViewMode};
 use resonance_audio::types::{
     AssetId, BusId, ClipId, PluginInstanceId, SamplePos, ScannedPlugin, SendSource, TrackId,
 };
@@ -30,6 +27,7 @@ pub use crate::update::external_instrument::ExternalInstrumentMessage;
 pub use crate::update::freeze::FreezeMessage;
 pub use crate::update::global_track::GlobalTrackMessage;
 pub use crate::update::group::GroupMessage;
+pub use crate::update::import::ImportMessage;
 pub use crate::update::marker::MarkerMessage;
 pub use crate::update::marker_ui::MarkerUiMessage;
 pub use crate::update::master::MasterMessage;
@@ -415,70 +413,6 @@ pub enum UiMessage {
     /// Close the track context menu (backdrop click, or after an entry
     /// dispatched its action).
     CloseTrackMenu,
-}
-
-/// User actions for the MIDI Import modal (see [`crate::state::ImportDialogState`]
-/// and [`crate::view::import_dialog`]). Lifecycle: `Open` → file
-/// chosen/parsed → review / tempo-conflict → `Confirm`, or `Cancel` to
-/// dismiss. Everything before `Confirm` is transient dialog state.
-#[derive(Debug, Clone)]
-pub enum ImportMessage {
-    /// Open the modal at the Drop stage.
-    Open,
-    /// Dismiss the modal without importing.
-    Cancel,
-    /// A recognized MIDI file is being dragged over the window. Opens the
-    /// modal at the Drop stage so the drop target is visible; a no-op when
-    /// a dialog is already open. Emitted by the window file-drop
-    /// subscription in `update.rs`.
-    HoverFile,
-    /// The dragged file(s) left the window without being dropped. Dismisses
-    /// a dialog that was opened purely by the hover (and is still empty), so
-    /// a stray drag-over doesn't leave the modal stuck open.
-    HoverLeft,
-    /// Open the OS file chooser for a `.mid`/`.midi` file; a pick comes
-    /// back as [`Self::FileChosen`], a cancel as nothing.
-    Choose,
-    /// The user picked a file via the file dialog.
-    FileChosen(std::path::PathBuf),
-    /// A `.mid`/`.midi` file was dropped (onto the window or the modal).
-    /// Opens the modal if it isn't already open, then kicks off the parse.
-    FileDropped(std::path::PathBuf),
-    /// Background parse finished — `Ok` carries the parsed summary + rows,
-    /// `Err` a user-facing error string.
-    ParseCompleted(Result<ParsedImport, String>),
-    /// The parse task spawned for `path` finished. Applied as
-    /// [`Self::ParseCompleted`] only while the dialog is still parsing
-    /// that same file — a slower parse of a file the user has since
-    /// replaced is dropped.
-    Parsed {
-        path: std::path::PathBuf,
-        result: Result<ParsedImport, String>,
-    },
-    /// Toggle whether the row at this index is included in the import.
-    ToggleTrack(usize),
-    /// Select (`true`) or deselect (`false`) every row at once.
-    SetAllTracks(bool),
-    /// Rename the destination track for the row at this index.
-    RenameTrack(usize, String),
-    /// Choose how to reconcile the file vs project tempo.
-    SetTempoChoice(TempoChoice),
-    /// Set the timeline anchor for imported clips.
-    SetPlacementStart(PlacementStart),
-    /// Switch between new-tracks and merge-into-selected placement.
-    SetPlacementMode(PlacementMode),
-    /// Set the merge target track for `MergeIntoSelected`.
-    SetMergeTarget(Option<TrackId>),
-    /// Choose bar- vs time-aligned tempo-conflict resolution.
-    SetConflictAlignment(TempoAlignment),
-    /// Pick one TempoConflict option: the tempo choice together with its
-    /// alignment (the alignment only matters when keeping the project's).
-    ChooseTempo(TempoChoice, TempoAlignment),
-    /// Accept the TempoConflict stage's choice and move on to Review.
-    ResolveTempo,
-    /// Import the selected tracks — the one message of the flow that
-    /// edits the project, recorded as a single undo entry.
-    Confirm,
 }
 
 /// Audio import + placement orchestration (doc #175, ba todo #598).
