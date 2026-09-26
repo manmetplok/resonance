@@ -24,7 +24,7 @@ mod restore;
 
 use resonance_audio::types::*;
 
-use super::reconcile::{reconcile_stage, Origin, ReconcileCtx, Stage};
+use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
 use crate::project::{LoadedProject, ProjectFile};
 use crate::state::*;
 use crate::util::db_to_gain;
@@ -59,24 +59,27 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // `io.restoring_undo` marks an undo/redo's full replay (set at its
     // `ClearAll`, cleared by `all_cleared` after this returns); the
     // replay reads it only through the ctx.
-    let ctx = ReconcileCtx {
-        origin: if r.io.restoring_undo {
-            Origin::UndoFull
-        } else {
-            Origin::DiskLoad
-        },
-        project_dir: Some(&loaded.project_dir),
+    let origin = if r.io.restoring_undo {
+        Origin::UndoFull
+    } else {
+        Origin::DiskLoad
     };
     r.io.reconcile_trace.clear();
     // Will be set by the caller (OpenPathSelected); an undo/redo's caller
     // puts this one back, which the freeze restore needs meanwhile.
     let live_project_path = r.io.project_path.take();
-    // An undo/redo never lowers the derived-clip id counter (ARCH-01
-    // A-6); `load_from_project` resets it, so remember it here.
-    let derived_counter_floor = ctx
-        .origin
-        .is_undo()
-        .then_some(r.compose.next_derived_clip_id);
+    let ctx = ReconcileCtx {
+        origin,
+        project_dir: Some(&loaded.project_dir),
+        live: LiveCarry {
+            project_path: live_project_path.as_deref(),
+            // An undo/redo never lowers the derived-clip id counter
+            // (ARCH-01 A-6); `load_from_project` resets it, so remember it
+            // here.
+            derived_counter_floor: LiveCarry::derived_counter_floor(r, origin),
+        },
+    };
+    let derived_counter_floor = ctx.live.derived_counter_floor;
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
     // before re-installing entries from the project. Without this,
@@ -153,20 +156,14 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // is flagged rather than lost).
     reconcile_stage(r, Stage::Content, None, project, &ctx);
 
-    // Parameter-automation lanes (epic #14 / epic #40). Reconcile the
-    // engine + app mirror to exactly the saved set: `restore_automation_lanes`
-    // clears any lane left over from a previously-open project (ClearAll does
-    // not touch engine automation) and (re-)sends every saved lane. This runs
-    // last, so `DeviceParam` lanes are (re-)applied *after* each external
-    // track's `SetTrackDeviceParams` (dispatched in `replay_track`) — the
-    // engine already knows the bindings by the time the lane arrives. Legacy
-    // projects carry no lanes, so this reduces to clearing stale ones and is
-    // otherwise a no-op. An undo's diff replay makes the same call.
-    r.restore_automation_lanes(&project.automation_lanes);
+    // Automation lanes: after each external track's `SetTrackDeviceParams`
+    // (dispatched in `replay_track`), so the engine knows the bindings by
+    // the time a `DeviceParam` lane arrives.
+    reconcile_stage(r, Stage::Tail, None, project, &ctx);
 
     // Last: a disk load's freeze baseline fingerprints the replayed
     // content, automation lanes included.
-    replay_freeze(r, project, &ctx, live_project_path.as_deref());
+    replay_freeze(r, project, &ctx, ctx.live.project_path);
 }
 
 /// Restore every track's freeze status from `ProjectTrack.freeze` (ARCH-01

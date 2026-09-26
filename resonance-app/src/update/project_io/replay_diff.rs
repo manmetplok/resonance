@@ -34,7 +34,7 @@ use crate::project::{
 use crate::util::db_to_gain;
 use crate::Resonance;
 
-use super::reconcile::{reconcile_stage, Origin, ReconcileCtx, Stage};
+use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
 use super::replay::restore_drum_patterns;
 use super::serialize::build_project_file;
 
@@ -61,6 +61,10 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     let ctx = ReconcileCtx {
         origin: Origin::UndoDiff,
         project_dir: project_path.as_deref(),
+        live: LiveCarry {
+            project_path: project_path.as_deref(),
+            derived_counter_floor: LiveCarry::derived_counter_floor(r, Origin::UndoDiff),
+        },
     };
 
     // -- Global transport / master -------------------------------------
@@ -149,13 +153,10 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // here).
     reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
 
-    // -- Automation lanes ----------------------------------------------
-    // From `ProjectFile::automation_lanes`, as `replay_loaded_project`
-    // does on the slow path: clear lanes that went away, re-send those
-    // that changed. Lanes never alter the project shape, so the
-    // structural check ignores them. After the external-instrument
-    // restore, so a `DeviceParam` lane lands on known bindings.
-    r.restore_automation_lanes(&target_file.automation_lanes);
+    // Automation lanes: never alter the project shape, so the structural
+    // check ignores them. After the external-instrument restore, so a
+    // `DeviceParam` lane lands on known bindings.
+    reconcile_stage(r, Stage::Tail, Some(&current), target_file, &ctx);
 
     // -- Sort track / bus registry so view-layer invariant holds -------
     r.registry.resort_tracks();
