@@ -95,3 +95,26 @@ impl fmt::Display for EngineError {
         f.write_str(&self.message)
     }
 }
+
+/// `resonance_common::WavDecodeError` (C-4) always classifies as
+/// [`EngineErrorKind::Io`] — matches the pre-existing precedent at every
+/// `decode_file`/`decode_wav_*` call site in this crate (`clips.rs`,
+/// `audition.rs`), which already wrapped the bare decode-failure string in
+/// `EngineError::io(...)` regardless of which decode step failed.
+impl From<resonance_common::WavDecodeError> for EngineError {
+    fn from(e: resonance_common::WavDecodeError) -> Self {
+        EngineError::io(e.to_string())
+    }
+}
+
+/// `resonance_common::AudioProbeError` (C-4) also classifies as
+/// [`EngineErrorKind::Io`] — same precedent as [`EngineError`]'s
+/// `WavDecodeError` conversion above; `import_pool.rs`'s `probe_audio_file`
+/// call currently stringifies this itself (its enclosing fn predates a
+/// typed `EngineError` return), but a future caller that already returns
+/// `Result<_, EngineError>` can use `?` directly.
+impl From<resonance_common::AudioProbeError> for EngineError {
+    fn from(e: resonance_common::AudioProbeError) -> Self {
+        EngineError::io(e.to_string())
+    }
+}

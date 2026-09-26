@@ -33,7 +33,7 @@ pub mod track_group;
 #[cfg(feature = "decode")]
 mod wav;
 
-pub use atomic_file::{atomic_write, quarantine_corrupt};
+pub use atomic_file::{atomic_write, quarantine_corrupt, AtomicWriteError};
 #[cfg(feature = "model")]
 pub use automation::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value,
@@ -46,12 +46,12 @@ pub use automation::{
 #[cfg(feature = "model")]
 pub use device_definition::{
     binding_value_to_lane, lane_value_to_binding_value, DeviceDefinition, DeviceDefinitionError,
-    DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
+    DeviceJsonError, DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
 };
 #[cfg(feature = "model")]
 pub use device_registry::{
-    bundled_definitions, user_definitions_dir, DeviceDefinitionRegistry, DeviceScanError,
-    DEVICE_DEFINITION_EXT,
+    bundled_definitions, user_definitions_dir, DeviceDefinitionRegistry, DeviceLoadError,
+    DeviceSaveError, DeviceScanError, DEVICE_DEFINITION_EXT,
 };
 #[cfg(feature = "model")]
 pub use external_instrument::{ExternalInstrument, PlaybackSource};
@@ -59,12 +59,13 @@ pub use external_instrument::{ExternalInstrument, PlaybackSource};
 pub use midi_map::{
     apply_delta, cc_to_norm, decode_relative, delete_controller_map, load_controller_maps,
     save_controller_map, takeover_value, BindingId, CcMode, ControlSource, ControllerMap,
-    ControllerMapStore, MidiBinding, MidiTarget, RelativeEnc, SendId, Takeover, TransportAction,
+    ControllerMapStore, MidiBinding, MidiMapError, MidiTarget, RelativeEnc, SendId, Takeover,
+    TransportAction,
 };
 #[cfg(feature = "decode")]
 pub use audio_probe::{
     probe_audio_file, scan_audio_folder, waveform_thumbnail, AudioFileEntry, AudioFormat,
-    AudioInfo, WaveformThumbnail,
+    AudioInfo, AudioProbeError, WaveformThumbnail,
 };
 #[cfg(feature = "model")]
 pub use group_identity::{GroupColor, GroupIdentityColor};
@@ -79,7 +80,7 @@ pub use track_group::{MACRO_LEVEL_UNITY, TrackGroup};
 #[cfg(feature = "decode")]
 pub use wav::{
     decode_file, decode_wav_channels, decode_wav_stereo, linear_resample_mono,
-    linear_resample_stereo, StreamingLinearResampler, WavChannels,
+    linear_resample_stereo, StreamingLinearResampler, WavChannels, WavDecodeError,
 };
 #[cfg(feature = "model")]
 pub use freeze::{

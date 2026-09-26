@@ -25,6 +25,16 @@ use std::collections::HashSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Failure serializing or parsing a [`DeviceDefinition`]'s on-disk JSON.
+#[derive(Debug, Error)]
+pub enum DeviceJsonError {
+    #[error("serialize device definition: {0}")]
+    Serialize(#[source] serde_json::Error),
+    #[error("parse device definition: {0}")]
+    Parse(#[source] serde_json::Error),
+}
 
 /// On-disk schema version stamped into every [`DeviceDefinition`]. Bump when the
 /// serialized shape changes incompatibly so loaders can migrate or reject.
@@ -273,14 +283,14 @@ impl DeviceDefinition {
     /// Serialize to the stable on-disk JSON form (pretty-printed). JSON mirrors
     /// the rest of the crate's persistence ([`crate::midi_map`],
     /// [`crate::registry`]); `schema_version` rides along for forward-compat.
-    pub fn to_json(&self) -> Result<String, String> {
-        serde_json::to_string_pretty(self).map_err(|e| format!("serialize device definition: {e}"))
+    pub fn to_json(&self) -> Result<String, DeviceJsonError> {
+        serde_json::to_string_pretty(self).map_err(DeviceJsonError::Serialize)
     }
 
     /// Parse a definition from its on-disk JSON form. Does **not** validate —
     /// call [`DeviceDefinition::validate`] on the result before trusting it.
-    pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
-        serde_json::from_slice(bytes).map_err(|e| format!("parse device definition: {e}"))
+    pub fn from_json(bytes: &[u8]) -> Result<Self, DeviceJsonError> {
+        serde_json::from_slice(bytes).map_err(DeviceJsonError::Parse)
     }
 }
 

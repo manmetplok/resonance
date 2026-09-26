@@ -228,19 +228,17 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
     if let Some(loaded) = r.io.pending_load.take() {
         // Extract project_path before replay (replay clears it)
         let path = r.io.project_path.clone();
-        // A pending undo/redo extras bundle marks this clear/replay as a
-        // history restore rather than a fresh disk load. The replay
-        // restores freeze status from the file on both (a disk load
-        // re-attaches each frozen track's cache, ba todo #577; an undo
-        // reconciles, ARCH-01 A-4).
+        // `io.restoring_undo` marks this clear/replay as a history restore
+        // rather than a fresh disk load; `replay_loaded_project` reads it
+        // (e.g. freeze: a disk load re-attaches each frozen track's cache,
+        // ba todo #577; an undo reconciles, ARCH-01 A-4), so it is cleared
+        // only after the replay. An undo has nothing left to do here: the
+        // replay restored everything from the snapshot's `ProjectFile`.
         crate::update::replay_loaded_project(r, loaded);
         r.io.project_path = path;
         r.io.loading = false;
-        // If this clear/replay came from an undo or redo, finish it
-        // (nothing left to apply since A-6; A-7 removes the hook).
-        if let Some(extras) = r.io.pending_undo_extras.take() {
-            r.finalize_undo_restore(extras);
-        } else {
+        let restored_undo = std::mem::take(&mut r.io.restoring_undo);
+        if !restored_undo {
             // Fresh project load (not an undo): re-send Bank Select +
             // Program Change for every external-instrument track from its
             // restored config, so a freshly-powered synth lands on its saved

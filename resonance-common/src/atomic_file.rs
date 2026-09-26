@@ -10,8 +10,47 @@
 //! writes get the same crash safety a project save already has.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use thiserror::Error;
+
+/// Failure writing a file via [`atomic_write`]'s write-temp-then-rename
+/// sequence. Every variant names the step that failed and the path
+/// involved; `atomic_write` already removes the stranded temp file
+/// before returning any of the io variants below.
+#[derive(Debug, Error)]
+pub enum AtomicWriteError {
+    #[error("Atomic write target {} has no parent dir", path.display())]
+    NoParentDir { path: PathBuf },
+    #[error("Atomic write target {} has no file name", path.display())]
+    NoFileName { path: PathBuf },
+    #[error("create {}: {source}", path.display())]
+    Create {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("write {}: {source}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("fsync {}: {source}", path.display())]
+    Fsync {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("rename {} -> {}: {source}", from.display(), to.display())]
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// Crash-safe file write: write `bytes` to a sibling `*.tmp` in the
 /// same directory, fsync it, atomically rename it over `path`, then
@@ -31,14 +70,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// a full disk) removes it before returning the error. Only a crash can
 /// strand one, and a leftover `*.tmp` is inert: it shares no name with
 /// any file the loader looks for, so it can never clobber a good target.
-pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AtomicWriteError> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| format!("Atomic write target {} has no parent dir", path.display()))?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| format!("Atomic write target {} has no file name", path.display()))?;
+        .ok_or_else(|| AtomicWriteError::NoParentDir {
+            path: path.to_path_buf(),
+        })?;
+    let file_name = path.file_name().ok_or_else(|| AtomicWriteError::NoFileName {
+        path: path.to_path_buf(),
+    })?;
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut tmp_name = file_name.to_os_string();
@@ -55,7 +96,10 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .write(true)
         .create_new(true)
         .open(&tmp_path)
-        .map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
+        .map_err(|source| AtomicWriteError::Create {
+            path: tmp_path.clone(),
+            source,
+        })?;
 
     // Write the full contents and fsync before the rename so the new
     // data is durable on disk before it becomes visible at `path`. Then
@@ -63,15 +107,23 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     // new file. Any failure removes the temp file so it is not stranded.
     let result = f
         .write_all(bytes)
-        .map_err(|e| format!("write {}: {e}", tmp_path.display()))
+        .map_err(|source| AtomicWriteError::Write {
+            path: tmp_path.clone(),
+            source,
+        })
         .and_then(|()| {
-            f.sync_all()
-                .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))
+            f.sync_all().map_err(|source| AtomicWriteError::Fsync {
+                path: tmp_path.clone(),
+                source,
+            })
         })
         .and_then(|()| {
             drop(f);
-            std::fs::rename(&tmp_path, path)
-                .map_err(|e| format!("rename {} -> {}: {e}", tmp_path.display(), path.display()))
+            std::fs::rename(&tmp_path, path).map_err(|source| AtomicWriteError::Rename {
+                from: tmp_path.clone(),
+                to: path.to_path_buf(),
+                source,
+            })
         });
     if let Err(e) = result {
         let _ = std::fs::remove_file(&tmp_path);

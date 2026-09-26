@@ -57,8 +57,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // A-6); `load_from_project` resets it, so remember it here.
     let derived_counter_floor = r
         .io
-        .pending_undo_extras
-        .is_some()
+        .restoring_undo
         .then_some(r.compose.next_derived_clip_id);
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
@@ -77,7 +76,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // snapshot (FU-H2b). The fingerprint is keyed by track id and slot
     // position, both stable across the replay. Nothing in the replay
     // reads the statuses.
-    if r.io.pending_undo_extras.is_some() {
+    if r.io.restoring_undo {
         r.freeze.queue = None;
     } else {
         r.freeze.reset();
@@ -90,7 +89,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // gets the same refusals, so it would re-raise the modal on every
     // history step — the same reason the missing-FILE modal is opened
     // only for disk loads (`engine_events::project_io::all_cleared`).
-    if r.io.pending_undo_extras.is_none() {
+    if !r.io.restoring_undo {
         r.missing_plugins.reset();
     } else {
         r.missing_plugins.dismiss();
@@ -123,7 +122,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     // Restore independent sub-states. An undo/redo keeps the live A/B
     // monitor; a disk load takes the one the project was saved with.
-    let reference_monitor = if r.io.pending_undo_extras.is_some() {
+    let reference_monitor = if r.io.restoring_undo {
         ReferenceMonitorSource::Live
     } else {
         ReferenceMonitorSource::File
@@ -167,7 +166,7 @@ fn replay_freeze(
     project_dir: &std::path::Path,
     live_project_path: Option<&std::path::Path>,
 ) {
-    if r.io.pending_undo_extras.is_some() {
+    if r.io.restoring_undo {
         r.apply_freeze_restore(&project.tracks, live_project_path);
     } else {
         let freezes: Vec<_> = project

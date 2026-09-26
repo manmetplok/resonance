@@ -103,7 +103,7 @@ fn a_drag_that_moves_the_clip_still_records_one_entry() {
 /// Every Begin…Commit gesture, not just the clip drag (FU-M4c).
 ///
 /// The gesture-end check compares the whole snapshot — the `ProjectFile`
-/// a save writes, the notes and the `UndoExtras` — so "changed nothing
+/// a save writes (minus the A/B monitor state) and the notes — so "changed nothing
 /// snapshotted" means "changed nothing a save or an undo could see". The
 /// only other state these gestures touch is transient interaction state
 /// (the drag handle, `selected_global_event`), which is deliberately not

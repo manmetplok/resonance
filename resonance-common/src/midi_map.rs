@@ -20,9 +20,28 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-use crate::atomic_file::{atomic_write, quarantine_corrupt};
+use crate::atomic_file::{atomic_write, quarantine_corrupt, AtomicWriteError};
 use crate::automation::{PluginInstanceId, TrackId};
+
+/// Failure persisting the controller-map preset file.
+#[derive(Debug, Error)]
+pub enum MidiMapError {
+    /// No `$XDG_DATA_HOME` (or platform equivalent) could be determined.
+    #[error("no data dir")]
+    NoDataDir,
+    #[error("mkdir {}: {source}", path.display())]
+    Mkdir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("serialize controller maps: {0}")]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    Write(#[from] AtomicWriteError),
+}
 
 /// Identifier for a [`MidiBinding`], unique within a [`ControllerMap`] / project.
 #[derive(
@@ -295,13 +314,13 @@ pub fn load_controller_maps_from(path: &Path) -> Vec<ControllerMap> {
 
 /// Save one controller map, replacing any existing map with the same `name`
 /// (presets are keyed by name) so re-saves don't accumulate duplicates.
-pub fn save_controller_map(map: &ControllerMap) -> Result<(), String> {
-    let path = controller_maps_path().ok_or_else(|| "no data dir".to_string())?;
+pub fn save_controller_map(map: &ControllerMap) -> Result<(), MidiMapError> {
+    let path = controller_maps_path().ok_or(MidiMapError::NoDataDir)?;
     save_controller_map_to(map, &path)
 }
 
 /// Save to a specific path (useful for testing).
-pub fn save_controller_map_to(map: &ControllerMap, path: &Path) -> Result<(), String> {
+pub fn save_controller_map_to(map: &ControllerMap, path: &Path) -> Result<(), MidiMapError> {
     let mut maps = load_controller_maps_from(path);
     maps.retain(|m| m.name != map.name);
     maps.push(map.clone());
@@ -310,25 +329,27 @@ pub fn save_controller_map_to(map: &ControllerMap, path: &Path) -> Result<(), St
 
 /// Delete the controller map with the given name. Succeeds even if no such map
 /// exists (the file is left listing the remaining maps).
-pub fn delete_controller_map(name: &str) -> Result<(), String> {
-    let path = controller_maps_path().ok_or_else(|| "no data dir".to_string())?;
+pub fn delete_controller_map(name: &str) -> Result<(), MidiMapError> {
+    let path = controller_maps_path().ok_or(MidiMapError::NoDataDir)?;
     delete_controller_map_from(name, &path)
 }
 
 /// Delete from a specific path (useful for testing).
-pub fn delete_controller_map_from(name: &str, path: &Path) -> Result<(), String> {
+pub fn delete_controller_map_from(name: &str, path: &Path) -> Result<(), MidiMapError> {
     let mut maps = load_controller_maps_from(path);
     maps.retain(|m| m.name != name);
     write_store(&ControllerMapStore { maps }, path)
 }
 
 /// Persist the whole store, pretty-printed, creating parent dirs as needed.
-fn write_store(store: &ControllerMapStore, path: &Path) -> Result<(), String> {
+fn write_store(store: &ControllerMapStore, path: &Path) -> Result<(), MidiMapError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| MidiMapError::Mkdir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
-    let json = serde_json::to_string_pretty(store)
-        .map_err(|e| format!("serialize controller maps: {e}"))?;
+    let json = serde_json::to_string_pretty(store)?;
     atomic_write(path, json.as_bytes())?;
     Ok(())
 }

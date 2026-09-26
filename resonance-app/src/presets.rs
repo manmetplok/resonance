@@ -301,7 +301,7 @@ pub fn save_user_preset(preset: &TrackPreset) -> Result<PathBuf, String> {
     }
     let json =
         serde_json::to_string_pretty(preset).map_err(|e| format!("Serialize preset: {e}"))?;
-    atomic_write(&path, json.as_bytes())?;
+    atomic_write(&path, json.as_bytes()).map_err(|e| e.to_string())?;
     // Overwriting a preset stored under an older filename: drop that copy
     // so the name is not listed twice.
     for stale in files_named(&dir, &preset.name) {

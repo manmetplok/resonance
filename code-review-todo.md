@@ -67,6 +67,8 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-4 (ARCH-01) | A1-2 (6) track_freeze from ProjectTrack.freeze; slow-path undo now deletes an undone freeze's cache | opus | merged | 8e10c24c |
 | refactor-intent A-5 (ARCH-01) | A1-2 (7) reference content/monitor split; engine re-sync on both undo paths; `null` LUFS load fix | opus | merged | db57a50c |
 | refactor-intent A-6 (ARCH-01) | A1-2 (8) derived-clip map → `ProjectFile.derived_clips`; derived counter session-monotonic; `UndoExtras` empty | opus | merged | 4c76bb78 |
+| refactor-intent A-7 (ARCH-01) | A1-2 (9b) `UndoExtras` deleted; snapshot = `LoadedProject`; `io.restoring_undo` flag | opus | merged | 3e4496e9 |
+| FU-A6a (from A-6) | Clip-id collision: engine bumped `next_clip_id` into the derived range (drawn clip = next derived clip id; also on reopen via STATE-08 WAV scan). Engine now reserves only below `DERIVED_CLIP_ID_BASE` | opus | merged | 6942f712 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
@@ -76,6 +78,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent C-1 (ARCH-05) | A5-3 `EngineError { kind, message }`; 39 emit sites classified (NotFound 5, Busy 2, Io 15, Plugin 4, dynamic 1, Internal 12) | sonnet | merged | 8339eecd |
 | refactor-intent C-2 (ARCH-05) | A5-3 second half: BounceError carries ExportErrorKind, Track/Stem bounce errors carry EngineError; `JobStatus.error` = `{message, kind?}` | sonnet | merged | 4f3342dd |
 | refactor-intent C-3 (ARCH-05) | A5-4 part 1: `thiserror` in 8 resonance-audio modules; 12 pub fns still `Result<_, String>` | sonnet | merged | 4ef24291 |
+| refactor-intent C-4 (ARCH-05) | A5-4 resonance-common: 7 `thiserror` types, 18 sites; zero `Result<_, String>` left | sonnet | merged | 0d8a7504 |
 | refactor-intent D-1 (ARCH-04) | A4-4 plugins: mandatory `id` on plugin adds; engine rejects duplicates (`Internal`); `next_plugin_id` / `CONTROL_PLUGIN_ID_BASE` gone | sonnet | merged | 630b5197 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).

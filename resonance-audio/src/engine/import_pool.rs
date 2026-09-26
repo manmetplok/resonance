@@ -27,20 +27,26 @@ use super::clips::{transcode_to_wav, TranscodeError};
 use super::thread::{HandlerCtx, HandlerState};
 
 /// Failure importing one source file into the pool
-/// ([`import_one_to_pool`]). `Probe`/`Decode` carry the still-`String`
-/// `resonance_common` errors verbatim (converted separately, under C-4);
-/// `Transcode` wraps the engine's own typed write error; `Panic` is the
-/// decoder-panic fallback text from [`run_pool_import_with`].
+/// ([`import_one_to_pool`]). `Probe`/`Decode` wrap `resonance_common`'s
+/// typed errors (C-4); `Transcode` wraps the engine's own typed write
+/// error; `Panic` is the decoder-panic fallback text from
+/// [`run_pool_import_with`].
 #[derive(Debug, Error)]
 pub enum ImportError {
-    #[error("{0}")]
-    Probe(String),
-    #[error("{0}")]
-    Decode(String),
+    #[error(transparent)]
+    Probe(#[from] resonance_common::AudioProbeError),
+    #[error(transparent)]
+    Decode(#[from] resonance_common::WavDecodeError),
     #[error(transparent)]
     Transcode(#[from] TranscodeError),
     #[error("Import failed: decoder panicked: {0}")]
     Panic(String),
+    /// Short-circuit for a batch job whose project closed mid-run
+    /// (`stale()` in [`handle_import_audio_to_pool`]'s worker closure);
+    /// immediately superseded by [`POOL_IMPORT_CANCELLED`] once the
+    /// event reaches [`cancellation`], never shown to the user as-is.
+    #[error("project closed")]
+    Stale,
 }
 
 /// Outcome of importing one source file into the project pool. Mirrors
@@ -73,14 +79,14 @@ fn asset_relative_path(asset_id: AssetId) -> String {
 /// decode + channel-mix + resample to `engine_rate`, write the
 /// engine-format stereo WAV under `{project_dir}/audio/`, and compute
 /// waveform peaks. Pure (no event emission, no engine state) so it can
-/// be unit-tested directly. Returns a user-facing error string on any
-/// failure (missing/corrupt file, decode error, write error).
+/// be unit-tested directly. Returns a typed error on any failure
+/// (missing/corrupt file, decode error, write error).
 pub fn import_one_to_pool(
     asset_id: AssetId,
     src_path: &str,
     project_dir: &Path,
     engine_rate: u32,
-) -> Result<PoolImportOutcome, String> {
+) -> Result<PoolImportOutcome, ImportError> {
     // Source metadata for display (format / channels / original rate).
     // Cheap for WAV/FLAC (declared frame counts); the media browser's
     // probe helper handles the compressed-format fallback.
@@ -94,7 +100,7 @@ pub fn import_one_to_pool(
 
     let project_relative_path = asset_relative_path(asset_id);
     let target = project_dir.join(&project_relative_path);
-    transcode_to_wav(&target, &data, engine_rate).map_err(|e| e.to_string())?;
+    transcode_to_wav(&target, &data, engine_rate)?;
 
     let peaks = compute_waveform_peaks(&data);
     let duration_frames = (data.len() / 2) as u64;
@@ -141,7 +147,7 @@ pub fn run_pool_import_with(
     jobs: &[(AssetId, String)],
     project_dir: &Path,
     engine_rate: u32,
-    mut import: impl FnMut(AssetId, &str, &Path, u32) -> Result<PoolImportOutcome, String>,
+    mut import: impl FnMut(AssetId, &str, &Path, u32) -> Result<PoolImportOutcome, ImportError>,
     mut emit: impl FnMut(AudioEvent),
 ) {
     for (asset_id, path) in jobs {
@@ -165,9 +171,8 @@ pub fn run_pool_import_with(
             import(*asset_id, path, project_dir, engine_rate)
         }))
         .unwrap_or_else(|payload| {
-            Err(format!(
-                "Import failed: decoder panicked: {}",
-                crate::supervise::panic_message(payload.as_ref())
+            Err(ImportError::Panic(
+                crate::supervise::panic_message(payload.as_ref()).to_string(),
             ))
         });
         match result {
@@ -192,7 +197,7 @@ pub fn run_pool_import_with(
                 emit(AudioEvent::ImportFailed {
                     asset_id: *asset_id,
                     path: path.clone(),
-                    reason,
+                    reason: reason.to_string(),
                 });
             }
         }
@@ -307,7 +312,7 @@ pub(crate) fn handle_import_audio_to_pool(
                         |asset_id, path, dir, rate| {
                             // Skip the decode of the rest of a stale batch.
                             if stale() {
-                                return Err("project closed".into());
+                                return Err(ImportError::Stale);
                             }
                             import_one_to_pool(asset_id, path, dir, rate)
                         },

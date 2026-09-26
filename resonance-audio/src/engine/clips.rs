@@ -51,12 +51,25 @@ fn highest_clip_id_on_disk(dir: &Path) -> Option<ClipId> {
             let name = name.to_str()?;
             name.strip_prefix("clip_")?.strip_suffix(".wav")?.parse::<ClipId>().ok()
         })
+        .filter(|id| *id < DERIVED_CLIP_ID_BASE)
         .max()
 }
 
 fn reserve_clip_ids_up_to(state: &mut HandlerState, highest: Option<ClipId>) {
     if let Some(id) = highest {
-        state.next_clip_id = state.next_clip_id.max(id.saturating_add(1));
+        reserve_clip_id(&mut state.next_clip_id, id);
+    }
+}
+
+/// Keep the engine's clip-id counter above `id` — a clip it was handed
+/// or found on disk — unless `id` is app-owned ([`DERIVED_CLIP_ID_BASE`]
+/// and up): the app allocates those itself, and bumping past one would
+/// put the next engine allocation onto the id the app hands out next
+/// (code review FU-A6a). The same rule the track, bus and send hints
+/// follow.
+pub(crate) fn reserve_clip_id(next_clip_id: &mut ClipId, id: ClipId) {
+    if id < DERIVED_CLIP_ID_BASE {
+        *next_clip_id = (*next_clip_id).max(id + 1);
     }
 }
 
@@ -717,7 +730,7 @@ pub(crate) fn handle_load_take_clip_from_wav(
     if ctx.clips.read().iter().any(|c| c.id == clip_id) {
         // Still raise the allocator: the reservation must hold whether or
         // not this particular load had anything left to do.
-        state.next_clip_id = state.next_clip_id.max(clip_id + 1);
+        reserve_clip_id(&mut state.next_clip_id, clip_id);
         return;
     }
     submit_clip_load(
@@ -751,7 +764,7 @@ fn submit_clip_load(
     // subsequent `ImportClip` command issued before the worker thread
     // completes still allocates a unique id. The worker captures
     // `clip_id` by move, so this update only affects future allocations.
-    state.next_clip_id = state.next_clip_id.max(clip_id + 1);
+    reserve_clip_id(&mut state.next_clip_id, clip_id);
 
     // The heavy work — `ClipSource::open_wav` (which pre-touches every
     // page of the mmap), `compute_waveform_peaks` (an O(n) decimation

@@ -542,6 +542,47 @@ impl EngineHandlerHarness {
 
     // -- MIDI note edits (code review VIEW-02 / CTL-02) ------------------
 
+    /// Run the real `AudioCommand::CreateMidiClip` handler — the one clip
+    /// path the engine allocates the id for (a GUI-drawn clip).
+    pub fn create_midi_clip(&mut self, track_id: TrackId, start_sample: u64, duration_ticks: u64) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::midi::handle_create_midi_clip(
+                ctx,
+                state,
+                track_id,
+                start_sample,
+                duration_ticks,
+                "drawn".into(),
+            )
+        });
+    }
+
+    /// Run the real `AudioCommand::LoadMidiClipDirect` handler: a clip
+    /// whose id the app chose (a derived clip, a replayed one).
+    pub fn load_midi_clip_direct(&mut self, clip_id: ClipId, track_id: TrackId) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::midi::handle_load_midi_clip_direct(
+                ctx,
+                state,
+                clip_id,
+                track_id,
+                0,
+                1920,
+                Vec::new(),
+                "direct".into(),
+                0,
+                0,
+            )
+        });
+    }
+
+    /// Ids in the shared MIDI clip list, ascending.
+    pub fn midi_clip_ids(&self) -> Vec<ClipId> {
+        let mut ids: Vec<ClipId> = self.midi_clips.read().iter().map(|c| c.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// Push a MIDI clip into the shared MIDI clip list.
     pub fn push_midi_clip(&mut self, clip: MidiClip) {
         self.midi_clips.write().push(clip);

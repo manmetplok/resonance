@@ -53,11 +53,8 @@ const POSITION_REPORT_INTERVAL: Duration = Duration::from_millis(16);
 pub enum AuditionError {
     #[error("audition path is not valid UTF-8")]
     InvalidPath,
-    /// `crate::decode::decode_file` (`resonance_common::decode_file`) is
-    /// still `Result<_, String>` (converted separately, under C-4); its
-    /// text is carried verbatim.
-    #[error("{0}")]
-    Decode(String),
+    #[error(transparent)]
+    Decode(#[from] resonance_common::WavDecodeError),
 }
 
 impl From<AuditionError> for EngineError {
@@ -193,8 +190,7 @@ pub fn set_audition_options_in_place(
 /// enable) to engine-rate stereo and wrap it as an [`AuditionSource`].
 pub fn load_audition_source(path: &Path, sample_rate: u32) -> Result<AuditionSource, AuditionError> {
     let path_str = path.to_str().ok_or(AuditionError::InvalidPath)?;
-    let (samples, _name) =
-        crate::decode::decode_file(path_str, sample_rate).map_err(AuditionError::Decode)?;
+    let (samples, _name) = crate::decode::decode_file(path_str, sample_rate)?;
     Ok(AuditionSource::from_samples(samples, sample_rate))
 }
 
