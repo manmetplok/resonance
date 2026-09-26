@@ -443,6 +443,19 @@ impl EngineHandlerHarness {
         true
     }
 
+    /// Run the real live-MIDI bookkeeping for `event` (record-into-clip
+    /// when the track is armed and the transport rolls).
+    pub fn live_midi_event(&mut self, event: crate::midi_hardware::LiveMidiEvent) {
+        self.with_ctx(|ctx, state| crate::engine::midi::handle_live_midi_event(ctx, state, event));
+    }
+
+    /// Move the playhead the handlers read, as the audio callback does.
+    pub fn set_playhead(&self, sample: u64) {
+        self.shared
+            .playhead
+            .store(sample, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Every echo the handlers have emitted since the last drain.
     pub fn drain_events(&mut self) -> Vec<AudioEvent> {
         self.event_rx.try_iter().collect()
