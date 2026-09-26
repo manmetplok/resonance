@@ -16,12 +16,12 @@
 //! it returns `false` and the caller falls back to the full clear-and-
 //! replay pipeline.
 //!
-//! Plugin parameter restores: even when the cached state blob bytes
-//! match between snapshots, the engine's live plugin instance may have
-//! drifted (knob coalescing recorded the *pre-burst* blob; the engine
-//! holds the *post-burst* state). The fast path always re-sends
-//! `LoadPluginState` for every plugin that has a cached blob, so plugin
-//! param undo works without a full re-instantiation.
+//! Plugin parameter restores: a snapshot's state blob is re-sent with
+//! `LoadPluginState` only when the live cache has moved on since the
+//! snapshot; either way the snapshot's param values are then driven
+//! explicitly (all of them the blob may have reset, or just those that
+//! differ from the live mirror when no blob was pushed), so plugin param
+//! undo works without a full re-instantiation.
 
 use std::collections::HashMap;
 
@@ -89,10 +89,14 @@ pub fn try_diff_replay(
     apply_master(r, &current, target_file);
 
     // -- Plugin state blobs --------------------------------------------
-    // Always re-push every cached blob: the engine's live plugin state
-    // may have drifted from the snapshot point even when the cache key
-    // bytes match (knob-burst coalescing captures the pre-burst blob).
-    push_all_plugin_states(r, target);
+    // Re-push a snapshot's blob only when the cache moved on since it was
+    // taken (editor close, preset capture, save): then the plugin's
+    // internal state may differ from the snapshot's. When the snapshot
+    // holds the very blob still cached (`Arc::ptr_eq`), nothing but the
+    // params can have drifted — the blob is refreshed at every point that
+    // changes anything else — so pushing it would only reset the params
+    // the next step has to repair (FU-A2b).
+    let pushed = push_all_plugin_states(r, target);
 
     // -- Plugin parameter values ---------------------------------------
     // The blob just pushed is only as fresh as its last refresh (plugin
@@ -100,8 +104,9 @@ pub fn try_diff_replay(
     // own values are re-applied after it, to the mirror and the engine,
     // exactly as a load does. Without this an undone knob kept its value
     // on screen and in the next save while the engine sat on the stale
-    // blob (STATE-03).
-    apply_all_plugin_params(r, target_file);
+    // blob (STATE-03). A plugin whose blob was not pushed only needs the
+    // params that differ from the live mirror (FU-A2b).
+    apply_all_plugin_params(r, target_file, &pushed);
 
     // -- Audio clips: scalar reposition / retrim only ------------------
     apply_audio_clips(r, &current, target_file);
@@ -777,25 +782,44 @@ fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     apply_plugin_bypass(&r.engine, &mut r.master_plugins, &master_saved);
 }
 
-fn push_all_plugin_states(r: &mut Resonance, target: &LoadedProject) {
+fn push_all_plugin_states(
+    r: &mut Resonance,
+    target: &LoadedProject,
+) -> std::collections::HashSet<PluginInstanceId> {
     // Walk every (track, bus, master) plugin in the target snapshot and
-    // re-push the cached blob to the engine if one exists.
+    // re-push the cached blob to the engine if it differs from the live
+    // cache. Returns the instances whose blob was pushed.
+    let mut pushed = std::collections::HashSet::new();
     for pt in &target.file.tracks {
-        push_plugin_states(r, target, &pt.plugins);
+        push_plugin_states(r, target, &pt.plugins, &mut pushed);
     }
     for pb in &target.file.busses {
-        push_plugin_states(r, target, &pb.plugins);
+        push_plugin_states(r, target, &pb.plugins, &mut pushed);
     }
-    push_plugin_states(r, target, &target.file.master_plugins);
+    push_plugin_states(r, target, &target.file.master_plugins, &mut pushed);
+    pushed
 }
 
-fn push_plugin_states(r: &mut Resonance, target: &LoadedProject, plugins: &[ProjectPlugin]) {
+fn push_plugin_states(
+    r: &mut Resonance,
+    target: &LoadedProject,
+    plugins: &[ProjectPlugin],
+    pushed: &mut std::collections::HashSet<PluginInstanceId>,
+) {
     for pp in plugins {
         if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
+            if r
+                .plugin_state_cache
+                .get(&pp.instance_id)
+                .is_some_and(|live| std::sync::Arc::ptr_eq(live, blob))
+            {
+                continue;
+            }
             let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
                 data: blob.to_vec(),
             });
+            pushed.insert(pp.instance_id);
             // Track what was just pushed, so the cache matches the state
             // the engine now holds. For an instance that isn't live (a
             // missing `.clap`) this is the only copy that exists, and it
@@ -806,42 +830,56 @@ fn push_plugin_states(r: &mut Resonance, target: &LoadedProject, plugins: &[Proj
     }
 }
 
-fn apply_all_plugin_params(r: &mut Resonance, b: &ProjectFile) {
+fn apply_all_plugin_params(
+    r: &mut Resonance,
+    b: &ProjectFile,
+    pushed: &std::collections::HashSet<PluginInstanceId>,
+) {
     for track in r.registry.tracks.iter_mut() {
         if let Some(pt) = b.tracks.iter().find(|t| t.id == track.id) {
-            apply_plugin_params(&r.engine, &mut track.plugins, &pt.plugins);
+            apply_plugin_params(&r.engine, &mut track.plugins, &pt.plugins, pushed);
         }
     }
     for bus in r.registry.busses.iter_mut() {
         if let Some(pb) = b.busses.iter().find(|x| x.id == bus.id) {
-            apply_plugin_params(&r.engine, &mut bus.plugins, &pb.plugins);
+            apply_plugin_params(&r.engine, &mut bus.plugins, &pb.plugins, pushed);
         }
     }
-    apply_plugin_params(&r.engine, &mut r.master_plugins, &b.master_plugins);
+    apply_plugin_params(&r.engine, &mut r.master_plugins, &b.master_plugins, pushed);
 }
 
 /// Drive every live slot's params to the snapshot's values: the saved
 /// override where there is one, the plugin's default otherwise (only
-/// non-defaults are saved). A param is re-sent when it is non-default on
-/// either side — that covers every changed value, and every value the
-/// stale blob pushed just before may have reset. A slot with no live
-/// params (a missing `.clap`) has nothing to drive.
+/// non-defaults are saved). For a slot whose blob was just `pushed`, a
+/// param is re-sent when it is non-default on either side — that covers
+/// every changed value, and every value the stale blob may have reset.
+/// For any other slot the engine still holds the live values the mirror
+/// shows, so only the params that differ from the mirror are sent
+/// (FU-A2b). A slot with no live params (a missing `.clap`) has nothing
+/// to drive.
 fn apply_plugin_params(
     engine: &resonance_audio::AudioEngine,
     slots: &mut [crate::state::PluginSlotState],
     saved: &[ProjectPlugin],
+    pushed: &std::collections::HashSet<PluginInstanceId>,
 ) {
     for slot in slots.iter_mut() {
         let Some(pp) = saved.iter().find(|p| p.instance_id == slot.instance_id) else {
             continue;
         };
+        let blob_pushed = pushed.contains(&slot.instance_id);
         for param in slot.params.iter_mut() {
             let target = pp
                 .params
                 .iter()
                 .find(|p| p.id == param.id)
                 .map_or(param.default_value, |p| p.value);
-            if param.current_value == param.default_value && target == param.default_value {
+            let unchanged = if blob_pushed {
+                param.current_value == param.default_value && target == param.default_value
+            } else {
+                param.current_value == target
+            };
+            if unchanged {
                 continue;
             }
             param.current_value = target;
