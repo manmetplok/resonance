@@ -14,7 +14,7 @@
 //! this module never resamples — thumbnails and metadata describe the
 //! file as it is on disk.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
@@ -22,6 +22,37 @@ use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+use thiserror::Error;
+
+/// Failure probing or decoding an audio file for the media browser
+/// ([`probe_audio_file`] / [`waveform_thumbnail`]).
+#[derive(Debug, Error)]
+pub enum AudioProbeError {
+    #[error("open {}: {source}", path.display())]
+    Open {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("probe {}: {source}", path.display())]
+    Probe {
+        path: PathBuf,
+        #[source]
+        source: SymphoniaError,
+    },
+    #[error("no decodable audio track")]
+    NoTrack,
+    #[error("track missing audio codec parameters")]
+    MissingCodecParams,
+    #[error("missing sample rate")]
+    MissingSampleRate,
+    #[error("decoder: {0}")]
+    Decoder(#[source] SymphoniaError),
+    #[error("read packet: {0}")]
+    ReadPacket(#[source] SymphoniaError),
+    #[error("decode: {0}")]
+    Decode(#[source] SymphoniaError),
+}
 
 /// Container/codec family of an audio file, derived from its extension
 /// and confirmed decodable by the probe. Kept deliberately small — the
@@ -112,24 +143,22 @@ pub struct AudioFileEntry {
 /// length. Falls back to a full decode only when the frame count is not
 /// available up front (e.g. some streamed MP3/Ogg), so the common WAV /
 /// FLAC case stays cheap.
-pub fn probe_audio_file(path: &Path) -> Result<AudioInfo, String> {
+pub fn probe_audio_file(path: &Path) -> Result<AudioInfo, AudioProbeError> {
     let format = AudioFormat::from_extension(
         path.extension().and_then(|e| e.to_str()).unwrap_or(""),
     );
     let mut reader = open_reader(path)?;
     let track = reader
         .first_track_known_codec(TrackType::Audio)
-        .ok_or_else(|| "no decodable audio track".to_string())?;
+        .ok_or(AudioProbeError::NoTrack)?;
 
     let audio = track
         .codec_params
         .as_ref()
         .and_then(|p| p.audio())
-        .ok_or_else(|| "track missing audio codec parameters".to_string())?;
+        .ok_or(AudioProbeError::MissingCodecParams)?;
 
-    let sample_rate = audio
-        .sample_rate
-        .ok_or_else(|| "missing sample rate".to_string())?;
+    let sample_rate = audio.sample_rate.ok_or(AudioProbeError::MissingSampleRate)?;
     let channels = audio
         .channels
         .as_ref()
@@ -168,23 +197,24 @@ pub fn probe_audio_file(path: &Path) -> Result<AudioInfo, String> {
 /// clamped to at least 1; a file with fewer frames than buckets still
 /// yields exactly `buckets` columns — adjacent buckets then share the
 /// same frame, stretching the short waveform across the row.
-pub fn waveform_thumbnail(path: &Path, buckets: usize) -> Result<WaveformThumbnail, String> {
+pub fn waveform_thumbnail(
+    path: &Path,
+    buckets: usize,
+) -> Result<WaveformThumbnail, AudioProbeError> {
     let buckets = buckets.max(1);
     let mut reader = open_reader(path)?;
     let track = reader
         .first_track_known_codec(TrackType::Audio)
-        .ok_or_else(|| "no decodable audio track".to_string())?;
+        .ok_or(AudioProbeError::NoTrack)?;
     let track_id = track.id;
     let audio = track
         .codec_params
         .as_ref()
         .and_then(|p| p.audio())
-        .ok_or_else(|| "track missing audio codec parameters".to_string())?
+        .ok_or(AudioProbeError::MissingCodecParams)?
         .clone();
 
-    let sample_rate = audio
-        .sample_rate
-        .ok_or_else(|| "missing sample rate".to_string())?;
+    let sample_rate = audio.sample_rate.ok_or(AudioProbeError::MissingSampleRate)?;
     let channels = audio
         .channels
         .as_ref()
@@ -254,8 +284,11 @@ fn list_audio_paths(dir: &Path) -> Vec<String> {
 
 /// Open a file and hand it to symphonia's probe, returning the format
 /// reader positioned at the start of the stream.
-fn open_reader(path: &Path) -> Result<Box<dyn FormatReader>, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+fn open_reader(path: &Path) -> Result<Box<dyn FormatReader>, AudioProbeError> {
+    let file = std::fs::File::open(path).map_err(|source| AudioProbeError::Open {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -270,7 +303,10 @@ fn open_reader(path: &Path) -> Result<Box<dyn FormatReader>, String> {
             FormatOptions::default(),
             MetadataOptions::default(),
         )
-        .map_err(|e| format!("probe {}: {e}", path.display()))
+        .map_err(|source| AudioProbeError::Probe {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 /// Decode every packet of `track_id` and return the total frame count
@@ -280,19 +316,19 @@ fn decode_count_frames(
     reader: &mut Box<dyn FormatReader>,
     track_id: u32,
     channels: usize,
-) -> Result<u64, String> {
+) -> Result<u64, AudioProbeError> {
     let audio = reader
         .tracks()
         .iter()
         .find(|t| t.id == track_id)
         .and_then(|t| t.codec_params.as_ref())
         .and_then(|p| p.audio())
-        .ok_or_else(|| "track missing audio codec parameters".to_string())?
+        .ok_or(AudioProbeError::MissingCodecParams)?
         .clone();
 
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(&audio, &AudioDecoderOptions::default())
-        .map_err(|e| format!("decoder: {e}"))?;
+        .map_err(AudioProbeError::Decoder)?;
 
     let channels = channels.max(1);
     let mut samples = 0u64;
@@ -302,7 +338,7 @@ fn decode_count_frames(
             Ok(Some(p)) => p,
             Ok(None) => break,
             Err(SymphoniaError::IoError(_)) => break,
-            Err(e) => return Err(format!("read packet: {e}")),
+            Err(e) => return Err(AudioProbeError::ReadPacket(e)),
         };
         if packet.track_id != track_id {
             continue;
@@ -311,7 +347,7 @@ fn decode_count_frames(
             Ok(d) => d,
             Err(SymphoniaError::DecodeError(_)) => continue,
             Err(SymphoniaError::IoError(_)) => break,
-            Err(e) => return Err(format!("decode: {e}")),
+            Err(e) => return Err(AudioProbeError::Decode(e)),
         };
         decoded.copy_to_vec_interleaved(&mut scratch);
         samples += scratch.len() as u64;
@@ -325,7 +361,7 @@ fn decode_to_mono(
     reader: &mut Box<dyn FormatReader>,
     track_id: u32,
     audio: &symphonia::core::codecs::audio::AudioCodecParameters,
-) -> Result<Vec<f32>, String> {
+) -> Result<Vec<f32>, AudioProbeError> {
     let channels = audio
         .channels
         .as_ref()
@@ -335,7 +371,7 @@ fn decode_to_mono(
 
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(audio, &AudioDecoderOptions::default())
-        .map_err(|e| format!("decoder: {e}"))?;
+        .map_err(AudioProbeError::Decoder)?;
 
     let mut mono: Vec<f32> = Vec::new();
     let mut scratch: Vec<f32> = Vec::new();
@@ -344,7 +380,7 @@ fn decode_to_mono(
             Ok(Some(p)) => p,
             Ok(None) => break,
             Err(SymphoniaError::IoError(_)) => break,
-            Err(e) => return Err(format!("read packet: {e}")),
+            Err(e) => return Err(AudioProbeError::ReadPacket(e)),
         };
         if packet.track_id != track_id {
             continue;
@@ -353,7 +389,7 @@ fn decode_to_mono(
             Ok(d) => d,
             Err(SymphoniaError::DecodeError(_)) => continue,
             Err(SymphoniaError::IoError(_)) => break,
-            Err(e) => return Err(format!("decode: {e}")),
+            Err(e) => return Err(AudioProbeError::Decode(e)),
         };
         decoded.copy_to_vec_interleaved(&mut scratch);
         let frames = scratch.len() / channels;

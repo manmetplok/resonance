@@ -576,7 +576,7 @@ pub fn run_reference_analysis(
         Err(reason) => {
             emit_event(AudioEvent::ReferenceLoadFailed {
                 path: path_str,
-                reason,
+                reason: reason.to_string(),
             });
             return;
         }

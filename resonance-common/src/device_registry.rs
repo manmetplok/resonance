@@ -14,8 +14,54 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::device_definition::DeviceDefinition;
+use thiserror::Error;
+
+use crate::device_definition::{DeviceDefinition, DeviceDefinitionError, DeviceJsonError};
 use crate::scan::scan_directory;
+
+/// Failure loading a user-authored device definition from disk.
+#[derive(Debug, Error)]
+pub enum DeviceLoadError {
+    #[error("read {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{}: {source}", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: DeviceJsonError,
+    },
+    #[error("invalid device definition {}: {source}", path.display())]
+    Invalid {
+        path: PathBuf,
+        #[source]
+        source: DeviceDefinitionError,
+    },
+}
+
+/// Failure saving a device definition to disk.
+#[derive(Debug, Error)]
+pub enum DeviceSaveError {
+    #[error("refusing to save invalid device definition: {0}")]
+    Invalid(#[source] DeviceDefinitionError),
+    #[error("mkdir {}: {source}", path.display())]
+    Mkdir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Json(#[from] DeviceJsonError),
+    #[error("write {}: {source}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
 /// On-disk file extension for device-definition files (one definition per file).
 pub const DEVICE_DEFINITION_EXT: &str = "json";
@@ -102,7 +148,10 @@ impl DeviceDefinitionRegistry {
             let path = PathBuf::from(path);
             match Self::load_from_path(&path) {
                 Ok(def) => self.insert(def),
-                Err(message) => self.errors.push(DeviceScanError { path, message }),
+                Err(e) => self.errors.push(DeviceScanError {
+                    path,
+                    message: e.to_string(),
+                }),
             }
         }
     }
@@ -135,28 +184,38 @@ impl DeviceDefinitionRegistry {
     /// Returns a human-readable error if the file can't be read, parsed, or
     /// fails [`DeviceDefinition::validate`] — callers (and [`Self::scan_dir`])
     /// treat that as "skip this file".
-    pub fn load_from_path(path: &Path) -> Result<DeviceDefinition, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let def = DeviceDefinition::from_json(&bytes)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        def.validate()
-            .map_err(|e| format!("invalid device definition {}: {e}", path.display()))?;
+    pub fn load_from_path(path: &Path) -> Result<DeviceDefinition, DeviceLoadError> {
+        let bytes = std::fs::read(path).map_err(|source| DeviceLoadError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let def = DeviceDefinition::from_json(&bytes).map_err(|source| DeviceLoadError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        def.validate().map_err(|source| DeviceLoadError::Invalid {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Ok(def)
     }
 
     /// Save a user-authored definition to a JSON file, creating parent
     /// directories as needed. Validates before writing so a broken definition is
     /// never persisted. Pretty-printed, matching [`DeviceDefinition::to_json`].
-    pub fn save_to_path(def: &DeviceDefinition, path: &Path) -> Result<(), String> {
-        def.validate()
-            .map_err(|e| format!("refusing to save invalid device definition: {e}"))?;
+    pub fn save_to_path(def: &DeviceDefinition, path: &Path) -> Result<(), DeviceSaveError> {
+        def.validate().map_err(DeviceSaveError::Invalid)?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent).map_err(|source| DeviceSaveError::Mkdir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
         let json = def.to_json()?;
-        std::fs::write(path, json.as_bytes())
-            .map_err(|e| format!("write {}: {e}", path.display()))?;
+        std::fs::write(path, json.as_bytes()).map_err(|source| DeviceSaveError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Ok(())
     }
 }

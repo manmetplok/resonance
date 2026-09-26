@@ -16,7 +16,8 @@ pub fn load_ir(path: &str, target_sample_rate: f32) -> Result<IrData, String> {
 
 /// Load an IR from WAV bytes.
 pub fn load_ir_from_bytes(data: &[u8], target_sample_rate: f32) -> Result<IrData, String> {
-    let channels = resonance_common::decode_wav_channels(data, target_sample_rate)?;
+    let channels = resonance_common::decode_wav_channels(data, target_sample_rate)
+        .map_err(|e| e.to_string())?;
     Ok(IrData {
         left: channels.left,
         right: channels.right,

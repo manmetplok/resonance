@@ -170,7 +170,8 @@ pub fn load_audition_source(path: &Path, sample_rate: u32) -> Result<AuditionSou
     let path_str = path
         .to_str()
         .ok_or_else(|| "audition path is not valid UTF-8".to_string())?;
-    let (samples, _name) = crate::decode::decode_file(path_str, sample_rate)?;
+    let (samples, _name) =
+        crate::decode::decode_file(path_str, sample_rate).map_err(|e| e.to_string())?;
     Ok(AuditionSource::from_samples(samples, sample_rate))
 }
 

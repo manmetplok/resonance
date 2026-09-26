@@ -119,5 +119,5 @@ impl LoadedSample {
 /// Decode a WAV file from a byte slice into stereo interleaved f32 samples,
 /// resampled to the target sample rate if necessary.
 pub fn decode_wav(data: &[u8], target_sample_rate: f32) -> Result<Vec<f32>, String> {
-    resonance_common::decode_wav_stereo(data, target_sample_rate)
+    resonance_common::decode_wav_stereo(data, target_sample_rate).map_err(|e| e.to_string())
 }
