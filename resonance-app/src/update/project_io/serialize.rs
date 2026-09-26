@@ -487,5 +487,8 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             groups.sort_by_key(|g| g.id);
             groups
         },
+        // Global chord track (epic #33). Pure app-side metadata, never
+        // sent to the engine; the transient parse-error banner is left out.
+        chord_track: crate::project::ProjectChordTrack::from(&r.chord_track),
     }
 }

@@ -27,9 +27,10 @@ use resonance_audio::types::TrackId;
 /// restores it from there; the diff replay still reads it from here. It
 /// is being folded away field by field (ARCH-01 A1-2): a field leaves
 /// once both paths restore it from the file, guarded by
-/// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain and the drum
-/// arrangements already went — `ProjectClip` and
-/// `ProjectSectionDefinition::arrangement` carry them.
+/// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain, the drum
+/// arrangements and the chord track already went — `ProjectClip`,
+/// `ProjectSectionDefinition::arrangement` and `ProjectFile::chord_track`
+/// carry them.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
     pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
@@ -50,11 +51,6 @@ pub struct UndoExtras {
     /// entries (engine ids, analysis status) are reapplied from here after
     /// the replay on both paths, without yanking the monitor around.
     pub reference: crate::reference::ReferenceUndo,
-    /// The global chord track (epic #33). Captured here rather than in
-    /// `ProjectFile` because chord-track persistence is a later todo;
-    /// until then the track is declarative app state that the replay
-    /// path can't rebuild, so undo snapshots it directly.
-    pub chord_track: crate::chord_track::ChordTrack,
     /// Per-track freeze status at snapshot time. The rendered cache is not
     /// part of undo history, so on restore
     /// [`crate::Resonance::apply_freeze_restore`] detaches + deletes the
@@ -121,7 +117,6 @@ impl UndoSnapshot {
             && a.reference.loudness_match == b.reference.loudness_match
             && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
             && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
-            && a.chord_track == b.chord_track
             && a.track_freeze == b.track_freeze
             && a.external_instruments == b.external_instruments
             && a.external_instrument_devices == b.external_instrument_devices;
@@ -193,7 +188,6 @@ impl crate::Resonance {
             vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
             automation_lanes: self.automation.lanes.clone(),
             reference: self.reference.undo_snapshot(),
-            chord_track: self.chord_track.clone(),
             track_freeze: self.freeze.statuses.clone(),
             external_instruments: self
                 .external_instruments
@@ -335,8 +329,9 @@ impl crate::Resonance {
     /// `AllCleared` engine-event handler immediately after
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
-    /// Clip fade/gain and the drum arrangements need nothing here: the
-    /// replay restores them from the snapshot's `ProjectFile`.
+    /// Clip fade/gain, the drum arrangements and the chord track need
+    /// nothing here: the replay restores them from the snapshot's
+    /// `ProjectFile`.
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         self.restore_automation_lanes(&extras.automation_lanes);
         self.restore_external_instruments(&extras);
@@ -344,7 +339,6 @@ impl crate::Resonance {
         self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
         self.reference.restore_undo(extras.reference);
-        self.chord_track = extras.chord_track;
         self.apply_freeze_restore(extras.track_freeze);
         // Take lanes are *not* reconciled here. `replay_loaded_project`
         // runs immediately before this and ends in `replay_take_groups`,

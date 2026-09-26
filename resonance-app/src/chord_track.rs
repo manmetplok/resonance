@@ -19,11 +19,11 @@
 //!
 //! Scope of this module (todo #439): the data types, their sort
 //! invariants, and lookup/mutation helpers. Message routing and update
-//! handlers live in the `ChordTrackMessage` work (todo #441); project
-//! persistence in todo #440; the timeline lane render in #442. Undo is
-//! wired through [`UndoExtras`](crate::undo::UndoExtras) because the
-//! track isn't part of `ProjectFile` yet (persistence is a later todo),
-//! so it can't be rebuilt by the replay path alone.
+//! handlers live in `update::chord_track` (todo #441); the timeline lane
+//! render in #442. The track is persisted as
+//! [`ProjectFile::chord_track`](crate::project::ProjectFile::chord_track)
+//! (a serde mirror, `last_error` excluded), which is also what an undo
+//! snapshot restores it from on both replay paths.
 
 use resonance_music_theory::{Chord, Scale};
 

@@ -439,7 +439,6 @@ fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
             && x.reference.loudness_match == y.reference.loudness_match
             && x.reference.trim_db.to_bits() == y.reference.trim_db.to_bits(),
     );
-    check("chord_track", x.chord_track == y.chord_track);
     check("track_freeze", x.track_freeze == y.track_freeze);
     check(
         "external_instruments",
@@ -482,8 +481,8 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     );
     assert!(!file.tempo_events.is_empty(), "tempo event landed");
     assert!(!file.arrangement_markers.is_empty(), "marker landed");
-    assert_eq!(x.chord_track.regions.len(), 1, "chord region landed");
-    assert_eq!(x.chord_track.key_changes.len(), 1, "key change landed");
+    assert_eq!(file.chord_track.regions.len(), 1, "chord region landed");
+    assert_eq!(file.chord_track.key_changes.len(), 1, "key change landed");
     assert!(
         (x.reference.trim_db + 3.0).abs() < 1e-6,
         "reference trim landed"

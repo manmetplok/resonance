@@ -171,6 +171,9 @@ fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
     r.markers = crate::state::ArrangementMarkers::from(project.arrangement_markers.clone());
+    // Global chord track (epic #33): app-side metadata only, nothing to
+    // send. Legacy projects carry none and come up with an empty track.
+    r.chord_track = project.chord_track.to_chord_track();
 
     // Restore the project's drum pattern bank (with legacy promotion),
     // keeping the `ComposeState::default()` bank in place when the
