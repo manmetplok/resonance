@@ -51,7 +51,7 @@ master and updates this table. Agents do **not** edit this file.
 | C1 app/control follow-ups | FU-E1, E2, M5a/b/c, B2, B3, V2c, V3c, V4a, V4b, A2c, M6b, V1b, M12c | opus | merged | ec04990b |
 | A5 audio follow-ups 2 | FU-D3, D4, F2b, M3a, M3c, A4a, A4b, A4c | opus | merged | a2a53c5f |
 | U1 undo follow-ups | FU-A1a, A2a, A2b, M4c, H2a, H2b, H2c | opus | merged | b611a4f5 |
-| R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | in progress | |
+| R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | merged | d2be52fc |
 | T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | merged | 51000f97 |
 | V5 vocal data loss + canvas leftovers | FU-C1a, FU-C1b, FU-V2c, FU-V3c | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
@@ -135,8 +135,8 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 - [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
 - [x] **FU-H4b** — done (A3-2); note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
-- [ ] **FU-M12a** (medium) autosave crash detection + recovery prompt (#466/#467 on `ba/epic-32`, ~1000 lines) and the autosave settings UI (#471) not ported — need their own todos.
-- [ ] **FU-M12b** (low) [dir-scan part fixed @78fd7021] autosave of a never-saved project uses the real user cache dir; backup side-file folder can be orphaned by a crash mid-backup; `SetProjectDir` folder scan runs on the engine command thread.
+- [x] **FU-M12a** — done (R1): session marker, recovery modal, untitled recovery at startup, settings UI; control `project.open` gets `autosave_available` / `recover_autosave`; (medium) autosave crash detection + recovery prompt (#466/#467 on `ba/epic-32`, ~1000 lines) and the autosave settings UI (#471) not ported — need their own todos.
+- [x] **FU-M12b** — done (A4 + R1); (low) [dir-scan part fixed @78fd7021] autosave of a never-saved project uses the real user cache dir; backup side-file folder can be orphaned by a crash mid-backup; `SetProjectDir` folder scan runs on the engine command thread.
 - [x] **FU-M12c** — fixed (C1); (low) possibly flaky: `io preset_name_collisions::a_file_holding_another_preset_is_never_overwritten` failed once under full-suite load.
 - [x] **FU-H3a** — done @d0f5ab01 (crate-level allow kept by design: ~150 items; doc link + counts fixed); (low) crate-level `allow(dead_code, unused_imports)` when `test-internals` is off — reviewer may prefer per-item cfg gating; broken intra-doc link to gated `RolledAudioTake` from `project/take_audio.rs`; stale binary counts in run-tests.py docstring / CLAUDE.md.
 - [x] **FU-H6a** — fixed @359709b8; (medium) ARCH-05 app sweep: convert resonance-app's ~49 `eprintln!` to tracing, then remove resonance-app's exemption from `library_crates_log_through_tracing_not_stderr`.
@@ -153,6 +153,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-A5c** — fixed @22757a50; (low) FU-M3c only checks the keyed plugin's own bypass (not chain-level FX bypass / muted consumer); frozen tracks play the live chain during async cache conversion (~100s of ms).
 - [ ] **FU-C1a** (HIGH, data loss) after a project reload the vocal-clip map points at `clip_<id>.wav`; re-rendering a vocal calls `unlink_if_exists(old_path)` in `vocal_audio_install` and deletes the file the saved project and undo snapshots reference.
 - [ ] **FU-C1b** (low) stray `vocal_*.wav` files from before the project-audio-dir fix remain in sibling `audio/` folders.
+- [ ] **FU-R1a** (low) stale autosave files inside project dirs are never deleted; marker-less scratch dirs (autosave racing Save As) are never GC'd; untitled recovery only offered at startup; non-Linux can't tell a live other instance from a crash.
 
 ## How to use this file
 
