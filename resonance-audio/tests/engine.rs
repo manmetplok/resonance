@@ -60,6 +60,8 @@ mod playback_source_handler;
 mod playhead_seek_race;
 #[path = "engine/reference_handlers.rs"]
 mod reference_handlers;
+#[path = "engine/startup_no_default_track.rs"]
+mod startup_no_default_track;
 #[path = "engine/take_removal.rs"]
 mod take_removal;
 #[path = "engine/tempo_handlers.rs"]

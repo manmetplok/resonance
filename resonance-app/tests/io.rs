@@ -97,6 +97,8 @@ mod replay;
 mod replay_diff;
 #[path = "io/save_keeps_dirty_for_late_edit.rs"]
 mod save_keeps_dirty_for_late_edit;
+#[path = "io/startup_default_track.rs"]
+mod startup_default_track;
 #[path = "io/take_lanes_persistence.rs"]
 mod take_lanes_persistence;
 #[path = "io/undo_snapshot_fixed_point.rs"]
