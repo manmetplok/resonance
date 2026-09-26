@@ -22,6 +22,12 @@ pub const RENAME: &str = "track.rename";
 pub const DELETE: &str = "track.delete";
 /// `track.add_instrument` — set a built-in instrument by stable plugin
 /// id ([`AddPluginParams`] -> [`AddPluginResult`]).
+///
+/// SET semantics despite the name: a track that already has an
+/// instrument gets it swapped in place (the old one's settings go with
+/// it, like `track.replace_effect`), never a second one appended; naming
+/// the instrument that is already loaded is a no-op. So there is only
+/// ever one instrument, and the reply's `occurrence` is always 0.
 pub const ADD_INSTRUMENT: &str = "track.add_instrument";
 /// `track.add_effect` — append a built-in effect to the insert chain
 /// ([`AddPluginParams`] -> [`AddPluginResult`]). Instrument plugins are

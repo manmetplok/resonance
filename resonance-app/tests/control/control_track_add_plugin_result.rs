@@ -326,3 +326,69 @@ fn an_unknown_plugin_id_is_still_refused_before_anything_is_allocated() {
     assert_eq!(error.kind(), ErrorKind::NotFound);
     assert!(chain(&mut app).plugins.is_empty(), "nothing was mirrored");
 }
+
+// ---------------------------------------------------------------------------
+// CTL-04: `track.add_instrument` SETS the track's instrument
+// ---------------------------------------------------------------------------
+
+fn app_with_drums() -> Resonance {
+    let mut app = app();
+    let plugin = |id: &str, is_instrument: bool| ScannedPlugin {
+        clap_file_path: format!("/plugins/{id}.clap"),
+        clap_plugin_id: id.to_owned(),
+        name: id.to_owned(),
+        vendor: "Resonance".to_owned(),
+        is_instrument,
+        ..Default::default()
+    };
+    let plugins = vec![
+        plugin("com.resonance.wavetable", true),
+        plugin("com.resonance.eq", false),
+        plugin("com.resonance.drums", true),
+    ];
+    app.test_apply_engine_event(AudioEvent::PluginsScanned { plugins });
+    app
+}
+
+fn add_instrument(app: &mut Resonance, plugin_id: &str) -> AddPluginResult {
+    call(
+        app,
+        "track.add_instrument",
+        serde_json::json!({"track_id": TRACK, "plugin_id": plugin_id}),
+    )
+    .result()
+    .expect("track.add_instrument succeeds")
+}
+
+#[test]
+fn a_second_add_instrument_replaces_the_first_in_place() {
+    let mut app = app_with_drums();
+    add_instrument(&mut app, "com.resonance.wavetable");
+    add_effect(&mut app, "com.resonance.eq");
+
+    let result = add_instrument(&mut app, "com.resonance.drums");
+    assert_eq!(result.plugin_id, "com.resonance.drums");
+    assert_eq!((result.occurrence, result.slot), (0, 0));
+
+    let ids: Vec<String> = chain(&mut app)
+        .plugins
+        .into_iter()
+        .map(|p| p.plugin_id)
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["com.resonance.drums", "com.resonance.eq"],
+        "exactly one instrument, at the old instrument's slot, effects untouched"
+    );
+}
+
+#[test]
+fn repeating_add_instrument_with_the_same_id_is_a_no_op() {
+    let mut app = app_with_drums();
+    add_instrument(&mut app, "com.resonance.wavetable");
+    let before = app.revision();
+    let again = add_instrument(&mut app, "com.resonance.wavetable");
+    assert_eq!((again.occurrence, again.slot), (0, 0));
+    assert_eq!(chain(&mut app).plugins.len(), 1, "a retry must not stack a copy");
+    assert_eq!(app.revision(), before, "and must not burn an undo entry");
+}
