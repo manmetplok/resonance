@@ -12,13 +12,13 @@ use crate::Resonance;
 pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     // Repair sub-track id collisions left by buggier prior versions. If
     // the saved id is already in use by an earlier-loaded track, allocate
-    // a fresh sub-track id from `next_sub_track_id` (which the pre-loop
+    // a fresh app-side id from `next_sub_track_id` (which the pre-loop
     // bump already advanced past every saved sub-track id, so this won't
     // collide with later siblings either).
     let track_id = if pt.sub_track.is_some()
         && r.registry.tracks.iter().any(|t| t.id == pt.id)
     {
-        let new_id = r.registry.allocate_sub_track_id();
+        let new_id = r.allocate_track_id();
         eprintln!(
             "replay_track: sub-track {:?} id {} collided with existing track; remapped to {}",
             pt.name, pt.id, new_id

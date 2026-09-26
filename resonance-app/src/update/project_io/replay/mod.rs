@@ -283,7 +283,7 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // new sub-tracks allocated after this load don't collide with
     // restored ones. Saved projects from buggier prior versions may have
     // *non-sub-track* ids that fell into the sub-track range; include
-    // every id so the next `allocate_sub_track_id` skip loop has fewer
+    // every id so the next `allocate_track_id` skip loop has fewer
     // iterations to do.
     for pt in &project.tracks {
         if pt.id >= r.registry.next_sub_track_id {

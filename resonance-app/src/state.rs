@@ -23,6 +23,7 @@ pub mod export;
 pub mod external_instrument;
 pub mod freeze;
 pub mod global;
+pub mod ids;
 pub mod markers;
 pub mod import;
 pub mod interaction;

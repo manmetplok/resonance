@@ -74,14 +74,9 @@ fn create_group_from_selection(r: &mut Resonance) {
     if members.len() < 2 {
         return;
     }
-    // `allocate_sub_track_id` only skips track ids; also skip existing
-    // group ids so a group can never overwrite another (STATE-04).
-    let group_id = loop {
-        let id = r.registry.allocate_sub_track_id();
-        if r.track_groups.get_group(id).is_none() {
-            break id;
-        }
-    };
+    // Tracks and groups share one id space; the allocator skips both
+    // (STATE-04, FU-A1c).
+    let group_id = r.allocate_track_id();
     r.track_groups.create_group_from_selection(group_id, &members);
     r.interaction.select_single_track(None);
 }

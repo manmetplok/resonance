@@ -478,16 +478,20 @@ pub struct TrackRegistry {
     pub busses: Vec<BusState>,
     pub next_track_order: usize,
     pub next_bus_order: usize,
-    /// Id counter for auto-created sub-tracks. Lives in a high numeric
-    /// range so it never collides with engine-allocated track ids
-    /// (engine tracks count up from 1).
+    /// Id counter for auto-created sub-tracks, control-API tracks and
+    /// track groups (one id space). Seeded at
+    /// [`SUB_TRACK_ID_BASE`](super::ids::SUB_TRACK_ID_BASE), a high range
+    /// engine-allocated track ids (counting up from 1) never reach;
+    /// consumed through `Resonance::allocate_track_id`, which also skips
+    /// the ids tracks and groups already hold.
     pub next_sub_track_id: u64,
     /// Id counter for FX return busses the *app* creates up front (the
     /// "create new FX return from this send" gesture), so it can name the
     /// return role and the send's destination before the engine echoes
     /// `BusAdded`. Like [`next_sub_track_id`](Self::next_sub_track_id) it
     /// lives in a high range so an app-chosen id never collides with the
-    /// engine's own bus allocator (busses count up from 1). Seeded in
+    /// engine's own bus allocator (busses count up from 1). Seeded at
+    /// [`RETURN_BUS_ID_BASE`](super::ids::RETURN_BUS_ID_BASE) in
     /// `Resonance::new`; the engine bumps its allocator past any id it
     /// receives as a hint, so the two never overlap.
     pub next_return_bus_id: u64,
@@ -547,34 +551,19 @@ impl TrackRegistry {
         self.busses.iter_mut().find(|b| b.id == id).map(f)
     }
 
-    /// Allocate a fresh id from `next_sub_track_id`, skipping past any
-    /// id already taken by a track in the registry. Used for sub-tracks
-    /// and for bounce-target tracks that share this counter. Without the
-    /// skip, a collision with an engine-allocated id silently overwrites
-    /// the other track in the engine's hashmap (or no-ops the new one,
-    /// depending on which command ran first).
-    pub fn allocate_sub_track_id(&mut self) -> TrackId {
-        loop {
-            let candidate = self.next_sub_track_id;
-            self.next_sub_track_id += 1;
-            if !self.tracks.iter().any(|t| t.id == candidate) {
-                return candidate;
-            }
-        }
-    }
-
     /// Allocate a fresh bus id for an app-created FX return bus, skipping
     /// past any id already taken by a bus in the registry. Same collision-
-    /// avoidance rationale as [`allocate_sub_track_id`](Self::allocate_sub_track_id):
+    /// avoidance rationale as
+    /// [`Resonance::allocate_track_id`](crate::Resonance::allocate_track_id):
     /// the app hands this id to the engine as an `AddBus` hint, so it must
-    /// not clash with a bus the engine allocated itself.
+    /// not clash with a bus the engine allocated itself. Without the
+    /// skip, a collision with an engine-allocated id silently overwrites
+    /// the other entry in the engine's hashmap (or no-ops the new one,
+    /// depending on which command ran first).
     pub fn allocate_return_bus_id(&mut self) -> BusId {
-        loop {
-            let candidate = self.next_return_bus_id;
-            self.next_return_bus_id += 1;
-            if !self.busses.iter().any(|b| b.id == candidate) {
-                return candidate;
-            }
-        }
+        let busses = &self.busses;
+        super::ids::allocate_unused(&mut self.next_return_bus_id, |id| {
+            busses.iter().any(|b| b.id == id)
+        })
     }
 }

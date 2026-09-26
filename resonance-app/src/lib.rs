@@ -888,8 +888,8 @@ impl Resonance {
             },
             mixer: MixerUiState::default(),
             registry: TrackRegistry {
-                next_sub_track_id: 1_000_000_000,
-                next_return_bus_id: 2_000_000_000,
+                next_sub_track_id: state::ids::SUB_TRACK_ID_BASE,
+                next_return_bus_id: state::ids::RETURN_BUS_ID_BASE,
                 ..TrackRegistry::default()
             },
             track_groups: state::TrackGroupRegistry::new(),
@@ -901,7 +901,7 @@ impl Resonance {
             device_registry,
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),
-            next_control_plugin_id: crate::state::plugin_index::CONTROL_PLUGIN_ID_BASE,
+            next_control_plugin_id: state::ids::CONTROL_PLUGIN_ID_BASE,
             confirm_delete_track: None,
             bounce_dialog: None,
             import_dialog: None,
