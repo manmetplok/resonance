@@ -223,7 +223,7 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
 
 pub(super) fn replay_bus(r: &mut Resonance, pb: &ProjectBus, loaded: &LoadedProject) {
     let _ = r.engine.send(AudioCommand::AddBus {
-        id_hint: Some(pb.id),
+        id: pb.id,
         name: Some(pb.name.clone()),
     });
     let _ = r.engine.send(AudioCommand::SetBusVolume {

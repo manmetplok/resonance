@@ -59,10 +59,10 @@ fn create_returns_the_id_in_the_reply_and_the_bus_shows_up_in_song_summary() {
     assert!(result.bus_id.0 > 0, "a real id, in the reply");
     assert!(result.revision > 0);
 
-    // The engine is told to create exactly that bus — the id is a hint,
-    // not something to wait for.
+    // The engine is told to create exactly that bus — the id is
+    // app-allocated (ARCH-04 D-3), not something to wait for.
     let hinted = std::iter::from_fn(|| rx.try_recv().ok()).any(|c| {
-        matches!(c, AudioCommand::AddBus { id_hint: Some(id), name: Some(n) }
+        matches!(c, AudioCommand::AddBus { id, name: Some(n) }
             if id == result.bus_id.0 && n == "Drum Bus")
     });
     assert!(hinted, "AddBus must carry the app-chosen id and name");

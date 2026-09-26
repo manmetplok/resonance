@@ -10,13 +10,17 @@ use crate::Resonance;
 /// (ARCH-01 A1-3).
 #[derive(Debug, Clone)]
 pub enum BusMessage {
+    /// Add a bus with an app-generated default name. Since ARCH-04 D-3
+    /// the id is app-allocated here too (`Resonance::allocate_bus_id`),
+    /// same as [`AddBusWithId`](Self::AddBusWithId) — what distinguishes
+    /// the two is only that this one waits for the engine's `BusAdded`
+    /// echo to mirror the bus, rather than mirroring it eagerly.
     AddBus,
     /// Add a bus whose id and name the *app* chose up front, so the
     /// caller can use the id without waiting for the engine's `BusAdded`
     /// echo. Same pattern as
     /// [`MixerMessage::CreateReturnFromSend`](crate::message::MixerMessage::CreateReturnFromSend)
-    /// and the control API's `track.add`; the engine bumps its own
-    /// allocator past any id it receives as a hint.
+    /// and the control API's `track.add`.
     AddBusWithId { id: BusId, name: String },
     RemoveBus(BusId),
     SetBusVolume(BusId, f32),
@@ -77,14 +81,15 @@ impl BusMessage {
 pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
     match m {
         BusMessage::AddBus => {
-            let _ = r.engine.send(AudioCommand::AddBus {
-                id_hint: None,
-                name: None,
-            });
+            // App-allocated (ARCH-04 D-3); still no eager mirror, same as
+            // the plain plugin/send GUI adds — the mixer waits for
+            // `BusAdded`.
+            let id = r.registry.allocate_bus_id();
+            let _ = r.engine.send(AudioCommand::AddBus { id, name: None });
         }
         BusMessage::AddBusWithId { id, name } => {
             let _ = r.engine.send(AudioCommand::AddBus {
-                id_hint: Some(id),
+                id,
                 name: Some(name.clone()),
             });
             // Mirror the bus NOW rather than on the engine's `BusAdded`

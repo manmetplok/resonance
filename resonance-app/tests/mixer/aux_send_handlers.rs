@@ -40,7 +40,7 @@ fn send(id: u64, source: SendSource, dest: u64, level_db: f32, pre_fader: bool, 
 }
 
 #[test]
-fn add_send_emits_set_aux_send_with_no_id_hint_and_defaults() {
+fn add_send_emits_add_aux_send_with_an_app_allocated_id_and_defaults() {
     let (mut app, rx) = capturing_app();
     app.test_dispatch(Message::Mixer(MixerMessage::AddSend {
         source: SendSource::Track(7),
@@ -50,22 +50,22 @@ fn add_send_emits_set_aux_send_with_no_id_hint_and_defaults() {
     let cmds = drain(&rx);
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        AudioCommand::SetAuxSend {
-            id_hint,
+        AudioCommand::AddAuxSend {
+            id,
             source,
             dest,
             level_db,
             pre_fader,
             enabled,
         } => {
-            assert_eq!(*id_hint, None, "a fresh send lets the engine allocate the id");
+            assert!(*id > 0, "the app allocates a fresh id up front (ARCH-04 D-2)");
             assert_eq!(*source, SendSource::Track(7));
             assert_eq!(*dest, 10);
             assert_eq!(*level_db, 0.0);
             assert!(!*pre_fader);
             assert!(*enabled);
         }
-        other => panic!("expected SetAuxSend, got {other:?}"),
+        other => panic!("expected AddAuxSend, got {other:?}"),
     }
 }
 
@@ -94,14 +94,14 @@ fn set_send_level_upserts_under_existing_id_preserving_other_fields() {
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
         AudioCommand::SetAuxSend {
-            id_hint,
+            id,
             source,
             dest,
             level_db,
             pre_fader,
             enabled,
         } => {
-            assert_eq!(*id_hint, Some(3), "an edit upserts under the send's id");
+            assert_eq!(*id, 3, "an edit upserts under the send's id");
             assert_eq!(*source, SendSource::Bus(20));
             assert_eq!(*dest, 10);
             assert_eq!(*level_db, -2.5, "only the level changed");
@@ -122,13 +122,13 @@ fn toggle_pre_fader_flips_only_that_field() {
     let cmds = drain(&rx);
     match &cmds[0] {
         AudioCommand::SetAuxSend {
-            id_hint,
+            id,
             level_db,
             pre_fader,
             enabled,
             ..
         } => {
-            assert_eq!(*id_hint, Some(5));
+            assert_eq!(*id, 5);
             assert_eq!(*level_db, -3.0);
             assert!(*pre_fader, "post -> pre");
             assert!(*enabled);
@@ -145,10 +145,8 @@ fn toggle_enabled_flips_only_that_field() {
     app.test_dispatch(Message::Mixer(MixerMessage::ToggleSendEnabled(6)));
 
     match &drain(&rx)[0] {
-        AudioCommand::SetAuxSend {
-            id_hint, enabled, ..
-        } => {
-            assert_eq!(*id_hint, Some(6));
+        AudioCommand::SetAuxSend { id, enabled, .. } => {
+            assert_eq!(*id, 6);
             assert!(!*enabled, "enabled -> disabled");
         }
         other => panic!("expected SetAuxSend, got {other:?}"),
@@ -163,8 +161,8 @@ fn set_send_dest_reroutes_to_new_bus() {
     app.test_dispatch(Message::Mixer(MixerMessage::SetSendDest(8, 99)));
 
     match &drain(&rx)[0] {
-        AudioCommand::SetAuxSend { id_hint, dest, .. } => {
-            assert_eq!(*id_hint, Some(8));
+        AudioCommand::SetAuxSend { id, dest, .. } => {
+            assert_eq!(*id, 8);
             assert_eq!(*dest, 99);
         }
         other => panic!("expected SetAuxSend, got {other:?}"),
@@ -210,13 +208,12 @@ fn create_return_from_send_adds_bus_flags_return_then_routes_send() {
     assert_eq!(cmds.len(), 3, "add bus, flag return, route send — in order");
 
     let bus_id = match &cmds[0] {
-        AudioCommand::AddBus { id_hint, name } => {
-            let id = id_hint.expect("the app picks the new bus id up front");
+        AudioCommand::AddBus { id, name } => {
             assert!(
                 name.as_deref().unwrap_or_default().contains("Return"),
                 "return bus gets a descriptive name, got {name:?}"
             );
-            id
+            *id
         }
         other => panic!("expected AddBus first, got {other:?}"),
     };
@@ -228,19 +225,19 @@ fn create_return_from_send_adds_bus_flags_return_then_routes_send() {
         other => panic!("expected SetBusRole second, got {other:?}"),
     }
     match &cmds[2] {
-        AudioCommand::SetAuxSend {
-            id_hint,
+        AudioCommand::AddAuxSend {
+            id,
             source,
             dest,
             enabled,
             ..
         } => {
-            assert_eq!(*id_hint, None, "the send itself is fresh");
+            assert!(*id > 0, "the send itself is fresh, but its id is app-allocated");
             assert_eq!(*source, SendSource::Track(4));
             assert_eq!(*dest, bus_id, "the send routes into the new return bus");
             assert!(*enabled);
         }
-        other => panic!("expected SetAuxSend third, got {other:?}"),
+        other => panic!("expected AddAuxSend third, got {other:?}"),
     }
 }
 
@@ -258,7 +255,7 @@ fn successive_return_creations_pick_distinct_bus_ids() {
     let bus_ids: Vec<u64> = cmds
         .iter()
         .filter_map(|c| match c {
-            AudioCommand::AddBus { id_hint, .. } => *id_hint,
+            AudioCommand::AddBus { id, .. } => Some(*id),
             _ => None,
         })
         .collect();
