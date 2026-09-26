@@ -177,7 +177,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::CancelEditSectionDialog => section::handle_cancel_edit_dialog(r),
         ComposeMessage::SetEditSectionName(name) => section::handle_set_edit_name(r, name),
         ComposeMessage::SetEditSectionLength(input) => section::handle_set_edit_length(r, input),
-        ComposeMessage::ConfirmEditSection => section::handle_confirm_edit(r),
+        ComposeMessage::ConfirmEditSection => return section::handle_confirm_edit(r),
         ComposeMessage::CycleSectionColor { definition_id } => {
             section::handle_cycle_color(r, definition_id)
         }
@@ -196,7 +196,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::ResizeSection {
             definition_id,
             length_bars,
-        } => section::handle_resize(r, definition_id, length_bars, time_sig_num),
+        } => return section::handle_resize(r, definition_id, length_bars, time_sig_num),
         ComposeMessage::SetSectionScale {
             definition_id,
             scale,

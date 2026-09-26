@@ -516,7 +516,7 @@ fn pattern_bar_lengths(r: &crate::Resonance) -> HashMap<u64, u32> {
         .collect()
 }
 
-fn fill_to_end(r: &mut crate::Resonance, definition_id: u64) -> bool {
+pub(super) fn fill_to_end(r: &mut crate::Resonance, definition_id: u64) -> bool {
     let lens = pattern_bar_lengths(r);
     // The fallback pattern (used when the arrangement is empty) is the
     // section's resolved default, so "fill to end" on a blank section lays
@@ -780,7 +780,7 @@ pub(crate) fn materialize_drum_clips_for_control(
 /// `only_definition: None` rebuilds every placement of every section —
 /// what the GUI's drum editor wants, since a kit/pad/pattern edit there
 /// can affect any section rendering that pattern.
-fn materialize_drum_clips_for(
+pub(super) fn materialize_drum_clips_for(
     r: &mut crate::Resonance,
     only_definition: Option<u64>,
     visibility: ClipVisibility,

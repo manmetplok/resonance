@@ -7,7 +7,10 @@ use std::collections::HashMap;
 
 use resonance_audio::types::{AudioCommand, TICKS_PER_QUARTER_NOTE};
 
+use iced::Task;
+
 use super::handle as dispatch;
+use crate::message::Message;
 use crate::compose::invariants::{chord_fits_in_section, placement_overlaps};
 use crate::util::seed_from_id;
 use crate::compose::{
@@ -183,21 +186,21 @@ pub(super) fn handle_set_edit_length(r: &mut crate::Resonance, input: String) {
     }
 }
 
-pub(super) fn handle_confirm_edit(r: &mut crate::Resonance) {
+pub(super) fn handle_confirm_edit(r: &mut crate::Resonance) -> Task<Message> {
     let Some(form) = r.compose.edit_section_form.clone() else {
-        return;
+        return Task::none();
     };
     let name = form.name.trim().to_string();
     if name.is_empty() {
         r.compose.last_error = Some("Section name cannot be empty".into());
-        return;
+        return Task::none();
     }
     let length_bars: u32 = match form.length_input.parse() {
         Ok(n) if n > 0 => n,
         _ => {
             r.compose.last_error =
                 Some("Section length must be a positive whole number of bars".into());
-            return;
+            return Task::none();
         }
     };
     let _ = dispatch(
@@ -207,7 +210,9 @@ pub(super) fn handle_confirm_edit(r: &mut crate::Resonance) {
             name,
         },
     );
-    let _ = dispatch(
+    // Resizing re-derives the section's lanes; a vocal lane's re-render
+    // comes back as a task.
+    let task = dispatch(
         r,
         ComposeMessage::ResizeSection {
             definition_id: form.definition_id,
@@ -217,6 +222,7 @@ pub(super) fn handle_confirm_edit(r: &mut crate::Resonance) {
     if r.compose.last_error.is_none() {
         r.compose.edit_section_form = None;
     }
+    task
 }
 
 pub(super) fn handle_cycle_color(r: &mut crate::Resonance, definition_id: u64) {
@@ -302,15 +308,21 @@ pub(super) fn handle_resize(
     definition_id: u64,
     length_bars: u32,
     time_sig_num: u8,
-) {
+) -> Task<Message> {
     if length_bars == 0 {
         r.compose.last_error = Some("Section length must be at least 1 bar".into());
-        return;
+        return Task::none();
     }
     let old_length = match r.compose.find_definition(definition_id) {
         Some(d) => d.length_bars,
-        None => return,
+        None => return Task::none(),
     };
+    if length_bars == old_length {
+        // Nothing to re-derive (the edit dialog resizes on every confirm,
+        // including a pure rename).
+        r.compose.last_error = None;
+        return Task::none();
+    }
     if length_bars > old_length {
         let snapshot = r.compose.placements.clone();
         let definitions = r.compose.definitions.clone();
@@ -320,7 +332,7 @@ pub(super) fn handle_resize(
             if placement_overlaps(&others, &definitions, p.start_bar, length_bars, None) {
                 r.compose.last_error =
                     Some("Cannot grow section: a placement would overlap a neighbour".into());
-                return;
+                return Task::none();
             }
         }
     }
@@ -336,12 +348,72 @@ pub(super) fn handle_resize(
     if !chords_fit {
         r.compose.last_error =
             Some("Cannot shrink section: chords would fall outside the new length".into());
-        return;
+        return Task::none();
     }
+    // A drum arrangement that filled the old length (e.g. the single
+    // `Bars(old_len)` entry `set_primary_pattern` writes) keeps filling
+    // the section; one that deliberately left a trailing gap keeps it.
+    let arrangement_filled = r.compose.find_definition(definition_id).is_some_and(|def| {
+        !def.arrangement.is_empty()
+            && r
+                .compose
+                .resolve_arrangement_for(def)
+                .spans
+                .last()
+                .is_some_and(|s| s.bar_end >= old_length)
+    });
     if let Some(def) = r.compose.find_definition_mut(definition_id) {
         def.length_bars = length_bars;
-        r.compose.last_error = None;
     }
+    if length_bars > old_length && arrangement_filled {
+        super::drum_groups::fill_to_end(r, definition_id);
+    }
+    let task = rederive_section_clips(r, definition_id);
+    r.compose.last_error = None;
+    task
+}
+
+/// Re-derive every generated clip of a section after its length changed
+/// (code review VIEW-05): clip durations are fixed when a clip is built,
+/// so without this a shrink left full-length clips overlapping the next
+/// section and a grow left the added bars silent. Only lanes that already
+/// have clips are rebuilt — a resize never generates a lane the user did
+/// not ask for. Returns the vocal lanes' re-render tasks.
+fn rederive_section_clips(r: &mut crate::Resonance, definition_id: u64) -> Task<Message> {
+    let mut tracks: Vec<resonance_audio::types::TrackId> = r
+        .compose
+        .derived_clips
+        .keys()
+        .filter(|(d, _, _)| *d == definition_id)
+        .map(|(_, _, t)| *t)
+        .collect();
+    tracks.sort_unstable();
+    tracks.dedup();
+    let has_drums = tracks.iter().any(|t| {
+        r.registry
+            .tracks
+            .iter()
+            .any(|tr| tr.id == *t && tr.instrument_type == crate::state::InstrumentType::Drum)
+    });
+
+    if has_drums {
+        super::drum_groups::materialize_drum_clips_for(
+            r,
+            Some(definition_id),
+            super::ClipVisibility::Immediate,
+        );
+    }
+    // Drum tracks have no chord-lane generator, so `regenerate_lane` is a
+    // no-op for them; every other lane is rebuilt at the new length.
+    let tasks: Vec<Task<Message>> = tracks
+        .into_iter()
+        .map(|t| super::regenerate::regenerate_lane(r, definition_id, t))
+        .collect();
+    if has_drums {
+        // Materializing replaced any Motif-mode drum voices; lay them back.
+        super::regenerate::propagate_motif_change(r, definition_id);
+    }
+    Task::batch(tasks)
 }
 
 pub(super) fn handle_set_scale(
