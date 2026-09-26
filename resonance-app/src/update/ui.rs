@@ -217,6 +217,25 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             return crate::focus::any_text_input_focused()
                 .map(move |editing| Message::Ui(UiMessage::MarkerNavResolved { forward, editing }));
         }
+        UiMessage::RequestShortcut(message) => {
+            // Same gate as `F` and `.`/`,`, for the shortcuts that are also
+            // typing keys (Enter, `B`, Cmd-Z/Y): probe focus first, act
+            // only when no text field is being edited (UPD-11).
+            return crate::focus::any_text_input_focused().map(move |editing| {
+                Message::Ui(UiMessage::ShortcutResolved {
+                    message: message.clone(),
+                    editing,
+                })
+            });
+        }
+        UiMessage::ShortcutResolved { message, editing } => {
+            // Re-enter `update()` so the wrapped message meets every gate
+            // (startup modal, render in flight) exactly as if the key had
+            // dispatched it directly.
+            if !editing {
+                return r.update(*message);
+            }
+        }
         UiMessage::MarkerNavResolved { forward, editing } => {
             // Suppress navigation when the key was typed into a focused text
             // field; otherwise jump to the adjacent marker.

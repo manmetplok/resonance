@@ -65,3 +65,5 @@ mod reference_persistence;
 mod reference_undo;
 #[path = "performance/remote_indicator_snapshot.rs"]
 mod remote_indicator_snapshot;
+#[path = "performance/shortcut_focus_gate.rs"]
+mod shortcut_focus_gate;

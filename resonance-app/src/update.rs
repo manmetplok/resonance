@@ -177,89 +177,7 @@ impl crate::Resonance {
         let keys = keyboard::listen().filter_map(|event| match event {
             keyboard::Event::KeyPressed {
                 key, modifiers, ..
-            } => {
-                if modifiers.command() {
-                    match key {
-                        keyboard::Key::Character(ref c) if c.as_str() == "s" => {
-                            if modifiers.shift() {
-                                Some(Message::ProjectIo(ProjectIoMessage::SaveProjectAs))
-                            } else {
-                                Some(Message::ProjectIo(ProjectIoMessage::SaveProject))
-                            }
-                        }
-                        keyboard::Key::Character(ref c) if c.as_str() == "o" => {
-                            Some(Message::ProjectIo(ProjectIoMessage::OpenProject))
-                        }
-                        keyboard::Key::Character(ref c) if c.as_str() == "z" => {
-                            if modifiers.shift() {
-                                Some(Message::Redo)
-                            } else {
-                                Some(Message::Undo)
-                            }
-                        }
-                        keyboard::Key::Character(ref c) if c.as_str() == "y" => {
-                            Some(Message::Redo)
-                        }
-                        // `Cmd-G` groups the current multi-track selection.
-                        // No-ops in the reducer when fewer than two tracks
-                        // are selected (see `update::group`).
-                        keyboard::Key::Character(ref c) if c.as_str() == "g" => {
-                            Some(Message::Group(GroupMessage::CreateGroupFromSelection))
-                        }
-                        // `Cmd-F` freezes the selected track(s); `Shift-Cmd-F`
-                        // freezes every freezable track (design doc #181, todo
-                        // #581). Both no-op in the reducer when nothing is
-                        // freezable, and are gated while a render is in flight
-                        // (see `update::gates::freeze_blocks_message`).
-                        keyboard::Key::Character(ref c)
-                            if c.as_str().eq_ignore_ascii_case("f") =>
-                        {
-                            if modifiers.shift() {
-                                Some(Message::Freeze(FreezeMessage::FreezeAllTracks))
-                            } else {
-                                Some(Message::Freeze(FreezeMessage::FreezeSelectedTracks))
-                            }
-                        }
-                        _ => None,
-                    }
-                } else {
-                    match key {
-                        keyboard::Key::Named(keyboard::key::Named::Enter) => Some(
-                            Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip),
-                        ),
-                        // `F` toggles full-screen Performance mode in/out.
-                        // Manual only — never auto-opens on record-arm and
-                        // never disturbs transport state. Routed through
-                        // `RequestPerformanceToggle` so the toggle is
-                        // suppressed while a text field is focused (this
-                        // subscription fires even mid-edit; see `crate::focus`).
-                        keyboard::Key::Character(ref c)
-                            if c.as_str() == "f" || c.as_str() == "F" =>
-                        {
-                            Some(Message::Ui(UiMessage::RequestPerformanceToggle))
-                        }
-                        // `Esc` leaves Performance mode (a no-op elsewhere,
-                        // handled in the update so it never steals Escape
-                        // from other views).
-                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                            Some(Message::Ui(UiMessage::ExitPerformanceMode))
-                        }
-                        // `.` / `,` jump the playhead to the next / previous
-                        // arrangement marker (todo #370). Routed through the
-                        // focus-probing `RequestMarkerNav` so typing a period
-                        // or comma into a text field (track / section names,
-                        // lyrics, filters) never moves the playhead — the
-                        // same gate the `F` performance toggle uses.
-                        keyboard::Key::Character(ref c) if c.as_str() == "." => {
-                            Some(Message::Ui(UiMessage::RequestMarkerNav { forward: true }))
-                        }
-                        keyboard::Key::Character(ref c) if c.as_str() == "," => {
-                            Some(Message::Ui(UiMessage::RequestMarkerNav { forward: false }))
-                        }
-                        _ => None,
-                    }
-                }
-            }
+            } => key_press_message(key, modifiers),
             // Track the live modifier state so a track-header click can tell
             // a plain select from an additive (Cmd/Shift) one — the mouse
             // press itself carries no modifiers (todo #684).
@@ -333,6 +251,104 @@ impl crate::Resonance {
     }
 }
 
+/// Wrap a shortcut that is also a typing key so it only fires when no text
+/// field holds focus (see [`UiMessage::RequestShortcut`]).
+fn focus_gated(message: Message) -> Message {
+    Message::Ui(UiMessage::RequestShortcut(Box::new(message)))
+}
+
+/// The message a global key press maps to, if any. Public so the mapping
+/// — in particular which shortcuts are focus-gated — is testable without
+/// a live keyboard subscription.
+pub fn key_press_message(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Message> {
+    if modifiers.command() {
+        match key {
+            keyboard::Key::Character(ref c) if c.as_str() == "s" => {
+                if modifiers.shift() {
+                    Some(Message::ProjectIo(ProjectIoMessage::SaveProjectAs))
+                } else {
+                    Some(Message::ProjectIo(ProjectIoMessage::SaveProject))
+                }
+            }
+            keyboard::Key::Character(ref c) if c.as_str() == "o" => {
+                Some(Message::ProjectIo(ProjectIoMessage::OpenProject))
+            }
+            // Cmd-Z / Cmd-Y are also what a user presses inside a text
+            // field (iced has no text undo), so they are focus-gated
+            // rather than running a project undo mid-edit (UPD-11).
+            keyboard::Key::Character(ref c) if c.as_str() == "z" => {
+                if modifiers.shift() {
+                    Some(focus_gated(Message::Redo))
+                } else {
+                    Some(focus_gated(Message::Undo))
+                }
+            }
+            keyboard::Key::Character(ref c) if c.as_str() == "y" => {
+                Some(focus_gated(Message::Redo))
+            }
+            // `Cmd-G` groups the current multi-track selection.
+            // No-ops in the reducer when fewer than two tracks
+            // are selected (see `update::group`).
+            keyboard::Key::Character(ref c) if c.as_str() == "g" => {
+                Some(Message::Group(GroupMessage::CreateGroupFromSelection))
+            }
+            // `Cmd-F` freezes the selected track(s); `Shift-Cmd-F`
+            // freezes every freezable track (design doc #181, todo
+            // #581). Both no-op in the reducer when nothing is
+            // freezable, and are gated while a render is in flight
+            // (see `update::gates::freeze_blocks_message`).
+            keyboard::Key::Character(ref c)
+                if c.as_str().eq_ignore_ascii_case("f") =>
+            {
+                if modifiers.shift() {
+                    Some(Message::Freeze(FreezeMessage::FreezeAllTracks))
+                } else {
+                    Some(Message::Freeze(FreezeMessage::FreezeSelectedTracks))
+                }
+            }
+            _ => None,
+        }
+    } else {
+        match key {
+            // Enter submits a text field; focus-gated so submitting a
+            // track rename never opens the selected clip (UPD-11).
+            keyboard::Key::Named(keyboard::key::Named::Enter) => Some(focus_gated(
+                Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip),
+            )),
+            // `F` toggles full-screen Performance mode in/out.
+            // Manual only — never auto-opens on record-arm and
+            // never disturbs transport state. Routed through
+            // `RequestPerformanceToggle` so the toggle is
+            // suppressed while a text field is focused (this
+            // subscription fires even mid-edit; see `crate::focus`).
+            keyboard::Key::Character(ref c)
+                if c.as_str() == "f" || c.as_str() == "F" =>
+            {
+                Some(Message::Ui(UiMessage::RequestPerformanceToggle))
+            }
+            // `Esc` leaves Performance mode (a no-op elsewhere,
+            // handled in the update so it never steals Escape
+            // from other views).
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                Some(Message::Ui(UiMessage::ExitPerformanceMode))
+            }
+            // `.` / `,` jump the playhead to the next / previous
+            // arrangement marker (todo #370). Routed through the
+            // focus-probing `RequestMarkerNav` so typing a period
+            // or comma into a text field (track / section names,
+            // lyrics, filters) never moves the playhead — the
+            // same gate the `F` performance toggle uses.
+            keyboard::Key::Character(ref c) if c.as_str() == "." => {
+                Some(Message::Ui(UiMessage::RequestMarkerNav { forward: true }))
+            }
+            keyboard::Key::Character(ref c) if c.as_str() == "," => {
+                Some(Message::Ui(UiMessage::RequestMarkerNav { forward: false }))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// The held key that momentarily auditions the active reference (press →
 /// monitor reference, release → restore the prior source).
 const MOMENTARY_AUDITION_KEY: &str = "b";
@@ -343,21 +359,29 @@ const MOMENTARY_AUDITION_KEY: &str = "b";
 /// attached while the reference rail is open with a reference selected, so it
 /// can't steal the key from other surfaces.
 fn reference_momentary_keys() -> Subscription<Message> {
+    keyboard::listen().filter_map(momentary_audition_message)
+}
+
+/// The message a key event maps to for the momentary reference audition.
+/// The press is focus-gated — typing "b" into a field must not audition
+/// the reference (UPD-11); the release is not, and is a no-op in the
+/// handler when its press never took effect.
+pub fn momentary_audition_message(event: keyboard::Event) -> Option<Message> {
     use crate::reference::ReferenceMessage;
 
     fn is_momentary_key(key: &keyboard::Key) -> bool {
         matches!(key, keyboard::Key::Character(c) if c.as_str().eq_ignore_ascii_case(MOMENTARY_AUDITION_KEY))
     }
 
-    keyboard::listen().filter_map(|event| match event {
-        keyboard::Event::KeyPressed { ref key, .. } if is_momentary_key(key) => {
-            Some(Message::Reference(ReferenceMessage::MomentaryAudition(true)))
-        }
+    match event {
+        keyboard::Event::KeyPressed { ref key, .. } if is_momentary_key(key) => Some(focus_gated(
+            Message::Reference(ReferenceMessage::MomentaryAudition(true)),
+        )),
         keyboard::Event::KeyReleased { ref key, .. } if is_momentary_key(key) => {
             Some(Message::Reference(ReferenceMessage::MomentaryAudition(false)))
         }
         _ => None,
-    })
+    }
 }
 
 /// Listen for window file-drop events while in the Arrange view and forward
