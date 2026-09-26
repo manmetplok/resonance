@@ -31,6 +31,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use resonance_app::compose::ComposeMessage;
 use resonance_app::message::*;
 use resonance_app::project;
 use resonance_app::state::ids::{
@@ -39,7 +40,7 @@ use resonance_app::state::ids::{
 use resonance_app::{demo, Resonance, TestChain};
 use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{
-    AudioCommand, AudioEvent, ClipId, MidiNote, ScannedPlugin, SendSource,
+    AudioCommand, AudioEvent, ClipId, MidiNote, ScannedPlugin, SendSource, TrackType,
 };
 
 use crate::common::call;
@@ -55,6 +56,7 @@ struct FakeEngine {
     next_track: u64,
     next_bus: u64,
     next_send: u64,
+    next_clip: u64,
 }
 
 impl FakeEngine {
@@ -63,6 +65,7 @@ impl FakeEngine {
             next_track: 1,
             next_bus: 1,
             next_send: 1,
+            next_clip: 1,
         }
     }
 
@@ -95,6 +98,13 @@ impl FakeEngine {
 
     fn send(&mut self, hint: Option<u64>) -> u64 {
         Self::allocate(&mut self.next_send, hint, CONTROL_SEND_ID_BASE)
+    }
+
+    /// `engine/midi/clips.rs`, `engine/clips.rs` (FU-A6a): a clip id
+    /// handed in (`LoadMidiClipDirect`, `LoadClipFromWav`) raises the
+    /// counter only when it is below the app's derived-clip base.
+    fn clip(&mut self, id: Option<u64>) -> u64 {
+        Self::allocate(&mut self.next_clip, id, DERIVED_CLIP_ID_BASE)
     }
 
     /// D-1: the engine has no plugin-id counter left. It honours
@@ -209,6 +219,24 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                     has_sidechain_input: false,
                 });
             }
+            AudioCommand::CreateMidiClip {
+                track_id,
+                start_sample,
+                duration_ticks,
+                name,
+            } => {
+                let clip_id = engine.clip(None);
+                app.test_apply_engine_event(AudioEvent::MidiClipCreated {
+                    clip_id,
+                    track_id,
+                    start_sample,
+                    duration_ticks,
+                    name,
+                    notes: Vec::new(),
+                    trim_start_ticks: 0,
+                    trim_end_ticks: 0,
+                });
+            }
             AudioCommand::LoadMidiClipDirect {
                 clip_id,
                 track_id,
@@ -219,6 +247,7 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                 trim_start_ticks,
                 trim_end_ticks,
             } => {
+                let clip_id = engine.clip(Some(clip_id));
                 app.test_apply_engine_event(AudioEvent::MidiClipCreated {
                     clip_id,
                     track_id,
@@ -286,6 +315,14 @@ fn fixture(tag: &str) -> Fixture {
     engine.next_track = ids.tracks.iter().copied().max().unwrap_or(0) + 1;
     engine.next_bus = ids.busses.iter().copied().max().unwrap_or(0) + 1;
     engine.next_send = ids.sends.iter().copied().max().unwrap_or(0) + 1;
+    engine.next_clip = app
+        .test_midi_clips()
+        .iter()
+        .map(|c| c.id)
+        .filter(|id| *id < DERIVED_CLIP_ID_BASE)
+        .max()
+        .unwrap_or(0)
+        + 1;
     // No `next_plugin` to advance: D-1 deleted the engine's plugin
     // counter, so `FakeEngine::plugin` has nothing to seed.
     app.test_set_active_project(true);
@@ -607,6 +644,58 @@ fn a_new_track_never_takes_a_group_id() {
     assert_ne!(track_id, group_id, "the allocator skipped the group's id");
     echo(&mut f.app, &f.rx, &mut f.engine);
     assert_partition_holds(&f.app, "after allocating over a group id");
+}
+
+/// FU-A6a: a GUI-drawn MIDI clip (engine-allocated) between two
+/// app-derived ones (`notes.create_clip` draws from
+/// `fresh_derived_clip_id`) must not share an id with either. Before the
+/// engine stopped bumping its counter past app-range ids, the first
+/// derived clip at `base` moved the engine to `base + 1`, the drawn clip
+/// took it, and the next derived clip was handed `base + 1` as well.
+#[test]
+fn a_drawn_clip_never_takes_a_derived_clip_id() {
+    let mut f = fixture("clips");
+    let track_id = f
+        .app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|t| matches!(t.track_type, TrackType::Instrument) && t.sub_track.is_none())
+        .expect("the demo has an instrument track")
+        .id;
+    let seeded: HashSet<ClipId> = f.app.test_midi_clips().iter().map(|c| c.id).collect();
+    let derive = |f: &mut Fixture, bar: u32| {
+        let clip_id = call(
+            &mut f.app,
+            "notes.create_clip",
+            serde_json::json!({ "track_id": track_id, "start_bar": bar, "length_beats": 4.0 }),
+        )
+        .result::<serde_json::Value>()
+        .expect("notes.create_clip succeeds")["clip_id"]
+            .as_u64()
+            .expect("notes.create_clip returns the id");
+        echo(&mut f.app, &f.rx, &mut f.engine);
+        clip_id
+    };
+
+    let first = derive(&mut f, 40);
+    assert!(first >= DERIVED_CLIP_ID_BASE, "control clips come from the derived range");
+    f.app.test_dispatch(Message::Compose(ComposeMessage::CreateMidiClipInSection {
+        track_id,
+        start_sample: 0,
+        length_bars: 1,
+    }));
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    let second = derive(&mut f, 44);
+
+    let ids: Vec<ClipId> = f.app.test_midi_clips().iter().map(|c| c.id).collect();
+    assert_eq!(ids.len(), seeded.len() + 3, "three clips were added: {ids:?}");
+    assert_set("midi clip", &ids);
+    let drawn = *ids
+        .iter()
+        .find(|id| **id != first && **id != second && !seeded.contains(id))
+        .expect("the drawn clip landed");
+    assert!(drawn < DERIVED_CLIP_ID_BASE, "the drawn clip took an engine id, got {drawn}");
 }
 
 /// The bases are named in one place and keep their order; a base that

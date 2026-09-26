@@ -437,7 +437,7 @@ pub fn restore_take_groups_in_place(
         *next_group_id = (*next_group_id).max(group.id + 1);
         for take in &group.takes {
             if let TakeContent::Audio { clip_ref } = take.content {
-                *next_clip_id = (*next_clip_id).max(clip_ref + 1);
+                crate::engine::clips::reserve_clip_id(next_clip_id, clip_ref);
             }
         }
         take_groups.insert(group.id, group);

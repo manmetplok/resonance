@@ -18,7 +18,7 @@
 //! | track + track group (one space) | [`SUB_TRACK_ID_BASE`] | [`Resonance::allocate_track_id`](crate::Resonance::allocate_track_id) | counter bumps only for hints *below* the base |
 //! | bus | [`RETURN_BUS_ID_BASE`] | `TrackRegistry::allocate_return_bus_id` | counter bumps only for hints *below* the base |
 //! | aux send | [`CONTROL_SEND_ID_BASE`] | `AuxSendState::allocate_control_send_id` | counter bumps only for hints *below* the base |
-//! | derived (compose) clip | [`DERIVED_CLIP_ID_BASE`] | `ComposeState::allocate_derived_clip_id` | counter bumps past any id loaded directly |
+//! | clip (derived, control-created, vocal render, …) | [`DERIVED_CLIP_ID_BASE`] | [`ComposeState::fresh_derived_clip_id`](crate::compose::ComposeState::fresh_derived_clip_id) | counter bumps only for ids *below* the base (FU-A6a) |
 //! | missing reference | [`MISSING_REFERENCE_ID_BASE`] | local counter in `replay::restore` | never sees one (app-only) |
 //!
 //! **Plugin instance ids are no longer a partition** (ARCH-04 D-1): the
@@ -40,7 +40,8 @@
 //! track group's, which the engine never hears about. Until ARCH-04 A4-1
 //! the track, bus and send paths bumped past *any* hint, so one control
 //! `track.add` followed by a Cmd-G group and a GUI "Add track" put a
-//! track on the group's id. The in-use scan in [`allocate_unused`] is
+//! track on the group's id; the clip paths did the same until FU-A6a
+//! (see [`DERIVED_CLIP_ID_BASE`]). The in-use scan in [`allocate_unused`] is
 //! belt and braces on top of the split, not the thing that makes it
 //! safe: it only sees ids the app already mirrors. (D-2 through D-5 fold
 //! the send, bus, track and reference rows into the same "app is the
@@ -48,19 +49,28 @@
 
 use resonance_audio::types::TrackId;
 
-// The three bases the engine also honours are defined beside the
+// The four bases the engine also honours are defined beside the
 // engine's id types (`resonance-audio/src/types/mod.rs`): the partition
-// only works when both sides agree on it, and the engine's add paths
-// bump their counters only for hints below these.
-pub use resonance_audio::types::{CONTROL_SEND_ID_BASE, RETURN_BUS_ID_BASE, SUB_TRACK_ID_BASE};
-
-/// First id the compose model hands out for the clips it derives from
-/// chords / drum patterns. Chosen high enough that engine-allocated clip
-/// ids (counting up from 1 via `CreateMidiClip`) never reach it in a
-/// session, yet with headroom to spare; the engine bumps its own
-/// allocator past any id it sees via `LoadMidiClipDirect`, so values
-/// above this base are always safe.
-pub const DERIVED_CLIP_ID_BASE: u64 = 1 << 40;
+// only works when both sides agree on it, and the engine's add and load
+// paths bump their counters only for ids below these.
+//
+// `DERIVED_CLIP_ID_BASE` is where `ComposeState::fresh_derived_clip_id`
+// starts: the clips the app names before the engine echoes (compose
+// lanes, drum patterns, vocal MIDI and rendered vocal audio, control
+// `notes.create_clip`, imports and bounce targets that go through it).
+// Until FU-A6a the engine bumped `next_clip_id` past *any* id handed to
+// `LoadMidiClipDirect` / `LoadClipFromWav` (and past every
+// `audio/clip_<id>.wav` its STATE-08 scan found), so the first derived
+// clip at the base moved the engine to `base + 1` — the id the derived
+// counter handed out next — and a drawn clip, a recording or an import
+// then collided with the next generated clip (sharing its
+// `clip_<id>.wav`, for a vocal render). Nothing but the counter checks
+// the range: it is session-monotonic (undo never lowers it) and a load
+// reserves past every restored clip id in the range, so with the engine
+// kept out of it there is no second allocator to skip over.
+pub use resonance_audio::types::{
+    CONTROL_SEND_ID_BASE, DERIVED_CLIP_ID_BASE, RETURN_BUS_ID_BASE, SUB_TRACK_ID_BASE,
+};
 
 /// First id handed to a reference track whose file is missing on load,
 /// so it can be listed without ever being registered with the engine.

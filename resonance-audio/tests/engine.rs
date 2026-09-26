@@ -22,6 +22,8 @@ mod clip_fade_gain_handlers;
 mod clip_warp_handlers;
 #[path = "engine/deferred_clip_commands.rs"]
 mod deferred_clip_commands;
+#[path = "engine/derived_clip_id_partition.rs"]
+mod derived_clip_id_partition;
 #[path = "engine/device_params_handler.rs"]
 mod device_params_handler;
 #[path = "engine/engine_error_kind.rs"]

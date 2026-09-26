@@ -417,8 +417,11 @@ impl ComposeState {
             .or_default()
     }
 
-    /// Allocate a fresh clip id to use with `LoadMidiClipDirect`. See
-    /// [`DERIVED_CLIP_ID_BASE`] for why these live in the high range.
+    /// Allocate a fresh clip id to use with `LoadMidiClipDirect` /
+    /// `LoadClipFromWav`. See [`DERIVED_CLIP_ID_BASE`] for why these live
+    /// in the high range: the engine never moves its own clip counter
+    /// for an id there (FU-A6a), so this counter is the range's only
+    /// allocator and needs no in-use scan.
     pub fn fresh_derived_clip_id(&mut self) -> ClipId {
         let id = self.next_derived_clip_id;
         self.next_derived_clip_id += 1;
