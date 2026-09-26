@@ -96,3 +96,8 @@ pub use plugin_gui_core::SharedSize;
 #[doc(hidden)]
 pub use join::join_with_timeout;
 
+/// The bounded startup handshake `Editor::new` waits on (PLG-10), exposed
+/// for the same headless tests as [`join_with_timeout`].
+#[doc(hidden)]
+pub use join::{await_startup, Startup};
+
