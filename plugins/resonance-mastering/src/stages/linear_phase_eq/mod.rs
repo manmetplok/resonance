@@ -14,7 +14,7 @@ pub mod convolver;
 pub mod design;
 
 pub use band::{BandConfig, BandType};
-pub use convolver::{OverlapSaveConvolver, FIR_LENGTH, GROUP_DELAY, HOP_SIZE};
+pub use convolver::{FirGeometry, OverlapSaveConvolver, FIR_LENGTH, GROUP_DELAY, HOP_SIZE};
 pub use design::FirDesigner;
 
 /// Number of parametric bands exposed by the plugin per EQ instance.
@@ -41,11 +41,14 @@ pub struct LinearPhaseEq {
 
 impl LinearPhaseEq {
     pub fn new(sample_rate: f32) -> Self {
+        // FIR length scales with the rate so the low bands keep their
+        // resolution (DSP-06).
+        let geometry = FirGeometry::for_sample_rate(sample_rate);
         Self {
             sample_rate,
-            left: OverlapSaveConvolver::new(),
-            right: OverlapSaveConvolver::new(),
-            designer: FirDesigner::new(),
+            left: OverlapSaveConvolver::with_geometry(geometry),
+            right: OverlapSaveConvolver::with_geometry(geometry),
+            designer: FirDesigner::with_geometry(geometry),
             cached_bands: [BandConfig::off(); NUM_BANDS],
         }
     }
@@ -55,9 +58,10 @@ impl LinearPhaseEq {
         self.right.reset();
     }
 
-    /// Reported per-channel latency. Same for both channels.
+    /// Reported per-channel latency. Same for both channels; constant
+    /// in ms across sample rates.
     pub const fn latency(&self) -> usize {
-        GROUP_DELAY + HOP_SIZE
+        self.left.latency()
     }
 
     /// Process one stereo block in place, redesigning the filter first

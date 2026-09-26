@@ -20,11 +20,12 @@ use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
 use super::band::BandConfig;
-use super::convolver::{FFT_SIZE, FIR_LENGTH};
+use super::convolver::FirGeometry;
 
 /// Stateful FIR designer. Owns the inverse FFT plan and scratch
 /// buffers so we can redesign without allocating.
 pub struct FirDesigner {
+    geometry: FirGeometry,
     ifft: std::sync::Arc<dyn Fft<f32> + Send + Sync>,
     scratch: Vec<Complex<f32>>,
     /// Pre-allocated rustfft scratch so `process_with_scratch` never
@@ -40,27 +41,35 @@ pub struct FirDesigner {
 }
 
 impl FirDesigner {
+    /// A designer for the base (≤ 48 kHz) geometry.
     pub fn new() -> Self {
+        Self::with_geometry(FirGeometry::BASE)
+    }
+
+    pub fn with_geometry(geometry: FirGeometry) -> Self {
         let mut planner = FftPlanner::<f32>::new();
-        let ifft = planner.plan_fft_inverse(FFT_SIZE);
-        let hann = resonance_dsp::hann_window(FIR_LENGTH);
+        let ifft = planner.plan_fft_inverse(geometry.fft_size);
+        let hann = resonance_dsp::hann_window(geometry.fir_len);
         Self {
+            geometry,
             fft_scratch: vec![Complex::new(0.0, 0.0); ifft.get_inplace_scratch_len()],
             ifft,
-            scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
+            scratch: vec![Complex::new(0.0, 0.0); geometry.fft_size],
             hann,
-            h: vec![0.0; FIR_LENGTH],
+            h: vec![0.0; geometry.fir_len],
             biquads: Vec::new(),
         }
     }
 
-    /// Design a symmetric FIR of length `FIR_LENGTH` whose magnitude
+    /// Design a symmetric FIR of the geometry's length whose magnitude
     /// response matches the cascaded biquad chain described by `bands`.
     /// Returns a borrow of the internal impulse-response buffer so
     /// back-to-back redesigns do not allocate.
     pub fn design(&mut self, bands: &[BandConfig], sample_rate: f32) -> &[f32] {
-        let half = FFT_SIZE / 2;
-        let bin_hz = sample_rate / FFT_SIZE as f32;
+        let fft_size = self.geometry.fft_size;
+        let fir_len = self.geometry.fir_len;
+        let half = fft_size / 2;
+        let bin_hz = sample_rate / fft_size as f32;
 
         // Design each enabled band's biquad once up front; the per-bin
         // loop below only evaluates magnitudes.
@@ -83,23 +92,23 @@ impl FirDesigner {
             self.scratch[k] = Complex::new(mag, 0.0);
             // Mirror to the negative-frequency half (Hermitian symmetry).
             if k > 0 && k < half {
-                self.scratch[FFT_SIZE - k] = Complex::new(mag, 0.0);
+                self.scratch[fft_size - k] = Complex::new(mag, 0.0);
             }
         }
 
         // Inverse FFT → real impulse response (imaginary part ≈ 0).
         self.ifft
             .process_with_scratch(&mut self.scratch, &mut self.fft_scratch);
-        let norm = 1.0 / FFT_SIZE as f32;
+        let norm = 1.0 / fft_size as f32;
 
         // The IFFT output is a zero-phase impulse response centred at
         // index 0 (i.e. samples [0..FIR_LENGTH/2] come from positive
         // offsets, samples [FFT_SIZE - FIR_LENGTH/2..FFT_SIZE] from
         // negative offsets). Circular-shift by `FFT_SIZE / 2` so the
         // centre lands at index `FIR_LENGTH / 2` of our FIR output.
-        let half_fir = FIR_LENGTH / 2;
-        for i in 0..FIR_LENGTH {
-            let src = ((i as isize - half_fir as isize).rem_euclid(FFT_SIZE as isize)) as usize;
+        let half_fir = fir_len / 2;
+        for i in 0..fir_len {
+            let src = ((i as isize - half_fir as isize).rem_euclid(fft_size as isize)) as usize;
             self.h[i] = self.scratch[src].re * norm * self.hann[i];
         }
         &self.h
