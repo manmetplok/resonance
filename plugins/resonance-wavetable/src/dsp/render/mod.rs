@@ -149,8 +149,8 @@ impl SynthEngine {
                     self.seed_voice_lfo_rates(plan.lfo_rates, false);
                     self.refresh_active();
                 }
-                NoteEvent::NoteOff { note, .. } => self.note_off(*note),
-                NoteEvent::Choke { note, .. } => self.note_off(*note),
+                NoteEvent::NoteOff { note, .. } => self.note_off(*note, params),
+                NoteEvent::Choke { note, .. } => self.choke(*note),
             }
             *next_event = events.next_event();
         }
