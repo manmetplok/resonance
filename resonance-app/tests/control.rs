@@ -59,6 +59,8 @@ mod control_meter;
 mod control_mixer_volume_db;
 #[path = "control/control_mutation_gate.rs"]
 mod control_mutation_gate;
+#[path = "control/control_mutation_gate_loading.rs"]
+mod control_mutation_gate_loading;
 #[path = "control/control_notes.rs"]
 mod control_notes;
 #[path = "control/control_notes_bulk.rs"]

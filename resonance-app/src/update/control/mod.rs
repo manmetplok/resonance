@@ -498,6 +498,15 @@ pub(crate) fn mutation_gate_error(app: &Resonance, method: &str) -> Option<RpcEr
             "no active project — open or create one first",
         ));
     }
+    // Between `ClearAll` and `AllCleared` (a project load, a template
+    // instantiation, a structural undo/redo) the replay is about to
+    // rebuild everything from its snapshot: an edit taken now would be
+    // acknowledged and then wiped (code review UPD-03).
+    if app.io.loading || app.io.pending_load.is_some() {
+        return Some(RpcError::busy(
+            "a project load / undo replay is in progress; retry shortly",
+        ));
+    }
     // A WAV / FLAC mixdown (GUI bounce or `render.mixdown`) drives the
     // live plugin instances like a bounce in place, and the GUI gate
     // drops every synthesized domain message while it runs (code review
