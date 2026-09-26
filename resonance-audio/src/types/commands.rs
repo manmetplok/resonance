@@ -1018,10 +1018,12 @@ pub enum AudioCommand {
     },
 
     // -- Bus commands --
-    /// Add a bus. See [`AudioCommand::AddTrack`] for how `id_hint`/`name`
-    /// are honoured.
+    /// Add a bus. The app allocates every bus id (ARCH-04 D-3, same shape
+    /// as [`AudioCommand::AddPlugin`]'s `id`); the engine only ever
+    /// honours it, refusing with `EngineError::internal` if `id` is
+    /// already live rather than replacing the bus it names.
     AddBus {
-        id_hint: Option<BusId>,
+        id: BusId,
         name: Option<String>,
     },
     RemoveBus {
@@ -1092,18 +1094,35 @@ pub enum AudioCommand {
         bus_id: BusId,
         is_return: bool,
     },
-    /// Create or update (upsert) an aux send from a track or bus into a
-    /// return bus. When `id_hint` is `None` the engine allocates a fresh
-    /// `SendId`; when `Some(id)` it updates the existing send (or honours
-    /// the id for a fresh send on project load, bumping its allocator
-    /// past it). Covers create / re-route / level / pre-post / enable in
-    /// one command. The engine runs cyclic-route validation before
-    /// registering: a send routing a bus to itself, or to a destination
-    /// whose own sends already reach the source bus, is rejected with
-    /// `AudioEvent::AuxSendRejected` and not stored. On success the
-    /// engine emits `AudioEvent::AuxSendChanged` with the resolved send.
+    /// Create a new aux send from a track or bus into a return bus, under
+    /// an app-allocated `id` (ARCH-04 D-2, same shape as
+    /// [`AudioCommand::AddPlugin`]'s `id`). The engine runs cyclic-route
+    /// validation before registering — a send routing a bus to itself, or
+    /// to a destination whose own sends already reach the source bus, is
+    /// rejected with `AudioEvent::AuxSendRejected` and not stored — and
+    /// refuses the add outright with `EngineError::internal` if `id` is
+    /// already live, rather than silently turning the create into an edit
+    /// of the send that id names. On success the engine emits
+    /// `AudioEvent::AuxSendChanged` with the resolved send.
+    AddAuxSend {
+        id: SendId,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+        enabled: bool,
+    },
+    /// Edit an existing aux send in place — re-route / level / pre-post /
+    /// enable, covered in one command since every edit resends the send's
+    /// full state under its own `id`. The same cyclic-route validation as
+    /// [`AudioCommand::AddAuxSend`] runs, excluding the send's own current
+    /// edge. A no-op if `id` does not name a live send (an edit racing its
+    /// own removal), rather than an error: unlike a duplicate `id` on
+    /// [`AudioCommand::AddAuxSend`], there is no caller-invariant violation
+    /// to report here. On success the engine emits
+    /// `AudioEvent::AuxSendChanged` with the resolved send.
     SetAuxSend {
-        id_hint: Option<SendId>,
+        id: SendId,
         source: SendSource,
         dest: BusId,
         level_db: f32,

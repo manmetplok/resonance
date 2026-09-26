@@ -73,12 +73,12 @@ impl SendSlotAffordances {
 }
 
 impl Resonance {
-    /// Test-only: the app-side aux-send id counter (`0` until the
-    /// first control add seeds it), so the id-partition invariant test
-    /// can check it sits above every send it handed out.
+    /// Test-only: the app-side aux-send id counter — the only send-id
+    /// allocator left since ARCH-04 D-2 — for the id-partition invariant
+    /// test.
     #[doc(hidden)]
-    pub fn test_aux_next_control_send_id(&self) -> resonance_audio::types::SendId {
-        self.aux.next_control_send_id
+    pub fn test_next_send_id(&self) -> resonance_audio::types::SendId {
+        self.aux.next_send_id
     }
 
     /// Test-only: the app-side plugin-instance id counter — the only

@@ -119,8 +119,7 @@ fn a_duplicate_id_is_refused_across_track_bus_and_master() {
 
     // `ctx.plugins` is one map shared by every chain, so a bus (or
     // master) add asking for a track plugin's id must be refused too.
-    harness.add_bus(None, None);
-    let bus_events = harness.drain_events();
+    let bus_events = harness.add_bus(1, None);
     let bus_id = bus_events
         .iter()
         .find_map(|e| match e {

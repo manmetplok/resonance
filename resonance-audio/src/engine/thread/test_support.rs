@@ -254,9 +254,69 @@ impl EngineHandlerHarness {
     }
 
     /// Run the real `AddBus` handler (ARCH-05/C-1's `EngineError::busy`
-    /// guard: past `MAX_BUSSES`, the engine refuses rather than adding).
-    pub fn add_bus(&mut self, id_hint: Option<BusId>, name: Option<String>) {
-        self.with_ctx(|ctx, state| busses::handle_add_bus(ctx, state, id_hint, name));
+    /// guard: past `MAX_BUSSES`, the engine refuses rather than adding;
+    /// ARCH-04 D-3's `EngineErrorKind::Internal` guard: `id` already live
+    /// refuses the add rather than replacing the bus). The app allocates
+    /// every bus id now, so `id` is mandatory — no more `id_hint`.
+    pub fn add_bus(&mut self, id: BusId, name: Option<String>) -> Vec<AudioEvent> {
+        self.with_ctx(|ctx, _state| busses::handle_add_bus(ctx, id, name));
+        self.drain_events()
+    }
+
+    /// Run the real `AddAuxSend` handler (ARCH-04 D-2's
+    /// `EngineErrorKind::Internal` guard: `id` already live refuses the
+    /// add rather than editing the send it names).
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_aux_send(
+        &mut self,
+        id: SendId,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+        enabled: bool,
+    ) -> Vec<AudioEvent> {
+        self.with_ctx(|ctx, state| {
+            busses::handle_add_aux_send(ctx, state, id, source, dest, level_db, pre_fader, enabled)
+        });
+        self.drain_events()
+    }
+
+    /// Run the real `SetAuxSend` handler — the edit-only twin of
+    /// [`Self::add_aux_send`] (ARCH-04 D-2): a quiet no-op if `id` names
+    /// no live send.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_aux_send(
+        &mut self,
+        id: SendId,
+        source: SendSource,
+        dest: BusId,
+        level_db: f32,
+        pre_fader: bool,
+        enabled: bool,
+    ) -> Vec<AudioEvent> {
+        self.with_ctx(|ctx, state| {
+            busses::handle_set_aux_send(ctx, state, id, source, dest, level_db, pre_fader, enabled)
+        });
+        self.drain_events()
+    }
+
+    /// The live aux-send ids, in insertion order. Used to confirm a
+    /// refused duplicate-id add left the graph exactly as it was.
+    pub fn aux_send_ids(&self) -> Vec<SendId> {
+        self.state.aux_sends.keys().copied().collect()
+    }
+
+    /// The live bus ids, in insertion order. Used to confirm a refused
+    /// duplicate-id `AddBus` left the registry exactly as it was.
+    pub fn test_bus_ids(&self) -> Vec<BusId> {
+        self.busses.read().keys().copied().collect()
+    }
+
+    /// A live bus's name, if it exists. Used to confirm a refused
+    /// duplicate-id `AddBus` did not rename the bus it collided with.
+    pub fn test_bus_name(&self, id: BusId) -> Option<String> {
+        self.busses.read().get(&id).map(|b| b.name.clone())
     }
 
     /// Run the real `AddPlugin` handler (ARCH-04 D-1's

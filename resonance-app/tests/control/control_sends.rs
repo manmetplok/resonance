@@ -110,14 +110,15 @@ fn two_tracks_can_feed_one_return_and_both_sends_are_readable() {
         )),
         "the destination must be marked as a return bus"
     );
-    // The app's chosen id reaches the engine as a hint, not a wait.
+    // The app's chosen id reaches the engine directly (ARCH-04 D-2), not
+    // a wait.
     assert!(
         commands.iter().any(|c| matches!(
             c,
-            AudioCommand::SetAuxSend { id_hint: Some(id), dest, level_db, .. }
+            AudioCommand::AddAuxSend { id, dest, level_db, .. }
                 if *id == guitar_send && *dest == reverb && (*level_db - -6.0).abs() < 1e-4
         )),
-        "SetAuxSend must carry the app-chosen id"
+        "AddAuxSend must carry the app-chosen id"
     );
 
     let guitar = sends_of(&mut app, GUITAR);
