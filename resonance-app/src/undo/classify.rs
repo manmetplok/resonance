@@ -25,6 +25,19 @@ pub enum UndoAction {
     /// the matching gesture-end message.
     Begin,
     /// Commit the pending transaction opened by an earlier `Begin`.
+    ///
+    /// The commit records an entry only when the gesture changed the
+    /// snapshot (`commit_undo_gesture`, code review STATE-07). That is
+    /// complete for every gesture classified `Begin` below (FU-M4c): the
+    /// persisted state they edit — clip position/trim/fade/gain, MIDI clip
+    /// position/trim, the loop range, tempo events, automation
+    /// breakpoints — is all in the snapshot, and the only other state they
+    /// touch is transient interaction state (the drag handles in
+    /// `ClipInteractionState` / `transport.dragging_loop`,
+    /// `selected_global_event`), which is deliberately not undoable. A new
+    /// gesture that edits persisted state outside the `ProjectFile` must
+    /// put it in the snapshot, or its edits will leave no entry. Guarded
+    /// by `tests/timeline/undo_noop_gesture.rs`.
     Commit,
 }
 

@@ -237,6 +237,13 @@ impl Resonance {
         self.io.project_path.as_deref()
     }
 
+    /// Test-only: the token of the most recently started disk open — the
+    /// one whose `OpenLoadFinished` will be adopted (FU-A1a).
+    #[doc(hidden)]
+    pub fn test_pending_open_token(&self) -> u64 {
+        self.io.open_token
+    }
+
     /// Test-only: whether a project is active (startup modal dismissed).
     #[doc(hidden)]
     pub fn test_has_active_project(&self) -> bool {

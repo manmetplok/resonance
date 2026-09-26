@@ -127,8 +127,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // succeeds (`ProjectLoaded(Ok)`): a failed open must leave
             // the still-open project tied to its own folder.
             let path = std::path::PathBuf::from(path);
-            r.io.pending_open_path = Some(path.clone());
-            return dialogs::load_project_task(path);
+            return start_open(r, path);
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
         ProjectIoMessage::OpenRecent(path) => {
@@ -148,8 +147,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 crate::recent::remove(&mut r.io.recent_projects, &path);
                 return Task::none();
             }
-            r.io.pending_open_path = Some(path.clone());
-            return dialogs::load_project_task(path);
+            return start_open(r, path);
         }
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             finish_save_write(r);
@@ -215,6 +213,16 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 r.quit_after_save = None;
                 r.error_message = Some(format!("Save failed: {e}"));
             }
+        }
+        ProjectIoMessage::OpenLoadFinished(token, result) => {
+            // A later open overtook this one: its result is stale, and
+            // adopting it would pair this content with the later open's
+            // path (or, on failure, clear that open's pending slot).
+            if token != r.io.open_token || r.io.pending_open_path.is_none() {
+                tracing::debug!("dropping the result of a superseded project open");
+                return Task::none();
+            }
+            return handle(r, ProjectIoMessage::ProjectLoaded(result));
         }
         ProjectIoMessage::ProjectLoaded(Ok(loaded)) => {
             // Adopt the opened path now that the load succeeded — before
@@ -283,6 +291,15 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::ChordSheetPathSelected(None, _) => {}
     }
     Task::none()
+}
+
+/// Start an async disk open of `path` under a fresh open token. The path
+/// is only adopted when the load succeeds, and only if no later open has
+/// replaced this one in the meantime (FU-A1a).
+fn start_open(r: &mut Resonance, path: std::path::PathBuf) -> Task<Message> {
+    r.io.open_token = r.io.open_token.wrapping_add(1);
+    r.io.pending_open_path = Some(path.clone());
+    dialogs::load_project_task(path, r.io.open_token)
 }
 
 /// Tempo and meter for the exported chord sheet's page header.
