@@ -82,6 +82,9 @@ pub struct ProjectIoState {
         crate::update::project_io::reconcile::Origin,
         &'static str,
     )>,
+    /// Engine echoes of structural commands a diff restore sent and has
+    /// already mirrored (ARCH-01 A-13h). See [`RestoreEchoes`].
+    pub restore_echoes: RestoreEchoes,
     pub bouncing: bool,
     /// Progress `[0.0, 1.0]` of the in-flight WAV mixdown (`bouncing`),
     /// from the engine's `BounceProgress` events; drives the blocking
@@ -141,6 +144,107 @@ pub struct ProjectIoState {
     /// from. Its files stay until the next successful save or a clean
     /// quit.
     pub recovered_scratch_dir: Option<std::path::PathBuf>,
+}
+
+/// Structural echoes a diff restore is still owed by the engine (ARCH-01
+/// A-13h).
+///
+/// The diff restore removes busses and plugin instances and reorders
+/// chains itself, mirroring each change the moment it sends the command;
+/// the live edit paths instead let the engine's echo do the mirroring.
+/// Echoes arrive only after the restore returns, and an undo and a redo
+/// can both run before they do (a held Ctrl+Z, a control client's burst).
+/// Undo and redo reuse ids by design, so a stale echo can name an entity
+/// the *next* restore has put back: `BusRemoved` for a bus redo re-added
+/// would delete it, `PluginMoved` would scramble the order redo set, and
+/// the `*Added` echo of an instance a later restore removed would push a
+/// phantom slot.
+///
+/// The engine answers every `RemoveBus` / `RemovePlugin*` / `MovePlugin*`
+/// (an unknown id included), on one FIFO thread, so each expectation is
+/// consumed exactly once, in order. The rule the handlers apply:
+///
+/// * a removal / move echo that matches an expectation is swallowed (the
+///   restore already mirrored it);
+/// * an add echo for an instance or bus whose removal echo is still owed
+///   is ignored — FIFO puts that add *before* the removal the restore
+///   already mirrored, so the instance it announces is already gone.
+///
+/// Counts, not flags: an id can be removed by two restores before either
+/// echo lands (remove, re-add, remove).
+#[derive(Debug, Default)]
+pub struct RestoreEchoes {
+    removed_busses: std::collections::HashMap<resonance_audio::types::BusId, u32>,
+    removed_plugins: std::collections::HashMap<resonance_audio::types::PluginInstanceId, u32>,
+    moves: std::collections::HashMap<(resonance_audio::types::PluginInstanceId, usize), u32>,
+}
+
+fn owe<K: std::hash::Hash + Eq>(map: &mut std::collections::HashMap<K, u32>, key: K) {
+    *map.entry(key).or_insert(0) += 1;
+}
+
+fn settle<K: std::hash::Hash + Eq>(map: &mut std::collections::HashMap<K, u32>, key: K) -> bool {
+    let Some(n) = map.get_mut(&key) else {
+        return false;
+    };
+    *n -= 1;
+    if *n == 0 {
+        map.remove(&key);
+    }
+    true
+}
+
+impl RestoreEchoes {
+    /// The restore sent `RemoveBus` and mirrored it.
+    pub fn expect_bus_removed(&mut self, bus_id: resonance_audio::types::BusId) {
+        owe(&mut self.removed_busses, bus_id);
+    }
+
+    /// A `BusRemoved` echo arrived: `true` when a restore owed it (the
+    /// caller then ignores it).
+    pub fn settle_bus_removed(&mut self, bus_id: resonance_audio::types::BusId) -> bool {
+        settle(&mut self.removed_busses, bus_id)
+    }
+
+    /// A restore removed this bus and its echo has not arrived yet.
+    pub fn bus_removal_owed(&self, bus_id: resonance_audio::types::BusId) -> bool {
+        self.removed_busses.contains_key(&bus_id)
+    }
+
+    /// The restore sent `RemovePlugin*` and mirrored it.
+    pub fn expect_plugin_removed(&mut self, id: resonance_audio::types::PluginInstanceId) {
+        owe(&mut self.removed_plugins, id);
+    }
+
+    /// A `*PluginRemoved` echo arrived: `true` when a restore owed it.
+    pub fn settle_plugin_removed(&mut self, id: resonance_audio::types::PluginInstanceId) -> bool {
+        settle(&mut self.removed_plugins, id)
+    }
+
+    /// A restore removed this instance and its echo has not arrived yet.
+    pub fn plugin_removal_owed(&self, id: resonance_audio::types::PluginInstanceId) -> bool {
+        self.removed_plugins.contains_key(&id)
+    }
+
+    /// The restore sent `MovePlugin*` to engine index `to_index` and
+    /// mirrored it.
+    pub fn expect_plugin_moved(&mut self, id: resonance_audio::types::PluginInstanceId, to_index: usize) {
+        owe(&mut self.moves, (id, to_index));
+    }
+
+    /// A `*PluginMoved` echo arrived: `true` when a restore owed it.
+    pub fn settle_plugin_moved(
+        &mut self,
+        id: resonance_audio::types::PluginInstanceId,
+        to_index: usize,
+    ) -> bool {
+        settle(&mut self.moves, (id, to_index))
+    }
+
+    /// Nothing is owed.
+    pub fn is_empty(&self) -> bool {
+        self.removed_busses.is_empty() && self.removed_plugins.is_empty() && self.moves.is_empty()
+    }
 }
 
 /// The autosave-recovery prompt's subject (code review FU-M12a).

@@ -9,7 +9,8 @@ master `d538d5cf`; group 3 waits for D-2/D-3), §9 the fourth (A-13d, group
 5, against master `85b38b32`), §10 the fifth (A-13e, group 3, against
 master `1853dd1e`), §11 the sixth (A-13f, group 6 step 1, against
 master `fde89f24`), §12 the seventh (A-13g, group 6 step 2, against
-master `645d49e1`). Later slices move one group at a time.
+master `645d49e1`), §13 the eighth (A-13h, group 6 step 3, against master
+`91ec9867`). Later slices move one group at a time.
 
 ## 1. The problem
 
@@ -1171,3 +1172,240 @@ instead of `ClearAll` + full replay. User-visible:
 * A structural undo is still a full replay; the playhead / transient-UI /
   loading-window differences above are what users will notice change per
   entity kind as A-13h/i land.
+
+## 13. Group (6), step 3: A-13h
+
+Written against master `91ec9867` (after A-13g, D-7c).
+
+### What left the gate
+
+| Check dropped | Commit | Guard (`tests/io/undo_diff_shape.rs`) |
+|---|---|---|
+| bus id set | 2 | `adding_and_removing_a_bus_with_routing_undoes_through_the_diff_path` (GUI add, return role, send, key route keyed off the bus, delete — every undo/redo pinned or settled); `a_bus_restore_survives_the_previous_restores_late_echoes` |
+| plugin chains of tracks, busses and the master (ids, order, `.clap` identity) | 3 | `adding_removing_and_reordering_a_{track,bus,master}_plugin_undoes_through_the_diff_path` (add two, key one, set its param and bypass, reorder, remove); `undoing_a_plugin_add_drops_its_selection`; `a_plugin_restore_survives_the_previous_restores_late_echoes`; `a_re_added_plugins_params_follow_a_second_restore_before_its_echo` (commit 4) |
+
+Every guard asserts, after each step, no `ClearAll`, all 33 domains under
+`UndoDiff`, `build_project_file` equal to the target and the snapshot
+`same_state`; then plays the engine's echoes back and asserts the same
+again, plus that no echo is still owed (`RestoreEchoes`). The structural
+steps pin the exact command list. What the gate still checks: the track
+set (type, sub-track link) and the audio / MIDI clip sets (A-13i).
+
+### Domains
+
+`Stage` is now `Globals, Timeline, Removals, Entities, Routing, Clips,
+Content, Tail`; 33 domains. New code: `reconcile/removals.rs`.
+
+| Stage | Domain | Body by origin |
+|---|---|---|
+| Removals (1st) | `routing_removals` | after `ClearAll`: nothing. Diff: `RemoveAuxSend` for every send `old` has and `new` lacks; `ClearSidechainRoute` for every route of `old` that is not kept (`kept_route_plugins`: its plugin is kept and `new` still keys it). The removal half of `Sends` / `SidechainRoutes`, moved. |
+| Removals (2nd) | `entity_removals` | after `ClearAll`: nothing. Diff, in `old`'s chain order: every instance `new` does not keep → `RemovePlugin` / `RemovePluginFromBus` / `RemovePluginFromMaster` (skipped for a bus that goes too — `RemoveBus` drops its chain, with no per-plugin echo); then every bus `new` lacks → `RemoveBus`. Each pruned app-side at once (below). |
+| Entities | `tracks` | diff arm also appends each plugin of a kept track that `old` did not keep (`replay_plugins`, as a load). |
+| Entities | `busses` | diff arm adds a bus `old` lacks with `replay_bus` (the load body, keeping the file's `.order`), and appends new plugins to a kept bus. |
+| Entities | `master` | diff arm appends new plugins. |
+| Entities | `plugin_state` | fresh vs live **per instance** (below). |
+| Entities (last) | `entity_order` | diff arm moves every chain into `new`'s order (`MovePlugin` / `MovePluginInBus` / `MovePluginInMaster`, `order_chain`); the plugin side-index is rebuilt on every origin. |
+| Routing | `sends`, `sidechain_routes` | diff arms only upsert now; `sidechain_routes` compares only the kept routes against `new`, so a route onto a re-added instance is set again. |
+
+**Kept, fresh, removed.** `entities::kept_plugins(old, new)`: an instance
+id in both files, on the same chain (`PluginLocator`), with the same
+`clap_plugin_id` and `clap_file_path`. Every other instance of `new` is
+*fresh*; every other instance of `old` is removed. After a `ClearAll` the
+kept set is empty, so every instance is fresh — the full path is the
+special case of the rule, not a separate branch. An id whose identity
+changed (undo of a relocate, `update::plugin_replace`) or whose chain
+changed is removed and re-added under the same id, which is what the full
+replay did to it.
+
+### Removal ordering: a stage before `Entities`
+
+§10 left two options: a `RoutingRemovals` pre-pass, or entity removal in a
+late stage. Chosen: a `Removals` stage before `Entities`, holding both the
+edge removals and the entity removals, edges first. Why not late:
+
+1. **Chain order.** With removals first, a live chain at `EntityOrder` is
+   the kept slots in their old order followed by the appended fresh ones —
+   exactly the engine's chain, which appends an add. With a late removal,
+   every move index would have to count slots that are about to go.
+2. **Same-id re-add.** The engine refuses `AddPlugin*` for an id that is
+   still live (D-1). An identity or chain change under one id needs the
+   removal before the add, and a plugin moving from a bus to a track
+   would otherwise be added by `tracks` before `busses` removes it.
+3. **Edges before endpoints, everywhere.** `routing_removals` runs before
+   any entity goes, so no mirror (or engine table) ever names a removed
+   bus or plugin, and A-13e's removals-first rule (a replacement send is
+   cycle-checked against a graph without the edge it replaces) now spans
+   the whole restore instead of the `Routing` stage.
+
+The engine would tolerate the other order: `handle_remove_bus` leaves the
+bus's sends in the table (the live delete removes them on the
+`BusRemoved` echo) and a send onto a missing bus is skipped at render
+time; `RemovePlugin` drops a track plugin's key route itself. So the order
+is about the mirror and about (1) and (2), not about engine safety.
+
+**What moved (diff path):** `RemoveAuxSend` / `ClearSidechainRoute` from
+after the entity scalars and plugin state to before every entity command.
+`handle_remove_aux_send` and `sidechain::handle_clear` touch only
+`state.aux_sends` / `state.sidechain_routes` (§10, §11), which no entity
+scalar, bypass, state load or param handler reads; the echoes update
+`r.aux` / `r.sidechain`, which the entity domains do not write. Guard:
+`reconcile_order::a_diff_undo_removes_edges_before_any_entity_command`
+(fails on the A-13g order).
+
+**Bus removal and track outputs.** `RemoveBus` goes out before
+`TrackOutputs`. `handle_remove_bus` itself moves every track routed to the
+bus onto the master; `TrackOutputs` then sends `SetTrackOutput(Master)`
+for those tracks (their output differs from `old`'s), a no-op re-assertion
+that keeps one rule for the domain. `tracks` wrote the mirror's output
+from `new` already.
+
+### Fresh vs live in `plugin_state`
+
+| Phase | Fresh instance | Live (kept) instance |
+|---|---|---|
+| blob | pushed if the target has one; cached | pushed only when the cache moved on (`Arc::ptr_eq`, FU-A2b) |
+| bypass | `SetPluginBypass` when bypassed (placeholder already seeded) | sent when the slot's bypass changed, matched by id |
+| params | parked in `pending_plugin_param_overrides` for the `PluginAdded` echo | driven to the target (STATE-03 / FU-A2b); a live instance still awaiting its echo (added by a previous restore, or a missing `.clap`) has its parked values replaced by the target's |
+
+The last cell is a fix found while testing (commit 4): undo a plugin
+removal (the instance is re-added, its values parked), then undo the
+param edit before it before the echo lands — the second restore saw the
+instance as live, drove nothing (no param list yet) and left the first
+restore's values parked, which the echo then applied and a save wrote.
+
+The fresh rules are the full path's, per instance. The bypass-after-blob
+order (§11 proof 3) holds per instance on both.
+
+### Chain order on the diff path
+
+`order_chain(slots, target, kept, send_move)`: two left-to-right passes,
+first the kept slots into their target relative order, then each fresh
+slot into its target position. Each move is mirrored at once and named by
+the **engine** index the slot ends at (`plugin_chain::engine_slot_index`
+over the moved chain — a missing plugin keeps its place in the app's
+chain but not the engine's; moving one sends nothing).
+
+Kept first because they are known to exist. A fresh slot is `Available`
+until its echo says otherwise, so a fresh plugin that turns out missing is
+counted, and pass 2 can then place a *later* fresh plugin one engine slot
+off. That needs two plugins re-added by one restore, one of them missing
+and out of append order; the recovery path re-positions the missing one if
+it ever loads. Recorded, not fixed.
+
+### Echoes the restore owes: `io.restore_echoes`
+
+Live edits mirror structural changes on the engine's echo; the diff
+restore mirrors them itself, synchronously. Its echoes land after it
+returns — and after the *next* restore when an undo and a redo run before
+the event pump (a held Ctrl+Z, a control client's burst). Undo and redo
+reuse ids by design, so a late echo can name what the next restore put
+back. Without a guard:
+
+* `BusRemoved` for a bus the redo re-added deletes it (and its chain,
+  sends, scalars); `PluginRemoved` drops the re-added slot and its parked
+  params, and the `PluginAdded` after it pushes a bare slot at the end.
+* `*PluginMoved` is an absolute "move X to i": replaying one restore's
+  moves on the chain a later restore left does not in general give that
+  chain (found by brute force over 3-slot histories; the guard uses the
+  failing case: two reorders undone back to back).
+* The `*Added` echo of an instance (or a bus) a later restore removed
+  pushes a phantom.
+
+`RestoreEchoes` (`state/project_io.rs`) counts the removals and moves a
+restore sent. The engine answers every `RemoveBus` / `RemovePlugin*` /
+`MovePlugin*` (an unknown id too), on one FIFO thread, so each count is
+settled exactly once. Handlers: a matching removal / move echo is
+swallowed; an add echo for an instance or bus whose removal is still owed
+is ignored (FIFO puts it before that removal, which the restore already
+mirrored); `BusPluginAdded` for a bus whose removal is owed too. Both the
+plugin halves and the bus half were checked to fail their guard with the
+ledger disabled.
+
+The full path never needed this: `AllCleared` is delivered after every
+earlier echo, so a `ClearAll` serialised them.
+
+### Per-entity prune
+
+What `EntityRemovals` does to the mirror for a removed instance, as the
+`*_removed` echo handlers would: the slot, its cached blob, its parked
+params, its side-index entry, the mixer's `selected_plugin`, a key route
+onto it. For a removed bus: the registry entry, `selected_bus`, key routes
+keyed off it (its sends are `routing_removals`'). The rest needs nothing:
+
+* **Open plugin editors** — `editor_open` lives on the slot; the engine
+  drops the instance with its window.
+* **Missing-plugin warning** — derived from the chains
+  (`missing_plugin_slots`), so a removed missing slot leaves it; the
+  modal's own open / dismissed flags are session state.
+* **Output-destination picker, plugin side-index** — rebuilt by
+  `EntityOrder` on every origin.
+* **Transient UI (`TransientUi`), drum-roll focus** — name clips, tracks,
+  confirmations and drum patterns, none of which this slice removes. They
+  need a per-entity prune with A-13i (tracks, clips).
+
+### Behaviour changes
+
+Undo / redo of an edit that adds, removes, reorders or relocates a plugin
+(track, bus or master chain) or adds / removes a bus — including the
+sends and key routes that go with it — now takes the diff path.
+User-visible:
+
+* **Only the affected instance is instantiated or dropped.** Every other
+  plugin keeps running: no audible gap across the whole mix, no state
+  reload, other plugins' editor windows stay open, their parameter
+  automation and meters are not interrupted. A reorder is `MovePlugin*`:
+  nothing is re-instantiated.
+* **The playhead stays put**; **transient UI survives** (selected clip,
+  in-flight drag or trim, confirmations, drum-roll focus); **no loading
+  window** (control-API mutations are not refused mid-undo) — as A-13g
+  listed for its entities.
+* **A removed plugin or bus is deselected** in the mixer (the full path
+  reset every selection).
+* **A re-added missing plugin** fails to load again and raises the
+  missing-plugin warning unless the user has dismissed it for this
+  project. The full undo dismissed it (`MissingPlugins`' `UndoFull` arm);
+  the diff arm leaves the warning state alone, as for any diff undo.
+* **Full-path-only steps no longer run on these undos** (chord trim,
+  missing-plugin dismiss, take-lane peak-cache drop, frozen-track
+  re-decode, dropping derived-map entries whose echo is pending) — A-13g's
+  list.
+* **Engine traffic on the diff path's routing removals** moved ahead of
+  the entity commands (not observable).
+* **Group macro solo / mute (FU-A13a).** Not made worse: busses and
+  plugins are not group members. What changes is the same thing A-13g
+  noted — a plugin / bus undo no longer happens to reset the engine's
+  effective flags through `ClearAll`.
+
+### Found, not fixed
+
+* **Undo before the echo of a live plugin / bus delete** (the STATE-10
+  shape, which fixed clips and tracks). `RemovePluginFromTrack` /
+  `RemovePluginFromBus` / `RemovePluginFromMaster` / `RemoveBus` still
+  mirror on the echo; an undo in between snapshots a mirror that still
+  holds the entity, restores to an equal shape (a no-op) and the echo then
+  deletes it. Pre-existing (the gate saw equal shapes before too). The fix
+  is STATE-10's — mirror the delete at once — and the echo it then owes is
+  exactly what `RestoreEchoes` records; worth a follow-up.
+* **`order_chain` with two fresh plugins, one missing** — see above.
+
+### What this changes for A-13i / A-13j
+
+* **A-13i (tracks, clips).** Track removal belongs in `entity_removals`,
+  after the edges and plugins that name it (`kept_plugins` already
+  treats a plugin whose track changed as removed + re-added); track adds
+  in `tracks`' diff arm via `replay_track`. `RestoreEchoes` needs a
+  `TrackRemoved` count (and `ClipDeleted` for clip removals). Sub-tracks
+  are created by `ensure_subtracks` on a multi-output instrument's
+  `PluginAdded` echo: a diff restore that re-adds such an instrument
+  together with its sub-tracks must add the sub-tracks itself before the
+  echo, keyed by (parent, port), so the echo finds them and adds none.
+  The per-entity prune grows: selected track and clip, clip drags, the
+  delete-track confirm, the drum-roll focus, the MIDI editor, pending
+  control tracks. External instruments / freeze / lanes of an added
+  track need their `after_clear_all` behaviour per track (unchanged from
+  §10).
+* **A-13j (delete the fallback).** The kept / fresh rule already makes
+  the full path a special case (empty kept set); `EntityRemovals` and
+  `RoutingRemovals` are no-ops after `ClearAll`. With `Origin::UndoFull`
+  gone, `MissingPlugins`' dismiss-on-undo rule goes with it — decide
+  whether a diff re-add of a missing plugin should re-raise the warning.

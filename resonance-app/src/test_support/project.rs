@@ -279,6 +279,23 @@ impl Resonance {
         &self.io.reconcile_trace
     }
 
+    /// Test-only: no removal / move echo of a diff restore is still owed
+    /// (ARCH-01 A-13h, `RestoreEchoes`).
+    #[doc(hidden)]
+    pub fn test_restore_echoes_settled(&self) -> bool {
+        self.io.restore_echoes.is_empty()
+    }
+
+    /// Test-only: the chain the plugin side-index files `instance_id`
+    /// under, if any.
+    #[doc(hidden)]
+    pub fn test_plugin_index(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<crate::state::PluginLocator> {
+        self.plugin_mirror.index.get(&instance_id).copied()
+    }
+
     /// Test-only: the current project path. `None` for an untitled project
     /// (including one freshly instantiated from a template).
     #[doc(hidden)]

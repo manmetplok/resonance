@@ -472,11 +472,9 @@ fn master_state_built_over_the_control_api_is_persisted() {
     assert_eq!(ids, vec!["com.resonance.mastering"]);
 }
 
-/// Adding a master plugin is a structural change, so its undo takes the
-/// app's `ClearAll` → replay path rather than the scalar diff replay.
-/// The engine round-trip that finishes it is asynchronous, so what a
-/// unit test can assert is that the edit went onto the undo stack and
-/// that undo actually starts the restore.
+/// Adding a master plugin goes onto the undo stack, and (A-13h) its undo
+/// removes that one instance on the diff path — no `ClearAll`, no other
+/// plugin re-instantiated.
 #[test]
 fn chain_edits_are_recorded_on_the_undo_stack() {
     let mut app = app();
@@ -503,8 +501,17 @@ fn chain_edits_are_recorded_on_the_undo_stack() {
 
     let rx = app.test_capture_engine();
     let _ = app.update(Message::Undo);
+    let cmds: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(
-        std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find an entry and start restoring the pre-add snapshot"
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "the add undoes on the diff path: {cmds:?}"
     );
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::RemovePluginFromMaster { instance_id: id } if *id == instance_id
+        )),
+        "undo must remove the added instance: {cmds:?}"
+    );
+    assert!(summary(&mut app).plugins.is_empty());
 }

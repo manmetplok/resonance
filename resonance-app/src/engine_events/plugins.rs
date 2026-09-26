@@ -21,6 +21,11 @@ pub(super) fn track_added(
     output_port_count: usize,
     output_port_names: Vec<String>,
 ) {
+    // A diff restore removed this instance after adding it, before this
+    // echo arrived: the engine has already dropped it (ARCH-01 A-13h).
+    if r.io.restore_echoes.plugin_removal_owed(instance_id) {
+        return;
+    }
     // Idempotent: if the plugin slot already exists (created by project load),
     // just update its params and has_gui. Otherwise push a new slot.
     let mut inserted = false;
@@ -302,6 +307,11 @@ pub(super) fn track_removed(
     track_id: TrackId,
     instance_id: PluginInstanceId,
 ) {
+    // A diff restore's removal, already mirrored — and the slot may by now
+    // be one a later restore re-added under the same id (ARCH-01 A-13h).
+    if r.io.restore_echoes.settle_plugin_removed(instance_id) {
+        return;
+    }
     if r.ui.mixer.selected_plugin == Some(instance_id) {
         r.ui.mixer.selected_plugin = None;
     }
@@ -337,6 +347,10 @@ pub(super) fn track_moved(
     instance_id: PluginInstanceId,
     to_index: usize,
 ) {
+    // A diff restore's reorder, already mirrored (ARCH-01 A-13h).
+    if r.io.restore_echoes.settle_plugin_moved(instance_id, to_index) {
+        return;
+    }
     mirror_track_plugin_move(r, track_id, instance_id, to_index);
 }
 
@@ -564,6 +578,13 @@ pub(super) fn bus_added(
     has_gui: bool,
     has_sidechain_input: bool,
 ) {
+    // A diff restore removed this instance, or its whole bus, after
+    // adding it (ARCH-01 A-13h) — see `track_added`.
+    if r.io.restore_echoes.plugin_removal_owed(instance_id)
+        || r.io.restore_echoes.bus_removal_owed(bus_id)
+    {
+        return;
+    }
     let mut inserted = false;
     let mut recovered = false;
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
@@ -623,6 +644,10 @@ pub(super) fn bus_moved(
     instance_id: PluginInstanceId,
     to_index: usize,
 ) {
+    // A diff restore's reorder, already mirrored (ARCH-01 A-13h).
+    if r.io.restore_echoes.settle_plugin_moved(instance_id, to_index) {
+        return;
+    }
     mirror_bus_plugin_move(r, bus_id, instance_id, to_index);
 }
 
@@ -656,6 +681,10 @@ pub(super) fn bus_removed(
     bus_id: BusId,
     instance_id: PluginInstanceId,
 ) {
+    // A diff restore's removal, already mirrored (ARCH-01 A-13h).
+    if r.io.restore_echoes.settle_plugin_removed(instance_id) {
+        return;
+    }
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
         bus.plugins.retain(|p| p.instance_id != instance_id);
     }
@@ -682,6 +711,10 @@ pub(super) fn master_added(
     has_gui: bool,
     has_sidechain_input: bool,
 ) {
+    // See `track_added` (ARCH-01 A-13h).
+    if r.io.restore_echoes.plugin_removal_owed(instance_id) {
+        return;
+    }
     let mut recovered = false;
     if let Some(slot) = r
         .master.plugins
@@ -723,6 +756,10 @@ pub(super) fn master_added(
 /// (`AudioCommand::MovePluginInMaster` -> `AudioEvent::MasterPluginMoved`)
 /// onto `Resonance::master.plugins` — the master twin of [`bus_moved`].
 pub(super) fn master_moved(r: &mut Resonance, instance_id: PluginInstanceId, to_index: usize) {
+    // A diff restore's reorder, already mirrored (ARCH-01 A-13h).
+    if r.io.restore_echoes.settle_plugin_moved(instance_id, to_index) {
+        return;
+    }
     mirror_master_plugin_move(r, instance_id, to_index);
 }
 
@@ -752,6 +789,10 @@ pub(crate) fn mirror_master_plugin_move(
 }
 
 pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
+    // A diff restore's removal, already mirrored (ARCH-01 A-13h).
+    if r.io.restore_echoes.settle_plugin_removed(instance_id) {
+        return;
+    }
     r.master.plugins.retain(|p| p.instance_id != instance_id);
     if r.ui.mixer.selected_plugin == Some(instance_id) {
         r.ui.mixer.selected_plugin = None;

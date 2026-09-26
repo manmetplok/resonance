@@ -336,7 +336,11 @@ pub(super) fn playback_source_changed(
 }
 
 pub(super) fn bus_added(r: &mut Resonance, bus_id: BusId, name: String) {
-    if r.registry.busses.iter().any(|b| b.id == bus_id) {
+    // A diff restore removed this bus after adding it, before this echo
+    // arrived (ARCH-01 A-13h): the engine has already dropped it.
+    if r.io.restore_echoes.bus_removal_owed(bus_id)
+        || r.registry.busses.iter().any(|b| b.id == bus_id)
+    {
         return;
     }
     let order = r.registry.next_bus_order;
@@ -346,6 +350,11 @@ pub(super) fn bus_added(r: &mut Resonance, bus_id: BusId, name: String) {
 }
 
 pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
+    // A diff restore's removal, already mirrored — and the bus may by now
+    // be one a later restore re-added under the same id (ARCH-01 A-13h).
+    if r.io.restore_echoes.settle_bus_removed(bus_id) {
+        return;
+    }
     // A bus can be either end of a send edge, so drop both directions.
     for send_id in r.aux.drop_sends_touching_bus(bus_id) {
         let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id });

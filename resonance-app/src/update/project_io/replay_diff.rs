@@ -11,12 +11,13 @@
 //! [`try_diff_replay`] computes the structural shape of the current
 //! state vs. the target snapshot. When they match, it drives the engine
 //! surgically — one engine command per changed scalar — and rebuilds
-//! GUI state in place. When the shapes diverge (a track or bus was added
-//! or removed, a clip was inserted, a plugin instance changed identity),
-//! it returns `false` and the caller falls back to the full clear-and-
-//! replay pipeline. App-side entities restored whole on both paths
-//! (sections, drum patterns, track groups, markers) are not part of the
-//! shape (A-13g).
+//! GUI state in place. When the shapes diverge (a track was added or
+//! removed or changed type, a clip was inserted), it returns `false` and
+//! the caller falls back to the full clear-and-replay pipeline. App-side
+//! entities restored whole on both paths (sections, drum patterns, track
+//! groups, markers) are not part of the shape (A-13g), and neither are
+//! busses and plugin instances, which the diff arms add, remove and
+//! reorder one at a time (A-13h).
 //!
 //! Plugin parameter restores: a snapshot's state blob is re-sent with
 //! `LoadPluginState` only when the live cache has moved on since the
@@ -29,10 +30,7 @@ use std::collections::HashMap;
 
 use resonance_audio::types::*;
 
-use crate::project::{
-    LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
-    ProjectTrack,
-};
+use crate::project::{LoadedProject, ProjectClip, ProjectFile, ProjectMidiClip, ProjectTrack};
 use crate::Resonance;
 
 use super::reconcile::{reconcile_all_stages, LiveCarry, Origin, ReconcileCtx};
@@ -40,11 +38,11 @@ use super::serialize::build_project_file;
 
 /// Attempt a structure-preserving replay. Returns `true` when the diff
 /// path successfully drove engine + GUI to the target state; `false`
-/// when the structural shape of the project differs (tracks, busses,
-/// plugins, master plugins or clips were added / removed / renumbered)
-/// and the caller must fall back to the full clear-and-replay pipeline.
-/// App-side entities (sections, drum patterns, track groups, markers) may
-/// differ: their domains restore them whole (A-13g).
+/// when the structural shape of the project differs (tracks or clips were
+/// added / removed / renumbered) and the caller must fall back to the full
+/// clear-and-replay pipeline. App-side entities (sections, drum patterns,
+/// track groups, markers) may differ: their domains restore them whole
+/// (A-13g); so may busses and plugin chains (A-13h).
 ///
 /// On success the caller must skip the `ClearAll` command — there is no
 /// `AllCleared` event to wait for, so neither `pending_load` nor
@@ -72,11 +70,14 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
 
     // Every domain, in table order, by diff against `current` (ARCH-01
     // A-13): the transport / compose globals and the tempo map before any
-    // entity; the track, bus and master scalars that changed, the track
-    // outputs, each plugin's blob (only when the cache moved on — FU-A2b),
-    // bypass and params, the registry resort; the routing edges (removals
-    // first); the clips and what derives from them; the app-side content;
-    // external instruments, lanes and freeze last. See
+    // entity; the routing edges, plugin instances and busses the target
+    // lacks, removed in that order (A-13h); the track, bus and master
+    // scalars that changed and the busses and plugins the live state lacks,
+    // the track outputs, each plugin's blob (a live one only when the cache
+    // moved on — FU-A2b), bypass and params, the registry resort and chain
+    // order; the new or changed routing edges; the clips and what derives
+    // from them; the app-side content; external instruments, lanes and
+    // freeze last. See
     // `docs/design/A-13-reconcile.md` for why each sits where it does.
     reconcile_all_stages(r, Some(&current), target_file, &ctx);
 
@@ -88,22 +89,13 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
 // =====================================================================
 
 /// True iff the two project files have the same set of structural
-/// identifiers — track ids, plugin instance ids, clip ids, etc. —
-/// arranged into the same parent-child shape. Pure ordering of the
+/// identifiers — track ids, clip ids — arranged into the same
+/// parent-child shape. Pure ordering of the
 /// outer collections is normalised via id-sort before comparison so a
 /// re-ordering by `.order` alone does NOT force the slow path.
 pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
-    // Track set + per-track plugin set, sub-track linkage, track type,
-    // and clap plugin identity.
+    // Track set, sub-track linkage, track type.
     if !track_set_matches(&a.tracks, &b.tracks) {
-        return false;
-    }
-    // Bus set + per-bus plugin set.
-    if !bus_set_matches(&a.busses, &b.busses) {
-        return false;
-    }
-    // Master plugin set.
-    if !plugin_set_matches(&a.master_plugins, &b.master_plugins) {
         return false;
     }
     // Audio + MIDI clip ids + clip→track binding (a clip that moved to a
@@ -122,9 +114,15 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     // are rebuilt in `Clips` from the target), drum patterns and the legacy
     // flat drum-group list they promote (`DrumPatterns`, whose diff arm
     // empties the bank for an empty target), track groups (`TrackGroups`),
-    // arrangement markers (`Markers`). What is left is what the diff arms
-    // cannot add or remove yet: tracks, busses and plugin instances
-    // (A-13h/i), clips (A-13i).
+    // arrangement markers (`Markers`). Nor (A-13h) busses and plugin
+    // chains — track, bus and master: `RoutingRemovals` drops the edges
+    // `b` lacks, `EntityRemovals` the plugin instances it does not keep
+    // (`entities::kept_plugins`: same id, chain and `.clap` identity) and
+    // the busses it lacks, the entity domains add what `a` lacks,
+    // `PluginState` treats each added instance as a load does, and
+    // `EntityOrder` moves every chain into `b`'s order (`MovePlugin*`).
+    // What is left is what the diff arms cannot add or remove yet: tracks
+    // and clips (A-13i).
     true
 }
 
@@ -156,42 +154,8 @@ fn track_set_matches(a: &[ProjectTrack], b: &[ProjectTrack]) -> bool {
         if ta.sub_track != tb.sub_track {
             return false;
         }
-        if !plugin_set_matches(&ta.plugins, &tb.plugins) {
-            return false;
-        }
     }
     true
-}
-
-fn bus_set_matches(a: &[ProjectBus], b: &[ProjectBus]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let by_id_b: HashMap<u64, &ProjectBus> = b.iter().map(|x| (x.id, x)).collect();
-    for ba in a {
-        let Some(bb) = by_id_b.get(&ba.id) else {
-            return false;
-        };
-        if !plugin_set_matches(&ba.plugins, &bb.plugins) {
-            return false;
-        }
-    }
-    true
-}
-
-fn plugin_set_matches(a: &[ProjectPlugin], b: &[ProjectPlugin]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    // Chain order matters: reordering plugins in the FX chain is a
-    // structural change the engine doesn't expose a surgical command
-    // for today. Zip+compare by position covers both "same ids in the
-    // same order" and "identity bytes match for each slot".
-    a.iter().zip(b.iter()).all(|(pa, pb)| {
-        pa.instance_id == pb.instance_id
-            && pa.clap_plugin_id == pb.clap_plugin_id
-            && pa.clap_file_path == pb.clap_file_path
-    })
 }
 
 fn audio_clip_set_matches(a: &[ProjectClip], b: &[ProjectClip]) -> bool {

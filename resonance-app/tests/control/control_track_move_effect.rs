@@ -325,16 +325,22 @@ fn the_move_is_a_committed_undoable_edit() {
         .expect("succeeds");
     assert_eq!(app.revision(), before + 1, "the move is a committed edit");
 
-    // Chain order is structural, so undo takes the ClearAll -> replay
-    // path (the same one `track.remove_effect`'s undo takes); the engine
-    // round-trip that finishes it is asynchronous, so assert the restore
-    // actually starts.
+    // A-13h: the undo is one `MovePlugin` back on the diff path, no
+    // `ClearAll`, finished inside `update()`.
+    let moved = order(&mut app);
     let rx = app.test_capture_engine();
     let _ = app.update(Message::Undo);
+    let cmds: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(
-        std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find the move and start restoring the pre-move snapshot"
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a move undoes on the diff path: {cmds:?}"
     );
+    assert!(
+        cmds.iter().any(|c| matches!(c, AudioCommand::MovePlugin { .. })),
+        "undo must move the plugin back: {cmds:?}"
+    );
+    let restored = order(&mut app);
+    assert_eq!(restored, moved.iter().rev().cloned().collect::<Vec<_>>());
 }
 
 /// The instrument-floor rule belongs to the chain, not to the control
