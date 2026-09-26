@@ -139,6 +139,52 @@ pub struct UndoSnapshot {
     pub extras: UndoExtras,
 }
 
+impl UndoSnapshot {
+    /// True when `self` and `other` describe the same undoable state — the
+    /// check that tells a gesture that edited something from a click that
+    /// moved nothing (code review STATE-07). Compares every captured part:
+    /// the project file through its serialized form (no `PartialEq` on the
+    /// whole file tree; `serde_json` objects are key-sorted, so map order
+    /// can't differ), notes field by field, and the extras directly.
+    pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
+        let (a, b) = (&self.extras, &other.extras);
+        let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
+            && self.project.midi_notes.iter().all(|(id, notes)| {
+                other
+                    .project
+                    .midi_notes
+                    .get(id)
+                    .is_some_and(|o| crate::update::project_io::replay_diff::midi_notes_equal(notes, o))
+            });
+        let extras_equal = a.compose_derived_clips == b.compose_derived_clips
+            && a.compose_next_derived_clip_id == b.compose_next_derived_clip_id
+            && a.vocal_clip_lyrics == b.vocal_clip_lyrics
+            && a.automation_lanes == b.automation_lanes
+            && a.reference.entries == b.reference.entries
+            && a.reference.active_id == b.reference.active_id
+            && a.reference.loudness_match == b.reference.loudness_match
+            && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
+            && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
+            && a.chord_track == b.chord_track
+            && a.compose_arrangements == b.compose_arrangements
+            && a.track_freeze == b.track_freeze
+            && a.clip_fade_gain == b.clip_fade_gain
+            && a.external_instruments == b.external_instruments
+            && a.external_instrument_devices == b.external_instrument_devices;
+        if !(notes_equal && extras_equal) {
+            return false;
+        }
+        match (
+            serde_json::to_value(&self.project.file),
+            serde_json::to_value(&other.project.file),
+        ) {
+            (Ok(x), Ok(y)) => x == y,
+            // Unserializable: can't prove equality, so treat it as changed.
+            _ => false,
+        }
+    }
+}
+
 /// Identifies a continuous-edit source so that a stream of messages
 /// targeting the same control (a fader drag, a knob twist) collapses into
 /// a single undo entry. Any interaction that isn't the same source — a

@@ -97,7 +97,7 @@ impl crate::Resonance {
         let commit_after = self.record_undo(&message);
         let task = self.dispatch(message);
         if commit_after {
-            self.undo.commit();
+            self.commit_undo_gesture();
         }
         task
     }

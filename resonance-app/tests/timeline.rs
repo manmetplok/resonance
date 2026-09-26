@@ -65,6 +65,8 @@ mod markers_overview_ui;
 mod quantize_persistence;
 #[path = "timeline/recording_undo.rs"]
 mod recording_undo;
+#[path = "timeline/undo_noop_gesture.rs"]
+mod undo_noop_gesture;
 #[path = "timeline/render_cache.rs"]
 mod render_cache;
 #[path = "timeline/selection_bar.rs"]

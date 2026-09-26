@@ -202,6 +202,21 @@ impl UndoHistory {
         self.coalesce_key = None;
     }
 
+    /// The snapshot of an open gesture (its pre-gesture state), if any.
+    /// `commit_undo_gesture` compares it against the current state to tell
+    /// a real edit from a click that moved nothing (code review STATE-07).
+    pub fn pending_snapshot(&self) -> Option<&UndoSnapshot> {
+        self.pending.as_ref()
+    }
+
+    /// Drop the open gesture without recording it: the gesture ended
+    /// without changing anything, so there is nothing to undo, and the
+    /// redo stack must survive.
+    pub fn discard_pending(&mut self) {
+        self.pending = None;
+        self.pending_label.clear();
+    }
+
     /// Commit the pending transaction as a single undo entry. Called at
     /// gesture end when the state actually changed.
     pub fn commit(&mut self) {

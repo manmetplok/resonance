@@ -42,18 +42,20 @@ impl crate::Resonance {
     /// Classifies the message, marks the project dirty when appropriate,
     /// and captures a pre-dispatch snapshot for the Record / RecordCoalesced
     /// / Begin actions. Returns `true` when the caller must call
-    /// `self.undo.commit()` after dispatch — i.e. when the message is a
+    /// `self.commit_undo_gesture()` after dispatch — i.e. when the message is a
     /// gesture-end that closes a transaction opened by an earlier `Begin`.
     pub(crate) fn record_undo(&mut self, message: &crate::message::Message) -> bool {
         let action = classify(message);
         let commit_after = matches!(action, UndoAction::Commit);
 
         // Mark the project dirty on any state-changing action. This
-        // mirrors the undo classification: any action that warrants an
-        // undo entry (Record, RecordCoalesced, Begin, Commit) means the
-        // project has diverged from the last saved version. The dirty
-        // flag is cleared on ProjectSaved(Ok) and on project load.
-        if !matches!(action, UndoAction::Skip) {
+        // mirrors the undo classification: an action that warrants an
+        // undo entry means the project has diverged from the last saved
+        // version. The dirty flag is cleared on ProjectSaved(Ok) and on
+        // project load. A gesture (Begin…Commit) decides at its end, in
+        // `commit_undo_gesture`: a click that moves nothing is no edit
+        // (code review STATE-07).
+        if matches!(action, UndoAction::Record | UndoAction::RecordCoalesced(_)) {
             self.dirty = true;
         }
 
@@ -64,7 +66,9 @@ impl crate::Resonance {
         // closes a Begin…Commit gesture. Begin itself doesn't bump — the
         // transaction commits on gesture end. Unlike the history stack
         // this is not gated on `can_record_undo`: the state mutation
-        // happens regardless, and remote clients need to see it.
+        // happens regardless, and remote clients need to see it. The
+        // Commit's bump happens after dispatch, in `commit_undo_gesture`,
+        // and only when the gesture changed something.
         //
         // Inside a compound group (`with_compound_undo` — the control
         // API's per-call atomicity) only the group's opening mutation
@@ -72,14 +76,14 @@ impl crate::Resonance {
         // control call is one revision on the wire, matching the one
         // history entry it records below.
         let absorbed = match action {
-            UndoAction::Record | UndoAction::RecordCoalesced(_) | UndoAction::Commit => {
+            UndoAction::Record | UndoAction::RecordCoalesced(_) => {
                 let absorbed = self.undo.absorb_into_compound();
                 if !absorbed {
                     self.revision = self.revision.wrapping_add(1);
                 }
                 absorbed
             }
-            UndoAction::Begin | UndoAction::Skip => false,
+            UndoAction::Begin | UndoAction::Commit | UndoAction::Skip => false,
         };
 
         // Skip every history-mutating branch when the app isn't in a
@@ -127,6 +131,33 @@ impl crate::Resonance {
         }
 
         commit_after
+    }
+
+    /// Close a Begin…Commit gesture after its gesture-end message has
+    /// dispatched. The history entry, the dirty flag and the revision bump
+    /// all happen only when the gesture actually changed the project: a
+    /// click on a clip (press + release, no move) or a drag released where
+    /// it started records nothing, keeps the redo stack and leaves the
+    /// project clean (code review STATE-07).
+    ///
+    /// With no open transaction there is nothing to compare against. That
+    /// is either a stray gesture end (recording was possible, so the
+    /// gesture never began — nothing happened) or a project that cannot
+    /// record history at all, where the edit still counts as one.
+    pub(crate) fn commit_undo_gesture(&mut self) {
+        let changed = match self.undo.pending_snapshot() {
+            Some(before) => !before.same_state(&self.snapshot_for_undo()),
+            None => !self.can_record_undo(),
+        };
+        if !changed {
+            self.undo.discard_pending();
+            return;
+        }
+        self.dirty = true;
+        if !self.undo.absorb_into_compound() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        self.undo.commit();
     }
 
     /// Record what a recording lands as an undoable edit (STATE-02). Called
