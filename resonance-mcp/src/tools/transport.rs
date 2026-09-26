@@ -42,8 +42,9 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Move the playhead to a musical position (bar 1-based, optional beat \
-                       1-based within the bar) or an absolute sample position. Give either \
-                       bar[+beat] or sample, not both.",
+                       1-based within the bar, in the time signature's beat unit — an eighth \
+                       in 6/8, as song_summary reports it) or an absolute sample position. \
+                       Give either bar[+beat] or sample, not both.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<transport::TransportResult>()
     )]
@@ -55,7 +56,8 @@ impl ResonanceMcp {
     }
 
     #[tool(
-        description = "Set the loop region (start/end as bar[+beat] or sample positions); \
+        description = "Set the loop region (start/end as bar[+beat] or sample positions; \
+                       beat is in the time signature's beat unit, as for transport_seek); \
                        optional enabled also switches looping on/off in the same call.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<transport::TransportResult>()

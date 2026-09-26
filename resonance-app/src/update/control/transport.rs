@@ -196,9 +196,14 @@ fn set_key(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) 
 /// Resolve a client [`PositionSpec`] (1-based musical bar/beat, or an
 /// absolute sample) to a sample position via the tempo map.
 ///
-/// Shared with `meter.*` (todo #1219), which windows a measurement with
-/// the same vocabulary — one definition of "bar 5" for the whole control
-/// surface.
+/// `beat` counts the bar's time-signature beat — an eighth in 6/8, a half
+/// in 2/2 — exactly as `song_position` reports it, so a position read
+/// from any view seeks back to the same sample (CTL-01). A beat at or past
+/// `numerator + 1` is the next bar's downbeat and is refused.
+///
+/// The single resolver behind every positional input — `transport.seek` /
+/// `loop_set`, `clip.*`, and `meter.*` (todo #1219) — one definition of
+/// "bar 5 beat 2" for the whole control surface.
 pub(super) fn resolve_position(app: &Resonance, spec: &PositionSpec) -> Result<u64, RpcError> {
     if let Some(sample) = spec.sample {
         if spec.bar.is_some() || spec.beat.is_some() {
@@ -217,12 +222,23 @@ pub(super) fn resolve_position(app: &Resonance, spec: &PositionSpec) -> Result<u
         return Err(RpcError::invalid_params("bar is 1-based"));
     }
     let beat = spec.beat.unwrap_or(1.0);
-    if beat < 1.0 {
+    if !(beat >= 1.0) {
         return Err(RpcError::invalid_params("beat is 1-based"));
     }
-    let bar_sample = app.tempo_map.bar_to_sample(bar - 1); // wire 1-based -> app 0-based
-    let ticks = ((beat - 1.0) * resonance_audio::types::TICKS_PER_QUARTER_NOTE as f64).round()
-        as u64;
+    let bar_idx = bar - 1; // wire 1-based -> app 0-based
+    let beats_in_bar = app.tempo_map.numerator_at_bar(bar_idx);
+    if beat >= f64::from(beats_in_bar) + 1.0 {
+        return Err(RpcError::invalid_params(format!(
+            "beat {beat} is past the end of bar {bar}, which has {beats_in_bar} beats \
+             (beats count the time signature's beat unit); write the next bar's \
+             downbeat as {{bar: {}, beat: 1}}",
+            bar + 1
+        )));
+    }
+    let bar_sample = app.tempo_map.bar_to_sample(bar_idx);
+    let beat_ticks =
+        resonance_audio::types::beat_len_ticks(app.tempo_map.denominator_at_bar(bar_idx));
+    let ticks = ((beat - 1.0) * beat_ticks as f64).round() as u64;
     Ok(app
         .tempo_map
         .tick_to_abs_sample(bar_sample, ticks, app.sample_rate))

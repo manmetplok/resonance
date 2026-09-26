@@ -79,7 +79,7 @@ impl ResonanceMcp {
                        or an EXTERNAL-INSTRUMENT track, whose sound is outboard so what lands on \
                        it is recorded audio. A plain instrument, drums or vocal track is refused, \
                        because an audio clip on one would never render. start takes bar [+ beat] \
-                       (1-based) or sample, and \
+                       (1-based, beat in the time signature's unit) or sample, and \
                        defaults to bar 1 — it is NOT snapped to the grid, so the clip lands \
                        exactly where you say. The clip is named after the file's stem. \
                        \
@@ -104,7 +104,8 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Move an audio clip to a new position, and optionally to another audio \
-                       track. start takes bar [+ beat] (1-based) or sample, with no grid \
+                       track. start takes bar [+ beat] (1-based, beat in the time signature's \
+                       unit — an eighth in 6/8) or sample, with no grid \
                        snapping. Omit track_id to move it in time only; a track_id that is not \
                        an audio track is refused. \
                        \
@@ -213,7 +214,8 @@ impl ResonanceMcp {
                        the same audio, so nothing is copied and edit_undo restores the single \
                        clip exactly. \
                        \
-                       `at` is a POSITION on the timeline ({bar, beat} or {seconds}/{samples}), \
+                       `at` is a POSITION on the timeline ({bar, beat} with beat in the time \
+                       signature's unit, or {seconds}/{samples}), \
                        not an offset into the source, and must fall strictly inside the clip — \
                        a cut at either edge is refused rather than making an empty half. The \
                        head keeps the fade-in, the tail the fade-out. Returns {head_clip_id, \

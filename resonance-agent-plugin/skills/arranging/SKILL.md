@@ -111,9 +111,12 @@ it. For a few thousand notes, the JSON array itself starts to dominate the
 session cost — use `notes_import_midi` with a `path` or `data_base64` instead.
 
 Coordinates: pitch is MIDI (60 = C4), `start_beat` is **0-based and
-clip-relative**, `duration_beats` is in beats, velocity 1–127. Bars in the
-arrangement are 1-based. Mixing those two conventions up is the most common way
-a hand-written part lands in the wrong place.
+clip-relative**; it and `duration_beats` count **quarter notes**
+whatever the meter (a 6/8 bar is 3.0), velocity 1–127. Bars in the
+arrangement are 1-based, and a timeline `{bar, beat}` position's `beat` is
+1-based in the **signature's** beat (an eighth in 6/8). Mixing those
+conventions up is the most common way a hand-written part lands in the wrong
+place.
 
 After `notes_edit` or `notes_delete`, indices shift — **re-read
 `mcp__resonance__song_notes` before the next index-based edit.**

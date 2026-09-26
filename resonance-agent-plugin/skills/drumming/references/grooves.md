@@ -1,6 +1,6 @@
 # Groove recipes
 
-Beat positions are **0-based and clip-relative**, in beats, matching
+Beat positions are **0-based and clip-relative**, in quarter notes, matching
 `notes_insert_many`'s `start_beat`. One bar of 4/4 is beats 0–3.99: count "1" is
 beat 0, "2" is beat 1, "the and of 2" is beat 1.5, "4" is beat 3.
 

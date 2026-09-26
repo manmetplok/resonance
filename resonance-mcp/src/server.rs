@@ -60,7 +60,12 @@ a tool whose method is missing there cannot be made to work by re-phrasing the c
 Destructive operations (track_delete, section_delete, project_new/project_open with unsaved \
 changes, overwriting files) are refused with a summary of what would be lost until you pass \
 confirm: true (overwrite: true for render targets). Bars and beats are 1-based; clip- and \
-section-relative beats are 0-based; pitch 60 = C4.";
+section-relative beats are 0-based; pitch 60 = C4. A timeline {bar, beat} position — every \
+reported playhead/position, and every seek, loop, clip_* and meter range you send — counts \
+beat in the time signature's beat unit (an eighth in 6/8, a half in 2/2), so a reported \
+position can be sent straight back; a beat past the bar's last one is refused. Clip- and \
+section-relative *_beat / *_beats fields are quarter notes whatever the meter (a 6/8 bar is \
+3.0 of them).";
 
 /// The MCP server handler: a thin, stateless translation layer over the
 /// control socket. Cloneable (the client is shared via [`Arc`]).

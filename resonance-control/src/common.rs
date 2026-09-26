@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 
 /// A resolved song position: both musical (1-based bar, 1-based beat
 /// within the bar, fractional) and absolute sample time.
+///
+/// `beat` counts the bar's **time-signature beat** — one note of value
+/// `1/denominator`: a quarter in 4/4, an eighth in 6/8 and 7/8, a half in
+/// 2/2 — so a bar has `numerator` beats and `beat` runs from 1 up to (not
+/// including) `numerator + 1`. [`PositionSpec`] uses the same unit, so a
+/// reported position can be passed straight back in. (Clip- and
+/// section-relative `*_beat` / `*_beats` fields are a different thing:
+/// 0-based quarter notes.)
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SongPosition {
@@ -18,6 +26,11 @@ pub struct SongPosition {
 
 /// A client-supplied position: either musical (`bar` [+ `beat`]) or
 /// `sample`. Servers resolve it and echo back a full [`SongPosition`].
+///
+/// `beat` is 1-based and counts the bar's time-signature beat, exactly as
+/// [`SongPosition::beat`] does (an eighth in 6/8), following signature
+/// changes along the song. A beat at or past `numerator + 1` would be the
+/// next bar and is refused.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PositionSpec {

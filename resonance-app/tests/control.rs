@@ -85,6 +85,8 @@ mod control_plugin_params_persist;
 mod control_plugins_catalog;
 #[path = "control/control_plugins_rescan.rs"]
 mod control_plugins_rescan;
+#[path = "control/control_position_beats.rs"]
+mod control_position_beats;
 #[path = "control/control_project.rs"]
 mod control_project;
 #[path = "control/control_render.rs"]
