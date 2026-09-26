@@ -65,6 +65,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-2 (ARCH-01) | A1-2 (4) vocal_clip_lyrics from ProjectFile; canonical file/live lyric forms | opus | merged | cb850b0c |
 | refactor-intent A-3 (ARCH-01) | A1-2 (5) automation_lanes from ProjectFile; slow-path double restore removed | opus | merged | 5479f8cf |
 | refactor-intent A-4 (ARCH-01) | A1-2 (6) track_freeze from ProjectTrack.freeze; slow-path undo now deletes an undone freeze's cache | opus | merged | 8e10c24c |
+| refactor-intent A-5 (ARCH-01) | A1-2 (7) reference content/monitor split; engine re-sync on both undo paths; `null` LUFS load fix | opus | merged | db57a50c |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
