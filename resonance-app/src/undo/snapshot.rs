@@ -94,10 +94,17 @@ pub enum CoalesceKey {
     /// (FU-A10a).
     DrumGroupName(u64),
     /// Dragging one of a drum group's generator knobs (density, swing,
-    /// accent, humanize, fills — the right-rail sliders), keyed by group
-    /// id and which knob so switching knob or group breaks the run but
-    /// repeated steps on the same knob merge (FU-A10a).
+    /// accent, humanize, fills, cycle, phase — the right-rail sliders),
+    /// keyed by group id and which knob so switching knob or group breaks
+    /// the run but repeated steps on the same knob merge (FU-A10a, FU-A10c).
     DrumGroupParam(u64, DrumGroupKnob),
+    /// Dragging a drum pad's articulation weight slider, keyed by group id
+    /// and pad index so switching pad or group breaks the run but repeated
+    /// steps on the same pad merge (FU-A10c).
+    DrumPadWeight(u64, usize),
+    /// Dragging an external-instrument track's manual latency offset slider,
+    /// keyed by track id (FU-A10c).
+    ExternalLatency(TrackId),
     /// Typing in a vocal lane's lyric theme / prompt field, keyed by the
     /// lane (section definition + track) it belongs to (FU-A10a).
     VocalTheme(u64, TrackId),
@@ -131,6 +138,8 @@ pub enum DrumGroupKnob {
     Accent,
     Humanize,
     Fills,
+    Cycle,
+    Phase,
 }
 
 /// Which of the lane inspector's numeric sliders a coalesce run is for —

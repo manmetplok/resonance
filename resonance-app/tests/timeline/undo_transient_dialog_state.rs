@@ -13,6 +13,7 @@ use resonance_app::compose::messages::{ChordInspectorMsg, DrumGroupsMessage, Lan
 use resonance_app::compose::{ComposeMessage, LaneGeneratorKind};
 use resonance_app::message::{BounceMessage, Message, TrackMessage};
 use resonance_app::state::ViewMode;
+use resonance_app::update::external_instrument::ExternalInstrumentMessage;
 use resonance_app::{demo, Resonance};
 use resonance_audio::types::TrackType;
 
@@ -625,5 +626,158 @@ fn typing_bulk_lyrics_coalesces_into_one_entry() {
         vocal_draft_text(&app, def_id, track_id),
         old_draft,
         "one undo restores the pre-typing draft"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FU-A10c: additional drum group and external latency sliders coalesce
+// ---------------------------------------------------------------------------
+
+fn group_cycle(app: &Resonance, group_id: u64) -> u32 {
+    app.compose_state()
+        .drum_patterns
+        .iter()
+        .flat_map(|p| p.groups.iter())
+        .find(|g| g.id == group_id)
+        .expect("group exists")
+        .cycle
+}
+
+fn group_phase(app: &Resonance, group_id: u64) -> u32 {
+    app.compose_state()
+        .drum_patterns
+        .iter()
+        .flat_map(|p| p.groups.iter())
+        .find(|g| g.id == group_id)
+        .expect("group exists")
+        .phase
+}
+
+fn pad_weight(app: &Resonance, group_id: u64, pad_index: usize) -> u32 {
+    app.compose_state()
+        .drum_patterns
+        .iter()
+        .flat_map(|p| p.groups.iter())
+        .find(|g| g.id == group_id)
+        .expect("group exists")
+        .pads
+        .get(pad_index)
+        .expect("pad exists")
+        .weight
+}
+
+fn external_latency_offset(app: &Resonance, track_id: resonance_audio::types::TrackId) -> i64 {
+    app.test_external_instrument(track_id)
+        .expect("external instrument exists")
+        .latency_offset_samples
+}
+
+fn external_instrument(msg: ExternalInstrumentMessage) -> Message {
+    Message::ExternalInstrument(msg)
+}
+
+/// Five steps of the same drum-group cycle knob is one undo entry,
+/// and one undo restores the pre-drag value.
+#[test]
+fn drum_group_cycle_steps_coalesce_into_one_entry() {
+    let mut app = app_with_redo(ViewMode::Compose);
+    let group_id = group_id_of_first_pattern(&app);
+    let old_cycle = group_cycle(&app, group_id);
+    let before = entries(&app);
+
+    for cycle in [4, 8, 12, 16, 20] {
+        let _ = app.update(drums(DrumGroupsMessage::SetGroupCycle { group_id, cycle }));
+    }
+
+    assert_eq!(group_cycle(&app, group_id), 20);
+    assert_eq!(entries(&app), before + 1, "one knob, one entry");
+
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        group_cycle(&app, group_id),
+        old_cycle,
+        "one undo restores the pre-drag cycle"
+    );
+}
+
+/// Five steps of the same drum-group phase knob is one undo entry,
+/// and one undo restores the pre-drag value.
+#[test]
+fn drum_group_phase_steps_coalesce_into_one_entry() {
+    let mut app = app_with_redo(ViewMode::Compose);
+    let group_id = group_id_of_first_pattern(&app);
+    let old_phase = group_phase(&app, group_id);
+    let before = entries(&app);
+
+    for phase in [1, 2, 3, 4, 5] {
+        let _ = app.update(drums(DrumGroupsMessage::SetGroupPhase { group_id, phase }));
+    }
+
+    assert_eq!(group_phase(&app, group_id), 5);
+    assert_eq!(entries(&app), before + 1, "one knob, one entry");
+
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        group_phase(&app, group_id),
+        old_phase,
+        "one undo restores the pre-drag phase"
+    );
+}
+
+/// Five steps of the same drum-pad weight knob is one undo entry,
+/// and one undo restores the pre-drag value.
+#[test]
+fn drum_pad_weight_steps_coalesce_into_one_entry() {
+    let mut app = app_with_redo(ViewMode::Compose);
+    let group_id = group_id_of_first_pattern(&app);
+    let pad_index = 0;
+    let old_weight = pad_weight(&app, group_id, pad_index);
+    let before = entries(&app);
+
+    for weight in [20, 40, 60, 80, 100] {
+        let _ = app.update(drums(DrumGroupsMessage::SetPadWeight {
+            group_id,
+            pad_index,
+            weight,
+        }));
+    }
+
+    assert_eq!(pad_weight(&app, group_id, pad_index), 100);
+    assert_eq!(entries(&app), before + 1, "one pad, one entry");
+
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        pad_weight(&app, group_id, pad_index),
+        old_weight,
+        "one undo restores the pre-drag weight"
+    );
+}
+
+/// Five steps of the same external-latency offset knob is one undo entry,
+/// and one undo restores the pre-drag value.
+#[test]
+fn external_latency_offset_steps_coalesce_into_one_entry() {
+    let mut app = app_with_redo(ViewMode::Arrange);
+    const EXT_TRACK: resonance_audio::types::TrackId = 3;
+    add_external_track_with_clip(&mut app, EXT_TRACK);
+    let _ = app.update(external_instrument(ExternalInstrumentMessage::Enable(EXT_TRACK)));
+    app.test_set_dirty(false);
+    let old_latency = external_latency_offset(&app, EXT_TRACK);
+    let before = entries(&app);
+
+    for offset in [100, 200, 300, 400, 500] {
+        let _ = app.update(external_instrument(ExternalInstrumentMessage::SetLatencyOffset(
+            EXT_TRACK, offset,
+        )));
+    }
+
+    assert_eq!(external_latency_offset(&app, EXT_TRACK), 500);
+    assert_eq!(entries(&app), before + 1, "one track, one entry");
+
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        external_latency_offset(&app, EXT_TRACK),
+        old_latency,
+        "one undo restores the pre-drag offset"
     );
 }
