@@ -39,7 +39,7 @@ master and updates this table. Agents do **not** edit this file.
 | M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | merged | c7a9e298 |
 | M10 socket/presets/test hygiene | CTL-11/UPD-12, STATE-14, FU-D5, STATE-15, MIX-11 | opus | merged | 32f76e9b |
 | M11 vocal pipeline | UPD-08, VIEW-31, VIEW-34, VIEW-35, FU-V2d | opus | merged | 500d58ee |
-| M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | in progress | |
+| M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | merged | 213505c2 |
 | H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | merged | d1cdaa66 |
 | H5 plan ARCH-04/05/06/07/09 | planning (read-only) | fable | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
@@ -70,7 +70,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-A2a** (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
 - [ ] **FU-A2b** (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
 - [ ] **FU-A2c** (medium) live MIDI recording: `close_open_recordings` sets note durations at Stop without an event → app mirror keeps zero-length held notes.
-- [ ] **FU-A2d** (low, = STATE-08 remainder) engine can still reuse clip ids after a full-reload undo.
+- [x] **FU-A2d** — fixed @93f57443 (= STATE-08); (low, = STATE-08 remainder) engine can still reuse clip ids after a full-reload undo.
 - [ ] **FU-F1a** (low) if the engine refuses Play as a backstop (e.g. external MIDI-clock master), app mirror `transport.playing` stays true until Stop (banner shows).
 - [ ] **FU-F1b** (low) `measure_mix` acquires its render guard on the worker → sub-quantum window where Play lands and the transport appears to start then stall. Move acquire to the engine thread.
 - [ ] **FU-F1c** (low, UX) WAV mixdown now blocks GUI traffic like bounce-in-place but has no modal, only the master-strip label.
@@ -94,7 +94,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M5a** (low) CTL-05: repeated `insert_bars` can still push content past MAX_BARS (per-call check only).
 - [ ] **FU-M5b** (low) CTL-12 remainder: lockstep doesn't check param / plugin-param ids in skills.
 - [ ] **FU-M5c** (low) control API: accept string param `key` ids for plugin params (mastering skill currently uses display names).
-- [ ] **FU-M6a** (medium) `resonance-app/src/project/io.rs` has its own `atomic_write` copy with the fixed `.tmp` name + leak — make it call `resonance_common`'s.
+- [x] **FU-M6a** — fixed @4ee7b10f; (medium) `resonance-app/src/project/io.rs` has its own `atomic_write` copy with the fixed `.tmp` name + leak — make it call `resonance_common`'s.
 - [ ] **FU-M6b** (low) svs: unknown phonemes now fail the render (was: silent token 0); g2p paths that skip voicebank substitution will surface errors.
 - [ ] **FU-M6c** (low) EQ band kind change restarts its stages from zero (can click on loud material); optional ~5 ms crossfade.
 - [ ] **FU-M6d** (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
@@ -121,6 +121,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 - [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
 - [ ] **FU-H4b** note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
+- [ ] **FU-M12a** (medium) autosave crash detection + recovery prompt (#466/#467 on `ba/epic-32`, ~1000 lines) and the autosave settings UI (#471) not ported — need their own todos.
+- [ ] **FU-M12b** (low) autosave of a never-saved project uses the real user cache dir; backup side-file folder can be orphaned by a crash mid-backup; `SetProjectDir` folder scan runs on the engine command thread.
+- [ ] **FU-M12c** (low) possibly flaky: `io preset_name_collisions::a_file_holding_another_preset_is_never_overwritten` failed once under full-suite load.
 
 ## How to use this file
 
@@ -321,7 +324,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Make `commit` compare state before recording. The cheap check is to compare `build_project_file(self)` plus extras against the pending snapshot's file: derive `PartialEq` on `ProjectFile`, or compare serde_json values. Drop the pending snapshot when they are equal. Move the `dirty` flag and the revision bump to after that check: skip them on `Begin`, and on `Commit` apply them only when something was recorded. `update_inner` would need `record_undo` to return a richer result.
 - **Verification:** Add to `resonance-app/tests/timeline`: with a project path set, record one edit, dispatch `Message::Undo`, then dispatch `StartClipDrag` and `EndClipDrag` with no update in between. Assert that `can_redo()` is still true, `is_dirty()` is unchanged, and `revision()` is unchanged.
 
-### [ ] STATE-08 — After a slow-path undo, the engine hands out clip ids again; because recording does not clear redo, the redo snapshot can point at a WAV that a new take has overwritten
+### [x] STATE-08 — After a slow-path undo, the engine hands out clip ids again; because recording does not clear redo, the redo snapshot can point at a WAV that a new take has overwritten — fixed @93f57443
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** data-loss
@@ -348,7 +351,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Store the `revision` at capture time in the `SaveCollector`, or in the `ProjectSaved` message. On `Ok`, clear `dirty` only if `r.revision` still equals it.
 - **Verification:** Add to `resonance-app/tests/io`: drive a save to `try_finish_save` (via the test hooks that the existing autosave test in `tests/io/autosave_write.rs` uses), dispatch an undoable edit, then deliver `ProjectSaved(Ok(()), false)`, and assert `is_dirty()`.
 
-### [ ] STATE-10 — An undo or redo pressed before the engine echo arrives snapshots a stale app mirror, and the late echo then undoes the undo
+### [x] STATE-10 — An undo or redo pressed before the engine echo arrives snapshots a stale app mirror, and the late echo then undoes the undo — fixed @5d2b559e
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** concurrency
@@ -358,7 +361,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Drain pending engine events at the start of `try_undo` and `try_redo` (call the same drain the tick uses) before taking `snapshot_for_undo`. Alternatively, apply the mirror mutation optimistically in the GUI `DeleteClip` and `RemoveTrack` handlers, as the control path does.
 - **Verification:** Add to `resonance-app/tests/timeline` with a captured engine: dispatch `ClipMessage::DeleteClip(id)` and `Message::Undo` without draining, then deliver `AudioEvent::ClipDeleted`. Assert that the clip is present after the undo.
 
-### [ ] STATE-11 — Autosave, which nothing triggers yet, writes the shared MIDI and plugin files into the real project folder, and a manual save that interrupts it can finish using the autosave's results
+### [x] STATE-11 — Autosave, which nothing triggers yet, writes the shared MIDI and plugin files into the real project folder, and a manual save that interrupts it can finish using the autosave's results — fixed @bde466ad
 - **Severity:** low
 - **Confidence:** high
 - **Category:** data-loss
@@ -369,7 +372,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Write autosaves to a separate subtree, for example `autosave/midi` and `autosave/plugins`, or reference the blobs with an autosave suffix in `project.autosave.json`. Tag each engine save request with a sequence number (echoed in `ClipsSavedToProjectDir` and `AllPluginStatesSaved`) and ignore events that belong to a superseded collector.
 - **Verification:** Extend `resonance-app/tests/io/autosave_write.rs`: autosave into a dir that already contains a `project.json` and `midi/clip_1.mid`, and assert that the canonical `.mid` is unchanged.
 
-### [ ] STATE-12 — Versioned backups copy only `project.json`; the MIDI and plugin files they point to are overwritten on every save
+### [x] STATE-12 — Versioned backups copy only `project.json`; the MIDI and plugin files they point to are overwritten on every save — fixed @dc003c41
 - **Severity:** low
 - **Confidence:** high
 - **Category:** data-loss
@@ -470,7 +473,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Treat `io.bouncing` like `bounce_in_progress` in `gates_message` (block everything except `ProjectIo::Save*`, Tick, Control and close), and add it to `offline_render_busy_error`. In the `ProjectIo` handlers, refuse `OpenProject/OpenPathSelected/OpenRecent/TemplateLoaded` and `Ui::StartNewProject` while any offline render (`io.bouncing`, `bounce_in_progress`, freeze in flight, offline measure) is running.
 - **Verification:** `tests/control/control_mutation_gate.rs`: set `io.bouncing` (via `BouncePathSelected`) on `new_for_test_with_capture()`, then call `transport.play` and assert `busy`, with no `AudioCommand::Play` captured. A GUI test should assert that `OpenPathSelected` during a freeze sends no `SetProjectDir`/load.
 
-### [ ] UPD-07 — Autosave is dead on master: nothing ever emits `ProjectIoMessage::Autosave`
+### [x] UPD-07 — Autosave is dead on master: nothing ever emits `ProjectIoMessage::Autosave` — fixed @8c0ad2a0 (trigger; crash recovery + settings UI not ported)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -490,7 +493,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Make epochs globally monotonic (one `u64` counter on `Resonance` that `clear()` never resets), so a pre-replay epoch can never equal a post-replay one. On replay, fail every live `JobToken::VocalRender` job ("project state was replaced mid-render").
 - **Verification:** `tests/vocal/` module: `new_for_test()`, start `vocal.render` via `execute`, run a slow-path undo (`ProjectLoaded`/`AllCleared`), and feed the stale `VocalAudioReady`. Assert the job is terminal (`Error`), and that a new render's epoch differs from the stale one.
 
-### [ ] UPD-09 — A queued `ImportClip` finishing after `ClearAll` injects a stale clip into the new project
+### [x] UPD-09 — A queued `ImportClip` finishing after `ClearAll` injects a stale clip into the new project — fixed @c1d74004
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** concurrency
@@ -734,7 +737,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Clamp or reject lengths above a maximum (for example 1024 bars) in the dialog confirm handlers and in `handle_create`/`handle_resize`. Use `checked_add`/`checked_mul` in the invariants and treat overflow as "does not fit". Make `first_free_bar` return `Option`.
 - **Verification:** Add `compose` group-binary tests: create a section of `u32::MAX` bars (expect rejection), and add a chord with `start_beat = u32::MAX` (expect rejection, no panic).
 
-### [ ] VIEW-18 — Ribbon selection, expression tool state and async vocal completions record undo entries and wipe redo
+### [x] VIEW-18 — Ribbon selection, expression tool state and async vocal completions record undo entries and wipe redo — fixed @5423f84f
 - **Severity:** medium
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
