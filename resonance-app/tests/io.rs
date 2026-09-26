@@ -107,6 +107,8 @@ mod undo_snapshot_fixed_point;
 mod derived_clip_lifecycle;
 #[path = "io/undo_restore_flag.rs"]
 mod undo_restore_flag;
+#[path = "io/undo_diff_shape.rs"]
+mod undo_diff_shape;
 #[path = "io/reconcile_order.rs"]
 mod reconcile_order;
 #[path = "io/user_definitions_rescan.rs"]

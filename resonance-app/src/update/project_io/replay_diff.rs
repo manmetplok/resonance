@@ -143,12 +143,9 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     ) {
         return false;
     }
-    if !id_set_eq(
-        a.arrangement_markers.iter().map(|m| m.id),
-        b.arrangement_markers.iter().map(|m| m.id),
-    ) {
-        return false;
-    }
+    // Not checked (ARCH-01 A-13g): entity kinds whose domains restore them
+    // whole on both paths, so an added or removed one needs no `ClearAll`:
+    // arrangement markers (`Markers`).
     true
 }
 
