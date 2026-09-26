@@ -628,7 +628,8 @@ impl Resonance {
 
     /// Fingerprint of what a frozen track's cache was rendered *from* on
     /// the arrangement side: every MIDI clip on the track (position,
-    /// length, trims, notes, lyrics — in position order, ids excluded so a
+    /// length, trims, notes, lyrics in their file form — in position
+    /// order, ids excluded so a
     /// re-derived clip with the same content matches) plus the tempo and
     /// meter maps, which move ticks in time, and the plugin-param
     /// automation lanes on the track's chain. Plugin params are left out:
@@ -659,10 +660,11 @@ impl Resonance {
                 n.start_tick.hash(&mut h);
                 n.duration_ticks.hash(&mut h);
             }
+            // The lyrics' file form, so a restore that only normalises
+            // the side-table's padding (A-2) is not a content change.
             self.compose
                 .vocal_audio
-                .clip_lyrics
-                .get(&clip.id)
+                .file_lyrics(clip.id, clip.notes.len())
                 .hash(&mut h);
         }
         format!("{:?}{:?}", self.tempo_events, self.signature_events).hash(&mut h);

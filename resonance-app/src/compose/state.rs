@@ -102,6 +102,41 @@ impl VocalAudioRegistry {
         self.clip_lyrics.clear();
         self.render_cache.clear();
     }
+
+    /// A clip's lyrics in their file form (`ProjectMidiClip::vocal_lyrics`):
+    /// cut to the clip's `note_count`, trailing empties stripped. Empty
+    /// when the clip has no entry.
+    ///
+    /// Canonical forms (A-2): the file form is this; the live form is
+    /// the file form padded back to `note_count`, with no entry at all
+    /// when the file form is empty — see [`Self::restore_clip_lyrics`].
+    /// Every live shape therefore saves to exactly one file form, and a
+    /// save → restore is a fixed point from the file's side, which is the
+    /// side the undo snapshot compares.
+    pub fn file_lyrics(&self, clip_id: ClipId, note_count: usize) -> Vec<String> {
+        let Some(live) = self.clip_lyrics.get(&clip_id) else {
+            return Vec::new();
+        };
+        let mut lyrics: Vec<String> = live.iter().take(note_count).cloned().collect();
+        while lyrics.last().is_some_and(|s| s.is_empty()) {
+            lyrics.pop();
+        }
+        lyrics
+    }
+
+    /// Install a clip's lyrics from their file form, in the live form:
+    /// padded to `note_count` so every walker parallel to the notes stays
+    /// aligned, or no entry when `saved` is empty. The one rule a disk
+    /// load and both undo restore paths share (A-2).
+    pub fn restore_clip_lyrics(&mut self, clip_id: ClipId, saved: &[String], note_count: usize) {
+        if saved.is_empty() {
+            self.clip_lyrics.remove(&clip_id);
+            return;
+        }
+        let mut lyrics = saved.to_vec();
+        lyrics.resize(note_count, String::new());
+        self.clip_lyrics.insert(clip_id, lyrics);
+    }
 }
 
 /// Stable identity of one collapsible right-rail panel card in the

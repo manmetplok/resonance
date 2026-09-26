@@ -1071,7 +1071,21 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
         extras.compose_next_derived_clip_id,
         true,
     );
-    r.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics.clone();
+    // Lyrics from `ProjectMidiClip::vocal_lyrics`, installed exactly as
+    // the full replay does (`replay_midi_clips`). After `apply_midi_clips`,
+    // so the note counts they are padded to are the snapshot's; the clip
+    // id set is the snapshot's too (`structurally_compatible`).
+    r.compose.vocal_audio.clip_lyrics.clear();
+    for pmc in &b.midi_clips {
+        let note_count = r
+            .midi_clips
+            .iter()
+            .find(|mc| mc.id == pmc.id)
+            .map_or(0, |mc| mc.notes.len());
+        r.compose
+            .vocal_audio
+            .restore_clip_lyrics(pmc.id, &pmc.vocal_lyrics, note_count);
+    }
 }
 
 /// `MidiNote` is a plain bag of `u8/f32/u64` fields but does not derive

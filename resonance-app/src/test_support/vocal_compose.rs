@@ -396,6 +396,12 @@ impl Resonance {
         self.compose.vocal_audio.clip_lyrics.insert(clip_id, lyrics);
     }
 
+    /// Test-only: drop a MIDI clip's lyric side-table entry altogether.
+    #[doc(hidden)]
+    pub fn test_clear_clip_lyrics(&mut self, clip_id: resonance_audio::types::ClipId) {
+        self.compose.vocal_audio.clip_lyrics.remove(&clip_id);
+    }
+
     /// Test-only: borrow the global chord track.
     #[doc(hidden)]
     pub fn test_chord_track(&self) -> &crate::chord_track::ChordTrack {

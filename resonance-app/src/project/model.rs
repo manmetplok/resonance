@@ -890,7 +890,8 @@ pub struct ProjectMidiClip {
     /// per-note label overrides. Empty when the clip isn't on a vocal
     /// track or hasn't had any lyric edits applied. Trailing empty
     /// strings are stripped by the serializer to keep the JSON lean —
-    /// the replay path pads back to `notes.len()` on load.
+    /// both replay paths (load and undo) pad back to `notes.len()`. See
+    /// `VocalAudioRegistry::file_lyrics` for the canonical forms.
     #[serde(default)]
     pub vocal_lyrics: Vec<String>,
     /// The clip's notes, exactly as edited — the authoritative copy on

@@ -630,15 +630,12 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
             trim_end_ticks: pmc.trim_end_ticks,
         });
 
-        // Re-install the lyric side-table. Serializer strips trailing
-        // empties; pad back to the clip's note count so every parallel
-        // walker stays correctly aligned. Skip entirely when the saved
-        // vec is all-empty (legacy projects + non-vocal clips).
-        if !pmc.vocal_lyrics.is_empty() {
-            let mut lyrics = pmc.vocal_lyrics.clone();
-            lyrics.resize(note_count, String::new());
-            r.compose.vocal_audio.clip_lyrics.insert(pmc.id, lyrics);
-        }
+        // Re-install the lyric side-table in its live form: padded to
+        // the clip's note count, no entry when the saved vec is empty
+        // (legacy projects + non-vocal clips).
+        r.compose
+            .vocal_audio
+            .restore_clip_lyrics(pmc.id, &pmc.vocal_lyrics, note_count);
     }
 }
 

@@ -462,10 +462,6 @@ fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
         "compose_next_derived_clip_id",
         x.compose_next_derived_clip_id == y.compose_next_derived_clip_id,
     );
-    check(
-        "vocal_clip_lyrics",
-        x.vocal_clip_lyrics == y.vocal_clip_lyrics,
-    );
     check("automation_lanes", x.automation_lanes == y.automation_lanes);
     check(
         "reference",
@@ -484,6 +480,7 @@ fn assert_fixed_point(f: &Fixture, path: &str, snapshot: &UndoSnapshot) {
         &f.app.test_build_project_file(),
         &snapshot.project.file,
     );
+    assert_lyrics_canonical(&f.app, path, snapshot);
     let after = f.app.test_snapshot_for_undo();
     assert!(
         Resonance::test_snapshot_same_state(&after, snapshot),
@@ -492,6 +489,41 @@ fn assert_fixed_point(f: &Fixture, path: &str, snapshot: &UndoSnapshot) {
         snapshot_differences(&after, snapshot),
         after.extras,
         snapshot.extras
+    );
+}
+
+/// The live lyric side-table a restore must leave, derived from the
+/// snapshot's `ProjectFile` alone: an entry for every clip whose saved
+/// `vocal_lyrics` is non-empty, padded (or cut) to the clip's note count
+/// — the shape a disk load and a vocal install produce (A-2).
+fn canonical_lyrics(snapshot: &UndoSnapshot) -> HashMap<ClipId, Vec<String>> {
+    snapshot
+        .project
+        .file
+        .midi_clips
+        .iter()
+        .filter(|pmc| !pmc.vocal_lyrics.is_empty())
+        .map(|pmc| {
+            let n = snapshot.project.midi_notes.get(&pmc.id).map_or(0, Vec::len);
+            let mut lyrics = pmc.vocal_lyrics.clone();
+            lyrics.resize(n, String::new());
+            (pmc.id, lyrics)
+        })
+        .collect()
+}
+
+/// Both restore paths leave the lyric side-table in the canonical form
+/// of the snapshot's file, and that normalisation is not itself a change
+/// a gesture would record.
+fn assert_lyrics_canonical(app: &Resonance, path: &str, snapshot: &UndoSnapshot) {
+    assert_eq!(
+        app.compose_state().vocal_audio.clip_lyrics,
+        canonical_lyrics(snapshot),
+        "{path}: the restored lyrics are the snapshot file's, padded to the note count"
+    );
+    assert!(
+        !app.test_gesture_changed_since(snapshot),
+        "{path}: a restore reads as unchanged against its own snapshot"
     );
 }
 
@@ -562,9 +594,15 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
         assert!(!def.arrangement.is_empty(), "arrangement entry landed");
     }
     if let Some((clip, n)) = h.vocal_clip {
+        // The file form drops the trailing empty entry.
+        let pmc = file
+            .midi_clips
+            .iter()
+            .find(|pmc| pmc.id == clip)
+            .expect("vocal clip");
         assert_eq!(
-            x.vocal_clip_lyrics.get(&clip).map(Vec::len),
-            Some(short_lyrics("", n).len()),
+            pmc.vocal_lyrics.len(),
+            short_lyrics("", n).len() - 1,
             "lyrics landed"
         );
     }
@@ -835,4 +873,144 @@ fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Vocal lyric shapes (A-2)
+// ---------------------------------------------------------------------------
+
+/// Every live shape the lyric side-table can hold for a clip of `n`
+/// notes, including those that differ from the note count. The file form
+/// strips trailing empties (and cuts past the note count); a restore pads
+/// it back to `n`, on both paths.
+fn lyric_shapes(n: usize) -> Vec<(&'static str, Option<Vec<String>>)> {
+    let exact: Vec<String> = (0..n)
+        .map(|i| match i % 3 {
+            0 => "la".to_string(),
+            1 => String::new(),
+            _ => "+".to_string(),
+        })
+        .collect();
+    vec![
+        ("short, trailing empty", Some(short_lyrics("la", n))),
+        ("longer than the notes", Some(vec!["lo".to_string(); n + 2])),
+        ("exact, interior empties", Some(exact)),
+        ("all empty", Some(vec![String::new(); n])),
+        ("empty vec", Some(Vec::new())),
+        ("no entry", None),
+    ]
+}
+
+/// Each lyric shape round-trips through BOTH restore paths to the same
+/// live side-table — the canonical form of the snapshot's file — and a
+/// restore never reads as a change against its own snapshot.
+#[test]
+fn vocal_lyric_shapes_restore_identically_through_both_paths() {
+    let mut f = fixture(
+        "lyric-shapes",
+        load_template(BuiltinTemplateId::VocalSongwriting),
+    );
+    let (clip, n) = handles(&f.app)
+        .vocal_clip
+        .expect("the vocal template has a vocal clip");
+    assert!(n >= 3, "the vocal clip has enough notes for every shape");
+    let other = vec!["da".to_string(); n];
+
+    for (shape, lyrics) in lyric_shapes(n) {
+        match &lyrics {
+            Some(l) => f.app.test_set_clip_lyrics(clip, l.clone()),
+            None => f.app.test_clear_clip_lyrics(clip),
+        }
+        let snapshot = f.app.test_snapshot_for_undo();
+
+        // Fast path.
+        f.app.test_set_clip_lyrics(clip, other.clone());
+        let _ = drain(&f.rx);
+        f.app.test_begin_restore_from_snapshot(snapshot.clone());
+        assert!(
+            !drain(&f.rx)
+                .iter()
+                .any(|c| matches!(c, AudioCommand::ClearAll)),
+            "{shape}: a lyric edit takes the diff replay"
+        );
+        let fast = f.app.compose_state().vocal_audio.clip_lyrics.clone();
+        assert_fixed_point(&f, &format!("{shape}: fast path"), &snapshot);
+
+        // Slow path.
+        f.app.test_set_clip_lyrics(clip, other.clone());
+        f.app.test_add_track(9_999, TrackType::Audio);
+        let _ = drain(&f.rx);
+        f.app.test_begin_restore_from_snapshot(snapshot.clone());
+        f.app.test_apply_engine_event(AudioEvent::AllCleared);
+        let _ = drain(&f.rx);
+        let slow = f.app.compose_state().vocal_audio.clip_lyrics.clone();
+        assert_fixed_point(&f, &format!("{shape}: slow path"), &snapshot);
+
+        assert_eq!(fast, slow, "{shape}: both paths restore the same lyrics");
+    }
+}
+
+/// A restore that normalises the lyric table — here an all-empty entry,
+/// which a slur toggled on and off again leaves behind, comes back as no
+/// entry — must not read as a content change to the UPD-05 freeze check:
+/// the frozen vocal track stays frozen through both paths.
+#[test]
+fn a_lyric_normalising_restore_leaves_a_frozen_vocal_track_frozen() {
+    let mut f = fixture(
+        "lyric-freeze",
+        load_template(BuiltinTemplateId::VocalSongwriting),
+    );
+    let h = handles(&f.app);
+    let (clip, n) = h.vocal_clip.expect("the vocal template has a vocal clip");
+    let track = f
+        .app
+        .test_midi_clips()
+        .iter()
+        .find(|mc| mc.id == clip)
+        .map(|mc| mc.track_id)
+        .expect("vocal clip");
+    let other = *h
+        .tracks
+        .iter()
+        .find(|&&t| t != track)
+        .expect("a second track");
+    f.app.test_set_clip_lyrics(clip, vec![String::new(); n]);
+    let cache_filename = format!("freeze_{track}.wav");
+    std::fs::write(
+        f.project.with_extension("freeze").join(&cache_filename),
+        b"",
+    )
+    .expect("write freeze cache");
+    f.app.test_set_freeze_status(
+        track,
+        FreezeStatus::Frozen {
+            cache_ref: FreezeCacheRef {
+                cache_filename,
+                sample_rate: 48_000,
+                bit_depth: 24,
+                render_fingerprint: 7,
+                status: FreezeCacheStatus::Frozen,
+            },
+        },
+    );
+    let snapshot = f.app.test_snapshot_for_undo();
+    let frozen = |app: &Resonance| {
+        matches!(app.test_freeze_status(track), FreezeStatus::Frozen { .. })
+    };
+
+    // Fast path.
+    f.app
+        .test_dispatch(Message::Track(TrackMessage::SetTrackVolume(other, -9.0)));
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_update(Message::Tick);
+    assert!(frozen(&f.app), "fast path: the vocal track stays frozen");
+
+    // Slow path.
+    f.app.test_add_track(9_999, TrackType::Audio);
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    f.app.test_update(Message::Tick);
+    assert!(frozen(&f.app), "slow path: the vocal track stays frozen");
 }
