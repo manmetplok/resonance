@@ -417,6 +417,11 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     let mut last_audition_report = std::time::Instant::now();
     // Sequence of the last DSP-load report printed (see `cycle_load`).
     let mut cycle_report_seen = 0u64;
+    // Coalesce cpal stream underruns into one line per
+    // `UNDERRUN_REPORT_INTERVAL` (see `stream_errors`); the counts come
+    // from the streams' error callbacks via `SharedState` (FU-H6b).
+    let output_underruns = crate::stream_errors::UnderrunRateLimiter::new();
+    let input_underruns = crate::stream_errors::UnderrunRateLimiter::new();
     // Live automated-value emission (todo #377): throttle clock + the
     // per-target "last value sent" memo. Reset whenever the transport
     // isn't rolling so a fresh play re-tints the controls.
@@ -605,6 +610,25 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
             tracing::warn!(
                 "audio: cpal requested buf={requested} frames but scratch is {scratch} — clamping; audio will run slow"
             );
+        }
+
+        // The cpal streams' error callbacks only count (FU-H6b).
+        for (label, latch, limiter) in [
+            (
+                "output",
+                &ctx.shared.output_stream_errors,
+                &output_underruns,
+            ),
+            ("input", &ctx.shared.input_stream_errors, &input_underruns),
+        ] {
+            let underruns = latch.take_underruns();
+            if let Some(report) = limiter.record_count(std::time::Instant::now(), underruns) {
+                let line = crate::stream_errors::format_underrun_line(label, &report);
+                tracing::warn!("{line}");
+            }
+            if let Some((count, kind)) = latch.take_errors() {
+                tracing::error!("audio: {label} stream error: {kind} ({count}x)");
+            }
         }
 
         // Plugins an offline render's reset left dead (FU-M8b).
