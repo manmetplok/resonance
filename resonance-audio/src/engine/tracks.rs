@@ -81,11 +81,15 @@ pub(crate) fn handle_set_track_frozen_source(
     track_id: TrackId,
     source: Option<FrozenSource>,
 ) {
+    // A cache rendered at another rate (a project frozen at 44.1 kHz,
+    // opened at 48 kHz) is converted here, on the control thread, so the
+    // audio thread reads it frame for frame (code review FU-G3a).
+    let source = source.map(|s| Arc::new(s.at_rate(ctx.sample_rate)));
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         // A replaced cache can be tens of MB; it is retired, not dropped
         // here, so the callback's block-long load can never be its last
         // owner (code review MIX-04).
-        super::retire::publish_opt(&track.frozen_source, source.map(Arc::new), &ctx.shared.retired);
+        super::retire::publish_opt(&track.frozen_source, source, &ctx.shared.retired);
     }
 }
 

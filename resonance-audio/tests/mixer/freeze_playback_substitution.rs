@@ -300,15 +300,17 @@ fn mute_volume_pan_still_affect_frozen_track() {
 }
 
 /// A sample-rate mismatch between the cache and the engine is handled
-/// (linear resample): a half-rate DC cache still plays back as audio.
+/// by converting the cache when it is published (`FrozenSource::at_rate`,
+/// the shared band-limited resampler — code review FU-G3a): a half-rate
+/// DC cache still plays back as audio.
 #[test]
 fn sample_rate_mismatch_resamples() {
     let frames = 1024;
     let state = state_with_tone_track(frames);
-    // Cache rendered at half the engine rate; frame_count generous enough
-    // to cover the timeline window after the 0.5× resample stride.
+    // Cache rendered at half the engine rate; the conversion doubles it
+    // to cover the timeline window.
     const DC: f32 = 0.3;
-    attach(&state, manual_source(DC, frames, SR / 2));
+    attach(&state, manual_source(DC, frames, SR / 2).at_rate(SR));
 
     let frozen = bounce(&state, "resample");
     // DC interpolates to DC, so the resampled output is the same constant

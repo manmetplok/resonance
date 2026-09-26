@@ -40,4 +40,27 @@ impl FrozenSource {
             frame_count,
         }
     }
+
+    /// This source converted to `rate` by the shared band-limited
+    /// resampler (`resonance_common::resample_stereo`); itself when it is
+    /// already there. The engine converts every source it publishes, off
+    /// the audio thread, so the mixer only ever reads a cache frame for
+    /// frame (code review FU-G3a). `cache_ref` still describes the file.
+    pub fn at_rate(self, rate: u32) -> Self {
+        if self.sample_rate == rate || rate == 0 || self.sample_rate == 0 {
+            return self;
+        }
+        let samples = resonance_common::resample::resample_stereo(
+            &self.samples,
+            self.sample_rate as f32,
+            rate as f32,
+        );
+        let frame_count = (samples.len() / 2) as u64;
+        Self {
+            cache_ref: self.cache_ref,
+            samples: Arc::new(samples),
+            sample_rate: rate,
+            frame_count,
+        }
+    }
 }
