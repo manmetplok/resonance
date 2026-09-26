@@ -83,6 +83,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-13c (ARCH-01) | Reconcile group 4: `Globals` stage (transport, transient UI, compose sections, drum patterns), chord trim, clip lyrics; diff-path tempo converged | opus | merged | 3150564e |
 | refactor-intent A-13d (ARCH-01) | Reconcile group 5: audio clips, MIDI clips, vocal audio-clip map; `ctx.midi_notes` | opus | merged | be5c201a |
 | refactor-intent A-13e (ARCH-01) | Reconcile group 3: `Routing` stage (sends, sidechain routes); diff-path sends now after master (engine state proven disjoint) | opus | merged | ee067a01 |
+| refactor-intent A-13f (ARCH-01) | `Stage::Entities` (tracks, busses, master, track_outputs, plugin_state, entity_order); both paths = setup + `reconcile_all_stages`; plugin bypass after blob on both paths | opus | merged | b7531c90 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
