@@ -381,26 +381,97 @@ fn apply_after_seek_matches_an_eagerly_cleared_line() {
 }
 
 #[test]
-fn loop_wrap_discontinuity_never_replays_stale_audio() {
-    // A loop seam is a playhead mismatch on every single pass; the
-    // reset must hold repeatedly, not just for the first seek.
+fn loop_wrap_keeps_the_delay_line_continuous() {
+    // A loop seam is a jump on the TIMELINE but not on the OUTPUT: what
+    // is in the line at the wrap is the last `delay` samples before
+    // `loop_out`, and that is exactly what must be heard next, because
+    // everything reaches master `max_latency` late — the latent track's
+    // own plugin keeps playing its pre-seam tail too. Treating the wrap
+    // as a seek used to drop every compensated track to `delay` samples
+    // of hard silence on each pass (code review MIX-03).
     const DELAY: usize = 4;
     const FRAMES: usize = 16;
+    const LOOP_IN: u64 = 0;
+    const LOOP_OUT: u64 = FRAMES as u64;
     let comp = LatencyComp::new(DELAY as u64, &[(1, DELAY as u64)], 0, &[]);
     for pass in 0..5 {
         let v = (pass + 1) as f32;
         let mut l = [v; FRAMES];
         let mut r = [v; FRAMES];
-        // Every pass restarts at frame 0 — a wrap, never continuous.
-        assert!(comp.apply(1, &mut l, &mut r, 0));
+        assert!(comp.apply(1, &mut l, &mut r, LOOP_IN));
+        let head = if pass == 0 { 0.0 } else { pass as f32 };
         assert!(
-            l[..DELAY].iter().all(|&s| s == 0.0),
-            "pass {pass}: the seam must start silent"
+            l[..DELAY].iter().all(|&s| s == head),
+            "pass {pass}: the seam plays the previous pass's tail ({head}), got {:?}",
+            &l[..DELAY]
         );
-        assert!(
-            l[DELAY..].iter().all(|&s| s == v),
-            "pass {pass}: fresh audio after the seam, not last pass's tail"
+        assert!(l[DELAY..].iter().all(|&s| s == v), "pass {pass}: then this pass");
+        // The seam tells the lines the next block continues this one.
+        comp.continue_across_loop_wrap(LOOP_OUT, LOOP_IN);
+    }
+
+    // A real seek is still a discontinuity: `continue_across_loop_wrap`
+    // only rebases a line that ended exactly on `loop_out`.
+    let mut l = [9.0f32; FRAMES];
+    let mut r = [9.0f32; FRAMES];
+    assert!(comp.apply(1, &mut l, &mut r, 500));
+    assert!(l[..DELAY].iter().all(|&s| s == 0.0), "a seek still starts silent");
+}
+
+/// End to end through the callback: two DC tracks, one compensated by 64
+/// samples, looping with the seam mid-buffer and block-aligned. The sum
+/// must stay constant across every wrap — no dropout on the compensated
+/// track while the other plays on.
+#[test]
+fn looping_playback_keeps_compensated_tracks_continuous_across_the_seam() {
+    use resonance_audio::__test_support::MixAudioHarness;
+    use resonance_audio::types::TempoMap;
+    use std::sync::atomic::Ordering;
+    const BLOCK: usize = 128;
+    const LOOP_IN: u64 = 1_000;
+
+    for loop_len in [300u64, 3 * BLOCK as u64] {
+        let dc = |id: TrackId| {
+            let (track, mut clip) = impulse_track(id, TrackOutput::Master, 0, 1);
+            clip.source = ClipSource::Memory(vec![0.25; 20_000 * 2]);
+            (track, clip)
+        };
+        let (t1, c1) = dc(1);
+        let (t2, c2) = dc(2);
+        let mut h = MixAudioHarness::new(
+            vec![t1, t2],
+            Vec::new(),
+            vec![c1, c2],
+            Vec::new(),
+            Vec::new(),
+            TempoMap::default(),
+            BLOCK,
+            2,
+            48_000,
+            true,
         );
+        h.set_latency_comp(LatencyComp::new(64, &[(1, 64), (2, 0)], 0, &[]));
+        let shared = h.shared();
+        shared.master_volume_bits.store(1.0f32.to_bits(), Ordering::Relaxed);
+        shared.loop_enabled.store(true, Ordering::Relaxed);
+        shared.loop_in.store(LOOP_IN, Ordering::Relaxed);
+        shared.loop_out.store(LOOP_IN + loop_len, Ordering::Relaxed);
+        shared.playhead.store(LOOP_IN, Ordering::Relaxed);
+        shared.playing.store(true, Ordering::Relaxed);
+
+        // Block 0 ramps the faders up from rest and warms the 64-sample
+        // line up from Play; everything after is steady state.
+        h.render();
+        for block in 1..20 {
+            let out = h.render();
+            for (i, &s) in out.iter().enumerate() {
+                assert!(
+                    (s - 0.5).abs() < 1e-6,
+                    "loop {loop_len}: block {block} sample {i} is {s}, not the steady 0.5 — \
+                     the compensated track dropped out at the seam"
+                );
+            }
+        }
     }
 }
 

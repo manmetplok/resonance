@@ -241,14 +241,15 @@ struct DelayState {
     line_l: DelayLine,
     line_r: DelayLine,
     /// Timeline frame the next `apply` call is expected to start at.
-    /// A mismatch (seek, loop wrap, a track that was skipped while
-    /// muted) invalidates the lines so stale audio doesn't replay.
+    /// A mismatch (seek, a track that was skipped while muted)
+    /// invalidates the lines so stale audio doesn't replay. A loop wrap
+    /// is not one: the seam rebases this via
+    /// [`LatencyComp::continue_across_loop_wrap`].
     next_playhead: Option<u64>,
     /// Output samples still owed as silence after a discontinuity.
     /// Invalidation is lazy: eagerly `clear()`ing both lines would
     /// memset up to [`MAX_COMP_LATENCY`] samples each, per compensated
-    /// track/bus, inside the first callback after every seek — and at
-    /// the seam of every loop pass. Instead a mismatch just arms this
+    /// track/bus, inside the first callback after every seek. Instead a mismatch just arms this
     /// counter to `delay`: the next `delay` outputs read as 0.0 —
     /// exactly what taps of a freshly cleared line would return —
     /// while fresh pushes displace the stale tail in place, so it is
@@ -469,6 +470,37 @@ impl LatencyComp {
             return false;
         };
         apply_comp(tc, left, right, playhead)
+    }
+
+    /// Tell every delay line that the next block, starting at `loop_in`,
+    /// continues the one that just ended at `loop_out` (code review
+    /// MIX-03). Called by the loop seam between its two sub-blocks.
+    ///
+    /// A wrap is a jump on the timeline but not on the output: the audio
+    /// in a line at the seam is the last `delay` samples before
+    /// `loop_out`, which is exactly what must be heard next (everything
+    /// reaches master `max_latency` late, and the latent track's own
+    /// plugin plays its pre-seam tail regardless). Without this the
+    /// continuity check read the wrap as a seek and every compensated
+    /// track/bus dropped to `delay` samples of silence on each pass.
+    ///
+    /// Only a line that ended exactly on `loop_out` is rebased — one that
+    /// skipped the head sub-block (muted, say) stays discontinuous and
+    /// warms up as before. Allocation-free and lock-free (`try_lock`, as
+    /// in `apply`); a no-op for an empty table.
+    pub fn continue_across_loop_wrap(&self, loop_out: u64, loop_in: u64) {
+        let rebase = |tc: &TrackComp| {
+            if let Some(mut st) = tc.state.try_lock() {
+                if st.next_playhead == Some(loop_out) {
+                    st.next_playhead = Some(loop_in);
+                }
+            }
+        };
+        self.tracks.values().for_each(rebase);
+        self.busses.values().for_each(rebase);
+        if let Some(dry) = &self.dry {
+            rebase(dry);
+        }
     }
 
     /// Delay the master-direct (dry) sum in place by `bus_stage`
