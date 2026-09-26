@@ -2,8 +2,32 @@
 //! `update/tick.rs`.
 use iced::Task;
 
-use crate::message::{Message, ViewportMessage};
+use crate::message::Message;
 use crate::Resonance;
+
+#[derive(Debug, Clone)]
+pub enum ViewportMessage {
+    ZoomIn,
+    ZoomOut,
+    ScrollY(f32),
+    /// The arrange view's outer horizontal `Scrollable` moved or resized
+    /// (its `on_scroll`): live x offset, visible width and content width,
+    /// all in px. Feeds playhead follow (review FU-D1).
+    ArrangeScrolled {
+        offset_x: f32,
+        visible_width: f32,
+        content_width: f32,
+    },
+    ScrollToY(f32),
+    ViewportWidth(f32),
+    /// Total available height the timeline canvas + track-header column
+    /// see for content. Reported by `TimelineCanvas::report_viewport`
+    /// whenever `bounds.height` moves more than 1 px. The track-header
+    /// column uses this to drop tracks below the viewport during manual
+    /// virtualization (see `view/track_header.rs`).
+    ViewportHeight(f32),
+    TimelineContentSize(f32, f32),
+}
 
 /// Route a `ViewportMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {

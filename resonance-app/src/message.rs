@@ -40,6 +40,7 @@ pub use crate::update::mixer::MixerMessage;
 pub use crate::update::takes::TakeMessage;
 pub use crate::update::track::{BounceMessage, TrackMessage};
 pub use crate::update::transport::TransportMessage;
+pub use crate::update::viewport::ViewportMessage;
 pub use crate::update::vocal_tuning::VocalTuningMessage;
 
 #[derive(Debug, Clone)]
@@ -245,30 +246,6 @@ pub enum PluginMessage {
     /// Not undoable — the plugin catalog is a fact about the machine,
     /// not part of the project.
     RescanPlugins,
-}
-
-#[derive(Debug, Clone)]
-pub enum ViewportMessage {
-    ZoomIn,
-    ZoomOut,
-    ScrollY(f32),
-    /// The arrange view's outer horizontal `Scrollable` moved or resized
-    /// (its `on_scroll`): live x offset, visible width and content width,
-    /// all in px. Feeds playhead follow (review FU-D1).
-    ArrangeScrolled {
-        offset_x: f32,
-        visible_width: f32,
-        content_width: f32,
-    },
-    ScrollToY(f32),
-    ViewportWidth(f32),
-    /// Total available height the timeline canvas + track-header column
-    /// see for content. Reported by `TimelineCanvas::report_viewport`
-    /// whenever `bounds.height` moves more than 1 px. The track-header
-    /// column uses this to drop tracks below the viewport during manual
-    /// virtualization (see `view/track_header.rs`).
-    ViewportHeight(f32),
-    TimelineContentSize(f32, f32),
 }
 
 #[derive(Debug, Clone)]
