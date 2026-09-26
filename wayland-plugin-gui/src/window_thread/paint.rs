@@ -198,7 +198,7 @@ pub(super) fn paint_frame(
                     pressed: false,
                     modifiers: egui::Modifiers::default(),
                 });
-                eprintln!("wpg: WPG_TEST_CLOSE_AT injected synthetic close click at frame {n}");
+                tracing::info!("wpg: WPG_TEST_CLOSE_AT injected synthetic close click at frame {n}");
             }
         }
     }

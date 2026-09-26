@@ -282,7 +282,7 @@ pub fn load_controller_maps_from(path: &Path) -> Vec<ControllerMap> {
         Ok(bytes) => serde_json::from_slice::<ControllerMapStore>(&bytes)
             .map(|s| s.maps)
             .unwrap_or_else(|e| {
-                eprintln!(
+                tracing::warn!(
                     "{} is corrupt ({e}); quarantining and starting from an empty list",
                     path.display()
                 );

@@ -9,6 +9,7 @@ description = "Cocoa-native plugin GUI runtime: hosts an egui UI in a floating N
 # SharedSize, theme, widgets, the egui re-export). Unconditional: the
 # non-macOS stub body needs the same types.
 plugin-gui-core = { path = "../plugin-gui-core" }
+tracing.workspace = true
 
 # AppKit + the main-thread machinery. Target-gated so the crate is an
 # API-compatible stub everywhere else (mirroring wayland-plugin-gui's

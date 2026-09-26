@@ -25,6 +25,11 @@ dirs.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
+# Installed once per CLAP bundle (`logging.rs`): a cdylib carries its own
+# copy of the tracing dispatcher, so the host's subscriber never sees its
+# events (ARCH-05).
+tracing-subscriber.workspace = true
 plugin-gui-core = { path = "../plugin-gui-core", optional = true }
 
 # The platform GUI runtimes behind `editor_host::RuntimeEditor`. Target-gated

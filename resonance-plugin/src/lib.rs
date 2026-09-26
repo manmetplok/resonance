@@ -7,6 +7,7 @@ pub mod formatters;
 pub mod gui;
 pub mod host;
 pub mod loader;
+mod logging;
 pub mod param;
 pub mod plugin;
 pub mod presets;

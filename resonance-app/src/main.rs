@@ -7,7 +7,33 @@
 use iced::Size;
 use resonance_app::{parse_startup_tab, theme, Resonance, STARTUP_TAB};
 
+/// `RUST_LOG` unset: warnings from everything, `info` from the crates
+/// whose `eprintln!`s became `tracing` calls, so the default stderr output
+/// is what it was (ARCH-05 A5-1). Keep in step with
+/// `resonance-plugin/src/logging.rs`, which installs the same filter in
+/// each CLAP bundle (a cdylib has its own tracing dispatcher).
+const DEFAULT_LOG_FILTER: &str = "warn,resonance_audio=info,resonance_common=info,\
+     resonance_plugin=info,resonance_app=info,wayland_plugin_gui=info,cocoa_plugin_gui=info";
+
+/// The process's log subscriber: stderr, filtered by `RUST_LOG`. Only
+/// the binary installs one — library crates just emit `tracing` events,
+/// and tests (no subscriber) drop them. No `log` bridge: crates on the
+/// `log` facade (wgpu, iced) stay as silent as before.
+fn install_log_subscriber() {
+    use std::io::IsTerminal;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER));
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
+        .finish();
+    let _ = tracing::subscriber::set_global_default(subscriber);
+}
+
 fn main() -> iced::Result {
+    install_log_subscriber();
+
     if let Some(tab) = parse_startup_tab() {
         let _ = STARTUP_TAB.set(tab);
     }
