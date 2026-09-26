@@ -67,6 +67,8 @@ mod compose_workspace_collapse;
 mod drum_kit_pads;
 #[path = "compose/drum_pattern_library.rs"]
 mod drum_pattern_library;
+#[path = "compose/drum_cell_click_phase.rs"]
+mod drum_cell_click_phase;
 #[path = "compose/drum_section_coverage.rs"]
 mod drum_section_coverage;
 #[path = "compose/fresh_project_tempo_map.rs"]
