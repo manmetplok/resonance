@@ -115,9 +115,12 @@ impl TransportContinuity {
 
 /// Fallback playhead advance used when the audio callback couldn't acquire
 /// its locks. No audio is rendered on that path, so we only need to move
-/// the playhead forward and handle the loop seam by snapping back — stuck
-/// notes and audio content leakage aren't possible when we're outputting
-/// silence. The sample-accurate seam handling lives inline in `mix_audio`.
+/// the playhead forward and wrap at the loop seam — stuck notes and audio
+/// content leakage aren't possible when we're outputting silence. The
+/// wrap carries the overshoot past `loop_in` exactly like the rendering
+/// path's `loop_in + tail_frames` (code review MIX-11); a bare snap to
+/// `loop_in` lost up to a buffer of timeline per pass. The sample-accurate
+/// seam handling lives inline in `mix_audio`.
 pub(super) fn advance_playhead_silent(
     shared: &SharedState,
     playhead: u64,
@@ -131,7 +134,8 @@ pub(super) fn advance_playhead_silent(
         // still need to snap back, or the next buffer lands past the loop
         // and never catches up.
         if hi > lo && playhead < hi && new_playhead >= hi {
-            new_playhead = lo;
+            // Modulo keeps a loop shorter than one buffer inside the loop.
+            new_playhead = lo + (new_playhead - hi) % (hi - lo);
         }
     }
     new_playhead

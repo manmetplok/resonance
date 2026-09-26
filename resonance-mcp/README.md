@@ -36,6 +36,12 @@ claude mcp add --env RESONANCE_CONTROL_SOCKET=/run/user/1000/resonance/control.s
   --transport stdio resonance -- /absolute/path/to/target/release/resonance-mcp
 ```
 
+Both sides insist the socket's directory is private: a real directory
+(not a symlink) owned by you with mode `0700`. The app creates it that
+way and refuses to serve from one that isn't; `resonance-mcp` refuses to
+connect to one that isn't. Point `RESONANCE_CONTROL_SOCKET` into a
+private directory, not straight into `$HOME` or a project folder.
+
 Verify with `claude mcp list` (expect `✔ Connected`) and `/mcp` inside a
 Claude Code session to list the tools.
 

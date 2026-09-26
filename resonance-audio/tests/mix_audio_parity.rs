@@ -493,7 +493,10 @@ fn reference_monitor_blocks_are_bit_identical() {
 fn contended_and_audition_blocks_are_bit_identical() {
     // Re-blessed for code review MIX-03 (the last uncontended block
     // crosses the loop seam, where the PDC lines now stay continuous).
-    const EXPECTED: u64 = 0xa3e4_6b05_c99f_d6f4;
+    // Re-blessed for code review MIX-11: the contended blocks cross the
+    // loop seam, and the silent advance now carries the overshoot past
+    // loop_in instead of snapping to it.
+    const EXPECTED: u64 = 0x40ea_d698_e423_5ccb;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(false);
