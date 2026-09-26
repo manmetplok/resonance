@@ -6,8 +6,8 @@
 
 pub use resonance_common::{decode_file, StreamingLinearResampler};
 
-/// Linear interpolation resampler for stereo interleaved audio with
-/// `u32` rates. Delegates to [`resonance_common::linear_resample_stereo`].
+/// Band-limited (windowed-sinc, LIB-01) resampler for stereo
+/// interleaved audio with `u32` rates; the name is historical. Delegates to [`resonance_common::linear_resample_stereo`].
 pub fn linear_resample(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
     resonance_common::linear_resample_stereo(input, source_rate as f32, target_rate as f32)
 }

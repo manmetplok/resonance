@@ -704,8 +704,9 @@ pub fn pw_delay_to_engine_samples(
 /// rate, the monitor ring would otherwise carry device-rate frames that
 /// the engine-rate consumer replays pitch-shifted and glitchy. Wraps
 /// the existing stereo [`StreamingLinearResampler`] (the same one the
-/// recording drain uses) over channel pairs, preserving the interleaved
-/// N-channel layout. The native PipeWire input negotiates the engine
+/// recording drain uses; band-limited since LIB-01, with ~1 ms of
+/// lookahead) over channel pairs, preserving the interleaved N-channel
+/// layout. Allocation-free once its scratch Vecs have grown. The native PipeWire input negotiates the engine
 /// rate in the graph and never needs this.
 ///
 /// The recording push is untouched — takes stay at the device rate and

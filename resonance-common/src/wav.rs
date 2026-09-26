@@ -8,8 +8,8 @@
 //! `symphonia` features enable (FLAC, MP3, Ogg/Vorbis, AAC, MP4),
 //! without per-format branching here. The public API —
 //! `decode_wav_stereo`, `decode_wav_channels`, `decode_file`, and the
-//! linear resamplers — keeps the signatures downstream crates depend
-//! on.
+//! resamplers (band-limited, see `resample.rs`) — keeps the signatures
+//! downstream crates depend on.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -259,199 +259,21 @@ fn to_stereo_interleaved(samples: &[f32], channels: usize) -> Vec<f32> {
     stereo
 }
 
-/// Linear interpolation resampler for mono audio data.
+/// Sample-rate conversion for mono audio. Despite the historical name
+/// this is the band-limited windowed-sinc resampler of
+/// [`crate::resample`] (LIB-01), not linear interpolation.
 pub fn linear_resample_mono(input: &[f32], source_rate: f32, target_rate: f32) -> Vec<f32> {
-    if input.is_empty() {
-        return Vec::new();
-    }
-    let ratio = source_rate as f64 / target_rate as f64;
-    // Clamp to 1: a heavy downsample of a tiny input truncates to zero
-    // samples, silently discarding non-empty audio.
-    let target_len = ((input.len() as f64 / ratio) as usize).max(1);
-    let mut output = Vec::with_capacity(target_len);
-
-    for i in 0..target_len {
-        let src_pos = i as f64 * ratio;
-        let idx = src_pos as usize;
-        let frac = (src_pos - idx as f64) as f32;
-
-        let s0 = input[idx.min(input.len() - 1)];
-        let s1 = input[(idx + 1).min(input.len() - 1)];
-        output.push(s0 + (s1 - s0) * frac);
-    }
-
-    output
+    crate::resample::resample_mono(input, source_rate, target_rate)
 }
 
-/// Linear interpolation resampler for stereo interleaved audio data.
+/// Sample-rate conversion for stereo interleaved audio. Despite the
+/// historical name this is the band-limited windowed-sinc resampler of
+/// [`crate::resample`] (LIB-01), not linear interpolation.
 pub fn linear_resample_stereo(input: &[f32], source_rate: f32, target_rate: f32) -> Vec<f32> {
-    if input.is_empty() {
-        return Vec::new();
-    }
-    let source_frames = input.len() / 2;
-    if source_frames == 0 {
-        // A single stray sample is not a full stereo frame.
-        return Vec::new();
-    }
-    let ratio = source_rate as f64 / target_rate as f64;
-    // Clamp to 1: a heavy downsample of a tiny input truncates to zero
-    // frames, silently discarding non-empty audio.
-    let target_frames = ((source_frames as f64 / ratio) as usize).max(1);
-    let mut output = Vec::with_capacity(target_frames * 2);
-
-    for i in 0..target_frames {
-        let src_pos = i as f64 * ratio;
-        let src_idx = src_pos as usize;
-        let frac = (src_pos - src_idx as f64) as f32;
-
-        let idx0 = src_idx.min(source_frames.saturating_sub(1));
-        let idx1 = (src_idx + 1).min(source_frames.saturating_sub(1));
-
-        let l0 = input[idx0 * 2];
-        let r0 = input[idx0 * 2 + 1];
-        let l1 = input[idx1 * 2];
-        let r1 = input[idx1 * 2 + 1];
-
-        output.push(l0 + (l1 - l0) * frac);
-        output.push(r0 + (r1 - r0) * frac);
-    }
-
-    output
+    crate::resample::resample_stereo(input, source_rate, target_rate)
 }
 
-/// Stateful linear resampler for stereo interleaved audio that can
-/// be fed in chunks without introducing discontinuities at chunk
-/// boundaries. Used by the recording drain loop so takes stream to
-/// disk at the engine sample rate without ever materialising the
-/// full buffer.
-///
-/// The algorithm matches [`linear_resample_stereo`] in steady state —
-/// for the same total input the emitted samples agree to within the
-/// precision of `f64` phase accumulation — but carries a one-frame
-/// tail and a fractional phase across calls. Callers should emit a
-/// final [`StreamingLinearResampler::flush`] when the input stream
-/// ends so the trailing frame isn't lost.
-pub struct StreamingLinearResampler {
-    /// Ratio = source_rate / target_rate. Each output frame advances
-    /// the read head by `ratio` input frames.
-    ratio: f64,
-    /// Next read position, measured in input frames, as a
-    /// floating-point offset into the virtual concatenation of every
-    /// chunk the caller has pushed so far.
-    next_src_pos: f64,
-    /// Total input frames consumed across all prior calls. Used to
-    /// translate `next_src_pos` into a chunk-local index.
-    consumed_frames: u64,
-    /// The last input frame from the previous chunk, retained so that
-    /// interpolating at position `consumed_frames - 1 + frac` works
-    /// correctly on the first output frame of the next chunk.
-    last_frame: Option<[f32; 2]>,
-}
-
-impl StreamingLinearResampler {
-    pub fn new(source_rate: u32, target_rate: u32) -> Self {
-        Self {
-            ratio: source_rate as f64 / target_rate as f64,
-            next_src_pos: 0.0,
-            consumed_frames: 0,
-            last_frame: None,
-        }
-    }
-
-    /// Process a chunk of stereo-interleaved f32 input, appending
-    /// resampled stereo frames to `output`. Does not emit the final
-    /// partial frame; call [`StreamingLinearResampler::flush`] once
-    /// after the last chunk to drain it.
-    pub fn process(&mut self, input: &[f32], output: &mut Vec<f32>) {
-        let chunk_frames = input.len() / 2;
-        if chunk_frames == 0 {
-            return;
-        }
-
-        // Total frames available in the virtual stream up to the end
-        // of this chunk.
-        let total_frames = self.consumed_frames + chunk_frames as u64;
-
-        // Emit output frames while both neighbours of the
-        // interpolation window are fully inside the data we've seen
-        // so far. The right neighbour lives at index `src_idx + 1`,
-        // so we stop when `src_idx + 1 >= total_frames`, i.e. when
-        // `src_idx >= total_frames - 1`.
-        loop {
-            let src_idx_f = self.next_src_pos.floor();
-            if src_idx_f < 0.0 {
-                // Shouldn't happen — phase is monotonically
-                // non-negative — but guard defensively.
-                self.next_src_pos += self.ratio;
-                continue;
-            }
-            let src_idx = src_idx_f as u64;
-            if src_idx + 1 >= total_frames {
-                break;
-            }
-            let frac = (self.next_src_pos - src_idx_f) as f32;
-
-            let [l0, r0] = self.sample_at(src_idx, input);
-            let [l1, r1] = self.sample_at(src_idx + 1, input);
-
-            output.push(l0 + (l1 - l0) * frac);
-            output.push(r0 + (r1 - r0) * frac);
-
-            self.next_src_pos += self.ratio;
-        }
-
-        // Retain the last input frame for the next chunk so that a
-        // read at index `total_frames - 1` still resolves.
-        self.last_frame = Some([
-            input[(chunk_frames - 1) * 2],
-            input[(chunk_frames - 1) * 2 + 1],
-        ]);
-        self.consumed_frames = total_frames;
-    }
-
-    /// Emit any trailing output frame that wasn't produced during
-    /// [`StreamingLinearResampler::process`] because the right
-    /// neighbour would have fallen past the end of the stream. Uses
-    /// the retained last frame for both neighbours (equivalent to
-    /// clamping the read position to the final input frame).
-    pub fn flush(&mut self, output: &mut Vec<f32>) {
-        let Some(last) = self.last_frame else {
-            return;
-        };
-        let total_frames = self.consumed_frames;
-        if total_frames == 0 {
-            return;
-        }
-        loop {
-            let src_idx_f = self.next_src_pos.floor();
-            let src_idx = src_idx_f as u64;
-            if src_idx >= total_frames {
-                break;
-            }
-            // Both neighbours clamped to the last valid frame.
-            output.push(last[0]);
-            output.push(last[1]);
-            self.next_src_pos += self.ratio;
-        }
-    }
-
-    /// Resolve a frame at a virtual index into either the retained
-    /// tail frame (if it points at `consumed_frames - 1`) or the
-    /// current chunk (otherwise). Assumes the caller has already
-    /// checked that `idx < consumed_frames + chunk_frames`.
-    #[inline]
-    fn sample_at(&self, idx: u64, chunk: &[f32]) -> [f32; 2] {
-        if idx < self.consumed_frames {
-            // Only the single most-recent past frame is retained,
-            // so any earlier reference is a bug. Clamp as a safety
-            // net — the first `process` call starts at `0` anyway.
-            if let Some(last) = self.last_frame {
-                return last;
-            }
-            return [chunk[0], chunk[1]];
-        }
-        let local = (idx - self.consumed_frames) as usize;
-        [chunk[local * 2], chunk[local * 2 + 1]]
-    }
-}
-
+/// Historical name of [`crate::resample::StreamingResampler`], the
+/// band-limited streaming resampler (LIB-01) used by the recording drain
+/// and the cpal monitor path.
+pub type StreamingLinearResampler = crate::resample::StreamingResampler;
