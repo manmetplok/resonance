@@ -278,7 +278,8 @@ fn cleared_event_drops_external_mode() {
 
 #[test]
 fn undo_classifies_config_edits_but_skips_runtime_pings() {
-    // Config-changing edits record an undo entry.
+    // Config-changing edits record an undo entry (plain Record for discrete
+    // edits; RecordCoalesced for slider-driven latency offset).
     for m in [
         Eim::Enable(TRACK),
         Eim::Disable(TRACK),
@@ -286,7 +287,6 @@ fn undo_classifies_config_edits_but_skips_runtime_pings() {
         Eim::SetReturnDevice(TRACK, None),
         Eim::SetBank(TRACK, Some(1)),
         Eim::SetProgram(TRACK, Some(1)),
-        Eim::SetLatencyOffset(TRACK, 1),
         Eim::ToggleMonitor(TRACK),
         Eim::ToggleRecordArm(TRACK),
     ] {
@@ -295,6 +295,15 @@ fn undo_classifies_config_edits_but_skips_runtime_pings() {
             "{m:?} should record an undo entry"
         );
     }
+
+    // Latency offset slider coalesces multiple steps into one entry (FU-A10c).
+    assert!(
+        matches!(
+            classify(&Message::ExternalInstrument(Eim::SetLatencyOffset(TRACK, 1))),
+            UndoAction::RecordCoalesced(_)
+        ),
+        "SetLatencyOffset should record coalesced undo entries"
+    );
 
     // Runtime-only device traffic never touches history.
     for m in [Eim::CheckDevices(TRACK), Eim::RescanDevices] {

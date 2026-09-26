@@ -106,7 +106,7 @@ impl ExternalInstrumentMessage {
     /// variant does not compile until someone decides what undo does with
     /// it (ARCH-06 A6-4).
     pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
-        use crate::undo::UndoAction;
+        use crate::undo::{CoalesceKey, UndoAction};
         match self {
             // Runtime-only: re-checking devices / re-scanning hardware /
             // revealing the user definitions folder / re-scanning definitions /
@@ -118,7 +118,13 @@ impl ExternalInstrumentMessage {
             | Self::RevealUserDefinitionsFolder
             | Self::RescanDefinitions
             | Self::DetectLatency(_) => UndoAction::Skip,
-            // Every config change (enable/disable, route, patch, latency,
+            // The latency offset slider delivers one message per step with no
+            // begin/commit pair; coalesce per track so dragging the same track's
+            // offset back and forth merges into one entry (FU-A10c).
+            Self::SetLatencyOffset(track_id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::ExternalLatency(*track_id))
+            }
+            // Every other config change (enable/disable, route, patch,
             // monitor, arm, playback source) is a user-meaningful,
             // reversible edit. The playback-source *auto-switch* after a
             // recorded take is event-driven (`RecordingFinished`), not a
@@ -134,7 +140,6 @@ impl ExternalInstrumentMessage {
             | Self::SetBank(..)
             | Self::SetProgram(..)
             | Self::SetPatch(..)
-            | Self::SetLatencyOffset(..)
             | Self::ToggleMonitor(..)
             | Self::ToggleRecordArm(..)
             | Self::SetPlaybackSource(..) => UndoAction::Record,

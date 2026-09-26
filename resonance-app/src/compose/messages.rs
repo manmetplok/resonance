@@ -1175,6 +1175,24 @@ impl DrumGroupsMessage {
             Self::SetGroupFills { group_id, .. } => UndoAction::RecordCoalesced(
                 CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Fills),
             ),
+            // Cycle and phase sliders deliver one message per step with no
+            // begin/commit pair; coalesce per group *and* per knob so dragging
+            // cycle then phase on the same group is two entries, not one, but
+            // repeated steps on the same knob merge (FU-A10c).
+            Self::SetGroupCycle { group_id, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Cycle),
+            ),
+            Self::SetGroupPhase { group_id, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Phase),
+            ),
+            // Pad weight slider delivers one message per step with no
+            // begin/commit pair; coalesce per group *and* per pad so
+            // dragging one pad's weight then another on the same group is
+            // two entries, not one, but repeated steps on the same pad merge
+            // (FU-A10c).
+            Self::SetPadWeight { group_id, pad_index, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumPadWeight(*group_id, *pad_index),
+            ),
             // Pattern-bank and group edits mutate the persisted drum
             // patterns / section assignment.
             Self::AssignPattern { .. }
@@ -1190,10 +1208,7 @@ impl DrumGroupsMessage {
             | Self::TogglePadAssignment { .. }
             | Self::ClearGroupPads { .. }
             | Self::SetGroupGrid { .. }
-            | Self::SetGroupCycle { .. }
-            | Self::SetGroupPhase { .. }
             | Self::SetGroupMeter { .. }
-            | Self::SetPadWeight { .. }
             | Self::GenerateGroup { .. }
             | Self::GenerateAllGroups
             | Self::TogglePadStep { .. } => UndoAction::Record,
