@@ -71,7 +71,7 @@ pub(super) fn track_added(
     // If this plugin was added as part of a preset, load the saved
     // plugin state blob (if any). Pop the first entry from the pending
     // list to stay in order.
-    if let Some((pending_track, ref mut states)) = r.pending_preset_plugin_states {
+    if let Some((pending_track, ref mut states)) = r.presets.pending_preset_plugin_states {
         if pending_track == track_id {
             if let Some(Some(data)) = if states.is_empty() {
                 None
@@ -84,12 +84,12 @@ pub(super) fn track_added(
         }
     }
     // Clean up once all preset plugin states have been consumed.
-    if r.pending_preset_plugin_states
+    if r.presets.pending_preset_plugin_states
         .as_ref()
         .map(|(_, s)| s.is_empty())
         .unwrap_or(false)
     {
-        r.pending_preset_plugin_states = None;
+        r.presets.pending_preset_plugin_states = None;
     }
 
     apply_pending_param_overrides(r, instance_id);
@@ -198,7 +198,7 @@ fn restore_after_recovery(
 /// dropped or renumbered a parameter between versions must not have a
 /// stale id pushed at it.
 fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceId) {
-    let Some(overrides) = r.pending_plugin_param_overrides.remove(&instance_id) else {
+    let Some(overrides) = r.presets.pending_plugin_param_overrides.remove(&instance_id) else {
         return;
     };
     let applied = r
@@ -310,7 +310,7 @@ pub(super) fn track_removed(
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
-    r.pending_plugin_param_overrides.remove(&instance_id);
+    r.presets.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     // The engine's `RemovePlugin` arm already dropped this instance's key
     // route, so only the mirror needs pruning here — but prune it we must,
@@ -526,11 +526,11 @@ pub(super) fn state_saved(
     // the cache insert so a failure is reported against the request that
     // asked for it.
     if r
-        .pending_plugin_preset_save
+        .presets.pending_plugin_preset_save
         .as_ref()
         .is_some_and(|p| p.instance_id == instance_id)
     {
-        let pending = r.pending_plugin_preset_save.take().expect("just checked");
+        let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
         if let Err(e) = crate::update::control::write_plugin_preset(
             r,
             &pending.clap_id,
@@ -659,7 +659,7 @@ pub(super) fn bus_removed(
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
-    r.pending_plugin_param_overrides.remove(&instance_id);
+    r.presets.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
 }
@@ -753,7 +753,7 @@ pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
-    r.pending_plugin_param_overrides.remove(&instance_id);
+    r.presets.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
 }

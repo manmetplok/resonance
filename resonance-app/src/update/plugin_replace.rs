@@ -167,7 +167,7 @@ fn swap(
     // same frame cannot still write a `plugin_*.bin` for a slot that no
     // longer exists (the echo repeats it, idempotently).
     r.plugin_state_cache.remove(&old_id);
-    r.pending_plugin_param_overrides.remove(&old_id);
+    r.presets.pending_plugin_param_overrides.remove(&old_id);
     if r.sidechain.clear_plugin(old_id) && !matches!(locator, PluginLocator::Track(_)) {
         // The engine drops a key route itself on `RemovePlugin`, but not
         // on the bus/master removals — same asymmetry

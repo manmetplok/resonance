@@ -605,7 +605,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 },
             };
             let _ = r.engine.send(cmd);
-            r.pending_track_preset = Some(*preset);
+            r.presets.pending_track_preset = Some(*preset);
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::OpenSavePresetPrompt(track_id) => {
@@ -647,7 +647,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             if let Err(e) = crate::presets::delete_user_preset(&name) {
                 r.banners.error_message = Some(format!("Delete preset: {e}"));
             }
-            r.user_presets = crate::presets::load_user_presets();
+            r.presets.user_presets = crate::presets::load_user_presets();
         }
         TrackMessage::BounceInPlace(track_id) => {
             handle_bounce_in_place(r, track_id);
@@ -785,7 +785,7 @@ fn handle_save_track_as_preset(
         return;
     }
 
-    r.pending_preset_save = Some(crate::PendingPresetSave { track_id, name });
+    r.presets.pending_preset_save = Some(crate::PendingPresetSave { track_id, name });
     let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
     r.interaction.preset_save = None;
 }

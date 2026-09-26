@@ -363,7 +363,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // Dropping them together keeps a previous project's blob or
             // parked parameter list from being written into this one under
             // a colliding instance id.
-            r.pending_plugin_param_overrides.clear();
+            r.presets.pending_plugin_param_overrides.clear();
             r.freeze.reset();
             // Placements queued against the old project (code review UPD-04).
             r.pool_import.clear();

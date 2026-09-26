@@ -32,7 +32,7 @@ pub(super) fn all_plugin_states_saved(
     // If a preset save was pending, build and save it now: the blobs
     // that just arrived are the only part of a track preset the app
     // cannot produce on its own (ba todo #1303).
-    if let Some(pending) = r.pending_preset_save.take() {
+    if let Some(pending) = r.presets.pending_preset_save.take() {
         super::presets::finish_preset_save(r, &pending);
     }
     if let Some(ref mut save) = r.io.save_state {

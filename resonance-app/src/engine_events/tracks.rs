@@ -14,14 +14,14 @@ use crate::Resonance;
 /// leave `pending_track_preset` armed for the next add to inherit. Clear
 /// the slot here so a recovery click doesn't apply the wrong preset.
 fn drop_duplicate_track_added(r: &mut Resonance, track_id: TrackId) {
-    if r.pending_track_preset.is_some() {
+    if r.presets.pending_track_preset.is_some() {
         tracing::warn!(
             "engine_events::tracks: dropped TrackAdded for id {} — id already in registry; \
              clearing pending preset to avoid leaking to next add",
             track_id
         );
-        r.pending_track_preset = None;
-        r.pending_preset_plugin_states = None;
+        r.presets.pending_track_preset = None;
+        r.presets.pending_preset_plugin_states = None;
     }
 }
 
@@ -34,7 +34,7 @@ pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
     let order = r.registry.next_track_order;
     r.registry.next_track_order += 1;
     let mut track = TrackState::new_audio(track_id, order);
-    if let Some(preset) = r.pending_track_preset.take() {
+    if let Some(preset) = r.presets.pending_track_preset.take() {
         super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
@@ -50,7 +50,7 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
     let order = r.registry.next_track_order;
     r.registry.next_track_order += 1;
     let mut track = TrackState::new_instrument(track_id, order);
-    if let Some(preset) = r.pending_track_preset.take() {
+    if let Some(preset) = r.presets.pending_track_preset.take() {
         super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);
@@ -68,7 +68,7 @@ pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
     let order = r.registry.next_track_order;
     r.registry.next_track_order += 1;
     let mut track = TrackState::new_vocal(track_id, order);
-    if let Some(preset) = r.pending_track_preset.take() {
+    if let Some(preset) = r.presets.pending_track_preset.take() {
         super::presets::apply_preset_to_track(r, &mut track, &preset);
     }
     r.registry.tracks.push(track);

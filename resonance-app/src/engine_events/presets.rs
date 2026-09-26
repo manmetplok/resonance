@@ -54,7 +54,7 @@ pub(super) fn apply_preset_to_track(
     if preset.plugins.iter().any(|p| p.state.is_some()) {
         let states: Vec<Option<Vec<u8>>> =
             preset.plugins.iter().map(|p| p.state.clone()).collect();
-        r.pending_preset_plugin_states = Some((track_id, states));
+        r.presets.pending_preset_plugin_states = Some((track_id, states));
     }
 }
 
@@ -99,7 +99,7 @@ pub(super) fn finish_preset_save(r: &mut Resonance, pending: &crate::PendingPres
 
     match crate::presets::save_user_preset(&preset) {
         Ok(_) => {
-            r.user_presets = crate::presets::load_user_presets();
+            r.presets.user_presets = crate::presets::load_user_presets();
         }
         Err(e) => {
             r.banners.error_message = Some(format!("Save preset: {e}"));
