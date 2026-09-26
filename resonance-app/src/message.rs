@@ -11,12 +11,11 @@ use crate::control_socket::ControlMessage;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
-    ClipEdge, MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, TempoAlignment,
-    TempoChoice, ViewMode,
+    MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, TempoAlignment, TempoChoice,
+    ViewMode,
 };
 use resonance_audio::types::{
-    AssetId, BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendSource,
-    TrackId,
+    AssetId, BusId, ClipId, PluginInstanceId, SamplePos, ScannedPlugin, SendSource, TrackId,
 };
 use resonance_audio::PoolImportOutcome;
 use resonance_common::{TakeGroupId, TakeId, TimelineRange};
@@ -26,6 +25,7 @@ pub use crate::update::automation::AutomationMessage;
 pub use crate::update::browser::BrowserMessage;
 pub use crate::update::bus::BusMessage;
 pub use crate::update::chord_track::ChordTrackMessage;
+pub use crate::update::clips::ClipMessage;
 pub use crate::update::drag::{DragMessage, DropTarget};
 pub use crate::update::export::ExportMessage;
 pub use crate::update::external_instrument::ExternalInstrumentMessage;
@@ -117,125 +117,6 @@ pub enum Message {
     Redo,
     /// The window manager requested that the window be closed.
     WindowCloseRequested(iced::window::Id),
-}
-
-#[derive(Debug, Clone)]
-pub enum ClipMessage {
-    DeleteClip(ClipId),
-    StartClipDrag {
-        clip_id: ClipId,
-        grab_offset_x: f32,
-        start_x: f32,
-        start_y: f32,
-    },
-    UpdateClipDrag(f32, f32),
-    EndClipDrag,
-    StartClipTrim {
-        clip_id: ClipId,
-        edge: ClipEdge,
-        anchor_x: f32,
-    },
-    UpdateClipTrim(f32),
-    EndClipTrim,
-    /// Begin dragging a fade handle. `edge` selects fade-in (`Left`) vs
-    /// fade-out (`Right`); `anchor_x` is the pointer x at grab. Handled by
-    /// the edit/drag update handlers (todo #317).
-    StartClipFadeDrag {
-        clip_id: ClipId,
-        edge: ClipEdge,
-        anchor_x: f32,
-    },
-    /// Update the active fade drag to pointer x.
-    UpdateClipFadeDrag(f32),
-    /// Commit the active fade drag.
-    EndClipFadeDrag,
-    /// Begin dragging the clip-gain bead. `anchor_y` is the pointer y at
-    /// grab (gain is a vertical drag). Handled by todo #317.
-    StartClipGainDrag {
-        clip_id: ClipId,
-        anchor_y: f32,
-    },
-    /// Update the active gain drag to pointer y.
-    UpdateClipGainDrag(f32),
-    /// Commit the active gain drag.
-    EndClipGainDrag,
-    // -- Inspector flyout edits (emitted by todo #319, handled by #317) --
-    //
-    // Discrete, atomic edits from the clip inspector flyout, complementing
-    // the on-canvas direct manipulation above. Each one mutates the live
-    // `ClipState` mirror and sends the matching engine command
-    // (`SetClipFade` / `SetClipGain`); the undo system records one entry
-    // per edit (see `undo::classify`). The flyout reads the current values
-    // back from the same `ClipState` mirror, so on-canvas drags and the
-    // numeric fields always agree.
-    /// Set the fade-in length from the inspector's numeric field, in
-    /// milliseconds. Converted to frames against the project sample rate
-    /// and clamped to the clip's audible length.
-    SetClipFadeInMs {
-        clip_id: ClipId,
-        ms: f32,
-    },
-    /// Set the fade-out length from the inspector's numeric field, in ms.
-    SetClipFadeOutMs {
-        clip_id: ClipId,
-        ms: f32,
-    },
-    /// Set the clip gain from the inspector's numeric field, in decibels.
-    SetClipGainDb {
-        clip_id: ClipId,
-        gain_db: f32,
-    },
-    /// Choose the fade-in curve from the inspector's curve picker.
-    SetClipFadeInCurve {
-        clip_id: ClipId,
-        curve: FadeCurve,
-    },
-    /// Choose the fade-out curve from the inspector's curve picker.
-    SetClipFadeOutCurve {
-        clip_id: ClipId,
-        curve: FadeCurve,
-    },
-    /// Reset the clip's fades and gain to their defaults (no fade, unity
-    /// gain, default curves) — the inspector's "Reset to default" action.
-    ResetClipFadeGain {
-        clip_id: ClipId,
-    },
-    // -- Discrete placement edits (control endpoint `clip.*`, doc #265) --
-    //
-    // The on-canvas equivalents above are drag gestures: a Start/Update/End
-    // triple whose geometry comes from pointer pixels. A remote client has
-    // no pointer, so these two express the same two edits as one atomic,
-    // already-resolved message — the same shape `MidiClipMessage::MoveClipTo`
-    // takes for MIDI clips. Both mutate the live `ClipState` mirror and send
-    // the matching engine command, and both are `UndoAction::Record`.
-    /// Move an audio clip to an absolute timeline position, optionally onto
-    /// another track. No snapping — the caller has already decided where it
-    /// goes.
-    MoveClipTo {
-        clip_id: ClipId,
-        new_start_sample: SamplePos,
-        /// The clip's track after the move; pass its current track to move
-        /// it in time only.
-        new_track_id: TrackId,
-    },
-    /// Set an audio clip's trim (and, with it, its timeline start) to
-    /// absolute frame counts. The caller supplies values already clamped
-    /// against the source length.
-    TrimClipTo {
-        clip_id: ClipId,
-        new_start_sample: SamplePos,
-        trim_start_frames: u64,
-        trim_end_frames: u64,
-    },
-    /// Cut a clip in two at an absolute timeline position (control
-    /// endpoint `clip.split`, ba doc #275 P2). `new_clip_id` is allocated
-    /// by the caller so the reply can name both halves without waiting
-    /// for the engine echo, the same way `clip.place` does.
-    SplitClipAt {
-        clip_id: ClipId,
-        new_clip_id: ClipId,
-        at_sample: SamplePos,
-    },
 }
 
 #[derive(Debug, Clone)]
