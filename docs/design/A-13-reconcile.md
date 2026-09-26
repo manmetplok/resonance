@@ -8,7 +8,8 @@ written against master `c325335a`), §8 the third (A-13c, group 4, against
 master `d538d5cf`; group 3 waits for D-2/D-3), §9 the fourth (A-13d, group
 5, against master `85b38b32`), §10 the fifth (A-13e, group 3, against
 master `1853dd1e`), §11 the sixth (A-13f, group 6 step 1, against
-master `fde89f24`). Later slices move one group at a time.
+master `fde89f24`), §12 the seventh (A-13g, group 6 step 2, against
+master `645d49e1`). Later slices move one group at a time.
 
 ## 1. The problem
 
@@ -452,7 +453,7 @@ The explicit origin branches, and why each is kept:
   `drum_patterns` id sets, so an empty target means the live bank is empty
   too and the clear is a no-op. The exception is an old snapshot that only
   has `drum_groups`, which takes the promotion branch anyway. Kept rather
-  than proven away.
+  than proven away. (Live on the diff path since A-13g, §12.)
 * **`transient_ui`, drum-roll focus, playhead.** Full path only, as before.
   The diff path never removes the entities they name.
 * **`section_chord_trim`.** Full path only, as before. A diff target is a
@@ -1045,3 +1046,128 @@ track undo tests, the `io`, `plugins`, `mixer` and `timeline` groups).
   must keep `plugin_mirror.index` consistent itself, or `entity_order`
   rebuilds it on every origin (cheap).
 * `LiveCarry` is unchanged; nothing in `Entities` needed a carry.
+
+## 12. Group (6), step 2: A-13g
+
+Written against master `645d49e1` (after A-13f).
+
+### What left the gate
+
+`structurally_compatible` no longer looks at the id sets of entity kinds
+whose domains restore them whole on every origin. One commit per check, each
+with a guard in `tests/io/undo_diff_shape.rs`: a real edit on the demo
+project, walked through `Message::Undo` / `Message::Redo`, where every step
+must send no `ClearAll`, run all 31 domains under `Origin::UndoDiff`, and
+leave `build_project_file` equal to the target snapshot's file (and the
+snapshot `same_state`, notes included).
+
+| Check dropped | Domain that restores it whole | Guard |
+|---|---|---|
+| arrangement markers | `Markers` (Timeline) — `ArrangementMarkers::from`, id counter recomputed | add, then delete, a marker |
+| track groups | `TrackGroups` (Content) — registry rebuilt, track-id counter only rises | create a group from a selection |
+| drum patterns | `DrumPatterns` (Globals) — bank replaced, default recomputed, id counter only rises | add a pattern; a hand-made empty-bank snapshot |
+| legacy `drum_groups` | `DrumPatterns` (promotion) — and every snapshot writes the list empty | a group add inside a pattern; the gate unit test flipped |
+| section placements | `ComposeSections` (Globals) — `load_from_project` | place a section, then delete that placement |
+| section definitions | `ComposeSections` | create an unplaced section, then delete it; the GUI create (definition + placement) |
+
+What the gate still checks: tracks (type, sub-track link), busses, the
+plugin chains of both and of the master, audio and MIDI clips — what the
+diff arms cannot add or remove yet (A-13h, A-13i).
+
+### Checked against the §10 watch list
+
+* **`drum_patterns`' `clear_on_empty`.** Now live on the diff path. For an
+  empty target it empties the bank, which is what keeps the fixed point
+  (`a_diff_restore_to_an_empty_drum_bank_clears_it`). No edit can produce
+  such a snapshot — the last pattern refuses to delete — but the rule is
+  the right one. The full path keeps the live bank for an empty file; that
+  stays a disk-load rule for projects that predate drum patterns.
+* **Drum-roll focus.** The diff arm leaves `managing_pattern_id` /
+  `selected_group_id` / `managing_group_id` alone, so undoing a pattern
+  add leaves them naming a pattern that is gone. Every reader resolves or
+  compares them (`resolve_managing_pattern_id` falls back to the default
+  pattern; the views match by id), so nothing acts on a stale id; the
+  pattern test checks a group add after the undo lands in a live pattern.
+  This was already the case for groups inside a pattern, which the gate
+  never checked.
+* **Placement keys in `DerivedClips` and the vocal audio-clip map.** A
+  placement's derived MIDI clips and installed vocal audio clips are clips:
+  deleting a placement purges them (`purge_placement_outputs`), so undoing
+  that still changes the clip-id sets and still falls back. What reaches
+  the diff path is a placement with no clips. The derived map is the
+  target's entries (`DerivedClips` keeps every one on the diff path, as
+  before), so no key can name a placement the target lacks; the vocal
+  audio-clip map is rebuilt from the target's placements in
+  `VocalAudioClips`, after `ComposeSections` loaded them.
+* **Derived clip ids and the counter floor.** Unchanged: the floor is
+  carried in `LiveCarry`, `load_from_project` resets the counter,
+  `DerivedClips` / `VocalAudioClips` raise it back past the floor and every
+  restored id. No derived id is allocated by a restore.
+* **Readers of `r.compose` sections between `Globals` and `Clips`.** The
+  only one is the `tracks` domain's `migrate_old_generate_params`, on its
+  after-`ClearAll` arm only. `Entities`, `Routing` and the clip domains
+  read the file, the registry and the clip mirrors.
+* **Other runtime state keyed by a section.** `load_from_project` already
+  cleared the vocal side-tables (lyrics, render epochs and cache),
+  pronunciation and expression curves on every diff undo; the selected
+  placement falls back to the first. `vocal_bulk_lyrics` and an open
+  edit-section form are not reset by either path (a form naming a removed
+  definition renames / resizes nothing).
+
+### Behaviour changes
+
+Undo / redo of any edit that adds or removes only these entities — a
+marker, a track group, a drum pattern, a drum group, an unplaced section,
+an empty placement, the GUI's create-section — now takes the diff path
+instead of `ClearAll` + full replay. User-visible:
+
+* **No plugin re-instantiation**, so no audible gap and no plugin state
+  reload on those undos.
+* **The playhead stays put.** The full path's `Transport` resets it to 0
+  after `ClearAll`.
+* **Transient UI survives**: selected clip and plugin, an in-flight clip
+  drag or trim, the delete-track / quit confirmations (`TransientUi`), and
+  the drum-roll focus (`DrumPatterns`) are kept, not reset.
+* **No loading window.** The full path sets `io.loading` until
+  `AllCleared`, during which control-API mutations are refused; the diff
+  path is synchronous.
+* **Full-path-only steps no longer run on these undos**: the chord trim
+  (the target is a snapshot of already-trimmed live state), the
+  missing-plugin warning dismiss, the take-lane peak-cache drop, the
+  frozen-track cache re-decode, the drop of derived-map entries whose echo
+  is pending. Each is the diff path's existing rule, the same as for a
+  scalar undo.
+
+### Found, not fixed (pre-existing)
+
+* **Group macro solo / mute are not re-derived by any restore.** The group
+  handlers push each member's *effective* solo / mute
+  (`SetTrackSolo` / `SetTrackMute`); the entity domains restore each
+  track's own flag, and on the diff path only when it changed. So a diff
+  undo of a macro toggle already left the engine's effective flags stale;
+  before A-13g a later structural undo (e.g. of the group's creation)
+  happened to reset them via `ClearAll`, now it does not. The full path
+  has the mirror image: it sends the own flag, ignoring a restored macro
+  solo. Fix belongs in `TrackGroups` (re-send effective flags for every
+  member whose effective value differs) — a follow-up, not a gate issue.
+* **Marker ids are re-issued after an undo.** `ArrangementMarkers::from`
+  recomputes `next_id = max + 1`, so undoing a marker add frees its id and
+  the next add reuses it (the redo stack is cleared by that add, so no
+  snapshot collides). A stale `selected_marker_id` then highlights the new
+  marker. Same on both paths.
+
+### What this changes for A-13h–j
+
+* The gate is now exactly the entity / clip shape. A-13h drops the bus and
+  plugin checks (bus / plugin add-remove arms); A-13i the track and clip
+  checks; A-13j deletes the function. Nothing app-side is left for them to
+  worry about in the gate.
+* `transient_ui` and `drum_patterns`' focus rule say "the diff path never
+  removes the entities they name". That still holds for tracks, clips and
+  plugins until A-13h/i; once those are removable on the diff path, the
+  transient UI (selected clip / plugin, drags, delete-track confirm) needs
+  a per-entity prune on the diff arm instead of the after-`ClearAll`
+  reset.
+* A structural undo is still a full replay; the playhead / transient-UI /
+  loading-window differences above are what users will notice change per
+  entity kind as A-13h/i land.
