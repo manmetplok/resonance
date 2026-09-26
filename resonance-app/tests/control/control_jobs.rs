@@ -597,6 +597,36 @@ fn a_failed_lane_fails_only_the_jobs_waiting_on_it() {
 }
 
 #[test]
+fn a_render_with_no_voicebank_settles_the_job_and_the_lane() {
+    // Code review FU-M11a: with no SVS voicebank installed the render
+    // returns `Ok(None)` (the lane falls back to its MIDI). That used to
+    // map to `Message::Tick`, so a `vocal.render` job waiting on the lane
+    // never resolved and the lane's in-flight entry leaked.
+    let (def, track) = (7, 50);
+    let mut app = app();
+    app.test_set_vocal_render_epoch(def, track, 1);
+    let job = vocal_render_job(&mut app, "no voicebank", vec![(def, track)]);
+
+    let _ = app.update(Message::Compose(ComposeMessage::VocalAudioUnavailable {
+        definition_id: def,
+        track_id: track,
+        render_epoch: 1,
+    }));
+
+    let status = app.control_jobs().status(job).expect("job known");
+    assert_eq!(status.state, JobState::Error, "the job resolves, not hangs");
+    assert!(
+        status.error.as_deref().is_some_and(|e| e.contains("voicebank")),
+        "the reason names the missing voicebank: {:?}",
+        status.error
+    );
+    assert!(
+        !app.test_vocal_render_in_flight(def, track),
+        "the lane's in-flight entry is cleared"
+    );
+}
+
+#[test]
 fn a_superseded_renders_failure_fails_nothing() {
     // The failure-side epoch gate: the lane was re-rendered while the
     // failing render was in flight, so the newer render's outcome is

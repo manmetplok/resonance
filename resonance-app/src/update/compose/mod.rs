@@ -558,6 +558,33 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
                 current,
             );
         }
+        ComposeMessage::VocalAudioUnavailable {
+            definition_id,
+            track_id,
+            render_epoch,
+        } => {
+            // No voicebank: the lane plays its MIDI, which is the silent
+            // fallback, so no `last_error` banner. A job waiting on the
+            // lane asked for audio that is not coming, so it fails with
+            // the reason; a stale epoch settles like any stale event.
+            let current = render_epoch
+                == vocal_audio_install::current_render_epoch(r, definition_id, track_id);
+            if current {
+                r.control.jobs.fail_vocal_lane(
+                    definition_id,
+                    track_id,
+                    "no SVS voicebank is installed, so the vocal lane plays its MIDI \
+                     notes only; install a voicebank to render sung audio",
+                );
+            }
+            vocal_audio_install::settle_render_event(
+                r,
+                definition_id,
+                track_id,
+                render_epoch,
+                current,
+            );
+        }
     }
     Task::none()
 }

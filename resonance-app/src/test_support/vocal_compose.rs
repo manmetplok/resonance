@@ -174,6 +174,20 @@ impl Resonance {
             .insert((definition_id, track_id), epoch);
     }
 
+    /// Test-only: whether a render is still recorded as in flight for the
+    /// lane (code review FU-M11a).
+    #[doc(hidden)]
+    pub fn test_vocal_render_in_flight(
+        &self,
+        definition_id: u64,
+        track_id: resonance_audio::types::TrackId,
+    ) -> bool {
+        self.compose
+            .vocal_audio
+            .in_flight_render
+            .contains_key(&(definition_id, track_id))
+    }
+
     /// Test-only: install a rendered-vocal-audio clip entry for a lane,
     /// standing in for audio a previous session rendered. A re-render
     /// tears these down, so their disappearance is the observable "this

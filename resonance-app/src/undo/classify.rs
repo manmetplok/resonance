@@ -530,7 +530,9 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // redo stack an undo in the meantime filled (VIEW-18). An
             // accepted install still marks the project dirty and bumps the
             // revision in its handler: it changed the project's clips.
-            ComposeMessage::VocalAudioReady(_) | ComposeMessage::VocalAudioFailed { .. } => {
+            ComposeMessage::VocalAudioReady(_)
+            | ComposeMessage::VocalAudioFailed { .. }
+            | ComposeMessage::VocalAudioUnavailable { .. } => {
                 UndoAction::Skip
             }
 
