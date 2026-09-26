@@ -59,7 +59,8 @@ pub use external_instrument::{ExternalInstrument, PlaybackSource};
 pub use midi_map::{
     apply_delta, cc_to_norm, decode_relative, delete_controller_map, load_controller_maps,
     save_controller_map, takeover_value, BindingId, CcMode, ControlSource, ControllerMap,
-    ControllerMapStore, MidiBinding, MidiTarget, RelativeEnc, SendId, Takeover, TransportAction,
+    ControllerMapStore, MidiBinding, MidiMapError, MidiTarget, RelativeEnc, SendId, Takeover,
+    TransportAction,
 };
 #[cfg(feature = "decode")]
 pub use audio_probe::{
