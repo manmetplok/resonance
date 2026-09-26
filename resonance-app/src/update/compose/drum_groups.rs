@@ -802,8 +802,6 @@ pub(super) fn materialize_drum_clips_for(
         return;
     }
 
-    let time_sig_num = r.transport.time_sig_num.max(1);
-
     // Snapshot one tuple per placement so we don't reborrow `r.compose`
     // inside the engine-send loop. Resolves each section's *arrangement*
     // (via the #483 resolver) into ordered, section-clipped spans up front
@@ -837,6 +835,8 @@ pub(super) fn materialize_drum_clips_for(
         in placements
     {
         let start_sample = r.tempo_map.bar_to_sample(start_bar);
+        // The meter at this placement, not under the playhead (VIEW-13).
+        let time_sig_num = super::meter_at_bar(r, start_bar).numerator;
         let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
         let notes = build_drum_notes(&section_spans, time_sig_num);
 

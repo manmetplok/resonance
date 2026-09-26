@@ -81,6 +81,8 @@ mod global_tracks_edit_cycle;
 mod global_tracks_shelf;
 #[path = "compose/section_delete_cleanup.rs"]
 mod section_delete_cleanup;
+#[path = "compose/section_meter_from_tempo_map.rs"]
+mod section_meter_from_tempo_map;
 #[path = "compose/section_resize_rederive.rs"]
 mod section_resize_rederive;
 #[path = "compose/seed_markers_from_sections.rs"]

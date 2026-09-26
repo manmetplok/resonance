@@ -201,13 +201,14 @@ pub(super) fn regenerate_lane(
     // grid), the lane ends up empty.
     let notes = if matches!(&config.kind, LaneGeneratorKind::Melody(p) if p.fill_vocal_gaps) {
         let LaneGeneratorKind::Melody(p) = &config.kind else { unreachable!() };
-        let vocal_spans = collect_section_vocal_spans(&def, r.transport.time_sig_num);
+        let time_sig_num = super::section_meter(r, definition_id).numerator;
+        let vocal_spans = collect_section_vocal_spans(&def, time_sig_num);
         let timed = generate::to_timed_chords(&def.chords);
         // 32nd-note margin — keeps the arp tail off the singer's onset
         // without eating the small silences between phrases.
         let min_gap = TICKS_PER_QUARTER_NOTE / 8;
         let section_end_ticks = def.length_bars as u64
-            * r.transport.time_sig_num as u64
+            * time_sig_num as u64
             * TICKS_PER_QUARTER_NOTE;
         let filled = resonance_music_theory::derive_melody_fill_vocal(
             &timed,
@@ -238,9 +239,6 @@ pub(super) fn regenerate_lane(
         )
     };
 
-    let time_sig_num = r.transport.time_sig_num;
-    let duration_ticks = def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
-
     let track_name = r
         .registry
         .tracks
@@ -260,6 +258,11 @@ pub(super) fn regenerate_lane(
 
     for (placement_id, start_bar) in placements {
         let start_sample = r.tempo_map.bar_to_sample(start_bar);
+        // Each placement's clip spans the section's bars in the meter the
+        // tempo map has there, not the one under the playhead (VIEW-13).
+        let time_sig_num = super::meter_at_bar(r, start_bar).numerator;
+        let duration_ticks =
+            def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
         // Tear down + re-install through the shared helper, which also
         // mirrors the clip into `r.midi_clips` so the id `generate.part`
         // reports back is immediately resolvable by `song.notes` (ba todo
@@ -314,7 +317,8 @@ pub(crate) fn apply_chord_track_harmony(
     };
 
     let section_start_sample = r.tempo_map.bar_to_sample(start_bar);
-    let samples_per_beat = r.sample_rate as f64 * 60.0 / r.transport.bpm as f64;
+    let bpm = super::meter_at_bar(r, start_bar).bpm;
+    let samples_per_beat = r.sample_rate as f64 * 60.0 / bpm as f64;
 
     def.chords = generate::overlay_pinned_chords(
         &def.chords,

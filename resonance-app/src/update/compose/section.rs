@@ -78,8 +78,9 @@ pub(super) fn handle_create_midi_clip(
     track_id: resonance_audio::types::TrackId,
     start_sample: u64,
     length_bars: u32,
-    time_sig_num: u8,
 ) {
+    let (bar, _) = r.tempo_map.sample_to_bar(start_sample, r.sample_rate);
+    let time_sig_num = super::meter_at_bar(r, bar).numerator;
     let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
     let _ = r.engine.send(AudioCommand::CreateMidiClip {
         track_id,

@@ -101,10 +101,10 @@ pub(in crate::update::control) fn lane_articulation(
         &clip.notes,
         &assigned,
         resonance_audio::types::TICKS_PER_QUARTER_NOTE as u32,
-        // The render path reads the transport tempo the same way
-        // (`vocal_render::rerender_vocal_audio`), so the durations
+        // The render path reads the section's tempo the same way
+        // (`vocal_render::enqueue_vocal_render`), so the durations
         // reported here are the ones the segment builder will divide up.
-        app.transport.bpm,
+        crate::update::compose::section_meter(app, definition_id).bpm,
         params.voicebank,
     )
 }

@@ -107,7 +107,8 @@ pub(super) fn roll_vocal_melody(
     super::regenerate::apply_chord_track_harmony(r, definition_id, &mut def);
 
     let timed = crate::compose::generate::to_timed_chords(&def.chords);
-    let beats_per_bar = r.transport.time_sig_num.max(1) as u32;
+    let meter = super::section_meter(r, definition_id);
+    let beats_per_bar = meter.numerator as u32;
     let motif_intervals: Vec<i8> = timed
         .first()
         .map(|first| {
@@ -130,8 +131,7 @@ pub(super) fn roll_vocal_melody(
         return Task::none();
     }
 
-    let time_sig_num = r.transport.time_sig_num;
-    let duration_ticks = def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
+    let duration_ticks = def.length_bars as u64 * meter.numerator as u64 * TICKS_PER_QUARTER_NOTE;
 
     let track_name = r
         .registry
@@ -247,7 +247,8 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
             .expression_curves(req.definition_id, req.track_id)
             .cloned()
             .unwrap_or_default(),
-        bpm: r.transport.bpm,
+        // The section's tempo, not the one under the playhead (VIEW-13).
+        bpm: super::section_meter(r, req.definition_id).bpm,
         engine_sample_rate: r.sample_rate,
         dest_dir: vocal_audio_io::vocal_audio_dir(r.io.project_path.as_deref()),
         render_cache: render_cache_for(r, req.definition_id, req.track_id),

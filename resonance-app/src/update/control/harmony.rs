@@ -191,7 +191,7 @@ fn apply_progression(app: &mut Resonance, request: &Request) -> (Response, Task<
         Err(e) => return reject(request, e),
     };
 
-    let time_sig_num = app.transport.time_sig_num;
+    let time_sig_num = crate::update::compose::section_meter(app, definition_id).numerator;
     let beats_per_chord = match params.beats_per_chord {
         Some(b) => match whole_beats(b, "beats_per_chord") {
             Ok(0) | Err(_) => {
