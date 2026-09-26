@@ -81,6 +81,8 @@ mod generator_section;
 mod global_tracks_edit_cycle;
 #[path = "compose/global_tracks_shelf.rs"]
 mod global_tracks_shelf;
+#[path = "compose/section_bounds.rs"]
+mod section_bounds;
 #[path = "compose/section_delete_cleanup.rs"]
 mod section_delete_cleanup;
 #[path = "compose/section_meter_from_tempo_map.rs"]
