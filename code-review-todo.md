@@ -67,6 +67,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-4 (ARCH-01) | A1-2 (6) track_freeze from ProjectTrack.freeze; slow-path undo now deletes an undone freeze's cache | opus | merged | 8e10c24c |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
+| refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
 | refactor-intent E (ARCH-07) | A7-3 `model`/`decode` features in resonance-common; plugins set `default-features = false` (invariant) | sonnet | merged | 38d66942 |
 | refactor-intent A-11 (ARCH-06) | A1-3 remainder: 11 enums moved beside handlers, `message.rs` 1084 → 416 | sonnet | merged | d8bd59b7 |
 | refactor-intent C-1 (ARCH-05) | A5-3 `EngineError { kind, message }`; 39 emit sites classified (NotFound 5, Busy 2, Io 15, Plugin 4, dynamic 1, Internal 12) | sonnet | merged | 8339eecd |
