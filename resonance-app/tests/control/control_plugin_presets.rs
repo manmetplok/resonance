@@ -371,6 +371,14 @@ fn overwriting_a_user_preset_needs_the_flag() {
         .error
         .expect("saving over an existing user preset must be refused without the flag");
     assert!(error.message.contains("overwrite"), "{}", error.message);
+    // Like every other overwrite guard (CTL-10): the arguments are fine,
+    // the caller only has to confirm.
+    assert_eq!(
+        error.kind(),
+        resonance_control::ErrorKind::NeedsConfirmation,
+        "{}",
+        error.message
+    );
 
     assert!(save(&mut app, true).error.is_none(), "the flag allows it");
 }

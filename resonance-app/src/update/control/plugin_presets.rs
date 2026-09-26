@@ -228,7 +228,7 @@ pub(crate) fn check_save(
         .into_iter()
         .any(|p| p.name.eq_ignore_ascii_case(wanted));
     if exists && !overwrite {
-        return Err(RpcError::invalid_params(format!(
+        return Err(RpcError::needs_confirmation(format!(
             "a user preset named {wanted:?} already exists for {clap_id:?}; \
              pass overwrite: true to replace it"
         )));
