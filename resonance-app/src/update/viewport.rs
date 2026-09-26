@@ -29,6 +29,28 @@ pub enum ViewportMessage {
     TimelineContentSize(f32, f32),
 }
 
+impl ViewportMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Zoom, scroll and measured sizes are view state — never in the
+            // project, never undoable.
+            Self::ZoomIn
+            | Self::ZoomOut
+            | Self::ScrollY(..)
+            | Self::ArrangeScrolled { .. }
+            | Self::ScrollToY(..)
+            | Self::ViewportWidth(..)
+            | Self::ViewportHeight(..)
+            | Self::TimelineContentSize(..) => UndoAction::Skip,
+        }
+    }
+}
+
 /// Route a `ViewportMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ViewportMessage) -> Task<Message> {
     match m {

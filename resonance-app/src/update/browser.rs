@@ -96,6 +96,37 @@ pub enum BrowserMessage {
     ToggleAutoPlay,
 }
 
+impl BrowserMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Media-browser navigation, filtering, favourite / recent, and
+            // audition preview are all transient session UI state (doc #175) —
+            // never undoable and never in the project file, same rule as the
+            // collapse toggles. Favourites / recent persist to user settings
+            // (not the project); the engine's preview transport is outside
+            // undo entirely.
+            Self::ToggleVisible
+            | Self::SelectTab(..)
+            | Self::OpenFolder(..)
+            | Self::ScanCompleted { .. }
+            | Self::SetFilter(..)
+            | Self::ToggleFavourite(..)
+            | Self::Select(..)
+            | Self::Play(..)
+            | Self::Stop
+            | Self::Scrub(..)
+            | Self::ToggleLoop
+            | Self::ToggleSync
+            | Self::ToggleAutoPlay => UndoAction::Skip,
+        }
+    }
+}
+
 pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
     match message {
         BrowserMessage::ToggleVisible => {

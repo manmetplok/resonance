@@ -414,3 +414,57 @@ pub enum UiMessage {
     CloseTrackMenu,
 }
 
+impl UiMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Tabs, dialogs, menus, selection, performance mode and app
+            // settings: pure UI or user-settings state, never a project edit.
+            Self::SwitchView(..)
+            | Self::TogglePerformanceMode
+            | Self::RequestPerformanceToggle
+            | Self::PerformanceToggleResolved { .. }
+            | Self::ExitPerformanceMode
+            | Self::OpenSettings
+            | Self::CloseSettings
+            | Self::OpenAddTrackMenu
+            | Self::CloseAddTrackMenu
+            | Self::ToggleReferencePanel
+            | Self::DismissError
+            | Self::StartNewProject
+            | Self::SelectTrack(..)
+            | Self::SelectBus(..)
+            | Self::ModifiersChanged(..)
+            | Self::ConfirmSaveAndQuit
+            | Self::ConfirmDiscardAndQuit
+            | Self::CancelQuit
+            | Self::ToggleGlobalTracks
+            | Self::ToggleMixerInspectorGroup(..)
+            | Self::ToggleTakeLane(..)
+            | Self::ToggleFollowPlayhead
+            | Self::ToggleAutosave
+            | Self::SetAutosaveInterval(..)
+            | Self::ToggleMidiClockSend
+            | Self::SetMidiClockSendDevice(..)
+            | Self::ToggleMidiClockRecv
+            | Self::SetMidiClockRecvDevice(..)
+            | Self::SetPerformanceTuning(..)
+            | Self::SetPerformanceCapo(..)
+            | Self::ToggleMarkersOverview
+            | Self::CloseMarkersOverview
+            | Self::RequestMarkerNav { .. }
+            | Self::MarkerNavResolved { .. }
+            | Self::RequestShortcut(..)
+            | Self::ShortcutResolved { .. }
+            | Self::DismissImportProgress
+            | Self::DismissMissingPlugins
+            | Self::ShowMissingPlugins
+            | Self::OpenTrackMenu { .. }
+            | Self::CloseTrackMenu => UndoAction::Skip,
+        }
+    }
+}

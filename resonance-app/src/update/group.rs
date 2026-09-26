@@ -75,6 +75,49 @@ pub enum GroupMessage {
     CancelMembershipDrag,
 }
 
+impl GroupMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            // Creating a group from the selection mutates the persisted group
+            // registry, so it's a recordable edit (todo #684).
+            Self::CreateGroupFromSelection => UndoAction::Record,
+            // Committing a drag-and-drop membership change is the single
+            // recordable point of the gesture (todo #685): the registry's
+            // membership / nesting is part of the persisted project, so an
+            // undo restores the prior grouping.
+            Self::DropMembership => UndoAction::Record,
+            // Toggling a group's macro solo / mute mutates the persisted group
+            // registry (macro_solo / macro_mute live in the project), so each
+            // is a single recordable edit; a member's own solo / mute is left
+            // untouched, so undo restores the exact prior group + per-track
+            // picture (#687, #688).
+            Self::ToggleMacroSolo(..) | Self::ToggleMacroMute(..) => UndoAction::Record,
+            // Folding / unfolding a group flips the persisted `is_collapsed`
+            // flag (todo #686, persisted via #690), so a single toggle is a
+            // recordable edit — undo restores the prior fold picture and the
+            // hidden member rows reappear.
+            Self::ToggleCollapse(..) => UndoAction::Record,
+            // The group level trim is a continuous control (a slider drag, like
+            // a fader): coalesce the burst into one entry keyed by group so a
+            // drag undoes in a single step, restoring the persisted
+            // `macro_level` (todo #689).
+            Self::SetMacroLevel(group_id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::GroupMacroLevel(*group_id))
+            }
+            // The membership drag's start / update / cancel phases are transient
+            // UI bookkeeping and skip the history.
+            Self::StartMembershipDrag(..)
+            | Self::UpdateMembershipDrag { .. }
+            | Self::CancelMembershipDrag => UndoAction::Skip,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {
         // Collapse / fold state in the timeline — todo #686.

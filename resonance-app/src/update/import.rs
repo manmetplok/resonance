@@ -105,6 +105,44 @@ pub enum ImportMessage {
     Confirm,
 }
 
+impl ImportMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // The MIDI Import modal: Confirm lands the whole import — new tracks,
+            // clips, notes and an adopted tempo — as ONE undoable edit (code
+            // review FU-V2a). Its sub-dispatches are absorbed into this entry
+            // (`continue_as_one_undo`), and a Confirm that cannot import is
+            // dropped by `gates_message` before it could record anything.
+            Self::Confirm => UndoAction::Record,
+            // Every other interaction is transient dialog state.
+            Self::Open
+            | Self::Cancel
+            | Self::HoverFile
+            | Self::HoverLeft
+            | Self::Choose
+            | Self::FileChosen(..)
+            | Self::FileDropped(..)
+            | Self::ParseCompleted(..)
+            | Self::Parsed { .. }
+            | Self::ToggleTrack(..)
+            | Self::SetAllTracks(..)
+            | Self::RenameTrack(..)
+            | Self::SetTempoChoice(..)
+            | Self::SetPlacementStart(..)
+            | Self::SetPlacementMode(..)
+            | Self::SetMergeTarget(..)
+            | Self::SetConflictAlignment(..)
+            | Self::ChooseTempo(..)
+            | Self::ResolveTempo => UndoAction::Skip,
+        }
+    }
+}
+
 /// Notes kept per row for the Review stage's preview strip.
 const PREVIEW_NOTES: usize = 128;
 /// A file tempo within this many BPM of the project's is not a conflict.

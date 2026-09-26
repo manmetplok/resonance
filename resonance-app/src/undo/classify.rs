@@ -52,51 +52,23 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         // them before calling classify — but be defensive.
         Message::Undo | Message::Redo => UndoAction::Skip,
 
-        // Window close request: pure UI flow, no project mutation.
-        Message::WindowCloseRequested(_) => UndoAction::Skip,
+        // Window close request (it carries a window id, not a message
+        // enum): pure UI flow, no project mutation. The timer tick is
+        // engine runtime.
+        Message::WindowCloseRequested(..) | Message::Tick => UndoAction::Skip,
 
-        // Timer tick, pure UI, engine runtime, project I/O.
-        Message::Tick => UndoAction::Skip,
-        // Control-endpoint envelope (doc #265, todo #1147): connect /
-        // disconnect events and request execution carry no undo weight
-        // at this level. Mutating control methods synthesize ordinary
-        // domain messages that re-enter `update()` individually and are
-        // classified there.
-        Message::Control(_) => UndoAction::Skip,
-        Message::Viewport(_) => UndoAction::Skip,
-        Message::Ui(_) => UndoAction::Skip,
-        Message::ProjectIo(_) => UndoAction::Skip,
-        Message::Export(_) => UndoAction::Skip,
-        // The MIDI Import modal: every interaction is transient dialog
-        // state except Confirm, which lands the whole import — new tracks,
-        // clips, notes and an adopted tempo — as ONE undoable edit (code
-        // review FU-V2a). Its sub-dispatches are absorbed into this entry
-        // (`continue_as_one_undo`), and a Confirm that cannot import is
-        // dropped by `gates_message` before it could record anything.
-        Message::Import(ImportMessage::Confirm) => UndoAction::Record,
-        Message::Import(_) => UndoAction::Skip,
-        // Missing-file relink (doc #175, todo #600). Opening the OS
-        // picker, its cancel results, and starting the background import
-        // are transient — they mutate no project state. Only the applied
-        // outcome (`Imported(Ok)`) clears the missing flag, refreshes the
-        // asset's source provenance, and reloads its clips, so that one
-        // records a pre-relink snapshot to make the relink reversible.
-        // `Imported(Err)` only sets a transient error string.
-        Message::Relink(RelinkMessage::Imported(Ok(_))) => UndoAction::Record,
-        Message::Relink(_) => UndoAction::Skip,
-        // Media-browser navigation, filtering, favourite / recent, and
-        // audition preview are all transient session UI state (doc #175) —
-        // never undoable and never in the project file, same rule as the
-        // collapse toggles. Favourites / recent persist to user settings
-        // (not the project); the engine's preview transport is outside
-        // undo entirely.
-        Message::Browser(_) => UndoAction::Skip,
-        // Drag-to-timeline placement preview (doc #175, todo #605) is pure
-        // transient UI: the drag pill, lit lane, ghost clip and tooltip are
-        // never undoable and never in the project file. The one durable
-        // effect — the drop — re-dispatches a `Pool(ImportAndPlace)`, which
-        // records its own single undo entry via the arm below.
-        Message::Drag(_) => UndoAction::Skip,
+        // Every sub-message enum classifies itself exhaustively, beside
+        // its handler (ARCH-06 A6-4) — the reasoning for each variant
+        // lives there.
+        Message::Control(m) => m.undo_action(),
+        Message::Viewport(m) => m.undo_action(),
+        Message::Ui(m) => m.undo_action(),
+        Message::ProjectIo(m) => m.undo_action(),
+        Message::Export(m) => m.undo_action(),
+        Message::Import(m) => m.undo_action(),
+        Message::Relink(m) => m.undo_action(),
+        Message::Browser(m) => m.undo_action(),
+        Message::Drag(m) => m.undo_action(),
         // Audio import + placement (doc #175, todo #598) is one undoable
         // action. Recording here — before the import command is even sent —
         // captures the pre-import project (no pool asset, no placed clip, no
@@ -115,42 +87,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             UndoAction::Skip
         }
         Message::Pool(_) => UndoAction::Record,
-        // Creating a group from the selection mutates the persisted group
-        // registry, so it's a recordable edit (todo #684).
-        Message::Group(GroupMessage::CreateGroupFromSelection) => UndoAction::Record,
-        // Committing a drag-and-drop membership change is the single
-        // recordable point of the gesture (todo #685): the registry's
-        // membership / nesting is part of the persisted project, so an
-        // undo restores the prior grouping. The drag's start / update /
-        // cancel phases are transient UI bookkeeping and skip the history.
-        Message::Group(GroupMessage::DropMembership) => UndoAction::Record,
-        // Toggling a group's macro solo mutates the persisted group
-        // registry (macro_solo lives in the project), so it is a single
-        // recordable edit; a member's own solo is left untouched, so undo
-        // restores the exact prior group + per-track solo picture (#688).
-        Message::Group(GroupMessage::ToggleMacroSolo(_)) => UndoAction::Record,
-        // Folding / unfolding a group flips the persisted `is_collapsed`
-        // flag (todo #686, persisted via #690), so the fold state is part
-        // of the project and a single toggle is a recordable edit — undo
-        // restores the prior fold picture and the hidden member rows
-        // reappear.
-        Message::Group(GroupMessage::ToggleCollapse(_)) => UndoAction::Record,
-        // The group level trim is a continuous control (a slider drag, like a
-        // fader): coalesce the burst into one entry keyed by group so a drag
-        // undoes in a single step, restoring the persisted `macro_level`
-        // (todo #689).
-        Message::Group(GroupMessage::SetMacroLevel(group_id, _)) => {
-            UndoAction::RecordCoalesced(CoalesceKey::GroupMacroLevel(*group_id))
-        }
-        // Toggling a group's macro mute likewise mutates the persisted group
-        // registry (macro_mute lives in the project), so it is a single
-        // recordable edit; a member's own mute is left untouched, so undo
-        // restores the exact prior group + per-track mute picture (#687).
-        Message::Group(GroupMessage::ToggleMacroMute(_)) => UndoAction::Record,
-        // The remaining group macro/fold reducers are inert placeholders
-        // (todo #680) and the membership-drag start/update/cancel phases
-        // are transient; their undo classification is a skip.
-        Message::Group(_) => UndoAction::Skip,
+        Message::Group(m) => m.undo_action(),
         Message::GlobalTrack(GlobalTrackMessage::SelectEvent(_)) => UndoAction::Skip,
         Message::GlobalTrack(GlobalTrackMessage::StartTempoDrag(_)) => UndoAction::Begin,
         Message::GlobalTrack(GlobalTrackMessage::EndTempoDrag) => UndoAction::Commit,
@@ -492,11 +429,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | MidiEditorMessage::SetGrooveStrength(_) => UndoAction::Skip,
         },
 
-        // Pitch-editor open/close is editor lifecycle + an analysis
-        // request (a read-only engine query whose result is cached, not
-        // user-authored project data) — never an undoable edit, mirroring
-        // the MIDI editor open/close above.
-        Message::VocalTuning(_) => UndoAction::Skip,
+        Message::VocalTuning(m) => m.undo_action(),
 
         Message::Compose(c) => match c {
             // Form input, selections, panel open/close: UI only.
