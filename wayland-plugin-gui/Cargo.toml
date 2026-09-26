@@ -13,6 +13,7 @@ plugin-gui-core = { path = "../plugin-gui-core" }
 # the font atlas is empty, and text has zero-width metrics (layouts collapse,
 # text is invisible).
 egui.workspace = true
+tracing.workspace = true
 
 # The whole windowing body is `#[cfg(target_os = "linux")]` (non-Linux gets a
 # stub `Editor` so dependents keep compiling), so everything Wayland/EGL only

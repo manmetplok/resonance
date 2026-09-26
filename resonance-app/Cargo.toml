@@ -21,8 +21,14 @@ dirs.workspace = true
 base64 = "0.22"
 printpdf = { version = "0.9", default-features = false }
 time = { workspace = true, features = ["formatting", "parsing"] }
+# Subscriber installed in `main.rs` only (ARCH-05 A5-1).
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The engine-internals test surface (`resonance_audio::test_support`, ARCH-03)
+# for tests only; resolver 2 keeps it out of `cargo build -p resonance-app`.
+resonance-audio = { path = "../resonance-audio", features = ["test-internals"] }
 iced_test = "0.14"
 tempfile = "3"
 hound.workspace = true

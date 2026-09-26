@@ -249,7 +249,7 @@ pub fn slots_match(a: TimelineRange, b: TimelineRange) -> bool {
 /// rather than from the run — the group id, the take id and the slot —
 /// were previously copied into the event by hand at each call site, where
 /// nothing could tell if one of them drifted back to the run's value. With
-/// one site there is nothing left to drift, and `tests/loop_record_takes.rs`
+/// one site there is nothing left to drift, and `tests/engine/loop_record_takes.rs`
 /// asserts on the event this returns rather than on a re-implementation of
 /// how it is assembled.
 ///
@@ -300,7 +300,7 @@ pub fn capture_take_event(
 /// `slot` binds a *newly created* group; it never rebinds an existing one.
 /// See [`take_group_for_slot`] for why a lane's region is immutable once
 /// its first take has landed — this is the writer that used to break it,
-/// which is why `tests/loop_record_takes.rs` pins it here as well as on
+/// which is why `tests/engine/loop_record_takes.rs` pins it here as well as on
 /// [`resolve_take_group`]'s return.
 pub fn store_take_in(
     take_groups: &mut TakeGroupStore,
@@ -363,7 +363,7 @@ pub fn store_take_in(
 /// that created it (todo #1392 — see [`take_group_for_slot`]).
 ///
 /// Split out from [`store_take_in`] so
-/// `tests/loop_record_takes.rs` can pin the uniqueness invariants against
+/// `tests/engine/loop_record_takes.rs` can pin the uniqueness invariants against
 /// the real code rather than a re-implementation of them.
 pub fn push_take(
     group: &mut TakeGroup,
@@ -380,7 +380,7 @@ pub fn push_take(
 /// Replace `take_groups` wholesale with `groups`, raising `next_group_id`
 /// above every restored group id **and** `next_clip_id` above every audio
 /// take's `clip_ref`. The pure half of [`handle_restore_take_groups`] — no
-/// `HandlerState`, no publish — so `tests/loop_record_takes.rs` can pin the
+/// `HandlerState`, no publish — so `tests/engine/loop_record_takes.rs` can pin the
 /// store/allocator contract against the real code.
 ///
 /// Three invariants live here:

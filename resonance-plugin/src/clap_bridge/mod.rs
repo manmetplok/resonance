@@ -117,6 +117,9 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
     }
 
     fn new_shared<'a>(host: HostSharedHandle<'a>) -> Result<ClapShared<'a>, PluginError> {
+        // A bundle has its own tracing dispatcher; give it a subscriber
+        // before anything below can log (ARCH-05).
+        crate::logging::ensure_subscriber();
         let temp = P::new();
         let count = temp.param_count();
         let output_ports = temp.output_layout();
@@ -163,7 +166,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             // and return a PluginError instead so the host reports
             // a clean load failure.
             if let Some(&existing_slot) = clap_id_to_slot.get(&clap_id) {
-                eprintln!(
+                tracing::error!(
                     "resonance-plugin: CLAP param ID collision — params '{}' (slot {}) and '{}' (slot {}) both hash to {}",
                     param_metas[existing_slot].str_id, existing_slot, p.id(), i, clap_id
                 );

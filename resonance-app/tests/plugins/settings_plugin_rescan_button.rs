@@ -38,7 +38,7 @@ fn simulator(app: &Resonance) -> Simulator<'_, Message> {
     Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view())
 }
 
-fn drain(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
+fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 

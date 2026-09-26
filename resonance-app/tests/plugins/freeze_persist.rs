@@ -18,7 +18,7 @@ use resonance_app::message::{Message, TrackMessage};
 use resonance_app::project::{load_project, save_project, ProjectFile};
 use resonance_app::state::FreezeStatus;
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, TrackType};
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus, TrackFreezeState};
 

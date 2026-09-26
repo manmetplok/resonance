@@ -1066,6 +1066,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "plugin-gui-core",
+ "tracing",
 ]
 
 [[package]]
@@ -4892,6 +4893,8 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4918,6 +4921,7 @@ dependencies = [
  "opus",
  "parking_lot",
  "pipewire",
+ "resonance-audio",
  "resonance-common",
  "resonance-dsp",
  "resonance-metering",
@@ -4926,6 +4930,7 @@ dependencies = [
  "rubato",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -4937,6 +4942,7 @@ dependencies = [
  "serde_json",
  "symphonia",
  "time",
+ "tracing",
 ]
 
 [[package]]
@@ -4945,7 +4951,6 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-metering",
@@ -4973,7 +4978,6 @@ dependencies = [
  "clack-plugin",
  "criterion",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-metering",
@@ -5019,7 +5023,6 @@ dependencies = [
  "criterion",
  "parking_lot",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-metering",
@@ -5036,7 +5039,6 @@ dependencies = [
  "clack-plugin",
  "cocoa-plugin-gui",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-metering",
@@ -5053,7 +5055,6 @@ dependencies = [
  "clack-plugin",
  "criterion",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-metering",
@@ -5090,7 +5091,6 @@ dependencies = [
  "criterion",
  "parking_lot",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-metering",
@@ -5150,6 +5150,8 @@ dependencies = [
  "resonance-plugin",
  "serde",
  "serde_json",
+ "tracing",
+ "tracing-subscriber",
  "wayland-plugin-gui",
 ]
 
@@ -5162,7 +5164,6 @@ dependencies = [
  "clack-plugin",
  "criterion",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-metering",
@@ -5197,7 +5198,6 @@ dependencies = [
  "clack-plugin",
  "criterion",
  "plugin-gui-core",
- "resonance-common",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-plugin",
@@ -6956,6 +6956,7 @@ dependencies = [
  "plugin-gui-core",
  "raw-window-handle",
  "smithay-client-toolkit 0.20.0",
+ "tracing",
  "wayland-client",
  "wayland-egl",
  "wayland-protocols",

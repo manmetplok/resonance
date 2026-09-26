@@ -41,11 +41,16 @@ master and updates this table. Agents do **not** edit this file.
 | M11 vocal pipeline | UPD-08, VIEW-31, VIEW-34, VIEW-35, FU-V2d | opus | merged | 500d58ee |
 | M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | merged | 213505c2 |
 | H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | merged | d1cdaa66 |
-| H5 plan ARCH-04/05/06/07/09 | planning (read-only) | fable | in progress | |
+| H5 plan ARCH-04/05/06/07/09 | planning (read-only) | fable | done → arch-migration-plan.md Part 2 | |
 | V4 import dialog + app follow-ups | VIEW-25/FU-V2a, FU-M11a, FU-M4b, FU-C2, FU-C3, FU-V2b, FU-V3a, FU-V3b | opus | in progress | |
+| H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | merged | 582c4fcb |
+| H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
+| H8 message enums + undo blobs + ids | ARCH-06 A6-1, ARCH-09 A9-1/2, ARCH-04 A4-1/2/3 | — | queued (after V4/H3) | |
+| P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | in progress | |
+| A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
-| H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | in progress | |
+| H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
 
 ### Follow-ups found while fixing (new todos)
 
@@ -121,10 +126,14 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M11a** (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
 - [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 - [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
-- [ ] **FU-H4b** note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
+- [x] **FU-H4b** — done (A3-2); note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
 - [ ] **FU-M12a** (medium) autosave crash detection + recovery prompt (#466/#467 on `ba/epic-32`, ~1000 lines) and the autosave settings UI (#471) not ported — need their own todos.
 - [ ] **FU-M12b** (low) autosave of a never-saved project uses the real user cache dir; backup side-file folder can be orphaned by a crash mid-backup; `SetProjectDir` folder scan runs on the engine command thread.
 - [ ] **FU-M12c** (low) possibly flaky: `io preset_name_collisions::a_file_holding_another_preset_is_never_overwritten` failed once under full-suite load.
+- [ ] **FU-H3a** (low) crate-level `allow(dead_code, unused_imports)` when `test-internals` is off — reviewer may prefer per-item cfg gating; broken intra-doc link to gated `RolledAudioTake` from `project/take_audio.rs`; stale binary counts in run-tests.py docstring / CLAUDE.md.
+- [ ] **FU-H6a** (medium) ARCH-05 app sweep: convert resonance-app's ~49 `eprintln!` to tracing, then remove resonance-app's exemption from `library_crates_log_through_tracing_not_stderr`.
+- [ ] **FU-H6b** (low) cpal error callbacks in `engine/mod.rs` / `platform.rs` still format+log on the ALSA audio worker thread (rate-limited; outside the `mixer/` invariant) — route via atomics like the oversize latch.
+- [ ] **FU-H6c** (low) default tracing filter string duplicated in `resonance-app/src/main.rs` and `resonance-plugin/src/logging.rs`; log lines now carry `LEVEL target:` prefixes.
 
 ## How to use this file
 
@@ -1793,7 +1802,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   Pitfall: `HandlerCtx` (`engine/thread/mod.rs:44`) holds `&Arc<RwLock<...>>` for every handler; migrate by adding a `graph: &ArcSwap<RenderGraph>` alongside and removing the old fields last.
 - **Verification / done-when:** `grep -rn '\.write()' resonance-audio/src/engine | grep -E 'tracks|busses|clips|midi_clips'` is empty; the callback does no `try_read` on project maps; a test using `EngineHandlerHarness` loads a 500-clip project while a synthetic callback runs and asserts zero contended blocks.
 
-### [ ] ARCH-03 — Test-binary sprawl outside the app, and engine internals leaking into the public API for tests
+### [x] ARCH-03 — Test-binary sprawl outside the app, and engine internals leaking into the public API for tests — fixed @811b08a0 (130→12 binaries, rebuild 12.1s→3.7s, test-internals feature)
 - **Severity:** high
 - **Category:** build-time
 - **Location:** `resonance-audio/tests/` (121 files = 121 binaries, 29,930 LOC, `0` `[[test]]` groups in `resonance-audio/Cargo.toml`), `resonance-music-theory/tests/` (41), `plugins/resonance-amp/tests/` (28), `plugins/resonance-granular-delay/tests/` (22), `plugins/resonance-mastering/tests/` (21); `resonance-audio/src/lib.rs:56-120` and `:200-400` (`__test_support` plus 24 `#[doc(hidden)] pub use engine::…` blocks); `scripts/run-tests.py:1-12` ("~620 of them").
@@ -1818,7 +1827,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   Pitfall: demo seeding (`demo.rs`) and templates construct entities before the engine echoes; they need the allocator too.
 - **Verification / done-when:** `grep -rn 'next_[a-z_]*_id' resonance-audio/src/engine` empty; `grep -rn '_ID_BASE' resonance-app resonance-audio` empty; a test loads a project, adds one of each entity via GUI and via control, saves, reloads, and asserts no id reuse.
 
-### [ ] ARCH-05 — No error taxonomy or logging facade: `String` errors and `eprintln!` everywhere
+### [ ] ARCH-05 — (partial: tracing facade + RT print fix + invariants landed @9dcd3bcd; app sweep of 49 sites, error taxonomy A5-3/4 open) No error taxonomy or logging facade: `String` errors and `eprintln!` everywhere
 - **Severity:** medium
 - **Category:** consistency
 - **Location:** `resonance-audio/src/types/events.rs` (`Error(String)`, `BounceError(String)`, `TrackBounceError(String)`, `StemExportError(String)`, …); `Result<_, String>` counts: audio 41, app 27, common 23, amp 65, plugin 8; `eprintln!` counts: app 49, audio 34; only `resonance-mcp` and `resonance-svs` use `tracing`, only `resonance-control` and `resonance-music-theory` use `thiserror`; `resonance-app/src/engine_events/dispatch.rs:56` logs an engine report with `eprintln!` because "no UI surface yet".
@@ -1842,7 +1851,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Move undo classification beside the enum: `impl TrackMessage { fn undo_action(&self) -> UndoAction }` with an exhaustive match (no `_`), so adding a variant fails to compile until classified. Delete the sub-enum catch-alls in `classify.rs` as each domain migrates.
 - **Verification / done-when:** `message.rs` < 300 lines; `Resonance` ≤ 40 fields; `grep -nE '\(_\) => UndoAction::Skip' resonance-app/src/undo/classify.rs` empty.
 
-### [ ] ARCH-07 — `resonance-common` is a domain-model crate wearing a primitives label, and every plugin links it
+### [ ] ARCH-07 — (partial: A7-1/A7-2 landed @cae04146 — 8 plugins dropped resonance-common, allow-list invariant; A7-3 feature-gating open) `resonance-common` is a domain-model crate wearing a primitives label, and every plugin links it
 - **Severity:** medium
 - **Category:** layering
 - **Location:** `resonance-common/src/` (`take.rs` 733, `audio_probe.rs` 402, `midi_map.rs` 334, `device_definition.rs` 328, `automation.rs`, `freeze.rs`, `external_instrument.rs`, `track_group.rs`, `device_registry.rs`); `resonance-common/Cargo.toml` deps (symphonia, serde_json, dirs, time); every `plugins/*/Cargo.toml` depends on it but the plugins import only `flush_denormals`, `scan_directory`, `registry`, `drum_map`, `decode_wav_*`.

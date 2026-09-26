@@ -16,7 +16,7 @@ use resonance_app::message::{ClipMessage, Message};
 use resonance_app::state::ClipState;
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, FadeCurve, TrackType};
 
 const SR: u32 = 48_000;

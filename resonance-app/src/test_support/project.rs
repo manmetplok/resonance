@@ -56,7 +56,7 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_capture_engine(
         &mut self,
-    ) -> resonance_audio::__test_support::Receiver<resonance_audio::types::AudioCommand> {
+    ) -> crossbeam_channel::Receiver<resonance_audio::types::AudioCommand> {
         let (engine, cmd_rx) = resonance_audio::AudioEngine::for_test_capture();
         self.engine = engine;
         cmd_rx

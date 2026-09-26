@@ -106,7 +106,7 @@ impl ImportQueue {
             // import in the queue. Contain the panic and keep serving.
             while let Ok(job) = rx.recv() {
                 crate::supervise::run_supervised("clip-import", job, |message| {
-                    eprintln!("clip-import: {message}");
+                    tracing::error!("clip-import: {message}");
                 });
             }
         }) {

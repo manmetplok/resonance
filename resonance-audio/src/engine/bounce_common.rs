@@ -42,7 +42,7 @@ pub(crate) fn offline_tail_frames(sample_rate: u32) -> u64 {
 /// Returns `Err` if there's nothing to bounce — neither a loop nor
 /// any MIDI clip on the source track.
 ///
-/// `pub` (not `pub(crate)`) only so `__test_support` can re-export it
+/// `pub` (not `pub(crate)`) only so `test_support` can re-export it
 /// for integration tests.
 pub fn midi_render_range(
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,

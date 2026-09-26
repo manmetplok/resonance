@@ -32,7 +32,7 @@ fn app_with_project() -> Resonance {
     app
 }
 
-fn drain(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
+fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
     let mut cmds = Vec::new();
     while let Ok(cmd) = rx.try_recv() {
         cmds.push(cmd);

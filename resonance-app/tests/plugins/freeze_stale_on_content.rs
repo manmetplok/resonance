@@ -12,7 +12,7 @@
 use resonance_app::message::{ArrangementMessage, Message, TrackMessage, TransportMessage};
 use resonance_app::state::FreezeStatus;
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 use resonance_control::ids::TrackId as ProtoTrackId;

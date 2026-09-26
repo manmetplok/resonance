@@ -312,7 +312,7 @@ fn on_state_changed(
                 .shared
                 .output_stream_lost
                 .store(true, Ordering::Release);
-            eprintln!("audio: PipeWire output stream error (was {old:?}): {e}");
+            tracing::error!("audio: PipeWire output stream error (was {old:?}): {e}");
         }
         pw::stream::StreamState::Streaming => {
             if user_data
@@ -320,7 +320,7 @@ fn on_state_changed(
                 .output_stream_lost
                 .swap(false, Ordering::AcqRel)
             {
-                eprintln!("audio: PipeWire output stream recovered (was {old:?})");
+                tracing::info!("audio: PipeWire output stream recovered (was {old:?})");
             }
         }
         _ => {}

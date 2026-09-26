@@ -66,7 +66,7 @@ fn section_named(app: &mut Resonance, name: &str) -> SectionDefinitionId {
 /// Latest note tick written per section, keyed by the section name in
 /// the derived clip's name.
 fn last_tick_by_section(
-    rx: &resonance_audio::__test_support::Receiver<AudioCommand>,
+    rx: &resonance_audio::test_support::Receiver<AudioCommand>,
 ) -> std::collections::BTreeMap<String, u64> {
     let mut out = std::collections::BTreeMap::new();
     while let Ok(cmd) = rx.try_recv() {

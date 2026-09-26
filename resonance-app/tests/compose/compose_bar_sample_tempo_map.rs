@@ -111,7 +111,7 @@ fn generate_part(app: &mut Resonance, section_id: SectionDefinitionId, track: Pr
 /// Pull the single `LoadMidiClipDirect` a derive emitted out of the captured
 /// command stream, returning `(clip_id, start_sample)`.
 fn load_direct_start(
-    rx: &resonance_audio::__test_support::Receiver<AudioCommand>,
+    rx: &resonance_audio::test_support::Receiver<AudioCommand>,
 ) -> (u64, u64) {
     let mut found = None;
     while let Ok(cmd) = rx.try_recv() {

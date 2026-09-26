@@ -114,7 +114,7 @@ impl ResonancePlugin for ResonanceMastering {
         };
         let left = &mut main.left[..frames];
         let right = &mut main.right[..frames];
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         // `Chain::process` honours the bypass param itself: a
         // latency-matched dry path, crossfaded, with the stages kept warm.

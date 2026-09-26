@@ -21,7 +21,7 @@ use resonance_app::state::{BrowserState, BrowserTab, FolderScan};
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::update::browser::scan_folder;
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::AudioCommand;
 use resonance_common::audio_probe::{AudioFileEntry, AudioFormat, AudioInfo};
 

@@ -571,7 +571,7 @@ impl ClapInstance {
     }
 
     /// Read-only view of the pending note queue. Test surface only —
-    /// see `tests/clap_all_notes_off.rs`.
+    /// see `tests/clap_host/clap_all_notes_off.rs`.
     #[doc(hidden)]
     pub fn __pending_notes_for_test(&self) -> &[(bool, u8, f32, u32)] {
         &self.pending_notes

@@ -105,7 +105,7 @@ fn section_named(app: &mut Resonance, name: &str) -> SectionDefinitionId {
 /// sample keeps two sections distinguishable even when they are placed
 /// at the same bar.
 fn drum_writes(
-    rx: &resonance_audio::__test_support::Receiver<AudioCommand>,
+    rx: &resonance_audio::test_support::Receiver<AudioCommand>,
 ) -> std::collections::BTreeMap<String, Vec<(u8, u64, u64)>> {
     let mut by_section = std::collections::BTreeMap::new();
     while let Ok(cmd) = rx.try_recv() {

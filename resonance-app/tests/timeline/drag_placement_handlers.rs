@@ -21,7 +21,7 @@ use resonance_app::state::{TrackGroupRegistry, TrackState};
 use resonance_app::view::arrange_layout::{ArrangeAutomationRows, ArrangeRowLayout};
 use resonance_app::view::timeline::placement::{resolve_drop, PlacementGeometry};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TempoMap};
 use resonance_common::audio_probe::{AudioFileEntry, AudioInfo};
 use resonance_common::AudioFormat;

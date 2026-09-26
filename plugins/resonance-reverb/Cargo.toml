@@ -13,7 +13,6 @@ editor = ["dep:plugin-gui-core", "resonance-plugin/editor-widgets"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
-resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
 resonance-metering = { path = "../../resonance-metering" }
 serde_json.workspace = true

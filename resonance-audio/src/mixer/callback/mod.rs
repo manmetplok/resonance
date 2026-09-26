@@ -46,7 +46,7 @@ use context::BlockTiming;
 /// Runs on the audio callback thread: allocation-free (it only writes into
 /// the caller's pre-allocated [`CallbackScratch`]) and non-blocking.
 pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratch<'_>) {
-    resonance_common::flush_denormals();
+    resonance_dsp::flush_denormals();
 
     // The one "offline render in progress" gate (code review MIX-02 /
     // ENG-05). Every offline renderer (export, stems, bounce in place,
@@ -159,22 +159,12 @@ fn forward_live_midi_unplayed(inputs: &CallbackInputs<'_>) {
 fn block_frames(inputs: &CallbackInputs<'_>, data_len: usize) -> usize {
     let raw_output_frames = data_len / inputs.channels;
     if raw_output_frames > inputs.buf_frames {
-        log_oversize_buffer(raw_output_frames, inputs.buf_frames);
+        // Latched into `SharedState`; the engine loop logs it once. The
+        // audio thread never formats or writes to stderr (ARCH-05 A5-2).
+        inputs
+            .shared
+            .oversize_buffer
+            .record(raw_output_frames, inputs.buf_frames);
     }
     raw_output_frames.min(inputs.buf_frames)
-}
-
-/// One-shot warning when the backend requests a buffer larger than our
-/// pre-allocated scratch. Latches via `AtomicBool` so the audio thread
-/// doesn't flood stderr; subsequent oversize buffers are silently clamped
-/// (audio plays slower than real-time, but does not desync).
-fn log_oversize_buffer(requested: usize, scratch: usize) {
-    use std::sync::atomic::AtomicBool;
-    static WARNED: AtomicBool = AtomicBool::new(false);
-    if !WARNED.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "audio: cpal requested buf={} frames but scratch is {} — clamping; audio will run slow",
-            requested, scratch
-        );
-    }
 }

@@ -360,7 +360,7 @@ impl GraphRateForce {
         write_force_rate(rate)?;
         let readback = read_force_rate();
         if readback != Some(rate) {
-            eprintln!(
+            tracing::warn!(
                 "audio: clock.force-rate {rate} not accepted (readback {readback:?}); following graph rate instead"
             );
             // The write above already landed — the metadata is global
@@ -404,7 +404,7 @@ pub(crate) fn assert_graph_rate(
     direction: DeviceDirection,
 ) -> Option<GraphRateForce> {
     if std::env::var_os("RESONANCE_NO_GRAPH_FORCE").is_some() {
-        eprintln!("audio: RESONANCE_NO_GRAPH_FORCE set — following the graph rate");
+        tracing::info!("audio: RESONANCE_NO_GRAPH_FORCE set — following the graph rate");
         return None;
     }
     let graph_rate = pipewire_graph_rate();
@@ -412,7 +412,7 @@ pub(crate) fn assert_graph_rate(
         device_supports_rate(device, &direction, rate)
     })?;
     if force_is_redundant(graph_rate, &pipewire_allowed_rates(), target) {
-        eprintln!(
+        tracing::info!(
             "audio: graph already pinned to {target} Hz by clock.allowed-rates — not forcing"
         );
         return None;
@@ -670,12 +670,12 @@ pub(crate) fn build_input_stream(
                 return Ok((crate::input_handle::InputHandle::PipeWire(handle), sr, ch));
             }
             Ok((_handle, _, ch)) => {
-                eprintln!(
+                tracing::warn!(
                     "[input] PipeWire negotiated {ch} channels (max {max_channels}); falling back to cpal"
                 );
             }
             Err(e) => {
-                eprintln!("[input] PipeWire backend failed ({e}); falling back to cpal");
+                tracing::warn!("[input] PipeWire backend failed ({e}); falling back to cpal");
             }
         }
     }
@@ -933,11 +933,11 @@ fn build_input_stream_cpal(
                     if let Some(report) =
                         underrun_limiter.record(std::time::Instant::now())
                     {
-                        eprintln!("{}", format_underrun_line("input", &report));
+                        tracing::warn!("{}", format_underrun_line("input", &report));
                     }
                 }
                 other => {
-                    eprintln!("Input stream error: {}", other);
+                    tracing::error!("Input stream error: {}", other);
                 }
             },
             None,
@@ -962,7 +962,7 @@ fn build_input_stream_cpal(
             // recording / deinterleave layer will then clamp ports past
             // that to the last channel — same caveat as before this
             // fix, but at least monitoring of channels 1+2 still works.
-            eprintln!(
+            tracing::warn!(
                 "[input] {} channels rejected ({}); falling back to {} channels",
                 primary_channels, primary_err, default_channels
             );

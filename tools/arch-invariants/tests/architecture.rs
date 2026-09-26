@@ -170,7 +170,8 @@ fn report(rule: &str, violations: &[String]) {
 
 /// What every crate under `plugins/` may depend on, any dependency kind.
 ///
-/// ARCHITECTURE.md: "`resonance-common` ──► every plugin",
+/// ARCHITECTURE.md: "`resonance-common` ──► ... amp/drums/ir plugins" (which
+/// ones: `only_listed_plugins_depend_on_resonance_common`),
 /// "`resonance-plugin` ──► every plugin", "`resonance-dsp` ──► (every FX
 /// plugin)", the metering and music-theory arrows, and `plugin-gui-core`
 /// as "the platform-neutral half of the editor stack". The platform
@@ -415,6 +416,147 @@ fn plugins_never_name_a_platform_runtime() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Plugin reach into resonance-common (ARCH-07)
+// ---------------------------------------------------------------------------
+
+/// The `resonance_common::` items plugin code may name: file/preset/
+/// content utilities, never DAW model types. `flush_denormals` is not
+/// here — it moved to `resonance-dsp` (ARCH-07 A7-2).
+const PLUGIN_COMMON_ITEMS: &[&str] = &[
+    "scan_directory",      // amp, ir; resonance-plugin's loader
+    "registry",            // drums: downloadable kit content
+    "drum_map",            // drums: the GM pad contract shared with the app
+    "decode_wav_stereo",   // drums: sample decode
+    "decode_wav_channels", // ir: impulse-response decode
+    "factory_presets",     // resonance-plugin: the factory-preset codec
+];
+
+/// The plugins that declare a `resonance-common` dependency at all. The
+/// other plugins reach only `resonance-dsp`/`resonance-plugin`; a new edge
+/// is a decision, not a side effect of an auto-import.
+const PLUGINS_ON_COMMON: &[&str] = &["resonance-amp", "resonance-drums", "resonance-ir"];
+
+/// The item(s) a `resonance_common` occurrence names: `::x` → `x`,
+/// `::{a, b::{c}}` → `a, b` (`self` skipped), a bare crate name → `""`.
+fn common_items_named(rest: &str) -> Vec<String> {
+    let head = |s: &str| {
+        s.trim()
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '*'))
+            .next()
+            .unwrap_or("")
+            .to_owned()
+    };
+    let Some(path) = rest.strip_prefix("::") else {
+        return vec![String::new()];
+    };
+    let Some(group) = path.strip_prefix('{') else {
+        return vec![head(path)];
+    };
+    let mut depth = 0usize;
+    let mut items = vec![String::new()];
+    for c in group.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' if depth == 0 => break,
+            '}' => depth -= 1,
+            ',' if depth == 0 => items.push(String::new()),
+            _ if depth == 0 => items.last_mut().expect("non-empty").push(c),
+            _ => {}
+        }
+    }
+    items
+        .iter()
+        .map(|i| head(i))
+        .filter(|i| !i.is_empty() && i != "self")
+        .collect()
+}
+
+/// ARCHITECTURE.md → Crate Layering: "Plugins reach `resonance-common`
+/// only for utilities … DAW model types are not plugin API". Every
+/// `resonance_common::<item>` in a plugin crate or `resonance-plugin` (any
+/// target: src, tests, benches, examples, build.rs) must be in
+/// `PLUGIN_COMMON_ITEMS`; a bare `resonance_common` (`use resonance_common
+/// as rc;`) or a glob would hide the item, so both fail too.
+///
+/// Exercised 2026-09-26: added `use resonance_common::Take;` to
+/// `plugins/resonance-drums/src/lib.rs` → failed on that line; reverted.
+#[test]
+fn plugins_reach_only_common_utilities() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for p in packages()
+        .iter()
+        .filter(|p| p.is_plugin(&root) || p.name == "resonance-plugin")
+    {
+        let mut files = Vec::new();
+        rust_files(&p.dir, &mut files);
+        for file in files {
+            let text: String = code_lines(&file).iter().map(|(_, l)| format!("{l}\n")).collect();
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            for (off, _) in text.match_indices("resonance_common") {
+                let before = text[..off].chars().next_back();
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let rest = &text[off + "resonance_common".len()..];
+                for item in common_items_named(rest) {
+                    if !PLUGIN_COMMON_ITEMS.contains(&item.as_str()) {
+                        let shown = if item.is_empty() { "<bare crate name>" } else { &item };
+                        violations.push(format!(
+                            "{rel}:{}: resonance_common::{shown} — DAW model types are not \
+                             plugin API; add the utility to `PLUGIN_COMMON_ITEMS` or move it \
+                             down (e.g. into resonance-dsp)",
+                            text[..off].matches('\n').count() + 1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    report(
+        "ARCHITECTURE.md: plugins reach resonance-common only for listed utilities (ARCH-07)",
+        &violations,
+    );
+}
+
+/// ARCH-07: a plugin that does not depend on `resonance-common` must not
+/// gain the dependency silently, and the list must not go stale when one
+/// drops it. Any dependency kind counts.
+///
+/// Exercised 2026-09-26: re-added `resonance-common = { path = ... }` to
+/// `plugins/resonance-gate/Cargo.toml` → failed with "not in
+/// `PLUGINS_ON_COMMON`"; reverted.
+#[test]
+fn only_listed_plugins_depend_on_resonance_common() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    let mut seen = BTreeSet::new();
+    for p in packages().iter().filter(|p| p.is_plugin(&root)) {
+        if !p.deps.iter().any(|d| d.name == "resonance-common") {
+            continue;
+        }
+        seen.insert(p.name.clone());
+        if !PLUGINS_ON_COMMON.contains(&p.name.as_str()) {
+            violations.push(format!(
+                "{}/Cargo.toml depends on resonance-common but is not in `PLUGINS_ON_COMMON` — \
+                 use resonance-dsp/resonance-plugin, or add it to the list deliberately",
+                p.rel_dir(&root).display()
+            ));
+        }
+    }
+    for name in PLUGINS_ON_COMMON.iter().filter(|n| !seen.contains(**n)) {
+        violations.push(format!(
+            "{name} is in `PLUGINS_ON_COMMON` but no longer depends on resonance-common — \
+             drop it from the list"
+        ));
+    }
+    report(
+        "ARCH-07: only the plugins in `PLUGINS_ON_COMMON` depend on resonance-common",
+        &violations,
+    );
+}
+
 /// `scripts/bundle.sh` derives the bundle from `plugins/*/` and cross-checks
 /// it against the workspace members both ways, then requires every plugin
 /// to be a cdylib — but only when someone bundles. The same three checks,
@@ -523,6 +665,61 @@ fn app_test_binaries_are_the_known_groups() {
     );
 }
 
+/// The same rule for `resonance-audio/tests/` (code review ARCH-03): its
+/// 129 one-file targets were grouped into seven by source area, plus the
+/// four that own process-global state and so need a process of their own —
+/// a `#[global_allocator]` (`sidechain_taps`, `retire_queue`; one per
+/// binary), a lowered `RLIMIT_FSIZE` (`recording_write_failure`), and the
+/// one-shot engine-disconnect latch (`engine_send_disconnected`). A new
+/// test is a module in a group; a new standalone needs one of those
+/// reasons, and an entry here saying which.
+///
+/// Exercised 2026-09-26: created `resonance-audio/tests/scratch.rs` →
+/// failed with `scratch.rs: new top-level test file`; deleted.
+#[test]
+fn audio_test_binaries_are_the_known_groups() {
+    let root = workspace_root();
+    let known: BTreeSet<&str> = [
+        // groups
+        "bounce",
+        "clap_host",
+        "engine",
+        "io",
+        "midi_hw",
+        "mixer",
+        "types",
+        // standalone: process-global state
+        "engine_send_disconnected",
+        "recording_write_failure",
+        "retire_queue",
+        "sidechain_taps",
+    ]
+    .into_iter()
+    .collect();
+    let actual: BTreeSet<String> = fs::read_dir(root.join("resonance-audio/tests"))
+        .expect("resonance-audio/tests exists")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "rs"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let mut violations: Vec<String> = actual
+        .iter()
+        .filter(|s| !known.contains(s.as_str()))
+        .map(|s| format!("{s}.rs: new top-level test file — add a module to a group binary instead"))
+        .collect();
+    violations.extend(
+        known
+            .iter()
+            .filter(|k| !actual.contains(**k))
+            .map(|k| format!("{k}.rs: test binary is gone — update this list if that was deliberate")),
+    );
+    report(
+        "CLAUDE.md → Tests: resonance-audio/tests/ holds exactly the group binaries",
+        &violations,
+    );
+}
+
 /// ARCHITECTURE.md → Test Layout: "Tests live in `<crate>/tests/`, not in
 /// `#[cfg(test)] mod tests` blocks inside source files", with the
 /// documented `resonance-app` private-helper exception ("shrink this list
@@ -624,6 +821,123 @@ fn control_view_model_has_no_wildcard_arms() {
     }
     report(
         "resonance-app/src/update/control/view_model/: wire mappings match exhaustively",
+        &violations,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Logging (code review ARCH-05: one facade, nothing on the audio thread)
+// ---------------------------------------------------------------------------
+
+/// True if `code` names the path `prefix` (e.g. `log::`) as a whole path
+/// segment — `log::warn!` yes, `catalog::find` no.
+fn names_path(code: &str, prefix: &str) -> bool {
+    code.match_indices(prefix).any(|(i, _)| {
+        !code[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
+/// A file only a binary, a build script or tests compile: `src/main.rs`,
+/// `src/bin/**`, and any `test_support` module.
+fn is_binary_or_test_support(rel: &str) -> bool {
+    rel.ends_with("/src/main.rs")
+        || rel.contains("/src/bin/")
+        || rel.split('/').any(|seg| seg.starts_with("test_support"))
+}
+
+/// ARCH-05 A5-1: library code logs through `tracing`, so `RUST_LOG`
+/// filters it and a binary chooses where it goes; a bare `eprintln!` /
+/// `println!` bypasses both. Binaries (`main.rs`, `src/bin/`), build
+/// scripts (not under `src/`) and `test_support` modules may print.
+///
+/// Allowed for now, each a later step: `resonance-app` (its own sweep,
+/// after M12), `resonance-dsp-test-support` (a test-only crate: the bless
+/// notice), and the plugin files below — plugin crates keep stderr until
+/// their own sweep; none of these sites is reachable from `process()`.
+///
+/// Exercised 2026-09-26: added `eprintln!("x");` to
+/// `resonance-common/src/scan.rs` → failed on that line; reverted.
+#[test]
+fn library_crates_log_through_tracing_not_stderr() {
+    let root = workspace_root();
+    let allowed_crates: BTreeSet<&str> = ["resonance-app", "resonance-dsp-test-support"]
+        .into_iter()
+        .collect();
+    let allowed_files: BTreeSet<&str> = [
+        "plugins/resonance-amp/src/lib.rs",
+        "plugins/resonance-amp/src/loader.rs",
+        "plugins/resonance-amp/src/nam/parse/weights.rs",
+        "plugins/resonance-drums/src/articulation.rs",
+        "plugins/resonance-drums/src/dsp/sampler.rs",
+        "plugins/resonance-ir/src/loader.rs",
+    ]
+    .into_iter()
+    .collect();
+    let mut violations = Vec::new();
+    for p in packages() {
+        if allowed_crates.contains(p.name.as_str()) {
+            continue;
+        }
+        let mut files = Vec::new();
+        rust_files(&p.dir.join("src"), &mut files);
+        for file in files {
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            if is_binary_or_test_support(&rel) || allowed_files.contains(rel.as_str()) {
+                continue;
+            }
+            for (n, code) in code_lines(&file) {
+                if code.contains("println!") {
+                    violations.push(format!(
+                        "{rel}:{n}: stderr/stdout print in library code — use tracing::{{error,warn,info,debug}}!"
+                    ));
+                }
+            }
+        }
+    }
+    report(
+        "ARCH-05: library crates log through `tracing`, not `eprintln!`/`println!`",
+        &violations,
+    );
+}
+
+/// ARCH-05 A5-2: "Rule for the RT thread: no logging — increment an
+/// atomic and let the tick handler log." Everything under
+/// `resonance-audio/src/mixer/` runs on (or is only called from) the
+/// audio callback, so no logging macro, facade or print may appear
+/// there; latch the value into `SharedState` and log it from the engine
+/// loop instead (`cycle_load::OversizeBufferLatch`, `CycleReportSlot`).
+///
+/// Exercised 2026-09-26: added `tracing::warn!("x");` to
+/// `resonance-audio/src/mixer/callback/mod.rs` → failed on that line;
+/// reverted.
+#[test]
+fn audio_callback_never_logs() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-audio/src/mixer"), &mut files);
+    assert!(!files.is_empty(), "resonance-audio/src/mixer moved? update this test");
+    let mut violations = Vec::new();
+    for file in files {
+        for (n, code) in code_lines(&file) {
+            let logs = names_path(&code, "tracing::")
+                || names_path(&code, "log::")
+                || code.contains("println!")
+                || code.contains("eprint!")
+                || names_path(&code, "print!")
+                || names_path(&code, "dbg!");
+            if logs {
+                violations.push(format!(
+                    "{}:{n}: logging on the audio thread — store an atomic in SharedState and log it from the engine loop",
+                    file.strip_prefix(&root).unwrap_or(&file).display()
+                ));
+            }
+        }
+    }
+    report(
+        "ARCH-05: nothing under resonance-audio/src/mixer/ logs or prints (audio thread)",
         &violations,
     );
 }

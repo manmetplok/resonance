@@ -257,7 +257,7 @@ impl ResonancePlugin for ResonanceAmp {
         };
         let left = &mut *main.left;
         let right = &mut *main.right;
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         // Snapshot the dry input before the processing loop overwrites
         // it. Used by the scope view and the tuner.

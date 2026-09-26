@@ -15,7 +15,7 @@ const MIXDOWN: &str = "/tmp/io-offline-render-gate.wav";
 
 fn app_mid_mixdown() -> (
     Resonance,
-    resonance_audio::__test_support::Receiver<AudioCommand>,
+    resonance_audio::test_support::Receiver<AudioCommand>,
 ) {
     let (mut app, _task, cmd_rx) = Resonance::new_for_test_with_capture();
     app.test_set_active_project(true);
