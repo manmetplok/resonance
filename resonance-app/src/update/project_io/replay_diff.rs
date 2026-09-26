@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use resonance_audio::types::*;
 
 use crate::project::{
-    fade_curve_from_tag, send_source_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile,
+    send_source_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile,
     ProjectMidiClip, ProjectPlugin, ProjectSend, ProjectTrack,
 };
 use crate::util::db_to_gain;
@@ -60,6 +60,7 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     let ctx = ReconcileCtx {
         origin: Origin::UndoDiff,
         project_dir: project_path.as_deref(),
+        midi_notes: &target.midi_notes,
         live: LiveCarry {
             project_path: project_path.as_deref(),
             derived_counter_floor: LiveCarry::derived_counter_floor(r, Origin::UndoDiff),
@@ -120,22 +121,18 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // params that differ from the live mirror (FU-A2b).
     apply_all_plugin_params(r, target_file, &pushed);
 
-    // -- Audio clips: scalar reposition / retrim only ------------------
-    apply_audio_clips(r, &current, target_file);
-
-    // -- MIDI clips: reposition + replace notes via delete+reload ------
-    apply_midi_clips(r, &current, target_file, &target.midi_notes);
-
     // -- Migrated domains, tail (ARCH-01 A-13) -------------------------
-    // The lyric side-table (padded to the note counts `apply_midi_clips`
-    // just installed) and the derived-clip map: the snapshot's with every
-    // entry, pending echoes included (FU-H2a, A-6). After
-    // `ComposeSections` reset it.
+    // The audio clips (scalar reposition / retrim / fade / gain) and MIDI
+    // clips (reposition, or notes replaced by delete + reload) by diff
+    // against `current`; then the lyric side-table (padded to the note
+    // counts just installed), the derived-clip map (the snapshot's with
+    // every entry, pending echoes included — FU-H2a, A-6; after
+    // `ComposeSections` reset it) and the vocal audio-clip map.
     reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
     // References (reconciled against the engine's live ones, no
     // `ClearAll` here), then pool, quantize, performance, track groups,
     // take lanes: app-side content the structural check ignores, restored
-    // verbatim. The pool counts the clips' asset refs `apply_audio_clips`
+    // verbatim. The pool counts the clips' asset refs `AudioClips`
     // mirrored; the take lanes' `RestoreTakeGroups` replaces the engine's
     // store wholesale, so an undo that deleted a take does not resurrect it
     // (no `ClearAll` here).
@@ -152,30 +149,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     r.registry.resort_busses();
     r.view_caches.rebuild_output(&r.registry.busses);
     r.compose.refresh_track_count(&r.registry.tracks);
-
-    // Rebuild runtime-only caches that aren't captured in the snapshot.
-    // Mirrors the tail end of `replay_loaded_project` so the Compose tab
-    // shows the right vocal audio clips after the restore. The derived
-    // MIDI clip map is *not* rebuilt here: the `DerivedClips` domain
-    // restored the snapshot's from `ProjectFile::derived_clips` (FU-H2a,
-    // A-6).
-    use std::collections::HashSet;
-    let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
-        .registry
-        .tracks
-        .iter()
-        .filter(|t| t.track_type == resonance_audio::types::TrackType::Vocal)
-        .map(|t| t.id)
-        .collect();
-    let project_dir = r.io.project_path.clone().unwrap_or_default();
-    let audio_clip_paths: HashMap<resonance_audio::types::ClipId, std::path::PathBuf> = target
-        .file
-        .clips
-        .iter()
-        .map(|pc| (pc.id, project_dir.join(&pc.audio_file)))
-        .collect();
-    r.compose
-        .rebuild_vocal_audio_clips(&r.clips, &audio_clip_paths, &vocal_track_ids, &r.tempo_map);
 
     true
 }
@@ -811,161 +784,6 @@ fn apply_plugin_params(
                 param_id: param.id,
                 value: target,
             });
-        }
-    }
-}
-
-fn apply_audio_clips(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
-    let a_by_id: HashMap<u64, &ProjectClip> = a.clips.iter().map(|c| (c.id, c)).collect();
-    for cb in &b.clips {
-        let ca = a_by_id
-            .get(&cb.id)
-            .copied();
-        let Some(ca) = ca else {
-            // Defence in depth — see the note in `apply_tracks`.
-            continue;
-        };
-        let trim_changed = ca.trim_start_frames != cb.trim_start_frames
-            || ca.trim_end_frames != cb.trim_end_frames;
-        let moved = ca.start_sample != cb.start_sample || ca.track_id != cb.track_id;
-        if trim_changed {
-            let _ = r.engine.send(AudioCommand::TrimClip {
-                clip_id: cb.id,
-                new_start_sample: cb.start_sample,
-                trim_start_frames: cb.trim_start_frames,
-                trim_end_frames: cb.trim_end_frames,
-            });
-        } else if moved {
-            let _ = r.engine.send(AudioCommand::MoveClip {
-                clip_id: cb.id,
-                new_start_sample: cb.start_sample,
-                new_track_id: cb.track_id,
-            });
-        }
-
-        // Fades & per-clip gain (epic #18, doc #156). Independent of the
-        // trim/move fast path above — a snapshot diff (save/load or
-        // undo/redo) that only changes a fade length, curve, or gain must
-        // still reach the engine and the GUI mirror. Curves round-trip as
-        // tags, so compare the parsed `FadeCurve` (normalizing unknown /
-        // legacy tags) rather than the raw strings.
-        let fa_in = fade_curve_from_tag(&ca.fade_in_curve);
-        let fb_in = fade_curve_from_tag(&cb.fade_in_curve);
-        let fa_out = fade_curve_from_tag(&ca.fade_out_curve);
-        let fb_out = fade_curve_from_tag(&cb.fade_out_curve);
-        let fade_changed = ca.fade_in_frames != cb.fade_in_frames
-            || ca.fade_out_frames != cb.fade_out_frames
-            || fa_in != fb_in
-            || fa_out != fb_out;
-        let gain_changed = ca.gain_db != cb.gain_db;
-        if fade_changed {
-            let _ = r.engine.send(AudioCommand::SetClipFade {
-                clip_id: cb.id,
-                fade_in_frames: cb.fade_in_frames,
-                fade_in_curve: fb_in,
-                fade_out_frames: cb.fade_out_frames,
-                fade_out_curve: fb_out,
-            });
-        }
-        if gain_changed {
-            let _ = r.engine.send(AudioCommand::SetClipGain {
-                clip_id: cb.id,
-                gain_db: cb.gain_db,
-            });
-        }
-
-        // Mirror onto GUI state.
-        if let Some(cs) = r.clips.iter_mut().find(|c| c.id == cb.id) {
-            cs.start_sample = cb.start_sample;
-            cs.track_id = cb.track_id;
-            cs.trim_start_frames = cb.trim_start_frames;
-            cs.trim_end_frames = cb.trim_end_frames;
-            cs.name = cb.name.clone();
-            cs.duration_samples = cb
-                .total_frames
-                .saturating_sub(cb.trim_start_frames)
-                .saturating_sub(cb.trim_end_frames);
-            // Fade/gain mirror (epic #18, doc #156).
-            cs.fade_in_frames = cb.fade_in_frames;
-            cs.fade_in_curve = fb_in;
-            cs.fade_out_frames = cb.fade_out_frames;
-            cs.fade_out_curve = fb_out;
-            cs.gain_db = cb.gain_db;
-            // Pool link (doc #175): restore the clip's asset ref so an
-            // undo/redo that relinked or cleared the link is reflected.
-            cs.asset_ref = cb.asset_ref.map(crate::state::pool::AssetRef::new);
-        }
-    }
-}
-
-fn apply_midi_clips(
-    r: &mut Resonance,
-    a: &ProjectFile,
-    b: &ProjectFile,
-    target_notes: &HashMap<ClipId, Vec<MidiNote>>,
-) {
-    let a_by_id: HashMap<u64, &ProjectMidiClip> =
-        a.midi_clips.iter().map(|c| (c.id, c)).collect();
-    let current_notes: HashMap<ClipId, Vec<MidiNote>> = r
-        .midi_clips
-        .iter()
-        .map(|mc| (mc.id, mc.notes.clone()))
-        .collect();
-
-    for cb in &b.midi_clips {
-        let ca = a_by_id
-            .get(&cb.id)
-            .copied();
-        let Some(ca) = ca else {
-            // Defence in depth — see the note in `apply_tracks`.
-            continue;
-        };
-        let target_for_clip = target_notes.get(&cb.id).cloned().unwrap_or_default();
-        let current_for_clip = current_notes.get(&cb.id).cloned().unwrap_or_default();
-        let notes_changed = !midi_notes_equal(&target_for_clip, &current_for_clip);
-        let trim_changed = ca.trim_start_ticks != cb.trim_start_ticks
-            || ca.trim_end_ticks != cb.trim_end_ticks;
-        let moved = ca.start_sample != cb.start_sample || ca.track_id != cb.track_id;
-        let duration_changed = ca.duration_ticks != cb.duration_ticks;
-
-        if notes_changed || duration_changed {
-            // Delete + reload preserves the clip id, so the rest of the
-            // engine state (track binding, derived-clip map keys) stays
-            // consistent. Cheaper than a full ClearAll.
-            let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: cb.id });
-            let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
-                clip_id: cb.id,
-                track_id: cb.track_id,
-                start_sample: cb.start_sample,
-                duration_ticks: cb.duration_ticks,
-                notes: target_for_clip.clone(),
-                name: cb.name.clone(),
-                trim_start_ticks: cb.trim_start_ticks,
-                trim_end_ticks: cb.trim_end_ticks,
-            });
-        } else if trim_changed {
-            let _ = r.engine.send(AudioCommand::TrimMidiClip {
-                clip_id: cb.id,
-                new_start_sample: cb.start_sample,
-                trim_start_ticks: cb.trim_start_ticks,
-                trim_end_ticks: cb.trim_end_ticks,
-            });
-        } else if moved {
-            let _ = r.engine.send(AudioCommand::MoveMidiClip {
-                clip_id: cb.id,
-                new_start_sample: cb.start_sample,
-                new_track_id: cb.track_id,
-            });
-        }
-
-        if let Some(mc) = r.midi_clips.iter_mut().find(|c| c.id == cb.id) {
-            mc.start_sample = cb.start_sample;
-            mc.track_id = cb.track_id;
-            mc.duration_ticks = cb.duration_ticks;
-            mc.trim_start_ticks = cb.trim_start_ticks;
-            mc.trim_end_ticks = cb.trim_end_ticks;
-            mc.name = cb.name.clone();
-            mc.notes = target_for_clip;
         }
     }
 }

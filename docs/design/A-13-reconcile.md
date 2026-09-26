@@ -5,8 +5,8 @@ ARCH-01 step 3, "A-13 roadmap" in the A-7 progress note). Written against
 master `d6d89413`. This document covers the trait, the driver, and the first
 slice (A-13a, roadmap group 1); §7 records the second (A-13b, group 2,
 written against master `c325335a`), §8 the third (A-13c, group 4, against
-master `d538d5cf`; group 3 waits for D-2/D-3). Later slices move one group
-at a time.
+master `d538d5cf`; group 3 waits for D-2/D-3), §9 the fourth (A-13d, group
+5, against master `85b38b32`). Later slices move one group at a time.
 
 ## 1. The problem
 
@@ -569,3 +569,128 @@ order test above.
 * **(6) Structural.** Tracks, busses, master, plugins; then
   `structurally_compatible` and the `ClearAll` fallback go, and
   `wipe_registry` / `finalize_plugin_chains` fold into those domains.
+
+## 9. Group (5): A-13d
+
+### Domains
+
+`Clips` now opens with the clips themselves and closes with the vocal
+audio-clip map; 23 domains (`reconcile_order::the_table_is_the_agreed_order`).
+Code: `reconcile/clips.rs`.
+
+| Stage | Domain | Body by origin |
+|---|---|---|
+| Clips (1st) | `audio_clips` | after `ClearAll`: empty `r.clips`, then per clip `LoadClipFromWav` + `SetClipFade` / `SetClipGain` when non-default + push the mirror (with `asset_ref`). Diff: per clip `TrimClip`, else `MoveClip`, then `SetClipFade` / `SetClipGain` when changed; mirror updated in place. |
+| Clips (2nd) | `midi_clips` | after `ClearAll`: empty `r.midi_clips`, then `LoadMidiClipDirect` + push. Diff: notes (vs the live mirror) or length changed → `DeleteMidiClip` + `LoadMidiClipDirect`; else `TrimMidiClip`; else `MoveMidiClip`; mirror updated in place. |
+| Clips | `clip_lyrics`, `derived_clips` | unchanged (A-13c, A-13b) |
+| Clips (last) | `vocal_audio_clips` | `rebuild_vocal_audio_clips` from `r.clips`, paths `ctx.project_dir.join(audio_file)` — all origins |
+
+`ReconcileCtx` gains `midi_notes: &HashMap<ClipId, Vec<MidiNote>>`, the
+target `LoadedProject`'s notes: the `ProjectFile` names a clip's notes only
+by its `.mid` file. Both entry points already held the `LoadedProject`. Notes
+are plain `Vec<MidiNote>` clones as before (ARCH-09's `Arc` sharing has not
+landed). The notes compare on the diff path is still against the live
+mirror, not `old`, because the snapshot file carries no notes.
+
+The per-path bodies are the old ones, moved: `replay_audio_clips`,
+`replay_midi_clips`, `replay_vocal`, `apply_audio_clips` and
+`apply_midi_clips` are deleted, and so is the inline map rebuild at the end
+of `try_diff_replay`. `wipe_registry`'s `r.clips.clear()` /
+`r.midi_clips.clear()` moved into the domains' `old = None` arm, as
+`TakeGroups`' clear did. Nothing between the wipe and `Clips` (tracks,
+busses, master, outputs, sends, sidechain routes) reads either mirror.
+
+### What the diff path relies on
+
+`structurally_compatible` still gates it: equal audio and MIDI clip-id sets,
+and an audio clip's `audio_file` and `total_frames` unchanged. So the diff
+arm never loads or deletes a clip, and never reloads a WAV. A clip id in
+`new` but not in `old` is skipped (defence in depth), as before. Replacing
+that gate with "load the added, delete the removed" is group (6)'s job,
+once tracks can be added on the diff path too.
+
+### Things checked that did not move
+
+* **Clip WAVs (V6 / FU-V5b).** `PersistClipWavs` is sent by
+  `snapshot_for_undo`, not by the restore. The full path's `LoadClipFromWav`
+  still reads `audio/clip_<id>.wav` under the project dir.
+* **Clip ids (STATE-08, FU-A6a).** The engine bumps its allocator past each
+  loaded id in `LoadClipFromWav` / `LoadMidiClipDirect`; the same commands
+  go out with the same ids.
+* **Pool.** `Pool` (Content) counts `r.clips`' asset refs, which
+  `audio_clips` sets on both arms. Still Clips before Content.
+* **Derived-counter floor.** `DerivedClips` still runs after both clip
+  domains (it filters against `r.midi_clips` and reserves past them), and
+  `vocal_audio_clips` after it (it reserves past the audio clip ids). The
+  floor is carried in `LiveCarry` as before.
+* **Take groups.** Take clips live in the engine's take store
+  (`RestoreTakeGroups`, Content), not in `r.clips`; untouched.
+
+### Ordering changes (each checked against every reader in between)
+
+Full path: none. The domains run where `replay_audio_clips`,
+`replay_midi_clips` and `replay_vocal` ran, in the same order, with the same
+commands; only the two mirror clears move later (from `wipe_registry` to
+the top of their domains, see above).
+
+Diff path:
+
+1. **Audio and MIDI clips** join the `Clips` stage; they were the two calls
+   right before it. No change.
+2. **The vocal audio-clip map** moves from after `Tail`, the track/bus
+   resort, `rebuild_output` and `refresh_track_count` to right after
+   `DerivedClips`, which is the full path's position. The rebuild reads
+   `r.clips` (`Content` and `Tail` don't write it), the vocal track set
+   (a set, so the resort cannot change it; track types are structural),
+   the placements (`Globals`) and the tempo map (`Timeline`). It writes
+   `vocal_audio.clips` and reserves `next_derived_clip_id`. Nothing in
+   `Content` or `Tail` reads either: the map's readers are the vocal install
+   / tear-down handlers and the clip-deleted event; the counter's are
+   `DerivedClips` and the allocator. The freeze fingerprint reads the MIDI
+   clips and the lyric side-table, not the map. It sends no engine command.
+   Guard: `reconcile_order::a_diff_undo_rebuilds_the_vocal_audio_clip_map_from_the_target`
+   (fails if the diff arm skips the rebuild); the trace tests pin the
+   position.
+
+Every existing guard passed unchanged.
+
+### Where the stages sit now
+
+```
+Full path (replay_loaded_project)
+  vocal_audio.clear, SetProjectDir,
+  ── Globals ── ── Timeline ──,
+  wipe_registry, tracks/busses/master/outputs/sends/sidechain,
+  ── Clips ──, finalize_plugin_chains,
+  ── Content ── ── Tail ──
+
+Diff path (try_diff_replay)
+  ── Globals ── ── Timeline ──,
+  tracks, busses, sends, sidechain, master, plugin blobs + params,
+  ── Clips ── ── Content ── ── Tail ──,
+  resort
+```
+
+The only inline code left between `Timeline` and `Clips` is entities
+(tracks, busses, master, plugins, with the full path's track outputs) and
+routing (sends, sidechain routes).
+
+### What's next
+
+* **(3) Routing.** Unchanged from §8: a `Routing` stage between `Timeline`
+  and `Clips`. Full path: after `replay_master`. Diff path: after
+  `apply_master`, before the plugin blobs, which puts sends after the
+  master instead of before it (not checked yet; the slice must show the
+  engine treats the two independently). Model the
+  domains on `audio_clips`' shape: `old = None` clears the mirror and sends
+  everything, which also moves `aux.sends.clear()` / `sidechain.clear()` out
+  of `wipe_registry`.
+* **(6) Structural.** Tracks, busses, master, plugins (blobs + params, and
+  the full path's `finalize_plugin_chains` order fix-up). Once entities
+  have add/remove arms on the diff path, the clip domains' diff arm grows
+  "load what `old` lacks, delete what `new` lacks" (the full arm's
+  `load_audio_clip` / `load_midi_clip` are the add bodies), and
+  `structurally_compatible` and the `ClearAll` fallback can go. The
+  full path's top-of-replay `vocal_audio.clear()` (lyrics, render epochs)
+  can fold into `ClipLyrics` / `VocalAudioClips` then. `ctx.midi_notes`
+  stays: the file will still not carry notes.

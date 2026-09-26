@@ -14,13 +14,15 @@ use std::path::PathBuf;
 
 use resonance_app::message::{ExternalInstrumentMessage as Eim, Message, ProjectIoMessage};
 use resonance_app::project::{LoadedProject, ProjectFile};
-use resonance_app::state::{MidiClipState, TempoEvent, TrackState};
+use resonance_app::compose::{GenerateParams, SectionDefinitionState};
+use resonance_app::state::{ClipState, MidiClipState, TempoEvent, TrackState};
 use resonance_app::update::project_io::reconcile::{domain_order, Origin, Stage};
 use resonance_app::update::project_io::replay_loaded_project;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
+use resonance_audio::types::{AudioCommand, AudioEvent, FadeCurve, TrackType};
 use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
+use resonance_music_theory::MotifSource;
 
 fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
     let mut cmds = Vec::new();
@@ -212,8 +214,11 @@ fn the_table_is_the_agreed_order() {
             (Stage::Timeline, "chord_track"),
             (Stage::Timeline, "markers"),
             (Stage::Timeline, "section_chord_trim"),
+            (Stage::Clips, "audio_clips"),
+            (Stage::Clips, "midi_clips"),
             (Stage::Clips, "clip_lyrics"),
             (Stage::Clips, "derived_clips"),
+            (Stage::Clips, "vocal_audio_clips"),
             (Stage::Content, "references"),
             (Stage::Content, "pool"),
             (Stage::Content, "quantize"),
@@ -293,4 +298,72 @@ fn the_full_path_sends_external_config_after_the_tracks_and_before_the_lanes() {
         last_track < config && config < bindings && bindings < lane,
         "{last_track} < {config} < {bindings} < {lane}"
     );
+}
+
+/// The vocal audio-clip map is the last `Clips` domain on both paths
+/// (A-13d). The diff path used to rebuild it inline after the `Tail` stage
+/// and the registry resort; it now runs right after `DerivedClips`, as on
+/// the full path (the trace tests pin the position). Nothing in `Content`
+/// or `Tail` reads the map or the derived counter it reserves. Here: the
+/// live clip sits off the section start, so no lane claims it; the target
+/// puts it back on bar 0 and the diff undo must key it to the lane.
+#[test]
+fn a_diff_undo_rebuilds_the_vocal_audio_clip_map_from_the_target() {
+    const VOCAL: u64 = 1;
+    const CLIP: u64 = 10;
+    const DEF: u64 = 5;
+    let mut l = disk_load();
+    l.app.test_push_track(TrackState::new_vocal(VOCAL, 0));
+    l.app.test_push_section_definition(SectionDefinitionState {
+        id: DEF,
+        name: "Verse".to_string(),
+        color: [0, 0, 0],
+        length_bars: 4,
+        chords: Vec::new(),
+        scale: None,
+        progression_seed: 0,
+        generate_params: GenerateParams::default(),
+        generator_spec: None,
+        generator_seed: 0,
+        generated_material: None,
+        lane_generators: std::collections::HashMap::new(),
+        beats_per_chord: 4,
+        seventh_chords: false,
+        motif_source: MotifSource::default(),
+        arrangement: Vec::new(),
+    });
+    l.app.test_place_section(DEF, 0);
+    l.app.test_push_clip(ClipState {
+        id: CLIP,
+        track_id: VOCAL,
+        start_sample: 12_345,
+        duration_samples: 48_000,
+        name: "vocal".to_string(),
+        total_frames: 48_000,
+        trim_start_frames: 0,
+        trim_end_frames: 0,
+        fade_in_frames: 0,
+        fade_in_curve: FadeCurve::default(),
+        fade_out_frames: 0,
+        fade_out_curve: FadeCurve::default(),
+        gain_db: 0.0,
+        waveform_peaks: Vec::new(),
+        vocal_tuning: None,
+        asset_ref: None,
+    });
+    assert!(l.app.test_vocal_audio_clips(VOCAL).is_empty());
+    let mut target = l.app.test_snapshot_for_undo();
+    target.project.file.clips[0].start_sample = 0;
+    let _ = drain(&l.rx);
+    l.app.test_begin_restore_from_snapshot(target);
+    let cmds = drain(&l.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "an unchanged shape takes the diff path"
+    );
+    assert!(cmds.iter().any(|c| matches!(
+        c,
+        AudioCommand::MoveClip { clip_id: CLIP, new_start_sample: 0, .. }
+    )));
+    assert_eq!(l.app.test_vocal_audio_clips(VOCAL), vec![(DEF, CLIP)]);
 }
