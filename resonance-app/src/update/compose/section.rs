@@ -414,6 +414,40 @@ pub(super) fn handle_resize(
     task
 }
 
+/// Revalidate every section's chords after the global signature changed
+/// (code review FU-V2b). A section is `length_bars` bars in the meter at
+/// its start, so a shorter meter can leave chords past its end — which
+/// every chord edit refuses (`chord_fits_in_section`). A chord that
+/// straddles the new end is trimmed to it, one that starts at or past it
+/// is dropped, and the section's derived clips are rebuilt so the lanes
+/// stop playing what is gone. A longer meter touches nothing. Runs inside
+/// the signature edit's own dispatch, so it rides that undo entry.
+pub(crate) fn revalidate_chords_after_meter_change(r: &mut crate::Resonance) -> Task<Message> {
+    let ids: Vec<u64> = r.compose.definitions.iter().map(|d| d.id).collect();
+    let mut tasks = Vec::new();
+    for id in ids {
+        let numerator = super::section_meter(r, id).numerator;
+        let Some(def) = r.compose.find_definition_mut(id) else {
+            continue;
+        };
+        let end = u64::from(def.length_bars) * u64::from(numerator);
+        let before = def.chords.len();
+        let mut trimmed = false;
+        def.chords.retain(|c| u64::from(c.start_beat) < end);
+        for c in def.chords.iter_mut() {
+            let chord_end = u64::from(c.start_beat) + u64::from(c.duration_beats);
+            if chord_end > end {
+                c.duration_beats = (end - u64::from(c.start_beat)) as u32;
+                trimmed = true;
+            }
+        }
+        if trimmed || def.chords.len() != before {
+            tasks.push(rederive_section_clips(r, id));
+        }
+    }
+    Task::batch(tasks)
+}
+
 /// Re-derive every generated clip of a section after its length changed
 /// (code review VIEW-05): clip durations are fixed when a clip is built,
 /// so without this a shrink left full-length clips overlapping the next

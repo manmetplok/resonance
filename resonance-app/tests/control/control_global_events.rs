@@ -451,6 +451,33 @@ fn undo_entry_count(app: &Resonance) -> usize {
     app.test_undo_history().test_undo_entries().len()
 }
 
+/// Moving a tempo event past its neighbour keeps the list in bar order
+/// and the selection on the moved event, exactly like the GUI drag
+/// (VIEW-15) — so a Delete afterwards removes the event that moved, not
+/// whatever slid into its old slot (code review FU-V2b).
+#[test]
+fn moving_a_tempo_event_past_a_neighbour_keeps_order_and_selection() {
+    let mut app = app_with_project();
+    let _: MutationAck = add_tempo(&mut app, 5, 100.0).result().expect("tempo add");
+    let _: MutationAck = add_tempo(&mut app, 9, 140.0).result().expect("tempo add");
+
+    let _: MutationAck = edit_tempo(&mut app, serde_json::json!({"bar": 5, "new_bar": 13}))
+        .result()
+        .expect("global.edit_tempo_event succeeds");
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (9, 140.0), (13, 100.0)]);
+    assert_eq!(
+        app.test_selected_global_event(),
+        Some(SelectedGlobalEvent {
+            kind: GlobalTrackKind::Tempo,
+            index: 2,
+        }),
+        "the selection follows the moved event"
+    );
+
+    let _ = app.update(Message::GlobalTrack(GlobalTrackMessage::DeleteSelectedEvent));
+    assert_eq!(tempo_pairs(&mut app), vec![(1, 120.0), (9, 140.0)]);
+}
+
 #[test]
 fn editing_a_tempo_event_changes_only_the_named_field() {
     // Omitted fields keep their current value: retuning the bridge must

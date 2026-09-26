@@ -81,6 +81,14 @@ impl crate::Resonance {
         task
     }
 
+    /// The signature track, comparable.
+    fn signature_fingerprint(&self) -> Vec<(u32, u8, u8)> {
+        self.signature_events
+            .iter()
+            .map(|e| (e.bar, e.numerator, e.denominator))
+            .collect()
+    }
+
     /// What Delete on the timeline acts on.
     fn timeline_delete_targets(
         &self,
@@ -128,7 +136,16 @@ impl crate::Resonance {
             }
         }
         let commit_after = self.record_undo(&message);
-        let task = self.dispatch(message);
+        // A signature change re-measures every section; its chords are
+        // revalidated against the new length in the same dispatch
+        // (code review FU-V2b).
+        let meter_before = matches!(message, Message::Transport(_) | Message::GlobalTrack(_))
+            .then(|| self.signature_fingerprint());
+        let mut task = self.dispatch(message);
+        if meter_before.is_some_and(|before| before != self.signature_fingerprint()) {
+            let revalidate = crate::update::compose::revalidate_chords_after_meter_change(self);
+            task = Task::batch([task, revalidate]);
+        }
         if commit_after {
             self.commit_undo_gesture();
         }
