@@ -69,6 +69,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-6 (ARCH-01) | A1-2 (8) derived-clip map → `ProjectFile.derived_clips`; derived counter session-monotonic; `UndoExtras` empty | opus | merged | 4c76bb78 |
 | refactor-intent A-7 (ARCH-01) | A1-2 (9b) `UndoExtras` deleted; snapshot = `LoadedProject`; `io.restoring_undo` flag | opus | merged | 3e4496e9 |
 | FU-A6a (from A-6) | Clip-id collision: engine bumped `next_clip_id` into the derived range (drawn clip = next derived clip id; also on reopen via STATE-08 WAV scan). Engine now reserves only below `DERIVED_CLIP_ID_BASE` | opus | merged | 6942f712 |
+| FU-A6b/c (from A-6) | User-deleted derived clips drop their map entry (no resurrection on resize, UPD-05 resumes); derived counter reserves past on-disk WAVs on load / Save As | opus | merged | 1da0beba |
 | FU-A4a (from A-4) | Undo/redo re-attach frozen caches (`SetTrackFrozenSource`) on both paths; undecodable cache → Stale | opus | merged | 5dc2fa1e |
 | FU-A7a (from A-7) | GUI open/recent/template during an in-flight undo no longer replays the disk project with undo branches | sonnet | merged | f0c07231 |
 | FU-A10a (from A-10) | Coalesced undo: track name, drum group name + 5 knobs, vocal theme / line text; `BounceInPlace` → Skip + recorded `BounceInPlaceOffline` | sonnet | merged | a8a5f234 |
