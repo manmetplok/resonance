@@ -68,7 +68,7 @@ master and updates this table. Agents do **not** edit this file.
 - macOS: FU-M1a, FU-M8a, FU-M8c, FU-H4a — Cocoa changes (PLG-01/03/05, async destroy) are type-checked only; run `cargo check` + the three ignored Cocoa tests on a Mac.
 - Product decision: FU-B1 — section resize re-rolls generated chord/vocal lanes (hand edits lost). Keep, warn, or preserve?
 - Sound change to confirm: LIB-06 compressor release now matches the knob (was ~1.5–2.5× longer) — revert `cea54427` if unwanted.
-- Architecture epics (not started, suggested for ba): engine render-graph publishing (ARCH-02 A2-4+), state-tax / Reconcile (ARCH-01 rest + ARCH-06 A6-2..4), engine error taxonomy (ARCH-05 A5-3/4), app-owned entity ids (ARCH-04 A4-4), `Arc<Vec<MidiNote>>` + `PartialEq` on ProjectFile (ARCH-09 A9-3), feature-gate model/decode in resonance-common (ARCH-07 A7-3).
+- Architecture epics → **`refactor-intent.md`** (self-contained hand-off for fresh agents): engine render-graph publishing (ARCH-02 A2-4+), state-tax / Reconcile (ARCH-01 rest + ARCH-06 A6-2..4), engine error taxonomy (ARCH-05 A5-3/4), app-owned entity ids (ARCH-04 A4-4), `Arc<Vec<MidiNote>>` + `PartialEq` on ProjectFile (ARCH-09 A9-3), feature-gate model/decode in resonance-common (ARCH-07 A7-3).
 
 ### Follow-ups found while fixing (new todos)
 
