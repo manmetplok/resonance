@@ -226,7 +226,7 @@ impl crate::Resonance {
             collect(&bus.plugins, &mut plugin_states, &self.plugin_mirror.state_cache);
         }
         collect(
-            &self.master_plugins,
+            &self.master.plugins,
             &mut plugin_states,
             &self.plugin_mirror.state_cache,
         );

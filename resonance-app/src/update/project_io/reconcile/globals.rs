@@ -69,7 +69,7 @@ impl Reconcile for Transport {
             });
         }
         if differs(old, new, |f| f.master_volume) {
-            r.master_volume = new.master_volume;
+            r.master.volume = new.master_volume;
             let _ = r.engine.send(AudioCommand::SetMasterVolume {
                 volume: db_to_gain(new.master_volume),
             });

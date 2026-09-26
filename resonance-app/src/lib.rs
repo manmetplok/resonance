@@ -105,15 +105,9 @@ pub struct Resonance {
     /// The transient error/notification banner and its raise latches
     /// (ARCH-06 A6-2). See `state::Banners`.
     pub(crate) banners: state::Banners,
-    pub(crate) master_volume: f32,
-    pub(crate) master_level_l: f32,
-    pub(crate) master_level_r: f32,
-    /// FX plugins inserted on the master bus, rendered after every
-    /// track and bus has been summed.
-    pub(crate) master_plugins: Vec<PluginSlotState>,
-    /// When true, the master FX chain is bypassed — the master fader
-    /// and metering still run, but no master-bus plugins are processed.
-    pub(crate) master_fx_bypassed: bool,
+    /// The master bus: fader, meters, FX chain and FX-chain bypass
+    /// (ARCH-06 A6-3). See `state::MasterState`.
+    pub(crate) master: state::MasterState,
     pub(crate) view_mode: ViewMode,
     /// The view that was active when Performance mode was entered, so
     /// exiting (`F` toggle / `Esc` / the Exit button) returns the user to
@@ -659,11 +653,13 @@ impl Resonance {
             view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
             banners: state::Banners::default(),
-            master_volume: 0.0, // 0 dB = unity gain
-            master_level_l: 0.0,
-            master_level_r: 0.0,
-            master_plugins: Vec::new(),
-            master_fx_bypassed: false,
+            master: state::MasterState {
+                volume: 0.0, // 0 dB = unity gain
+                level_l: 0.0,
+                level_r: 0.0,
+                plugins: Vec::new(),
+                fx_bypassed: false,
+            },
             // `STARTUP_TAB` carries the binary's `--tab` flag, so it is a read
             // of *this process's* invocation and belongs to `Host::Machine`.
             // A hermetic app always starts on the default tab and takes its

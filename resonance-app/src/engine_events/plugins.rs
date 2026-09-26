@@ -457,7 +457,7 @@ fn mark_slot_missing(r: &mut Resonance, instance_id: PluginInstanceId, reason: &
         }
     }
     if let Some(slot) = r
-        .master_plugins
+        .master.plugins
         .iter_mut()
         .find(|p| p.instance_id == instance_id)
     {
@@ -682,13 +682,13 @@ pub(super) fn master_added(
 ) {
     let mut recovered = false;
     if let Some(slot) = r
-        .master_plugins
+        .master.plugins
         .iter_mut()
         .find(|p| p.instance_id == instance_id)
     {
         recovered = adopt_live_instance(slot, params, has_gui, has_sidechain_input);
     } else {
-        r.master_plugins.push(
+        r.master.plugins.push(
             PluginSlotState::new(
                 instance_id,
                 plugin_name,
@@ -702,7 +702,7 @@ pub(super) fn master_added(
         r.insert_plugin_index(instance_id, PluginLocator::Master);
     }
     if recovered {
-        let live = live_slot_index(&r.master_plugins, instance_id);
+        let live = live_slot_index(&r.master.plugins, instance_id);
         restore_after_recovery(
             r,
             instance_id,
@@ -719,7 +719,7 @@ pub(super) fn master_added(
 
 /// Mirror an engine-side master chain reorder
 /// (`AudioCommand::MovePluginInMaster` -> `AudioEvent::MasterPluginMoved`)
-/// onto `Resonance::master_plugins` — the master twin of [`bus_moved`].
+/// onto `Resonance::master.plugins` — the master twin of [`bus_moved`].
 pub(super) fn master_moved(r: &mut Resonance, instance_id: PluginInstanceId, to_index: usize) {
     mirror_master_plugin_move(r, instance_id, to_index);
 }
@@ -734,23 +734,23 @@ pub(crate) fn mirror_master_plugin_move(
     to_index: usize,
 ) {
     let Some(from) = r
-        .master_plugins
+        .master.plugins
         .iter()
         .position(|p| p.instance_id == instance_id)
     else {
         return;
     };
     // `from` was found, so the chain is non-empty and this cannot wrap.
-    let to = to_index.min(r.master_plugins.len() - 1);
+    let to = to_index.min(r.master.plugins.len() - 1);
     if from == to {
         return;
     }
-    let slot = r.master_plugins.remove(from);
-    r.master_plugins.insert(to, slot);
+    let slot = r.master.plugins.remove(from);
+    r.master.plugins.insert(to, slot);
 }
 
 pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
-    r.master_plugins.retain(|p| p.instance_id != instance_id);
+    r.master.plugins.retain(|p| p.instance_id != instance_id);
     if r.mixer.selected_plugin == Some(instance_id) {
         r.mixer.selected_plugin = None;
     }
@@ -809,7 +809,7 @@ pub(super) fn sidechain_route_changed(
 }
 
 pub(super) fn master_fx_bypass_changed(r: &mut Resonance, bypassed: bool) {
-    r.master_fx_bypassed = bypassed;
+    r.master.fx_bypassed = bypassed;
 }
 
 /// Adopt the engine's per-slot bypass echo (ba todo #1305).

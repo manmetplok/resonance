@@ -423,7 +423,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             let _ = r.engine.send(AudioCommand::SetMasterVolume {
                 volume: db_to_gain(vol_db),
             });
-            r.master_volume = vol_db;
+            r.master.volume = vol_db;
         }
         TrackMessage::ToggleMute(id) => {
             let new_muted = r.with_track_mut(id, |t| {

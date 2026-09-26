@@ -22,7 +22,7 @@
 //!
 //! What is NOT here is how each namespace finds its chain — a track's is
 //! `TrackState::plugins`, a bus's is `BusState::plugins`, the master's is
-//! `Resonance::master_plugins` — and the track path additionally keeps
+//! `Resonance::master.plugins` — and the track path additionally keeps
 //! its instrument-aware fallback for error wording. Those stay with
 //! their namespace.
 

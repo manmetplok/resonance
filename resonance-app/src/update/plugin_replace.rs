@@ -224,7 +224,7 @@ fn locate_slot(r: &Resonance, instance_id: PluginInstanceId) -> Option<(PluginLo
             return Some((PluginLocator::Bus(bus.id), i));
         }
     }
-    position(&r.master_plugins).map(|i| (PluginLocator::Master, i))
+    position(&r.master.plugins).map(|i| (PluginLocator::Master, i))
 }
 
 fn chain(r: &Resonance, locator: PluginLocator) -> Option<&[PluginSlotState]> {
@@ -241,7 +241,7 @@ fn chain(r: &Resonance, locator: PluginLocator) -> Option<&[PluginSlotState]> {
             .iter()
             .find(|b| b.id == bus_id)
             .map(|b| b.plugins.as_slice()),
-        PluginLocator::Master => Some(r.master_plugins.as_slice()),
+        PluginLocator::Master => Some(r.master.plugins.as_slice()),
     }
 }
 
@@ -259,7 +259,7 @@ fn chain_mut(r: &mut Resonance, locator: PluginLocator) -> Option<&mut Vec<Plugi
             .iter_mut()
             .find(|b| b.id == bus_id)
             .map(|b| &mut b.plugins),
-        PluginLocator::Master => Some(&mut r.master_plugins),
+        PluginLocator::Master => Some(&mut r.master.plugins),
     }
 }
 

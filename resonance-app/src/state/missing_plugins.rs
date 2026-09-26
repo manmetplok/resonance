@@ -76,7 +76,7 @@ impl Resonance {
             );
         }
         collect_missing(
-            &self.master_plugins,
+            &self.master.plugins,
             PluginLocator::Master,
             "Master",
             &mut out,
@@ -96,7 +96,8 @@ impl Resonance {
                 .iter()
                 .any(|b| b.plugins.iter().any(|p| p.availability.is_missing()))
             || self
-                .master_plugins
+                .master
+                .plugins
                 .iter()
                 .any(|p| p.availability.is_missing())
     }

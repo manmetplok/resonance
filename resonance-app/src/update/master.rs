@@ -12,7 +12,7 @@ pub enum MasterMessage {
     ToggleMasterFxBypass,
     AddPluginToMaster(ScannedPlugin),
     /// Add a plugin to the master whose instance id the *app* chose up
-    /// front, mirroring a placeholder slot into `Resonance::master_plugins`
+    /// front, mirroring a placeholder slot into `Resonance::master.plugins`
     /// immediately so the caller can address it without waiting for the
     /// engine's `MasterPluginAdded` echo. The master twin of
     /// [`BusMessage::AddPluginToBusWithId`](crate::message::BusMessage::AddPluginToBusWithId); `engine_events::plugins::master_added`
@@ -26,7 +26,7 @@ pub enum MasterMessage {
     /// Reorder the master insert chain: move `instance_id` to
     /// `to_index`, clamped to the last slot. Sends
     /// `AudioCommand::MovePluginInMaster` AND mirrors the new order into
-    /// `Resonance::master_plugins`, so a control client reads its own
+    /// `Resonance::master.plugins`, so a control client reads its own
     /// write back in the same cycle; the engine's `MasterPluginMoved`
     /// echo replays the same move and is then a no-op.
     MovePluginInMaster {
@@ -57,9 +57,9 @@ impl MasterMessage {
 pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
     match m {
         MasterMessage::ToggleMasterFxBypass => {
-            r.master_fx_bypassed = !r.master_fx_bypassed;
+            r.master.fx_bypassed = !r.master.fx_bypassed;
             let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
-                bypassed: r.master_fx_bypassed,
+                bypassed: r.master.fx_bypassed,
             });
         }
         MasterMessage::AddPluginToMaster(plugin) => {
@@ -86,7 +86,7 @@ pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
             // project-load replay does; `master_added` finds it by
             // `instance_id` on the echo and fills in params/has_gui
             // instead of pushing a second one.
-            r.master_plugins.push(crate::state::PluginSlotState::new(
+            r.master.plugins.push(crate::state::PluginSlotState::new(
                 instance_id,
                 plugin.name,
                 plugin.clap_plugin_id,

@@ -240,12 +240,12 @@ pub(super) fn replay_master(
     project: &crate::project::ProjectFile,
     loaded: &LoadedProject,
 ) {
-    r.master_fx_bypassed = project.master_fx_bypassed;
+    r.master.fx_bypassed = project.master_fx_bypassed;
     let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
         bypassed: project.master_fx_bypassed,
     });
 
-    r.master_plugins = replay_plugins(r, &project.master_plugins, loaded, |pp| {
+    r.master.plugins = replay_plugins(r, &project.master_plugins, loaded, |pp| {
         AudioCommand::AddPluginToMaster {
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),

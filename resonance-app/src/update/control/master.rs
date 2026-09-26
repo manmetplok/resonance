@@ -69,7 +69,7 @@ fn set_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let chain = app.master_plugins.clone();
+    let chain = app.master.plugins.clone();
     const HOST: &str = "the master chain";
 
     let source = match sidechain::resolve_key_source(
@@ -108,7 +108,7 @@ fn clear_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Me
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let chain = app.master_plugins.clone();
+    let chain = app.master.plugins.clone();
     let instance_id = match sidechain::resolve_chain_target(
         &chain,
         params.plugin_id.as_deref(),
@@ -124,12 +124,13 @@ fn clear_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Me
 
 fn summary(app: &Resonance, request: &Request) -> Response {
     let result = MasterSummary {
-        volume: crate::util::db_to_gain(app.master_volume),
-        // `Resonance::master_volume` is already dB.
-        volume_db: app.master_volume,
-        fx_bypassed: app.master_fx_bypassed,
+        volume: crate::util::db_to_gain(app.master.volume),
+        // `Resonance::master.volume` is already dB.
+        volume_db: app.master.volume,
+        fx_bypassed: app.master.fx_bypassed,
         plugins: app
-            .master_plugins
+            .master
+            .plugins
             .iter()
             .enumerate()
             .map(|(slot, p)| MasterPluginEntry {
@@ -230,7 +231,7 @@ fn set_volume(app: &mut Resonance, request: &Request) -> (Response, Task<Message
 /// `Effect`: the master has no instrument slot.
 fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
     let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
-    app.master_plugins
+    app.master.plugins
         .iter()
         .enumerate()
         .map(|(i, p)| {
@@ -299,8 +300,8 @@ fn add_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         Err(e) => return reject(request, e),
     };
     let (slot, occurrence) = (
-        app.master_plugins.len() as u32,
-        app.master_plugins
+        app.master.plugins.len() as u32,
+        app.master.plugins
             .iter()
             .filter(|p| p.clap_plugin_id == params.plugin_id)
             .count() as u32,
@@ -384,7 +385,7 @@ fn remove_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         params.occurrence,
         "remove",
         &MasterWording,
-        |id, occurrence| effect_addressing::instance_at(&app.master_plugins, id, occurrence),
+        |id, occurrence| effect_addressing::instance_at(&app.master.plugins, id, occurrence),
     ) {
         Ok((_, id)) => id,
         Err(error) => return reject(request, error),
@@ -417,7 +418,7 @@ fn replace_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
         params.occurrence,
         "replace",
         &MasterWording,
-        |id, occurrence| effect_addressing::instance_at(&app.master_plugins, id, occurrence),
+        |id, occurrence| effect_addressing::instance_at(&app.master.plugins, id, occurrence),
     ) {
         Ok(found) => found,
         Err(error) => return reject(request, error),
@@ -449,7 +450,7 @@ fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
         params.occurrence,
         "move",
         &MasterWording,
-        |id, occurrence| effect_addressing::instance_at(&app.master_plugins, id, occurrence),
+        |id, occurrence| effect_addressing::instance_at(&app.master.plugins, id, occurrence),
     ) {
         Ok(found) => found,
         Err(error) => return reject(request, error),
@@ -458,7 +459,7 @@ fn move_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
     // end", and the engine clamps identically so the echo agrees.
     let to_slot = params
         .to_slot
-        .min(app.master_plugins.len().saturating_sub(1) as u32);
+        .min(app.master.plugins.len().saturating_sub(1) as u32);
     if to_slot == entry.slot {
         return (ack(app, request), Task::none());
     }
@@ -587,7 +588,8 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     };
 
     let Some(instance_id) = app
-        .master_plugins
+        .master
+        .plugins
         .iter()
         .filter(|p| p.clap_plugin_id == entry.plugin_id)
         .nth(entry.occurrence as usize)
@@ -621,7 +623,7 @@ fn set_fx_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<Mess
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if app.master_fx_bypassed == params.bypassed {
+    if app.master.fx_bypassed == params.bypassed {
         return (ack(app, request), Task::none());
     }
     let task = super::run_via_update(app, Message::Master(MasterMessage::ToggleMasterFxBypass));
@@ -694,7 +696,7 @@ fn set_plugin_bypass(app: &mut Resonance, request: &Request) -> (Response, Task<
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let chain = app.master_plugins.clone();
+    let chain = app.master.plugins.clone();
     super::bypass::run(
         app,
         request,

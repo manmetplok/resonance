@@ -133,7 +133,7 @@ impl Resonance {
                 out.insert(p.instance_id, p.bypassed);
             }
         }
-        for p in &self.master_plugins {
+        for p in &self.master.plugins {
             out.insert(p.instance_id, p.bypassed);
         }
         out
@@ -295,7 +295,7 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_push_master_plugin(&mut self, plugin: state::PluginSlotState) {
         let instance_id = plugin.instance_id;
-        self.master_plugins.push(plugin);
+        self.master.plugins.push(plugin);
         self.insert_plugin_index(instance_id, state::PluginLocator::Master);
     }
 
@@ -336,7 +336,7 @@ impl Resonance {
                 .find(|b| b.id == id)
                 .map(|b| b.plugins.as_slice())
                 .unwrap_or_default(),
-            TestChain::Master => self.master_plugins.as_slice(),
+            TestChain::Master => self.master.plugins.as_slice(),
         };
         slots
             .iter()
@@ -362,7 +362,7 @@ impl Resonance {
             .iter()
             .flat_map(|t| t.plugins.iter())
             .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master_plugins.iter())
+            .chain(self.master.plugins.iter())
             .find(|p| p.instance_id == instance_id)
             .and_then(|p| p.availability.reason())
             .map(str::to_owned)
@@ -431,7 +431,7 @@ impl Resonance {
             }
             TestChain::Master => (
                 PluginOwner::Master,
-                self.master_plugins.iter().map(|p| p.instance_id).collect(),
+                self.master.plugins.iter().map(|p| p.instance_id).collect(),
             ),
         };
         let len = slots.len();
@@ -479,7 +479,7 @@ impl Resonance {
             .iter()
             .flat_map(|t| t.plugins.iter())
             .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master_plugins.iter())
+            .chain(self.master.plugins.iter())
             .find(|p| p.instance_id == instance_id)?;
         crate::view::mixer::editor_toggle_spec(plugin)
     }
@@ -503,7 +503,7 @@ impl Resonance {
             .iter()
             .flat_map(|t| t.plugins.iter())
             .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master_plugins.iter())
+            .chain(self.master.plugins.iter())
             .find(|p| p.instance_id == instance_id)?;
         Some(crate::view::mixer::bypass_toggle_spec(plugin))
     }

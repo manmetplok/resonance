@@ -675,16 +675,16 @@ fn apply_sidechain_routes(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
 
 fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     if a.master_fx_bypassed != b.master_fx_bypassed {
-        r.master_fx_bypassed = b.master_fx_bypassed;
+        r.master.fx_bypassed = b.master_fx_bypassed;
         let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
             bypassed: b.master_fx_bypassed,
         });
     }
-    for (slot, pp) in r.master_plugins.iter_mut().zip(b.master_plugins.iter()) {
+    for (slot, pp) in r.master.plugins.iter_mut().zip(b.master_plugins.iter()) {
         slot.plugin_name = pp.plugin_name.clone();
     }
     let master_saved = b.master_plugins.clone();
-    apply_plugin_bypass(&r.engine, &mut r.master_plugins, &master_saved);
+    apply_plugin_bypass(&r.engine, &mut r.master.plugins, &master_saved);
 }
 
 fn push_all_plugin_states(
@@ -752,7 +752,7 @@ fn apply_all_plugin_params(
             apply_plugin_params(&r.engine, &mut bus.plugins, &pb.plugins, pushed);
         }
     }
-    apply_plugin_params(&r.engine, &mut r.master_plugins, &b.master_plugins, pushed);
+    apply_plugin_params(&r.engine, &mut r.master.plugins, &b.master_plugins, pushed);
 }
 
 /// Drive every live slot's params to the snapshot's values: the saved

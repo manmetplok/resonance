@@ -357,8 +357,8 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     .align_y(alignment::Vertical::Center);
 
     let meter = canvas_widget(MasterMeter {
-        level_l: r.master_level_l,
-        level_r: r.master_level_r,
+        level_l: r.master.level_l,
+        level_r: r.master.level_r,
     })
     .width(90)
     .height(10);
