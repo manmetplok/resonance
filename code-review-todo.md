@@ -27,7 +27,7 @@ master and updates this table. Agents do **not** edit this file.
 | H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | planned → `arch-migration-plan.md`; NOW-steps queued behind M3 (audio) and M4 (undo) to avoid conflicts | |
 | M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | merged | e996ad33 |
 | M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | in progress | |
-| M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | in progress | |
+| M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | merged | f7ad84e2 |
 | M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
 | M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | in progress | |
 | M6 theory + small plugins | LIB-02..LIB-09 | opus | in progress | |
@@ -50,7 +50,6 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-F2a** (low) carried CLAP note events wait for the instrument's next `process()`; if the tail sub-block skips that instrument the note is late, and a carried note-on can land after a Stop panic.
 - [ ] **FU-F2b** (low) ENG-03 salvage rewrites the WAV header in place — may fail on CoW filesystems (btrfs) when the disk is full; then no clip.
 - [ ] **FU-F2c** (low) ENG-12 should reuse the new `activate_and_start()` in `clap_host/state.rs`; `restart()` still bails on inactive instances.
-- [ ] **FU-F2d** (low) flaky timing test `bounce_plugin_lock::bounce_helper_does_not_block_long_audio_holder` under load.
 - [ ] **FU-E1** (medium) `update/control/import_midi.rs:275` rounds imported clip length with `time_sig_num * TICKS_PER_QUARTER_NOTE` — wrong for x/8 meters; use `tempo_map.bar_len_ticks_at(bar)`.
 - [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
 - [ ] **FU-G1** (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
@@ -71,6 +70,13 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-D3** (low) engine `handle_set_bpm` clamps 20..999 and passes NaN; use `sanitize_bpm` there too.
 - [ ] **FU-D4** (low) MIDI-imported tempo points > 300 BPM are now clamped at bar-table rebuild.
 - [ ] **FU-D5** (low, test hygiene) `track_preset_save_prompt` golden reads the real user preset dir (cf. STATE-14).
+- [ ] **FU-M1a** (medium, needs macOS) Cocoa changes for PLG-01/03 were never compiled: run `cargo check` + `editor_open_cocoa`, `cocoa-plugin-gui editor_size`, `modal_reentrancy` with `-- --ignored` on a Mac.
+- [ ] **FU-M1b** (low) now that `on_main_thread` runs, a plugin reporting latency while inactive triggers `restart()` on an inactive instance → spurious "failed to reactivate" error; narrow double-restart race.
+- [ ] **FU-M1c** (low) Wayland re-map waits ≤200 ms for configure then paints anyway (Hyprland quirk) — could be a protocol error on strict compositors; button held across hide stays pressed in egui.
+- [ ] **FU-M3a** (low) MIX-09: >32-ch device whose capped request is rejected now fails to open input (was: crash-prone).
+- [ ] **FU-M3b** (low) MIX-06: every lock-contended block causes a flush on the next block → sustained notes can be cut during heavy UI edits.
+- [ ] **FU-M3c** (low) MIX-05: muted key sources keep rendering (CPU cost while muted).
+- [ ] **FU-F2d** (medium, upgraded) `bounce_plugin_lock` timing test fails 3/5 standalone — make it deterministic.
 
 ## How to use this file
 
@@ -1037,7 +1043,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `mix_audio` (`callback/mod.rs`), right after `scratch.data.fill(0.0)`, if `shared.offline_render_count.load(Acquire) > 0` output silence (still run `mix_audition_overlay` if desired, which touches no plugins) and return before any branch that locks a plugin; also skip `pickup_live_midi`'s delivery (leave events queued) in that state. Make `handle_play` / `handle_record` refuse (emit an error event) while `offline_render_count > 0`, mirroring the existing "Stop transport before bouncing" guard in the other direction. Keep the check a single relaxed/acquire atomic load — no locking.
 - **Verification:** `resonance-audio/tests/bounce_transport_guard.rs` already covers the start-guard; add cases there: with `offline_render_count` bumped (via `OfflineRenderGuard::mark` through a test hook or by setting the atomic), a `MixAudioHarness` block with a monitor-enabled track must not call the plugin (use a counting test plugin as in `plugin_bypass.rs`) and must output zeros; `handle_play` must leave `playing == false`.
 
-### [ ] MIX-03 — Plugin-delay-compensation lines silence `delay` samples at every loop seam (compensated tracks drop out, latent track does not)
+### [x] MIX-03 — Plugin-delay-compensation lines silence `delay` samples at every loop seam (compensated tracks drop out, latent track does not) — fixed @f107e1c4
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1057,7 +1063,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Keep the previous snapshot alive on the publishing (engine) thread until the audio thread can no longer hold it: e.g. a small `Retired<T>` queue on the engine thread that holds `Arc`s just replaced and drops them only once `Arc::strong_count == 1` (checked on the next engine tick), or use `arc_swap`'s pattern of `swap()` returning the old `Arc` and pushing it to such a list. Apply to `automation`, `tempo_map`, `latency_comp`, `take_comp`, `aux_sends`, `sidechain_routes`, `frozen_source` and `Track::plugin_chain`. Do NOT try to "fix" it by dropping on a background thread from the audio side (that needs a channel send which may allocate).
 - **Verification:** Add a test in `resonance-audio/tests/` that holds `automation.load()` (simulating the callback), publishes a new snapshot through the engine helper, drops the guard, and asserts via a `Drop`-counting wrapper or `Arc::strong_count` on a clone kept by the retire list that the old value was not destroyed on the reading thread (the retire list still owns it). Run under the existing `assert_no_alloc`-style harness if one exists; otherwise document with a unit test on the retire list.
 
-### [ ] MIX-05 — Muting / solo-suppressing a sidechain key source silently switches the keyed plugin to self-keying
+### [x] MIX-05 — Muting / solo-suppressing a sidechain key source silently switches the keyed plugin to self-keying — fixed @0c2e53c7
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1067,7 +1073,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** When the track/bus is tapped (`scratch.sidechain.is_tapped(...)`), still render its source + FX chain and capture the key, then stop before PDC/fader/routing — exactly the existing `is_key_only` early-return path. Concretely: in `render_one_track`, if disposition is `None` (or `discard_after_instrument`) but the track is tapped, run the source stage with a "key-only" flag, capture, and return. Do the same for sub-tracks (`render_sub_track_tap`) and busses. Pitfall: for the live strategy keep updating `last_gains` to 0 so un-muting still ramps in; for bounce keep the key-only track out of the mix.
 - **Verification:** `resonance-audio/tests/sidechain_key_delivery.rs`: add live and bounce cases where the source track is muted (and one where another track is soloed) and assert the keyed test plugin still receives a non-`None` key equal to the source's post-FX signal, while the muted source contributes nothing to the output.
 
-### [ ] MIX-06 — Seek during playback and A/B-reference monitoring leave stuck notes (mixer never panics on a playhead discontinuity)
+### [x] MIX-06 — Seek during playback and A/B-reference monitoring leave stuck notes (mixer never panics on a playhead discontinuity) — fixed @fb058b81
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1077,7 +1083,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Detect discontinuities on the audio thread, which owns the `MidiStash` and so never loses a panic: keep `expected_playhead: Option<u64>` in `CallbackScratch` (audio-thread owned), set it to `new_playhead` at the end of every rendered playing block; at the start of `render_playing_block`, if `Some(e)` and `e != playhead`, call `panic_instrument_tracks(tracks, plugins, midi_stash)` (it stashes a panic on contention) and `scratch.sidechain.clear()`. In the reference branch and the lock-contended fallback, do not update `expected_playhead` (so the next rendered block sees a mismatch and panics). Reset to `None` in the stopped branch (Stop already panics). Combine with MIX-01's single playhead load.
 - **Verification:** `MixAudioHarness` test (add to `resonance-audio/tests/midi_stash.rs` or `clap_all_notes_off.rs`): with a recording `NoteSink`-style test instrument, play a long note, move `shared.playhead` between blocks, assert an all-notes-off arrives in the next block. Second case: set the reference monitor active for N blocks while playing, then back, and assert all-notes-off before any new event.
 
-### [ ] MIX-07 — Soloing a multi-output parent drops its sub-tracks from the mixdown export (live vs bounce divergence)
+### [x] MIX-07 — Soloing a multi-output parent drops its sub-tracks from the mixdown export (live vs bounce divergence) — fixed @f67f9df4
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1087,7 +1093,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In the Bounce arm, drop the solo clause for sub-tracks: the parent's `track_disposition` already returned `None` when the parent is solo-suppressed, so the fan-out never runs for it. I.e. `if *respect_mute_solo && muted { return None; }`. Keep the `in_filter` check.
 - **Verification:** Add to `resonance-audio/tests/render_block_parity.rs` (or `stem_sub_track_render.rs`): project with a multi-output parent (use the `tests/multi_out_harness` plugin) and sub-tracks; parent soloed; render one block Live and Bounce(`respect_mute_solo: true`) and assert identical sub-track contribution (non-zero).
 
-### [ ] MIX-08 — Instrument plugins are never processed while the transport is stopped unless the track is input-monitored with live input; queued notes pile up and burst on Play
+### [x] MIX-08 — Instrument plugins are never processed while the transport is stopped unless the track is input-monitored with live input; queued notes pile up and burst on Play — fixed @489d2a8f
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1097,7 +1103,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In the stopped branch, also render MIDI-accepting tracks whose instrument has pending events or recent live input: simplest is to process every instrument track (the first plugin + its FX chain) with a zeroed input buffer when `!playing`, summing through fader/pan like `mix_monitor_passthrough` does, independent of `monitor.frames` (use `frames`, not `monitor.frames`). Cost can be bounded by only processing instruments that received events in the last N seconds (tracked in a small audio-thread-owned array). Also make `queue_note_off` evict a queued note-on instead of dropping at the cap (mirror `push_capped` in `midi_events.rs:387`).
 - **Verification:** `MixAudioHarness` test (e.g. in `resonance-audio/tests/live_note_retry_order.rs` or `audition_preview.rs`): stopped transport, no monitor, send a live note-on to an instrument test plugin and assert it is processed (non-zero output / plugin sees the event) within one block.
 
-### [ ] MIX-09 — Input device with more than 32 channels panics the audio callback (monitor scratch overrun)
+### [x] MIX-09 — Input device with more than 32 channels panics the audio callback (monitor scratch overrun) — fixed @3affbcad
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** rt-safety
