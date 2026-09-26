@@ -219,6 +219,15 @@ pub(crate) fn handle_import_audio_to_pool(
 
     let event_tx = ctx.event_tx.clone();
     let engine_rate = ctx.sample_rate;
+    // Project fence (FU-M4a, like UPD-09's clip imports): `ClearAll` bumps
+    // the generation before it takes the clip write lock and sends
+    // `AllCleared` after it. Every event of this batch is sent under a read
+    // of that lock after re-checking the generation, so a batch outlived by
+    // its project stops emitting before `AllCleared` and never lands in the
+    // new project's pool.
+    let clips_fence = std::sync::Arc::clone(ctx.clips);
+    let clear_generation = std::sync::Arc::clone(&state.clear_generation);
+    let generation = clear_generation.load(std::sync::atomic::Ordering::SeqCst);
 
     // One dedicated thread per batch, deliberately *not* the shared
     // `HandlerState::imports` pool: a pool-import batch is a foreground,
@@ -236,9 +245,38 @@ pub(crate) fn handle_import_audio_to_pool(
             crate::supervise::run_supervised(
                 "pool-import",
                 || {
-                    run_pool_import(&jobs, &project_dir, engine_rate, |ev| {
-                        let _ = event_tx.send(ev);
-                    });
+                    let stale =
+                        || clear_generation.load(std::sync::atomic::Ordering::SeqCst) != generation;
+                    run_pool_import_with(
+                        &jobs,
+                        &project_dir,
+                        engine_rate,
+                        |asset_id, path, dir, rate| {
+                            // Skip the decode of the rest of a stale batch.
+                            if stale() {
+                                return Err("project closed".into());
+                            }
+                            import_one_to_pool(asset_id, path, dir, rate)
+                        },
+                        |ev| {
+                            let _fence = clips_fence.read();
+                            if stale() {
+                                // The WAV went into the old project's folder
+                                // and nothing will reference it.
+                                if let AudioEvent::AssetImported {
+                                    project_relative_path,
+                                    ..
+                                } = &ev
+                                {
+                                    let _ = std::fs::remove_file(
+                                        project_dir.join(project_relative_path),
+                                    );
+                                }
+                                return;
+                            }
+                            let _ = event_tx.send(ev);
+                        },
+                    );
                 },
                 |message| {
                     let _ = panic_tx.send(AudioEvent::Error(message));

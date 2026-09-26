@@ -288,3 +288,57 @@ fn a_panicking_import_fails_that_file_and_the_batch_continues() {
     assert_eq!(done, vec![1, 3], "the files around the panic still import");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A pool-import batch still running when the project is replaced
+/// (`ClearAll`) must never report an asset after `AllCleared`: the app
+/// would add it, unplaced, to the new project's pool (code review FU-M4a).
+#[test]
+fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
+    let dir = make_tempdir("stale-batch");
+    // Long enough that the batch is still decoding when `ClearAll` lands.
+    let long_a = write_wav(&dir, "long_a.wav", 44_100, 2, 44_100 * 20);
+    let long_b = write_wav(&dir, "long_b.wav", 44_100, 2, 44_100 * 20);
+    let short = write_wav(&dir, "short.wav", PROJECT_RATE, 1, 4_800);
+    let project = dir.join("project");
+    std::fs::create_dir_all(project.join("audio")).unwrap();
+
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
+    engine.set_project_dir(project.clone());
+    engine.import_audio_to_pool(vec![long_a, long_b]);
+    engine.clear_all();
+    // A batch queued after the clear belongs to the new project and lands.
+    engine.import_audio_to_pool(vec![short.clone()]);
+
+    let mut events = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let fresh_done = |events: &[AudioEvent]| {
+        events.iter().any(|e| {
+            matches!(e, AudioEvent::AssetImported { original_path, .. } if *original_path == short)
+        })
+    };
+    while !fresh_done(&events) && std::time::Instant::now() < deadline {
+        events.extend(engine.drain_events());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(fresh_done(&events), "the post-clear batch never landed");
+    // Grace for a (wrong) late stale event; the fenced batch gives up
+    // after at most the file it was decoding.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    events.extend(engine.drain_events());
+
+    let cleared = events
+        .iter()
+        .position(|e| matches!(e, AudioEvent::AllCleared))
+        .expect("ClearAll echoed");
+    let stale: Vec<_> = events[cleared..]
+        .iter()
+        .filter(|e| match e {
+            AudioEvent::AssetImported { original_path, .. }
+            | AudioEvent::ImportFailed { path: original_path, .. }
+            | AudioEvent::ImportProgress { path: original_path, .. } => *original_path != short,
+            _ => false,
+        })
+        .collect();
+    assert!(stale.is_empty(), "stale batch events after AllCleared: {stale:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

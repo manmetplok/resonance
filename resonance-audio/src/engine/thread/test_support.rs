@@ -157,6 +157,14 @@ impl EngineHandlerHarness {
         });
     }
 
+    /// Run the real `AudioCommand::ImportAudioToPool` handler: spawns the
+    /// pool-import worker, whose events arrive asynchronously.
+    pub fn import_audio_to_pool(&mut self, paths: Vec<String>) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::import_pool::handle_import_audio_to_pool(ctx, state, paths)
+        });
+    }
+
     /// Run the real `AudioCommand::ClearAll` handler.
     pub fn clear_all(&mut self) {
         self.with_ctx(tracks::handle_clear_all);
