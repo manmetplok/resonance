@@ -535,18 +535,22 @@ impl Resonance {
     ///
     /// `project_path` is the live project's `.rproj` path, whose sibling
     /// freeze directory holds the caches.
+    /// `fresh`: tracks the restore has just added to the engine (ARCH-01
+    /// A-13i), which hold no frozen source whatever their live status says
+    /// — each gets the after-`ClearAll` treatment on its own.
     pub(crate) fn apply_freeze_restore(
         &mut self,
         tracks: &[crate::project::ProjectTrack],
         project_path: Option<&Path>,
         after_clear_all: bool,
+        fresh: &std::collections::HashSet<TrackId>,
     ) {
         let target = tracks
             .iter()
             .map(|t| (t.id, FreezeStatus::from_persisted(&t.freeze)))
             .filter(|(_, status)| *status != FreezeStatus::Idle)
             .collect();
-        self.reconcile_freeze_statuses(target, project_path, after_clear_all);
+        self.reconcile_freeze_statuses(target, project_path, after_clear_all, fresh);
     }
 
     /// The body of [`Self::apply_freeze_restore`], on a target already in
@@ -556,6 +560,7 @@ impl Resonance {
         target: std::collections::HashMap<TrackId, FreezeStatus>,
         project_path: Option<&Path>,
         after_clear_all: bool,
+        fresh: &std::collections::HashSet<TrackId>,
     ) {
         let dir = project_path.map(freeze_cache_dir_for);
         // The tracks whose engine source is attached right now: a live
@@ -568,7 +573,7 @@ impl Resonance {
             self.freeze
                 .statuses
                 .iter()
-                .filter(|(_, status)| status.is_frozen())
+                .filter(|(id, status)| status.is_frozen() && !fresh.contains(id))
                 .map(|(id, _)| *id)
                 .collect()
         };

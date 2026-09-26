@@ -23,7 +23,10 @@ pub(super) fn track_added(
 ) {
     // A diff restore removed this instance after adding it, before this
     // echo arrived: the engine has already dropped it (ARCH-01 A-13h).
-    if r.io.restore_echoes.plugin_removal_owed(instance_id) {
+    if r.io.restore_echoes.plugin_removal_owed(instance_id)
+        // …or removed its track (A-13i), which drops the chain with it.
+        || r.io.restore_echoes.track_removal_owed(track_id)
+    {
         return;
     }
     // Idempotent: if the plugin slot already exists (created by project load),

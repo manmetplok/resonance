@@ -14,6 +14,13 @@ pub(super) fn imported(
     name: String,
     waveform_peaks: Vec<(f32, f32)>,
 ) {
+    // The load of a clip whose deletion echo is still owed (ARCH-01
+    // A-13i): the engine deletes it right after this (the delete waited
+    // for the load to land), and the mirror already dropped it — or holds
+    // the instance a later restore re-added, whose own load echoes after.
+    if r.io.restore_echoes.clip_deletion_owed(clip_id) {
+        return;
+    }
     // A stale import — queued in a project that a load or slow-path undo
     // has since replaced — names a track this project doesn't have, or an
     // id that is another track's clip here. Drop it rather than overwrite
@@ -58,6 +65,17 @@ pub(super) fn imported(
     }
 }
 
+/// The `ClipDeleted` echo: swallowed when a diff restore or a live delete
+/// already mirrored it (ARCH-01 A-13i — the id may name a clip a later
+/// restore re-added), mirrored otherwise.
+pub(super) fn deleted_echo(r: &mut Resonance, clip_id: ClipId) {
+    if r.io.restore_echoes.settle_clip_deleted(clip_id) {
+        return;
+    }
+    deleted(r, clip_id);
+}
+
+/// Mirror an audio clip's deletion.
 pub(crate) fn deleted(r: &mut Resonance, clip_id: ClipId) {
     r.clips.retain(|c| c.id != clip_id);
     // The Pool "used ×N" badge / `pool.list` count (review VIEW-30).
@@ -78,6 +96,10 @@ pub(super) fn moved(
     new_start_sample: SamplePos,
     new_track_id: TrackId,
 ) {
+    // An edit of the instance whose deletion is still owed (A-13i).
+    if r.io.restore_echoes.clip_deletion_owed(clip_id) {
+        return;
+    }
     if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
         clip.start_sample = new_start_sample;
         clip.track_id = new_track_id;
@@ -92,6 +114,10 @@ pub(super) fn trimmed(
     trim_start_frames: u64,
     trim_end_frames: u64,
 ) {
+    // An edit of the instance whose deletion is still owed (A-13i).
+    if r.io.restore_echoes.clip_deletion_owed(clip_id) {
+        return;
+    }
     if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
         clip.start_sample = new_start_sample;
         clip.duration_samples = new_duration_samples;
@@ -108,6 +134,10 @@ pub(super) fn fade_changed(
     fade_out_frames: u64,
     fade_out_curve: FadeCurve,
 ) {
+    // An edit of the instance whose deletion is still owed (A-13i).
+    if r.io.restore_echoes.clip_deletion_owed(clip_id) {
+        return;
+    }
     if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
         clip.fade_in_frames = fade_in_frames;
         clip.fade_in_curve = fade_in_curve;
@@ -117,6 +147,10 @@ pub(super) fn fade_changed(
 }
 
 pub(super) fn gain_changed(r: &mut Resonance, clip_id: ClipId, gain_db: f32) {
+    // An edit of the instance whose deletion is still owed (A-13i).
+    if r.io.restore_echoes.clip_deletion_owed(clip_id) {
+        return;
+    }
     if let Some(clip) = r.clips.iter_mut().find(|c| c.id == clip_id) {
         clip.gain_db = gain_db;
     }
@@ -193,5 +227,17 @@ pub(super) fn pitch_detected(
         let tuning = clip.vocal_tuning.get_or_insert_with(VocalTuning::default);
         tuning.contour = contour;
         tuning.notes = notes;
+    }
+}
+
+/// Send `DeleteClip` for a clip the caller drops from the mirror itself,
+/// right now (STATE-10), and owe its `ClipDeleted` echo (ARCH-01 A-13i):
+/// an undo may re-add the clip under this id before the echo lands. Call
+/// it while the clip is still mirrored — only a mirrored clip is owed, as
+/// the engine answers a delete of an id it never loaded with no echo.
+pub(crate) fn send_mirrored_delete(r: &mut Resonance, clip_id: ClipId) {
+    let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
+    if r.clips.iter().any(|c| c.id == clip_id) {
+        r.io.restore_echoes.expect_clip_deleted(clip_id);
     }
 }

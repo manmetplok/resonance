@@ -83,42 +83,28 @@ fn scalar_only_track_diff_is_compatible() {
     assert!(structurally_compatible(&a, &b));
 }
 
+/// Tracks are not part of the shape (A-13i): the diff arms add a track
+/// `a` lacks, remove one `b` lacks, and treat a renumbered track or a type
+/// change as a remove + add (`entities::kept_tracks`).
 #[test]
-fn added_track_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0)];
-    b.tracks = vec![track(1, 0.0), track(2, 0.0)];
-    assert!(!structurally_compatible(&a, &b));
-}
-
-#[test]
-fn removed_track_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0), track(2, 0.0)];
-    b.tracks = vec![track(1, 0.0)];
-    assert!(!structurally_compatible(&a, &b));
-}
-
-#[test]
-fn renumbered_track_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0)];
-    b.tracks = vec![track(2, 0.0)];
-    assert!(!structurally_compatible(&a, &b));
-}
-
-#[test]
-fn track_type_change_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0)];
-    let mut t = track(1, 0.0);
-    t.track_type = "instrument".to_string();
-    b.tracks = vec![t];
-    assert!(!structurally_compatible(&a, &b));
+fn added_removed_renumbered_and_retyped_tracks_are_compatible() {
+    let pairs = [
+        (vec![track(1, 0.0)], vec![track(1, 0.0), track(2, 0.0)]),
+        (vec![track(1, 0.0), track(2, 0.0)], vec![track(1, 0.0)]),
+        (vec![track(1, 0.0)], vec![track(2, 0.0)]),
+        (vec![track(1, 0.0)], {
+            let mut t = track(1, 0.0);
+            t.track_type = "instrument".to_string();
+            vec![t]
+        }),
+    ];
+    for (ta, tb) in pairs {
+        let mut a = empty_file();
+        let mut b = empty_file();
+        a.tracks = ta;
+        b.tracks = tb;
+        assert!(structurally_compatible(&a, &b));
+    }
 }
 
 /// Plugin chains are not part of the shape (A-13h): the diff arms add,

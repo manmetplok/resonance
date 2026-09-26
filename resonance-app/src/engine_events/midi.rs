@@ -18,6 +18,12 @@ pub(super) fn clip_created(
     trim_start_ticks: u64,
     trim_end_ticks: u64,
 ) {
+    // The load of a clip whose deletion echo is still owed (ARCH-01
+    // A-13i): FIFO puts it before that deletion, which the mirror already
+    // reflects — mirroring it would push a phantom.
+    if r.io.restore_echoes.midi_clip_deletion_owed(clip_id) {
+        return;
+    }
     // Idempotent: skip if the MIDI clip already exists (created by project load).
     if r.midi_clips.iter().any(|c| c.id == clip_id) {
         return;
@@ -47,6 +53,10 @@ pub(super) fn clip_moved(
     new_start_sample: SamplePos,
     new_track_id: TrackId,
 ) {
+    // An edit of the instance whose deletion is still owed (A-13i).
+    if r.io.restore_echoes.midi_clip_deletion_owed(clip_id) {
+        return;
+    }
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         clip.start_sample = new_start_sample;
         clip.track_id = new_track_id;
@@ -60,11 +70,23 @@ pub(super) fn clip_trimmed(
     trim_start_ticks: u64,
     trim_end_ticks: u64,
 ) {
+    if r.io.restore_echoes.midi_clip_deletion_owed(clip_id) {
+        return;
+    }
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         clip.start_sample = new_start_sample;
         clip.trim_start_ticks = trim_start_ticks;
         clip.trim_end_ticks = trim_end_ticks;
     }
+}
+
+/// The `MidiClipDeleted` echo: swallowed when a diff restore or a live
+/// delete already mirrored it (ARCH-01 A-13i), mirrored otherwise.
+pub(super) fn clip_deleted_echo(r: &mut Resonance, clip_id: ClipId) {
+    if r.io.restore_echoes.settle_midi_clip_deleted(clip_id) {
+        return;
+    }
+    clip_deleted(r, clip_id);
 }
 
 pub(super) fn clip_deleted(r: &mut Resonance, clip_id: ClipId) {
@@ -462,4 +484,13 @@ pub(super) fn groove_extracted(r: &mut Resonance, template: GrooveTemplate) {
         name,
         template,
     });
+}
+
+/// Send `DeleteMidiClip` for a clip the caller drops from the mirror
+/// itself, right now, and owe its `MidiClipDeleted` echo (ARCH-01 A-13i):
+/// an undo may re-add the clip under this id before the echo lands. The
+/// engine echoes every MIDI delete, known id or not.
+pub(crate) fn send_mirrored_delete(r: &mut Resonance, clip_id: ClipId) {
+    let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id });
+    r.io.restore_echoes.expect_midi_clip_deleted(clip_id);
 }

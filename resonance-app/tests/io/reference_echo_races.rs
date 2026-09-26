@@ -433,7 +433,7 @@ fn a_full_replay_restore_cancels_an_in_flight_load() {
     f.app.test_add_track(9_999, TrackType::Audio);
     f.pump();
 
-    f.app.test_begin_restore_from_snapshot(snapshot);
+    f.app.test_begin_full_restore_from_snapshot(snapshot);
     f.pump();
     assert!(listed_paths(&f.app).is_empty(), "the restore drops the load");
     assert!(!f.engine.holds(id), "ClearAll dropped the engine's copy");

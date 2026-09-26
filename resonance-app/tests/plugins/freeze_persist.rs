@@ -498,7 +498,7 @@ mod undo_reattach {
         let mut l = load();
         let snapshot = l.app.test_snapshot_for_undo();
         // After the snapshot: track 3 is frozen (a freeze the undo retires)
-        // and an extra track forces the structural fallback.
+        // the full path is forced (since A-13i no shape falls back on its own).
         let cache_3 = l.freeze_dir.join("freeze_3.wav");
         write_cache_wav(&cache_3, 48_000, 64);
         l.app.test_set_freeze_status(
@@ -510,7 +510,7 @@ mod undo_reattach {
         l.app.test_add_track(9_999, TrackType::Audio);
         let _ = drain(&l.rx);
 
-        l.app.test_begin_restore_from_snapshot(snapshot);
+        l.app.test_begin_full_restore_from_snapshot(snapshot);
         let cmds = drain(&l.rx);
         assert!(
             cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),

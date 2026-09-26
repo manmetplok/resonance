@@ -28,7 +28,18 @@ fn drop_duplicate_track_added(r: &mut Resonance, track_id: TrackId) {
     }
 }
 
+/// The `*TrackAdded` echo of a track whose removal echo is still owed
+/// (ARCH-01 A-13i): FIFO puts it before that removal, which a diff restore
+/// (or a live delete) has already mirrored, so the track it announces is
+/// already gone — mirroring it would push a phantom.
+fn stale_add_echo(r: &Resonance, track_id: TrackId) -> bool {
+    r.io.restore_echoes.track_removal_owed(track_id)
+}
+
 pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
+    if stale_add_echo(r, track_id) {
+        return;
+    }
     // Idempotent: skip if the track already exists (created by project load).
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
         drop_duplicate_track_added(r, track_id);
@@ -46,6 +57,9 @@ pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
 }
 
 pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
+    if stale_add_echo(r, track_id) {
+        return;
+    }
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
         drop_duplicate_track_added(r, track_id);
         return;
@@ -64,6 +78,9 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
 }
 
 pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
+    if stale_add_echo(r, track_id) {
+        return;
+    }
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
         drop_duplicate_track_added(r, track_id);
         return;
@@ -79,6 +96,21 @@ pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
     r.apply_pending_control_track(track_id);
 }
 
+/// The `TrackRemoved` echo. One a diff restore or a live delete owes has
+/// already been mirrored — and the id may by now be a track a later
+/// restore re-added (ARCH-01 A-13i) — so it is swallowed. Any other (an
+/// engine-initiated removal, e.g. a realtime bounce's scratch track) is
+/// mirrored here.
+pub(super) fn removed_echo(r: &mut Resonance, track_id: TrackId) {
+    if r.io.restore_echoes.settle_track_removed(track_id) {
+        return;
+    }
+    removed(r, track_id);
+}
+
+/// Mirror a track's removal: the track, its sub-tracks and everything
+/// that names them. Called by the live delete at once (STATE-10) and by
+/// [`removed_echo`] for a removal nobody mirrored yet.
 pub(crate) fn removed(r: &mut Resonance, track_id: TrackId) {
     // Aux sends leaving this track die with it (ba todo #1269 review).
     // The engine does NOT prune its own table on RemoveTrack, so tell it
@@ -161,7 +193,7 @@ fn drop_track_references(
     use resonance_common::AutomationTarget as T;
 
     // The engine's `RemoveTrack` keeps MIDI clips, so delete them there
-    // too; the `MidiClipDeleted` echo then finds nothing left to drop.
+    // too. Mirrored here, so the `MidiClipDeleted` echo is owed (A-13i).
     let midi_ids: Vec<ClipId> = r
         .midi_clips
         .iter()
@@ -169,7 +201,7 @@ fn drop_track_references(
         .map(|c| c.id)
         .collect();
     for clip_id in &midi_ids {
-        let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: *clip_id });
+        super::midi::send_mirrored_delete(r, *clip_id);
         r.compose.vocal_audio.clip_lyrics.remove(clip_id);
     }
     r.midi_clips.retain(|c| c.track_id != track_id);

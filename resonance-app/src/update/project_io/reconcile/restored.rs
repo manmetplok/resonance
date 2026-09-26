@@ -1,12 +1,24 @@
 //! Roadmap group (2): domains shared by every origin whose body depends on
 //! the origin or on live state an undo keeps (ARCH-01 A-13b).
 
+use std::collections::HashSet;
+
+use resonance_audio::types::TrackId;
+
+use super::entities::kept_tracks;
 use super::{Origin, Reconcile, ReconcileCtx};
 use crate::project::ProjectFile;
 use crate::update::project_io::replay::{
     reconcile_references, restore_references, ReferenceMonitorSource,
 };
 use crate::Resonance;
+
+/// The tracks of `new` this restore added to the engine rather than kept
+/// (`entities::kept_tracks`, ARCH-01 A-13i). Every one after a `ClearAll`.
+fn fresh_tracks(old: Option<&ProjectFile>, new: &ProjectFile) -> HashSet<TrackId> {
+    let kept = kept_tracks(old, new);
+    new.tracks.iter().map(|t| t.id).filter(|id| !kept.contains(id)).collect()
+}
 
 /// Parameter-automation lanes (epic #14 / epic #40): the engine and the
 /// app mirror reconciled to exactly the saved set by
@@ -75,7 +87,9 @@ impl Reconcile for DerivedClips {
 ///
 /// After a `ClearAll` the map is rebuilt from scratch and a track with no
 /// device selected sends no `SetTrackDeviceParams`; on the diff path stale
-/// tracks are cleared on the engine and every live offline flag survives.
+/// tracks (a removed one included) are cleared on the engine and every live
+/// offline flag survives — except on a fresh track, which gets the
+/// after-`ClearAll` rule on its own (A-13i).
 /// The Bank Select + Program Change resend a disk load needs
 /// (`ResendExternalInstrumentPatches`) is not part of this domain: it stays
 /// in the `AllCleared` handler's disk-load tail, since an undo must never
@@ -90,8 +104,9 @@ pub(crate) struct ExternalInstruments;
 impl Reconcile for ExternalInstruments {
     const NAME: &'static str = "external_instruments";
 
-    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
-        r.restore_external_instruments(new, ctx.origin.after_clear_all());
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        let fresh = fresh_tracks(old, new);
+        r.restore_external_instruments(new, ctx.origin.after_clear_all(), &fresh);
     }
 }
 
@@ -172,8 +187,11 @@ impl Reconcile for MissingPlugins {
 /// It also reconciles the engine's frozen sources (FU-A4a): each track the
 /// target has frozen whose source the engine does not hold — every one
 /// after a `ClearAll` (`origin.after_clear_all()`); on the diff path, those
-/// that were not frozen before — has its cache decoded and attached as
-/// `rehydrate_frozen_tracks` does, an undecodable one going `Stale`.
+/// that were not frozen before, and each fresh track (A-13i: added by this
+/// restore, so it holds no source) — has its cache decoded and attached as
+/// `rehydrate_frozen_tracks` does, an undecodable one going `Stale`. A
+/// removed frozen track's cache is detached and deleted, as the live
+/// delete does.
 ///
 /// [`rehydrate_frozen_tracks`]: Resonance::rehydrate_frozen_tracks
 /// [`apply_freeze_restore`]: Resonance::apply_freeze_restore
@@ -182,12 +200,13 @@ pub(crate) struct Freeze;
 impl Reconcile for Freeze {
     const NAME: &'static str = "freeze";
 
-    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         if ctx.origin.is_undo() {
             r.apply_freeze_restore(
                 &new.tracks,
                 ctx.live.project_path,
                 ctx.origin.after_clear_all(),
+                &fresh_tracks(old, new),
             );
             return;
         }

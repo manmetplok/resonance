@@ -9,11 +9,19 @@
 //! Since A-13h the diff path also adds what `old` lacks: a bus (the
 //! after-`ClearAll` add body, [`replay_bus`]) and a plugin instance on a
 //! chain that stays (the same [`replay_plugins`] body, appended to the
-//! live chain). What `new` lacks was already removed by
+//! live chain); since A-13i a track too ([`replay_track`]), sub-tracks
+//! included. What `new` lacks was already removed by
 //! `removals::EntityRemovals`, the stage before, and [`EntityOrder`] puts
-//! every chain into the target's order last. Tracks are still gated by
-//! `structurally_compatible` (A-13i): a track id missing from `old` is
-//! skipped here as defence in depth.
+//! every chain into the target's order last.
+//!
+//! **Kept and fresh tracks** ([`kept_tracks`]). A track is *kept* by a diff
+//! restore when both files have its id with the same type and sub-track
+//! link (and, for a sub-track, its parent is kept). Every other track of
+//! `new` is *fresh* — added exactly as a load adds it — and every other
+//! track of `old` is removed. After a `ClearAll` nothing is kept. The
+//! domains whose after-`ClearAll` behaviour differs (track outputs, plugin
+//! state, external instruments, freeze, group macros) apply it per fresh
+//! track rather than per restore.
 //!
 //! Each plugin's state (blob, per-slot bypass, params) is
 //! `plugin_state::PluginState`'s, the next domain in the stage.
@@ -41,10 +49,12 @@ use crate::Resonance;
 ///   scalar + its plugin chain) and is mirrored in file order. Then the
 ///   legacy generate-params migration, which reads the replayed track
 ///   roles.
-/// * Diff: per track, each scalar that differs from `old` is sent; the
-///   mirror takes every field (name, order, …) from `new`; each plugin
-///   `old` did not have on the chain is added to its end (`EntityOrder`
-///   moves it into place).
+/// * Diff: per kept track ([`kept_tracks`]), each scalar that differs from
+///   `old` is sent; the mirror takes every field (name, order, …) from
+///   `new`; each plugin `old` did not have on the chain is added to its
+///   end (`EntityOrder` moves it into place). Each fresh track is added as
+///   after a `ClearAll`, with its saved `.order`. A removed one is already
+///   gone (`removals::EntityRemovals`).
 ///
 /// The main output (`SetTrackOutput`) is [`TrackOutputs`]', after the
 /// busses it names exist.
@@ -74,7 +84,9 @@ impl Reconcile for Tracks {
                 }
             }
             for pt in &new.tracks {
-                replay_track(r, pt);
+                let order = r.registry.next_track_order;
+                replay_track(r, pt, order);
+                r.registry.next_track_order += 1;
             }
             // Migrate old generate_params + track roles to lane_generators
             // for projects predating the unified lane generator system.
@@ -84,24 +96,44 @@ impl Reconcile for Tracks {
             return;
         };
         let old_by_id: HashMap<u64, &ProjectTrack> = old.tracks.iter().map(|t| (t.id, t)).collect();
+        let kept_tracks = kept_tracks(Some(old), new);
         let kept = kept_plugins(Some(old), new);
         for pt in &new.tracks {
-            // Defence in depth: `structurally_compatible` should have gated
-            // us here, but if it ever drifts we'd rather skip an unmatched
-            // id than crash on undo.
-            if let Some(&ot) = old_by_id.get(&pt.id) {
-                apply_track(r, ot, pt);
-                let track_id = pt.id;
-                let added = replay_plugins(r, fresh(&pt.plugins, &kept), |pp| AudioCommand::AddPlugin {
-                    track_id,
-                    clap_file_path: pp.clap_file_path.clone(),
-                    clap_plugin_id: pp.clap_plugin_id.clone(),
-                    id: pp.instance_id,
-                });
-                if let Some(t) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
-                    t.plugins.extend(added);
-                }
+            let Some(&ot) = old_by_id.get(&pt.id).filter(|_| kept_tracks.contains(&pt.id)) else {
+                continue;
+            };
+            apply_track(r, ot, pt);
+            let track_id = pt.id;
+            let added = replay_plugins(r, fresh(&pt.plugins, &kept), |pp| AudioCommand::AddPlugin {
+                track_id,
+                clap_file_path: pp.clap_file_path.clone(),
+                clap_plugin_id: pp.clap_plugin_id.clone(),
+                id: pp.instance_id,
+            });
+            if let Some(t) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
+                t.plugins.extend(added);
             }
+        }
+        // The fresh tracks, as a load adds them — parents before
+        // sub-tracks, since the engine files a sub-track under its parent
+        // (`CreateSubTrack`). A fresh multi-output instrument's sub-tracks
+        // are added here, under their saved ids, before its `PluginAdded`
+        // echo can run `ensure_subtracks`, which then finds every
+        // (parent, port) taken and adds none. Each keeps its saved
+        // `.order` (the fixed point); both id and order counters stay past
+        // it, so an add after the restore never collides (D-4).
+        let fresh_tracks = new
+            .tracks
+            .iter()
+            .filter(|pt| !kept_tracks.contains(&pt.id));
+        let (parents, subs): (Vec<&ProjectTrack>, Vec<&ProjectTrack>) =
+            fresh_tracks.partition(|pt| pt.sub_track.is_none());
+        for pt in parents.into_iter().chain(subs) {
+            if pt.id >= r.registry.next_track_id {
+                r.registry.next_track_id = pt.id + 1;
+            }
+            replay_track(r, pt, pt.order);
+            r.registry.next_track_order = r.registry.next_track_order.max(pt.order + 1);
         }
     }
 }
@@ -208,29 +240,30 @@ impl Reconcile for Master {
 ///
 /// * After a `ClearAll`: sent for every track routed to a bus (the engine
 ///   default is the master).
-/// * Diff: sent for every track whose output differs from `old`'s,
-///   including one returning to the master.
+/// * Diff: sent for every kept track whose output differs from `old`'s,
+///   including one returning to the master; for a fresh track, as after a
+///   `ClearAll`.
 pub(crate) struct TrackOutputs;
 
 impl Reconcile for TrackOutputs {
     const NAME: &'static str = "track_outputs";
 
     fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _ctx: &ReconcileCtx<'_>) {
-        let old_outputs: Option<HashMap<u64, Option<BusId>>> =
-            old.map(|old| old.tracks.iter().map(|t| (t.id, t.output_bus)).collect());
+        let kept = kept_tracks(old, new);
+        let old_outputs: HashMap<u64, Option<BusId>> = old
+            .map(|old| old.tracks.iter().map(|t| (t.id, t.output_bus)).collect())
+            .unwrap_or_default();
         for pt in &new.tracks {
-            let output = match &old_outputs {
-                None => match pt.output_bus {
+            let output = if kept.contains(&pt.id) {
+                if old_outputs.get(&pt.id) == Some(&pt.output_bus) {
+                    continue;
+                }
+                pt.output_bus.map(TrackOutput::Bus).unwrap_or(TrackOutput::Master)
+            } else {
+                // Fresh: the engine default is the master.
+                match pt.output_bus {
                     Some(bus_id) => TrackOutput::Bus(bus_id),
                     None => continue,
-                },
-                Some(old_outputs) => {
-                    // Defence in depth — see `Tracks`.
-                    match old_outputs.get(&pt.id) {
-                        Some(before) if *before != pt.output_bus => {}
-                        _ => continue,
-                    }
-                    pt.output_bus.map(TrackOutput::Bus).unwrap_or(TrackOutput::Master)
                 }
             };
             let _ = r.engine.send(AudioCommand::SetTrackOutput {
@@ -304,7 +337,9 @@ impl Reconcile for EntityOrder {
 // Full arms: add one entity after a `ClearAll`
 // ---------------------------------------------------------------------------
 
-fn replay_track(r: &mut Resonance, pt: &ProjectTrack) {
+/// Add one saved track — engine add command, every scalar, its plugin
+/// chain — and mirror it at `order`. The caller keeps the order counter.
+fn replay_track(r: &mut Resonance, pt: &ProjectTrack, order: usize) {
     // Repair sub-track id collisions left by buggier prior versions. If
     // the saved id is already in use by an earlier-loaded track, allocate
     // a fresh app-side id from `next_track_id` (which the pre-loop bump
@@ -420,7 +455,6 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack) {
         id: pp.instance_id,
     });
 
-    let order = r.registry.next_track_order;
     let mut track = if let Some(link) = pt.sub_track {
         // Sub-tracks are always instrument-typed regardless of what the
         // saved `track_type` says. Earlier buggy saves could land a
@@ -472,7 +506,6 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack) {
     track.midi_output_device = pt.midi_output_device.clone();
     track.midi_output_channel = pt.midi_output_channel;
     r.registry.tracks.push(track);
-    r.registry.next_track_order += 1;
     // External-instrument mode is restored after every track, by the
     // `ExternalInstruments` reconcile domain (ARCH-01 A-13b).
 }
@@ -823,8 +856,41 @@ pub(super) fn plugin_owners(file: &ProjectFile) -> HashMap<u64, (PluginLocator, 
     out
 }
 
+/// The tracks a diff restore keeps live (ARCH-01 A-13i): in both files,
+/// with the same type and the same sub-track link, and — for a sub-track —
+/// a kept parent (the engine's `RemoveTrack` drops a parent's sub-tracks
+/// with it). Every other track of `new` is *fresh*: added as a load adds
+/// it, its chain, output, external-instrument config, freeze source and
+/// group-macro flags treated as after a `ClearAll`. Every other track of
+/// `old` is removed. So a type change is a remove + add under the same
+/// id, which is what the full replay did to it. Empty after a `ClearAll`.
+pub(super) fn kept_tracks(old: Option<&ProjectFile>, new: &ProjectFile) -> HashSet<TrackId> {
+    let Some(old) = old else {
+        return HashSet::new();
+    };
+    let before: HashMap<TrackId, &ProjectTrack> = old.tracks.iter().map(|t| (t.id, t)).collect();
+    let same: HashMap<TrackId, &ProjectTrack> = new
+        .tracks
+        .iter()
+        .filter(|pt| {
+            before.get(&pt.id).is_some_and(|was| {
+                was.track_type == pt.track_type && was.sub_track == pt.sub_track
+            })
+        })
+        .map(|pt| (pt.id, pt))
+        .collect();
+    same.iter()
+        .filter(|(_, pt)| {
+            pt.sub_track
+                .is_none_or(|link| same.get(&link.parent_track_id).is_some_and(|p| p.sub_track.is_none()))
+        })
+        .map(|(id, _)| *id)
+        .collect()
+}
+
 /// The plugin instances a diff restore keeps live (ARCH-01 A-13h): in
-/// both files, on the same chain, with the same `.clap` identity. Every
+/// both files, on the same chain — a kept track's (A-13i), a bus's, or
+/// the master's — with the same `.clap` identity. Every
 /// other instance of `new` is *fresh* — added, then given its blob,
 /// bypass and parked params as a load does — and every other instance of
 /// `old` is removed. So an id whose identity changed (a relocated missing
@@ -836,14 +902,20 @@ pub(super) fn kept_plugins(old: Option<&ProjectFile>, new: &ProjectFile) -> Hash
         return HashSet::new();
     };
     let before = plugin_owners(old);
+    let tracks = kept_tracks(Some(old), new);
     plugin_owners(new)
         .into_iter()
         .filter(|(id, (owner, pp))| {
-            before.get(id).is_some_and(|(was_owner, was)| {
-                was_owner == owner
-                    && was.clap_plugin_id == pp.clap_plugin_id
-                    && was.clap_file_path == pp.clap_file_path
-            })
+            let chain_kept = match owner {
+                PluginLocator::Track(track_id) => tracks.contains(track_id),
+                PluginLocator::Bus(_) | PluginLocator::Master => true,
+            };
+            chain_kept
+                && before.get(id).is_some_and(|(was_owner, was)| {
+                    was_owner == owner
+                        && was.clap_plugin_id == pp.clap_plugin_id
+                        && was.clap_file_path == pp.clap_file_path
+                })
         })
         .map(|(id, _)| id)
         .collect()

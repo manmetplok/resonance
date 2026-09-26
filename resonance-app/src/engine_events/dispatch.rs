@@ -137,7 +137,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             name,
             waveform_peaks,
         ),
-        E::ClipDeleted { clip_id } => clips::deleted(r, clip_id),
+        E::ClipDeleted { clip_id } => clips::deleted_echo(r, clip_id),
         E::ClipMoved {
             clip_id,
             new_start_sample,
@@ -310,7 +310,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             trim_start_ticks,
             trim_end_ticks,
         ),
-        E::MidiClipDeleted { clip_id } => midi::clip_deleted(r, clip_id),
+        E::MidiClipDeleted { clip_id } => midi::clip_deleted_echo(r, clip_id),
         E::MidiNoteAdded { clip_id, note } => midi::note_added(r, clip_id, note),
         E::MidiNoteRemoved {
             clip_id,
@@ -355,7 +355,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::TrackAdded { track_id } => tracks::added(r, track_id),
         E::InstrumentTrackAdded { track_id } => tracks::instrument_added(r, track_id),
         E::VocalTrackAdded { track_id } => tracks::vocal_added(r, track_id),
-        E::TrackRemoved { track_id } => tracks::removed(r, track_id),
+        E::TrackRemoved { track_id } => tracks::removed_echo(r, track_id),
         E::TrackBounceCompleted {
             source_track_id,
             target_track_id,

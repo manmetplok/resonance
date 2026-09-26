@@ -207,7 +207,7 @@ fn an_undo_slow_path_takes_the_undo_branches() {
     snapshot.project.file.tracks[0].freeze = TrackFreezeState::unfrozen();
     l.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&l.rx);
-    l.app.test_begin_restore_from_snapshot(snapshot);
+    l.app.test_begin_full_restore_from_snapshot(snapshot);
     let cmds = drain(&l.rx);
     assert!(
         cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
@@ -265,7 +265,7 @@ fn start_undo_slow_path(l: &mut Loaded) {
     snapshot.project.file.tracks[0].freeze = TrackFreezeState::unfrozen();
     l.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&l.rx);
-    l.app.test_begin_restore_from_snapshot(snapshot);
+    l.app.test_begin_full_restore_from_snapshot(snapshot);
     let cmds = drain(&l.rx);
     assert!(
         cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),

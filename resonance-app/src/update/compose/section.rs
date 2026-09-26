@@ -597,7 +597,7 @@ pub(crate) fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u6
         .derived_clips
         .retain(|(_, p, _), _| *p != placement_id);
     for clip_id in midi {
-        let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id });
+        crate::engine_events::midi::send_mirrored_delete(r, clip_id);
         r.midi_clips.retain(|c| c.id != clip_id);
         r.compose.vocal_audio.clip_lyrics.remove(&clip_id);
     }
@@ -616,7 +616,7 @@ pub(crate) fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u6
         .retain(|(_, p, _), _| *p != placement_id);
     let removed_audio = !audio.is_empty();
     for clip_id in audio {
-        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
+        crate::engine_events::clips::send_mirrored_delete(r, clip_id);
         r.clips.retain(|c| c.id != clip_id);
     }
     if removed_audio {

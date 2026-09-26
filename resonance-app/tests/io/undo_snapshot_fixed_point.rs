@@ -110,6 +110,11 @@ fn fixture(tag: &str, load: impl FnOnce(&mut Resonance, &Path)) -> Fixture {
 /// replay already pushed are untouched.
 fn echo_midi_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
     for cmd in drain(rx) {
+        // The engine echoes every MIDI delete (a re-derived slot is a
+        // delete + load under one id); the delete echo is owed (A-13i).
+        if let AudioCommand::DeleteMidiClip { clip_id } = &cmd {
+            app.test_apply_engine_event(AudioEvent::MidiClipDeleted { clip_id: *clip_id });
+        }
         if let AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
@@ -714,11 +719,11 @@ fn check_both_paths(mut f: Fixture) {
     assert_freeze_attached("fast path", &cmds, &snapshot.project.file);
     assert_fixed_point(&f, "fast path (try_diff_replay)", &snapshot);
 
-    // -- Slow path: an extra track forces the structural fallback. --
+    // -- Slow path: forced (since A-13i no shape falls back on its own). --
     edit_every_domain(&mut f, &h, 1);
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&f.rx);
-    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     let cmds = drain(&f.rx);
     assert!(
         cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
@@ -859,6 +864,11 @@ fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
 
     // The echo lands: the clip is now mirrored and still claimed.
     for cmd in pending_loads {
+        // The engine echoes every MIDI delete (a re-derived slot is a
+        // delete + load under one id); the delete echo is owed (A-13i).
+        if let AudioCommand::DeleteMidiClip { clip_id } = &cmd {
+            f.app.test_apply_engine_event(AudioEvent::MidiClipDeleted { clip_id: *clip_id });
+        }
         if let AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
@@ -888,7 +898,7 @@ fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
     // nothing will ever re-create it — the entry must not survive.
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&f.rx);
-    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
     assert_eq!(
         unmirrored_derived(&f.app),
@@ -971,7 +981,7 @@ fn vocal_lyric_shapes_restore_identically_through_both_paths() {
         f.app.test_set_clip_lyrics(clip, other.clone());
         f.app.test_add_track(9_999, TrackType::Audio);
         let _ = drain(&f.rx);
-        f.app.test_begin_restore_from_snapshot(snapshot.clone());
+        f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
         f.app.test_apply_engine_event(AudioEvent::AllCleared);
         let _ = drain(&f.rx);
         let slow = f.app.compose_state().vocal_audio.clip_lyrics.clone();
@@ -1038,7 +1048,7 @@ fn a_lyric_normalising_restore_leaves_a_frozen_vocal_track_frozen() {
     // Slow path.
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&f.rx);
-    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
     f.app.test_update(Message::Tick);
     assert!(frozen(&f.app), "slow path: the vocal track stays frozen");
@@ -1569,7 +1579,7 @@ fn freeze_states_restore_identically_through_both_paths() {
     edit_freeze(&mut f, &t);
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&f.rx);
-    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     let mut cmds = drain(&f.rx);
     assert!(
         cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
@@ -1903,7 +1913,7 @@ fn reference_content_restores_and_monitor_state_stays_through_both_paths() {
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = sync_refs(&f, &mut engine);
     let monitor = ref_monitor(&f.app);
-    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     let cmds = sync_refs(&f, &mut engine);
     assert!(
         cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
@@ -2078,7 +2088,7 @@ fn a6_derived_clips_restore_through_both_paths_across_a_section_resize() {
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&f.rx);
     let before = derived_counter(&f.app);
-    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     assert!(drain(&f.rx)
         .iter()
         .any(|c| matches!(c, AudioCommand::ClearAll)));
@@ -2131,6 +2141,11 @@ fn a6_a_pending_echo_entry_restores_through_both_paths() {
     let _ = drain(&f.rx);
     assert_eq!(derived_map(&f.app), at_snapshot, "fast path keeps the pending entry");
     for cmd in pending_loads {
+        // The engine echoes every MIDI delete (a re-derived slot is a
+        // delete + load under one id); the delete echo is owed (A-13i).
+        if let AudioCommand::DeleteMidiClip { clip_id } = &cmd {
+            f.app.test_apply_engine_event(AudioEvent::MidiClipDeleted { clip_id: *clip_id });
+        }
         if let AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
@@ -2161,7 +2176,7 @@ fn a6_a_pending_echo_entry_restores_through_both_paths() {
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&f.rx);
     let before = derived_counter(&f.app);
-    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
     let _ = drain(&f.rx);
     let expected: DerivedMap = at_snapshot

@@ -30,7 +30,7 @@ use std::collections::HashMap;
 
 use resonance_audio::types::*;
 
-use crate::project::{LoadedProject, ProjectClip, ProjectFile, ProjectMidiClip, ProjectTrack};
+use crate::project::{LoadedProject, ProjectClip, ProjectFile, ProjectMidiClip};
 use crate::Resonance;
 
 use super::reconcile::{reconcile_all_stages, LiveCarry, Origin, ReconcileCtx};
@@ -94,10 +94,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
 /// outer collections is normalised via id-sort before comparison so a
 /// re-ordering by `.order` alone does NOT force the slow path.
 pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
-    // Track set, sub-track linkage, track type.
-    if !track_set_matches(&a.tracks, &b.tracks) {
-        return false;
-    }
     // Audio + MIDI clip ids + clip→track binding (a clip that moved to a
     // different track is structural — we can `MoveClip` but the GUI
     // state needs more care; force fallback for safety).
@@ -121,8 +117,14 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     // the busses it lacks, the entity domains add what `a` lacks,
     // `PluginState` treats each added instance as a load does, and
     // `EntityOrder` moves every chain into `b`'s order (`MovePlugin*`).
-    // What is left is what the diff arms cannot add or remove yet: tracks
-    // and clips (A-13i).
+    // Nor (A-13i) tracks: `entities::kept_tracks` keeps a track whose id,
+    // type and sub-track link match (and whose parent is kept);
+    // `EntityRemovals` removes every other track of `a` (sub-tracks first),
+    // `Tracks` adds every other track of `b` (parents first) as a load
+    // does, and the domains that treat a track differently after a
+    // `ClearAll` (outputs, plugin state, external instruments, freeze,
+    // group macros) do so per fresh track. What is left is what the diff
+    // arms cannot add or remove yet: clips (A-13i).
     true
 }
 
@@ -136,26 +138,6 @@ where
     av.sort_unstable();
     bv.sort_unstable();
     av == bv
-}
-
-fn track_set_matches(a: &[ProjectTrack], b: &[ProjectTrack]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let by_id_b: HashMap<u64, &ProjectTrack> = b.iter().map(|t| (t.id, t)).collect();
-    for ta in a {
-        let Some(tb) = by_id_b.get(&ta.id) else {
-            return false;
-        };
-        // Track-shape changes that the fast path cannot fix:
-        if ta.track_type != tb.track_type {
-            return false;
-        }
-        if ta.sub_track != tb.sub_track {
-            return false;
-        }
-    }
-    true
 }
 
 fn audio_clip_set_matches(a: &[ProjectClip], b: &[ProjectClip]) -> bool {

@@ -104,9 +104,7 @@ pub(crate) fn install_derived_midi_clip(
     let key = (clip.definition_id, clip.placement_id, clip.track_id);
     let reused = r.compose.derived_clips.remove(&key);
     if let Some(old_id) = reused {
-        let _ = r
-            .engine
-            .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
+        crate::engine_events::midi::send_mirrored_delete(r, old_id);
         r.midi_clips.retain(|c| c.id != old_id);
     }
 
@@ -253,8 +251,6 @@ pub(crate) fn track_exists(r: &crate::Resonance, track_id: resonance_audio::type
 /// an undo of the delete restores the generators from the project
 /// snapshot.
 pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::types::TrackId) {
-    use resonance_audio::types::AudioCommand;
-
     for def in r.compose.definitions.iter_mut() {
         def.lane_generators.remove(&track_id);
     }
@@ -267,7 +263,7 @@ pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::
         .collect();
     r.compose.derived_clips.retain(|(_, _, t), _| *t != track_id);
     for clip_id in midi {
-        let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id });
+        crate::engine_events::midi::send_mirrored_delete(r, clip_id);
         r.midi_clips.retain(|c| c.id != clip_id);
         r.compose.vocal_audio.clip_lyrics.remove(&clip_id);
     }
@@ -286,7 +282,7 @@ pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::
     }
     audio.render_cache.retain(|(_, t), _| *t != track_id);
     for clip_id in audio_ids {
-        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
+        crate::engine_events::clips::send_mirrored_delete(r, clip_id);
         r.clips.retain(|c| c.id != clip_id);
     }
     r.compose.vocal_bulk_lyrics.retain(|(_, t), _| *t != track_id);

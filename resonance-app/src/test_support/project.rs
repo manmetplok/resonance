@@ -238,6 +238,16 @@ impl Resonance {
         self.begin_restore_from_snapshot(snapshot);
     }
 
+    /// Test-only: restore a snapshot through the undo's full path
+    /// (`ClearAll` → `AllCleared` → `replay_loaded_project`,
+    /// `Origin::UndoFull`) whatever its shape. Since ARCH-01 A-13i no
+    /// snapshot pair falls back on its own; this keeps the full path's
+    /// guards running until A-13j deletes it.
+    #[doc(hidden)]
+    pub fn test_begin_full_restore_from_snapshot(&mut self, snapshot: crate::undo::UndoSnapshot) {
+        self.restore_from_snapshot(snapshot, false);
+    }
+
     /// Test-only: route a message through the *full* `update()` entry,
     /// including the pre-dispatch gates and undo bookkeeping. Used by the
     /// frozen-input read-only gating tests (ba todo #576), which need the

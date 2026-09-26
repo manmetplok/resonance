@@ -14,7 +14,7 @@
 //! * `build_project_file` equals the target snapshot's file, and the whole
 //!   snapshot (notes included) is `same_state` — the fixed point.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use resonance_app::compose::messages::DrumGroupsMessage;
@@ -35,6 +35,9 @@ struct Fixture {
     app: Resonance,
     rx: Receiver<AudioCommand>,
     root: PathBuf,
+    /// The engine's sub-tracks, by parent (`CreateSubTrack` has no echo;
+    /// `RemoveTrack` of a parent answers for each one still under it).
+    subs: HashMap<u64, u64>,
 }
 
 impl Drop for Fixture {
@@ -56,10 +59,16 @@ fn fixture(tag: &str) -> Fixture {
 
     let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
     demo::seed_demo_content(&mut app);
-    echo_midi_clip_loads(&mut app, &rx);
-    app.test_set_active_project(true);
-    app.test_set_project_path(project);
-    Fixture { app, rx, root }
+    let mut f = Fixture {
+        app,
+        rx,
+        root,
+        subs: HashMap::new(),
+    };
+    echo_midi_clip_loads(&mut f);
+    f.app.test_set_active_project(true);
+    f.app.test_set_project_path(project);
+    f
 }
 
 fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
@@ -73,26 +82,86 @@ fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
 /// Answer every `LoadMidiClipDirect` with its `MidiClipCreated` echo, as
 /// the live engine does, and every other command below with its echo
 /// (the adds, removals and moves of busses and plugins, sends and key
-/// routes — A-13h). Until the engine goes quiet: an echo handler may send
-/// commands of its own (a bus removal's send cleanup).
-fn echo_midi_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
-    echo(app, rx, drain(rx));
+/// routes — A-13h; tracks and clips — A-13i). Until the engine goes
+/// quiet: an echo handler may send commands of its own (a bus removal's
+/// send cleanup, a multi-output instrument's sub-tracks).
+fn echo_midi_clip_loads(f: &mut Fixture) {
+    let cmds = drain(&f.rx);
+    echo(f, cmds);
 }
 
-fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, mut cmds: Vec<AudioCommand>) {
+fn echo(f: &mut Fixture, mut cmds: Vec<AudioCommand>) {
     while !cmds.is_empty() {
         for cmd in cmds {
-            if let Some(event) = echo_of(cmd) {
-                app.test_apply_engine_event(event);
+            for event in engine_answer(f, cmd) {
+                f.app.test_apply_engine_event(event);
             }
         }
-        cmds = drain(rx);
+        cmds = drain(&f.rx);
     }
 }
 
-/// The event the engine answers `cmd` with, for the commands these tests
-/// drive. The removals and moves are answered for any id, as the engine
-/// does.
+/// The engine's answer to `cmd`, with the little engine state these
+/// tests need: which sub-tracks sit under which parent, and an audio
+/// clip's length (the WAV's, which the load reports; the mirror has it).
+fn engine_answer(f: &mut Fixture, cmd: AudioCommand) -> Vec<AudioEvent> {
+    match cmd {
+        AudioCommand::CreateSubTrack {
+            sub_id,
+            parent_track_id,
+            ..
+        } => {
+            f.subs.insert(sub_id, parent_track_id);
+            Vec::new()
+        }
+        AudioCommand::RemoveTrack { track_id } => {
+            f.subs.remove(&track_id);
+            let mut subs: Vec<u64> = f
+                .subs
+                .iter()
+                .filter(|(_, parent)| **parent == track_id)
+                .map(|(sub, _)| *sub)
+                .collect();
+            subs.sort_unstable();
+            f.subs.retain(|_, parent| *parent != track_id);
+            std::iter::once(track_id)
+                .chain(subs)
+                .map(|track_id| AudioEvent::TrackRemoved { track_id })
+                .collect()
+        }
+        AudioCommand::LoadClipFromWav {
+            clip_id,
+            track_id,
+            start_sample,
+            name,
+            trim_start_frames,
+            trim_end_frames,
+            ..
+        } => {
+            let total = f
+                .app
+                .test_clips()
+                .iter()
+                .find(|c| c.id == clip_id)
+                .map_or(0, |c| c.total_frames);
+            vec![AudioEvent::ClipImported {
+                clip_id,
+                track_id,
+                start_sample,
+                duration_samples: total
+                    .saturating_sub(trim_start_frames)
+                    .saturating_sub(trim_end_frames),
+                name,
+                waveform_peaks: Vec::new(),
+            }]
+        }
+        other => echo_of(other).into_iter().collect(),
+    }
+}
+
+/// The event the engine answers `cmd` with, for the stateless commands
+/// these tests drive. The removals and moves are answered for any id, as
+/// the engine does.
 fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
     // Every fake plugin has one parameter, at its default.
     let plugin_params = || {
@@ -139,18 +208,22 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
             clap_file_path,
             clap_plugin_id,
             id,
-        } => AudioEvent::PluginAdded {
-            track_id,
-            instance_id: id,
-            plugin_name: clap_plugin_id.clone(),
-            clap_plugin_id,
-            clap_file_path,
-            params: plugin_params(),
-            has_gui: false,
-            has_sidechain_input: true,
-            output_port_count: 1,
-            output_port_names: vec!["Main".to_owned()],
-        },
+        } => {
+            // A "multi" plugin has three outputs: two sub-tracks.
+            let ports = if clap_plugin_id.contains("multi") { 3 } else { 1 };
+            AudioEvent::PluginAdded {
+                track_id,
+                instance_id: id,
+                plugin_name: clap_plugin_id.clone(),
+                clap_plugin_id,
+                clap_file_path,
+                params: plugin_params(),
+                has_gui: false,
+                has_sidechain_input: true,
+                output_port_count: ports,
+                output_port_names: (0..ports).map(|p| format!("Out {p}")).collect(),
+            }
+        }
         AudioCommand::AddPluginToBus {
             bus_id,
             clap_file_path,
@@ -267,6 +340,13 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
             source: None,
             enabled: false,
         },
+        AudioCommand::AddTrack { id, .. } => AudioEvent::TrackAdded { track_id: id },
+        AudioCommand::AddInstrumentTrack { id, .. } => {
+            AudioEvent::InstrumentTrackAdded { track_id: id }
+        }
+        AudioCommand::AddVocalTrack { id, .. } => AudioEvent::VocalTrackAdded { track_id: id },
+        AudioCommand::DeleteClip { clip_id } => AudioEvent::ClipDeleted { clip_id },
+        AudioCommand::DeleteMidiClip { clip_id } => AudioEvent::MidiClipDeleted { clip_id },
         _ => return None,
     })
 }
@@ -275,7 +355,7 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
 fn edit(f: &mut Fixture, msg: Message) -> UndoSnapshot {
     let depth = f.app.test_undo_history().undo_len();
     let _ = f.app.update(msg);
-    echo_midi_clip_loads(&mut f.app, &f.rx);
+    echo_midi_clip_loads(f);
     assert_eq!(
         f.app.test_undo_history().undo_len(),
         depth + 1,
@@ -949,7 +1029,7 @@ fn loading_a_saved_group_macro_mute_sends_effective_member_mute() {
 /// and owes the engine nothing: the echoes of its own adds, removals and
 /// moves change nothing.
 fn settle(f: &mut Fixture, cmds: Vec<AudioCommand>, target: &UndoSnapshot, what: &str) {
-    echo(&mut f.app, &f.rx, cmds);
+    echo(f, cmds);
     assert_eq!(
         f.app.test_build_project_file(),
         target.project.file,
@@ -1477,4 +1557,530 @@ fn a_re_added_plugins_params_follow_a_second_restore_before_its_echo() {
     late.extend(step_lands_on(&mut f, Message::Undo, &turned_up, "undo remove"));
     late.extend(step_lands_on(&mut f, Message::Undo, &added, "undo param"));
     settle(&mut f, late, &added, "undo remove, undo param, then the echoes");
+}
+
+// ---------------------------------------------------------------------------
+// Tracks (A-13i)
+// ---------------------------------------------------------------------------
+
+fn track_ids(app: &Resonance) -> HashSet<u64> {
+    app.test_registry().tracks.iter().map(|t| t.id).collect()
+}
+
+/// Apply a recorded edit that adds exactly one top-level track; return
+/// the snapshot it left and the new track's id.
+fn add_track(f: &mut Fixture, msg: Message) -> (UndoSnapshot, u64) {
+    let before = track_ids(&f.app);
+    let s = edit(f, msg);
+    let added: Vec<u64> = track_ids(&f.app)
+        .difference(&before)
+        .copied()
+        .filter(|id| {
+            f.app
+                .test_registry()
+                .tracks
+                .iter()
+                .any(|t| t.id == *id && t.sub_track.is_none())
+        })
+        .collect();
+    assert_eq!(added.len(), 1, "the edit added one track: {added:?}");
+    (s, added[0])
+}
+
+/// The GUI delete of an empty track (no confirmation, one undo entry).
+fn delete_track(f: &mut Fixture, track_id: u64) -> UndoSnapshot {
+    edit(f, Message::Track(TrackMessage::RequestRemoveTrack(track_id)))
+}
+
+/// What `replay_track` sends after the add command for a default track
+/// (`mono` differs by type), before its plugins.
+fn default_track_scalars(t: u64, mono: bool) -> Vec<String> {
+    vec![
+        format!("SetTrackVolume {{ track_id: {t}, volume: 1.0 }}"),
+        format!("SetTrackPan {{ track_id: {t}, pan: 0.0 }}"),
+        format!("SetTrackMute {{ track_id: {t}, muted: false }}"),
+        format!("SetTrackSolo {{ track_id: {t}, soloed: false }}"),
+        format!("SetTrackRecordArm {{ track_id: {t}, armed: false }}"),
+        format!("SetTrackMonitor {{ track_id: {t}, enabled: false }}"),
+        format!("SetTrackPlaybackSource {{ track_id: {t}, source: Live }}"),
+        format!("SetTrackMono {{ track_id: {t}, mono: {mono} }}"),
+        format!("SetTrackFxBypass {{ track_id: {t}, bypassed: false }}"),
+        format!("SetTrackInputPort {{ track_id: {t}, port_index: 0 }}"),
+    ]
+}
+
+fn wrap(inner: Vec<String>) -> Vec<String> {
+    ["PersistClipWavs".to_owned(), TEMPO.to_owned()]
+        .into_iter()
+        .chain(inner)
+        .chain([NO_TAKES.to_owned()])
+        .collect()
+}
+
+/// `before` → add → `added` → delete → `deleted`, then every undo and
+/// redo over the two edits, each settled. Returns the four steps'
+/// commands (undo delete, undo add, redo add, redo delete).
+fn track_add_delete_walk(
+    f: &mut Fixture,
+    before: &UndoSnapshot,
+    added: &UndoSnapshot,
+    deleted: &UndoSnapshot,
+) -> [Vec<String>; 4] {
+    let a = step_lands_on(f, Message::Undo, added, "undo track delete");
+    let a_sent = sent(&a);
+    settle(f, a, added, "undo track delete");
+    let b = step_lands_on(f, Message::Undo, before, "undo track add");
+    let b_sent = sent(&b);
+    settle(f, b, before, "undo track add");
+    let c = step_lands_on(f, Message::Redo, added, "redo track add");
+    let c_sent = sent(&c);
+    settle(f, c, added, "redo track add");
+    let d = step_lands_on(f, Message::Redo, deleted, "redo track delete");
+    let d_sent = sent(&d);
+    settle(f, d, deleted, "redo track delete");
+    [a_sent, b_sent, c_sent, d_sent]
+}
+
+/// A GUI audio-track add, then its delete: undo re-adds it under its id
+/// (the add command, every scalar, nothing else), undo again removes it,
+/// and the redos do the same — no `ClearAll`, nothing else touched.
+#[test]
+fn adding_and_removing_an_audio_track_undoes_through_the_diff_path() {
+    let mut f = fixture("audio-track");
+    let s0 = f.app.test_snapshot_for_undo();
+    let (s1, t) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    let s2 = delete_track(&mut f, t);
+    let [undo_delete, undo_add, redo_add, redo_delete] = track_add_delete_walk(&mut f, &s0, &s1, &s2);
+    let add = wrap(
+        std::iter::once(format!("AddTrack {{ id: {t}, name: Some(\"Track {t}\") }}"))
+            .chain(default_track_scalars(t, true))
+            .collect(),
+    );
+    let remove = wrap(vec![format!("RemoveTrack {{ track_id: {t} }}")]);
+    assert_eq!(undo_delete, add, "undo track delete: the add, every scalar");
+    assert_eq!(undo_add, remove, "undo track add: that track only");
+    assert_eq!(redo_add, add, "redo track add");
+    assert_eq!(redo_delete, remove, "redo track delete");
+}
+
+#[test]
+fn adding_and_removing_a_vocal_track_undoes_through_the_diff_path() {
+    let mut f = fixture("vocal-track");
+    let s0 = f.app.test_snapshot_for_undo();
+    let (s1, t) = add_track(&mut f, Message::Track(TrackMessage::AddVocalTrack));
+    let s2 = delete_track(&mut f, t);
+    let [undo_delete, undo_add, ..] = track_add_delete_walk(&mut f, &s0, &s1, &s2);
+    assert!(
+        undo_delete[2].starts_with(&format!("AddVocalTrack {{ id: {t},")),
+        "undo vocal track delete re-adds a vocal track: {undo_delete:?}"
+    );
+    assert_eq!(undo_add, wrap(vec![format!("RemoveTrack {{ track_id: {t} }}")]));
+}
+
+/// An instrument track carrying a plugin (gain up, bypassed) and a send:
+/// undoing its delete re-adds the track, then the plugin as a load does
+/// (blob-less, bypass after the add, param parked for the echo), then the
+/// send once the track exists. Undoing the add removes the track whole —
+/// its send first, its plugin with it (no per-plugin command).
+#[test]
+fn adding_and_removing_an_instrument_track_with_plugins_and_sends_undoes_through_the_diff_path() {
+    let mut f = fixture("instrument-track");
+    let s0 = f.app.test_snapshot_for_undo();
+    let (_, t) = add_track(&mut f, Message::Track(TrackMessage::AddInstrumentTrack));
+    let _ = edit(&mut f, add_to(TestChain::Track(t), scanned("synth")));
+    let synth = chain_ids(&f.app, TestChain::Track(t))[0];
+    let _ = edit(&mut f, Message::Plugin(PluginMessage::SetPluginParam(synth, GAIN, 0.5)));
+    let _ = edit(
+        &mut f,
+        Message::Plugin(PluginMessage::SetPluginBypass {
+            instance_id: synth,
+            bypassed: true,
+        }),
+    );
+    let s_full = edit(
+        &mut f,
+        Message::Mixer(MixerMessage::AddSend {
+            source: SendSource::Track(t),
+            dest: DRUM_BUS,
+        }),
+    );
+    let send = s_full.project.file.sends[0].id;
+    let s_deleted = delete_track(&mut f, t);
+    assert!(s_deleted.project.file.sends.is_empty(), "the delete took its send");
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &s_full, "undo instrument track delete");
+    assert_eq!(
+        sent(&cmds),
+        wrap(
+            std::iter::once(format!("AddInstrumentTrack {{ id: {t}, name: Some(\"Instrument {t}\") }}"))
+                .chain(default_track_scalars(t, false))
+                .chain([
+                    add_cmd(TestChain::Track(t), synth, "synth"),
+                    format!("SetPluginBypass {{ instance_id: {synth}, bypassed: true }}"),
+                    format!(
+                        "AddAuxSend {{ id: {send}, source: Track({t}), dest: {DRUM_BUS}, \
+                         level_db: 0.0, pre_fader: false, enabled: true }}"
+                    ),
+                ])
+                .collect()
+        ),
+        "undo instrument track delete: track, plugin, bypass, send"
+    );
+    settle(&mut f, cmds, &s_full, "undo instrument track delete");
+
+    let cmds = step_lands_on(&mut f, Message::Redo, &s_deleted, "redo instrument track delete");
+    assert_eq!(
+        sent(&cmds),
+        wrap(vec![
+            format!("RemoveAuxSend {{ send_id: {send} }}"),
+            format!("RemoveTrack {{ track_id: {t} }}"),
+        ]),
+        "redo instrument track delete: the send, then the track and its chain"
+    );
+    settle(&mut f, cmds, &s_deleted, "redo instrument track delete");
+
+    // Undo back over every edit to before the track add, then redo.
+    let _ = s0;
+}
+
+fn sub_tracks_of(app: &Resonance, parent: u64) -> Vec<u64> {
+    let mut subs: Vec<u64> = app
+        .test_registry()
+        .tracks
+        .iter()
+        .filter(|t| t.sub_track.is_some_and(|l| l.parent_track_id == parent))
+        .map(|t| t.id)
+        .collect();
+    subs.sort_unstable();
+    subs
+}
+
+/// A multi-output instrument makes its sub-tracks on its `PluginAdded`
+/// echo (`ensure_subtracks`). A restore that re-adds the instrument
+/// together with its sub-tracks adds the sub-tracks itself, under their
+/// saved ids, before that echo — which then finds every (parent, port)
+/// taken and adds none (`settle` would see a duplicate in the file). The
+/// plugin's removal with the parent kept removes the sub-tracks one by
+/// one; the parent's removal takes the sub-tracks first, each by its own
+/// `RemoveTrack`.
+#[test]
+fn a_sub_track_producing_instrument_undoes_through_the_diff_path() {
+    let mut f = fixture("sub-tracks");
+    let s0 = f.app.test_snapshot_for_undo();
+    let (s1, t) = add_track(&mut f, Message::Track(TrackMessage::AddInstrumentTrack));
+    let s2 = edit(&mut f, add_to(TestChain::Track(t), scanned("multi")));
+    let multi = chain_ids(&f.app, TestChain::Track(t))[0];
+    let subs = sub_tracks_of(&f.app, t);
+    assert_eq!(subs.len(), 2, "the echo made two sub-tracks");
+    let s3 = delete_track(&mut f, t);
+    assert!(sub_tracks_of(&f.app, t).is_empty(), "the delete took them");
+
+    // Undo the delete: parent, its plugin, then the sub-tracks.
+    let cmds = step_lands_on(&mut f, Message::Undo, &s2, "undo instrument delete");
+    let sent_cmds = sent(&cmds);
+    let creates: Vec<&String> = sent_cmds
+        .iter()
+        .filter(|c| c.starts_with("CreateSubTrack"))
+        .collect();
+    assert_eq!(creates.len(), 2, "both sub-tracks re-added: {sent_cmds:?}");
+    let add_parent = sent_cmds
+        .iter()
+        .position(|c| c.starts_with("AddInstrumentTrack"))
+        .expect("the parent is re-added");
+    let first_sub = sent_cmds
+        .iter()
+        .position(|c| c.starts_with("CreateSubTrack"))
+        .expect("a sub-track is re-added");
+    assert!(add_parent < first_sub, "parent before its sub-tracks");
+    for sub in &subs {
+        assert!(
+            sent_cmds.iter().any(|c| c.starts_with(&format!("CreateSubTrack {{ sub_id: {sub},"))),
+            "sub-track {sub} keeps its id"
+        );
+    }
+    settle(&mut f, cmds, &s2, "undo instrument delete (the echo adds no sub-track)");
+    assert_eq!(sub_tracks_of(&f.app, t), subs);
+
+    // Undo the plugin add: the plugin and both sub-tracks go, the parent
+    // stays.
+    let cmds = step_lands_on(&mut f, Message::Undo, &s1, "undo multi-out plugin add");
+    assert_eq!(
+        sent(&cmds),
+        wrap(vec![
+            remove_cmd(TestChain::Track(t), multi),
+            format!("RemoveTrack {{ track_id: {} }}", subs[0]),
+            format!("RemoveTrack {{ track_id: {} }}", subs[1]),
+        ]),
+        "undo multi-out plugin add: the plugin, then its sub-tracks"
+    );
+    settle(&mut f, cmds, &s1, "undo multi-out plugin add");
+
+    // Undo the track add, then redo all three.
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo instrument add");
+    settle(&mut f, cmds, &s0, "undo instrument add");
+    for (target, what) in [(&s1, "redo instrument add"), (&s2, "redo multi-out plugin add")] {
+        let cmds = step_lands_on(&mut f, Message::Redo, target, what);
+        settle(&mut f, cmds, target, what);
+    }
+    assert_eq!(sub_tracks_of(&f.app, t), subs, "the redo re-added the same sub-tracks");
+    let cmds = step_lands_on(&mut f, Message::Redo, &s3, "redo instrument delete");
+    assert_eq!(
+        sent(&cmds),
+        wrap(vec![
+            format!("RemoveTrack {{ track_id: {} }}", subs[0]),
+            format!("RemoveTrack {{ track_id: {} }}", subs[1]),
+            format!("RemoveTrack {{ track_id: {t} }}"),
+        ]),
+        "redo instrument delete: sub-tracks first, then the parent with its chain"
+    );
+    settle(&mut f, cmds, &s3, "redo instrument delete");
+}
+
+/// An external-instrument track: re-added with its config
+/// (`SetExternalInstrument`), and — fresh, like after a `ClearAll` — no
+/// empty `SetTrackDeviceParams` when no device is selected. Removed, its
+/// config is cleared on the engine.
+#[test]
+fn adding_and_removing_an_external_instrument_track_undoes_through_the_diff_path() {
+    let mut f = fixture("external-track");
+    let s0 = f.app.test_snapshot_for_undo();
+    let (s1, t) = add_track(&mut f, Message::Track(TrackMessage::AddExternalInstrumentTrack));
+    assert!(
+        s1.project.file.tracks.iter().any(|pt| pt.id == t && pt.external_instrument.is_some()),
+        "the add made an external track"
+    );
+    let s2 = delete_track(&mut f, t);
+    let [undo_delete, undo_add, ..] = track_add_delete_walk(&mut f, &s0, &s1, &s2);
+    assert!(
+        undo_delete.iter().any(|c| c.starts_with(&format!(
+            "SetExternalInstrument {{ config: ExternalInstrument {{ track_id: {t},"
+        ))),
+        "undo delete restores the external config: {undo_delete:?}"
+    );
+    assert!(
+        !undo_delete.iter().any(|c| c.starts_with("SetTrackDeviceParams")),
+        "a fresh external track with no device gets no device params: {undo_delete:?}"
+    );
+    assert!(
+        undo_add.contains(&format!("ClearExternalInstrument {{ track_id: {t} }}")),
+        "undo add clears the removed track's config: {undo_add:?}"
+    );
+    assert_eq!(f.app.test_external_instrument(t).is_some(), false);
+}
+
+/// A frozen track re-added by a restore holds no frozen source on the
+/// engine, whatever the live status said: its cache is decoded and
+/// attached, as after a `ClearAll` (per fresh track, not per restore).
+#[test]
+fn a_re_added_frozen_track_gets_its_cache_attached() {
+    use resonance_app::state::FreezeStatus;
+    use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
+
+    let mut f = fixture("frozen-track");
+    let (_, t) = add_track(&mut f, Message::Track(TrackMessage::AddInstrumentTrack));
+    let cache = f.root.join("fixture.freeze").join(format!("freeze_{t}.wav"));
+    crate::common::write_freeze_cache_wav(&cache);
+    f.app.test_set_freeze_status(
+        t,
+        FreezeStatus::Frozen {
+            cache_ref: FreezeCacheRef::new(
+                format!("freeze_{t}.wav"),
+                48_000,
+                32,
+                1,
+                FreezeCacheStatus::Frozen,
+            ),
+        },
+    );
+    let frozen = f.app.test_snapshot_for_undo();
+    let deleted = delete_track(&mut f, t);
+    assert!(!cache.exists(), "the live delete deleted the cache");
+    // A re-render leaves the cache back on disk.
+    crate::common::write_freeze_cache_wav(&cache);
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &frozen, "undo frozen track delete");
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::SetTrackFrozenSource { track_id, source: Some(_) } if *track_id == t
+        )),
+        "the re-added track plays its cache"
+    );
+    assert!(matches!(f.app.test_freeze_status(t), FreezeStatus::Frozen { .. }));
+    settle(&mut f, cmds, &frozen, "undo frozen track delete");
+
+    let cmds = step_lands_on(&mut f, Message::Redo, &deleted, "redo frozen track delete");
+    assert!(
+        cmds.iter().any(|c| matches!(c, AudioCommand::UnfreezeTrack { track_id } if *track_id == t)),
+        "the removed frozen track's source is detached"
+    );
+    assert_eq!(f.app.test_freeze_status(t), FreezeStatus::Idle);
+    settle(&mut f, cmds, &deleted, "redo frozen track delete");
+}
+
+/// A track whose type changed under the same id (a hand-made snapshot —
+/// no edit does it) is removed and re-added, as the full replay did.
+#[test]
+fn a_track_type_change_is_a_remove_and_an_add() {
+    let mut f = fixture("track-retype");
+    let (audio, t) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    let mut retyped = audio.clone();
+    let pt = retyped
+        .project
+        .file
+        .tracks
+        .iter_mut()
+        .find(|pt| pt.id == t)
+        .expect("the track");
+    pt.track_type = "instrument".to_owned();
+    pt.mono = false;
+
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(retyped.clone());
+    let cmds = drain(&f.rx);
+    let sent_cmds = sent(&cmds);
+    assert!(!cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)));
+    let remove = sent_cmds
+        .iter()
+        .position(|c| *c == format!("RemoveTrack {{ track_id: {t} }}"))
+        .expect("the old track goes");
+    let add = sent_cmds
+        .iter()
+        .position(|c| c.starts_with(&format!("AddInstrumentTrack {{ id: {t},")))
+        .expect("an instrument track comes back under the id");
+    assert!(remove < add, "removed before the re-add: {sent_cmds:?}");
+    assert_eq!(f.app.test_build_project_file(), retyped.project.file);
+    settle(&mut f, cmds, &retyped, "retype");
+
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(audio.clone());
+    let cmds = drain(&f.rx);
+    assert_eq!(f.app.test_build_project_file(), audio.project.file);
+    settle(&mut f, cmds, &audio, "retype back");
+}
+
+/// The echoes of one restore land after the next ran (a held Ctrl+Z):
+/// `TrackRemoved` for a track the redo put back must not delete it, and
+/// the `*TrackAdded` of a track the undo removed again must not bring it
+/// back — for a plain track and for one with sub-tracks, whose
+/// `PluginAdded` must not make sub-tracks on a removed parent.
+#[test]
+fn a_track_restore_survives_the_previous_restores_late_echoes() {
+    let mut f = fixture("track-late-echo");
+    let s0 = f.app.test_snapshot_for_undo();
+    let (s1, _) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    let (s2, t) = add_track(&mut f, Message::Track(TrackMessage::AddInstrumentTrack));
+    let s3 = edit(&mut f, add_to(TestChain::Track(t), scanned("multi")));
+    let s4 = delete_track(&mut f, t);
+
+    let mut late = Vec::new();
+    late.extend(step_lands_on(&mut f, Message::Undo, &s3, "undo delete"));
+    late.extend(step_lands_on(&mut f, Message::Redo, &s4, "redo delete"));
+    late.extend(step_lands_on(&mut f, Message::Undo, &s3, "undo delete again"));
+    settle(&mut f, late, &s3, "delete undone, redone, undone, then the echoes");
+
+    let mut late = Vec::new();
+    for (target, what) in [(&s2, "undo plugin"), (&s1, "undo instrument add"), (&s0, "undo add")] {
+        late.extend(step_lands_on(&mut f, Message::Undo, target, what));
+    }
+    for (target, what) in [(&s1, "redo add"), (&s2, "redo instrument add")] {
+        late.extend(step_lands_on(&mut f, Message::Redo, target, what));
+    }
+    late.extend(step_lands_on(&mut f, Message::Undo, &s1, "undo instrument add again"));
+    settle(&mut f, late, &s1, "a burst of track undos and redos, then the echoes");
+}
+
+/// The live delete mirrors at once (STATE-10) and owes its echo: an undo
+/// before that echo re-adds the track under its id, and the late
+/// `TrackRemoved` of the delete must not remove it again.
+#[test]
+fn undoing_a_track_delete_before_its_echo_keeps_the_track() {
+    let mut f = fixture("track-delete-early-undo");
+    let (added, t) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Track(TrackMessage::RequestRemoveTrack(t)));
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &added, "undo delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &added, "the delete's echo, then the undo's");
+    assert!(track_ids(&f.app).contains(&t));
+}
+
+/// FU-A13a for a re-added member: the entity domain adds the track with
+/// its own mute, and `TrackGroups` then sends the effective one while the
+/// group's macro mute holds.
+#[test]
+fn a_re_added_group_member_gets_its_effective_mute() {
+    let mut f = fixture("group-member-readd");
+    let (_, a) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    let (_, b) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    f.app.test_set_selected_tracks(vec![a, b]);
+    let _ = edit(&mut f, Message::Group(GroupMessage::CreateGroupFromSelection));
+    let group = f
+        .app
+        .test_track_groups()
+        .get_all_groups()
+        .into_iter()
+        .map(|g| g.id)
+        .max()
+        .expect("the group");
+    let muted = edit(&mut f, Message::Group(GroupMessage::ToggleMacroMute(group)));
+    let _ = delete_track(&mut f, b);
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &muted, "undo member delete");
+    assert_eq!(
+        last_mute(&cmds, b),
+        Some(true),
+        "the re-added member plays muted while the group's macro mute holds"
+    );
+    settle(&mut f, cmds, &muted, "undo member delete");
+}
+
+/// A lane on a deleted track (the live delete clears it on the engine)
+/// comes back with the track.
+#[test]
+fn a_re_added_tracks_automation_lane_is_sent_again() {
+    use resonance_app::message::AutomationMessage;
+    use resonance_common::{AutomationTarget, CurveKind};
+
+    let mut f = fixture("track-lane-readd");
+    let (_, t) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    let target = AutomationTarget::TrackGain(t);
+    let laned = edit(
+        &mut f,
+        Message::Automation(AutomationMessage::AddBreakpoint {
+            target: target.clone(),
+            time_frames: 0,
+            value: 0.5,
+            curve: CurveKind::Linear,
+        }),
+    );
+    let _ = delete_track(&mut f, t);
+    let cmds = step_lands_on(&mut f, Message::Undo, &laned, "undo laned track delete");
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::SetAutomationLane { lane } if lane.target == target
+        )),
+        "the lane is sent again"
+    );
+    settle(&mut f, cmds, &laned, "undo laned track delete");
+}
+
+/// A restore that removes a track drops every piece of transient UI that
+/// names it; the track id is never handed out again (D-4).
+#[test]
+fn undoing_a_track_add_drops_its_selection_and_never_reissues_its_id() {
+    let mut f = fixture("track-selection");
+    let s0 = f.app.test_snapshot_for_undo();
+    let (_, t) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    f.app.test_set_selected_tracks(vec![t]);
+    assert_eq!(f.app.test_selected_track(), Some(t));
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo track add");
+    settle(&mut f, cmds, &s0, "undo track add");
+    assert_eq!(f.app.test_selected_track(), None);
+    assert!(f.app.test_selected_tracks().is_empty());
+
+    let (_, again) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+    assert_ne!(again, t, "the undone add's id is not reissued");
 }

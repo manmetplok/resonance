@@ -102,6 +102,11 @@ fn frozen_generated_track() -> (Resonance, Receiver<AudioCommand>, resonance_con
 fn echo_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
     let loads: Vec<AudioCommand> = rx.try_iter().collect();
     for cmd in loads {
+        // The engine echoes every MIDI delete (a re-derived slot is a
+        // delete + load under one id); the delete echo is owed (A-13i).
+        if let AudioCommand::DeleteMidiClip { clip_id } = &cmd {
+            app.test_apply_engine_event(AudioEvent::MidiClipDeleted { clip_id: *clip_id });
+        }
         if let AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
@@ -205,7 +210,8 @@ fn a_full_replay_undo_keeps_the_frozen_content_baseline() {
     let snapshot = app.test_snapshot_for_undo();
     app.test_add_track(99, TrackType::Audio);
     let _ = rx.try_iter().count();
-    app.test_begin_restore_from_snapshot(snapshot);
+    // Forced: since A-13i no shape falls back on its own.
+    app.test_begin_full_restore_from_snapshot(snapshot);
     assert!(
         rx.try_iter().any(|c| matches!(c, AudioCommand::ClearAll)),
         "a structural undo takes the full replay"

@@ -172,11 +172,22 @@ pub struct ProjectIoState {
 ///
 /// Counts, not flags: an id can be removed by two restores before either
 /// echo lands (remove, re-add, remove).
+///
+/// Since A-13i the same ledger covers tracks (`TrackRemoved`), audio clips
+/// (`ClipDeleted`) and MIDI clips (`MidiClipDeleted`), and not only for a
+/// restore: every live edit that mirrors a track or clip deletion at once
+/// (STATE-10) owes its echo here too. Before A-13i an undo of such an edit
+/// went through `ClearAll`, whose `AllCleared` arrived after the echo; now
+/// the diff restore re-adds the entity under the same id at once, and the
+/// late echo of the live delete would remove it again.
 #[derive(Debug, Default)]
 pub struct RestoreEchoes {
     removed_busses: std::collections::HashMap<resonance_audio::types::BusId, u32>,
     removed_plugins: std::collections::HashMap<resonance_audio::types::PluginInstanceId, u32>,
     moves: std::collections::HashMap<(resonance_audio::types::PluginInstanceId, usize), u32>,
+    removed_tracks: std::collections::HashMap<resonance_audio::types::TrackId, u32>,
+    deleted_clips: std::collections::HashMap<resonance_audio::types::ClipId, u32>,
+    deleted_midi_clips: std::collections::HashMap<resonance_audio::types::ClipId, u32>,
 }
 
 fn owe<K: std::hash::Hash + Eq>(map: &mut std::collections::HashMap<K, u32>, key: K) {
@@ -241,9 +252,63 @@ impl RestoreEchoes {
         settle(&mut self.moves, (id, to_index))
     }
 
+    /// `RemoveTrack` was sent and mirrored (by a restore or a live delete).
+    /// The engine answers with one `TrackRemoved` for the track and one for
+    /// each sub-track it still held under it; each is owed separately.
+    pub fn expect_track_removed(&mut self, track_id: resonance_audio::types::TrackId) {
+        owe(&mut self.removed_tracks, track_id);
+    }
+
+    /// A `TrackRemoved` echo arrived: `true` when it was owed (the caller
+    /// then ignores it).
+    pub fn settle_track_removed(&mut self, track_id: resonance_audio::types::TrackId) -> bool {
+        settle(&mut self.removed_tracks, track_id)
+    }
+
+    /// This track's removal echo has not arrived yet: an echo naming it
+    /// that arrives now describes the instance already removed (FIFO).
+    pub fn track_removal_owed(&self, track_id: resonance_audio::types::TrackId) -> bool {
+        self.removed_tracks.contains_key(&track_id)
+    }
+
+    /// `DeleteClip` was sent and mirrored.
+    pub fn expect_clip_deleted(&mut self, clip_id: resonance_audio::types::ClipId) {
+        owe(&mut self.deleted_clips, clip_id);
+    }
+
+    /// A `ClipDeleted` echo arrived: `true` when it was owed.
+    pub fn settle_clip_deleted(&mut self, clip_id: resonance_audio::types::ClipId) -> bool {
+        settle(&mut self.deleted_clips, clip_id)
+    }
+
+    /// This audio clip's deletion echo has not arrived yet.
+    pub fn clip_deletion_owed(&self, clip_id: resonance_audio::types::ClipId) -> bool {
+        self.deleted_clips.contains_key(&clip_id)
+    }
+
+    /// `DeleteMidiClip` was sent and mirrored.
+    pub fn expect_midi_clip_deleted(&mut self, clip_id: resonance_audio::types::ClipId) {
+        owe(&mut self.deleted_midi_clips, clip_id);
+    }
+
+    /// A `MidiClipDeleted` echo arrived: `true` when it was owed.
+    pub fn settle_midi_clip_deleted(&mut self, clip_id: resonance_audio::types::ClipId) -> bool {
+        settle(&mut self.deleted_midi_clips, clip_id)
+    }
+
+    /// This MIDI clip's deletion echo has not arrived yet.
+    pub fn midi_clip_deletion_owed(&self, clip_id: resonance_audio::types::ClipId) -> bool {
+        self.deleted_midi_clips.contains_key(&clip_id)
+    }
+
     /// Nothing is owed.
     pub fn is_empty(&self) -> bool {
-        self.removed_busses.is_empty() && self.removed_plugins.is_empty() && self.moves.is_empty()
+        self.removed_busses.is_empty()
+            && self.removed_plugins.is_empty()
+            && self.moves.is_empty()
+            && self.removed_tracks.is_empty()
+            && self.deleted_clips.is_empty()
+            && self.deleted_midi_clips.is_empty()
     }
 }
 

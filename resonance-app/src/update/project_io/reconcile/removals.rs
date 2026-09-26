@@ -15,7 +15,8 @@
 //!    rule of A-13e (a replacement edge is cycle-checked against a graph
 //!    without the edge it replaces) holds for the whole restore this way.
 //! 2. [`EntityRemovals`] — every plugin instance `new` does not keep
-//!    (`entities::kept_plugins`), then every bus `new` lacks.
+//!    (`entities::kept_plugins`), then every track it does not keep
+//!    (`entities::kept_tracks`, A-13i), then every bus `new` lacks.
 //!
 //! Removing before adding also lets an instance whose chain or identity
 //! changed be removed and re-added under the same id: the engine refuses
@@ -27,25 +28,32 @@
 
 use std::collections::HashSet;
 
-use resonance_audio::types::{AudioCommand, BusId, PluginInstanceId, SendSource};
+use resonance_audio::types::{AudioCommand, BusId, PluginInstanceId, SendSource, TrackId};
 
-use super::entities::{kept_plugins, plugin_owners};
+use super::entities::{kept_plugins, kept_tracks, plugin_owners};
 use super::{Reconcile, ReconcileCtx};
-use crate::project::ProjectFile;
+use crate::project::{send_source_from_tag, ProjectFile, ProjectTrack};
 use crate::state::PluginLocator;
 use crate::Resonance;
 
 /// The key routes of `old` a diff restore keeps: the target plugin is kept
-/// (same instance, same chain) and `new` still keys it. Every other route
-/// of `old` is cleared by [`RoutingRemovals`]; `routing::SidechainRoutes`
-/// compares only these against `new`, so a route onto a re-added instance
-/// is set again.
+/// (same instance, same chain), `new` still keys it, and its source is not
+/// a track the restore removes (A-13i: the engine's `RemoveTrack` drops
+/// every route keyed off the track, so one onto a re-added track must be
+/// set again). Every other route of `old` is cleared by
+/// [`RoutingRemovals`]; `routing::SidechainRoutes` compares only these
+/// against `new`, so a route onto a re-added instance is set again.
 pub(super) fn kept_route_plugins(old: &ProjectFile, new: &ProjectFile) -> HashSet<PluginInstanceId> {
     let kept = kept_plugins(Some(old), new);
+    let tracks = kept_tracks(Some(old), new);
     let keyed: HashSet<PluginInstanceId> =
         new.sidechain_routes.iter().map(|route| route.plugin_instance_id).collect();
     old.sidechain_routes
         .iter()
+        .filter(|route| match send_source_from_tag(&route.source_kind, route.source_id) {
+            Some(SendSource::Track(track_id)) => tracks.contains(&track_id),
+            _ => true,
+        })
         .map(|route| route.plugin_instance_id)
         .filter(|id| kept.contains(id) && keyed.contains(id))
         .collect()
@@ -88,15 +96,26 @@ impl Reconcile for RoutingRemovals {
     }
 }
 
-/// The plugin instances and busses a diff restore removes.
+/// The plugin instances, tracks and busses a diff restore removes.
 ///
 /// * After a `ClearAll`: nothing.
 /// * Diff, in `old`'s chain order: every instance `new` does not keep
 ///   goes (`RemovePlugin` / `RemovePluginFromBus` /
-///   `RemovePluginFromMaster`) — except one on a bus that goes too, which
-///   `RemoveBus` drops with the bus (the engine sends no per-plugin echo
-///   for those). Then every bus `new` lacks (`RemoveBus`). Tracks are
-///   still gated by `structurally_compatible` (A-13i).
+///   `RemovePluginFromMaster`) — except one on a track or bus that goes
+///   too, which `RemoveTrack` / `RemoveBus` drops with it (the engine sends
+///   no per-plugin echo for those). Then every track `new` does not keep
+///   (`RemoveTrack`, A-13i): sub-tracks first, each by its own command, so
+///   every `RemoveTrack` drops exactly its own track and chain and answers
+///   with exactly one `TrackRemoved` (a parent's would also drop — and
+///   echo — any sub-track still under it, but not that sub-track's chain).
+///   Then every bus `new` lacks (`RemoveBus`).
+///
+/// A removed track's clips are already gone (`ClipRemovals`, before this):
+/// `RemoveTrack` drops its audio clips silently and keeps its MIDI clips.
+/// Its edges are gone too (`RoutingRemovals`). What else names it —
+/// freeze status and cache, external-instrument config, automation lanes,
+/// group membership, compose tables — is reconciled against the target by
+/// its own domain later in the restore.
 ///
 /// The mirror is pruned per entity, as the echo handlers
 /// (`engine_events::plugins::*_removed`, `engine_events::tracks::bus_removed`)
@@ -117,6 +136,10 @@ impl Reconcile for EntityRemovals {
             return;
         };
         let kept = kept_plugins(Some(old), new);
+        let kept_tracks = kept_tracks(Some(old), new);
+        let removed_tracks: Vec<&ProjectTrack> =
+            old.tracks.iter().filter(|t| !kept_tracks.contains(&t.id)).collect();
+        let removed_track_ids: HashSet<TrackId> = removed_tracks.iter().map(|t| t.id).collect();
         let target_busses: HashSet<BusId> = new.busses.iter().map(|b| b.id).collect();
         let removed_busses: Vec<BusId> = old
             .busses
@@ -147,6 +170,7 @@ impl Reconcile for EntityRemovals {
         for (instance_id, owner) in removed_plugins {
             let command = match owner {
                 PluginLocator::Bus(bus_id) if removed_busses.contains(&bus_id) => None,
+                PluginLocator::Track(track_id) if removed_track_ids.contains(&track_id) => None,
                 PluginLocator::Track(track_id) => Some(AudioCommand::RemovePlugin {
                     track_id,
                     instance_id,
@@ -162,6 +186,14 @@ impl Reconcile for EntityRemovals {
                 r.io.restore_echoes.expect_plugin_removed(instance_id);
             }
             prune_plugin(r, owner, instance_id);
+        }
+
+        let (subs, others): (Vec<&ProjectTrack>, Vec<&ProjectTrack>) =
+            removed_tracks.into_iter().partition(|t| t.sub_track.is_some());
+        for pt in subs.into_iter().chain(others) {
+            let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: pt.id });
+            r.io.restore_echoes.expect_track_removed(pt.id);
+            prune_track(r, pt.id);
         }
 
         for bus_id in removed_busses {
@@ -203,6 +235,52 @@ fn prune_plugin(r: &mut Resonance, owner: PluginLocator, instance_id: PluginInst
     r.remove_plugin_index(instance_id);
     // `RoutingRemovals` cleared a route onto it in the engine already.
     r.sidechain.clear_plugin(instance_id);
+}
+
+/// What the live delete (`engine_events::tracks::removed`) does to the
+/// mirror for one track, less what later domains reconcile against the
+/// target: the registry entry (its chain was pruned by [`prune_plugin`]),
+/// and every piece of transient UI that names it — the track selection,
+/// its open context menu, preset-save prompt or membership drag, the
+/// delete-track confirmation, the bounce dialog, the mixer's expanded
+/// sub-tracks, the automation / take-lane expansion, the Compose
+/// instrument focus (the drum roll's included) — and a control client's
+/// pending name for it.
+fn prune_track(r: &mut Resonance, track_id: TrackId) {
+    use crate::state::MembershipDragSubject;
+
+    r.registry.tracks.retain(|t| t.id != track_id);
+    let ui = &mut r.ui.interaction;
+    ui.deselect_track(track_id);
+    ui.automation_expanded_tracks.remove(&track_id);
+    ui.take_lane_expanded_tracks.remove(&track_id);
+    if ui.track_menu.as_ref().is_some_and(|m| m.track_id == track_id) {
+        ui.track_menu = None;
+    }
+    if ui.preset_save.as_ref().is_some_and(|p| p.track_id == track_id) {
+        ui.preset_save = None;
+    }
+    if ui
+        .membership_drag
+        .as_ref()
+        .is_some_and(|d| d.subject == MembershipDragSubject::Track(track_id))
+    {
+        ui.membership_drag = None;
+    }
+    r.ui.mixer.expanded_sub_track_parents.remove(&track_id);
+    if r.modals.confirm_delete_track == Some(track_id) {
+        r.modals.confirm_delete_track = None;
+    }
+    if r.modals.bounce_dialog.as_ref().is_some_and(|d| d.source_track_id == track_id) {
+        r.modals.bounce_dialog = None;
+    }
+    if r.compose.expanded_track_id == Some(track_id) {
+        r.compose.expanded_track_id = None;
+    }
+    if r.compose.details_track_id() == Some(track_id) {
+        r.compose.selected_lane = crate::compose::SelectedLane::Chords;
+    }
+    r.control.pending_tracks.remove(&track_id);
 }
 
 /// What `engine_events::tracks::bus_removed` does to the mirror for one
