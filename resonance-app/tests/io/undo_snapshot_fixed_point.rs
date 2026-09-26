@@ -638,3 +638,118 @@ fn beatmaking_template_restores_to_a_fixed_point() {
 fn empty_template_restores_to_a_fixed_point() {
     check_both_paths(fixture("empty", load_template(BuiltinTemplateId::Empty)));
 }
+
+// ---------------------------------------------------------------------------
+// Derived clips whose engine echo is still in flight (FU-H2a)
+// ---------------------------------------------------------------------------
+
+/// Derived-clip entries whose clip the mirror doesn't hold.
+fn unmirrored_derived(app: &Resonance) -> Vec<ClipId> {
+    app.compose_state()
+        .derived_clips
+        .values()
+        .copied()
+        .filter(|id| !app.test_midi_clips().iter().any(|mc| mc.id == *id))
+        .collect()
+}
+
+/// A snapshot taken while a re-derived clip's `MidiClipCreated` echo is
+/// still pending carries its `derived_clips` entry but not the clip. The
+/// fast path used to rebuild the map from the mirror and drop the entry —
+/// so the echo then landed an orphan the next regeneration duplicated —
+/// while the slow path copied the snapshot's map verbatim, leaving an
+/// entry for a clip `ClearAll` had wiped (which also blinds the UPD-05
+/// freeze check on that track for good). Both paths now take the
+/// snapshot's map, and the slow path drops only the entries whose clip
+/// cannot arrive any more.
+#[test]
+fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
+    let mut f = fixture("derived-pending", load_demo);
+    let h = handles(&f.app);
+    let (Some(d), Some(p)) = (h.definition, h.pattern) else {
+        panic!("the demo has a section and a drum pattern");
+    };
+    let _ = drain(&f.rx);
+    f.app
+        .test_dispatch(Message::Compose(ComposeMessage::Arrangement(
+            ArrangementMessage::AddEntry {
+                definition_id: d,
+                pattern_id: p,
+            },
+        )));
+    // Keep the re-materialised drum clip's echo in flight.
+    let pending_loads = drain(&f.rx);
+    let pending = unmirrored_derived(&f.app);
+    assert!(
+        !pending.is_empty(),
+        "the arrangement edit must leave a derived clip with a pending echo, or this test is vacuous"
+    );
+    let snapshot = f.app.test_snapshot_for_undo();
+
+    // Fast path: a scalar edit, then restore.
+    if let Some(&t) = h.tracks.first() {
+        f.app
+            .test_dispatch(Message::Track(TrackMessage::SetTrackVolume(t, -9.0)));
+    }
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    assert!(
+        !drain(&f.rx)
+            .iter()
+            .any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a scalar edit takes the diff replay"
+    );
+    assert_eq!(
+        f.app.compose_state().derived_clips,
+        snapshot.extras.compose_derived_clips,
+        "the fast path keeps the entry whose echo is still pending"
+    );
+
+    // The echo lands: the clip is now mirrored and still claimed.
+    for cmd in pending_loads {
+        if let AudioCommand::LoadMidiClipDirect {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            notes,
+            name,
+            trim_start_ticks,
+            trim_end_ticks,
+        } = cmd
+        {
+            f.app.test_apply_engine_event(AudioEvent::MidiClipCreated {
+                clip_id,
+                track_id,
+                start_sample,
+                duration_ticks,
+                name,
+                notes,
+                trim_start_ticks,
+                trim_end_ticks,
+            });
+        }
+    }
+    assert!(unmirrored_derived(&f.app).is_empty(), "the echo landed");
+
+    // Slow path: the snapshot lacks that clip, so `ClearAll` wipes it and
+    // nothing will ever re-create it — the entry must not survive.
+    f.app.test_add_track(9_999, TrackType::Audio);
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert_eq!(
+        unmirrored_derived(&f.app),
+        Vec::<ClipId>::new(),
+        "the slow path leaves no entry for a clip ClearAll wiped"
+    );
+    for (key, id) in &snapshot.extras.compose_derived_clips {
+        if !pending.contains(id) {
+            assert_eq!(
+                f.app.compose_state().derived_clips.get(key),
+                Some(id),
+                "every entry whose clip was replayed is kept"
+            );
+        }
+    }
+}

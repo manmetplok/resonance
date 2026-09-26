@@ -184,11 +184,9 @@ pub fn try_diff_replay(
 
     // Rebuild runtime-only caches that aren't captured in the snapshot.
     // Mirrors the tail end of `replay_loaded_project` so the Compose tab
-    // shows the right derived MIDI / vocal audio clips after the restore.
-    let drum_track_ids = crate::compose::ComposeState::drum_track_ids(&r.registry.tracks);
-    r.compose
-        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map, &drum_track_ids);
-
+    // shows the right vocal audio clips after the restore. The derived
+    // MIDI clip map is *not* rebuilt here: `apply_compose` restored the
+    // snapshot's, exactly as `finalize_undo_restore` does (FU-H2a).
     use std::collections::HashSet;
     let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
         .registry
@@ -1024,8 +1022,14 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     // project loader does. Unlike the full load, an all-empty snapshot
     // clears the bank rather than keeping the seeded default.
     restore_drum_patterns(&mut r.compose, b, true);
-    r.compose.derived_clips = extras.compose_derived_clips.clone();
-    r.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
+    // After `apply_midi_clips`, so the counter is reserved past the
+    // restored clips. No rebuild from the mirror: see
+    // `restore_derived_clips` (FU-H2a).
+    r.restore_derived_clips(
+        extras.compose_derived_clips.clone(),
+        extras.compose_next_derived_clip_id,
+        true,
+    );
     r.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics.clone();
 }
 
