@@ -725,6 +725,11 @@ pub enum AudioCommand {
     /// get transcoded. Emits `AudioEvent::ClipsSavedToProjectDir`
     /// when done so the save path can write project.json.
     SaveClipsToProjectDir,
+    /// Write `{project_dir}/audio/clip_{id}.wav` for every in-engine
+    /// audio clip that has none yet, silently (code review FU-V5b). Sent
+    /// whenever the app captures an undo snapshot, so a full-reload undo
+    /// finds the audio of every clip the snapshot names.
+    PersistClipWavs,
     /// Batch save all plugin states for project save.
     SaveAllPluginStates,
     /// Remove all tracks, clips, and plugins (for project load).

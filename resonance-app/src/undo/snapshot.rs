@@ -181,7 +181,17 @@ impl crate::Resonance {
     /// blobs come from `plugin_state_cache`, which refreshes at natural
     /// resting points — plugin add, editor close, project save — and is
     /// therefore slightly stale between those points.
+    ///
+    /// Also asks the engine to persist every audio clip's
+    /// `audio/clip_<id>.wav` (code review FU-V5b): the snapshot names a
+    /// clip's audio only by that file, which the slow-path restore
+    /// reloads, and which otherwise exists only after a save. Sent here —
+    /// before the edit's own commands, which the engine runs after it —
+    /// so a clip the edit removes is persisted while it still exists.
     pub(crate) fn snapshot_for_undo(&self) -> UndoSnapshot {
+        if !self.clips.is_empty() && self.can_record_undo() {
+            let _ = self.engine.send(AudioCommand::PersistClipWavs);
+        }
         let file = crate::update::build_project_file(self);
         let midi_notes: HashMap<ClipId, Vec<MidiNote>> = self
             .midi_clips

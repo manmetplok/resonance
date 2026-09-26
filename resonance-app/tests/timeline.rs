@@ -75,6 +75,8 @@ mod undo_noop_gesture;
 mod stale_clip_import;
 #[path = "timeline/undo_before_echo.rs"]
 mod undo_before_echo;
+#[path = "timeline/undo_clip_audio_persist.rs"]
+mod undo_clip_audio_persist;
 #[path = "timeline/undo_view_state_keeps_redo.rs"]
 mod undo_view_state_keeps_redo;
 #[path = "timeline/render_cache.rs"]
