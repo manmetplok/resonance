@@ -66,7 +66,7 @@ impl Wsola {
                 self.frame_buf[j] = input.get(start + j);
             }
             let frame = std::mem::take(&mut self.frame_buf);
-            self.ola.add_frame(&frame, &self.window, SYNTH_HOP as f64);
+            self.ola.add_raw_frame(&frame, &self.window, SYNTH_HOP as f64);
             self.frame_buf = frame;
 
             // Natural continuation the next frame should resemble: what
