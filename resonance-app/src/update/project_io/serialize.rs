@@ -339,6 +339,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
                 trim_end_ticks: mc.trim_end_ticks,
                 midi_file: format!("midi/clip_{}.mid", mc.id),
                 vocal_lyrics,
+                notes: None,
             }
         })
         .collect();

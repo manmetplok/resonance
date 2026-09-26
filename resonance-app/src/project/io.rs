@@ -11,7 +11,8 @@ use resonance_audio::midi_io;
 use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
 
 use super::model::{
-    LoadedProject, ProjectFile, ProjectPlugin, AUTOSAVE_JSON, PROJECT_FORMAT_VERSION, PROJECT_JSON,
+    LoadedProject, ProjectFile, ProjectMidiNote, ProjectPlugin, AUTOSAVE_JSON,
+    PROJECT_FORMAT_VERSION, PROJECT_JSON,
 };
 
 /// Write a project to disk. Assumes the engine has already written
@@ -72,9 +73,29 @@ fn write_project_metadata(
     }
 
     // Write the project-metadata JSON (project.json or, for an autosave,
-    // project.autosave.json).
+    // project.autosave.json). Each MIDI clip carries its notes inline:
+    // that copy is lossless, the `.mid` above is not (code review
+    // STATE-06).
+    let notes_by_clip: HashMap<ClipId, &Vec<MidiNote>> =
+        midi_clips.iter().map(|(id, notes)| (*id, notes)).collect();
+    let mut project = project.clone();
+    for mc in &mut project.midi_clips {
+        if let Some(notes) = notes_by_clip.get(&mc.id) {
+            mc.notes = Some(
+                notes
+                    .iter()
+                    .map(|n| ProjectMidiNote {
+                        note: n.note,
+                        velocity: n.velocity,
+                        start_tick: n.start_tick,
+                        duration_ticks: n.duration_ticks,
+                    })
+                    .collect(),
+            );
+        }
+    }
     let json =
-        serde_json::to_string_pretty(project).map_err(|e| format!("Serialize project: {e}"))?;
+        serde_json::to_string_pretty(&project).map_err(|e| format!("Serialize project: {e}"))?;
     atomic_write(&path.join(json_file_name), json.as_bytes())
         .map_err(|e| format!("Write {json_file_name}: {e}"))?;
 
@@ -301,6 +322,21 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
     // with empty note lists so the rest of the project still loads.
     let mut midi_notes: HashMap<ClipId, Vec<MidiNote>> = HashMap::new();
     for mc in &file.midi_clips {
+        // The inline copy is lossless (code review STATE-06); the `.mid`
+        // is the fallback for projects saved before it existed.
+        if let Some(notes) = &mc.notes {
+            let notes = notes
+                .iter()
+                .map(|n| MidiNote {
+                    note: n.note,
+                    velocity: n.velocity,
+                    start_tick: n.start_tick,
+                    duration_ticks: n.duration_ticks,
+                })
+                .collect();
+            midi_notes.insert(mc.id, notes);
+            continue;
+        }
         let mid_path = project_dir.join(&mc.midi_file);
         match midi_io::read_midi_file(&mid_path) {
             Ok(notes) => {

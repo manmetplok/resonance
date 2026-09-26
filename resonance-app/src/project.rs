@@ -43,7 +43,7 @@ pub use sections::{
 pub use model::{
     AUTOSAVE_JSON, PROJECT_FORMAT_VERSION, PROJECT_JSON,
     LoadedProject, ProjectBus, ProjectClip, ProjectExternalInstrument, ProjectFile,
-    ProjectMidiClip, ProjectPerformance, ProjectPlugin, ProjectPluginParam, ProjectPoolAsset,
+    ProjectMidiClip, ProjectMidiNote, ProjectPerformance, ProjectPlugin, ProjectPluginParam, ProjectPoolAsset,
     ProjectReference,
     ProjectReferenceMarker, ProjectReferenceSettings, ProjectSend, ProjectSidechainRoute,
     ProjectTrack, SaveCollector,

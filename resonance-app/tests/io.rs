@@ -43,6 +43,8 @@ mod import_placement;
 mod import_progress_dialog;
 #[path = "io/media_browser_scaffold.rs"]
 mod media_browser_scaffold;
+#[path = "io/midi_clip_lossless_roundtrip.rs"]
+mod midi_clip_lossless_roundtrip;
 #[path = "io/offline_render_gate.rs"]
 mod offline_render_gate;
 #[path = "io/open_failure_keeps_path.rs"]
