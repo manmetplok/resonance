@@ -24,7 +24,8 @@ use midly::{
 };
 
 use crate::types::{
-    bar_len_ticks, MidiNote, SignaturePoint, TempoMap, TempoPoint, TICKS_PER_QUARTER_NOTE,
+    bar_len_ticks, sanitize_bpm, MidiNote, SignaturePoint, TempoMap, TempoPoint, MAX_BPM,
+    MIN_BPM, TICKS_PER_QUARTER_NOTE,
 };
 
 /// One named source track for a multi-track (Format 1) export.
@@ -424,7 +425,13 @@ pub struct ImportedSmf {
     /// All time-signature events, sorted by absolute engine tick.
     pub signature_events: Vec<SignatureEvent>,
     /// Bar-indexed tempo points (0-based bars), ready for a `TempoMap`.
+    /// Unlike [`Self::tempo_events`] (the file's own values), each point
+    /// is already clamped into the app's `MIN_BPM..=MAX_BPM` range.
     pub tempo_points: Vec<TempoPoint>,
+    /// How many of [`Self::tempo_points`] were outside `MIN_BPM..=MAX_BPM`
+    /// in the file and had to be clamped (FU-D4) — non-zero means adopting
+    /// the file tempo will not reproduce it exactly.
+    pub tempo_points_clamped: usize,
     /// Bar-indexed signature points (0-based bars), ready for a `TempoMap`.
     pub signature_points: Vec<SignaturePoint>,
 }
@@ -663,14 +670,31 @@ pub fn parse_smf_bytes(bytes: &[u8]) -> Result<ImportedSmf, String> {
     let spans = meter_spans(&signature_events);
     let length_bars = length_in_bars(length_ticks, &spans);
 
-    // Derive bar-indexed points ready to splice into a TempoMap.
+    // Derive bar-indexed points ready to splice into a TempoMap. They go
+    // through the one tempo-legality rule here, explicitly, so a file
+    // tempo outside the supported range is counted and reported instead
+    // of being clamped silently at the next bar-table rebuild (FU-D4).
+    let mut tempo_points_clamped = 0usize;
     let tempo_points: Vec<TempoPoint> = tempo_events
         .iter()
-        .map(|e| TempoPoint {
-            bar: tick_to_bar(e.tick, &spans),
-            bpm: e.bpm,
+        .map(|e| {
+            let bpm = sanitize_bpm(e.bpm).unwrap_or(DEFAULT_BPM);
+            if bpm != e.bpm {
+                tempo_points_clamped += 1;
+            }
+            TempoPoint {
+                bar: tick_to_bar(e.tick, &spans),
+                bpm,
+            }
         })
         .collect();
+    if tempo_points_clamped > 0 {
+        tracing::warn!(
+            clamped = tempo_points_clamped,
+            "MIDI import: {tempo_points_clamped} tempo change(s) outside \
+             {MIN_BPM}..={MAX_BPM} BPM were clamped into range"
+        );
+    }
     let signature_points: Vec<SignaturePoint> = signature_events
         .iter()
         .map(|e| SignaturePoint {
@@ -704,6 +728,7 @@ pub fn parse_smf_bytes(bytes: &[u8]) -> Result<ImportedSmf, String> {
         tempo_events,
         signature_events,
         tempo_points,
+        tempo_points_clamped,
         signature_points,
     })
 }
