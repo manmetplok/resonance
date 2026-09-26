@@ -1,10 +1,14 @@
 //! Roadmap group (1): app-side domains restored whole from the new file on
 //! every origin. They ignore `old`.
 
+use std::collections::HashMap;
 use std::path::Path;
 
+use resonance_audio::types::AudioCommand;
+
 use super::{Origin, Reconcile, ReconcileCtx};
-use crate::project::ProjectFile;
+use crate::project::{ProjectFile, ProjectTrack};
+use crate::state::TrackGroupRegistry;
 use crate::update::project_io::replay::{
     replay_take_groups, restore_performance, restore_pool_assets, restore_quantize,
     restore_tempo_events, restore_track_groups,
@@ -84,14 +88,115 @@ impl Reconcile for Performance {
 }
 
 /// Track groups (folder tracks, epic #36), incl. the sub-track id counter
-/// bump (STATE-04).
+/// bump (STATE-04), and the group-macro solo/mute cascade every restore
+/// must re-derive (FU-A13a).
 pub(crate) struct TrackGroups;
 
 impl Reconcile for TrackGroups {
     const NAME: &'static str = "track_groups";
 
-    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, _: &ReconcileCtx<'_>) {
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         restore_track_groups(r, new);
+        sync_effective_track_macros(r, old, new, ctx);
+    }
+}
+
+/// Re-derive every track's *effective* solo/mute — its own flag OR any
+/// containing group's macro (`TrackGroupRegistry::effective_solo` /
+/// `effective_mute`) — and send it to the engine wherever that may have
+/// changed (FU-A13a, design doc §12 "found, not fixed").
+///
+/// Nothing else re-runs this. `Tracks` (`Stage::Entities`, ahead of this
+/// domain) only ever sends a track's *own* flag, and on the diff path only
+/// when that own flag changed — so a macro toggle's undo, or undoing a
+/// member's own flag while a group macro holds, left the engine's solo/mute
+/// stale even though the app-side registries were restored correctly. This
+/// runs after both `Tracks` and this domain's own `restore_track_groups`,
+/// so `r.track_groups` and the live `soloed`/`muted` flags `Tracks` just
+/// wrote already reflect `new` — the effective value computed here is the
+/// target's.
+///
+/// * After a `ClearAll` there is no live state to diff against (and
+///   `Tracks`' full replay always re-adds every track with its bare own
+///   flag), so every track's effective value is sent unconditionally —
+///   correcting a saved group macro's cascade on disk load exactly as a
+///   fresh toggle would.
+/// * On the diff path, `old` names the snapshot the still-live engine was
+///   built from, so the *old* effective value is computed the same way —
+///   through a throwaway `TrackGroupRegistry::from_saved(&old.track_groups)`
+///   — as what the engine holds now **unless `Tracks` just overwrote it**:
+///   when a track's own flag changed, `Tracks`' diff arm already sent that
+///   bare own value (`apply_track`, ahead of this domain), so what the
+///   engine currently holds is `pt.muted`/`pt.soloed`, not the old
+///   effective value. Only a track whose effective target differs from
+///   *that* — the value the engine actually holds right now — gets a
+///   command; this is what catches both a macro toggle's undo (own flag
+///   unchanged, effective value flips) and undoing a member's own flag
+///   while a group macro holds (own flag flips back, but `Tracks`' bare
+///   send must be overridden because the macro never let go). A track
+///   present only in `new` (A-13h/i, not yet possible on this path) is
+///   skipped, as `Tracks`' own diff arm does.
+fn sync_effective_track_macros(
+    r: &mut Resonance,
+    old: Option<&ProjectFile>,
+    new: &ProjectFile,
+    ctx: &ReconcileCtx<'_>,
+) {
+    if ctx.origin.after_clear_all() {
+        for pt in &new.tracks {
+            let soloed = r.track_groups.effective_solo(pt.id, pt.soloed);
+            let muted = r.track_groups.effective_mute(pt.id, pt.muted);
+            let _ = r.engine.send(AudioCommand::SetTrackSolo {
+                track_id: pt.id,
+                soloed,
+            });
+            let _ = r.engine.send(AudioCommand::SetTrackMute {
+                track_id: pt.id,
+                muted,
+            });
+        }
+        return;
+    }
+    let Some(old) = old else {
+        // No snapshot to diff against (untitled project, diff path) —
+        // nothing was live to have gone stale.
+        return;
+    };
+    let old_groups = TrackGroupRegistry::from_saved(&old.track_groups);
+    let old_by_id: HashMap<u64, &ProjectTrack> = old.tracks.iter().map(|t| (t.id, t)).collect();
+    for pt in &new.tracks {
+        // Defence in depth — see `Tracks`: a track only in `new` is
+        // A-13h/i, not reachable on the diff path yet.
+        let Some(&ot) = old_by_id.get(&pt.id) else {
+            continue;
+        };
+        // What the engine holds *right now*: `Tracks`' bare own-flag send
+        // if the own flag changed (it ran first, in `Stage::Entities`),
+        // else the old effective value it never touched.
+        let engine_soloed = if ot.soloed != pt.soloed {
+            pt.soloed
+        } else {
+            old_groups.effective_solo(pt.id, ot.soloed)
+        };
+        let target_soloed = r.track_groups.effective_solo(pt.id, pt.soloed);
+        if engine_soloed != target_soloed {
+            let _ = r.engine.send(AudioCommand::SetTrackSolo {
+                track_id: pt.id,
+                soloed: target_soloed,
+            });
+        }
+        let engine_muted = if ot.muted != pt.muted {
+            pt.muted
+        } else {
+            old_groups.effective_mute(pt.id, ot.muted)
+        };
+        let target_muted = r.track_groups.effective_mute(pt.id, pt.muted);
+        if engine_muted != target_muted {
+            let _ = r.engine.send(AudioCommand::SetTrackMute {
+                track_id: pt.id,
+                muted: target_muted,
+            });
+        }
     }
 }
 
