@@ -38,11 +38,26 @@ pub struct Chain {
     /// to an already-warm delayed signal instead of zeros.
     bypass_delay_l: DelayLine,
     bypass_delay_r: DelayLine,
+    /// Per-block scratch for the delayed dry signal (sized at
+    /// `max_buffer`; longer host blocks are processed in chunks).
+    dry_l: Vec<f32>,
+    dry_r: Vec<f32>,
+    /// Processed-path weight of the output, 1 = chain, 0 = delayed dry.
+    /// Ramps over [`BYPASS_XFADE_SECONDS`] on bypass toggles.
+    wet_mix: f32,
+    /// Per-sample `wet_mix` step.
+    wet_mix_step: f32,
+    /// False until the first block: a bypass set before any audio
+    /// engages instantly (there is nothing to click against).
+    wet_mix_primed: bool,
     /// Smoothed input-trim gain (linear). Ramped toward the param's
     /// current value across each block so pushing the trim slider
     /// doesn't click.
     input_trim_lin: f32,
 }
+
+/// Whole-plugin bypass crossfade length (DSP-05).
+pub const BYPASS_XFADE_SECONDS: f32 = 0.010;
 
 impl Chain {
     pub fn new(sample_rate: f32, max_buffer: usize, viz: &MasteringViz) -> Self {
@@ -65,6 +80,11 @@ impl Chain {
             meters: MeteringCore::new(sample_rate, viz),
             bypass_delay_l: DelayLine::new(max_latency + 1),
             bypass_delay_r: DelayLine::new(max_latency + 1),
+            dry_l: vec![0.0; max_buffer.max(1)],
+            dry_r: vec![0.0; max_buffer.max(1)],
+            wet_mix: 1.0,
+            wet_mix_step: 1.0 / (BYPASS_XFADE_SECONDS * sample_rate).max(1.0),
+            wet_mix_primed: false,
             input_trim_lin: 1.0,
         }
     }
@@ -81,6 +101,7 @@ impl Chain {
         self.meters.reset();
         self.bypass_delay_l.clear();
         self.bypass_delay_r.clear();
+        self.wet_mix_primed = false;
         self.input_trim_lin = 1.0;
     }
 
@@ -96,26 +117,18 @@ impl Chain {
             + self.limiter.latency()) as u32
     }
 
-    /// Whole-plugin bypass path: output = raw input delayed by exactly
-    /// [`Chain::latency`] samples so host delay compensation and A/B
-    /// comparisons stay aligned, same as the per-stage bypasses. The
-    /// metering tap still runs (on the delayed signal the listener
-    /// actually hears) so the UI stays live.
-    pub fn process_bypassed(&mut self, left: &mut [f32], right: &mut [f32], viz: &MasteringViz) {
-        let frames = left.len().min(right.len());
-        let delay = self.latency() as usize;
-        for i in 0..frames {
-            self.bypass_delay_l.push(left[i]);
-            self.bypass_delay_r.push(right[i]);
-            left[i] = self.bypass_delay_l.tap(delay);
-            right[i] = self.bypass_delay_r.tap(delay);
-        }
-        self.meters.feed(left, right, viz);
-    }
-
-    /// Run the chain on a stereo block. Audio is modified in place;
-    /// the metering tap runs last so the meters reflect the final
-    /// post-chain output.
+    /// Run the chain on a stereo block, honouring the whole-plugin
+    /// `bypass` param. Audio is modified in place; the metering tap runs
+    /// last so the meters reflect what the listener hears.
+    ///
+    /// Bypass swaps the output to the raw input delayed by exactly
+    /// [`Chain::latency`] samples, so host delay compensation and A/B
+    /// stay aligned, like the per-stage bypasses. The stages keep
+    /// running on the input while bypassed (their output is discarded):
+    /// frozen, they would hold the ~0.4 s of audio in flight when bypass
+    /// engaged and replay it on un-bypass (DSP-05). Both directions
+    /// crossfade over [`BYPASS_XFADE_SECONDS`]; at rest each path is
+    /// passed bit-exactly.
     pub fn process(
         &mut self,
         left: &mut [f32],
@@ -124,13 +137,83 @@ impl Chain {
         viz: &MasteringViz,
     ) {
         let frames = left.len().min(right.len());
+        let bypassed = params.bypass.value();
+        let target = if bypassed { 0.0 } else { 1.0 };
+        if !self.wet_mix_primed {
+            self.wet_mix = target;
+            self.wet_mix_primed = true;
+        }
+        let cap = self.dry_l.len();
+        let mut start = 0;
+        while start < frames {
+            let end = (start + cap).min(frames);
+            self.process_chunk(&mut left[start..end], &mut right[start..end], params, target);
+            start = end;
+        }
+        let (left, right) = (&mut left[..frames], &mut right[..frames]);
 
-        // Keep the bypass delay warm with the pre-trim input so
-        // engaging bypass doesn't switch onto a cold (zeroed) line.
+        self.meters.feed(left, right, viz);
+        if bypassed {
+            return;
+        }
+
+        // Publish the stage GR meters for the UI header, and the four
+        // per-band multiband GR values for the Multiband tab. All of
+        // these are already computed by the stages themselves.
+        viz.store_gr(
+            self.glue_compressor.meter_gr_db(),
+            self.limiter.meter_gr_db(),
+        );
+        viz.store_band_gr(self.multiband.band_gr_db());
+
+        // Feed the post-chain audio into the assistant's capture ring.
+        // Runs unconditionally so the user can click Analyze at any
+        // moment without having to arm capture first.
+        viz.assistant.feed(left, right);
+    }
+
+    /// One chunk of at most `dry_l.len()` frames: fill the delayed dry
+    /// path, run every stage in place, then blend toward `target`.
+    fn process_chunk(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        params: &MasteringParams,
+        target: f32,
+    ) {
+        let frames = left.len().min(right.len());
+        let delay = self.latency() as usize;
         for i in 0..frames {
             self.bypass_delay_l.push(left[i]);
             self.bypass_delay_r.push(right[i]);
+            self.dry_l[i] = self.bypass_delay_l.tap(delay);
+            self.dry_r[i] = self.bypass_delay_r.tap(delay);
         }
+
+        self.run_stages(left, right, params);
+
+        if self.wet_mix == target {
+            if target == 0.0 {
+                left.copy_from_slice(&self.dry_l[..frames]);
+                right.copy_from_slice(&self.dry_r[..frames]);
+            }
+            return;
+        }
+        for i in 0..frames {
+            self.wet_mix = if target > self.wet_mix {
+                (self.wet_mix + self.wet_mix_step).min(target)
+            } else {
+                (self.wet_mix - self.wet_mix_step).max(target)
+            };
+            let (dl, dr) = (self.dry_l[i], self.dry_r[i]);
+            left[i] = dl + (left[i] - dl) * self.wet_mix;
+            right[i] = dr + (right[i] - dr) * self.wet_mix;
+        }
+    }
+
+    /// Input trim and every stage, in processing order, in place.
+    fn run_stages(&mut self, left: &mut [f32], right: &mut [f32], params: &MasteringParams) {
+        let frames = left.len().min(right.len());
 
         // Input trim: linearly ramp from the last applied gain to the
         // current param value across the block so parameter changes
@@ -172,21 +255,5 @@ impl Chain {
 
         let dither_cfg = params.dither.snapshot();
         self.dither.process_stereo(left, right, &dither_cfg);
-
-        self.meters.feed(left, right, viz);
-
-        // Publish the stage GR meters for the UI header, and the four
-        // per-band multiband GR values for the Multiband tab. All of
-        // these are already computed by the stages themselves.
-        viz.store_gr(
-            self.glue_compressor.meter_gr_db(),
-            self.limiter.meter_gr_db(),
-        );
-        viz.store_band_gr(self.multiband.band_gr_db());
-
-        // Feed the post-chain audio into the assistant's capture ring.
-        // Runs unconditionally so the user can click Analyze at any
-        // moment without having to arm capture first.
-        viz.assistant.feed(left, right);
     }
 }

@@ -6,15 +6,18 @@
 //! sampled on an FFT grid and the corresponding zero-phase symmetric FIR
 //! is fed to the overlap-save convolver.
 //!
-//! A band parameter change marks the filter dirty; the next `process`
-//! call redesigns the FIR (one extra FFT pair) before convolving.
+//! A band parameter change redesigns the FIR and crossfades to it over
+//! one convolver hop (DSP-10), so an automated band morphs instead of
+//! stepping at hop boundaries. Redesigns are rate-limited to one per hop:
+//! while a crossfade is staged, further changes wait for it to land and
+//! the newest settings are designed next.
 
 pub mod band;
 pub mod convolver;
 pub mod design;
 
 pub use band::{BandConfig, BandType};
-pub use convolver::{OverlapSaveConvolver, FIR_LENGTH, GROUP_DELAY, HOP_SIZE};
+pub use convolver::{FirGeometry, OverlapSaveConvolver, FIR_LENGTH, GROUP_DELAY, HOP_SIZE};
 pub use design::FirDesigner;
 
 /// Number of parametric bands exposed by the plugin per EQ instance.
@@ -41,11 +44,14 @@ pub struct LinearPhaseEq {
 
 impl LinearPhaseEq {
     pub fn new(sample_rate: f32) -> Self {
+        // FIR length scales with the rate so the low bands keep their
+        // resolution (DSP-06).
+        let geometry = FirGeometry::for_sample_rate(sample_rate);
         Self {
             sample_rate,
-            left: OverlapSaveConvolver::new(),
-            right: OverlapSaveConvolver::new(),
-            designer: FirDesigner::new(),
+            left: OverlapSaveConvolver::with_geometry(geometry),
+            right: OverlapSaveConvolver::with_geometry(geometry),
+            designer: FirDesigner::with_geometry(geometry),
             cached_bands: [BandConfig::off(); NUM_BANDS],
         }
     }
@@ -55,9 +61,10 @@ impl LinearPhaseEq {
         self.right.reset();
     }
 
-    /// Reported per-channel latency. Same for both channels.
+    /// Reported per-channel latency. Same for both channels; constant
+    /// in ms across sample rates.
     pub const fn latency(&self) -> usize {
-        GROUP_DELAY + HOP_SIZE
+        self.left.latency()
     }
 
     /// Process one stereo block in place, redesigning the filter first
@@ -68,7 +75,10 @@ impl LinearPhaseEq {
         right: &mut [f32],
         bands: &[BandConfig; NUM_BANDS],
     ) {
-        if *bands != self.cached_bands {
+        // At most one redesign per hop: while a crossfade is staged the
+        // newest settings wait (they differ from `cached_bands`, so they
+        // are picked up on the first block after it lands).
+        if *bands != self.cached_bands && !self.left.crossfade_pending() {
             self.cached_bands = *bands;
             // `FirDesigner::design` already iterates `bands` and skips
             // disabled entries, so we can pass the whole fixed array
@@ -76,8 +86,8 @@ impl LinearPhaseEq {
             // `Vec<BandConfig>` on every band-parameter change — fine
             // for a one-off but allocates on the audio thread.
             let h = self.designer.design(bands.as_slice(), self.sample_rate);
-            self.left.set_impulse_response(h);
-            self.right.set_impulse_response(h);
+            self.left.crossfade_to_impulse_response(h);
+            self.right.crossfade_to_impulse_response(h);
         }
         self.left.process_in_place(left);
         self.right.process_in_place(right);

@@ -149,14 +149,38 @@ impl<T> SwapFader<T> {
     /// If a payload is already active it fades out first; otherwise the
     /// new one is swapped in directly and fades in. A pending payload
     /// superseded by a rapid re-selection is retired, not dropped here.
+    ///
+    /// A swap requested while a fade is already running never restarts
+    /// the envelope at full gain (DSP-07): mid fade-out the fade simply
+    /// carries on and the newest payload replaces the pending one; mid
+    /// fade-in the fade-out starts from the current gain. So continuous
+    /// retargeting (e.g. automated delay time) keeps the gain moving by
+    /// at most one fade step per sample, and the latest payload lands.
     pub fn begin_swap(&mut self, payload: T) {
         if let Some(old) = self.pending.take() {
             self.retire(old);
         }
         self.pending = Some(payload);
         if self.active.is_some() {
-            self.fade_out_remaining = self.fade_samples;
+            if self.fade_out_remaining > 0 {
+                // Already fading out: keep going; `pending` was replaced.
+                return;
+            }
+            // Idle (remaining 0 → full length) or mid fade-in, where
+            // the last gain was `1 - fade_in_remaining·step`: fade out
+            // from there.
+            self.fade_out_remaining = self.fade_samples - self.fade_in_remaining;
             self.fade_in_remaining = 0;
+            if self.fade_out_remaining == 0 {
+                // The fade-in had not emitted a sample yet (gain still
+                // 0): land the newest payload right away.
+                let old = self.active.take();
+                self.active = self.pending.take();
+                if let Some(old) = old {
+                    self.retire(old);
+                }
+                self.fade_in_remaining = self.fade_samples;
+            }
         } else {
             self.active = self.pending.take();
             self.fade_in_remaining = self.fade_samples;

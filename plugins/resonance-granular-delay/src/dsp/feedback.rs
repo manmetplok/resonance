@@ -22,11 +22,20 @@ struct FeedbackChain {
     dc: DcBlocker,
 }
 
+/// DC-blocker corner inside the feedback loop. Higher than the 5 Hz
+/// full-range default on purpose: the loop compounds it on every
+/// recirculation, so offset (and sub-sonic build-up from the tanh) has
+/// to drain within a few repeats, while 20 Hz still costs a repeat only
+/// ~1 dB at 40 Hz. Fixed in Hz, so repeats thin out identically at
+/// every sample rate (DSP-04; the old fixed pole sat at 38 Hz at 48 kHz
+/// and 152 Hz at 192 kHz).
+const FEEDBACK_DC_CUTOFF_HZ: f32 = 20.0;
+
 impl FeedbackChain {
-    fn new() -> Self {
+    fn new(sample_rate: f32) -> Self {
         Self {
             filter: OnePole::new(),
-            dc: DcBlocker::default(),
+            dc: DcBlocker::new(FEEDBACK_DC_CUTOFF_HZ, sample_rate),
         }
     }
 
@@ -45,16 +54,12 @@ impl FeedbackChain {
 
 pub(super) struct FeedbackStage {
     /// Wet→Buffer feedback bus: the conditioned (damped, soft-clipped,
-    /// DC-blocked) wet output of the *previous* block, summed with the
-    /// dry input at the write point of the current block. The one-block
-    /// loop latency is far below the minimum grain delay (10 ms), so it
-    /// is inaudible in the repeat spacing (ba todo #1074).
+    /// DC-blocked) wet output of this block, added into the ring at the
+    /// same samples' write positions once the grains have rendered
+    /// ([`super::source::SourceRing::add_feedback`]), so the loop delay
+    /// is exactly the grain delay (ba todo #1074, DSP-08).
     pub(super) bus_l: Vec<f32>,
     pub(super) bus_r: Vec<f32>,
-    /// Valid prefix of `bus_l`/`bus_r` (0 when the previous block ran
-    /// the Output-only route; shrinks safely if the host varies block
-    /// size).
-    pub(super) bus_len: usize,
     /// Output-only recirculation rings (same length/mask as the source
     /// buffers): hold the wet-path output so "clean repeats" can
     /// recirculate at the delay time without touching the grain source
@@ -97,12 +102,11 @@ impl FeedbackStage {
         Self {
             bus_l: vec![0.0; max_block],
             bus_r: vec![0.0; max_block],
-            bus_len: 0,
             ring_l: vec![0.0; ring_len],
             ring_r: vec![0.0; ring_len],
             mask: ring_len - 1,
-            chain_l: FeedbackChain::new(),
-            chain_r: FeedbackChain::new(),
+            chain_l: FeedbackChain::new(sample_rate),
+            chain_r: FeedbackChain::new(sample_rate),
             pos: 0,
             recirc_fade: SwapFader::new(fade_leg),
             recirc_goal: 0.0,
@@ -115,7 +119,6 @@ impl FeedbackStage {
     pub(super) fn clear(&mut self) {
         self.bus_l.fill(0.0);
         self.bus_r.fill(0.0);
-        self.bus_len = 0;
         self.ring_l.fill(0.0);
         self.ring_r.fill(0.0);
         self.chain_l.reset();
@@ -180,7 +183,7 @@ impl FeedbackStage {
         match params.fb_route {
             FbRoute::WetToBuffer | FbRoute::PingPong => {
                 // Condition this block's wet bus into the feedback bus
-                // consumed at the next block's write point, and keep the
+                // added back at this block's write positions, and keep the
                 // recirculation ring warm so a route switch is seamless.
                 // Ping-pong (ba todo #1077) swaps the channels right
                 // here at the feedback write tap, so every
@@ -203,7 +206,6 @@ impl FeedbackStage {
                     self.ring_l[idx] = grains.wet_l[i];
                     self.ring_r[idx] = grains.wet_r[i];
                 }
-                self.bus_len = frames;
             }
             FbRoute::OutputOnly if plan.time_varying() => {
                 // Clean repeats with the recirc read tap following the
@@ -238,7 +240,6 @@ impl FeedbackStage {
                     grains.wet_l[i] += fl;
                     grains.wet_r[i] += fr;
                 }
-                self.bus_len = 0;
             }
             FbRoute::OutputOnly => {
                 // Clean repeats: recirculate the wet-path output through
@@ -311,7 +312,6 @@ impl FeedbackStage {
                         grains.wet_r[i] += fr;
                     }
                 }
-                self.bus_len = 0;
             }
         }
     }

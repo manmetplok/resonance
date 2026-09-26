@@ -256,8 +256,11 @@ fn off_mode_is_bit_identical_to_pre_alignment_engine() {
     // FNV-1a over the raw f32 bit patterns of a 2 s stereo render that
     // exercises every engine feature, captured from the engine at
     // f9806af1 (before onset alignment existed) with the identical
-    // scenario. Alignment off must reproduce it bit for bit.
-    const REFERENCE_HASH: u64 = 0x768c_fc17_6897_c9d3;
+    // scenario. Alignment off must reproduce it bit for bit. Re-pinned
+    // once, deliberately, when the anti-alias one-pole after the read
+    // became a band-limited read (DSP-09) — the scenario has
+    // `anti_alias: true` and upward-transposed grains.
+    const REFERENCE_HASH: u64 = 0x71bb_1647_c026_6dd1;
 
     let mut rng = SimpleRng::new(77);
     let source: Vec<f32> = (0..BUF_LEN)

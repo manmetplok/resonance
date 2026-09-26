@@ -558,3 +558,38 @@ fn time_mode_changes_do_not_allocate() {
         after - before
     );
 }
+
+/// DSP-07: Fade mode under continuous Time automation. Every 128-frame
+/// block retargets the swap; the fader used to restart its fade-out at
+/// full gain each time, so the tap never moved until the automation
+/// stopped (and the wet gain saw-toothed at the block rate). The tap
+/// must now follow the sweep while it is still running.
+#[test]
+fn fade_mode_follows_continuous_time_automation() {
+    let mut plugin = mode_plugin(0, 200.0, 40.0, 40.0);
+    plugin.initialize(SR, 4096);
+    let block = 128;
+    let blocks = (2.0 * SR) as usize / block;
+    let input = sine(blocks * block, 330.0, 0.5);
+    let mut left = input.clone();
+    let mut right = input;
+    let mut mid_sweep_delay = 0.0;
+    for b in 0..blocks {
+        let t = b as f32 / blocks as f32;
+        plugin.params.time_ms.set_value(200.0 + 200.0 * t);
+        let range = b * block..(b + 1) * block;
+        let (l, r) = (&mut left[range.clone()], &mut right[range]);
+        run_blocks(&mut plugin, l, r, block);
+        if b == blocks * 3 / 4 {
+            mid_sweep_delay = plugin.effective_delay_seconds();
+        }
+    }
+    // Three quarters through the sweep the target is 350 ms; the tap
+    // may trail it by a few swap legs, but it must have left 200 ms.
+    assert!(
+        mid_sweep_delay > 0.3,
+        "Fade tap stuck at {:.1} ms while the automation is at 350 ms",
+        mid_sweep_delay * 1000.0
+    );
+    assert!(rms(&left[(SR as usize)..]) > 1e-3, "wet output is silent");
+}
