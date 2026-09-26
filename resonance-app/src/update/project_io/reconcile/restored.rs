@@ -156,14 +156,11 @@ impl Reconcile for MissingPlugins {
 /// live project path, carried in `ctx.live` because the full replay has
 /// taken `io.project_path` by now.
 ///
-/// **FU-A4a (open, not fixed here):** after a `ClearAll`, a track an undo
-/// restores `Frozen` never gets `SetTrackFrozenSource` — it shows Frozen
-/// and plays the live chain; the diff path has the same gap for a redo of a
-/// freeze whose cache exists. The fix belongs in the undo arm below: for
-/// each track `apply_freeze_restore` leaves `Frozen` (all of them after a
-/// `ClearAll`; on the diff path, those that were not frozen before), decode
-/// and attach the cache as `rehydrate_frozen_tracks` does, downgrading an
-/// undecodable one to `Stale`.
+/// It also reconciles the engine's frozen sources (FU-A4a): each track the
+/// target has frozen whose source the engine does not hold — every one
+/// after a `ClearAll` (`origin.after_clear_all()`); on the diff path, those
+/// that were not frozen before — has its cache decoded and attached as
+/// `rehydrate_frozen_tracks` does, an undecodable one going `Stale`.
 ///
 /// [`rehydrate_frozen_tracks`]: Resonance::rehydrate_frozen_tracks
 /// [`apply_freeze_restore`]: Resonance::apply_freeze_restore
@@ -174,7 +171,11 @@ impl Reconcile for Freeze {
 
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         if ctx.origin.is_undo() {
-            r.apply_freeze_restore(&new.tracks, ctx.live.project_path);
+            r.apply_freeze_restore(
+                &new.tracks,
+                ctx.live.project_path,
+                ctx.origin.after_clear_all(),
+            );
             return;
         }
         r.freeze.reset();

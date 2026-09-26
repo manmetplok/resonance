@@ -394,7 +394,34 @@ fn redo_of_freeze_marks_stale_when_cache_is_gone() {
 
 #[test]
 fn redo_of_freeze_keeps_frozen_when_cache_exists() {
-    let (mut app, _rx, dir) = capturing_app();
+    let (mut app, rx, dir) = capturing_app();
+    app.test_add_track(1, TrackType::Instrument);
+    crate::common::write_freeze_cache_wav(&freeze_dir(dir.path()).join("freeze_1.wav"));
+    let mut target = HashMap::new();
+    target.insert(
+        1,
+        FreezeStatus::Frozen {
+            cache_ref: cache_ref("freeze_1.wav"),
+        },
+    );
+
+    app.test_apply_freeze_restore(target);
+
+    assert!(matches!(
+        app.test_freeze_status(1),
+        FreezeStatus::Frozen { .. }
+    ));
+    // The track was live before the redo, so the engine holds no source:
+    // the restore decodes the cache and attaches it (FU-A4a).
+    assert!(drain(&rx).iter().any(|c| matches!(
+        c,
+        AudioCommand::SetTrackFrozenSource { track_id: 1, source: Some(_) }
+    )));
+}
+
+#[test]
+fn redo_of_freeze_marks_stale_when_cache_is_undecodable() {
+    let (mut app, rx, dir) = capturing_app();
     app.test_add_track(1, TrackType::Instrument);
     let cache_dir = freeze_dir(dir.path());
     std::fs::create_dir_all(&cache_dir).unwrap();
@@ -411,8 +438,11 @@ fn redo_of_freeze_keeps_frozen_when_cache_exists() {
 
     assert!(matches!(
         app.test_freeze_status(1),
-        FreezeStatus::Frozen { .. }
+        FreezeStatus::Stale { .. }
     ));
+    assert!(!drain(&rx)
+        .iter()
+        .any(|c| matches!(c, AudioCommand::SetTrackFrozenSource { .. })));
 }
 
 // ---------------------------------------------------------------------

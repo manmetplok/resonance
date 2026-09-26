@@ -651,7 +651,8 @@ impl Resonance {
             .filter(|(_, status)| *status != crate::state::FreezeStatus::Idle)
             .collect();
         let project_path = self.io.project_path.clone();
-        self.reconcile_freeze_statuses(target, project_path.as_deref());
+        // A diff-path restore: no `ClearAll`, the engine keeps its sources.
+        self.reconcile_freeze_statuses(target, project_path.as_deref(), false);
     }
 
     /// Test-only: read the external-instrument state mirror for a track, if

@@ -395,3 +395,180 @@ fn deleting_a_frozen_track_removes_its_cache() {
         .iter()
         .any(|c| matches!(c, AudioCommand::UnfreezeTrack { track_id: 1 })));
 }
+
+// ---------------------------------------------------------------------
+// Undo / redo re-attaches the cache (FU-A4a)
+// ---------------------------------------------------------------------
+
+/// Undo and redo reconcile the engine's frozen sources, not just the app's
+/// statuses. A track an undo restores `Frozen` must be handed its decoded
+/// cache (`SetTrackFrozenSource { Some }`) whenever the engine does not
+/// already hold it — after a `ClearAll` (every track is rebuilt without
+/// one) and on the diff path for a track that was not frozen before the
+/// restore. Without it the GUI says Frozen while the live chain plays.
+mod undo_reattach {
+    use super::*;
+    use resonance_app::message::{FreezeMessage, ProjectIoMessage};
+    use resonance_app::project::LoadedProject;
+    use resonance_audio::types::AudioEvent;
+
+    fn attached(cmds: &[AudioCommand], id: u64) -> bool {
+        cmds.iter().any(|c| {
+            matches!(c, AudioCommand::SetTrackFrozenSource { track_id, source: Some(_) }
+                if *track_id == id)
+        })
+    }
+
+    fn frozen_source_cmds(cmds: &[AudioCommand], id: u64) -> usize {
+        cmds.iter()
+            .filter(|c| {
+                matches!(c, AudioCommand::SetTrackFrozenSource { track_id, .. }
+                    if *track_id == id)
+            })
+            .count()
+    }
+
+    fn unfrozen(cmds: &[AudioCommand], id: u64) -> bool {
+        cmds.iter().any(|c| {
+            matches!(c, AudioCommand::UnfreezeTrack { track_id } if *track_id == id)
+                || matches!(c, AudioCommand::SetTrackFrozenSource { track_id, source: None }
+                    if *track_id == id)
+        })
+    }
+
+    struct Loaded {
+        app: Resonance,
+        rx: Receiver<AudioCommand>,
+        freeze_dir: std::path::PathBuf,
+        _tmp: tempfile::TempDir,
+    }
+
+    /// Disk-load a project: track 1 `Frozen` and track 2 saved `Stale`,
+    /// both with a real cache; track 3 live; track 4 `Frozen` over an
+    /// undecodable cache (so it loads `Stale` with nothing attached).
+    fn load() -> Loaded {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut app, rx) = capturing_app(tmp.path());
+        let project_dir = tmp.path().join("project.rproj");
+        let freeze_dir = tmp.path().join("project.freeze");
+        write_cache_wav(&freeze_dir.join("freeze_1.wav"), 48_000, 64);
+        write_cache_wav(&freeze_dir.join("freeze_2.wav"), 48_000, 64);
+        std::fs::write(freeze_dir.join("freeze_4.wav"), b"not a wav file").unwrap();
+        let frozen = |id: u64, status| {
+            TrackFreezeState::frozen(frozen_ref(&format!("freeze_{id}.wav"), id, status))
+        };
+        let file = ProjectFile {
+            tracks: vec![
+                project_track(1, frozen(1, FreezeCacheStatus::Frozen)),
+                project_track(2, frozen(2, FreezeCacheStatus::Stale)),
+                project_track(3, TrackFreezeState::unfrozen()),
+                project_track(4, frozen(4, FreezeCacheStatus::Frozen)),
+            ],
+            ..ProjectFile::default()
+        };
+        let loaded = LoadedProject {
+            file,
+            project_dir,
+            midi_notes: Default::default(),
+            plugin_states: Default::default(),
+        };
+        let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
+            Box::new(loaded),
+        ))));
+        let _ = drain(&rx);
+        app.test_apply_engine_event(AudioEvent::AllCleared);
+        let _ = drain(&rx);
+        assert!(matches!(app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
+        assert!(matches!(app.test_freeze_status(2), FreezeStatus::Stale { .. }));
+        assert!(matches!(app.test_freeze_status(4), FreezeStatus::Stale { .. }));
+        Loaded {
+            app,
+            rx,
+            freeze_dir,
+            _tmp: tmp,
+        }
+    }
+
+    /// A full-replay undo (`ClearAll` → `AllCleared`) back to a state with
+    /// frozen tracks re-attaches every decodable cache, keeps an
+    /// undecodable one `Stale` with nothing attached, and retires the cache
+    /// of a freeze the undo takes back.
+    #[test]
+    fn a_full_replay_undo_reattaches_every_restored_freeze() {
+        let mut l = load();
+        let snapshot = l.app.test_snapshot_for_undo();
+        // After the snapshot: track 3 is frozen (a freeze the undo retires)
+        // and an extra track forces the structural fallback.
+        let cache_3 = l.freeze_dir.join("freeze_3.wav");
+        write_cache_wav(&cache_3, 48_000, 64);
+        l.app.test_set_freeze_status(
+            3,
+            FreezeStatus::Frozen {
+                cache_ref: frozen_ref("freeze_3.wav", 3, FreezeCacheStatus::Frozen),
+            },
+        );
+        l.app.test_add_track(9_999, TrackType::Audio);
+        let _ = drain(&l.rx);
+
+        l.app.test_begin_restore_from_snapshot(snapshot);
+        let cmds = drain(&l.rx);
+        assert!(
+            cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+            "a structural change takes the full replay"
+        );
+        l.app.test_apply_engine_event(AudioEvent::AllCleared);
+        let cmds = drain(&l.rx);
+
+        assert!(matches!(l.app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
+        assert!(attached(&cmds, 1), "the restored Frozen track plays its cache");
+        assert!(matches!(l.app.test_freeze_status(2), FreezeStatus::Stale { .. }));
+        assert!(attached(&cmds, 2), "a restored Stale track still plays its cache");
+        assert!(matches!(l.app.test_freeze_status(4), FreezeStatus::Stale { .. }));
+        assert!(!attached(&cmds, 4), "an undecodable cache attaches nothing");
+        assert_eq!(l.app.test_freeze_status(3), FreezeStatus::Idle);
+        assert!(!attached(&cmds, 3), "a track the undo unfreezes attaches nothing");
+        assert!(unfrozen(&cmds, 3), "the retired freeze is detached");
+        assert!(!cache_3.exists(), "and its cache deleted");
+    }
+
+    /// The diff path: undoing a freeze detaches it; redoing it — with the
+    /// cache back on disk, as a re-render leaves it — re-attaches the cache.
+    /// A track that stays frozen across the restore is left alone: its
+    /// engine source is already attached.
+    #[test]
+    fn a_diff_path_undo_and_redo_reconcile_the_engine_source() {
+        let mut l = load();
+        let frozen_snapshot = l.app.test_snapshot_for_undo();
+
+        // Unfreeze track 1: detaches the source and deletes the cache.
+        l.app.test_dispatch(Message::Freeze(FreezeMessage::UnfreezeTrack(1)));
+        let live_snapshot = l.app.test_snapshot_for_undo();
+        let _ = drain(&l.rx);
+
+        // Redo of the freeze with its cache present again.
+        write_cache_wav(&l.freeze_dir.join("freeze_1.wav"), 48_000, 64);
+        l.app.test_begin_restore_from_snapshot(frozen_snapshot);
+        let cmds = drain(&l.rx);
+        assert!(
+            !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+            "a freeze-only change takes the diff replay"
+        );
+        assert!(matches!(l.app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
+        assert!(attached(&cmds, 1), "the re-frozen track plays its cache again");
+        assert_eq!(
+            frozen_source_cmds(&cmds, 2),
+            0,
+            "a track frozen throughout is not re-decoded"
+        );
+        assert!(!unfrozen(&cmds, 2));
+
+        // Undo of the freeze again: detached, nothing attached.
+        l.app.test_begin_restore_from_snapshot(live_snapshot);
+        let cmds = drain(&l.rx);
+        assert!(!cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)));
+        assert_eq!(l.app.test_freeze_status(1), FreezeStatus::Idle);
+        assert!(unfrozen(&cmds, 1), "the undone freeze is detached");
+        assert!(!attached(&cmds, 1));
+        assert_eq!(frozen_source_cmds(&cmds, 2), 0);
+    }
+}
