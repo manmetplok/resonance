@@ -15,11 +15,11 @@
 //!   controller**, reachable only through a main-thread registry.
 //! - The caller-facing [`Editor`] handle is `Send` and owns no Objective-C
 //!   objects — only the editor's registry id and the [`SharedSize`] mirror.
-//!   Its methods dispatch onto the main queue (`show`/`hide`/`set_size`
-//!   asynchronously; `new` and `destroy` synchronously, mirroring the Wayland
-//!   handle's ready-handshake and thread-join). A caller already on the main
-//!   thread runs the work inline instead — dispatching synchronously to
-//!   yourself is a deadlock.
+//!   Its methods dispatch onto the main queue (`show`/`hide`/`set_size`/
+//!   `destroy` asynchronously; only `new` synchronously, mirroring the
+//!   Wayland handle's ready-handshake). A caller already on the main thread
+//!   runs the work inline instead — dispatching synchronously to yourself is
+//!   a deadlock.
 //! - Repaint is paced by a 60 Hz `NSTimer` on the main run loop (common
 //!   modes, so frames keep coming through live resizes and modal loops); a
 //!   tick repaints only when egui or an input event asked for it, so an idle
@@ -34,11 +34,15 @@
 //! a frame is still being built inside `ui()` — a reentrancy guard skips those
 //! nested paints (macos-editor-plan.md item 3h).
 //!
-//! **Deadlock rule** (plan §1): the main thread must never block on the
-//! thread calling [`Editor::new`]/[`Editor::destroy`] while that call is in
-//! flight. Our host calls the CLAP gui extension from the engine control
-//! thread, which only ever sends non-blocking commands to the main thread —
-//! the invariant this runtime's `exec_sync` calls rely on.
+//! **Deadlock rule** (plan §1): the main thread must never block on a
+//! thread while that thread is inside [`Editor::new`] — the one remaining
+//! `exec_sync`. [`Editor::destroy`] no longer waits for the main thread
+//! when called from another one (PLG-05): Resonance's quit path breaks the
+//! rule for teardown by design — the main thread waits in
+//! `AudioEngine::shutdown` for the engine thread, which drops every plugin
+//! and so destroys every open editor — so the teardown is queued and runs
+//! whenever the main thread next services its queue (or never, if the
+//! process exits first, which is harmless: nothing is left to release).
 //!
 //! # Scope
 //!

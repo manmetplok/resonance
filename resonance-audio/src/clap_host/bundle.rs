@@ -323,7 +323,14 @@ pub(super) fn build_instance(
 
     // Activate
     if let Some(activate) = unsafe { (*plugin).activate } {
-        let ok = unsafe { activate(plugin, sample_rate as f64, 32, 8192) };
+        let ok = unsafe {
+            activate(
+                plugin,
+                sample_rate as f64,
+                super::ACTIVATE_MIN_FRAMES,
+                super::ACTIVATE_MAX_FRAMES,
+            )
+        };
         if !ok {
             if let Some(destroy) = unsafe { (*plugin).destroy } {
                 unsafe { destroy(plugin) };

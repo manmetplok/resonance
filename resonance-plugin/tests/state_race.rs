@@ -747,3 +747,168 @@ fn a_state_load_landing_inside_the_value_store_window_survives() {
 
     shutdown(instance, audio);
 }
+
+// ---------------------------------------------------------------------------
+// A panicking extra-state saver must not wedge the publication generation
+// ---------------------------------------------------------------------------
+
+/// The extra-state saver of `PanicPlugin`: panics on the next `load()`,
+/// as a saver tripping over a corrupt IR path or preset might.
+#[derive(Default)]
+struct PanicSaver {
+    armed: AtomicBool,
+}
+
+impl ExtraStateSaver for PanicSaver {
+    fn save(&self) -> serde_json::Map<String, Value> {
+        serde_json::Map::new()
+    }
+
+    fn load(&self, _state: &Value) {
+        if self.armed.swap(false, Ordering::AcqRel) {
+            panic!("extra-state saver panicked on purpose (PLG-06 test)");
+        }
+    }
+}
+
+static PANIC_SAVER: OnceLock<Arc<PanicSaver>> = OnceLock::new();
+
+fn panic_saver() -> Arc<PanicSaver> {
+    PANIC_SAVER
+        .get_or_init(|| Arc::new(PanicSaver::default()))
+        .clone()
+}
+
+race_plugin!(
+    PanicPlugin,
+    PANIC_SLOT,
+    panic_params,
+    "test.race-panic",
+    saver: panic_saver
+);
+
+/// A saver that panics inside the active-path load used to leave
+/// `params_gen` odd forever: `end_param_publish` never ran. Every later
+/// block then saw "a load is publishing" and abandoned the editor
+/// push-back, so no editor edit reached the host again — and a save
+/// persisted the pre-panic values (code review PLG-06).
+#[test]
+fn a_panicking_extra_state_load_does_not_disable_the_editor_push_back() {
+    let params = panic_params();
+    let (mut instance, processor) = activate::<PanicPlugin>(c"test.race-panic");
+    let audio = spawn_audio(processor);
+    audio.wait_blocks(2);
+
+    panic_saver().armed.store(true, Ordering::Release);
+    let bytes = state_bytes(250.0);
+    let result = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginState>()
+        .expect("state extension")
+        .load(&mut instance.plugin_handle(), &mut &bytes[..]);
+    assert!(result.is_err(), "a panicking saver must fail the load");
+    audio.wait_blocks(3);
+
+    // The params half is announced like the inactive path's (params
+    // first, then the saver), so the plugin and the host agree on it.
+    assert_eq!(get_value(&mut instance, "loaded"), 250.0);
+    assert_eq!(params.loaded.get_plain(), 250.0);
+
+    // The editor path must still work after the failed load.
+    params.edited.set_plain(123.0);
+    audio.wait_blocks(3);
+    assert_eq!(
+        get_value(&mut instance, "edited"),
+        123.0,
+        "an editor edit after a panicking load must still reach the host"
+    );
+    assert_eq!(
+        save_state(&mut instance)["params"]["edited"],
+        json!(123.0),
+        "and a save must persist it"
+    );
+
+    shutdown(instance, audio);
+}
+
+// ---------------------------------------------------------------------------
+// Editor edits across a deactivate → activate cycle
+// ---------------------------------------------------------------------------
+
+race_plugin!(CyclePlugin, CYCLE_SLOT, cycle_params, "test.race-cycle");
+
+/// Editors write straight into the plugin's params; those writes reach
+/// `shared` only through the push-back at the top of a `process()` block.
+/// `deactivate` and `activate` used to copy `shared` into the plugin
+/// unconditionally, so an edit made after the last block — or while the
+/// plugin was deactivated (a latency-driven restart) — snapped back to
+/// the stale shared value (code review PLG-08).
+#[test]
+fn editor_edits_survive_a_deactivate_activate_cycle() {
+    let params = cycle_params();
+    let (mut instance, processor) = activate::<CyclePlugin>(c"test.race-cycle");
+    let audio = spawn_audio(processor);
+    audio.wait_blocks(2);
+    let processor = audio.stop();
+
+    // After the last block's push-back, before deactivate.
+    params.edited.set_plain(77.0);
+    instance.deactivate(processor.stop_processing());
+    assert_eq!(
+        params.edited.get_plain(),
+        77.0,
+        "deactivate must not revert an edit the push-back has not mirrored yet"
+    );
+    assert_eq!(get_value(&mut instance, "edited"), 77.0);
+
+    // While deactivated (between deactivate and activate of a restart).
+    params.edited.set_plain(88.0);
+    let processor = instance
+        .activate(
+            |_, _| (),
+            PluginAudioConfiguration {
+                sample_rate: 48_000.0,
+                min_frames_count: 32,
+                max_frames_count: 8192,
+            },
+        )
+        .expect("reactivation")
+        .start_processing()
+        .expect("start processing");
+    assert_eq!(
+        params.edited.get_plain(),
+        88.0,
+        "activate must not revert an edit made while deactivated"
+    );
+    assert_eq!(get_value(&mut instance, "edited"), 88.0);
+
+    let audio = spawn_audio(processor);
+    audio.wait_blocks(2);
+    assert_eq!(get_value(&mut instance, "edited"), 88.0);
+    assert_eq!(params.edited.get_plain(), 88.0);
+    shutdown(instance, audio);
+}
+
+/// The #1376 case must keep working: a load that lands while active and
+/// is followed by deactivation with no block in between still reaches
+/// the plugin.
+#[test]
+fn a_load_with_no_block_before_deactivate_still_wins() {
+    let params = cycle_load_params();
+    let (mut instance, processor) = activate::<CycleLoadPlugin>(c"test.race-cycle-load");
+    let audio = spawn_audio(processor);
+    audio.wait_blocks(2);
+    let processor = audio.stop();
+
+    load_state(&mut instance, &state_bytes(321.0));
+    instance.deactivate(processor.stop_processing());
+    assert_eq!(params.loaded.get_plain(), 321.0);
+    assert_eq!(get_value(&mut instance, "loaded"), 321.0);
+}
+
+race_plugin!(
+    CycleLoadPlugin,
+    CYCLE_LOAD_SLOT,
+    cycle_load_params,
+    "test.race-cycle-load"
+);

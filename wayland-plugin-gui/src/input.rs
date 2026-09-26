@@ -10,6 +10,9 @@ pub struct InputState {
     pointer_pos: Pos2,
     modifiers: Modifiers,
     scale: f32,
+    /// Which pointer buttons egui has been told are down, indexed by
+    /// `PointerButton as usize`.
+    held: [bool; egui::NUM_POINTER_BUTTONS],
 }
 
 impl InputState {
@@ -18,6 +21,46 @@ impl InputState {
             pointer_pos: Pos2::ZERO,
             modifiers: Modifiers::default(),
             scale: 1.0,
+            held: [false; egui::NUM_POINTER_BUTTONS],
+        }
+    }
+
+    /// A raw (evdev-coded) pointer button went down or up at the current
+    /// pointer position.
+    pub fn pointer_button(&mut self, raw: u32, pressed: bool, out: &mut Vec<egui::Event>) {
+        if let Some(button) = map_pointer_button(raw) {
+            self.held[button as usize] = pressed;
+            out.push(egui::Event::PointerButton {
+                pos: self.pointer_pos,
+                button,
+                pressed,
+                modifiers: self.modifiers,
+            });
+        }
+    }
+
+    /// Release every button egui still thinks is down. A window that is
+    /// hidden with a button held never sees that button's release (input
+    /// is dropped while hidden, and an unmapped surface gets none), so the
+    /// show that follows must release it, or egui keeps the button pressed
+    /// — a drag that never ends (FU-M1c).
+    pub fn release_all(&mut self, out: &mut Vec<egui::Event>) {
+        const BUTTONS: [PointerButton; egui::NUM_POINTER_BUTTONS] = [
+            PointerButton::Primary,
+            PointerButton::Secondary,
+            PointerButton::Middle,
+            PointerButton::Extra1,
+            PointerButton::Extra2,
+        ];
+        for button in BUTTONS {
+            if std::mem::take(&mut self.held[button as usize]) {
+                out.push(egui::Event::PointerButton {
+                    pos: self.pointer_pos,
+                    button,
+                    pressed: false,
+                    modifiers: self.modifiers,
+                });
+            }
         }
     }
 
@@ -43,24 +86,10 @@ impl InputState {
                 out.push(egui::Event::PointerMoved(self.pointer_pos));
             }
             PointerEventKind::Press { button, .. } => {
-                if let Some(btn) = map_pointer_button(button) {
-                    out.push(egui::Event::PointerButton {
-                        pos: self.pointer_pos,
-                        button: btn,
-                        pressed: true,
-                        modifiers: self.modifiers,
-                    });
-                }
+                self.pointer_button(button, true, out);
             }
             PointerEventKind::Release { button, .. } => {
-                if let Some(btn) = map_pointer_button(button) {
-                    out.push(egui::Event::PointerButton {
-                        pos: self.pointer_pos,
-                        button: btn,
-                        pressed: false,
-                        modifiers: self.modifiers,
-                    });
-                }
+                self.pointer_button(button, false, out);
             }
             PointerEventKind::Axis {
                 horizontal,

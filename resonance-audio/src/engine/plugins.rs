@@ -230,23 +230,50 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
                     failure: None,
                 });
             }
-            if !inst.0.take_host_restart_request() {
-                continue;
-            }
-            if inst.0.restart() {
-                any_restarted = true;
-            } else {
-                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
-                    "Plugin instance {} failed to reactivate after a restart/latency-change \
-                     request; it is deactivated and will stay silent.",
-                    instance_id
-                )));
+            let (restarted, event) = service_host_restart_request(&mut inst.0, instance_id);
+            any_restarted |= restarted;
+            if let Some(event) = event {
+                let _ = ctx.event_tx.send(event);
             }
         }
     }
     if any_restarted {
         refresh_latency_comp(ctx, external);
     }
+}
+
+/// Act on one instance's pending restart / latency-change request:
+/// returns whether it (re)activated, plus the error to report, if any.
+///
+/// * active: the deactivate → reactivate cycle that re-reads latency;
+/// * deactivated by an earlier failure: a latency change alone needs
+///   nothing — it is read at the next activation, and treating it as a
+///   failed restart was a spurious error (FU-M1b) — while a restart
+///   request retries the activation (FU-F2c);
+/// * a failure is reported once, not again for every later request from
+///   a plugin that stays deactivated (ENG-12).
+pub fn service_host_restart_request(
+    inst: &mut crate::clap_host::ClapInstance,
+    instance_id: PluginInstanceId,
+) -> (bool, Option<AudioEvent>) {
+    let (restart, latency) = inst.take_host_restart_requests();
+    if !restart && !(latency && inst.is_active()) {
+        return (false, None);
+    }
+    if inst.restart() {
+        return (true, None);
+    }
+    if !inst.take_restart_failure_report() {
+        return (false, None);
+    }
+    (
+        false,
+        Some(AudioEvent::Error(format!(
+            "Plugin instance {} failed to reactivate after a restart/latency-change \
+             request; it is deactivated and will stay silent.",
+            instance_id
+        ))),
+    )
 }
 
 /// The engine's plugin instance-id allocation rule, shared by the track,

@@ -13,6 +13,11 @@ use clack_plugin::prelude::*;
 use crate::gui::{EditorFactory, PluginEditor};
 use crate::plugin::{OutputPortSpec, PluginEvent, ResonancePlugin};
 
+/// Most output ports a bridged plugin may declare. `process()` builds its
+/// per-block port views in a stack array of this size (no audio-thread
+/// allocation), so `new_shared` refuses a larger layout at load (PLG-09).
+pub(crate) const MAX_OUTPUT_PORTS: usize = 8;
+
 // ---------------------------------------------------------------------------
 // Param metadata stored in SharedState
 // ---------------------------------------------------------------------------
@@ -105,7 +110,7 @@ pub struct ClapShared<'a> {
     pub(crate) params_gen: AtomicU64,
 }
 
-impl ClapShared<'_> {
+impl<'a> ClapShared<'a> {
     pub fn find_slot(&self, clap_id: u32) -> Option<usize> {
         self.clap_id_to_slot.get(&clap_id).copied()
     }
@@ -180,10 +185,28 @@ impl ClapShared<'_> {
             .store(current.wrapping_add(1), Ordering::SeqCst);
     }
 
+    /// Main thread: open the publication window and close it again when
+    /// the returned guard drops — on every exit, unwinding included. A
+    /// window left open leaves `params_gen` odd forever, which disables
+    /// the state re-sync and the editor push-back for good (PLG-06).
+    pub(crate) fn param_publish_guard(&self) -> ParamPublishGuard<'_, 'a> {
+        self.begin_param_publish();
+        ParamPublishGuard(self)
+    }
+
     /// Audio thread: the current publication generation. Odd means a load
     /// is publishing right now.
     pub(crate) fn param_publish_gen(&self) -> u64 {
         self.params_gen.load(Ordering::SeqCst)
+    }
+}
+
+/// An open publication window; see [`ClapShared::param_publish_guard`].
+pub(crate) struct ParamPublishGuard<'s, 'a>(&'s ClapShared<'a>);
+
+impl Drop for ParamPublishGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.0.end_param_publish();
     }
 }
 

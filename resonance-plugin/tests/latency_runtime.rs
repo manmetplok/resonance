@@ -308,4 +308,28 @@ fn a_runtime_latency_change_reaches_the_host_and_survives_the_restart() {
 
     // The inactive query goes straight to the plugin object and agrees.
     assert_eq!(query_latency(&mut instance), INITIAL_LATENCY);
+
+    // -- a change while inactive, then activation before the callback -----
+    // (FU-M1b.) The typical case: a state load inside the host's
+    // deactivate → reactivate cycle moves the latency. The activation is
+    // where CLAP lets `changed()` be called and where the host re-reads
+    // the latency anyway, so the bridge reports it there; the main-thread
+    // callback that arrives afterwards must not report it a second time,
+    // or the host runs a second, redundant restart cycle.
+    move_lookahead(NEW_LATENCY);
+    assert!(take_flag(&instance, |h| &h.callback_requested));
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("re-activation");
+    assert!(
+        take_flag(&instance, |h| &h.latency_changed),
+        "the activation must report a latency changed while inactive"
+    );
+    assert_eq!(query_latency(&mut instance), NEW_LATENCY);
+    instance.call_on_main_thread_callback();
+    assert!(
+        !take_flag(&instance, |h| &h.latency_changed),
+        "a latency already reported at activation must not be reported again"
+    );
+    instance.deactivate(processor);
 }

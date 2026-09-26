@@ -169,10 +169,29 @@ impl Editor {
         self.closed.set_callback(callback);
     }
 
-    /// Destroy the window. Blocks until the main thread has torn it down,
-    /// exactly as the Wayland handle joins its editor thread.
+    /// Destroy the window.
+    ///
+    /// On the main thread the teardown runs inline, before this returns.
+    /// From any other thread it is queued onto the main queue and this
+    /// returns at once (PLG-05): a synchronous dispatch would block until
+    /// the main thread services its queue, and Resonance's quit path has
+    /// the main thread waiting on exactly the engine thread that destroys
+    /// editors — every quit with an editor open burned the whole shutdown
+    /// deadline, and plugin teardown then raced process exit. A late
+    /// teardown is safe: the handle owns no Objective-C objects, and the
+    /// registry id makes a teardown that finds the editor already gone a
+    /// no-op. (A spec-following CLAP host calls `gui.destroy` on the main
+    /// thread anyway, where nothing changes.)
     pub fn destroy(mut self) {
         self.stop();
+    }
+
+    /// The flag the main-thread controller clears once the editor is torn
+    /// down (or closed by the user). For tests that must wait for an
+    /// asynchronous [`Editor::destroy`] to land; not part of the API.
+    #[doc(hidden)]
+    pub fn liveness(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.alive)
     }
 
     fn stop(&mut self) {
@@ -183,7 +202,7 @@ impl Editor {
         // Host-initiated: not a close the host needs to hear about.
         self.closed.disarm();
         let id = self.id;
-        run_on_main_blocking(move || window_main_thread::destroy(id));
+        run_on_main_async(move || window_main_thread::destroy(id));
     }
 }
 

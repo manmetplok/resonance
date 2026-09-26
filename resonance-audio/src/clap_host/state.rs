@@ -195,9 +195,13 @@ impl ClapInstance {
     /// (see [`ClapInstance::take_host_restart_request`]), and the fresh
     /// latency is re-read on the way back up. Returns false — leaving
     /// the plugin deactivated — if reactivation fails.
+    ///
+    /// An instance an earlier failure left deactivated is brought back
+    /// up instead (FU-F2c), the same way [`Self::reload_with_state`]
+    /// recovers one.
     pub fn restart(&mut self) -> bool {
         if !self.active {
-            return false;
+            return self.activate_and_start();
         }
         self.cycle_activation(|_| true)
     }
@@ -231,7 +235,14 @@ impl ClapInstance {
     fn activate_and_start(&mut self) -> bool {
         // Reactivate
         if let Some(activate) = unsafe { (*self.plugin).activate } {
-            let ok = unsafe { activate(self.plugin, self.sample_rate as f64, 32, 8192) };
+            let ok = unsafe {
+                activate(
+                    self.plugin,
+                    self.sample_rate as f64,
+                    super::ACTIVATE_MIN_FRAMES,
+                    super::ACTIVATE_MAX_FRAMES,
+                )
+            };
             if !ok {
                 return false;
             }
@@ -258,20 +269,47 @@ impl ClapInstance {
                 return false;
             }
         }
+        // Back up: a later failure is news again (see
+        // `take_restart_failure_report`).
+        self.restart_failure_reported = false;
         true
     }
 
     /// Reset plugin to clean state by cycling stop/start processing.
     /// Clears reverb tails, delay lines, model state, etc.
-    pub fn reset_processing(&mut self) {
+    ///
+    /// A plugin that refuses `start_processing` again is not left
+    /// activated-but-stopped — `process()` on it is forbidden by CLAP —
+    /// but taken through a full deactivate → [`Self::activate_and_start`]
+    /// cycle (ENG-12). Returns false, leaving the plugin deactivated and
+    /// skipped by `process`, if that fails too; also false for an
+    /// instance that was already deactivated.
+    pub fn reset_processing(&mut self) -> bool {
         if !self.active {
-            return;
+            return false;
         }
         if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
             unsafe { stop(self.plugin) };
         }
-        if let Some(start) = unsafe { (*self.plugin).start_processing } {
-            unsafe { start(self.plugin) };
+        let started = match unsafe { (*self.plugin).start_processing } {
+            Some(start) => unsafe { start(self.plugin) },
+            None => true,
+        };
+        if started {
+            return true;
         }
+        if let Some(deactivate) = unsafe { (*self.plugin).deactivate } {
+            unsafe { deactivate(self.plugin) };
+        }
+        self.active = false;
+        self.activate_and_start()
+    }
+
+    /// True the first time a restart failure is reported since the
+    /// instance was last active; false for the repeats. A plugin left
+    /// deactivated that keeps calling `request_restart()` must not
+    /// re-send the same error on every request (ENG-12).
+    pub(crate) fn take_restart_failure_report(&mut self) -> bool {
+        !std::mem::replace(&mut self.restart_failure_reported, true)
     }
 }

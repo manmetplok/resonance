@@ -176,7 +176,9 @@ impl EditorThread {
             visible: false,
             mapped: false,
             needs_remap: false,
-            remap_deadline: None,
+            remap_pending: false,
+            remap_generation: 0,
+            qh: qh.clone(),
             running: true,
             configured: false,
             needs_redraw: true,
@@ -263,14 +265,9 @@ impl EditorThread {
                 state.repaint_at = None;
                 state.needs_redraw = true;
             }
-            // A re-map after a hide waits for its configure, but only
-            // until the deadline (see `REMAP_CONFIGURE_WAIT`).
-            if let Some(deadline) = state.remap_deadline {
-                if state.configured || now >= deadline {
-                    state.remap_deadline = None;
-                    state.configured = true;
-                }
-            }
+            // A re-map after a hide waits for its configure; the sync
+            // round trips that bound that wait (`REMAP_SYNC_ROUNDS`) arrive
+            // on the Wayland fd and wake the dispatch below.
             let timeout = if state.visible && state.configured && state.needs_redraw {
                 match state.frame_callback_pending {
                     // Waiting on the compositor: park until the callback
@@ -284,9 +281,8 @@ impl EditorThread {
             } else {
                 // Idle, but never park past a pending repaint deadline —
                 // that is what turns a 10 Hz `request_repaint_after`
-                // animation into actual frames while the mouse is still —
-                // nor past a re-map's configure deadline.
-                match state.repaint_at.into_iter().chain(state.remap_deadline).min() {
+                // animation into actual frames while the mouse is still.
+                match state.repaint_at {
                     Some(at) => IDLE_BUDGET
                         .min(at.saturating_duration_since(now))
                         .max(Duration::from_millis(1)),

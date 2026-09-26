@@ -1,6 +1,6 @@
 //! State held by the editor thread, mutated by SCTK dispatch handlers.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::registry::RegistryState;
@@ -9,23 +9,42 @@ use smithay_client_toolkit::shell::xdg::window::{DecorationMode, Window};
 use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_pointer::WlPointer;
-use wayland_client::Connection;
+use wayland_client::{Connection, QueueHandle};
 
 use crate::input::InputState;
 use crate::size::SharedSize;
 
-/// How long a re-map after [`State::hide`] waits for the compositor's
-/// configure before painting anyway.
+/// `wl_display.sync` round trips a re-map after [`State::hide`] waits for
+/// the compositor's configure before it concludes none is coming.
 ///
 /// xdg-shell says an unmapped toplevel is reset and must be configured
 /// again before a buffer is attached, and wlroots-based compositors enforce
 /// that (attaching early is a protocol error). Hyprland, though, keeps the
 /// toplevel configured across the unmap and sends nothing until a buffer
 /// arrives, so waiting for the configure would leave the window hidden
-/// for good. A resetting compositor answers the initial commit within a
-/// round trip — milliseconds — so this is generous for them and a short
-/// delay on show for the others.
-pub(super) const REMAP_CONFIGURE_WAIT: Duration = Duration::from_millis(200);
+/// for good.
+///
+/// So the wait is bounded by the compositor itself rather than by a
+/// wall-clock guess (FU-M1c): the initial commit is followed by a sync,
+/// and when that is answered, by a second one. A resetting compositor
+/// queues its configure while handling the commit or, like wlroots, from
+/// an idle callback right after that batch of requests — in both cases
+/// before it can answer the second sync, which it only reads after the
+/// first one's `done` reached us. Two answered round trips without a
+/// configure therefore mean the compositor kept the toplevel configured,
+/// and painting is safe. However slow or loaded the compositor, the paint
+/// never overtakes a configure it was going to send.
+pub(super) const REMAP_SYNC_ROUNDS: u8 = 2;
+
+/// User data of a re-map's `wl_display.sync` callback; see
+/// [`REMAP_SYNC_ROUNDS`].
+pub(super) struct RemapSync {
+    /// [`State::remap_generation`] when the sync was sent: an answer that
+    /// belongs to an earlier hide/show cycle is ignored.
+    pub(super) generation: u64,
+    /// 1-based round number.
+    pub(super) round: u8,
+}
 
 // ---------------------------------------------------------------------------
 // State: holds everything SCTK dispatch handlers mutate.
@@ -58,9 +77,13 @@ pub(super) struct State {
     /// resets it to its just-created state; [`State::show`] has to redo
     /// the initial commit / configure round before painting again.
     pub(super) needs_remap: bool,
-    /// `Some(deadline)` while a re-map waits for its configure; see
-    /// [`REMAP_CONFIGURE_WAIT`].
-    pub(super) remap_deadline: Option<Instant>,
+    /// True while a re-map waits for its configure; see
+    /// [`REMAP_SYNC_ROUNDS`]. `configured` is false for exactly as long.
+    pub(super) remap_pending: bool,
+    /// Bumped by every re-map, to match sync answers to their cycle.
+    pub(super) remap_generation: u64,
+    /// Needed to send the re-map's `wl_display.sync` from [`State::show`].
+    pub(super) qh: QueueHandle<State>,
     pub(super) running: bool,
     pub(super) configured: bool,
     pub(super) needs_redraw: bool,
@@ -110,8 +133,8 @@ pub(super) struct State {
 impl State {
     /// `Command::Show`. Paints on the next loop turn, which maps the
     /// window; after a [`State::hide`] it first re-runs the initial
-    /// commit, and the paint waits for the configure that answers it (for
-    /// at most [`REMAP_CONFIGURE_WAIT`]).
+    /// commit, and the paint waits for the configure that answers it (or
+    /// for [`REMAP_SYNC_ROUNDS`] round trips proving none is coming).
     pub(super) fn show(&mut self) {
         if self.visible {
             return;
@@ -119,7 +142,9 @@ impl State {
         self.visible = true;
         self.needs_redraw = true;
         // Whatever egui last knew about the pointer is stale: it left (or
-        // never entered) while we were hidden.
+        // never entered) while we were hidden, and a button held across
+        // the hide was released where we could not see it (FU-M1c).
+        self.input.release_all(&mut self.pending_events);
         self.pending_events.push(egui::Event::PointerGone);
         if self.needs_remap {
             self.needs_remap = false;
@@ -130,8 +155,37 @@ impl State {
             self.window.set_app_id(&self.app_id);
             self.window.set_min_size(Some(self.min_size));
             self.configured = false;
-            self.remap_deadline = Some(Instant::now() + REMAP_CONFIGURE_WAIT);
+            self.remap_pending = true;
+            self.remap_generation += 1;
             self.window.commit();
+            self.send_remap_sync(1);
+        }
+    }
+
+    fn send_remap_sync(&self, round: u8) {
+        let data = RemapSync {
+            generation: self.remap_generation,
+            round,
+        };
+        let _ = self.conn.display().sync(&self.qh, data);
+    }
+
+    /// The compositor answered one of the re-map's syncs.
+    pub(super) fn remap_sync_done(&mut self, sync: &RemapSync) {
+        if !self.remap_pending || sync.generation != self.remap_generation {
+            return;
+        }
+        if self.configured {
+            // The configure arrived; the wait is over.
+            self.remap_pending = false;
+        } else if sync.round < REMAP_SYNC_ROUNDS {
+            self.send_remap_sync(sync.round + 1);
+        } else {
+            // No configure is coming: the compositor kept the toplevel
+            // configured across the unmap (Hyprland). Paint.
+            self.remap_pending = false;
+            self.configured = true;
+            self.needs_redraw = true;
         }
     }
 

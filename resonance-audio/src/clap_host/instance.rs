@@ -39,6 +39,10 @@ pub struct ClapInstance {
     pub(super) plugin: *const clap_plugin,
     pub(super) host_data: Pin<Box<HostData>>,
     pub(super) active: bool,
+    /// A failed (re)activation has been reported to the user and the
+    /// instance has not been active since. Keeps a plugin that keeps
+    /// requesting restarts from re-sending the same error (ENG-12).
+    pub(super) restart_failure_reported: bool,
     pub(super) sample_rate: u32,
     pub(super) params_ext: Option<*const clap_plugin_params>,
     pub(super) state_ext: Option<*const clap_plugin_state>,
@@ -135,6 +139,7 @@ impl ClapInstance {
             plugin,
             host_data,
             active: true,
+            restart_failure_reported: false,
             sample_rate,
             params_ext,
             state_ext,
@@ -206,10 +211,19 @@ impl ClapInstance {
     /// thread runs [`ClapInstance::restart`] at its next safe point,
     /// which re-reads the latency, then republishes PDC.
     pub fn take_host_restart_request(&self) -> bool {
+        let (restart, latency) = self.take_host_restart_requests();
+        restart || latency
+    }
+
+    /// [`Self::take_host_restart_request`], keeping the two flags apart:
+    /// `(restart_requested, latency_changed)`. A latency change on a
+    /// deactivated instance needs no action — it is read at the next
+    /// activation — while a restart request does (FU-M1b).
+    pub(crate) fn take_host_restart_requests(&self) -> (bool, bool) {
         use std::sync::atomic::Ordering;
         let restart = self.host_data.restart_requested.swap(false, Ordering::AcqRel);
         let latency = self.host_data.latency_changed.swap(false, Ordering::AcqRel);
-        restart || latency
+        (restart, latency)
     }
 
     /// Re-read the plugin's reported latency. Only meaningful right

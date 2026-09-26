@@ -9,7 +9,7 @@ use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 
 use crate::app::EditorApp;
 use crate::error::EditorError;
-use crate::join::join_with_timeout;
+use crate::join::{await_startup, join_with_timeout, Startup};
 use crate::size::SharedSize;
 use crate::window_thread::{Command, EditorThread};
 
@@ -28,6 +28,13 @@ pub use plugin_gui_core::EditorOptions;
 /// wedge the cocoa runtime's `modal_reentrancy` test guards against)
 /// must cost that thread two seconds once, not wedge it forever.
 const DESTROY_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long `Editor::new` waits for the editor thread to come up: the
+/// Wayland roundtrip, the compositor's first configure and EGL setup.
+/// Healthy startup takes tens of milliseconds; a compositor that never
+/// configures the window must not wedge the host's engine thread, which
+/// is the same reason teardown is bounded (PLG-10).
+const CREATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A handle to a running editor window.
 ///
@@ -75,18 +82,36 @@ impl Editor {
             })
             .map_err(EditorError::ThreadSpawn)?;
 
-        // Wait for the thread to finish initialisation (or fail).
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                // Thread hit a setup error and is exiting; reap it —
-                // bounded all the same, so a teardown wedge inside the
-                // failing thread cannot block plugin instantiation.
-                let _ = join_with_timeout(thread, DESTROY_JOIN_TIMEOUT);
-                return Err(err);
+        // Wait for the thread to finish initialisation (or fail), bounded
+        // like teardown (PLG-10): the host creates editors on its engine
+        // control thread with the instance lock held, and the thread's
+        // first step is waiting for the compositor's first configure.
+        let abort_sender = sender.clone();
+        let thread = match await_startup(
+            &ready_rx,
+            thread,
+            CREATE_TIMEOUT,
+            || {
+                // Not a close the host should hear about: `new` fails.
+                closed.disarm();
+                let _ = abort_sender.send(Command::Quit);
+            },
+            DESTROY_JOIN_TIMEOUT,
+        ) {
+            Startup::Ready(thread) => thread,
+            Startup::Failed(err) => return Err(err),
+            Startup::Disconnected => return Err(EditorError::ChannelClosed),
+            Startup::TimedOut => {
+                eprintln!(
+                    "wayland-plugin-gui: the compositor did not configure the editor \
+                     window within {:?}; giving up",
+                    CREATE_TIMEOUT
+                );
+                return Err(EditorError::WaylandConnect(
+                    "compositor did not configure the window".to_string(),
+                ));
             }
-            Err(_) => return Err(EditorError::ChannelClosed),
-        }
+        };
 
         Ok(Self {
             sender,

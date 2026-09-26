@@ -17,14 +17,15 @@ use smithay_client_toolkit::{
     delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
     delegate_seat, delegate_xdg_shell, delegate_xdg_window, registry_handlers,
 };
+use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{Connection, QueueHandle};
+use wayland_client::{Connection, Dispatch, QueueHandle};
 
-use super::state::State;
+use super::state::{RemapSync, State};
 
 // --- SCTK delegate impls ---------------------------------------------------
 
@@ -302,6 +303,22 @@ impl WindowHandler for State {
         } else {
             DecorationMode::Client
         };
+    }
+}
+
+/// Answers to a re-map's `wl_display.sync` round trips (FU-M1c).
+impl Dispatch<WlCallback, RemapSync> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlCallback,
+        event: wl_callback::Event,
+        sync: &RemapSync,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            state.remap_sync_done(sync);
+        }
     }
 }
 

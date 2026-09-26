@@ -143,6 +143,8 @@ pub mod __test_support {
     /// State reload + the error it reports on failure (code review
     /// ENG-02) — see `tests/clap_latency_tracking.rs`.
     pub use crate::engine::plugins::reload_plugin_state;
+    /// Restart / latency-change request servicing (ENG-12, FU-M1b).
+    pub use crate::engine::plugins::service_host_restart_request;
     /// The event pair the engine emits when a plugin editor refuses to
     /// open (ba todo #1347) — see `tests/plugin_editor_state.rs`.
     pub use crate::engine::plugins::plugin_editor_failure_events;

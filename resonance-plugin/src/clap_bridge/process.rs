@@ -2,11 +2,12 @@
 
 use std::sync::atomic::Ordering;
 
+use clack_extensions::latency::HostLatency;
 use clack_plugin::events::event_types::NoteExpressionType;
 use clack_plugin::prelude::*;
 
 use super::ports::sidechain_port_index;
-use super::shared::{ClapAudioProcessor, ClapMainThread, ClapShared};
+use super::shared::{ClapAudioProcessor, ClapMainThread, ClapShared, MAX_OUTPUT_PORTS};
 use crate::plugin::{
     ControlEvent, EventIterator, KeyBuffer, NoteEvent, OutputBuffer, PluginEvent, ResonancePlugin,
     TempoInfo,
@@ -26,12 +27,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             .take()
             .ok_or(PluginError::Message("Plugin not initialized"))?;
 
-        // Sync param values from shared atomics to plugin's params
-        for i in 0..plugin.param_count() {
-            if i < shared.param_values.len() {
-                plugin.param(i).set_plain(shared.get_value(i));
-            }
-        }
+        // Bring the plugin's params and the shared atomics into agreement
+        // before the plugin moves into the audio processor (PLG-08).
+        reconcile_params(&plugin, shared);
 
         plugin.initialize(
             audio_config.sample_rate as f32,
@@ -53,6 +51,17 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         main_thread
             .host_handle
             .store_latency(plugin.latency_samples());
+        // A change the plugin reported while inactive is announced here,
+        // during activation — where CLAP allows `clap_host_latency.changed()`
+        // and where the host re-reads the latency anyway — and taken, so
+        // the main-thread callback the report also asked for finds nothing
+        // left to say. Otherwise that late callback made the host run a
+        // second, redundant restart cycle (FU-M1b).
+        if main_thread.host_handle.take_latency_dirty() {
+            if let Some(latency) = main_thread.host.shared().get_extension::<HostLatency>() {
+                latency.changed(&mut main_thread.host);
+            }
+        }
         // From here on the plugin is active, so a further latency change
         // needs a restart request rather than a bare notification.
         main_thread.host_handle.set_active(true);
@@ -473,15 +482,8 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
 
         // Build a transient slice of OutputBuffer views over the scratch.
         // Uses a stack array to avoid heap allocation on the audio thread.
-        // A plugin declaring more ports than the array holds is a plugin
-        // bug: caught by the debug_assert in debug builds, and by the
-        // array's bounds check (panic, not silent truncation) in release.
-        const MAX_OUTPUT_PORTS: usize = 8;
-        debug_assert!(
-            self.output_scratch.len() <= MAX_OUTPUT_PORTS,
-            "plugin declares {} output ports; the CLAP bridge supports at most {MAX_OUTPUT_PORTS}",
-            self.output_scratch.len(),
-        );
+        // `new_shared` refuses a layout with more ports than the array
+        // holds, so a plugin cannot get this far with one (PLG-09).
         let mut port_views_arr: [std::mem::MaybeUninit<OutputBuffer<'_>>; MAX_OUTPUT_PORTS] =
             [const { std::mem::MaybeUninit::uninit() }; MAX_OUTPUT_PORTS];
         let mut port_views_len = 0;
@@ -547,39 +549,51 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
     fn deactivate(self, main_thread: &mut ClapMainThread<'a, P>) {
         main_thread.host_handle.set_active(false);
 
-        // Hand the plugin back holding the shared values, mirroring
-        // `activate`'s sync in the other direction (ba todo #1376).
+        // Hand the plugin back in agreement with the shared values (ba
+        // todo #1376, PLG-08).
         //
-        // `shared` is the authority for a param's value: the host, the
-        // editor and `state::load` all write it, and the audio thread
-        // copies it into the plugin whenever `params_dirty` is set. Every
-        // path that gets a value into the plugin object therefore runs on
-        // the audio thread — so a load that lands while active and is
-        // followed by deactivation with no `process()` block in between
-        // never reaches the plugin at all.
+        // A load that lands while active and is followed by deactivation
+        // with no `process()` block in between never reaches the plugin
+        // on its own: only the audio thread copies `shared` into the
+        // plugin. That is what a host does when it opens a project with
+        // the transport stopped, and the main-thread `state::save` path
+        // asks the PLUGIN, so saving in that window used to persist every
+        // parameter at its default. `reconcile_params` applies such a load.
         //
-        // That is not hypothetical: it is what a host does when it opens a
-        // project with the transport stopped. The values were not lost
-        // (they sit in `shared`, and `get_value` still reports them), but
-        // the main-thread `state::save` path asks the PLUGIN, so saving in
-        // that window wrote every parameter at its default and persisted
-        // the loaded project as a blank one.
-        //
-        // Unconditional rather than gated on `params_dirty`: when the flag
-        // is clear the two already agree — the push-back keeps `shared`
-        // tracking the plugin every block — so the copy is a no-op, and
-        // one less flag to reason about on a path that runs once per
-        // transport stop.
-        for i in 0..self.plugin.param_count() {
-            if i < self.shared.param_values.len() {
-                self.plugin.param(i).set_plain(self.shared.get_value(i));
-            }
-        }
+        // Without a pending load the plugin is the newer side: an editor
+        // edit made after the last block's push-back lives only in the
+        // plugin, and copying `shared` over it would snap the knob back.
+        reconcile_params(&self.plugin, self.shared);
 
         main_thread.plugin = Some(self.plugin);
     }
 
     fn reset(&mut self) {
         self.plugin.reset();
+    }
+}
+
+/// Make the plugin's params and the shared atomics agree at an activation
+/// boundary (`activate` / `deactivate`, main thread, no `process()` in
+/// flight and no `state::load` either — both are `[main-thread]`).
+///
+/// Whichever side holds the newer values wins:
+///
+/// * `params_dirty` set: a state load was published into `shared` and no
+///   block has applied it yet, so `shared` → plugin (ba todo #1376);
+/// * otherwise the plugin: every host-side writer (`flush`, an inactive
+///   `state::load`, `ParamValue` events) writes both sides, but an editor
+///   writes only the plugin — after the last block's push-back, or while
+///   the plugin is deactivated — so plugin → `shared` (PLG-08).
+fn reconcile_params<P: ResonancePlugin>(plugin: &P, shared: &ClapShared<'_>) {
+    let count = plugin.param_count().min(shared.param_values.len());
+    if shared.params_dirty.swap(false, Ordering::AcqRel) {
+        for i in 0..count {
+            plugin.param(i).set_plain(shared.get_value(i));
+        }
+    } else {
+        for i in 0..count {
+            shared.set_value(i, plugin.param(i).get_plain());
+        }
     }
 }

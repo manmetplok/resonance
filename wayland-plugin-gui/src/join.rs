@@ -49,3 +49,54 @@ pub fn join_with_timeout(handle: JoinHandle<()>, timeout: Duration) -> bool {
         Err(_) => false,
     }
 }
+
+/// How [`await_startup`] ended.
+#[derive(Debug)]
+pub enum Startup<E> {
+    /// The thread reported ready; here is its handle to keep.
+    Ready(JoinHandle<()>),
+    /// The thread reported a setup error; it has been reaped (bounded).
+    Failed(E),
+    /// The thread went away without reporting anything.
+    Disconnected,
+    /// No report within the deadline: `abort` was called and the thread
+    /// reaped, or detached if it did not exit within `reap_timeout`.
+    TimedOut,
+}
+
+/// Wait for a freshly spawned editor thread's startup report — the
+/// creation-side twin of [`join_with_timeout`] (PLG-10).
+///
+/// The CLAP host creates editors on the same audio-engine control thread
+/// it destroys them on, with the instance lock held, so the wait for the
+/// thread's first configure must be bounded just like teardown: a
+/// compositor that never configures the window (hung, restarting, a
+/// kiosk shell) would otherwise wedge that thread forever. On timeout,
+/// `abort` asks the thread to quit (the pre-configure loop watches for
+/// it) and the thread is reaped under `reap_timeout`.
+pub fn await_startup<E>(
+    ready_rx: &mpsc::Receiver<Result<(), E>>,
+    thread: JoinHandle<()>,
+    timeout: Duration,
+    abort: impl FnOnce(),
+    reap_timeout: Duration,
+) -> Startup<E> {
+    match ready_rx.recv_timeout(timeout) {
+        Ok(Ok(())) => Startup::Ready(thread),
+        Ok(Err(err)) => {
+            // The thread hit a setup error and is exiting; reap it,
+            // bounded all the same.
+            let _ = join_with_timeout(thread, reap_timeout);
+            Startup::Failed(err)
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = join_with_timeout(thread, reap_timeout);
+            Startup::Disconnected
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            abort();
+            let _ = join_with_timeout(thread, reap_timeout);
+            Startup::TimedOut
+        }
+    }
+}

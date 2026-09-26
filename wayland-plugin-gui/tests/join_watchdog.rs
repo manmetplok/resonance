@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use wayland_plugin_gui::join_with_timeout;
+use wayland_plugin_gui::{await_startup, join_with_timeout, Startup};
 
 /// A thread that has already exited joins immediately and reports true —
 /// the happy path must stay a real join (nothing detached, no waiting
@@ -96,5 +96,104 @@ fn stuck_thread_times_out_instead_of_wedging() {
     );
 
     // Unstick the leaked thread so the test binary exits cleanly.
+    drop(hold_tx);
+}
+
+// ---------------------------------------------------------------------------
+// The startup handshake (`await_startup`, PLG-10)
+// ---------------------------------------------------------------------------
+
+/// A thread that reports ready is handed back, promptly and joinable.
+#[test]
+fn startup_ready_returns_the_thread() {
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let handle = thread::spawn(move || {
+        let _ = ready_tx.send(Ok(()));
+    });
+    match await_startup(
+        &ready_rx,
+        handle,
+        Duration::from_secs(10),
+        || panic!("a ready thread must not be aborted"),
+        Duration::from_secs(10),
+    ) {
+        Startup::Ready(handle) => handle.join().expect("editor thread"),
+        other => panic!("expected Ready, got {other:?}"),
+    }
+}
+
+/// A setup error is passed through and the failing thread reaped.
+#[test]
+fn startup_failure_is_reported() {
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let handle = thread::spawn(move || {
+        let _ = ready_tx.send(Err("no compositor".to_string()));
+    });
+    let outcome = await_startup(
+        &ready_rx,
+        handle,
+        Duration::from_secs(10),
+        || {},
+        Duration::from_secs(10),
+    );
+    match outcome {
+        Startup::Failed(err) => assert_eq!(err, "no compositor"),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+/// The wedge case: the editor thread waits for a first configure that
+/// never comes. `Editor::new` used to block on it forever — on the host's
+/// engine thread, with the instance lock held. The wait must give up at
+/// its deadline, ask the thread to quit, and reap it.
+#[test]
+fn startup_that_never_reports_times_out_and_aborts_the_thread() {
+    let (_ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let (quit_tx, quit_rx) = mpsc::channel::<()>();
+    // The stand-in for the pre-configure loop: never ready, but it does
+    // watch for Quit.
+    let handle = thread::spawn(move || {
+        let _ = quit_rx.recv();
+    });
+    let timeout = Duration::from_millis(250);
+    let start = Instant::now();
+    let outcome = await_startup(
+        &ready_rx,
+        handle,
+        timeout,
+        move || {
+            let _ = quit_tx.send(());
+        },
+        Duration::from_secs(10),
+    );
+    let elapsed = start.elapsed();
+    assert!(matches!(outcome, Startup::TimedOut), "got {outcome:?}");
+    assert!(elapsed >= timeout, "gave up early ({elapsed:?})");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the abort must reap the thread promptly ({elapsed:?})"
+    );
+}
+
+/// A thread that ignores the abort too (stuck in the Wayland roundtrip)
+/// is detached after the reap deadline: the caller still returns.
+#[test]
+fn startup_stuck_past_the_abort_is_detached() {
+    let (_ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let (hold_tx, hold_rx) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        let _ = hold_rx.recv();
+    });
+    let start = Instant::now();
+    let outcome = await_startup(
+        &ready_rx,
+        handle,
+        Duration::from_millis(100),
+        || {},
+        Duration::from_millis(100),
+    );
+    let elapsed = start.elapsed();
+    assert!(matches!(outcome, Startup::TimedOut), "got {outcome:?}");
+    assert!(elapsed < Duration::from_secs(5), "wedged ({elapsed:?})");
     drop(hold_tx);
 }
