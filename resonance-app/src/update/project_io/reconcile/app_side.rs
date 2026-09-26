@@ -46,7 +46,19 @@ impl Reconcile for Markers {
     const NAME: &'static str = "markers";
 
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, _: &ReconcileCtx<'_>) {
+        // The live counter, not the live markers' max: a restore never
+        // rewinds it, or two undos in a row hand a removed id out again
+        // (FU-A13b).
+        let live_next_id = r.markers.next_id();
         r.markers = crate::state::ArrangementMarkers::from(new.arrangement_markers.clone());
+        r.markers.ensure_next_id_at_least(live_next_id);
+        // A selection naming a marker the restore removed would highlight
+        // a later marker that reuses nothing but the stale id (FU-A13b).
+        if let Some(selected_id) = r.ui.interaction.selected_marker_id {
+            if !r.markers.contains(selected_id) {
+                r.ui.interaction.selected_marker_id = None;
+            }
+        }
     }
 }
 

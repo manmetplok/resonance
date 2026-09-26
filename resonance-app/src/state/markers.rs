@@ -219,6 +219,18 @@ impl ArrangementMarkers {
     pub fn is_empty(&self) -> bool {
         self.markers.is_empty()
     }
+
+    /// Ensure the next_id counter is at least the given value. Used when
+    /// restoring to maintain session-monotonic id allocation across
+    /// undo/redo cycles. The counter is never lowered.
+    pub fn ensure_next_id_at_least(&mut self, min_id: u64) {
+        self.next_id = self.next_id.max(min_id);
+    }
+
+    /// The id [`Self::allocate_id`] will try next.
+    pub fn next_id(&self) -> u64 {
+        self.next_id
+    }
 }
 
 impl std::ops::Deref for ArrangementMarkers {

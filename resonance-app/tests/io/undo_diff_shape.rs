@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use resonance_app::compose::messages::DrumGroupsMessage;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::demo;
-use resonance_app::message::{GroupMessage, MarkerMessage, Message, TrackMessage};
+use resonance_app::message::{GroupMessage, MarkerMessage, MarkerUiMessage, Message, TrackMessage};
 use resonance_app::project::ProjectFile;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::reconcile::{domain_order, Origin};
@@ -198,6 +198,57 @@ fn adding_and_removing_a_marker_undoes_through_the_diff_path() {
     step_lands_on(&mut f, Message::Undo, &added, "undo marker delete");
     undo_redo_over(&mut f, &before, &added, "marker add");
     step_lands_on(&mut f, Message::Redo, &removed, "redo marker delete");
+}
+
+/// FU-A13b: a restore never rewinds the marker id counter. Two undos in a
+/// row used to reset it to the restored set's max + 1, so the next marker
+/// took the id of one the undos had removed.
+#[test]
+fn undoing_marker_adds_never_hands_a_removed_id_out_again() {
+    let mut f = fixture("marker-ids");
+    let ids = |f: &Fixture| -> HashSet<u64> {
+        f.app.test_markers().markers.iter().map(|m| m.id).collect()
+    };
+    let start = ids(&f);
+    edit(&mut f, Message::Marker(MarkerMessage::AddAtPlayhead));
+    edit(&mut f, Message::Marker(MarkerMessage::AddAtPlayhead));
+    let added: HashSet<u64> = ids(&f).difference(&start).copied().collect();
+    assert_eq!(added.len(), 2, "two markers were added");
+
+    let _ = f.app.update(Message::Undo);
+    let _ = f.app.update(Message::Undo);
+    assert_eq!(ids(&f), start, "both adds were undone");
+
+    edit(&mut f, Message::Marker(MarkerMessage::AddAtPlayhead));
+    let fresh: Vec<u64> = ids(&f).difference(&start).copied().collect();
+    assert_eq!(fresh.len(), 1);
+    assert!(
+        !added.contains(&fresh[0]),
+        "the post-undo marker reused a removed id: {fresh:?} vs {added:?}"
+    );
+}
+
+/// FU-A13b: a selection naming a marker the restore removed is cleared, so
+/// it can't highlight a later marker that happens to share the id.
+#[test]
+fn undoing_a_marker_add_clears_its_selection() {
+    let mut f = fixture("marker-select");
+    let start: HashSet<u64> = f.app.test_markers().markers.iter().map(|m| m.id).collect();
+    edit(&mut f, Message::Marker(MarkerMessage::AddAtPlayhead));
+    let id = f
+        .app
+        .test_markers()
+        .markers
+        .iter()
+        .map(|m| m.id)
+        .find(|id| !start.contains(id))
+        .expect("the add landed a marker");
+    let _ = f.app.update(Message::MarkerUi(MarkerUiMessage::Select(Some(id))));
+    assert_eq!(f.app.test_selected_marker_id(), Some(id));
+
+    let _ = f.app.update(Message::Undo);
+    assert!(!f.app.test_markers().markers.iter().any(|m| m.id == id));
+    assert_eq!(f.app.test_selected_marker_id(), None);
 }
 
 // ---------------------------------------------------------------------------
