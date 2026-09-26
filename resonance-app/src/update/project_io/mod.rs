@@ -3,6 +3,7 @@
 //! engine + state replay lives in `replay.rs`, and rfd file-dialog
 //! tasks live in `dialogs.rs`.
 
+mod autosave;
 mod dialogs;
 mod instantiate;
 mod replay;
@@ -19,6 +20,7 @@ use crate::message::*;
 use crate::project::SaveCollector;
 use crate::Resonance;
 
+pub use autosave::{should_autosave, tick_autosave, AutosaveGate};
 pub use dialogs::save_project_as_dialog;
 pub use instantiate::{begin_instantiate, instantiate_builtin, load_user_template_task};
 pub use replay::replay_loaded_project;

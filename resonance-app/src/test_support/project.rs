@@ -40,6 +40,13 @@ impl Resonance {
         self.io.save_state.as_ref().map(|s| (s.path.clone(), s.autosave))
     }
 
+    /// Test-only: replace the in-memory autosave settings (nothing is
+    /// persisted), e.g. to drive the autosave trigger with a 0 s interval.
+    #[doc(hidden)]
+    pub fn test_set_autosave_settings(&mut self, settings: crate::settings::AutosaveSettings) {
+        self.settings.autosave = settings;
+    }
+
     /// Test-only: swap in a command-capturing engine and hand back the
     /// receiver its [`send`](resonance_audio::AudioEngine::send) calls
     /// queue onto. Lets `tests/aux_send_handlers.rs` assert the exact

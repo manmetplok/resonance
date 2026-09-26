@@ -17,6 +17,8 @@ mod common;
 mod audio_import_entry_points;
 #[path = "io/autosave_settings.rs"]
 mod autosave_settings;
+#[path = "io/autosave_trigger.rs"]
+mod autosave_trigger;
 #[path = "io/autosave_write.rs"]
 mod autosave_write;
 #[path = "io/browser_handlers.rs"]
