@@ -84,6 +84,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-13d (ARCH-01) | Reconcile group 5: audio clips, MIDI clips, vocal audio-clip map; `ctx.midi_notes` | opus | merged | be5c201a |
 | refactor-intent A-13e (ARCH-01) | Reconcile group 3: `Routing` stage (sends, sidechain routes); diff-path sends now after master (engine state proven disjoint) | opus | merged | ee067a01 |
 | refactor-intent A-13f (ARCH-01) | `Stage::Entities` (tracks, busses, master, track_outputs, plugin_state, entity_order); both paths = setup + `reconcile_all_stages`; plugin bypass after blob on both paths | opus | merged | b7531c90 |
+| refactor-intent A-13g (ARCH-01) | Structural gate drops sections, placements, drum patterns, legacy drum groups, track groups, markers — those undos take the diff path | opus | merged | 37b049a4 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
@@ -104,6 +105,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent D-4 (ARCH-04) | App allocates every track id; engine `next_track_id` + `SUB_TRACK_ID_BASE` gone; demo seed counter bug fixed | sonnet | merged | c44abfdb |
 | refactor-intent D-5 (ARCH-04) | Mandatory reference id; engine `next_ref_id` gone, collision refused; arrangement markers were already app-only | sonnet | merged | 32a81629 |
 | refactor-intent D-6 (ARCH-04) | Design `docs/design/D-6-engine-created-ids.md`: one app clip allocator (`CLIP_ID_BASE`), standing `GrantIds` for recording/take ids, app-owned asset ids; D-7a–f; 4 open human decisions | opus | merged (design) | a215818c |
+| refactor-intent D-7c (ARCH-04) | `CreateMidiClip { clip_id }` from `fresh_derived_clip_id`; engine rejects clip-id collisions across audio+MIDI; dead `ImportClip` deleted | sonnet | merged | 37b049a4 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
