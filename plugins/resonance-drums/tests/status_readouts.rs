@@ -80,7 +80,7 @@ fn render_and_measure(sampler: &mut DrumSampler, frames: usize) -> [f32; 2] {
                 right: r.as_mut_slice(),
             })
             .collect();
-        sampler.render_block(&mut ports, frames, &DrumParams::default());
+        sampler.render_block(&mut ports, frames, &DrumParams::default(), &[]);
     }
     let mut peak = [0.0f32; 2];
     for (l, r) in &port_data {
