@@ -545,7 +545,8 @@ fn restore_into_full_replay_path_reapplies_fade_gain() {
     app.test_add_track(42, TrackType::Audio);
     let _ = drain(&rx);
 
-    app.test_begin_restore_from_snapshot(snapshot);
+    // Forced: since A-13i no shape falls back on its own.
+    app.test_begin_full_restore_from_snapshot(snapshot);
     assert!(
         drain(&rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
         "a structural change forces the full replay"

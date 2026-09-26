@@ -10,7 +10,8 @@ master `d538d5cf`; group 3 waits for D-2/D-3), §9 the fourth (A-13d, group
 master `1853dd1e`), §11 the sixth (A-13f, group 6 step 1, against
 master `fde89f24`), §12 the seventh (A-13g, group 6 step 2, against
 master `645d49e1`), §13 the eighth (A-13h, group 6 step 3, against master
-`91ec9867`). Later slices move one group at a time.
+`91ec9867`), §14 the ninth (A-13i, group 6 step 4, against master
+`815af005`). Later slices move one group at a time.
 
 ## 1. The problem
 
@@ -1409,3 +1410,238 @@ User-visible:
   `RoutingRemovals` are no-ops after `ClearAll`. With `Origin::UndoFull`
   gone, `MissingPlugins`' dismiss-on-undo rule goes with it — decide
   whether a diff re-add of a missing plugin should re-raise the warning.
+
+## 14. Group (6), step 4: A-13i
+
+Written against master `815af005` (after A-13h).
+
+### What left the gate
+
+| Check dropped | Commit | Guards (`tests/io/undo_diff_shape.rs`) |
+|---|---|---|
+| track set (id, type, sub-track link) | 1 | `adding_and_removing_{an_audio,a_vocal}_track_…`, `…_an_instrument_track_with_plugins_and_sends_…`, `a_sub_track_producing_instrument_…`, `…_an_external_instrument_track_…`, `a_re_added_frozen_track_gets_its_cache_attached`, `a_track_type_change_is_a_remove_and_an_add`, `a_re_added_group_member_gets_its_effective_mute`, `a_re_added_tracks_automation_lane_is_sent_again`, `undoing_a_track_add_drops_its_selection_and_never_reissues_its_id`, `a_track_restore_survives_the_previous_restores_late_echoes`, `undoing_a_track_delete_before_its_echo_keeps_the_track` |
+| audio and MIDI clip sets (id, WAV, length) | 2 | `deleting_an_audio_clip_…`, `splitting_an_audio_clip_…`, `adding_and_removing_midi_clips_…`, `deleting_a_track_with_clips_…`, `a_clip_whose_wav_changed_is_deleted_and_reloaded`, `a_clip_restore_survives_the_previous_restores_late_echoes`, `undoing_a_clip_delete_before_its_echo_keeps_the_clip`, `a_midi_note_restore_keeps_the_clips_lyrics_through_its_echoes` |
+
+Every guard asserts, after each step, no `ClearAll`, all 34 domains under
+`UndoDiff`, `build_project_file` equal to the target and the snapshot
+`same_state`; then plays the engine's echoes back (the harness now also
+answers track adds and removals — a parent's `RemoveTrack` for each
+sub-track the engine still holds under it — clip loads, deletes and MIDI
+deletes) and asserts the same again with nothing owed. The structural
+steps pin the command list. The track- and clip-ledger halves were each
+checked to fail their late-echo guards with the ledger disabled.
+
+`structurally_compatible` now checks nothing. It stays, always `true`,
+for A-13j to delete together with the undo's `ClearAll` fallback. The
+tests that pinned the full undo path used to force it with an extra track;
+they now call `test_begin_full_restore_from_snapshot`
+(`Resonance::restore_from_snapshot(snapshot, allow_diff = false)`), the
+only way left to reach `Origin::UndoFull`.
+
+### Kept, fresh, removed — tracks and clips
+
+The A-13h rule, extended:
+
+* **`entities::kept_tracks(old, new)`** — the id is in both files with the
+  same `track_type` and `sub_track` link, and a sub-track's parent is kept
+  (the engine's `RemoveTrack` drops a parent's sub-tracks). Every other
+  track of `new` is *fresh*, every other track of `old` is removed. A type
+  change is a remove + add under the same id, which is what the full
+  replay did to it. Empty after a `ClearAll`.
+* **`kept_plugins`** additionally requires a track chain's track to be
+  kept: `RemoveTrack` drops the chain, so a re-added track's plugins are
+  fresh even under unchanged ids.
+* **`clips::kept_audio_clips` / `kept_midi_clips`** — in both files, on a
+  kept track (in `old`), and for audio the same `audio_file` and
+  `total_frames`. A clip whose WAV or length changed is deleted and
+  reloaded under its id.
+
+### Where each piece runs
+
+| Stage | Domain | A-13i change |
+|---|---|---|
+| Removals (1st) | `routing_removals` | `kept_route_plugins` also drops a route keyed off a removed track (the engine's `RemoveTrack` drops it with the track), so `SidechainRoutes` sets it again onto a re-added one. Sends are left alone: `RemoveTrack` does not prune the engine's send table, and a send whose source goes is absent from `new` anyway. |
+| Removals (2nd, **new**) | `clip_removals` | Diff: `DeleteClip` / `DeleteMidiClip` for every clip of `old` not kept; mirrored at once, echo owed, transient UI pruned. |
+| Removals (3rd) | `entity_removals` | After the plugins (a plugin on a removed track sends nothing — the track takes it), every removed track: sub-tracks first, then the rest, each by its own `RemoveTrack`, then the busses. |
+| Entities | `tracks` | Diff arm: kept tracks as before; then every fresh track through `replay_track` (the load body, now taking the order), parents before sub-tracks, keeping the saved `.order`; `next_track_id` / `next_track_order` bumped past each. |
+| Entities | `track_outputs`, `plugin_state` | Per fresh track: `SetTrackOutput` only for a bus route; its plugins fresh (blob, bypass after the add, params parked). |
+| Clips | `audio_clips`, `midi_clips` | Diff arm: kept clips as before; every fresh clip through `load_audio_clip` / `load_midi_clip`; then the mirror sorted into `new`'s order (the serializer writes it in vector order — a clip re-added at the end broke the fixed point). A MIDI reload's delete echo is owed (below). |
+| Content | `track_groups` | Group-macro sync: a fresh track's engine flags are the own flags `replay_track` just sent, so the effective mute / solo goes out only where it differs (FU-A13a for a re-added member). |
+| Tail | `external_instruments` | A fresh track gets the after-`ClearAll` rule on its own: its map entry is rebuilt (online) and it gets no empty `SetTrackDeviceParams` when no device is selected. A removed track is in the stale set: `ClearExternalInstrument` + empty params, since the engine's `RemoveTrack` keeps its external config. |
+| Tail | `freeze` | A fresh track is not in the "attached" set, so a restored freeze decodes and attaches its cache (`SetTrackFrozenSource`); a removed frozen track is detached and its cache deleted, as the live delete does. |
+| Tail | `automation_lanes` | Unchanged: the engine keeps lanes keyed by target across `RemoveTrack`, and the domain diffs against the mirror, which the live delete had cleared — so a re-added track's lane is sent again (guarded). |
+
+`removals.rs` is now three domains: edges, clips, entities — the
+"removals before adds, edges before endpoints" rule of §13, with clips as
+the edges of a track.
+
+**Why clips go before tracks, in their own domain.** The design sketch
+(§13) put clip deletion in the clip domains' diff arms. They run after
+`Entities`, i.e. after `RemoveTrack`, which drops a track's audio clips
+*without an echo* and keeps its MIDI clips. A `DeleteClip` after it is
+parked by the engine's load-deferral queue (`defer_clip_command`) for a
+clip that never lands, times out with an error and never echoes — an
+owed echo that never settles. Deleting every clip first, explicitly,
+gives one command and one echo per clip whatever happens to its track.
+Adds stay in the clip domains (after the tracks they sit on exist).
+
+### Sub-tracks
+
+`ensure_subtracks` creates a multi-output instrument's sub-tracks on its
+`PluginAdded` echo, allocating fresh ids. A restore that re-adds such an
+instrument adds the sub-tracks the target names itself, under their saved
+ids (`CreateSubTrack`, no echo), in the same synchronous pass as the
+`AddPlugin` — so when the echo runs, every (parent, port) is taken and it
+adds none. Removal: a sub-track `new` lacks while its parent stays (undo
+of the plugin add) is removed by its own `RemoveTrack`; a removed parent's
+sub-tracks are removed first, each by its own `RemoveTrack`, so the parent's
+`RemoveTrack` answers only for itself and every sub-track's plugin chain
+is dropped (the engine's parent `RemoveTrack` drops the sub-tracks but not
+their chains).
+
+### Echoes the restore owes
+
+`RestoreEchoes` gains `TrackRemoved`, `ClipDeleted` and `MidiClipDeleted`
+counts. Handlers (`engine_events::{tracks, clips, midi}`):
+
+* a matching removal echo is swallowed (`removed_echo`, `deleted_echo`,
+  `clip_deleted_echo` — dispatch now calls these, the mirror functions
+  stay for the live paths);
+* every other echo naming an entity whose removal is owed is ignored —
+  FIFO puts it before the removal, so it describes the instance already
+  gone: `*TrackAdded`, `PluginAdded` on that track (which would otherwise
+  run `ensure_subtracks` on a missing parent), `ClipImported`,
+  `MidiClipCreated`, and the clip placement echoes (`ClipMoved` /
+  `ClipTrimmed` / fade / gain, MIDI moved / trimmed). An audio clip's
+  `ClipImported` comes from the load worker, not the command thread, but a
+  `DeleteClip` of a loading clip waits for it to land, so it still echoes
+  after the load.
+
+**Live deletes owe their echo too.** STATE-10 made the GUI track and clip
+deletes mirror at once, and their echoes found nothing left to drop.
+Before A-13i the undo of such a delete was a `ClearAll`, and `AllCleared`
+arrived after the delete's echo; now the diff restore re-adds the entity
+under the same id at once, and the late echo would remove it again. So
+every live path that mirrors a deletion at once now owes its echo:
+`ConfirmRemoveTrack` (the track and each sub-track), the track removal's
+own MIDI clip deletes, the GUI clip delete, the arrange-span delete, the
+placement purge, `forget_track`, `install_derived_midi_clip` and the vocal
+MIDI install (`engine_events::{clips, midi}::send_mirrored_delete`). An
+audio delete is owed only for a mirrored clip (the engine answers a
+delete of an id it never loaded with no echo); the engine echoes every
+MIDI delete. Paths that mirror on the echo (the GUI MIDI-clip delete, the
+vocal-audio re-install) owe nothing. Guards:
+`undoing_a_{track,clip}_delete_before_its_echo_keeps_the_{track,clip}`.
+
+### Per-entity prune
+
+The after-`ClearAll` `TransientUi` reset is replaced, for removed tracks
+and clips, by a prune in the removal domains:
+
+* **Track** (`removals::prune_track`): the registry entry, the track
+  selection (`deselect_track`), its context menu, preset-save prompt and
+  membership drag, the delete-track confirmation, the bounce dialog, the
+  mixer's expanded sub-track parents, automation / take-lane expansion,
+  the Compose focus (`expanded_track_id`, and `selected_lane` —
+  instrument or drum-roll — back to Chords), a control client's pending
+  track. Freeze, external config, lanes, group membership, sends and
+  routes, compose tables are reconciled by their domains.
+* **Clip** (`removals::prune_clip`): the mirror entry, the selected audio /
+  MIDI clip, a clip drag, trim, fade or gain gesture, MIDI clip drag or
+  trim, the open MIDI editor and pitch editor. Pool usage, lyrics and the
+  derived / vocal-audio maps are rebuilt by their domains.
+
+### Checked, no change needed
+
+* **D-4 track ids.** The file's ids are re-added; the engine accepts them
+  (the removal ran first, or the id was never live) and `next_track_id`
+  only rises (guarded: an add after undoing an add gets a new id).
+* **Clip WAVs (V6).** `snapshot_for_undo` sends `PersistClipWavs` before
+  the edit that removes a clip, so a re-add's `clip_<id>.wav` exists; the
+  undo's own snapshot persists the current clips before the restore's
+  commands (`undo_clip_audio_persist` rewritten for the diff path).
+* **Derived clips, vocal audio map, lyrics.** Restored whole from the
+  target after the clips (`DerivedClips`, `VocalAudioClips`,
+  `ClipLyrics`), so a removed or re-added derived clip needs nothing more.
+* **Take groups.** `TakeGroups` re-sends every take clip load on every
+  origin ("the cache skips the read, never the load"), so a re-added
+  track's take clips — dropped by `RemoveTrack` — come back.
+* **Automation lanes.** See the table.
+
+### Behaviour changes
+
+* **Every undo / redo now takes the diff path.** Adding, deleting,
+  splitting, recording or generating a track or clip no longer
+  re-instantiates every plugin on undo: only the tracks and clips that
+  differ are touched. The playhead stays, transient UI survives (except
+  what names a removed entity), and there is no loading window — a
+  control-API mutation is no longer refused as `busy` during an undo
+  (`control_mutation_gate_loading` now forces the full path to test the
+  gate, which disk loads still use).
+* **Full-path-only steps no longer run on any undo**: chord trim,
+  missing-plugin dismiss, the take-lane peak-cache drop, the drop of
+  derived-map entries whose echo is pending (A-13g's list), and the
+  re-decode of every frozen track (a kept frozen track keeps its source; a
+  fresh one is decoded).
+* **A MIDI note undo keeps the clip's lyrics.** A kept MIDI clip whose
+  notes changed is reloaded (`DeleteMidiClip` + `LoadMidiClipDirect`);
+  the delete's echo used to drop the mirror's clip *and its lyric
+  side-table entry*, and the load's echo brought the clip back without its
+  lyrics — a vocal clip lost its lyrics on a note undo once the echoes
+  landed, and the next save wrote them lost. Pre-existing; found by
+  `a_midi_note_restore_keeps_the_clips_lyrics_through_its_echoes`.
+* **Test harnesses that echo MIDI loads must echo MIDI deletes too**
+  (`undo_snapshot_fixed_point`, `freeze_stale_on_content`): a re-derived
+  slot is a delete + load under one id, and the load echo is ignored while
+  the delete's is owed — as the real engine, which echoes both in order,
+  never leaves it.
+
+### Found, not fixed
+
+* **Audio clip load race in the engine.** Loads are asynchronous; a
+  `DeleteClip` of a still-loading clip is parked until it lands. A load,
+  delete and re-load of one id within one load's latency (a held Ctrl+Z
+  over a clip delete) can let the second load's worker see the first
+  clip still published and drop itself as a duplicate, after which the
+  parked delete removes the only copy: the engine ends without the clip
+  the app shows. Fix is engine-side (a delete should cancel an in-flight
+  load of that id rather than wait for it).
+* **An owed audio delete that never echoes.** A clip whose WAV never
+  loaded (missing media) is mirrored; its `DeleteClip` parks, times out
+  and never echoes, so its ledger entry stays and later echoes naming the
+  id are ignored (a re-added clip's `ClipImported` would not set its
+  peaks). Rare; the entry is harmless otherwise.
+* **Sub-track plugin chains leak on a live parent delete.** The engine's
+  `RemoveTrack` of a parent drops its sub-tracks but not their plugin
+  instances. The restore avoids it (sub-tracks first); the live delete
+  does not.
+* **The GUI MIDI-clip delete mirrors on the echo** (FU-A13c's shape): an
+  undo before that echo is a no-op and the echo then deletes the clip.
+  Mirroring it at once plus `send_mirrored_delete` would fix it, as for
+  audio clips.
+* **Late scalar echoes of a removed-and-re-added track** (e.g.
+  `PlaybackSourceChanged`) are not filtered by the ledger, only add and
+  clip-placement echoes are. They carry the old instance's values, which
+  a delete + re-add from adjacent snapshots normally repeats.
+
+### What this leaves for A-13j
+
+* `structurally_compatible` (always `true`), the `allow_diff` switch and
+  `test_begin_full_restore_from_snapshot`, the undo's `ClearAll` branch in
+  `restore_from_snapshot`, `io.restoring_undo`, `Origin::UndoFull` and
+  every `after_clear_all()` / `UndoFull` arm that only it reached. The
+  tests that force the full path (`undo_snapshot_fixed_point`'s slow
+  paths, `undo_restore_flag`, `freeze_persist::undo_reattach`,
+  `freeze_stale_on_content`, `reconcile_order`'s full-undo trace,
+  `clip_fade_gain_handlers`, `reference_echo_races`,
+  `control_mutation_gate_loading`) go or move to the disk-load path.
+* The kept / fresh rules make the after-`ClearAll` behaviour the empty-kept
+  special case in every domain, so collapsing the origins leaves
+  `DiskLoad` (full, `old = None`) and `Undo` (diff). The remaining
+  per-origin differences are real rules: `MissingPlugins` (dismiss vs
+  re-raise — product decision, §13), `TransientUi` / playhead reset and
+  chord trim on a disk load, `References`' monitor source, `DerivedClips`'
+  keep-rule, `TakeGroups`' peak-cache drop, `drum_patterns`'
+  `clear_on_empty`.
+* `LiveCarry::project_path` can go once nothing `take()`s
+  `io.project_path` (FU-A7a).

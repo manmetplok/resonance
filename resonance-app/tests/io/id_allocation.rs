@@ -740,18 +740,21 @@ fn a_drawn_clip_never_shares_an_id_with_a_derived_clip_including_across_undo_and
     );
     assert_set("midi clip", &[first, drawn]);
 
-    // STATE-08: undo the draw (a structural change — `midi_clip_set_matches`
-    // is part of `structurally_compatible`, so this takes the `ClearAll` ->
-    // replay path, same as a track add-undo below) *immediately*,
-    // so it's the draw's own snapshot that's undone rather than whatever
-    // came after it, and draw again: the allocator must not rewind and
-    // reuse the undone id.
+    // STATE-08: undo the draw (since A-13i through the diff path, which
+    // deletes the clip itself) *immediately*, so it's the draw's own
+    // snapshot that's undone rather than whatever came after it, and draw
+    // again: the allocator must not rewind and reuse the undone id.
     let _ = f.app.update(Message::Undo);
+    let undo: Vec<AudioCommand> = std::iter::from_fn(|| f.rx.try_recv().ok()).collect();
     assert!(
-        std::iter::from_fn(|| f.rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find the draw and start restoring the pre-draw snapshot"
+        !undo.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a clip draw undoes through the diff path (A-13i)"
     );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(
+        undo.iter()
+            .any(|c| matches!(c, AudioCommand::DeleteMidiClip { clip_id } if *clip_id == drawn)),
+        "undo must find the draw and delete its clip"
+    );
     assert!(
         !f.app.test_midi_clips().iter().any(|c| c.id == drawn),
         "undo removed the clip the draw created"
@@ -1022,9 +1025,9 @@ fn every_send_add_path_gets_a_unique_app_id_including_across_undo() {
 /// (`a_new_track_never_takes_a_group_id` covers that specifically); this
 /// adds the undo-monotonicity half `every_bus_add_path_gets_a_unique_app_id_including_across_undo`
 /// pins for busses: undoing a track add must not let the next add reuse
-/// the id undo just freed. A track add is structural
-/// (`replay_diff::added_track_forces_fallback`), so undo takes the
-/// `ClearAll` -> replay path (a plugin or bus add no longer does, A-13h).
+/// the id undo just freed. Since A-13i the undo takes the diff path (no
+/// `ClearAll`): it removes the track itself, and re-adding a track never
+/// lowers the allocator either.
 #[test]
 fn every_track_add_path_gets_a_unique_app_id_including_across_undo() {
     let mut f = fixture("track-paths");
@@ -1054,11 +1057,16 @@ fn every_track_add_path_gets_a_unique_app_id_including_across_undo() {
         .expect("the first add landed a new track");
 
     let _ = f.app.update(Message::Undo);
+    let undo: Vec<AudioCommand> = std::iter::from_fn(|| f.rx.try_recv().ok()).collect();
     assert!(
-        std::iter::from_fn(|| f.rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find the add and start restoring the pre-add snapshot"
+        !undo.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a track add undoes through the diff path (A-13i)"
     );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(
+        undo.iter()
+            .any(|c| matches!(c, AudioCommand::RemoveTrack { track_id } if *track_id == first_id)),
+        "undo must find the add and remove its track"
+    );
     assert!(
         !f.app.test_registry().tracks.iter().any(|t| t.id == first_id),
         "undo removed the track the first add created"

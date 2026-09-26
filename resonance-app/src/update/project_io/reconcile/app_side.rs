@@ -176,19 +176,18 @@ fn sync_effective_track_macros(
     };
     let old_groups = TrackGroupRegistry::from_saved(&old.track_groups);
     let old_by_id: HashMap<u64, &ProjectTrack> = old.tracks.iter().map(|t| (t.id, t)).collect();
+    let kept = super::entities::kept_tracks(Some(old), new);
     for pt in &new.tracks {
-        // Defence in depth — see `Tracks`: a track only in `new` is
-        // A-13h/i, not reachable on the diff path yet.
-        let Some(&ot) = old_by_id.get(&pt.id) else {
-            continue;
-        };
-        // What the engine holds *right now*: `Tracks`' bare own-flag send
-        // if the own flag changed (it ran first, in `Stage::Entities`),
-        // else the old effective value it never touched.
-        let engine_soloed = if ot.soloed != pt.soloed {
-            pt.soloed
-        } else {
-            old_groups.effective_solo(pt.id, ot.soloed)
+        // What the engine holds *right now*: for a fresh track (A-13i),
+        // the own flags `Tracks` just added it with; for a kept one,
+        // `Tracks`' bare own-flag send if the own flag changed (it ran
+        // first, in `Stage::Entities`), else the old effective value it
+        // never touched.
+        let ot = old_by_id.get(&pt.id).filter(|_| kept.contains(&pt.id));
+        let engine_soloed = match ot {
+            None => pt.soloed,
+            Some(ot) if ot.soloed != pt.soloed => pt.soloed,
+            Some(ot) => old_groups.effective_solo(pt.id, ot.soloed),
         };
         let target_soloed = r.track_groups.effective_solo(pt.id, pt.soloed);
         if engine_soloed != target_soloed {
@@ -197,10 +196,10 @@ fn sync_effective_track_macros(
                 soloed: target_soloed,
             });
         }
-        let engine_muted = if ot.muted != pt.muted {
-            pt.muted
-        } else {
-            old_groups.effective_mute(pt.id, ot.muted)
+        let engine_muted = match ot {
+            None => pt.muted,
+            Some(ot) if ot.muted != pt.muted => pt.muted,
+            Some(ot) => old_groups.effective_mute(pt.id, ot.muted),
         };
         let target_muted = r.track_groups.effective_mute(pt.id, pt.muted);
         if engine_muted != target_muted {

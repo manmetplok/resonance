@@ -1,18 +1,20 @@
 //! The mutation gate refuses edits while a replay is pending (code review
 //! UPD-03).
 //!
-//! A project load, a template instantiation and a structural undo/redo
-//! all send `ClearAll` and rebuild everything from a snapshot once the
-//! engine answers `AllCleared` — on a later Tick. A control edit landing
-//! in between was acknowledged (revision bumped) and then silently wiped
-//! by the replay. It must answer `busy` instead, like the other gates.
+//! A project load, a template instantiation and an undo/redo's full
+//! restore all send `ClearAll` and rebuild everything from a snapshot once
+//! the engine answers `AllCleared` — on a later Tick. A control edit
+//! landing in between was acknowledged (revision bumped) and then silently
+//! wiped by the replay. It must answer `busy` instead, like the other
+//! gates. (Since ARCH-01 A-13i an undo never takes the full restore on its
+//! own — it is forced here — and a diff undo is synchronous, so it leaves
+//! no window.)
 
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioEvent, TrackType};
-use resonance_control::methods::edit::UndoResult;
-use resonance_control::{ErrorKind, MutationAck, Request};
-use crate::common::{call, roundtrip};
+use resonance_control::{ErrorKind, MutationAck};
+use crate::common::call;
 
 const TRACK: u64 = 1;
 
@@ -30,8 +32,8 @@ fn a_control_edit_during_a_slow_path_undo_is_busy() {
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/control-gate-loading.rprj"));
     app.test_add_track(TRACK, TrackType::Audio);
-    // A finished take is a structural edit, so undoing it takes the slow
-    // path: ClearAll now, the replay on the engine's AllCleared.
+    let before_take = app.test_snapshot_for_undo();
+    // A finished take is an undoable edit.
     app.test_apply_engine_event(AudioEvent::RecordingFinished {
         clip_id: 7,
         track_id: TRACK,
@@ -40,9 +42,9 @@ fn a_control_edit_during_a_slow_path_undo_is_busy() {
         name: "take".into(),
         waveform_peaks: Vec::new(),
     });
-    let _: UndoResult = roundtrip(&mut app, Request::without_params(2, "edit.undo"))
-        .result()
-        .expect("edit.undo succeeds");
+    // Its undo through the full path: ClearAll now, the replay on the
+    // engine's AllCleared.
+    app.test_begin_full_restore_from_snapshot(before_take);
     let revision = app.revision();
 
     let error = set_volume(&mut app)

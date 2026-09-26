@@ -167,11 +167,12 @@ impl ClipMessage {
 pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
     match m {
         ClipMessage::DeleteClip(id) => {
-            let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: id });
             // Update the mirror now rather than on the `ClipDeleted` echo:
             // an undo pressed before the echo lands must snapshot the
-            // post-delete state (code review STATE-10). The echo then
-            // finds nothing left to drop.
+            // post-delete state (code review STATE-10). The echo is owed,
+            // so it cannot drop a clip an undo re-added under this id
+            // (ARCH-01 A-13i).
+            crate::engine_events::clips::send_mirrored_delete(r, id);
             crate::engine_events::clips::deleted(r, id);
             if r.ui.interaction.selected_clip == Some(id) {
                 r.ui.interaction.selected_clip = None;

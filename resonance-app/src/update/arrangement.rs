@@ -223,12 +223,12 @@ pub fn remove_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
         if !r.clips.iter().any(|c| c.id == *clip_id) {
             continue;
         }
+        crate::engine_events::clips::send_mirrored_delete(r, *clip_id);
         r.clips.retain(|c| c.id != *clip_id);
         // A rendered vocal-audio clip the user moved into the span
         // outlives its placement's purge above; its entry must not
         // dangle (FU-A6d, the audio-map analogue of the MIDI fix below).
         r.compose.vocal_audio.forget_deleted_clip(*clip_id);
-        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: *clip_id });
     }
     if !casualties.audio_clips.is_empty() {
         r.recompute_pool_usage(); // review VIEW-30
@@ -242,9 +242,7 @@ pub fn remove_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
         // A derived clip the user moved into the span outlives its
         // placement's purge above; its entry must not dangle (FU-A6b).
         r.compose.forget_deleted_derived_clip(*clip_id);
-        let _ = r
-            .engine
-            .send(AudioCommand::DeleteMidiClip { clip_id: *clip_id });
+        crate::engine_events::midi::send_mirrored_delete(r, *clip_id);
     }
 
     let at = at_bar.saturating_sub(1);

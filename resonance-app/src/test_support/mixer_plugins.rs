@@ -652,7 +652,7 @@ impl Resonance {
             .collect();
         let project_path = self.io.project_path.clone();
         // A diff-path restore: no `ClearAll`, the engine keeps its sources.
-        self.reconcile_freeze_statuses(target, project_path.as_deref(), false);
+        self.reconcile_freeze_statuses(target, project_path.as_deref(), false, &Default::default());
     }
 
     /// Test-only: read the external-instrument state mirror for a track, if
@@ -744,7 +744,7 @@ impl Resonance {
     /// round-trip.
     #[doc(hidden)]
     pub fn test_restore_external_instruments(&mut self, target: &crate::project::ProjectFile) {
-        self.restore_external_instruments(target, false);
+        self.restore_external_instruments(target, false, &Default::default());
     }
 
     /// Test-only: the ordered automation-parameter-picker labels the mixer

@@ -2,18 +2,25 @@
 //! audio-clip map rebuilt from them (ARCH-01 A-13d).
 //!
 //! Shaped like `globals::Transport`: after a `ClearAll` (`old = None`) the
-//! mirror is emptied and every clip is loaded; on the diff path each clip
-//! is moved / trimmed / re-faded / re-gained / reloaded by diff against
-//! `old`. The diff path relies on `structurally_compatible`: the clip-id
-//! sets are equal (and an audio clip's WAV and length unchanged), so it
-//! never adds or deletes a clip. A clip id missing from `old` is skipped
-//! there as defence in depth rather than loaded.
+//! mirror is emptied and every clip is loaded; on the diff path each kept
+//! clip is moved / trimmed / re-faded / re-gained / reloaded by diff
+//! against `old`, and each fresh one is loaded exactly as after a
+//! `ClearAll` (A-13i).
+//!
+//! **Kept and fresh clips** ([`kept_audio_clips`], [`kept_midi_clips`]).
+//! A clip is kept when both files have its id on a kept track
+//! (`entities::kept_tracks` — `RemoveTrack` drops a track's audio clips)
+//! and, for an audio clip, the same WAV and length. Every other clip of
+//! `old` was deleted by `removals::ClipRemovals` before any entity went;
+//! every other clip of `new` is fresh. So a clip whose WAV or length
+//! changed is deleted and reloaded under its id.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use resonance_audio::types::{AudioCommand, ClipId, MidiNote, TrackId, TrackType};
 
+use super::entities::kept_tracks;
 use super::{Reconcile, ReconcileCtx};
 use crate::project::{fade_curve_from_tag, ProjectClip, ProjectFile, ProjectMidiClip};
 use crate::state::{ClipState, MidiClipState};
@@ -24,6 +31,50 @@ use crate::Resonance;
 /// before.
 fn project_dir<'a>(ctx: &ReconcileCtx<'a>) -> &'a Path {
     ctx.project_dir.unwrap_or(Path::new(""))
+}
+
+/// The audio clips a diff restore keeps (A-13i): in both files, on a kept
+/// track in `old`, with the same WAV and length. Empty after a `ClearAll`.
+pub(super) fn kept_audio_clips(old: Option<&ProjectFile>, new: &ProjectFile) -> HashSet<ClipId> {
+    let Some(old) = old else {
+        return HashSet::new();
+    };
+    let tracks = kept_tracks(Some(old), new);
+    let target: HashMap<ClipId, &ProjectClip> = new.clips.iter().map(|c| (c.id, c)).collect();
+    old.clips
+        .iter()
+        .filter(|oc| {
+            tracks.contains(&oc.track_id)
+                && target.get(&oc.id).is_some_and(|pc| {
+                    pc.audio_file == oc.audio_file && pc.total_frames == oc.total_frames
+                })
+        })
+        .map(|oc| oc.id)
+        .collect()
+}
+
+/// The MIDI clips a diff restore keeps (A-13i): in both files, on a kept
+/// track in `old`. Empty after a `ClearAll`.
+pub(super) fn kept_midi_clips(old: Option<&ProjectFile>, new: &ProjectFile) -> HashSet<ClipId> {
+    let Some(old) = old else {
+        return HashSet::new();
+    };
+    let tracks = kept_tracks(Some(old), new);
+    let target: HashSet<ClipId> = new.midi_clips.iter().map(|c| c.id).collect();
+    old.midi_clips
+        .iter()
+        .filter(|oc| tracks.contains(&oc.track_id) && target.contains(&oc.id))
+        .map(|oc| oc.id)
+        .collect()
+}
+
+/// Put a mirror's clips into `target`'s order (the serializer writes the
+/// mirror in vector order, so a clip re-added at the end would otherwise
+/// break the fixed point). Mirror-only: the engine's clip list has no
+/// order anyone reads.
+fn order_like<T>(clips: &mut [T], id: impl Fn(&T) -> ClipId, target: &[ClipId]) {
+    let position: HashMap<ClipId, usize> = target.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    clips.sort_by_key(|c| position.get(&id(c)).copied().unwrap_or(usize::MAX));
 }
 
 /// Audio clips: the engine's clip set and the `r.clips` mirror, including
@@ -37,9 +88,12 @@ fn project_dir<'a>(ctx: &ReconcileCtx<'a>) -> &'a Path {
 ///   reloads exist because `snapshot_for_undo` sent `PersistClipWavs`
 ///   (FU-V5b); the engine bumps its clip-id allocator past each loaded id
 ///   (STATE-08).
-/// * Diff: `TrimClip` if the trim changed, else `MoveClip` if the start or
-///   track changed; then `SetClipFade` / `SetClipGain` when they changed;
-///   the mirror is updated in place (peaks and tuning kept).
+/// * Diff: per kept clip, `TrimClip` if the trim changed, else `MoveClip`
+///   if the start or track changed; then `SetClipFade` / `SetClipGain`
+///   when they changed; the mirror is updated in place (peaks and tuning
+///   kept). Each fresh clip is loaded as after a `ClearAll` (its WAV is
+///   on disk: `snapshot_for_undo` sent `PersistClipWavs` before the edit
+///   that removed it). The mirror is then put into the target's order.
 pub(crate) struct AudioClips;
 
 impl Reconcile for AudioClips {
@@ -55,11 +109,16 @@ impl Reconcile for AudioClips {
             return;
         };
         let old_by_id: HashMap<u64, &ProjectClip> = old.clips.iter().map(|c| (c.id, c)).collect();
+        let kept = kept_audio_clips(Some(old), new);
+        let dir = project_dir(ctx);
         for pc in &new.clips {
-            if let Some(&oc) = old_by_id.get(&pc.id) {
-                apply_audio_clip(r, oc, pc);
+            match old_by_id.get(&pc.id) {
+                Some(&oc) if kept.contains(&pc.id) => apply_audio_clip(r, oc, pc),
+                _ => load_audio_clip(r, pc, dir),
             }
         }
+        let order: Vec<ClipId> = new.clips.iter().map(|c| c.id).collect();
+        order_like(&mut r.clips, |c| c.id, &order);
     }
 }
 
@@ -195,12 +254,14 @@ fn audio_clip_duration(pc: &ProjectClip) -> u64 {
 ///
 /// * After a `ClearAll`: the mirror is emptied, then every clip goes out as
 ///   `LoadMidiClipDirect`.
-/// * Diff: a clip whose notes or length changed is reloaded by
+/// * Diff: a kept clip whose notes or length changed is reloaded by
 ///   `DeleteMidiClip` + `LoadMidiClipDirect` (keeps the id, so the track
-///   binding and the derived-map keys stay valid); else `TrimMidiClip` if
-///   the trim changed, else `MoveMidiClip` if the start or track changed.
-///   Notes are compared against the live mirror, not `old` (the snapshot
-///   file has no notes).
+///   binding and the derived-map keys stay valid; the delete's echo is
+///   owed, so it cannot drop the reloaded clip or its lyrics); else
+///   `TrimMidiClip` if the trim changed, else `MoveMidiClip` if the start
+///   or track changed. Notes are compared against the live mirror, not
+///   `old` (the snapshot file has no notes). Each fresh clip is loaded as
+///   after a `ClearAll`; the mirror is then put into the target's order.
 pub(crate) struct MidiClips;
 
 impl Reconcile for MidiClips {
@@ -224,13 +285,18 @@ impl Reconcile for MidiClips {
             .iter()
             .map(|mc| (mc.id, mc.notes.clone()))
             .collect();
+        let kept = kept_midi_clips(Some(old), new);
         for pmc in &new.midi_clips {
-            let Some(&omc) = old_by_id.get(&pmc.id) else {
-                continue;
-            };
-            let live = live_notes.get(&pmc.id).map(Vec::as_slice).unwrap_or(&[]);
-            apply_midi_clip(r, omc, pmc, live, target_notes(pmc.id));
+            match old_by_id.get(&pmc.id) {
+                Some(&omc) if kept.contains(&pmc.id) => {
+                    let live = live_notes.get(&pmc.id).map(Vec::as_slice).unwrap_or(&[]);
+                    apply_midi_clip(r, omc, pmc, live, target_notes(pmc.id));
+                }
+                _ => load_midi_clip(r, pmc, target_notes(pmc.id)),
+            }
         }
+        let order: Vec<ClipId> = new.midi_clips.iter().map(|c| c.id).collect();
+        order_like(&mut r.midi_clips, |c| c.id, &order);
     }
 }
 
@@ -272,6 +338,9 @@ fn apply_midi_clip(
 
     if notes_changed || duration_changed {
         let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: pmc.id });
+        // The mirror keeps the clip (updated below): its `MidiClipDeleted`
+        // echo must not drop it, nor its lyric side-table entry.
+        r.io.restore_echoes.expect_midi_clip_deleted(pmc.id);
         let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
             clip_id: pmc.id,
             track_id: pmc.track_id,

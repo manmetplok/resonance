@@ -331,6 +331,15 @@ impl crate::Resonance {
     /// step, and `RestoreTakeGroups` was deliberately made silent so a
     /// restore does not come up dirty.
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
+        self.restore_from_snapshot(snapshot, true);
+    }
+
+    /// [`Self::begin_restore_from_snapshot`], with the diff path optional.
+    /// `allow_diff = false` forces the `ClearAll` fallback: since A-13i
+    /// `structurally_compatible` accepts every pair of snapshots, so this
+    /// is the only way left to reach `Origin::UndoFull` — kept for the
+    /// tests that pin that path until A-13j deletes it.
+    pub(crate) fn restore_from_snapshot(&mut self, snapshot: UndoSnapshot, allow_diff: bool) {
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.
         let _ = self.engine.send(AudioCommand::Stop);
@@ -342,7 +351,7 @@ impl crate::Resonance {
         // Fast path: structure-identical undo (the common case for
         // fader/knob/transport edits). Drives the engine surgically
         // without tearing down plugin instances.
-        if crate::update::try_diff_replay(self, &loaded) {
+        if allow_diff && crate::update::try_diff_replay(self, &loaded) {
             return;
         }
 
@@ -441,10 +450,17 @@ impl crate::Resonance {
     /// project from before device presets loads with no device traffic).
     /// Without a clear, an empty map is sent so a deselected device leaves
     /// no stale bindings behind.
+    ///
+    /// `fresh`: tracks the restore has just added to the engine (ARCH-01
+    /// A-13i — on the diff path, those `old` did not have or had with a
+    /// different shape). Each gets the after-`ClearAll` treatment on its
+    /// own: it starts online, and no empty `SetTrackDeviceParams` is sent
+    /// for it when no device is selected.
     pub(crate) fn restore_external_instruments(
         &mut self,
         target: &crate::project::ProjectFile,
         after_clear_all: bool,
+        fresh: &std::collections::HashSet<TrackId>,
     ) {
         if after_clear_all {
             self.devices.external_instruments.clear();
@@ -489,7 +505,11 @@ impl crate::Resonance {
             // on the engine to clear). An unresolved id also sends an empty
             // map, and the selection is kept so a later rescan can recover
             // it.
-            if !after_clear_all || ext.device_id.is_some() {
+            let starts_clean = after_clear_all || fresh.contains(&id);
+            if starts_clean {
+                self.devices.external_instruments.remove(&id);
+            }
+            if !starts_clean || ext.device_id.is_some() {
                 let params = ext.device_params(&self.devices.registry);
                 let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
                     track_id: id,

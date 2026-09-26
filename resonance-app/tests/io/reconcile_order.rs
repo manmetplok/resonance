@@ -110,10 +110,10 @@ fn a_diff_undo_runs_every_domain_in_table_order() {
 fn a_full_undo_runs_every_domain_in_table_order() {
     let mut l = disk_load();
     let snapshot = l.app.test_snapshot_for_undo();
-    // An extra track forces the structural fallback.
+    // The full path, forced (since A-13i no shape falls back on its own).
     l.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&l.rx);
-    l.app.test_begin_restore_from_snapshot(snapshot);
+    l.app.test_begin_full_restore_from_snapshot(snapshot);
     assert!(
         drain(&l.rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
         "a structural change takes the full path"
@@ -219,6 +219,7 @@ fn the_table_is_the_agreed_order() {
             (Stage::Timeline, "markers"),
             (Stage::Timeline, "section_chord_trim"),
             (Stage::Removals, "routing_removals"),
+            (Stage::Removals, "clip_removals"),
             (Stage::Removals, "entity_removals"),
             (Stage::Entities, "tracks"),
             (Stage::Entities, "busses"),

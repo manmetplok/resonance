@@ -28,8 +28,7 @@ impl VocalMidiInstall<'_> {
                     .derived_clips
                     .remove(&(self.definition_id, placement_id, self.track_id))
             {
-                let _ = r.engine
-                    .send(AudioCommand::DeleteMidiClip { clip_id: old_id });
+                crate::engine_events::midi::send_mirrored_delete(r, old_id);
                 r.compose.vocal_audio.clip_lyrics.remove(&old_id);
                 r.midi_clips.retain(|c| c.id != old_id);
             }

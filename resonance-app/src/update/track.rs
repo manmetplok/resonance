@@ -400,7 +400,21 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: id });
                 // Mirror the removal now, not on the `TrackRemoved` echo,
                 // so an undo before the echo sees it (code review
-                // STATE-10). The echo's handler is idempotent.
+                // STATE-10). The engine answers for the track and for each
+                // sub-track it drops with it; those echoes are owed, so a
+                // late one cannot remove what an undo has put back under
+                // the same id (ARCH-01 A-13i).
+                let subs: Vec<TrackId> = r
+                    .registry
+                    .tracks
+                    .iter()
+                    .filter(|t| t.sub_track.is_some_and(|l| l.parent_track_id == id))
+                    .map(|t| t.id)
+                    .collect();
+                r.io.restore_echoes.expect_track_removed(id);
+                for sub in subs {
+                    r.io.restore_echoes.expect_track_removed(sub);
+                }
                 crate::engine_events::tracks::removed(r, id);
             }
         }

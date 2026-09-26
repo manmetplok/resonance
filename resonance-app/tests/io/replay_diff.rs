@@ -83,42 +83,28 @@ fn scalar_only_track_diff_is_compatible() {
     assert!(structurally_compatible(&a, &b));
 }
 
+/// Tracks are not part of the shape (A-13i): the diff arms add a track
+/// `a` lacks, remove one `b` lacks, and treat a renumbered track or a type
+/// change as a remove + add (`entities::kept_tracks`).
 #[test]
-fn added_track_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0)];
-    b.tracks = vec![track(1, 0.0), track(2, 0.0)];
-    assert!(!structurally_compatible(&a, &b));
-}
-
-#[test]
-fn removed_track_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0), track(2, 0.0)];
-    b.tracks = vec![track(1, 0.0)];
-    assert!(!structurally_compatible(&a, &b));
-}
-
-#[test]
-fn renumbered_track_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0)];
-    b.tracks = vec![track(2, 0.0)];
-    assert!(!structurally_compatible(&a, &b));
-}
-
-#[test]
-fn track_type_change_forces_fallback() {
-    let mut a = empty_file();
-    let mut b = empty_file();
-    a.tracks = vec![track(1, 0.0)];
-    let mut t = track(1, 0.0);
-    t.track_type = "instrument".to_string();
-    b.tracks = vec![t];
-    assert!(!structurally_compatible(&a, &b));
+fn added_removed_renumbered_and_retyped_tracks_are_compatible() {
+    let pairs = [
+        (vec![track(1, 0.0)], vec![track(1, 0.0), track(2, 0.0)]),
+        (vec![track(1, 0.0), track(2, 0.0)], vec![track(1, 0.0)]),
+        (vec![track(1, 0.0)], vec![track(2, 0.0)]),
+        (vec![track(1, 0.0)], {
+            let mut t = track(1, 0.0);
+            t.track_type = "instrument".to_string();
+            vec![t]
+        }),
+    ];
+    for (ta, tb) in pairs {
+        let mut a = empty_file();
+        let mut b = empty_file();
+        a.tracks = ta;
+        b.tracks = tb;
+        assert!(structurally_compatible(&a, &b));
+    }
 }
 
 /// Plugin chains are not part of the shape (A-13h): the diff arms add,
@@ -187,7 +173,7 @@ fn track_reorder_alone_is_compatible() {
 }
 
 #[test]
-fn audio_file_path_change_forces_fallback() {
+fn audio_file_path_change_is_compatible() {
     let mut a = empty_file();
     let mut b = empty_file();
     let mk = |id: u64, name: &str| ProjectClip {
@@ -206,9 +192,16 @@ fn audio_file_path_change_forces_fallback() {
         fade_out_curve: "equal_power".into(),
         gain_db: 0.0,
     };
+    // Clips are not part of the shape (A-13i): a clip whose WAV changed is
+    // deleted and reloaded under its id (`clips::kept_audio_clips`); an
+    // added or removed clip is loaded or deleted.
     a.clips = vec![mk(1, "audio/a.wav")];
     b.clips = vec![mk(1, "audio/b.wav")];
-    assert!(!structurally_compatible(&a, &b));
+    assert!(structurally_compatible(&a, &b));
+    b.clips = vec![mk(1, "audio/a.wav"), mk(2, "audio/b.wav")];
+    assert!(structurally_compatible(&a, &b));
+    b.clips.clear();
+    assert!(structurally_compatible(&a, &b));
 }
 
 #[test]
