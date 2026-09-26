@@ -53,7 +53,7 @@ master and updates this table. Agents do **not** edit this file.
 | U1 undo follow-ups | FU-A1a, A2a, A2b, M4c, H2a, H2b, H2c | opus | merged | b611a4f5 |
 | R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | merged | d2be52fc |
 | T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | merged | 51000f97 |
-| V5 vocal data loss + canvas leftovers | FU-C1a, FU-C1b, FU-V2c, FU-V3c | opus | in progress | |
+| V5 vocal data loss + canvas leftovers | FU-C1a, FU-C1b, FU-V2c, FU-V3c | opus | merged | 141b3f76 |
 | F1 final follow-ups | FU-G2d, FU-F1c, FU-R1a, FU-M11b | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | merged | b9a5e1a4 |
@@ -121,7 +121,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-V1c** — fixed @68f4563d; note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
 - [x] **FU-V2a** — fixed @14f059e0; (medium) VIEW-25 partial: MIDI Import modal now parses off-thread + has a file chooser, but Confirm is still a no-op, Review has no Import button, TempoConflict is a placeholder (doc #158 follow-ups); needs `undo/classify.rs` to stop classifying `Message::Import(_)` as Skip.
 - [x] **FU-V2b** — fixed @895ae569; (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
-- [ ] **FU-V2c** [partial (C1): load-time clamp done; visible-bar-only Compose drawing open] (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
+- [ ] **FU-V2c** [mostly done @514f0c13: chord ruler, track grid/notes, drum grid culled; vocal lane, global rows, expanded editor still per-bar] (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
 - [x] **FU-V2d** — fixed @accf5caf; (low) a vocal render that finishes after its placement moved into a different tempo region is placed right but rendered at the old tempo.
 - [ ] **FU-M8a** (low) with async Cocoa destroy, `editor_size`/`editor_open_cocoa` teardown watchdogs pass trivially — make them wait for the main-thread teardown.
 - [x] **FU-M8b** — fixed @c2fb20fc; (low) `bounce/render.rs` ignores `reset_processing()`'s bool → a plugin that stays dead after export is silent without an error.
@@ -131,7 +131,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-H2c** — fixed @bdc6479b; (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
 - [x] **FU-V3a** — fixed @dac46f8c; (low) `update/project_io/replay/mod.rs:161` resets `viewport.scroll_offset = 0` on load → can disagree with the real Scrollable until its next report.
 - [x] **FU-V3b** — fixed @4907ebb1; (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
-- [ ] **FU-V3c** [partial (C1): pool usage + HashMap done; dead TimelineCanvas::scroll_offset open] (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
+- [x] **FU-V3c** — done (C1 + @ecbd728b); (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
 - [x] **FU-M11a** — fixed @d27ee2ab; (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
 - [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 - [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
@@ -152,9 +152,11 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-A5a** — fixed @5461de45; (medium, flaky) `resonance-audio` `io::import_audio_to_pool::a_pool_import_outlived_by_its_project_never_lands_after_clear_all` failed once under full-suite load (passes 6/6 standalone) — make its timing deterministic.
 - [x] **FU-A5b** — fixed (C1); (low) import dialog doesn't show `ImportedSmf::tempo_points_clamped` yet (small hunk in `update/import.rs`).
 - [x] **FU-A5c** — fixed @22757a50; (low) FU-M3c only checks the keyed plugin's own bypass (not chain-level FX bypass / muted consumer); frozen tracks play the live chain during async cache conversion (~100s of ms).
-- [ ] **FU-C1a** (HIGH, data loss) after a project reload the vocal-clip map points at `clip_<id>.wav`; re-rendering a vocal calls `unlink_if_exists(old_path)` in `vocal_audio_install` and deletes the file the saved project and undo snapshots reference.
-- [ ] **FU-C1b** (low) stray `vocal_*.wav` files from before the project-audio-dir fix remain in sibling `audio/` folders.
+- [x] **FU-C1a** — fixed @ec2cf6a2 (only unreferenced `vocal_*.wav` are ever unlinked); (HIGH, data loss) after a project reload the vocal-clip map points at `clip_<id>.wav`; re-rendering a vocal calls `unlink_if_exists(old_path)` in `vocal_audio_install` and deletes the file the saved project and undo snapshots reference.
+- [x] **FU-C1b** — documented, intentionally not deleted @94da144c; (low) stray `vocal_*.wav` files from before the project-audio-dir fix remain in sibling `audio/` folders.
 - [ ] **FU-R1a** (low) stale autosave files inside project dirs are never deleted; marker-less scratch dirs (autosave racing Save As) are never GC'd; untitled recovery only offered at startup; non-Linux can't tell a live other instance from a crash.
+- [ ] **FU-V5a** (low) `clip_*.wav` files are never garbage-collected (removed vocal clips leave theirs) — disk only.
+- [ ] **FU-V5b** (medium, pre-existing) slow-path undo reloads audio from `clip_<id>.wav`, which only exists after a save → undoing a vocal re-render (or any unsaved audio clip edit) in a never-saved-since session can come back silent. Consider writing clip WAVs eagerly to the project audio dir or keeping them in memory for undo.
 
 ## How to use this file
 
