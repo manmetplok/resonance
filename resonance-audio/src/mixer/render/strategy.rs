@@ -31,6 +31,24 @@ fn bounce_gain_endpoints(static_gains: (f32, f32), auto: AutoGain) -> ((f32, f32
     }
 }
 
+/// Whether a top-level track is silenced by mute / solo this block. The
+/// one mute/solo resolution shared by the live mixer and the bounce (code
+/// review MIX-07), so an export can never disagree with playback about
+/// who is heard. `muted` already folds in any mute automation.
+#[inline]
+pub(crate) fn track_silenced(track: &Track, muted: bool, any_solo: bool) -> bool {
+    muted || (any_solo && !track.soloed())
+}
+
+/// Whether a sub-track is silenced this block. Sub-tracks follow their
+/// parent's solo (their own solo flag is ignored, exactly as
+/// `any_top_level_solo` ignores it), so only their own mute and a
+/// silenced parent count. Shared by live and bounce (code review MIX-07).
+#[inline]
+pub(crate) fn sub_track_silenced(muted: bool, parent_silenced: bool) -> bool {
+    muted || parent_silenced
+}
+
 /// Per-call policy for the bits of the render block that differ between
 /// the live callback and the offline bounce. See the module docs.
 pub(crate) enum RenderStrategy<'a> {
@@ -212,7 +230,7 @@ impl RenderStrategy<'_> {
                 // except for one extra block after silencing, which
                 // renders normally with a target gain of 0.0 so the
                 // mute ramps out instead of hard-cutting.
-                let silenced = muted || (any_solo && !track.soloed());
+                let silenced = track_silenced(track, muted, any_solo);
                 let (last_gain_l, last_gain_r) = track.last_gains();
                 let faded_out = last_gain_l == 0.0 && last_gain_r == 0.0;
                 if silenced && faded_out && track.track_type != TrackType::Instrument {
@@ -250,7 +268,7 @@ impl RenderStrategy<'_> {
                 // — and the source is explicitly muted by
                 // `finalize_bounce` after every successful bounce, so
                 // respecting `muted` would silence every re-bounce.
-                if *respect_mute_solo && (muted || (any_solo && !track.soloed())) {
+                if *respect_mute_solo && track_silenced(track, muted, any_solo) {
                     return None;
                 }
                 if !in_filter(track.id) {
@@ -290,7 +308,6 @@ impl RenderStrategy<'_> {
     pub(crate) fn sub_track_disposition(
         &self,
         sub_track: &Track,
-        any_solo: bool,
         parent_silenced: bool,
         auto_gain: AutoGain,
         auto_mute: Option<bool>,
@@ -302,7 +319,7 @@ impl RenderStrategy<'_> {
                 // A silenced parent fades its sub-tracks out in the same
                 // block; once fully faded the fan-out stops running and
                 // the subs stay at zero.
-                let sub_silenced = muted || parent_silenced;
+                let sub_silenced = sub_track_silenced(muted, parent_silenced);
                 let (sub_last_l, sub_last_r) = sub_track.last_gains();
                 if sub_silenced && sub_last_l == 0.0 && sub_last_r == 0.0 {
                     return None;
@@ -328,7 +345,11 @@ impl RenderStrategy<'_> {
                 freeze_raw,
                 ..
             } => {
-                if *respect_mute_solo && (muted || (any_solo && !sub_track.soloed())) {
+                // Same resolution as live: a sub-track follows its
+                // parent's solo, never its own flag (code review MIX-07).
+                // A solo-suppressed parent never reaches its fan-out here
+                // (`track_disposition` dropped it).
+                if *respect_mute_solo && sub_track_silenced(muted, parent_silenced) {
                     return None;
                 }
                 if !in_filter(sub_track.id) {

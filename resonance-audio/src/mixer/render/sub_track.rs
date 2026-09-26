@@ -103,7 +103,6 @@ fn render_sub_track_tap(
     );
     let Some((sub_gain_l, sub_gain_r)) = strategy.sub_track_disposition(
         sub_track,
-        ctx.inputs.any_solo,
         parent_silenced,
         sub_auto_gain,
         sub_auto_mute,
