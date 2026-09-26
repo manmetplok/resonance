@@ -60,17 +60,16 @@ pub fn span_may_be_visible(span: (f32, f32), window: Option<(f32, f32)>) -> bool
 }
 
 /// Pixel span of a `[start_sample, end_sample)` range at the given zoom
-/// and internal scroll offset — the same mapping `sample_to_x` uses, as
+/// in canvas content coordinates (x=0 is sample 0) — the same mapping `sample_to_x` uses, as
 /// a free function so the cull tests can drive it without a canvas.
 pub fn sample_span_x(
     start_sample: u64,
     end_sample: u64,
     sample_rate: u32,
     zoom: f32,
-    scroll_offset: f32,
 ) -> (f32, f32) {
     let to_x = |sample: u64| {
-        (sample as f64 / sample_rate as f64) as f32 * zoom - scroll_offset
+        (sample as f64 / sample_rate as f64) as f32 * zoom
     };
     (to_x(start_sample), to_x(end_sample))
 }

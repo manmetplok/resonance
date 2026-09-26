@@ -128,7 +128,7 @@ impl TimelineCanvas<'_> {
 
         // Any other click in the ruler → seek the playhead, snapped to the
         // nearest grid line.
-        let seconds = ((pos.x + self.scroll_offset) / self.zoom).max(0.0);
+        let seconds = (pos.x / self.zoom).max(0.0);
         let sample = (seconds as f64 * self.sample_rate as f64) as u64;
         let snapped = self.snap_sample(sample);
         captured(Message::Transport(TransportMessage::SeekToSample(snapped)))

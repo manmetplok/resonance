@@ -117,11 +117,10 @@ pub fn clip_pixel_rect(
     duration_samples: u64,
     zoom: f32,
     sample_rate: u32,
-    scroll_offset: f32,
 ) -> Rectangle {
     let start_seconds = start_sample as f32 / sample_rate as f32;
     let duration_seconds = duration_samples as f32 / sample_rate as f32;
-    let x = start_seconds * zoom - scroll_offset + body.indent;
+    let x = start_seconds * zoom + body.indent;
     let width = duration_seconds * zoom;
     Rectangle {
         x,

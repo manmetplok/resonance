@@ -50,7 +50,6 @@ pub struct TimelineCanvas<'a> {
     pub playhead: u64,
     pub sample_rate: u32,
     pub zoom: f32,
-    pub scroll_offset: f32,
     pub recording_tracks: Vec<TrackId>,
     pub recording_start_sample: u64,
     pub bpm: f32,
@@ -189,7 +188,7 @@ impl TimelineCanvas<'_> {
 
     /// Convert a sample position to pixel x coordinate.
     pub(crate) fn sample_to_x(&self, sample: u64) -> f32 {
-        (sample as f64 / self.sample_rate as f64) as f32 * self.zoom - self.scroll_offset
+        (sample as f64 / self.sample_rate as f64) as f32 * self.zoom
     }
 
     /// The layout constants a drop resolution needs (see
@@ -337,7 +336,6 @@ impl TimelineCanvas<'_> {
             clip.start_sample + clip.duration_samples,
             self.sample_rate,
             self.zoom,
-            self.scroll_offset,
         )
     }
 
@@ -354,7 +352,6 @@ impl TimelineCanvas<'_> {
             end,
             self.sample_rate,
             self.zoom,
-            self.scroll_offset,
         )
     }
 }
@@ -422,7 +419,6 @@ pub struct TimelineFingerprint {
     // recording overlay are drawn as a separate uncached Geometry in
     // `Program::draw` below.
     pub zoom_bits: u32,
-    pub scroll_x_bits: u32,
     pub scroll_y_bits: u32,
     pub recording_count: usize,
     pub loop_enabled: bool,
@@ -804,7 +800,6 @@ impl<'a> TimelineCanvas<'a> {
             midi_clips_len: self.midi_clips.len(),
             tracks_len: self.tracks.len(),
             zoom_bits: self.zoom.to_bits(),
-            scroll_x_bits: self.scroll_offset.to_bits(),
             scroll_y_bits: self.scroll_offset_y.to_bits(),
             recording_count: self.recording_tracks.len(),
             loop_enabled: self.loop_enabled,
@@ -1338,7 +1333,7 @@ impl<'a> TimelineCanvas<'a> {
 
         // Playhead — warm 1px line + a rounded tab at the top.
         let playhead_seconds = (self.playhead as f64 / self.sample_rate as f64) as f32;
-        let playhead_x = playhead_seconds * self.zoom - self.scroll_offset;
+        let playhead_x = playhead_seconds * self.zoom;
         if playhead_x >= 0.0 && playhead_x <= bounds.width {
             let total_height = (header_height + track_area_height - y_off).max(bounds.height);
             frame.fill_rectangle(

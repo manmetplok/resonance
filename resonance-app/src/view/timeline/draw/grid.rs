@@ -25,14 +25,13 @@ pub(super) struct VisibleBar {
     samples_per_beat: f64,
     sr: f64,
     zoom: f32,
-    scroll_offset: f32,
 }
 
 impl VisibleBar {
     /// X position of `beat` (1-based within the bar), in canvas pixels.
     fn beat_x(&self, beat: u8) -> f32 {
         let beat_sample = self.sample_pos + beat as f64 * self.samples_per_beat;
-        (beat_sample / self.sr) as f32 * self.zoom - self.scroll_offset
+        (beat_sample / self.sr) as f32 * self.zoom
     }
 }
 
@@ -99,7 +98,7 @@ impl TimelineCanvas<'_> {
             let bar_seconds = samples_per_bar / sr;
             let bar_pixel_width = bar_seconds as f32 * self.zoom;
 
-            let x = (sample_pos / sr) as f32 * self.zoom - self.scroll_offset;
+            let x = (sample_pos / sr) as f32 * self.zoom;
 
             // Past the right edge — done.
             if x > width + 1.0 {
@@ -128,7 +127,6 @@ impl TimelineCanvas<'_> {
                     samples_per_beat,
                     sr,
                     zoom: self.zoom,
-                    scroll_offset: self.scroll_offset,
                 });
             }
 
