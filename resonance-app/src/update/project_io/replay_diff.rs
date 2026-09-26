@@ -145,6 +145,9 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // the diff path always sent it (the full path sends it before the
     // clips; roadmap group (4) moves it there on this path too).
     reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
+    // The derived-clip map: the snapshot's with every entry, pending
+    // echoes included (FU-H2a, A-6). After `apply_compose` reset it.
+    reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
     // Pool, quantize, performance, track groups, take lanes: app-side
     // content the structural check ignores, restored verbatim. The pool
     // counts the clips' asset refs `apply_audio_clips` mirrored; the take
@@ -167,8 +170,9 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // Rebuild runtime-only caches that aren't captured in the snapshot.
     // Mirrors the tail end of `replay_loaded_project` so the Compose tab
     // shows the right vocal audio clips after the restore. The derived
-    // MIDI clip map is *not* rebuilt here: `apply_compose` restored the
-    // snapshot's from `ProjectFile::derived_clips` (FU-H2a, A-6).
+    // MIDI clip map is *not* rebuilt here: the `DerivedClips` domain
+    // restored the snapshot's from `ProjectFile::derived_clips` (FU-H2a,
+    // A-6).
     use std::collections::HashSet;
     let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
         .registry
@@ -1028,9 +1032,9 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile) {
     // Section definitions / placements — drum arrangements included, from
     // `ProjectSectionDefinition::arrangement` — come back through
     // `load_from_project`, which clears runtime-only sub-state — the
-    // derived-clip counter included, which an undo must never lower
+    // derived-clip map and counter included; the `DerivedClips` domain
+    // restores both afterwards, the counter from the floor the ctx carries
     // (ARCH-01 A-6).
-    let derived_counter_floor = r.compose.next_derived_clip_id;
     r.compose
         .load_from_project(&b.section_definitions, &b.section_placements);
     // Restore the drum pattern bank. Modern snapshots persist
@@ -1039,10 +1043,6 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile) {
     // project loader does. Unlike the full load, an all-empty snapshot
     // clears the bank rather than keeping the seeded default.
     restore_drum_patterns(&mut r.compose, b, true);
-    // After `apply_midi_clips`, so the counter is reserved past the
-    // restored clips. The snapshot's map with every entry, pending echoes
-    // included: see `restore_derived_clips` (FU-H2a, A-6).
-    r.restore_derived_clips(b, true, Some(derived_counter_floor));
     // Lyrics from `ProjectMidiClip::vocal_lyrics`, installed exactly as
     // the full replay does (`replay_midi_clips`). After `apply_midi_clips`,
     // so the note counts they are padded to are the snapshot's; the clip

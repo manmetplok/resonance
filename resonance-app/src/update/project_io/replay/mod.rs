@@ -79,7 +79,6 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
             derived_counter_floor: LiveCarry::derived_counter_floor(r, origin),
         },
     };
-    let derived_counter_floor = ctx.live.derived_counter_floor;
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
     // before re-installing entries from the project. Without this,
@@ -136,7 +135,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     replay_midi_clips(r, project, &loaded);
 
     // Rebuild vocal-derived state from the restored clips.
-    replay_vocal(r, project, &loaded, derived_counter_floor);
+    replay_vocal(r, project, &loaded, &ctx);
 
     // Re-impose the saved plugin-slot order and refresh the side-index.
     finalize_plugin_chains(r, &saved_plugin_order);
@@ -672,19 +671,18 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
 }
 
 /// Rebuild vocal-derived state that depends on the already-restored MIDI and
-/// audio clips: the `derived_clips` section→clip map (used by the compose
-/// view) and the vocal-audio clip map (so the next Generate Vocal correctly
+/// audio clips: the [`Stage::Clips`] domains (the `derived_clips`
+/// section→clip map the compose view uses) and the vocal-audio clip map (so the next Generate Vocal correctly
 /// tears down old clips rather than stacking on top of them).
 fn replay_vocal(
     r: &mut Resonance,
     project: &ProjectFile,
     loaded: &LoadedProject,
-    derived_counter_floor: Option<u64>,
+    ctx: &ReconcileCtx<'_>,
 ) {
-    // The saved map (ARCH-01 A-6), keeping only entries whose clip this
-    // replay installed — `ClearAll` wiped anything else. A legacy file
-    // gets the positional rebuild (`rebuild_derived_clips`).
-    r.restore_derived_clips(project, false, derived_counter_floor);
+    // The derived-clip map (ARCH-01 A-6), keeping only entries whose clip
+    // this replay installed — `ClearAll` wiped anything else.
+    reconcile_stage(r, Stage::Clips, None, project, ctx);
 
     // Rebuild the vocal audio clip map so subsequent regen tear-downs
     // find the loaded clips and clean them up — otherwise the next

@@ -159,6 +159,8 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::TempoEvents>(Stage::Timeline),
     domain::<app_side::ChordTrack>(Stage::Timeline),
     domain::<app_side::Markers>(Stage::Timeline),
+    // After the MIDI and audio clips it filters against.
+    domain::<restored::DerivedClips>(Stage::Clips),
     // After the clips: the pool counts their asset refs. The full path's
     // order.
     domain::<app_side::Pool>(Stage::Content),
