@@ -97,8 +97,12 @@ impl crate::Resonance {
         let commit_after = self.record_undo(&message);
         let task = self.dispatch(message);
         if commit_after {
-            self.undo.commit();
+            self.commit_undo_gesture();
         }
+        // Compose regeneration, bar shifts, tempo edits and engine echoes
+        // (drained on Tick) reshape a frozen track's content without
+        // passing the gate above (code review UPD-05).
+        self.revalidate_frozen_content();
         task
     }
 

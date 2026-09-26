@@ -60,6 +60,14 @@ pub(super) fn asset_imported(
     // pool-only import (dialog / `PoolOnly`) queues no clip; a stray
     // asset with no matching entry is left in the pool unplaced.
     let placed = match r.pool_import.take_matching(&original_path) {
+        // The target track was deleted while the file transcoded: drop
+        // the placement rather than push a clip onto a dead id (code
+        // review UPD-04). A waiting `clip.place` job fails below.
+        Some(PlacementTarget::Track { track_id, .. })
+            if !r.registry.tracks.iter().any(|t| t.id == track_id) =>
+        {
+            None
+        }
         Some(PlacementTarget::Track {
             track_id,
             start_sample,

@@ -71,6 +71,9 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
     // for that slot and the user's settings were gone (ba doc #275, P5).
     let plugin_states = crate::update::plugin_states_for_save(r, save.plugin_states);
     let autosave = save.autosave;
+    if !autosave {
+        r.io.save_capture_revision = Some(r.revision());
+    }
     // Snapshot a versioned backup after each successful *manual* save. The
     // retention count comes from the persisted autosave settings (#462).
     // Autosaves don't snapshot: they write `project.autosave.json`, not

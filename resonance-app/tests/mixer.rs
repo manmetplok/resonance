@@ -77,6 +77,8 @@ mod plugin_bypass_persistence;
 mod recording_overflow_banner;
 #[path = "mixer/sidechain_persistence.rs"]
 mod sidechain_persistence;
+#[path = "mixer/delete_track_confirm_undo.rs"]
+mod delete_track_confirm_undo;
 #[path = "mixer/tick_gating.rs"]
 mod tick_gating;
 #[path = "mixer/track_group_registry.rs"]

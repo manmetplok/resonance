@@ -143,16 +143,15 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         TrackMessage::RequestRemoveTrack(id) => {
             let has_audio = r.clips.iter().any(|c| c.track_id == id);
             let has_midi = r.midi_clips.iter().any(|c| c.track_id == id);
-            if has_audio || has_midi {
-                r.confirm_delete_track = Some(id);
-            } else {
-                r.interaction.deselect_track(id);
-                if r.compose.expanded_track_id == Some(id) {
-                    r.compose.expanded_track_id = None;
-                }
-                // Tear down any freeze cache the track owned (ba todo #577).
-                r.cleanup_freeze_on_delete(id);
-                let _ = r.engine.send(AudioCommand::RemoveTrack { track_id: id });
+            // The request itself is `Skip` for undo — opening the confirm
+            // dialog is no edit (code review STATE-13). An empty track
+            // needs no confirm, so it goes straight to the confirmed
+            // delete, recorded exactly as a dispatched `ConfirmRemoveTrack`
+            // would be — that delete is the one undo entry.
+            r.confirm_delete_track = Some(id);
+            if !(has_audio || has_midi) {
+                let _ = r.record_undo(&Message::Track(TrackMessage::ConfirmRemoveTrack));
+                return handle(r, TrackMessage::ConfirmRemoveTrack);
             }
         }
         TrackMessage::ConfirmRemoveTrack => {

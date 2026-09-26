@@ -572,7 +572,13 @@ impl Resonance {
         track_id: resonance_audio::types::TrackId,
         status: crate::state::FreezeStatus,
     ) {
+        let frozen = matches!(status, crate::state::FreezeStatus::Frozen { .. });
         self.freeze.set(track_id, status);
+        // As a completed freeze would: the current content is what the
+        // cache holds.
+        if frozen {
+            self.note_freeze_content_baseline(track_id);
+        }
     }
 
     /// Test-only: read the active freeze batch queue, if any.

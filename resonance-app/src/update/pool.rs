@@ -247,6 +247,8 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
         r.pool_import.push(PendingImport {
             source_path: source_path.clone(),
             target: placement,
+            // The import's own undo entry was recorded before dispatch.
+            history_depth: r.undo.undo_len(),
         });
     }
 

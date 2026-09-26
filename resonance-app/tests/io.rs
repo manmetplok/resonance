@@ -39,10 +39,14 @@ mod import_dialog_review;
 mod import_entry_points;
 #[path = "io/import_placement.rs"]
 mod import_placement;
+#[path = "io/import_placement_stale.rs"]
+mod import_placement_stale;
 #[path = "io/import_progress_dialog.rs"]
 mod import_progress_dialog;
 #[path = "io/media_browser_scaffold.rs"]
 mod media_browser_scaffold;
+#[path = "io/midi_clip_lossless_roundtrip.rs"]
+mod midi_clip_lossless_roundtrip;
 #[path = "io/offline_render_gate.rs"]
 mod offline_render_gate;
 #[path = "io/open_failure_keeps_path.rs"]
@@ -65,6 +69,8 @@ mod relink_modal;
 mod replay;
 #[path = "io/replay_diff.rs"]
 mod replay_diff;
+#[path = "io/save_keeps_dirty_for_late_edit.rs"]
+mod save_keeps_dirty_for_late_edit;
 #[path = "io/take_lanes_persistence.rs"]
 mod take_lanes_persistence;
 #[path = "io/user_definitions_rescan.rs"]

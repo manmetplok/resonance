@@ -187,7 +187,21 @@ pub fn execute(
         if let Some(error) = mutation_gate_error(app, method) {
             return (failure(request, error), Task::none());
         }
+        // One call, one undo entry, one revision bump — however many
+        // messages the handler dispatches, and never coalesced with the
+        // previous call on the same control (code review CTL-03).
+        return app.with_compound_undo(|app| execute_mutating(app, conn, request));
     }
+    execute_mutating(app, conn, request)
+}
+
+/// The mutating namespaces of [`execute`], below the mutation gate.
+fn execute_mutating(
+    app: &mut Resonance,
+    conn: ConnId,
+    request: &Request,
+) -> (Response, Task<Message>) {
+    let method = request.method.as_str();
 
     // Mutating compose namespaces (todo #1153): `section.*` sections +
     // placements, `harmony.*` chords + progression apply. Both synthesize
@@ -482,6 +496,15 @@ pub(crate) fn mutation_gate_error(app: &Resonance, method: &str) -> Option<RpcEr
     if !app.io.has_active_project {
         return Some(RpcError::busy(
             "no active project — open or create one first",
+        ));
+    }
+    // Between `ClearAll` and `AllCleared` (a project load, a template
+    // instantiation, a structural undo/redo) the replay is about to
+    // rebuild everything from its snapshot: an edit taken now would be
+    // acknowledged and then wiped (code review UPD-03).
+    if app.io.loading || app.io.pending_load.is_some() {
+        return Some(RpcError::busy(
+            "a project load / undo replay is in progress; retry shortly",
         ));
     }
     // A WAV / FLAC mixdown (GUI bounce or `render.mixdown`) drives the

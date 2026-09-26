@@ -925,6 +925,7 @@ fn build_vocal_songwriting() -> BuiltinProject {
         trim_end_ticks: 0,
         midi_file: format!("midi/clip_{VOCAL_CLIP}.mid"),
         vocal_lyrics: Vec::new(),
+        notes: None,
     };
 
     let file = ProjectFile {

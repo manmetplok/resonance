@@ -854,6 +854,25 @@ pub struct ProjectMidiClip {
     /// the replay path pads back to `notes.len()` on load.
     #[serde(default)]
     pub vocal_lyrics: Vec<String>,
+    /// The clip's notes, exactly as edited — the authoritative copy on
+    /// load. The `.mid` file is kept as an interchange export, but SMF
+    /// cannot hold overlapping same-pitch notes, sub-1/127 velocities or
+    /// the order of same-tick notes that `vocal_lyrics` is indexed by
+    /// (code review STATE-06). Filled in at save time only
+    /// (`build_project_file` leaves it `None`, keeping undo snapshots
+    /// lean); a project without it loads its notes from `midi_file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Vec<ProjectMidiNote>>,
+}
+
+/// One note of a [`ProjectMidiClip`], field for field a
+/// [`MidiNote`](resonance_audio::types::MidiNote).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ProjectMidiNote {
+    pub note: u8,
+    pub velocity: f32,
+    pub start_tick: u64,
+    pub duration_ticks: u64,
 }
 
 /// Everything needed to reconstruct a project after loading from disk.

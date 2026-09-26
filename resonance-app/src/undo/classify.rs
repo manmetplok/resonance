@@ -219,6 +219,10 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             // Dismissing the delete-confirmation dialog is a transient
             // UI gesture — nothing to undo.
             TrackMessage::CancelRemoveTrack => UndoAction::Skip,
+            // Only asks: it opens the confirm dialog, or — for an empty
+            // track — re-dispatches `ConfirmRemoveTrack`, which records
+            // the delete (code review STATE-13).
+            TrackMessage::RequestRemoveTrack(_) => UndoAction::Skip,
             // Preset operations that don't mutate project state: a
             // preset is a file on the machine, and saving one leaves the
             // project exactly as it was (ba todo #1303). The prompt

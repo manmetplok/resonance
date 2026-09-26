@@ -142,6 +142,15 @@ pub struct FreezeState {
     pub statuses: HashMap<TrackId, FreezeStatus>,
     /// The in-flight "freeze selected" / "freeze all" batch, if any.
     pub queue: Option<FreezeQueue>,
+    /// App-side fingerprint of each frozen track's arrangement content
+    /// (its MIDI clips, their notes and lyrics, and the tempo/meter map)
+    /// as of the moment the cache became valid. Edits that reshape that
+    /// content without passing the pre-dispatch freeze gate — compose
+    /// regeneration, bar insert/remove, tempo changes — are caught by
+    /// comparing against it after every dispatch (code review UPD-05).
+    /// Never pruned except on reset: an undo that restores `Frozen` must
+    /// find the baseline it was frozen with.
+    pub content_baselines: HashMap<TrackId, u64>,
 }
 
 impl FreezeState {
@@ -180,5 +189,6 @@ impl FreezeState {
     pub fn reset(&mut self) {
         self.statuses.clear();
         self.queue = None;
+        self.content_baselines.clear();
     }
 }

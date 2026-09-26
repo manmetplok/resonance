@@ -75,4 +75,9 @@ pub struct ProjectIoState {
     /// flight, and a save can be in flight on a project that is no longer
     /// dirty. Drives the in-progress spinner/affordance in the chrome.
     pub saving: bool,
+    /// The control revision at which the in-flight manual save captured
+    /// the project (`try_finish_save`). Its completion clears `dirty` only
+    /// when the revision is unchanged: an edit made while the files were
+    /// being written is not in them (code review STATE-09).
+    pub save_capture_revision: Option<u64>,
 }

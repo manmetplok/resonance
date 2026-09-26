@@ -122,6 +122,7 @@ pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
         })
         .flat_map(|t| t.plugins.iter().map(|p| p.instance_id))
         .collect();
+    drop_track_references(r, track_id, &removed_plugin_ids);
     for id in removed_plugin_ids {
         r.plugin_index.remove(&id);
         // …and any key route pointing AT one of them: a track deletion
@@ -138,6 +139,68 @@ pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
             .unwrap_or(true)
     });
     r.compose.refresh_track_count(&r.registry.tracks);
+}
+
+/// Drop everything besides the track row that names a removed track (code
+/// review STATE-05): its MIDI clips, the automation lanes aimed at it or at
+/// its plugins, its group memberships, its external-instrument config and
+/// any freeze status. All of these are saved, and after a reload the
+/// engine hands the deleted id to the next new track, which would inherit
+/// them. Sub-tracks get their own `TrackRemoved`, so only `track_id` is
+/// handled here; `plugin_ids` covers the whole removed chain.
+fn drop_track_references(
+    r: &mut Resonance,
+    track_id: TrackId,
+    plugin_ids: &[resonance_audio::types::PluginInstanceId],
+) {
+    use resonance_common::AutomationTarget as T;
+
+    // The engine's `RemoveTrack` keeps MIDI clips, so delete them there
+    // too; the `MidiClipDeleted` echo then finds nothing left to drop.
+    let midi_ids: Vec<ClipId> = r
+        .midi_clips
+        .iter()
+        .filter(|c| c.track_id == track_id)
+        .map(|c| c.id)
+        .collect();
+    for clip_id in &midi_ids {
+        let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: *clip_id });
+        r.compose.vocal_audio.clip_lyrics.remove(clip_id);
+    }
+    r.midi_clips.retain(|c| c.track_id != track_id);
+    r.compose
+        .derived_clips
+        .retain(|&(_, _, t), clip_id| t != track_id && !midi_ids.contains(clip_id));
+
+    let stale_lanes: Vec<T> = r
+        .automation
+        .lanes
+        .keys()
+        .filter(|t| match t {
+            T::TrackGain(id) | T::TrackPan(id) | T::TrackMute(id) => *id == track_id,
+            T::DeviceParam { track, .. } => *track == track_id,
+            T::PluginParam { instance, .. } => plugin_ids.contains(instance),
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    for target in stale_lanes {
+        r.automation.lanes.remove(&target);
+        r.automation.live_values.remove(&target);
+        let _ = r.engine.send(AudioCommand::ClearAutomationLane { target });
+    }
+
+    for group in r.track_groups.get_all_groups_mut() {
+        group.ordered_members.retain(|&m| m != track_id);
+    }
+
+    if r.external_instruments.remove(&track_id).is_some() {
+        let _ = r
+            .engine
+            .send(AudioCommand::ClearExternalInstrument { track_id });
+    }
+    r.cleanup_freeze_on_delete(track_id);
+    r.freeze.clear(track_id);
 }
 
 pub(super) fn bounce_completed(

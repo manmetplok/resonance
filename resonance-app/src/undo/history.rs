@@ -77,6 +77,11 @@ impl UndoHistory {
         !self.redo.is_empty()
     }
 
+    /// Number of entries on the undo stack.
+    pub fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
     }
@@ -200,6 +205,21 @@ impl UndoHistory {
         self.pending = Some(snapshot);
         self.pending_label = label;
         self.coalesce_key = None;
+    }
+
+    /// The snapshot of an open gesture (its pre-gesture state), if any.
+    /// `commit_undo_gesture` compares it against the current state to tell
+    /// a real edit from a click that moved nothing (code review STATE-07).
+    pub fn pending_snapshot(&self) -> Option<&UndoSnapshot> {
+        self.pending.as_ref()
+    }
+
+    /// Drop the open gesture without recording it: the gesture ended
+    /// without changing anything, so there is nothing to undo, and the
+    /// redo stack must survive.
+    pub fn discard_pending(&mut self) {
+        self.pending = None;
+        self.pending_label.clear();
     }
 
     /// Commit the pending transaction as a single undo entry. Called at

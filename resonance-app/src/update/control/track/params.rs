@@ -14,9 +14,10 @@ use resonance_control::{Request, Response, RpcError};
 ///
 /// Routes the same `PluginMessage::SetPluginParam` the GUI's plugin
 /// panel sends, so the edit reaches the engine and is undoable.
-/// Successive sets of the *same* parameter coalesce into one undo entry
-/// (a knob drag is one gesture), but each still bumps `revision` — a
-/// remote client polling the counter sees every committed change.
+/// Each call is its own undo entry and one `revision` bump — successive
+/// sets of the same parameter do not coalesce the way a GUI knob drag
+/// does, so one `edit.undo` takes back exactly one call (code review
+/// CTL-03).
 ///
 /// Addressing mirrors `track.plugin_params`: the CLAP id `song.tracks`
 /// reports, plus `occurrence` for a track carrying the same plugin
