@@ -8,7 +8,6 @@
 /// move over one domain at a time (ARCH-01 A1-3 / ARCH-06).
 use crate::compose::ComposeMessage;
 use crate::control_socket::ControlMessage;
-use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
@@ -17,8 +16,7 @@ use crate::state::{
 };
 use resonance_audio::types::{
     AssetId, BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendId,
-    SendSource,
-    TrackId, TrackOutput,
+    SendSource, TrackId,
 };
 use resonance_audio::PoolImportOutcome;
 use resonance_common::{TakeGroupId, TakeId, TimelineRange};
@@ -39,6 +37,7 @@ pub use crate::update::marker_ui::MarkerUiMessage;
 pub use crate::update::master::MasterMessage;
 pub use crate::update::midi_clip::MidiClipMessage;
 pub use crate::update::midi_editor::MidiEditorMessage;
+pub use crate::update::track::{BounceMessage, TrackMessage};
 pub use crate::update::transport::TransportMessage;
 pub use crate::update::vocal_tuning::VocalTuningMessage;
 
@@ -117,135 +116,6 @@ pub enum Message {
     Redo,
     /// The window manager requested that the window be closed.
     WindowCloseRequested(iced::window::Id),
-}
-
-#[derive(Debug, Clone)]
-pub enum TrackMessage {
-    AddTrack,
-    AddInstrumentTrack,
-    /// Create an instrument track that starts already in external-instrument
-    /// mode (doc #251 gap 1 affordance 2). Allocates the track id app-side so
-    /// the external state lands atomically with the track in one undo step;
-    /// the menu entry that dispatches it is a separate view todo.
-    AddExternalInstrumentTrack,
-    AddVocalTrack,
-    /// Add a track with a caller-allocated id (control endpoint, doc
-    /// #265, todo #1152). Unlike the GUI adds, the id is allocated
-    /// app-side and passed to the engine as `id_hint` so the control
-    /// reply can return the real `track_id` immediately; `drums` comes
-    /// up as an instrument track whose instrument type is set to Drum
-    /// when the engine echo mirrors it. Undoable as one step, like the
-    /// other adds.
-    AddControlTrack {
-        id: TrackId,
-        kind: crate::state::ControlTrackKind,
-        name: Option<String>,
-    },
-    /// User clicked delete on a track — may require confirmation if it
-    /// has content.
-    RequestRemoveTrack(TrackId),
-    /// User confirmed removal in the "track has content" dialog.
-    ConfirmRemoveTrack,
-    /// User cancelled the "track has content" dialog.
-    CancelRemoveTrack,
-    SetTrackVolume(TrackId, f32),
-    SetTrackPan(TrackId, f32),
-    SetMasterVolume(f32),
-    ToggleMute(TrackId),
-    ToggleSolo(TrackId),
-    ToggleRecordArm(TrackId),
-    ToggleMonitor(TrackId),
-    ToggleTrackMono(TrackId),
-    ToggleTrackFxBypass(TrackId),
-    /// Rename a track (edited from the Compose instrument details panel).
-    SetTrackName(TrackId, String),
-    SetTrackInputDevice(TrackId, Option<String>),
-    SetTrackInputPort(TrackId, u16),
-    /// Pick the hardware MIDI input device for an instrument track.
-    SetTrackMidiInputDevice(TrackId, Option<String>),
-    /// Pick the hardware MIDI output device for an instrument track.
-    SetTrackMidiOutputDevice(TrackId, Option<String>),
-    /// Pick the input channel filter (`None` = omni / accept all).
-    SetTrackMidiInputChannel(TrackId, Option<u8>),
-    /// Pick the output channel (`None` = default to channel 1).
-    SetTrackMidiOutputChannel(TrackId, Option<u8>),
-    /// Toggle whether a parent track's sub-tracks are shown in the mixer.
-    ToggleSubTracksVisible(TrackId),
-    SetTrackOutput(TrackId, TrackOutput),
-    /// Create a new track from a preset template.
-    ///
-    /// `id_hint` is the app-allocated track id, so a caller can address
-    /// the new track without waiting for the engine's `*TrackAdded`
-    /// echo; `None` lets the engine allocate, which is the GUI's path
-    /// (the same split as `PluginMessage::AddPluginToTrackWithId`).
-    /// `name` overrides the preset's own name for the track only — the
-    /// preset keeps its name in the library (ba todo #1303).
-    AddTrackFromPreset {
-        preset: Box<TrackPreset>,
-        id_hint: Option<TrackId>,
-        name: Option<String>,
-    },
-    /// Delete a user preset by name.
-    DeleteUserPreset(String),
-    /// Open the "Save track as preset" name prompt, seeded with the
-    /// track's own name (ba todo #1303, finding P1).
-    OpenSavePresetPrompt(TrackId),
-    /// Live edit of the name in that prompt.
-    SetSavePresetName(String),
-    /// Dismiss the prompt without saving.
-    CloseSavePresetPrompt,
-    /// Capture a track — its mixer settings, its instrument identity and
-    /// its whole plugin chain including each plugin's opaque state — as
-    /// a reusable user preset (ba todo #1303, finding P1; control method
-    /// `track.save_preset`).
-    ///
-    /// The capture pipeline behind this has always worked; nothing ever
-    /// started it, so the preset menu could only list presets a user had
-    /// hand-written as JSON. Saving is a two-step: this arms
-    /// `pending_preset_save` and asks the engine for the plugins' state
-    /// blobs, and the `AllPluginStatesSaved` echo writes the file.
-    ///
-    /// `overwrite` is the destructive-operation flag: without it, a name
-    /// that already exists is refused rather than replaced.
-    SaveTrackAsPreset {
-        track_id: TrackId,
-        name: String,
-        overwrite: bool,
-    },
-    /// "Bounce in place" — render this instrument track to a fresh
-    /// audio track and mute the source. Routes to either the offline
-    /// bounce (for tracks with an internal synth) or the bounce
-    /// dialog (for external-MIDI tracks that need a real-time record
-    /// from a chosen audio input).
-    BounceInPlace(TrackId),
-    /// Sub-flow for the realtime "Bounce in place" dialog (external
-    /// MIDI tracks). Grouped under one variant so the top-level
-    /// `TrackMessage` doesn't accumulate dialog plumbing.
-    Bounce(BounceMessage),
-}
-
-/// User actions in the realtime bounce-in-place dialog (only shown for
-/// external-MIDI instrument tracks). The dialog lifecycle: open →
-/// `PickDevice` / `PickPort` → `Confirm` (kicks off the realtime bounce)
-/// or `Cancel` (closes without side effects).
-#[derive(Debug, Clone)]
-pub enum BounceMessage {
-    /// User picked an audio input device.
-    PickDevice(Option<String>),
-    /// User picked the starting input channel. In stereo mode the right
-    /// channel is `port + 1`; in mono mode the same channel is captured
-    /// to both L and R.
-    PickPort(u16),
-    /// Toggle stereo (`false`) vs mono (`true`) capture.
-    SetMono(bool),
-    /// User confirmed — kick off the realtime bounce.
-    Confirm,
-    /// User cancelled the dialog.
-    Cancel,
-    /// User clicked Cancel on the in-progress modal that's shown while
-    /// a bounce is actually running. Distinct from `Cancel`, which only
-    /// dismisses the pre-bounce input-picker dialog.
-    CancelInProgress,
 }
 
 /// Aux-send + return-bus actions raised from the Mixer inspector's
