@@ -1,15 +1,24 @@
 //! The clip-id partition (code review FU-A6a): the app allocates derived
 //! clips (compose-generated MIDI, SVS vocal renders, …) from
-//! [`DERIVED_CLIP_ID_BASE`] up, and the engine allocates GUI-drawn clips,
-//! recordings and imports from 1 up. Every path that hands the engine a
+//! [`DERIVED_CLIP_ID_BASE`] up, and the engine allocates recordings from 1
+//! up (until D-7d) via `next_clip_id`. Every path that hands the engine a
 //! concrete clip id used to bump `next_clip_id` past it, so the first
 //! derived clip at `base` dragged the engine's counter to `base + 1` —
 //! exactly the id the app's derived counter hands out next. The next
-//! drawn clip and the next generated one then shared an id (and, for a
+//! recorded clip and the next generated one then shared an id (and, for a
 //! vocal render, `audio/clip_<id>.wav`).
 //!
 //! These drive the real handlers: an id at or above the base is taken
 //! but never moves the engine's counter; one below it still does.
+//!
+//! D-7c gave `AudioCommand::CreateMidiClip` a mandatory app-allocated id
+//! (it no longer draws from `next_clip_id` at all — see
+//! `create_midi_clip_mandatory_id.rs` for its id-honouring and
+//! collision-rejection behaviour), so the "drawn clip" cases below now
+//! pass an explicit low id rather than relying on engine allocation, only
+//! to keep pinning that a below-base id and the derived range still don't
+//! collide when they land through different commands. This file is
+//! superseded once D-7f deletes the engine's own clip counter.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -39,18 +48,19 @@ fn write_wav(path: &std::path::Path) {
 }
 
 #[test]
-fn a_derived_midi_clip_does_not_drag_the_engine_counter_into_the_app_range() {
+fn a_drawn_midi_clip_does_not_collide_with_the_derived_range() {
     let mut h = EngineHandlerHarness::new();
-    // The app generates a derived clip, draws one, generates another:
+    // The app generates a derived clip, draws one (D-7c: `CreateMidiClip`
+    // now carries the app-allocated id explicitly), generates another:
     // the app's derived counter hands out `base`, then `base + 1`.
     h.load_midi_clip_direct(DERIVED_CLIP_ID_BASE, TRACK);
-    h.create_midi_clip(TRACK, 0, 1920);
+    h.create_midi_clip(1, TRACK, 0, 1920);
     h.load_midi_clip_direct(DERIVED_CLIP_ID_BASE + 1, TRACK);
 
     let ids = h.midi_clip_ids();
     let unique: std::collections::HashSet<_> = ids.iter().collect();
     assert_eq!(unique.len(), ids.len(), "clip ids collide: {ids:?}");
-    assert_eq!(ids[0], 1, "the drawn clip takes the engine's own first id");
+    assert_eq!(ids[0], 1, "the drawn clip landed under the id it was given");
     assert!(h.next_clip_id() < DERIVED_CLIP_ID_BASE);
 }
 
@@ -87,11 +97,14 @@ fn the_project_dir_scan_reserves_only_engine_range_wavs() {
 
 #[test]
 fn an_engine_range_id_still_raises_the_counter() {
-    // A replayed engine clip (a drawn clip after undo, a reload) must
-    // keep the counter above it, as before.
+    // A replayed engine clip (a recorded clip after undo, a reload) must
+    // keep the counter above it, as before. `CreateMidiClip` no longer
+    // draws from that counter (D-7c), so it's given the id explicitly
+    // here — this only pins that `reserve_clip_id`'s bump from
+    // `load_midi_clip_direct` is unaffected by the sibling command.
     let mut h = EngineHandlerHarness::new();
     h.load_midi_clip_direct(9, TRACK);
     assert_eq!(h.next_clip_id(), 10);
-    h.create_midi_clip(TRACK, 0, 1920);
+    h.create_midi_clip(10, TRACK, 0, 1920);
     assert_eq!(h.midi_clip_ids(), vec![9, 10]);
 }

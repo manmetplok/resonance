@@ -1,7 +1,6 @@
-//! Audio clip handlers: async file import (spawns a decode thread,
-//! transcodes to WAV, mmaps), move/trim/delete, mmap-backed load
-//! from a WAV file on disk (project load), and
-//! ensure-all-clips-have-wav-files (project save).
+//! Audio clip handlers: move/trim/delete, mmap-backed load from a WAV
+//! file on disk (project load, imports go through the pool — see
+//! `import_pool.rs`), and ensure-all-clips-have-wav-files (project save).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,7 +10,6 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::RwLock;
 use thiserror::Error;
 
-use crate::decode;
 use crate::types::*;
 
 use resonance_dsp::tempo::{detect_tempo_default, TempoEstimate};
@@ -122,6 +120,25 @@ pub(crate) fn clip_exists(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
     ctx.clips.read().iter().any(|c| c.id == clip_id)
 }
 
+/// Refuse a mandatory-id create that collides with a live clip, audio or
+/// MIDI — one shared clip-id space (D-6 §1d/§3), so a `CreateMidiClip`
+/// must not overwrite an audio clip's id or vice versa. Returns `true`
+/// (and emits `EngineErrorKind::Internal`) when the id is already taken,
+/// the same "refuse rather than replace the live entity" shape as
+/// `engine::tracks::reject_if_track_id_in_use`. The app is the only
+/// allocator for this space (`ComposeState::fresh_derived_clip_id`), so a
+/// collision here means a caller bug, not a race to recover from.
+pub(crate) fn reject_if_clip_id_in_use(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
+    let taken = ctx.clips.read().iter().any(|c| c.id == clip_id)
+        || ctx.midi_clips.read().iter().any(|c| c.id == clip_id);
+    if taken {
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            "clip id {clip_id} is already in use; refusing the create rather than replacing the live clip"
+        ))));
+    }
+    taken
+}
+
 /// Engine-loop hook: apply parked clip edits whose clip has landed, and
 /// give up on ones whose clip never did.
 ///
@@ -226,123 +243,6 @@ fn apply_clip_command(ctx: &HandlerCtx, command: AudioCommand) {
             handle_set_clip_gain(ctx, clip_id, gain_db)
         }
         _ => {}
-    }
-}
-
-pub(crate) fn handle_import_clip(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    track_id: TrackId,
-    path: String,
-    start_sample: u64,
-) {
-    // Import needs a project directory to transcode the decoded
-    // samples into. Startup enforces an active project, so this
-    // should always hold.
-    let project_dir = match state.project_dir.clone() {
-        Some(dir) => dir,
-        None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(
-                "Cannot import clip: no project directory set.",
-            )));
-            return;
-        }
-    };
-
-    let clips_arc = Arc::clone(ctx.clips);
-    let thread_event_tx = ctx.event_tx.clone();
-    settle_clip_id_scan(state, true);
-    let clip_id = state.next_clip_id;
-    state.next_clip_id += 1;
-    let sr = ctx.sample_rate;
-    let clear_generation = Arc::clone(&state.clear_generation);
-    let generation = clear_generation.load(std::sync::atomic::Ordering::SeqCst);
-
-    // Queued rather than run here: decoding is heavy and the engine
-    // thread must stay responsive. The queue bounds how many decodes
-    // run at once but never drops one, so dropping N files onto the
-    // timeline always yields N clips (see `ImportQueue`).
-    let submit_result = state
-        .imports
-        .submit(move || match decode::decode_file(&path, sr) {
-            Ok((data, name)) => {
-                let target = project_dir
-                    .join("audio")
-                    .join(format!("clip_{clip_id}.wav"));
-                match transcode_to_wav(&target, &data, sr) {
-                    Ok(()) => match ClipSource::open_wav(&target) {
-                        Ok(source) => {
-                            let duration = source.frame_count();
-                            let waveform_peaks = compute_waveform_peaks(source.as_frames());
-                            let clip = AudioClip {
-                                id: clip_id,
-                                track_id,
-                                start_sample,
-                                source,
-                                name: name.clone(),
-                                trim_start_frames: 0,
-                                trim_end_frames: 0,
-                                fade_in_frames: 0,
-                                fade_in_curve: FadeCurve::default(),
-                                fade_out_frames: 0,
-                                fade_out_curve: FadeCurve::default(),
-                                gain_db: 0.0,
-                                vocal_tuning: None,
-                                warp_enabled: false,
-                                original_bpm: None,
-                                transpose_semitones: 0.0,
-                                warp_algorithm: Default::default(),
-                                warp_markers: Vec::new(),
-                                tuning_render_cache: None,
-                            };
-                            // Checked under the clip lock, and the event sent
-                            // before releasing it: `ClearAll` bumps the
-                            // generation before it takes the lock, so either
-                            // this push (and its echo) precedes the clear, or
-                            // the import is dropped (code review UPD-09).
-                            let mut clips = clips_arc.write();
-                            if clear_generation.load(std::sync::atomic::Ordering::SeqCst)
-                                != generation
-                            {
-                                drop(clips);
-                                drop(clip);
-                                let _ = std::fs::remove_file(&target);
-                                return;
-                            }
-                            clips.push(clip);
-                            let _ = thread_event_tx.send(AudioEvent::ClipImported {
-                                clip_id,
-                                track_id,
-                                start_sample,
-                                duration_samples: duration,
-                                name,
-                                waveform_peaks,
-                            });
-                            drop(clips);
-                        }
-                        Err(e) => {
-                            let _ = thread_event_tx.send(AudioEvent::Error(EngineError::io(format!(
-                                "Failed to mmap imported clip: {e}"
-                            ))));
-                        }
-                    },
-                    Err(e) => {
-                        let _ = thread_event_tx.send(AudioEvent::Error(EngineError::io(format!(
-                            "Failed to transcode imported clip to WAV: {e}"
-                        ))));
-                    }
-                }
-            }
-            Err(e) => {
-                let _ = thread_event_tx
-                    .send(AudioEvent::Error(EngineError::io(format!("Failed to import clip: {}", e))));
-            }
-        });
-    if let Err(e) = submit_result {
-        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
-            "Failed to spawn decode thread: {}",
-            e
-        ))));
     }
 }
 
@@ -761,9 +661,10 @@ fn submit_clip_load(
     echo: ClipLoadEcho,
 ) {
     // Bump the engine-thread-local id counter immediately so that any
-    // subsequent `ImportClip` command issued before the worker thread
-    // completes still allocates a unique id. The worker captures
-    // `clip_id` by move, so this update only affects future allocations.
+    // subsequent recording (C3/C4/C5, still auto-allocated until D-7d)
+    // issued before the worker thread completes still allocates a unique
+    // id. The worker captures `clip_id` by move, so this update only
+    // affects future allocations.
     reserve_clip_id(&mut state.next_clip_id, clip_id);
 
     // The heavy work — `ClipSource::open_wav` (which pre-touches every

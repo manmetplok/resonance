@@ -79,8 +79,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::LoadTakeClipFromWav { .. } => takes::dispatch_takes(ctx, state, cmd),
 
         // Audio clips + automation + project
-        AudioCommand::ImportClip { .. }
-        | AudioCommand::ImportAudioToPool { .. }
+        AudioCommand::ImportAudioToPool { .. }
         | AudioCommand::ReserveAssetIds { .. }
         | AudioCommand::MoveClip { .. }
         | AudioCommand::TrimClip { .. }

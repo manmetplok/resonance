@@ -93,12 +93,34 @@ pub(super) fn handle_create_midi_clip(
     let (bar, _) = r.tempo_map.sample_to_bar(start_sample, r.sample_rate);
     let time_sig_num = super::meter_at_bar(r, bar).numerator;
     let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
+    // D-7c: the app allocates the id (today's general clip allocator,
+    // `fresh_derived_clip_id` — the same one `notes.create_clip` and every
+    // other clip create already use) and carries it to the engine, which
+    // no longer invents one for this command. Mirror optimistically, the
+    // same shape as `MidiClipMessage::CreateEmptyClip`: the echo's
+    // `clip_created` handler skips an id already present, so the round
+    // trip stays an idempotent no-op once it lands.
+    let clip_id = r.compose.fresh_derived_clip_id();
+    let name = "MIDI Clip".to_string();
     let _ = r.engine.send(AudioCommand::CreateMidiClip {
+        clip_id,
         track_id,
         start_sample,
         duration_ticks,
-        name: "MIDI Clip".to_string(),
+        name: name.clone(),
     });
+    if !r.midi_clips.iter().any(|c| c.id == clip_id) {
+        r.midi_clips.push(crate::state::MidiClipState {
+            id: clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            name,
+            notes: Vec::new(),
+            trim_start_ticks: 0,
+            trim_end_ticks: 0,
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

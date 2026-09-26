@@ -125,10 +125,13 @@ pub(crate) struct HandlerState {
     /// runs on its workers. Dropped with `HandlerState` at engine
     /// shutdown, which lets the workers finish and exit.
     pub imports: ImportQueue,
-    /// Bumped by every `ClearAll`. An `ImportClip` job captures it when
-    /// queued and drops its result if it changed meanwhile, so an import
-    /// never lands in the project that replaced its own (code review
-    /// UPD-09). Shared with the import workers.
+    /// Bumped by every `ClearAll`. `ImportAudioToPool`'s worker (and a
+    /// track freeze's) captures it when queued and drops its result if it
+    /// changed meanwhile, so an import never lands in the project that
+    /// replaced its own (code review UPD-09). `LoadClipFromWav`'s worker
+    /// does not check this — see `loop_record_takes.rs`'s note on the now-
+    /// deleted `ImportClip`'s UPD-09 test (D-7c). Shared with the import
+    /// workers.
     pub clear_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The `SetProjectDir` clip-id reservation scan still running on its
     /// worker (FU-M12b); see `clips::settle_clip_id_scan`.
