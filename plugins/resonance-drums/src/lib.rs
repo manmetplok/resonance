@@ -356,44 +356,17 @@ impl ResonancePlugin for ResonanceDrums {
         // param objects.
         self.sampler.update_global_settings(&self.params);
 
-        // Drain every pending MIDI event *before* rendering the block.
-        // The new multi-output sampler renders whole blocks per voice
-        // (not per frame) so sample-accurate timing within a block is
-        // coarsened to block granularity. This matches how most hosts
-        // run DAW-side instruments and is audibly indistinguishable for
-        // typical drum programming.
-        while let Some(event) = events.next_event() {
-            match event {
-                NoteEvent::NoteOn { note, velocity, .. } => {
-                    self.sampler.note_on(note, velocity);
-                }
-                NoteEvent::NoteOff { note, .. } => {
-                    self.sampler.note_off(note);
-                }
-                NoteEvent::Choke { note, .. } => {
-                    self.sampler.choke_note(note);
-                }
-            }
-        }
-
-        // Editor auditions (ba todo #1328). Drained after the host's
-        // events and fed through the same `note_on` a MIDI hit takes, so
-        // an auditioned pad sounds exactly like a played one — same
-        // velocity layer, same round robin, same choke group, same
-        // voice allocation. `try_recv` on a bounded channel neither
-        // allocates nor blocks, and this runs whether or not the
-        // transport is rolling: the host calls `process` for as long as
-        // the plugin is active.
-        while let Ok(hit) = self.audition_receiver.try_recv() {
-            self.sampler.note_on(hit.note, hit.velocity);
-        }
-
         // Project the CLAP bridge's `OutputBuffer` slice into the sampler's
         // `PortBuffers` shape on the stack. The plugin declares exactly
         // `NUM_OUTPUT_PORTS` output ports in its layout so the bridge is
         // guaranteed to hand us at least that many; bail if it doesn't
-        // rather than panic on the audio thread.
+        // rather than panic on the audio thread (still applying the
+        // events, so no hit or choke is lost).
         if outputs.len() < kit::NUM_OUTPUT_PORTS {
+            while let Some(event) = events.next_event() {
+                self.apply_event(event);
+            }
+            self.drain_auditions();
             return;
         }
         let mut out_iter = outputs.iter_mut();
@@ -407,10 +380,39 @@ impl ResonancePlugin for ResonanceDrums {
             });
         drop(out_iter);
 
-        // `render_block` zeroes ports, sums voices, and applies master
-        // volume in one pass so this method can stay a thin shim.
+        // Render the block in spans split at event times (DSP-01): every
+        // event is applied at its own frame, so a hit starts where the
+        // host put it, two hits on one pad in one block are two onsets,
+        // and a choke cuts at its offset rather than at frame 0.
+        //
+        // Offsets are clamped into the block, and never move backwards:
+        // an out-of-order event is applied at the frame already reached.
+        // Editor auditions carry no time; they are applied just before
+        // the first span, after any frame-0 host events, which is where
+        // they have always landed.
         self.sampler
-            .render_block(&mut port_views, frames, &self.params);
+            .begin_block(&mut port_views, frames, &self.params);
+        let last_frame = frames.saturating_sub(1);
+        let mut cursor = 0usize;
+        let mut auditions_drained = false;
+        while let Some(event) = events.next_event() {
+            let at = (event.timing() as usize).min(last_frame).max(cursor);
+            if at > cursor {
+                if !auditions_drained {
+                    self.drain_auditions();
+                    auditions_drained = true;
+                }
+                self.sampler.render_span(&mut port_views, cursor, at);
+                cursor = at;
+            }
+            self.apply_event(event);
+        }
+        if !auditions_drained {
+            self.drain_auditions();
+        }
+        self.sampler.render_span(&mut port_views, cursor, frames);
+        self.sampler
+            .end_block(&mut port_views, frames, &self.params);
     }
 
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
@@ -429,6 +431,35 @@ impl ResonancePlugin for ResonanceDrums {
 }
 
 impl ResonanceDrums {
+    /// Apply one host note event to the sampler, at the frame the caller
+    /// has rendered up to.
+    fn apply_event(&mut self, event: NoteEvent) {
+        match event {
+            NoteEvent::NoteOn { note, velocity, .. } => {
+                self.sampler.note_on(note, velocity);
+            }
+            NoteEvent::NoteOff { note, .. } => {
+                self.sampler.note_off(note);
+            }
+            NoteEvent::Choke { note, .. } => {
+                self.sampler.choke_note(note);
+            }
+        }
+    }
+
+    /// Editor auditions (ba todo #1328), fed through the same `note_on`
+    /// a MIDI hit takes, so an auditioned pad sounds exactly like a
+    /// played one — same velocity layer, same round robin, same choke
+    /// group, same voice allocation. `try_recv` on a bounded channel
+    /// neither allocates nor blocks, and this runs whether or not the
+    /// transport is rolling: the host calls `process` for as long as the
+    /// plugin is active.
+    fn drain_auditions(&mut self) {
+        while let Ok(hit) = self.audition_receiver.try_recv() {
+            self.sampler.note_on(hit.note, hit.velocity);
+        }
+    }
+
     /// Measure the kit the sampler currently holds and publish the two
     /// facts the editor displays about it: how much decoded audio is in
     /// memory, and what sample each pad plays at full velocity.
