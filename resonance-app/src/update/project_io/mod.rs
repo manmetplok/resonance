@@ -293,7 +293,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 // recorded capture keeps the old unconditional clean.
                 let captured = r.io.save_capture_revision.take();
                 if captured.is_none_or(|rev| rev == r.revision()) {
-                    r.dirty = false;
+                    r.session.dirty = false;
                 }
                 r.io.has_active_project = true;
                 r.io.last_saved_at = Some(std::time::SystemTime::now());
@@ -304,7 +304,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 if let Some(id) = r.modals.quit_after_save.take() {
                     // Still dirty: the save missed a late edit. Ask again
                     // rather than close over it.
-                    if r.dirty {
+                    if r.session.dirty {
                         r.modals.confirm_quit = Some(id);
                         return Task::none();
                     }
@@ -372,7 +372,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // through the undo branches instead (no patch resend, no
             // frozen-track rehydrate, no relink modal, no job completion).
             r.io.restoring_undo = false;
-            r.undo.clear();
+            r.session.undo.clear();
             r.plugin_mirror.state_cache.clear();
             // Both are re-seeded from the incoming file by the
             // `PluginState` reconcile domain. Dropping them together keeps a previous project's blob or
@@ -382,7 +382,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.freeze.reset();
             // Placements queued against the old project (code review UPD-04).
             r.media.pool_import.clear();
-            r.dirty = false;
+            r.session.dirty = false;
             let _ = r.engine.send(AudioCommand::ClearAll);
             r.io.has_active_project = true;
             if let Some(ref path) = r.io.project_path {

@@ -344,7 +344,7 @@ fn render_guard(app: &Resonance) -> Option<RpcError> {
 /// `needs_confirmation` when the open project has unsaved changes that
 /// `action` would discard.
 fn dirty_guard(app: &Resonance, confirm: bool, action: &str) -> Option<RpcError> {
-    if app.dirty && !confirm {
+    if app.session.dirty && !confirm {
         return Some(RpcError::needs_confirmation(format!(
             "the current project has unsaved changes that {action} would discard; \
              pass \"confirm\": true to proceed"

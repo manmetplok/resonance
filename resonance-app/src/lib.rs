@@ -190,21 +190,17 @@ pub struct Resonance {
     /// pass from being dropped on the floor: the engine emits every take,
     /// and until this existed the dispatch discarded them.
     pub(crate) take_groups: state::TakeGroupState,
-    /// Session-local undo/redo history. Cleared on project load.
-    pub(crate) undo: UndoHistory,
     /// App-side track-freeze orchestration: per-track freeze status plus
     /// the active "freeze selected / all" batch queue. Driven by the
     /// `FreezeMessage` handlers (ba todo #574) and the engine freeze-event
     /// mirror (ba todo #575). Cleared on project load.
     pub(crate) freeze: crate::state::FreezeState,
-    /// True when the project has been modified since the last save.
-    pub(crate) dirty: bool,
-    /// Monotonic edit counter (doc #265, todo #1147): bumped once per
-    /// committed undoable transaction (immediate records, each coalesced
-    /// step, gesture commits, and undo/redo restores). Every mutating
-    /// control-protocol reply carries it so remote clients can detect
-    /// concurrent GUI edits; it never resets while the app runs.
-    pub(crate) revision: u64,
+    /// Session-meta bookkeeping (ARCH-06 second tier, A-12g): the dirty
+    /// flag, the monotonic edit counter, the per-process session id, and
+    /// the undo/redo history — see `state::SessionMetaState` for why
+    /// `control` (the survey's fifth candidate field) stays out. See
+    /// `state::SessionMetaState`.
+    pub(crate) session: state::SessionMetaState,
     /// Unix-socket control endpoint (doc #265, todo #1147): listener
     /// lifecycle handle plus per-connection handshake sessions. Transient
     /// — never persisted, never in the undo snapshot.
@@ -223,11 +219,6 @@ pub struct Resonance {
     /// [`Resonance::autosave_settings`]; re-persisted with
     /// `settings::persist` whenever the user changes them.
     pub(crate) settings: settings::AppSettings,
-
-    /// Stable per-process identifier (pid + startup timestamp). Used to
-    /// namespace the autosave scratch dir for a never-saved project so
-    /// concurrent app instances never collide (epic #32 / doc #171).
-    pub(crate) session_id: String,
 
     /// Track- and plugin-preset save/apply state (ARCH-06 A6-2). See
     /// `state::PresetState`.
@@ -308,7 +299,7 @@ impl Resonance {
     /// Stable per-process session id, used to namespace the autosave
     /// scratch dir for a never-saved project.
     pub fn session_id(&self) -> &str {
-        &self.session_id
+        &self.session.session_id
     }
 
     // ---- Save/autosave status surface ----
@@ -319,7 +310,7 @@ impl Resonance {
     /// Whether the project has unsaved changes since the last *manual*
     /// save. Autosaves deliberately leave this set.
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.session.dirty
     }
 
     /// Whether a manual save or autosave is currently writing to disk.
@@ -662,18 +653,20 @@ impl Resonance {
             },
             sidechain: state::SidechainState::default(),
             take_groups: state::TakeGroupState::default(),
-            undo: UndoHistory::new(),
             plugin_mirror: state::PluginMirror {
                 next_id: 1,
                 ..Default::default()
             },
             freeze: crate::state::FreezeState::default(),
-            dirty: false,
-            revision: 0,
+            session: state::SessionMetaState {
+                dirty: false,
+                revision: 0,
+                session_id,
+                undo: UndoHistory::new(),
+            },
             control: crate::state::ControlEndpointState::default(),
             modals: state::ModalState::default(),
             settings,
-            session_id,
             presets: state::PresetState {
                 default_presets: presets::default_presets(),
                 user_presets: match host {
@@ -741,7 +734,7 @@ impl Resonance {
     /// control-protocol reply (doc #265): bumped once per committed
     /// undoable transaction, including undo/redo restores.
     pub fn revision(&self) -> u64 {
-        self.revision
+        self.session.revision
     }
 
     /// Bump the monotonic edit counter (doc #265, todo #1147). The single
@@ -751,7 +744,7 @@ impl Resonance {
     /// later `SessionMetaState` fold (A-12 survey) to this one function
     /// (ARCH-06, A-12g).
     pub(crate) fn bump_revision(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
+        self.session.revision = self.session.revision.wrapping_add(1);
     }
 
     /// Re-derive the transport stat-block label strings from current

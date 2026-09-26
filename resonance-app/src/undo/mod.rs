@@ -49,8 +49,8 @@ impl crate::Resonance {
             // start records the pre-call state like any other opening edit,
             // and the gesture end has nothing left to close (code review
             // CTL-03).
-            UndoAction::Begin if self.undo.in_compound() => UndoAction::Record,
-            UndoAction::Commit if self.undo.in_compound() => UndoAction::Skip,
+            UndoAction::Begin if self.session.undo.in_compound() => UndoAction::Record,
+            UndoAction::Commit if self.session.undo.in_compound() => UndoAction::Skip,
             action => action,
         };
         let commit_after = matches!(action, UndoAction::Commit);
@@ -63,7 +63,7 @@ impl crate::Resonance {
         // `commit_undo_gesture`: a click that moves nothing is no edit
         // (code review STATE-07).
         if matches!(action, UndoAction::Record | UndoAction::RecordCoalesced(_)) {
-            self.dirty = true;
+            self.session.dirty = true;
         }
 
         // Bump the control-protocol revision counter (doc #265, todo
@@ -84,7 +84,7 @@ impl crate::Resonance {
         // history entry it records below.
         let absorbed = match action {
             UndoAction::Record | UndoAction::RecordCoalesced(_) => {
-                let absorbed = self.undo.absorb_into_compound();
+                let absorbed = self.session.undo.absorb_into_compound();
                 if !absorbed {
                     self.bump_revision();
                 }
@@ -110,29 +110,29 @@ impl crate::Resonance {
                 UndoAction::Record | UndoAction::RecordCoalesced(_) if absorbed => {}
                 UndoAction::Record => {
                     let snap = self.snapshot_for_undo();
-                    self.undo.record(snap, describe(message));
+                    self.session.undo.record(snap, describe(message));
                 }
-                UndoAction::RecordCoalesced(_) if self.undo.in_compound() => {
+                UndoAction::RecordCoalesced(_) if self.session.undo.in_compound() => {
                     // The group's opening edit records PLAIN, never as a
                     // coalesce run: a later GUI drag on the same control
                     // must not merge into this call's entry, and
                     // `begin_compound` already broke any preceding run.
                     let snap = self.snapshot_for_undo();
-                    self.undo.record(snap, describe(message));
+                    self.session.undo.record(snap, describe(message));
                 }
                 UndoAction::RecordCoalesced(key) => {
                     // Check the coalesce run before building the snapshot:
                     // a continuing run keeps the run-opening snapshot, so
                     // building one here would deep-copy the whole project
                     // once per slider event only to drop it.
-                    if !self.undo.try_extend_coalesced(&key) {
+                    if !self.session.undo.try_extend_coalesced(&key) {
                         let snap = self.snapshot_for_undo();
-                        self.undo.record_coalesced(snap, key, describe(message));
+                        self.session.undo.record_coalesced(snap, key, describe(message));
                     }
                 }
                 UndoAction::Begin => {
                     let snap = self.snapshot_for_undo();
-                    self.undo.begin(snap, describe(message));
+                    self.session.undo.begin(snap, describe(message));
                 }
             }
         }
@@ -152,19 +152,19 @@ impl crate::Resonance {
     /// gesture never began — nothing happened) or a project that cannot
     /// record history at all, where the edit still counts as one.
     pub(crate) fn commit_undo_gesture(&mut self) {
-        let changed = match self.undo.pending_snapshot() {
+        let changed = match self.session.undo.pending_snapshot() {
             Some(before) => self.gesture_changed_since(before),
             None => !self.can_record_undo(),
         };
         if !changed {
-            self.undo.discard_pending();
+            self.session.undo.discard_pending();
             return;
         }
-        self.dirty = true;
-        if !self.undo.absorb_into_compound() {
+        self.session.dirty = true;
+        if !self.session.undo.absorb_into_compound() {
             self.bump_revision();
         }
-        self.undo.commit();
+        self.session.undo.commit();
     }
 
     /// Count a project change that is not an edit of its own — the async
@@ -173,7 +173,7 @@ impl crate::Resonance {
     /// dirty and bumps the revision like any committed change, but leaves
     /// the history (and so the redo stack) alone.
     pub(crate) fn mark_edited_without_history(&mut self) {
-        self.dirty = true;
+        self.session.dirty = true;
         self.bump_revision();
     }
 
@@ -191,7 +191,7 @@ impl crate::Resonance {
     /// the events of one session coalesce under [`CoalesceKey::Recording`]
     /// into one entry (`RecordingStarted` breaks the run).
     pub(crate) fn record_recording_edit(&mut self) {
-        self.dirty = true;
+        self.session.dirty = true;
         self.bump_revision();
         if !self.can_record_undo() {
             return;
@@ -201,21 +201,22 @@ impl crate::Resonance {
         // the part of the drag made so far as its own entry, record the
         // take after it, and re-open the drag on the post-take state once
         // the event has landed (`resume_split_gesture`).
-        if self.undo.has_pending() {
+        if self.session.undo.has_pending() {
             let changed = self
+                .session
                 .undo
                 .pending_snapshot()
                 .is_some_and(|before| self.gesture_changed_since(before));
-            if let Some((before, label)) = self.undo.split_pending() {
+            if let Some((before, label)) = self.session.undo.split_pending() {
                 if changed {
-                    self.undo.record(before, label);
+                    self.session.undo.record(before, label);
                 }
             }
         }
         let key = CoalesceKey::Recording;
-        if !self.undo.try_extend_coalesced(&key) {
+        if !self.session.undo.try_extend_coalesced(&key) {
             let snap = self.snapshot_for_undo();
-            self.undo.record_coalesced(snap, key, "Record".to_string());
+            self.session.undo.record_coalesced(snap, key, "Record".to_string());
         }
     }
 
@@ -225,9 +226,9 @@ impl crate::Resonance {
     /// take. Called after every engine event; a no-op unless a split is
     /// outstanding.
     pub(crate) fn resume_split_gesture(&mut self) {
-        if let Some(label) = self.undo.take_split_gesture() {
+        if let Some(label) = self.session.undo.take_split_gesture() {
             let snap = self.snapshot_for_undo();
-            self.undo.begin(snap, label);
+            self.session.undo.begin(snap, label);
         }
     }
 
@@ -258,12 +259,12 @@ impl crate::Resonance {
     /// reply says what happened, and one `edit.undo` takes the partial
     /// edit back.
     pub fn with_compound_undo<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        if self.undo.in_compound() {
+        if self.session.undo.in_compound() {
             return f(self);
         }
-        self.undo.begin_compound();
+        self.session.undo.begin_compound();
         let out = f(self);
-        self.undo.end_compound();
+        self.session.undo.end_compound();
         out
     }
 
@@ -278,14 +279,14 @@ impl crate::Resonance {
     /// the user: one click creates tracks, clips and notes, and may
     /// rewrite the tempo, all under one undo.
     pub(crate) fn continue_as_one_undo<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        if self.undo.in_compound() {
+        if self.session.undo.in_compound() {
             return f(self);
         }
-        self.undo.begin_compound();
+        self.session.undo.begin_compound();
         // Arm the group: the dispatching message is its opening edit.
-        let _ = self.undo.absorb_into_compound();
+        let _ = self.session.undo.absorb_into_compound();
         let out = f(self);
-        self.undo.end_compound();
+        self.session.undo.end_compound();
         out
     }
 }

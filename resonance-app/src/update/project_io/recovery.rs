@@ -173,7 +173,7 @@ pub(crate) fn open_resolved(r: &mut Resonance, path: PathBuf, recover: bool) -> 
 pub(crate) fn finish_load(r: &mut Resonance) -> LoadRecovery {
     let recovery = r.io.load_recovery.take().unwrap_or_default();
     if recovery.recovered {
-        r.dirty = true;
+        r.session.dirty = true;
     }
     if let Some(scratch) = &recovery.scratch_dir {
         // Claim the crashed session's marker: a second crash before the

@@ -209,7 +209,7 @@ impl crate::Resonance {
             Message::Control(m) => control::handle(self, m),
             Message::Tick => tick::handle_tick(self),
             Message::WindowCloseRequested(id) => {
-                if self.dirty && self.io.has_active_project {
+                if self.session.dirty && self.io.has_active_project {
                     self.modals.confirm_quit = Some(id);
                     Task::none()
                 } else {

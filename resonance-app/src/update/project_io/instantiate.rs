@@ -80,14 +80,14 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // replays the template through the disk-load branches, not the undo
     // ones.
     r.io.restoring_undo = false;
-    r.undo.clear();
+    r.session.undo.clear();
     r.plugin_mirror.state_cache.clear();
     // Re-seeded from the template's own file by the `PluginState`
     // reconcile domain; see the matching clear on the project-open path.
     r.presets.pending_plugin_param_overrides.clear();
     // Placements queued against the old project (code review UPD-04).
     r.media.pool_import.clear();
-    r.dirty = false;
+    r.session.dirty = false;
     let _ = r.engine.send(AudioCommand::ClearAll);
     r.io.has_active_project = true;
 }

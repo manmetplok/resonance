@@ -59,7 +59,7 @@ pub fn should_autosave(g: AutosaveGate) -> bool {
 /// Called from the tick: sample live state and start an autosave when
 /// [`should_autosave`] passes.
 pub fn tick_autosave(r: &mut Resonance) {
-    if !r.dirty {
+    if !r.session.dirty {
         // A manual save (or load) cleaned the project: the next edit
         // starts a fresh interval.
         r.io.autosave_armed_at = None;
@@ -71,7 +71,7 @@ pub fn tick_autosave(r: &mut Resonance) {
     let cfg = r.autosave_settings();
     let gate = AutosaveGate {
         enabled: cfg.enabled,
-        dirty: r.dirty,
+        dirty: r.session.dirty,
         changed_since_autosave: r.io.autosave_revision != Some(r.revision()),
         has_active_project: r.io.has_active_project,
         busy: r.io.loading || r.offline_render_in_progress() || r.transport.recording,

@@ -33,8 +33,8 @@ pub(super) fn try_handle(
 
 /// The history's two ends, without touching it.
 fn status(app: &Resonance) -> EditStatus {
-    let undo_label = app.undo.undo_label().map(str::to_owned);
-    let redo_label = app.undo.redo_label().map(str::to_owned);
+    let undo_label = app.session.undo.undo_label().map(str::to_owned);
+    let redo_label = app.session.undo.redo_label().map(str::to_owned);
     EditStatus {
         can_undo: undo_label.is_some(),
         can_redo: redo_label.is_some(),
@@ -54,7 +54,7 @@ fn blocked(app: &Resonance) -> Option<RpcError> {
             "a recording is in progress; stop the transport before undoing",
         ));
     }
-    if app.undo.has_pending() {
+    if app.session.undo.has_pending() {
         return Some(RpcError::busy(
             "an edit gesture is still in progress; retry once it finishes",
         ));
@@ -63,7 +63,7 @@ fn blocked(app: &Resonance) -> Option<RpcError> {
 }
 
 fn undo(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
-    if app.undo.can_undo() {
+    if app.session.undo.can_undo() {
         if let Some(error) = blocked(app) {
             return (super::failure(request, error), Task::none());
         }
@@ -80,7 +80,7 @@ fn undo(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
 }
 
 fn redo(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
-    if app.undo.can_redo() {
+    if app.session.undo.can_redo() {
         if let Some(error) = blocked(app) {
             return (super::failure(request, error), Task::none());
         }

@@ -150,7 +150,7 @@ impl Resonance {
         let mut keep: std::collections::BTreeSet<ClipId> = engine_clips.into_iter().collect();
         collect_clip_ids(file, &mut keep);
         keep.extend(self.clips.iter().map(|c| c.id));
-        for snapshot in self.undo.snapshots() {
+        for snapshot in self.session.undo.snapshots() {
             collect_clip_ids(&snapshot.project.file, &mut keep);
         }
         Some(keep)
