@@ -300,8 +300,8 @@ pub(super) fn track_removed(
     track_id: TrackId,
     instance_id: PluginInstanceId,
 ) {
-    if r.mixer.selected_plugin == Some(instance_id) {
-        r.mixer.selected_plugin = None;
+    if r.ui.mixer.selected_plugin == Some(instance_id) {
+        r.ui.mixer.selected_plugin = None;
     }
     if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
         track.plugins.retain(|p| p.instance_id != instance_id);
@@ -370,7 +370,7 @@ pub(crate) fn mirror_track_plugin_move(
 
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.plugin_catalog.available_plugins = plugins;
-    r.view_caches.rebuild_plugins(&r.plugin_catalog.available_plugins);
+    r.ui.view_caches.rebuild_plugins(&r.plugin_catalog.available_plugins);
     // A scan answers exactly one `PluginsScanned`, whether it was the
     // startup scan or a live rescan, so this is where a rescan ends
     // (ba todo #1307).
@@ -657,8 +657,8 @@ pub(super) fn bus_removed(
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
         bus.plugins.retain(|p| p.instance_id != instance_id);
     }
-    if r.mixer.selected_plugin == Some(instance_id) {
-        r.mixer.selected_plugin = None;
+    if r.ui.mixer.selected_plugin == Some(instance_id) {
+        r.ui.mixer.selected_plugin = None;
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
@@ -751,8 +751,8 @@ pub(crate) fn mirror_master_plugin_move(
 
 pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     r.master.plugins.retain(|p| p.instance_id != instance_id);
-    if r.mixer.selected_plugin == Some(instance_id) {
-        r.mixer.selected_plugin = None;
+    if r.ui.mixer.selected_plugin == Some(instance_id) {
+        r.ui.mixer.selected_plugin = None;
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
@@ -853,6 +853,6 @@ pub(super) fn editor_state(
 ) {
     r.with_plugin_mut(instance_id, |slot| slot.editor_open = open);
     if failure.is_some() {
-        r.mixer.selected_plugin = Some(instance_id);
+        r.ui.mixer.selected_plugin = Some(instance_id);
     }
 }

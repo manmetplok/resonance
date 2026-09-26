@@ -119,10 +119,10 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             crate::update::plugin_replace::replace_plugin_slot(r, instance_id, plugin);
         }
         PluginMessage::TogglePluginPanel(instance_id) => {
-            if r.mixer.selected_plugin == Some(instance_id) {
-                r.mixer.selected_plugin = None;
+            if r.ui.mixer.selected_plugin == Some(instance_id) {
+                r.ui.mixer.selected_plugin = None;
             } else {
-                r.mixer.selected_plugin = Some(instance_id);
+                r.ui.mixer.selected_plugin = Some(instance_id);
             }
         }
         PluginMessage::SetPluginParam(instance_id, param_id, value) => {

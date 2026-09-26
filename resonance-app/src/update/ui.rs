@@ -13,12 +13,12 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // Entering Performance from elsewhere remembers the source;
             // switching to any other view clears the memory. Switching
             // does not touch transport state — playback continues.
-            match (r.view_mode, mode) {
+            match (r.ui.view_mode, mode) {
                 (ViewMode::Performance, ViewMode::Performance) => {}
-                (from, ViewMode::Performance) => r.pre_performance_view = Some(from),
-                _ => r.pre_performance_view = None,
+                (from, ViewMode::Performance) => r.ui.pre_performance_view = Some(from),
+                _ => r.ui.pre_performance_view = None,
             }
-            r.view_mode = mode;
+            r.ui.view_mode = mode;
         }
         UiMessage::TogglePerformanceMode => {
             toggle_performance_mode(r);
@@ -41,24 +41,24 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::ExitPerformanceMode => {
             // `Esc` only leaves Performance mode; it is a no-op elsewhere so
             // it never steals Escape from other views.
-            if r.view_mode == ViewMode::Performance {
-                r.view_mode = r.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+            if r.ui.view_mode == ViewMode::Performance {
+                r.ui.view_mode = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
             }
         }
         UiMessage::OpenSettings => {
-            r.mixer.settings_open = true;
+            r.ui.mixer.settings_open = true;
         }
         UiMessage::CloseSettings => {
-            r.mixer.settings_open = false;
+            r.ui.mixer.settings_open = false;
         }
         UiMessage::OpenAddTrackMenu => {
-            r.mixer.add_track_menu_open = true;
+            r.ui.mixer.add_track_menu_open = true;
         }
         UiMessage::CloseAddTrackMenu => {
-            r.mixer.add_track_menu_open = false;
+            r.ui.mixer.add_track_menu_open = false;
         }
         UiMessage::ToggleReferencePanel => {
-            r.mixer.reference_panel_open = !r.mixer.reference_panel_open;
+            r.ui.mixer.reference_panel_open = !r.ui.mixer.reference_panel_open;
         }
         UiMessage::DismissError => {
             r.banners.error_message = None;
@@ -72,7 +72,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::ShowMissingPlugins => {
             r.missing_plugins.show();
-            r.mixer.settings_open = false;
+            r.ui.mixer.settings_open = false;
         }
         UiMessage::StartNewProject => {
             if r.refuse_project_switch_during_render() {
@@ -84,53 +84,53 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // A track and a bus can't both be selected — the inspector
             // describes one channel.
             if id.is_some() {
-                r.mixer.selected_bus = None;
+                r.ui.mixer.selected_bus = None;
             }
             match id {
                 // An additive (Cmd/Shift) click on a track toggles it in the
                 // multi-selection and leaves any clip selection alone.
-                Some(track_id) if r.interaction.select_additive => {
-                    r.interaction.toggle_track_selection(track_id);
+                Some(track_id) if r.ui.interaction.select_additive => {
+                    r.ui.interaction.toggle_track_selection(track_id);
                 }
                 // A plain click (or an explicit deselect-all) replaces the
                 // selection and drops the clip selection, as before.
                 _ => {
-                    r.interaction.select_single_track(id);
-                    r.interaction.selected_clip = None;
-                    r.interaction.selected_midi_clip = None;
+                    r.ui.interaction.select_single_track(id);
+                    r.ui.interaction.selected_clip = None;
+                    r.ui.interaction.selected_midi_clip = None;
                 }
             }
         }
         UiMessage::SelectBus(id) => {
-            r.mixer.selected_bus = id;
+            r.ui.mixer.selected_bus = id;
             // Selecting a bus takes the highlight off whatever track had
             // it, so the mixer never shows two selected strips while the
             // inspector describes one of them.
             if id.is_some() {
-                r.interaction.select_single_track(None);
-                r.interaction.selected_clip = None;
-                r.interaction.selected_midi_clip = None;
+                r.ui.interaction.select_single_track(None);
+                r.ui.interaction.selected_clip = None;
+                r.ui.interaction.selected_midi_clip = None;
             }
         }
         UiMessage::OpenTrackMenu { id, x, y } => {
             // Right-click selects the track (so the menu's "Freeze selected
             // tracks" entry targets what was clicked) and opens the context
             // menu anchored at the row (design doc #181, todo #581).
-            r.interaction.select_single_track(Some(id));
-            r.interaction.track_menu = Some(crate::state::TrackMenuState {
+            r.ui.interaction.select_single_track(Some(id));
+            r.ui.interaction.track_menu = Some(crate::state::TrackMenuState {
                 track_id: id,
                 x,
                 y,
             });
         }
         UiMessage::CloseTrackMenu => {
-            r.interaction.track_menu = None;
+            r.ui.interaction.track_menu = None;
         }
         UiMessage::ModifiersChanged(mods) => {
             // Cmd (macOS) / Ctrl (other platforms) and Shift both extend the
             // track selection. Mirroring the live state here lets the
             // modifier-less mouse press decide single vs additive.
-            r.interaction.select_additive = mods.command() || mods.shift();
+            r.ui.interaction.select_additive = mods.command() || mods.shift();
         }
         UiMessage::ConfirmSaveAndQuit => {
             let window_id = r.modals.confirm_quit.take();
@@ -151,7 +151,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.viewport.global_tracks_expanded = !r.viewport.global_tracks_expanded;
         }
         UiMessage::ToggleMixerInspectorGroup(group) => {
-            let set = &mut r.mixer.collapsed_inspector_groups;
+            let set = &mut r.ui.mixer.collapsed_inspector_groups;
             if !set.remove(&group) {
                 set.insert(group);
             }
@@ -161,7 +161,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // panels, which store the collapsed set): a take lane only
             // exists after cycle recording, and unfolding every stack the
             // moment a pass lands would shove the arrangement down.
-            let set = &mut r.interaction.take_lane_expanded_tracks;
+            let set = &mut r.ui.interaction.take_lane_expanded_tracks;
             if !set.remove(&track_id) {
                 set.insert(track_id);
             }
@@ -223,10 +223,10 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.performance.set_capo(frets);
         }
         UiMessage::ToggleMarkersOverview => {
-            r.mixer.markers_overview_open = !r.mixer.markers_overview_open;
+            r.ui.mixer.markers_overview_open = !r.ui.mixer.markers_overview_open;
         }
         UiMessage::CloseMarkersOverview => {
-            r.mixer.markers_overview_open = false;
+            r.ui.mixer.markers_overview_open = false;
         }
         UiMessage::RequestMarkerNav { forward } => {
             // The bare `.`/`,` shortcut arrives via the global keyboard
@@ -277,10 +277,10 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
 /// Performance, return to the remembered view; otherwise enter Performance
 /// from the current view (remembering it for the return trip).
 fn toggle_performance_mode(r: &mut Resonance) {
-    if r.view_mode == ViewMode::Performance {
-        r.view_mode = r.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+    if r.ui.view_mode == ViewMode::Performance {
+        r.ui.view_mode = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
     } else {
-        r.pre_performance_view = Some(r.view_mode);
-        r.view_mode = ViewMode::Performance;
+        r.ui.pre_performance_view = Some(r.ui.view_mode);
+        r.ui.view_mode = ViewMode::Performance;
     }
 }

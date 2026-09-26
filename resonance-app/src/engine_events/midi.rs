@@ -333,6 +333,7 @@ pub(crate) fn apply_note_move(
             // Keep the selection on the same notes, so the dragged note
             // stays highlighted and Delete removes it, not its neighbour.
             if let Some(editor) = r
+                .ui
                 .interaction
                 .editing_midi_clip
                 .as_mut()

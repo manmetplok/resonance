@@ -75,9 +75,9 @@ pub(super) fn chain_group(
     let needs_instrument =
         is_instrument && track.plugins.is_empty() && track.sub_track.is_none();
     let candidates = if needs_instrument {
-        r.view_caches.instrument_plugins.clone()
+        r.ui.view_caches.instrument_plugins.clone()
     } else {
-        r.view_caches.fx_plugins.clone()
+        r.ui.view_caches.fx_plugins.clone()
     };
     if !candidates.is_empty() {
         let track_id = track.id;

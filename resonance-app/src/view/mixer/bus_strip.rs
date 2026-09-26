@@ -63,7 +63,7 @@ impl crate::Resonance {
         // gives the inspector something to describe. `mouse_area` sits
         // *outside* the container so the inner buttons, pickers, knob and
         // fader keep their own press handling.
-        let is_selected = self.mixer.selected_bus == Some(bus_id);
+        let is_selected = self.ui.mixer.selected_bus == Some(bus_id);
         iced::widget::mouse_area(
             container(strip_content)
                 .height(Length::Fixed(theme::BUS_STRIP_HEIGHT as f32))
@@ -145,12 +145,12 @@ impl crate::Resonance {
         // treatment as track strips). Options come from the cached FX
         // filter on `view_caches` — cloning that Rc is a refcount bump.
         let fx_picker_element: Option<Element<'static, Message>> =
-            if self.view_caches.fx_plugins.is_empty() {
+            if self.ui.view_caches.fx_plugins.is_empty() {
                 None
             } else {
                 Some(
                     pick_list(
-                        self.view_caches.fx_plugins.clone(),
+                        self.ui.view_caches.fx_plugins.clone(),
                         None::<ScannedPlugin>,
                         move |plugin: ScannedPlugin| {
                             Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin))

@@ -138,7 +138,7 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
             r.sync_tempo_display();
         }
         GlobalTrackMessage::StartTempoDrag(index) => {
-            r.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+            r.ui.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
                 kind: state::GlobalTrackKind::Tempo,
                 index,
             });
@@ -156,10 +156,10 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
             // review VIEW-15) — Delete after the drag then removes it,
             // not whatever slid into its old slot.
             let tracking = matches!(
-                r.interaction.selected_global_event,
+                r.ui.interaction.selected_global_event,
                 Some(sel) if sel.kind == state::GlobalTrackKind::Tempo
             );
-            let index = match r.interaction.selected_global_event {
+            let index = match r.ui.interaction.selected_global_event {
                 Some(sel) if tracking => sel.index,
                 _ => index,
             };
@@ -181,7 +181,7 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
                 r.tempo_events.sort_by_key(|e| e.bar);
                 let pos = r.tempo_events.iter().position(|e| e.bar == moved_bar);
                 if let (true, Some(pos)) = (tracking, pos) {
-                    r.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+                    r.ui.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
                         kind: state::GlobalTrackKind::Tempo,
                         index: pos,
                     });
@@ -220,7 +220,7 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
                 });
             }
             if let Some(idx) = r.signature_events.iter().position(|e| e.bar == bar) {
-                r.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+                r.ui.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
                     kind: state::GlobalTrackKind::Signature,
                     index: idx,
                 });
@@ -249,10 +249,10 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
             }
         }
         GlobalTrackMessage::SelectEvent(sel) => {
-            r.interaction.selected_global_event = sel;
+            r.ui.interaction.selected_global_event = sel;
         }
         GlobalTrackMessage::DeleteSelectedEvent => {
-            if let Some(sel) = r.interaction.selected_global_event.take() {
+            if let Some(sel) = r.ui.interaction.selected_global_event.take() {
                 match sel.kind {
                     state::GlobalTrackKind::Tempo => r.remove_tempo_event(sel.index),
                     state::GlobalTrackKind::Signature => r.remove_signature_event(sel.index),

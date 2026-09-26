@@ -141,7 +141,7 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // -- Sort track / bus registry so view-layer invariant holds -------
     r.registry.resort_tracks();
     r.registry.resort_busses();
-    r.view_caches.rebuild_output(&r.registry.busses);
+    r.ui.view_caches.rebuild_output(&r.registry.busses);
     r.compose.refresh_track_count(&r.registry.tracks);
 
     true

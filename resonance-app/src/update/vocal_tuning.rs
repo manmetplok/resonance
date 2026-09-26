@@ -51,7 +51,7 @@ pub fn handle(r: &mut Resonance, m: VocalTuningMessage) -> Task<Message> {
     match m {
         VocalTuningMessage::OpenPitchEditor(clip_id) => open_pitch_editor(r, clip_id),
         VocalTuningMessage::ClosePitchEditor => {
-            r.interaction.editing_pitch_clip = None;
+            r.ui.interaction.editing_pitch_clip = None;
         }
     }
     Task::none()
@@ -74,7 +74,7 @@ fn open_pitch_editor(r: &mut Resonance, clip_id: ClipId) {
     if !is_vocal {
         return;
     }
-    r.interaction.editing_pitch_clip = Some(clip_id);
+    r.ui.interaction.editing_pitch_clip = Some(clip_id);
     // Run f0 detection + note segmentation off the realtime thread. The
     // detected contour/notes return via `AudioEvent::ClipPitchDetected`
     // and are folded into the clip's `vocal_tuning` mirror there. A failed

@@ -71,7 +71,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || r.io.loading
         || r.modals.bounce_in_progress.is_some()
         || export_render_in_flight(r)
-        || (r.mixer.reference_panel_open && !r.reference.entries.is_empty())
+        || (r.ui.mixer.reference_panel_open && !r.reference.entries.is_empty())
         || r.plugin_catalog.plugin_scan_in_progress
         || r.media.relink.scanning()
         || !r.control.pending_tracks.is_empty()
@@ -268,7 +268,7 @@ fn peaks_have_consumers(r: &Resonance) -> bool {
 /// by `engine_events::reference::ab_meter_snapshot`. Gated on the panel
 /// being visible so we don't poll the A/B taps when nothing reads them.
 fn poll_ab_meters(r: &mut Resonance) {
-    if r.mixer.reference_panel_open && !r.reference.entries.is_empty() {
+    if r.ui.mixer.reference_panel_open && !r.reference.entries.is_empty() {
         let _ = r.engine.send(AudioCommand::PollABMeters);
     }
 }
@@ -369,7 +369,7 @@ fn follow_playhead(r: &mut Resonance) -> Option<Task<Message>> {
         return None;
     }
     if !r.settings.arrange.follow_playhead
-        || r.view_mode != crate::state::ViewMode::Arrange
+        || r.ui.view_mode != crate::state::ViewMode::Arrange
         || r.viewport.visible_width <= 0.0
         || arrange_pointer_drag_active(r)
     {
@@ -407,7 +407,7 @@ fn follow_playhead(r: &mut Resonance) -> Option<Task<Message>> {
 /// A pointer gesture on the arrange timeline is in flight (clip / MIDI
 /// clip move or trim, fade or gain drag, loop-marker drag, browser drop).
 fn arrange_pointer_drag_active(r: &Resonance) -> bool {
-    let i = &r.interaction;
+    let i = &r.ui.interaction;
     i.clip_drag.is_some()
         || i.clip_trim.is_some()
         || i.clip_fade_drag.is_some()

@@ -77,7 +77,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
     match m {
         TransportMessage::Play => {
             // In Compose mode with a selected section, auto-loop that section
-            if r.view_mode == ViewMode::Compose {
+            if r.ui.view_mode == ViewMode::Compose {
                 if let Some((placement, definition)) =
                     r.compose.selected_placement().and_then(|p| {
                         r.compose.find_definition(p.definition_id).map(|d| (p, d))

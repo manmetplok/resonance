@@ -98,7 +98,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
         .iter()
         .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
     has_sub_tracks.hash(&mut h);
-    r.mixer
+    r.ui.mixer
         .expanded_sub_track_parents
         .contains(&track.id)
         .hash(&mut h);
@@ -117,7 +117,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     // enabled directions are a pure function of the chain hashed here).
     track.plugins.len().hash(&mut h);
     for p in &track.plugins {
-        hash_slot(&mut h, p, r.mixer.selected_plugin == Some(p.instance_id));
+        hash_slot(&mut h, p, r.ui.mixer.selected_plugin == Some(p.instance_id));
     }
     // External-instrument head pill, offline flag and summary chips.
     let ext = r.external_instruments.get(&track.id);
@@ -161,7 +161,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     .map(f32::to_bits)
     .hash(&mut h);
     // "+ Instrument" picker options / "No instruments" fallback.
-    hash_scanned(&mut h, &r.view_caches.instrument_plugins);
+    hash_scanned(&mut h, &r.ui.view_caches.instrument_plugins);
     r.plugin_catalog.available_plugins.is_empty().hash(&mut h);
     h.finish()
 }
@@ -192,9 +192,9 @@ pub(super) fn bus_strip_fingerprint(r: &crate::Resonance, bus: &BusState) -> u64
     bus.fx_bypassed.hash(&mut h);
     bus.plugins.len().hash(&mut h);
     for p in &bus.plugins {
-        hash_slot(&mut h, p, r.mixer.selected_plugin == Some(p.instance_id));
+        hash_slot(&mut h, p, r.ui.mixer.selected_plugin == Some(p.instance_id));
     }
-    hash_scanned(&mut h, &r.view_caches.fx_plugins);
+    hash_scanned(&mut h, &r.ui.view_caches.fx_plugins);
     hash_auto_header(&mut h, r, AutoChan::Bus(bus.id), &bus.plugins);
     bus.pan.to_bits().hash(&mut h);
     super::automation::live_value(
@@ -214,9 +214,9 @@ pub(super) fn master_strip_fingerprint(r: &crate::Resonance) -> u64 {
     r.master.fx_bypassed.hash(&mut h);
     r.master.plugins.len().hash(&mut h);
     for p in &r.master.plugins {
-        hash_slot(&mut h, p, r.mixer.selected_plugin == Some(p.instance_id));
+        hash_slot(&mut h, p, r.ui.mixer.selected_plugin == Some(p.instance_id));
     }
-    hash_scanned(&mut h, &r.view_caches.fx_plugins);
+    hash_scanned(&mut h, &r.ui.view_caches.fx_plugins);
     hash_auto_header(&mut h, r, AutoChan::Master, &r.master.plugins);
     h.finish()
 }

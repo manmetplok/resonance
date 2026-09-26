@@ -49,7 +49,7 @@ impl Resonance {
 
     #[doc(hidden)]
     pub fn test_selected_global_event(&self) -> Option<state::SelectedGlobalEvent> {
-        self.interaction.selected_global_event
+        self.ui.interaction.selected_global_event
     }
 
     /// Test-only: rebuild the GUI-side tempo map from the current
@@ -84,14 +84,14 @@ impl Resonance {
     /// Test-only: the currently active top-level [`ViewMode`].
     #[doc(hidden)]
     pub fn test_view_mode(&self) -> state::ViewMode {
-        self.view_mode
+        self.ui.view_mode
     }
 
     /// Test-only: directly set the active view (bypassing the reducer)
     /// to establish a starting tab for Performance-mode toggle tests.
     #[doc(hidden)]
     pub fn test_set_view_mode(&mut self, mode: state::ViewMode) {
-        self.view_mode = mode;
+        self.ui.view_mode = mode;
     }
 
     /// Test-only: whether the transport reports as playing. Used to

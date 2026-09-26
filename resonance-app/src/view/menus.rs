@@ -227,10 +227,10 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
 /// vanished (e.g. deleted straight from the menu) so the stack drops away.
 pub(crate) fn view_marker_overlay(r: &Resonance) -> Element<'_, Message> {
     // Inline rename takes priority — opening it always clears the menu.
-    if let Some(rename) = &r.interaction.marker_rename {
+    if let Some(rename) = &r.ui.interaction.marker_rename {
         return marker_rename_overlay(rename);
     }
-    if let Some(menu) = &r.interaction.marker_menu {
+    if let Some(menu) = &r.ui.interaction.marker_menu {
         if let Some(marker) = r.markers.get(menu.marker_id) {
             return marker_menu_overlay(r, menu, marker);
         }
@@ -428,10 +428,10 @@ fn marker_rename_overlay(rename: &MarkerRenameState) -> Element<'_, Message> {
 /// Renders nothing when no menu is open (or its track is gone).
 pub(crate) fn view_track_menu_overlay(r: &Resonance) -> Element<'_, Message> {
     // The name prompt takes over from the menu that opened it.
-    if let Some(prompt) = &r.interaction.preset_save {
+    if let Some(prompt) = &r.ui.interaction.preset_save {
         return preset_save_overlay(prompt);
     }
-    if let Some(menu) = &r.interaction.track_menu {
+    if let Some(menu) = &r.ui.interaction.track_menu {
         if let Some(track) = r.registry.tracks.iter().find(|t| t.id == menu.track_id) {
             return track_menu_overlay(r, menu, track);
         }

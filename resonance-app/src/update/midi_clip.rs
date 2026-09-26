@@ -70,8 +70,8 @@ pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
     match m {
         MidiClipMessage::DeleteMidiClip(id) => {
             let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: id });
-            if r.interaction.selected_midi_clip == Some(id) {
-                r.interaction.selected_midi_clip = None;
+            if r.ui.interaction.selected_midi_clip == Some(id) {
+                r.ui.interaction.selected_midi_clip = None;
             }
         }
         MidiClipMessage::CreateEmptyClip {

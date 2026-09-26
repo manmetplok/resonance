@@ -29,7 +29,7 @@ pub(super) fn audio_input_block(
         // Cached `Rc<[InputDeviceInfo]>` — clones are cheap (refcount).
         // Rebuilt by `engine_events::transport::input_devices_listed`
         // only when the engine re-enumerates devices.
-        r.view_caches.input_devices.clone(),
+        r.ui.view_caches.input_devices.clone(),
         selected_device,
         move |device: InputDeviceInfo| {
             Message::Track(TrackMessage::SetTrackInputDevice(track_id, Some(device.name)))
@@ -88,7 +88,7 @@ pub(super) fn midi_input_block(
     // synthesize a one-off Vec when the track is bound to a configured
     // device that's not currently enumerated (controller unplugged).
     let in_choices = super::midi_choices_with_override(
-        &r.view_caches.midi_input_choices,
+        &r.ui.view_caches.midi_input_choices,
         track.midi_input_device.as_deref(),
         &r.midi_devices.midi_input_devices,
     );
@@ -105,7 +105,7 @@ pub(super) fn midi_input_block(
 
     if track.midi_input_device.is_some() {
         let in_ch_picker = pick_list(
-            r.view_caches.input_channel_choices.clone(),
+            r.ui.view_caches.input_channel_choices.clone(),
             Some(MidiChannelChoice(track.midi_input_channel)),
             move |choice| {
                 Message::Track(TrackMessage::SetTrackMidiInputChannel(track_id, choice.0))
@@ -127,7 +127,7 @@ pub(super) fn midi_output_block(
 ) -> Element<'static, Message> {
     let track_id = track.id;
     let out_choices = super::midi_choices_with_override(
-        &r.view_caches.midi_output_choices,
+        &r.ui.view_caches.midi_output_choices,
         track.midi_output_device.as_deref(),
         &r.midi_devices.midi_output_devices,
     );
@@ -145,7 +145,7 @@ pub(super) fn midi_output_block(
     if track.midi_output_device.is_some() {
         let selected = MidiChannelChoice(Some(track.midi_output_channel.unwrap_or(0)));
         let out_ch_picker = pick_list(
-            r.view_caches.output_channel_choices.clone(),
+            r.ui.view_caches.output_channel_choices.clone(),
             Some(selected),
             move |choice| {
                 Message::Track(TrackMessage::SetTrackMidiOutputChannel(track_id, choice.0))
@@ -166,7 +166,7 @@ pub(super) fn output_block(
     track: &TrackState,
 ) -> Element<'static, Message> {
     let track_id = track.id;
-    let cached = r.view_caches.output_choices.clone();
+    let cached = r.ui.view_caches.output_choices.clone();
     // `cached` is normally seeded with at least a Master entry, but
     // defend against any future code path that clears it (or a window
     // between project-load and `rebuild_output`) and against a track

@@ -85,7 +85,7 @@ pub(super) fn view<'a>(r: &'a crate::Resonance, bus: &'a BusState) -> Element<'a
 }
 
 fn collapsed(r: &crate::Resonance, group: MixerInspectorGroup) -> bool {
-    r.mixer.collapsed_inspector_groups.contains(&group)
+    r.ui.mixer.collapsed_inspector_groups.contains(&group)
 }
 
 /// Hash every field the lazy ROUTING + CHAIN groups read. The live level
@@ -145,7 +145,7 @@ pub(crate) fn fingerprint(
             }
         }
     }
-    Rc::as_ptr(&r.view_caches.fx_plugins).hash(&mut h);
+    Rc::as_ptr(&r.ui.view_caches.fx_plugins).hash(&mut h);
     h.finish()
 }
 
@@ -354,10 +354,10 @@ fn chain_group(
         }
     }
 
-    if !r.view_caches.fx_plugins.is_empty() {
+    if !r.ui.view_caches.fx_plugins.is_empty() {
         let bus_id = bus.id;
         let picker = pick_list(
-            r.view_caches.fx_plugins.clone(),
+            r.ui.view_caches.fx_plugins.clone(),
             None::<ScannedPlugin>,
             move |plugin: ScannedPlugin| Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin)),
         )

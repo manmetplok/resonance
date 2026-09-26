@@ -466,7 +466,7 @@ impl Resonance {
     /// if any — the surface a refused editor falls back to (ba todo #1347).
     #[doc(hidden)]
     pub fn test_selected_plugin(&self) -> Option<resonance_audio::types::PluginInstanceId> {
-        self.mixer.selected_plugin
+        self.ui.mixer.selected_plugin
     }
 
     pub fn test_strip_editor_toggle(
@@ -703,10 +703,12 @@ impl Resonance {
     ) -> Option<u64> {
         let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
         let routing_collapsed = self
+            .ui
             .mixer
             .collapsed_inspector_groups
             .contains(&state::MixerInspectorGroup::Routing);
         let chain_collapsed = self
+            .ui
             .mixer
             .collapsed_inspector_groups
             .contains(&state::MixerInspectorGroup::Chain);
@@ -727,7 +729,7 @@ impl Resonance {
         bus_id: resonance_audio::types::BusId,
     ) -> Option<u64> {
         let bus = self.registry.busses.iter().find(|b| b.id == bus_id)?;
-        let groups = &self.mixer.collapsed_inspector_groups;
+        let groups = &self.ui.mixer.collapsed_inspector_groups;
         Some(crate::view::mixer::inspector::bus_fingerprint(
             self,
             bus,
@@ -796,7 +798,7 @@ impl Resonance {
         let mut registry = resonance_common::DeviceDefinitionRegistry::default();
         registry.scan_bundled();
         registry.scan_dir(user_dir);
-        self.view_caches.rebuild_device_choices(&registry.list());
+        self.ui.view_caches.rebuild_device_choices(&registry.list());
         self.device_registry = registry;
     }
 
@@ -806,7 +808,7 @@ impl Resonance {
     /// after a re-scan.
     #[doc(hidden)]
     pub fn test_device_choice_ids(&self) -> Vec<String> {
-        self.view_caches
+        self.ui.view_caches
             .device_choices
             .iter()
             .filter_map(|c| c.id.clone())

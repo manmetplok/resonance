@@ -173,6 +173,7 @@ pub(crate) fn view_track_header(
     let lane_count =
         crate::view::timeline::automation::track_lanes_sorted(&r.automation, track).len();
     let automation_expanded = r
+        .ui
         .interaction
         .automation_expanded_tracks
         .contains(&track_id);
@@ -215,7 +216,7 @@ pub(crate) fn view_track_header(
         .filter(|g| g.track_id == track_id)
         .map(|g| g.takes.len())
         .sum();
-    let take_lane_expanded = r.interaction.take_lane_expanded_tracks.contains(&track_id);
+    let take_lane_expanded = r.ui.interaction.take_lane_expanded_tracks.contains(&track_id);
     let take_caret: Element<'static, Message> = if take_count > 0 {
         mouse_area(
             row![

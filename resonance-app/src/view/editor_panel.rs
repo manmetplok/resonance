@@ -53,7 +53,7 @@ impl crate::Resonance {
     /// third editor type only has to supply its own canvas + toolbar
     /// text.
     pub(crate) fn view_midi_editor_panel(&self) -> Option<Element<'_, Message>> {
-        let editor_state = self.interaction.editing_midi_clip.as_ref()?;
+        let editor_state = self.ui.interaction.editing_midi_clip.as_ref()?;
         let clip = self
             .midi_clips
             .iter()

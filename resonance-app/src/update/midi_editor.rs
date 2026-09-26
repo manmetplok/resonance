@@ -245,12 +245,12 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             clips::open_midi_editor(r, clip_id);
         }
         MidiEditorMessage::OpenSelectedMidiClip => {
-            if let Some(clip_id) = r.interaction.selected_midi_clip {
+            if let Some(clip_id) = r.ui.interaction.selected_midi_clip {
                 clips::open_midi_editor(r, clip_id);
             }
         }
         MidiEditorMessage::CloseMidiEditor => {
-            r.interaction.editing_midi_clip = None;
+            r.ui.interaction.editing_midi_clip = None;
         }
         MidiEditorMessage::AddNote {
             clip_id,
@@ -284,7 +284,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
                 clip_id,
                 note_index,
             });
-            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+            if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
                 editor.clear_selection();
             }
         }
@@ -327,35 +327,35 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             });
         }
         MidiEditorMessage::SelectNote { note_index } => {
-            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+            if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
                 editor.select_single(note_index);
             }
         }
         MidiEditorMessage::ToggleNoteSelection { note_index } => {
-            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+            if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
                 editor.toggle_note(note_index);
             }
         }
         MidiEditorMessage::SelectNotesInRect { indices, additive } => {
-            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+            if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
                 editor.apply_marquee(indices, additive);
             }
         }
         MidiEditorMessage::SelectAllNotes => {
-            if let Some(clip_id) = r.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
+            if let Some(clip_id) = r.ui.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
                 let len = r
                     .midi_clips
                     .iter()
                     .find(|c| c.id == clip_id)
                     .map(|c| c.notes.len())
                     .unwrap_or(0);
-                if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+                if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
                     editor.select_all(len);
                 }
             }
         }
         MidiEditorMessage::ClearNoteSelection => {
-            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+            if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
                 editor.clear_selection();
             }
         }
@@ -370,7 +370,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
             let _ = r.engine.send(AudioCommand::SendNoteOff { track_id, note });
         }
         MidiEditorMessage::ScrollY(delta) => {
-            if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+            if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
                 editor.scroll_y = (editor.scroll_y + delta).max(0.0);
             }
         }
@@ -432,7 +432,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
         }
         MidiEditorMessage::ExtractGroove { grid } => {
             // Extraction reads the whole open clip regardless of selection.
-            if let Some(clip_id) = r.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
+            if let Some(clip_id) = r.ui.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id) {
                 // Stash the user's chosen name so the GrooveExtracted event
                 // mirror (#390) can file the captured template into the
                 // project groove library under it (#394). A blank name
@@ -497,7 +497,7 @@ pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
 /// are dropped. Returns `None` — making the op a no-op — when no clip is
 /// open, the clip is empty, or no in-range notes remain.
 fn bulk_target(r: &Resonance) -> Option<(ClipId, Vec<usize>)> {
-    let editor = r.interaction.editing_midi_clip.as_ref()?;
+    let editor = r.ui.interaction.editing_midi_clip.as_ref()?;
     let clip_id = editor.clip_id;
     let note_count = r
         .midi_clips
@@ -556,7 +556,7 @@ fn lookup_groove(r: &Resonance, template_id: &str) -> Option<GrooveTemplate> {
 /// indices of the not-yet-removed notes below it. Selection is cleared
 /// afterwards since the indices no longer refer to anything.
 fn remove_selected_notes(r: &mut crate::Resonance, clip_id: resonance_audio::types::ClipId) {
-    let Some(editor) = r.interaction.editing_midi_clip.as_ref() else {
+    let Some(editor) = r.ui.interaction.editing_midi_clip.as_ref() else {
         return;
     };
     let note_count = r
@@ -581,7 +581,7 @@ fn remove_selected_notes(r: &mut crate::Resonance, clip_id: resonance_audio::typ
         });
     }
 
-    if let Some(ref mut editor) = r.interaction.editing_midi_clip {
+    if let Some(ref mut editor) = r.ui.interaction.editing_midi_clip {
         editor.clear_selection();
     }
 }

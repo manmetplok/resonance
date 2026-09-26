@@ -173,8 +173,8 @@ pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
             // post-delete state (code review STATE-10). The echo then
             // finds nothing left to drop.
             crate::engine_events::clips::deleted(r, id);
-            if r.interaction.selected_clip == Some(id) {
-                r.interaction.selected_clip = None;
+            if r.ui.interaction.selected_clip == Some(id) {
+                r.ui.interaction.selected_clip = None;
             }
         }
         ClipMessage::StartClipDrag {
@@ -398,9 +398,9 @@ pub fn start_clip_drag(
     start_y: f32,
 ) {
     if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
-        r.interaction.selected_clip = Some(clip_id);
-        r.interaction.select_single_track(Some(clip.track_id));
-        r.interaction.clip_drag = Some(ClipDragState {
+        r.ui.interaction.selected_clip = Some(clip_id);
+        r.ui.interaction.select_single_track(Some(clip.track_id));
+        r.ui.interaction.clip_drag = Some(ClipDragState {
             clip_id,
             grab_offset_x,
             original_track_id: clip.track_id,
@@ -412,6 +412,7 @@ pub fn start_clip_drag(
 
 pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let original_track_id = r
+        .ui
         .interaction
         .clip_drag
         .as_ref()
@@ -424,7 +425,7 @@ pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let num = r.transport.time_sig_num;
     let sample_rate = r.sample_rate;
     let zoom = r.viewport.zoom;
-    if let Some(ref mut drag) = r.interaction.clip_drag {
+    if let Some(ref mut drag) = r.ui.interaction.clip_drag {
         drag.current_x = x;
         drag.current_y = y;
         let seconds = (x - drag.grab_offset_x) / zoom;
@@ -450,7 +451,7 @@ pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
 }
 
 pub fn end_clip_drag(r: &mut Resonance) {
-    if let Some(drag) = r.interaction.clip_drag.take() {
+    if let Some(drag) = r.ui.interaction.clip_drag.take() {
         if let Some(clip) = r.clips.iter().find(|c| c.id == drag.clip_id) {
             let _ = r.engine.send(AudioCommand::MoveClip {
                 clip_id: drag.clip_id,
@@ -463,9 +464,9 @@ pub fn end_clip_drag(r: &mut Resonance) {
 
 pub fn start_clip_trim(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, anchor_x: f32) {
     if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
-        r.interaction.selected_clip = Some(clip_id);
-        r.interaction.select_single_track(Some(clip.track_id));
-        r.interaction.clip_trim = Some(ClipTrimState {
+        r.ui.interaction.selected_clip = Some(clip_id);
+        r.ui.interaction.select_single_track(Some(clip.track_id));
+        r.ui.interaction.clip_trim = Some(ClipTrimState {
             clip_id,
             edge,
             original_start_sample: clip.start_sample,
@@ -478,7 +479,7 @@ pub fn start_clip_trim(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, ancho
 }
 
 pub fn update_clip_trim(r: &mut Resonance, x: f32) {
-    let Some(trim) = r.interaction.clip_trim.clone() else {
+    let Some(trim) = r.ui.interaction.clip_trim.clone() else {
         return;
     };
     let delta_px = x - trim.anchor_x;
@@ -556,7 +557,7 @@ pub fn update_clip_trim(r: &mut Resonance, x: f32) {
 }
 
 pub fn end_clip_trim(r: &mut Resonance) {
-    if let Some(trim) = r.interaction.clip_trim.take() {
+    if let Some(trim) = r.ui.interaction.clip_trim.take() {
         if let Some(clip) = r.clips.iter().find(|c| c.id == trim.clip_id) {
             let _ = r.engine.send(AudioCommand::TrimClip {
                 clip_id: trim.clip_id,
@@ -577,9 +578,9 @@ pub fn end_clip_trim(r: &mut Resonance) {
 /// design doc #153) — but kept in the message for symmetry with trim.
 pub fn start_clip_fade_drag(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, _anchor_x: f32) {
     if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
-        r.interaction.selected_clip = Some(clip_id);
-        r.interaction.selected_track = Some(clip.track_id);
-        r.interaction.clip_fade_drag = Some(FadeDragState {
+        r.ui.interaction.selected_clip = Some(clip_id);
+        r.ui.interaction.selected_track = Some(clip.track_id);
+        r.ui.interaction.clip_fade_drag = Some(FadeDragState {
             clip_id,
             edge,
             original_start_sample: clip.start_sample,
@@ -593,7 +594,7 @@ pub fn start_clip_fade_drag(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, 
 /// (fade-out) edge, clamped to the clip's audible length, and writes it to
 /// the live mirror. No engine command yet — that's sent on `End`.
 pub fn update_clip_fade_drag(r: &mut Resonance, x: f32) {
-    let Some(drag) = r.interaction.clip_fade_drag.clone() else {
+    let Some(drag) = r.ui.interaction.clip_fade_drag.clone() else {
         return;
     };
     let zoom = r.viewport.zoom;
@@ -624,7 +625,7 @@ pub fn update_clip_fade_drag(r: &mut Resonance, x: f32) {
 /// mirror and push the full `SetClipFade` to the engine. The undo entry is
 /// committed by the `EndClipFadeDrag` → `Commit` classification.
 pub fn end_clip_fade_drag(r: &mut Resonance) {
-    if let Some(drag) = r.interaction.clip_fade_drag.take() {
+    if let Some(drag) = r.ui.interaction.clip_fade_drag.take() {
         if let Some(clip) = r.clips.iter().find(|c| c.id == drag.clip_id) {
             send_clip_fade(r, clip_snapshot(clip));
         }
@@ -643,9 +644,9 @@ pub const GAIN_DB_PER_PX: f32 = 0.15;
 /// target from the total delta (no per-frame accumulation drift).
 pub fn start_clip_gain_drag(r: &mut Resonance, clip_id: ClipId, anchor_y: f32) {
     if let Some(clip) = r.clips.iter().find(|c| c.id == clip_id) {
-        r.interaction.selected_clip = Some(clip_id);
-        r.interaction.selected_track = Some(clip.track_id);
-        r.interaction.clip_gain_drag = Some(GainDragState {
+        r.ui.interaction.selected_clip = Some(clip_id);
+        r.ui.interaction.selected_track = Some(clip.track_id);
+        r.ui.interaction.clip_gain_drag = Some(GainDragState {
             clip_id,
             anchor_y,
             original_gain_db: clip.gain_db,
@@ -657,7 +658,7 @@ pub fn start_clip_gain_drag(r: &mut Resonance, clip_id: ClipId, anchor_y: f32) {
 /// increases gain; the result is clamped to the engine's accepted range
 /// and written to the live mirror.
 pub fn update_clip_gain_drag(r: &mut Resonance, y: f32) {
-    let Some(drag) = r.interaction.clip_gain_drag.clone() else {
+    let Some(drag) = r.ui.interaction.clip_gain_drag.clone() else {
         return;
     };
     let delta_db = (drag.anchor_y - y) * GAIN_DB_PER_PX;
@@ -669,7 +670,7 @@ pub fn update_clip_gain_drag(r: &mut Resonance, y: f32) {
 
 /// Commit the gain drag: push the live mirror's gain to the engine.
 pub fn end_clip_gain_drag(r: &mut Resonance) {
-    if let Some(drag) = r.interaction.clip_gain_drag.take() {
+    if let Some(drag) = r.ui.interaction.clip_gain_drag.take() {
         if let Some(clip) = r.clips.iter().find(|c| c.id == drag.clip_id) {
             let gain_db = clip.gain_db;
             let _ = r.engine.send(AudioCommand::SetClipGain {
@@ -833,10 +834,10 @@ pub fn start_midi_clip_drag(
     start_y: f32,
 ) {
     if let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) {
-        r.interaction.selected_midi_clip = Some(clip_id);
-        r.interaction.selected_clip = None;
-        r.interaction.select_single_track(Some(clip.track_id));
-        r.interaction.midi_clip_drag = Some(MidiClipDragState {
+        r.ui.interaction.selected_midi_clip = Some(clip_id);
+        r.ui.interaction.selected_clip = None;
+        r.ui.interaction.select_single_track(Some(clip.track_id));
+        r.ui.interaction.midi_clip_drag = Some(MidiClipDragState {
             clip_id,
             grab_offset_x,
             original_track_id: clip.track_id,
@@ -848,6 +849,7 @@ pub fn start_midi_clip_drag(
 
 pub fn update_midi_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let original_track_id = r
+        .ui
         .interaction
         .midi_clip_drag
         .as_ref()
@@ -860,7 +862,7 @@ pub fn update_midi_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let num = r.transport.time_sig_num;
     let sample_rate = r.sample_rate;
     let zoom = r.viewport.zoom;
-    if let Some(ref mut drag) = r.interaction.midi_clip_drag {
+    if let Some(ref mut drag) = r.ui.interaction.midi_clip_drag {
         drag.current_x = x;
         drag.current_y = y;
         let seconds = (x - drag.grab_offset_x) / zoom;
@@ -886,7 +888,7 @@ pub fn update_midi_clip_drag(r: &mut Resonance, x: f32, y: f32) {
 }
 
 pub fn end_midi_clip_drag(r: &mut Resonance) {
-    if let Some(drag) = r.interaction.midi_clip_drag.take() {
+    if let Some(drag) = r.ui.interaction.midi_clip_drag.take() {
         if let Some(clip) = r.midi_clips.iter().find(|c| c.id == drag.clip_id) {
             let _ = r.engine.send(AudioCommand::MoveMidiClip {
                 clip_id: drag.clip_id,
@@ -899,10 +901,10 @@ pub fn end_midi_clip_drag(r: &mut Resonance) {
 
 pub fn start_midi_clip_trim(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, anchor_x: f32) {
     if let Some(clip) = r.midi_clips.iter().find(|c| c.id == clip_id) {
-        r.interaction.selected_midi_clip = Some(clip_id);
-        r.interaction.selected_clip = None;
-        r.interaction.select_single_track(Some(clip.track_id));
-        r.interaction.midi_clip_trim = Some(MidiClipTrimState {
+        r.ui.interaction.selected_midi_clip = Some(clip_id);
+        r.ui.interaction.selected_clip = None;
+        r.ui.interaction.select_single_track(Some(clip.track_id));
+        r.ui.interaction.midi_clip_trim = Some(MidiClipTrimState {
             clip_id,
             edge,
             original_start_sample: clip.start_sample,
@@ -915,7 +917,7 @@ pub fn start_midi_clip_trim(r: &mut Resonance, clip_id: ClipId, edge: ClipEdge, 
 }
 
 pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
-    let Some(trim) = r.interaction.midi_clip_trim.clone() else {
+    let Some(trim) = r.ui.interaction.midi_clip_trim.clone() else {
         return;
     };
     let delta_px = x - trim.anchor_x;
@@ -1020,7 +1022,7 @@ pub fn update_midi_clip_trim(r: &mut Resonance, x: f32) {
 }
 
 pub fn end_midi_clip_trim(r: &mut Resonance) {
-    if let Some(trim) = r.interaction.midi_clip_trim.take() {
+    if let Some(trim) = r.ui.interaction.midi_clip_trim.take() {
         if let Some(clip) = r.midi_clips.iter().find(|c| c.id == trim.clip_id) {
             let _ = r.engine.send(AudioCommand::TrimMidiClip {
                 clip_id: trim.clip_id,
@@ -1048,7 +1050,7 @@ pub fn open_midi_editor(r: &mut Resonance, clip_id: ClipId) {
             .map(|t| t.track_type == resonance_audio::types::TrackType::Vocal)
             .unwrap_or(false);
         let scroll_y = if is_vocal { 0.0 } else { 60.0 * 5.0 };
-        r.interaction.editing_midi_clip = Some(MidiEditorState {
+        r.ui.interaction.editing_midi_clip = Some(MidiEditorState {
             clip_id,
             track_id: clip.track_id,
             scroll_y,

@@ -69,8 +69,8 @@ impl crate::Resonance {
             let after = self.timeline_delete_targets();
             let selected = after.0.is_some() || after.1.is_some() || after.2.is_some();
             if selected && after != before {
-                self.interaction.timeline_key_grant =
-                    self.interaction.timeline_key_grant.wrapping_add(1);
+                self.ui.interaction.timeline_key_grant =
+                    self.ui.interaction.timeline_key_grant.wrapping_add(1);
             }
         }
         // Iced repaints after each update, so refreshing here means the
@@ -98,9 +98,9 @@ impl crate::Resonance {
         Option<crate::state::SelectedGlobalEvent>,
     ) {
         (
-            self.interaction.selected_clip,
-            self.interaction.selected_midi_clip,
-            self.interaction.selected_global_event,
+            self.ui.interaction.selected_clip,
+            self.ui.interaction.selected_midi_clip,
+            self.ui.interaction.selected_global_event,
         )
     }
 
@@ -178,7 +178,7 @@ impl crate::Resonance {
                 };
                 // The control layer reads this back to report what moved;
                 // see `Resonance::last_arrangement_shift`.
-                self.last_arrangement_shift = Some(outcome);
+                self.ui.last_arrangement_shift = Some(outcome);
                 Task::none()
             }
             Message::MarkerUi(m) => marker_ui::handle(self, m),
@@ -279,7 +279,7 @@ impl crate::Resonance {
         // never silently imports audio into the pool; iced diffs
         // subscriptions by recipe, so it attaches/detaches as the view mode
         // changes.
-        if matches!(self.view_mode, crate::state::ViewMode::Arrange) {
+        if matches!(self.ui.view_mode, crate::state::ViewMode::Arrange) {
             subs.push(arrange_audio_file_drop());
         }
 
@@ -289,7 +289,7 @@ impl crate::Resonance {
         // in Arrange/Compose never silently loads a reference; iced diffs
         // subscriptions by recipe, so it attaches/detaches as the view
         // mode changes.
-        if matches!(self.view_mode, crate::state::ViewMode::Mixer) {
+        if matches!(self.ui.view_mode, crate::state::ViewMode::Mixer) {
             subs.push(reference_file_drop());
 
             // Momentary A/B audition: while the reference rail is open with
@@ -297,7 +297,7 @@ impl crate::Resonance {
             // releasing it returns to the prior source. Gated on those
             // conditions (and attached only here) so the key never hijacks
             // typing elsewhere; iced re-diffs subscriptions as state changes.
-            if self.mixer.reference_panel_open && self.reference.active_id.is_some() {
+            if self.ui.mixer.reference_panel_open && self.reference.active_id.is_some() {
                 subs.push(reference_momentary_keys());
             }
         }

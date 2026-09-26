@@ -117,7 +117,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums, bass, pad, lead, audio, vocal];
     app.registry.next_track_order = 6;
-    app.interaction.select_single_track(Some(2));
+    app.ui.interaction.select_single_track(Some(2));
     // Demo seed bypasses the engine-event handlers that normally keep
     // this cache fresh, so refresh by hand.
     app.compose.refresh_track_count(&app.registry.tracks);
@@ -150,7 +150,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
     app.registry.next_bus_order = 2;
     // Demo seed bypasses the engine event handlers that normally
     // refresh these caches, so refresh them by hand.
-    app.view_caches.rebuild_output(&app.registry.busses);
+    app.ui.view_caches.rebuild_output(&app.registry.busses);
 
     // ---- Clips on the timeline ----
     let bar_ticks = 480 * 6 / 2; // 6/8 → 6 eighth-note beats per bar
@@ -480,15 +480,15 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
     app.registry.tracks = vec![drums, bass, pad, lead, kick, snare, hh, tom];
     app.registry.next_track_order = 8;
     app.registry.next_sub_track_id = 14;
-    app.interaction.select_single_track(Some(1));
+    app.ui.interaction.select_single_track(Some(1));
 
     // Expand the drum parent so the mixer renders its sub-strips —
     // the whole point of the visual is verified in that state.
-    app.mixer.expanded_sub_track_parents.insert(1);
+    app.ui.mixer.expanded_sub_track_parents.insert(1);
 
     // Demo seed bypasses engine-event handlers that normally refresh
     // these caches, so do it by hand.
-    app.view_caches.rebuild_output(&app.registry.busses);
+    app.ui.view_caches.rebuild_output(&app.registry.busses);
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
 }
@@ -514,7 +514,7 @@ pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums];
     app.registry.next_track_order = 1;
-    app.interaction.select_single_track(Some(1));
+    app.ui.interaction.select_single_track(Some(1));
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
 

@@ -177,11 +177,11 @@ fn swap(
             .engine
             .send(AudioCommand::ClearSidechainRoute { plugin: old_id });
     }
-    if r.mixer.selected_plugin == Some(old_id) {
+    if r.ui.mixer.selected_plugin == Some(old_id) {
         // The parameter panel was showing the outgoing plugin's
         // parameters. The replacement has its own, and none of them have
         // arrived yet.
-        r.mixer.selected_plugin = None;
+        r.ui.mixer.selected_plugin = None;
     }
 
     let replacement = PluginSlotState::new(

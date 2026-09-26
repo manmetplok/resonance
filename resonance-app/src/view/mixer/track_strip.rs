@@ -77,10 +77,10 @@ impl crate::Resonance {
             .iter()
             .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
         let is_collapsed =
-            has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
+            has_sub_tracks && !self.ui.mixer.expanded_sub_track_parents.contains(&track.id);
 
         let ext_state = self.external_instruments.get(&track.id);
-        let is_selected = self.interaction.selected_track == Some(track.id);
+        let is_selected = self.ui.interaction.selected_track == Some(track.id);
         // A configured external device that's gone offline gives the strip a
         // BAD-pink inset glow so the outage reads at a glance from the mixer
         // (doc #169, todo #459). The route itself is preserved.
@@ -193,7 +193,7 @@ impl crate::Resonance {
             .iter()
             .any(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == track.id));
         let is_collapsed =
-            has_sub_tracks && !self.mixer.expanded_sub_track_parents.contains(&track.id);
+            has_sub_tracks && !self.ui.mixer.expanded_sub_track_parents.contains(&track.id);
 
         // Calculate indent level for group members using the registry method
         let indent_level = self.track_groups.indent_depth(track.id);
@@ -358,10 +358,10 @@ impl crate::Resonance {
                         0,
                         track.plugins.len(),
                     ))
-                } else if !self.view_caches.instrument_plugins.is_empty() {
+                } else if !self.ui.view_caches.instrument_plugins.is_empty() {
                     let track_id = track.id;
                     let inst_picker = pick_list(
-                        self.view_caches.instrument_plugins.clone(),
+                        self.ui.view_caches.instrument_plugins.clone(),
                         None::<ScannedPlugin>,
                         move |plugin: ScannedPlugin| {
                             Message::Plugin(PluginMessage::AddPluginToTrack(track_id, plugin))
@@ -566,7 +566,7 @@ impl crate::Resonance {
             sub_channel_strip_body(track)
         });
 
-        let is_selected = self.interaction.selected_track == Some(track.id);
+        let is_selected = self.ui.interaction.selected_track == Some(track.id);
 
         // Left-edge accent rail. A thin colored column the full strip
         // height — sits flush against the left edge so the eye reads a

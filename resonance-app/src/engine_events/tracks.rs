@@ -90,22 +90,22 @@ pub(crate) fn removed(r: &mut Resonance, track_id: TrackId) {
     // has to keep the mirror — and therefore the next save — honest.
     r.sidechain
         .drop_routes_from_source(resonance_audio::types::SendSource::Track(track_id));
-    if let Some(sel_clip_id) = r.interaction.selected_clip {
+    if let Some(sel_clip_id) = r.ui.interaction.selected_clip {
         if r.clips
             .iter()
             .any(|c| c.id == sel_clip_id && c.track_id == track_id)
         {
-            r.interaction.selected_clip = None;
+            r.ui.interaction.selected_clip = None;
         }
     }
-    if let Some(sel_plugin_id) = r.mixer.selected_plugin {
+    if let Some(sel_plugin_id) = r.ui.mixer.selected_plugin {
         if r.registry
             .tracks
             .iter()
             .filter(|t| t.id == track_id)
             .any(|t| t.plugins.iter().any(|p| p.instance_id == sel_plugin_id))
         {
-            r.mixer.selected_plugin = None;
+            r.ui.mixer.selected_plugin = None;
         }
     }
     // Drop side-index entries for every plugin on the removed track
@@ -339,7 +339,7 @@ pub(super) fn bus_added(r: &mut Resonance, bus_id: BusId, name: String) {
     let order = r.registry.next_bus_order;
     r.registry.next_bus_order += 1;
     r.registry.busses.push(BusState::new(bus_id, order, name));
-    r.view_caches.rebuild_output(&r.registry.busses);
+    r.ui.view_caches.rebuild_output(&r.registry.busses);
 }
 
 pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
@@ -350,14 +350,14 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
     // Same for key routes keyed off this bus — see `removed` above.
     r.sidechain
         .drop_routes_from_source(resonance_audio::types::SendSource::Bus(bus_id));
-    if let Some(sel) = r.mixer.selected_plugin {
+    if let Some(sel) = r.ui.mixer.selected_plugin {
         if r.registry
             .busses
             .iter()
             .filter(|b| b.id == bus_id)
             .any(|b| b.plugins.iter().any(|p| p.instance_id == sel))
         {
-            r.mixer.selected_plugin = None;
+            r.ui.mixer.selected_plugin = None;
         }
     }
     let removed_plugin_ids: Vec<resonance_audio::types::PluginInstanceId> = r
@@ -377,8 +377,8 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
     }
     r.registry.busses.retain(|b| b.id != bus_id);
     // Don't leave the inspector pointed at a bus that no longer exists.
-    if r.mixer.selected_bus == Some(bus_id) {
-        r.mixer.selected_bus = None;
+    if r.ui.mixer.selected_bus == Some(bus_id) {
+        r.ui.mixer.selected_bus = None;
     }
     // Any track that was routed to the removed bus falls back to Master
     // locally (the engine did the same server-side).
@@ -387,7 +387,7 @@ pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
             track.output = TrackOutput::Master;
         }
     }
-    r.view_caches.rebuild_output(&r.registry.busses);
+    r.ui.view_caches.rebuild_output(&r.registry.busses);
 }
 
 pub(super) fn bus_fx_bypass_changed(r: &mut Resonance, bus_id: BusId, bypassed: bool) {

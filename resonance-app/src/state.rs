@@ -50,6 +50,7 @@ pub mod takes;
 pub mod track_group_registry;
 pub mod tracks;
 pub mod transport;
+pub mod ui_transient;
 pub mod viewport;
 
 pub use automation::*;
@@ -88,4 +89,5 @@ pub use takes::*;
 pub use tracks::*;
 pub use track_group_registry::*;
 pub use transport::*;
+pub use ui_transient::*;
 pub use viewport::*;

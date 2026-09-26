@@ -137,7 +137,7 @@ impl crate::Resonance {
         // The Reference & A/B rail is the outermost right rail, shown only
         // when the chrome "REF" toggle is on. A hairline separates it from
         // the inspector.
-        if self.mixer.reference_panel_open {
+        if self.ui.mixer.reference_panel_open {
             let v_sep_reference =
                 container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
             body = body
@@ -167,7 +167,7 @@ impl crate::Resonance {
     ) -> Element<'a, Message> {
         let parent_strip = self.view_channel_strip(track, available_plugins);
 
-        let parent_expanded = self.mixer.expanded_sub_track_parents.contains(&track.id);
+        let parent_expanded = self.ui.mixer.expanded_sub_track_parents.contains(&track.id);
         if !parent_expanded {
             return parent_strip;
         }
@@ -263,7 +263,7 @@ impl crate::Resonance {
         // own window" are two different requests and one button cannot
         // be both.
         let click_msg = Message::Plugin(PluginMessage::TogglePluginPanel(pid));
-        let is_selected = self.mixer.selected_plugin == Some(pid);
+        let is_selected = self.ui.mixer.selected_plugin == Some(pid);
 
         // Instrument slots get the design's lavender pill: ◆ glyph
         // followed by the plugin name on a tinted ACCENT_DIM background

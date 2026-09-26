@@ -90,30 +90,19 @@ pub struct Resonance {
     /// only — which slots are missing is derived from the chains by
     /// [`Resonance::missing_plugin_slots`].
     pub(crate) missing_plugins: crate::state::MissingPluginState,
-    /// Cached pick-list option lists for the view layer. Rebuilt only
-    /// when source data changes (devices, busses, plugin scan) so a
-    /// continuous resize doesn't reallocate option vecs every frame.
-    /// See `view::ui_caches` for the cache and rebuild API.
-    pub(crate) view_caches: view::ui_caches::UiViewCaches,
-    /// Lazy-memoised label strings for the transport bar's stat blocks
-    /// (position, time, sig, key, loop). Re-formatted only when the
-    /// underlying inputs change. Refreshed by `refresh_transport_labels`
-    /// after every `update()` dispatch (plus at construction and after
-    /// demo seeding) so `view()` only ever reads it — the view layer
-    /// never mutates state. See `view::transport_labels`.
-    pub(crate) transport_labels: view::transport_labels::TransportLabels,
+    /// Transient view-layer/session UI state (ARCH-06 second tier, A-12e):
+    /// current tab + the tab Performance mode was entered from, cached
+    /// pick-list options, transport-bar labels, mixer-panel UI state, and
+    /// timeline/clip interaction state, plus the last arrangement bar-shift
+    /// report. Never persisted, never in the undo snapshot. See
+    /// `state::UiTransientState`.
+    pub(crate) ui: state::UiTransientState,
     /// The transient error/notification banner and its raise latches
     /// (ARCH-06 A6-2). See `state::Banners`.
     pub(crate) banners: state::Banners,
     /// The master bus: fader, meters, FX chain and FX-chain bypass
     /// (ARCH-06 A6-3). See `state::MasterState`.
     pub(crate) master: state::MasterState,
-    pub(crate) view_mode: ViewMode,
-    /// The view that was active when Performance mode was entered, so
-    /// exiting (`F` toggle / `Esc` / the Exit button) returns the user to
-    /// where they were rather than always to Arrange. `None` whenever the
-    /// current `view_mode` is not `Performance`.
-    pub(crate) pre_performance_view: Option<ViewMode>,
     /// Performance-mode footer selection: the active instrument/tuning and
     /// capo position that drive the live fingering diagrams. Mutated by the
     /// footer controls (`UiMessage::SetPerformanceTuning` /
@@ -176,25 +165,18 @@ pub struct Resonance {
     pub(crate) transport: TransportState,
     pub(crate) viewport: ArrangeViewport,
     pub(crate) markers: state::ArrangementMarkers,
-    /// What the last `arrangement.insert_bars` / `remove_bars` moved.
-    ///
-    /// A bar shift touches five collections at once, so its report can
-    /// only be assembled while it runs — the control handler dispatches
-    /// the edit through `update()` (which is what makes it one undo
-    /// entry) and reads the tally back from here. Overwritten by each
-    /// shift and never persisted.
-    pub(crate) last_arrangement_shift: Option<crate::update::arrangement::ShiftOutcome>,
     /// Nesting depth of `update()`: handlers (control calls, the import
     /// dialog's Confirm) re-enter it. Only the outermost call decides
-    /// whether a selection change grants the timeline the keyboard.
+    /// whether a selection change grants the timeline the keyboard. A
+    /// dispatch-loop re-entrancy guard, not view-presentation state, so it
+    /// stays a top-level field rather than joining `state::UiTransientState`
+    /// (A-12e survey).
     pub(crate) update_depth: u32,
-    pub(crate) interaction: ClipInteractionState,
     /// Settings of the MIDI editor's Quantize panel (todo #392). App-level
     /// so the chosen grid/strength/swing/mode persist across clip
     /// open/close; the Apply button reads this to build the bulk quantize.
     pub(crate) midi_quantize: state::MidiQuantizePanelState,
     pub(crate) io: ProjectIoState,
-    pub(crate) mixer: MixerUiState,
     pub(crate) registry: TrackRegistry,
     /// Track group (folder track) registry for group state management.
     pub(crate) track_groups: state::TrackGroupRegistry,
@@ -523,7 +505,7 @@ impl Resonance {
     #[doc(hidden)]
     pub fn new_for_test_on(tab: ViewMode) -> (Self, iced::Task<Message>) {
         let (mut app, task) = Self::new_for_test();
-        app.view_mode = tab;
+        app.ui.view_mode = tab;
         (app, task)
     }
 
@@ -606,8 +588,25 @@ impl Resonance {
             midi_devices: state::MidiDevices::default(),
             plugin_catalog: state::PluginCatalog::default(),
             missing_plugins: crate::state::MissingPluginState::default(),
-            view_caches,
-            transport_labels: view::transport_labels::TransportLabels::default(),
+            ui: state::UiTransientState {
+                view_caches,
+                transport_labels: view::transport_labels::TransportLabels::default(),
+                // `STARTUP_TAB` carries the binary's `--tab` flag, so it is a
+                // read of *this process's* invocation and belongs to
+                // `Host::Machine`. A hermetic app always starts on the
+                // default tab and takes its startup tab as an argument
+                // instead ([`Resonance::new_for_test_on`]) — otherwise one
+                // test file's `set()` would decide the tab for every other
+                // test sharing the binary.
+                view_mode: match host {
+                    Host::Machine => STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
+                    Host::None => ViewMode::Arrange,
+                },
+                pre_performance_view: None,
+                last_arrangement_shift: None,
+                interaction: ClipInteractionState::default(),
+                mixer: MixerUiState::default(),
+            },
             banners: state::Banners::default(),
             master: state::MasterState {
                 volume: 0.0, // 0 dB = unity gain
@@ -616,18 +615,6 @@ impl Resonance {
                 plugins: Vec::new(),
                 fx_bypassed: false,
             },
-            // `STARTUP_TAB` carries the binary's `--tab` flag, so it is a read
-            // of *this process's* invocation and belongs to `Host::Machine`.
-            // A hermetic app always starts on the default tab and takes its
-            // startup tab as an argument instead
-            // ([`Resonance::new_for_test_on`]) — otherwise one test file's
-            // `set()` would decide the tab for every other test sharing the
-            // binary.
-            view_mode: match host {
-                Host::Machine => STARTUP_TAB.get().copied().unwrap_or(ViewMode::Arrange),
-                Host::None => ViewMode::Arrange,
-            },
-            pre_performance_view: None,
             performance: state::PerformanceState::default(),
             clips: Vec::new(),
             midi_clips: Vec::new(),
@@ -664,15 +651,12 @@ impl Resonance {
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),
             markers: state::ArrangementMarkers::default(),
-            last_arrangement_shift: None,
             update_depth: 0,
-            interaction: ClipInteractionState::default(),
             midi_quantize: state::MidiQuantizePanelState::default(),
             io: ProjectIoState {
                 recent_projects,
                 ..ProjectIoState::default()
             },
-            mixer: MixerUiState::default(),
             registry: TrackRegistry {
                 next_sub_track_id: state::ids::SUB_TRACK_ID_BASE,
                 next_bus_id: state::ids::BUS_ID_BASE,
@@ -780,9 +764,9 @@ impl Resonance {
     /// the (small, all-owned) struct out for the duration sidesteps the
     /// double borrow without a `RefCell`.
     pub(crate) fn refresh_transport_labels(&mut self) {
-        let mut labels = std::mem::take(&mut self.transport_labels);
+        let mut labels = std::mem::take(&mut self.ui.transport_labels);
         labels.refresh(self);
-        self.transport_labels = labels;
+        self.ui.transport_labels = labels;
     }
 }
 

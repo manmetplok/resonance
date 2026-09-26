@@ -26,7 +26,7 @@ impl Resonance {
     /// or `None` when no editor is open.
     #[doc(hidden)]
     pub fn test_editing_selected_notes(&self) -> Option<std::collections::BTreeSet<usize>> {
-        self.interaction
+        self.ui.interaction
             .editing_midi_clip
             .as_ref()
             .map(|e| e.selected_notes.clone())
@@ -134,19 +134,19 @@ impl Resonance {
     /// the ruler hit-testing / `MarkerUiMessage::Select` (todo #369).
     #[doc(hidden)]
     pub fn test_selected_marker_id(&self) -> Option<u64> {
-        self.interaction.selected_marker_id
+        self.ui.interaction.selected_marker_id
     }
 
     /// Test-only: the open marker context menu, if any (todo #369).
     #[doc(hidden)]
     pub fn test_marker_menu(&self) -> Option<&state::MarkerMenuState> {
-        self.interaction.marker_menu.as_ref()
+        self.ui.interaction.marker_menu.as_ref()
     }
 
     /// Test-only: the in-progress inline marker rename, if any (todo #369).
     #[doc(hidden)]
     pub fn test_marker_rename(&self) -> Option<&state::MarkerRenameState> {
-        self.interaction.marker_rename.as_ref()
+        self.ui.interaction.marker_rename.as_ref()
     }
 
     /// Test-only: whether the arrangement-markers overview popover is open
@@ -154,7 +154,7 @@ impl Resonance {
     /// dismissed by `UiMessage::CloseMarkersOverview`.
     #[doc(hidden)]
     pub fn test_markers_overview_open(&self) -> bool {
-        self.mixer.markers_overview_open
+        self.ui.mixer.markers_overview_open
     }
 
     /// Test-only: which audio clip's vocal pitch editor is open, if any
@@ -162,7 +162,7 @@ impl Resonance {
     /// reducer when opened on a vocal clip.
     #[doc(hidden)]
     pub fn test_editing_pitch_clip(&self) -> Option<resonance_audio::types::ClipId> {
-        self.interaction.editing_pitch_clip
+        self.ui.interaction.editing_pitch_clip
     }
 
     /// Test-only: borrow the in-flight drag-placement state so gesture /
@@ -440,7 +440,7 @@ impl Resonance {
     /// assert the caret's state without scraping the widget tree.
     #[doc(hidden)]
     pub fn test_take_lane_expanded(&self, track_id: resonance_audio::types::TrackId) -> bool {
-        self.interaction
+        self.ui.interaction
             .take_lane_expanded_tracks
             .contains(&track_id)
     }

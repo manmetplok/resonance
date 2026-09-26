@@ -28,7 +28,7 @@ impl Resonance {
     pub fn test_expanded_sub_track_parents(
         &self,
     ) -> &std::collections::HashSet<resonance_audio::types::TrackId> {
-        &self.mixer.expanded_sub_track_parents
+        &self.ui.mixer.expanded_sub_track_parents
     }
 
     /// Test-only: forcibly clear an expanded-sub-track-parent flag so
@@ -39,7 +39,7 @@ impl Resonance {
         &mut self,
         parent_id: resonance_audio::types::TrackId,
     ) {
-        self.mixer.expanded_sub_track_parents.remove(&parent_id);
+        self.ui.mixer.expanded_sub_track_parents.remove(&parent_id);
     }
 
     /// Test-only: the mixer's top-level strip order as `(is_group, id)`
@@ -75,7 +75,7 @@ impl Resonance {
     /// Test-only: select a track so `FreezeSelectedTracks` has a target.
     #[doc(hidden)]
     pub fn test_select_track(&mut self, track_id: resonance_audio::types::TrackId) {
-        self.interaction.selected_track = Some(track_id);
+        self.ui.interaction.selected_track = Some(track_id);
     }
 
     /// Test-only: append a track of the given type so freeze tests have a
@@ -101,7 +101,7 @@ impl Resonance {
     /// inspector reads.
     #[doc(hidden)]
     pub fn test_selected_track(&self) -> Option<resonance_audio::types::TrackId> {
-        self.interaction.selected_track
+        self.ui.interaction.selected_track
     }
 
     /// Test-only: the selected BUS strip, if any. Drives
@@ -110,7 +110,7 @@ impl Resonance {
     /// separate id spaces.
     #[doc(hidden)]
     pub fn test_selected_bus(&self) -> Option<resonance_audio::types::BusId> {
-        self.mixer.selected_bus
+        self.ui.mixer.selected_bus
     }
 
     /// Test-only: push a bus straight into the registry, bypassing the
@@ -123,14 +123,14 @@ impl Resonance {
             .busses
             .push(state::BusState::new(bus_id, order, name.to_owned()));
         self.registry.next_bus_order = self.registry.busses.len();
-        self.view_caches.rebuild_output(&self.registry.busses);
+        self.ui.view_caches.rebuild_output(&self.registry.busses);
     }
 
     /// Test-only: read the Arrange multi-track selection set, in click
     /// order. Drives `tests/group_creation_from_selection.rs`.
     #[doc(hidden)]
     pub fn test_selected_tracks(&self) -> &[resonance_audio::types::TrackId] {
-        &self.interaction.selected_tracks
+        &self.ui.interaction.selected_tracks
     }
 
     /// Test-only: borrow the track-group registry so a reducer test can
@@ -156,15 +156,15 @@ impl Resonance {
     /// hovered target, and clears on drop / cancel.
     #[doc(hidden)]
     pub fn test_membership_drag(&self) -> Option<&state::MembershipDragState> {
-        self.interaction.membership_drag.as_ref()
+        self.ui.interaction.membership_drag.as_ref()
     }
 
     /// Test-only: seed the Arrange multi-track selection directly, bypassing
     /// the per-click `SelectTrack` plumbing.
     #[doc(hidden)]
     pub fn test_set_selected_tracks(&mut self, ids: Vec<resonance_audio::types::TrackId>) {
-        self.interaction.selected_track = ids.last().copied();
-        self.interaction.selected_tracks = ids;
+        self.ui.interaction.selected_track = ids.last().copied();
+        self.ui.interaction.selected_tracks = ids;
     }
 
     /// Test-only: render the standalone group-header row component
@@ -200,7 +200,7 @@ impl Resonance {
     /// #581).
     #[doc(hidden)]
     pub fn test_track_menu(&self) -> Option<&crate::state::TrackMenuState> {
-        self.interaction.track_menu.as_ref()
+        self.ui.interaction.track_menu.as_ref()
     }
 
     /// Test-only: render the floating "N tracks selected · Group ⌘G" bar

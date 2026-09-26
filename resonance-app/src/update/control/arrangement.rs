@@ -60,9 +60,9 @@ fn run(
     at_bar: u32,
     count: u32,
 ) -> (Response, Task<Message>) {
-    app.last_arrangement_shift = None;
+    app.ui.last_arrangement_shift = None;
     let task = super::run_via_update(app, Message::Arrangement(message));
-    let outcome = app.last_arrangement_shift.take().unwrap_or_default();
+    let outcome = app.ui.last_arrangement_shift.take().unwrap_or_default();
     let result = ShiftResult {
         at_bar,
         count,

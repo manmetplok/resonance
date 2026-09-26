@@ -125,10 +125,10 @@ impl Reconcile for TransientUi {
         if !ctx.origin.after_clear_all() {
             return;
         }
-        r.interaction.selected_clip = None;
-        r.mixer.selected_plugin = None;
-        r.interaction.clip_drag = None;
-        r.interaction.clip_trim = None;
+        r.ui.interaction.selected_clip = None;
+        r.ui.mixer.selected_plugin = None;
+        r.ui.interaction.clip_drag = None;
+        r.ui.interaction.clip_trim = None;
         r.modals.confirm_delete_track = None;
         r.modals.confirm_quit = None;
     }

@@ -70,7 +70,7 @@ impl Resonance {
         ArrangeAutomationRows::collect(
             &self.automation,
             &self.arrange_sorted_tracks(),
-            &self.interaction.automation_expanded_tracks,
+            &self.ui.interaction.automation_expanded_tracks,
         )
     }
 
@@ -83,7 +83,7 @@ impl Resonance {
         ArrangeTakeRows::collect(
             &self.take_groups,
             &self.arrange_sorted_tracks(),
-            &self.interaction.take_lane_expanded_tracks,
+            &self.ui.interaction.take_lane_expanded_tracks,
         )
     }
 
