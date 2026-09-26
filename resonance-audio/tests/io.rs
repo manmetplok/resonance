@@ -18,6 +18,8 @@ mod clip_tempo_detect;
 mod import_audio_to_pool;
 #[path = "io/load_clip_offthread.rs"]
 mod load_clip_offthread;
+#[path = "io/load_clip_stale_after_clear_all.rs"]
+mod load_clip_stale_after_clear_all;
 #[path = "io/load_wav_rate_mismatch.rs"]
 mod load_wav_rate_mismatch;
 #[path = "io/pw_output_smoke.rs"]
