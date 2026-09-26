@@ -204,7 +204,7 @@ fn resolve_target(r: &mut Resonance, target: DropTarget) -> PlacementTarget {
             start_sample: snap_drop_sample(r, start_sample),
         },
         DropTarget::NewTrack { start_sample } => {
-            let track_id = r.registry.allocate_sub_track_id();
+            let track_id = r.allocate_track_id();
             let name = new_audio_track_name(r);
             let _ = r.engine.send(AudioCommand::AddTrack {
                 id_hint: Some(track_id),

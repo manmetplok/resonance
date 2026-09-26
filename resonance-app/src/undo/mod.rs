@@ -19,8 +19,6 @@
 //! | [`classify`] | `UndoAction` enum and the `classify` function that maps messages to actions |
 //! | [`describe`] | Short human labels for history entries, reported by `edit.status` (todo #1196) |
 
-pub use resonance_audio::DEFAULT_HISTORY_CAPACITY;
-
 pub mod classify;
 pub mod describe;
 pub mod history;
@@ -28,7 +26,7 @@ pub mod snapshot;
 
 pub use classify::{classify, UndoAction};
 pub use describe::describe;
-pub use history::UndoHistory;
+pub use history::{UndoHistory, DEFAULT_HISTORY_CAPACITY};
 pub use snapshot::{CoalesceKey, UndoExtras, UndoSnapshot};
 
 // -------------------------------------------------------------------------
@@ -155,7 +153,7 @@ impl crate::Resonance {
     /// record history at all, where the edit still counts as one.
     pub(crate) fn commit_undo_gesture(&mut self) {
         let changed = match self.undo.pending_snapshot() {
-            Some(before) => !before.same_state(&self.snapshot_for_undo()),
+            Some(before) => self.gesture_changed_since(before),
             None => !self.can_record_undo(),
         };
         if !changed {

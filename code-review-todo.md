@@ -46,10 +46,12 @@ master and updates this table. Agents do **not** edit this file.
 | H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | merged | 582c4fcb |
 | H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
 | H8a message enums beside handlers | ARCH-06 A6-1 | opus | merged | a6a0a6e9 |
-| H8b undo blobs + id allocation | ARCH-09 A9-1/2, ARCH-04 A4-1/2/3, FU-A1c | fable | in progress | |
+| H8b undo blobs + id allocation | ARCH-09 A9-1/2, ARCH-04 A4-1/2/3, FU-A1c | fable | merged | 4f274847 |
 | L1 app logging sweep | FU-H6a, FU-H6c | opus | merged | b8952f64 |
 | C1 app/control follow-ups | FU-E1, E2, M5a/b/c, B2, B3, V2c, V3c, V4a, V4b, A2c, M6b, V1b, M12c | opus | in progress | |
-| P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | in progress | |
+| A5 audio follow-ups 2 | FU-D3, D4, F2b, M3a, M3c, A4a, A4b, A4c | opus | in progress | |
+| U1 undo follow-ups | FU-A1a, A2a, A2b, M4c, H2a, H2b, H2c | opus | in progress | |
+| P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | merged | b9a5e1a4 |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
@@ -59,11 +61,11 @@ master and updates this table. Agents do **not** edit this file.
 
 - [ ] **FU-A1a** (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
 - [x] **FU-A1b** (medium, = UPD-03) — fixed @137c320a; edits during `io.loading` are still acked then wiped by replay.
-- [ ] **FU-A1c** (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
-- [ ] **FU-G2a** (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
-- [ ] **FU-G2b** (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
+- [x] **FU-A1c** — fixed @0c09001c (`Resonance::allocate_track_id` skips group ids); (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
+- [x] **FU-G2a** — fixed @25f5da5c (−79 dB worst bass); (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
+- [x] **FU-G2b** — fixed @20ee064c; (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
 - [x] **FU-G2c** — fixed @96e5d02a; (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
-- [ ] **FU-G2d** (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
+- [ ] **FU-G2d** [partial @28f7a5c0: held-key legato done; held-note stack return not done] (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
 - [ ] **FU-B1** (low) section resize re-rolls chord/vocal lanes from seed → hand edits to generated notes are lost (same as a chord change); vocal lanes re-render.
 - [ ] **FU-B2** (low) `remove_bars` leaves stale vocal-audio map entries for placements it deletes (clips themselves are removed).
 - [ ] **FU-B3** (low) vocal WAVs are never garbage-collected after section/placement delete.
@@ -72,7 +74,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-F2c** — fixed (M8); (low) ENG-12 should reuse the new `activate_and_start()` in `clap_host/state.rs`; `restart()` still bails on inactive instances.
 - [ ] **FU-E1** (medium) `update/control/import_midi.rs:275` rounds imported clip length with `time_sig_num * TICKS_PER_QUARTER_NOTE` — wrong for x/8 meters; use `tempo_map.bar_len_ticks_at(bar)`.
 - [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
-- [ ] **FU-G1** (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
+- [x] **FU-G1** — fixed @3b9eac74; (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
 - [x] **FU-C1** (medium, = UPD-11) — fixed @b1357803; global `keyboard::listen()` shortcuts (Enter, B, Cmd-Z) still fire while typing; use the `any_text_input_focused` probe pattern.
 - [x] **FU-C2** — fixed @0408640f; (low) timeline Delete now needs a prior click on the timeline (KeyFocus); a clip selected via control API/other widget isn't deletable by key until clicked.
 - [x] **FU-C3** — fixed @71423884; (low) expanded compose editor's `+`/`-`/Escape still use hover gating, not KeyFocus.
@@ -99,14 +101,14 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-F2d** (medium, upgraded) — fixed @829d19e9 (30/30 under CPU load); `bounce_plugin_lock` timing test fails 3/5 standalone — make it deterministic.
 - [x] **FU-M2a** — fixed @0319fb91; (medium) DSP-10 partial: linear-phase EQ FIR design still runs on the audio thread (≤1/hop, now crossfaded). Plan: per-EQ design worker + lock-free request slot + double-buffered spectrum; fall back to inline design at hop boundary if result not ready (deterministic for bounce).
 - [x] **FU-M2b** — fixed @06e2803f; (medium) mastering multiband crossover lowpass: fixed 4097-tap FIR, hard swap, allocates a Vec on the audio thread on crossover move (= DSP-12) — give it the EQ treatment.
-- [ ] **FU-M2c** (low, perf) granular HQ sinc read ≈80 taps/grain-sample at +24 st (vs 6) — benchmark; bypassed mastering now costs full CPU.
+- [x] **FU-M2c** — fixed @6d8e1fa9 (bench: HQ +24 st = 3.9% of budget; left as is); (low, perf) granular HQ sinc read ≈80 taps/grain-sample at +24 st (vs 6) — benchmark; bypassed mastering now costs full CPU.
 - [ ] **FU-M5a** (low) CTL-05: repeated `insert_bars` can still push content past MAX_BARS (per-call check only).
 - [ ] **FU-M5b** (low) CTL-12 remainder: lockstep doesn't check param / plugin-param ids in skills.
 - [ ] **FU-M5c** (low) control API: accept string param `key` ids for plugin params (mastering skill currently uses display names).
 - [x] **FU-M6a** — fixed @4ee7b10f; (medium) `resonance-app/src/project/io.rs` has its own `atomic_write` copy with the fixed `.tmp` name + leak — make it call `resonance_common`'s.
 - [ ] **FU-M6b** (low) svs: unknown phonemes now fail the render (was: silent token 0); g2p paths that skip voicebank substitution will surface errors.
-- [ ] **FU-M6c** (low) EQ band kind change restarts its stages from zero (can click on loud material); optional ~5 ms crossfade.
-- [ ] **FU-M6d** (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
+- [x] **FU-M6c** — fixed @2af72aee; (low) EQ band kind change restarts its stages from zero (can click on loud material); optional ~5 ms crossfade.
+- [x] **FU-M6d** — fixed @6433c3ac; (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
 - [x] **FU-M4a** — fixed @6146d7b8; (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
 - [x] **FU-M4b** — fixed @12279270; (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
 - [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
@@ -142,6 +144,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-A4a** (low) a carried note-on is dropped when a panic had to be parked (busy lock); MIDI-clip lock contention during piano-roll edits still flushes held notes.
 - [ ] **FU-A4b** (low) after a project switch, the import modal rows of a stale pool batch get no final event — verify the app clears them on load.
 - [ ] **FU-A4c** (low) mismatched-rate freeze cache conversion runs on the engine command thread (~2.7 ms per audio second); backend stream-error text no longer logged (kind only).
+- [ ] **FU-P1a** (low, test infra) EQ `dsp_golden` differs in last bits between debug and release — always bless under the debug profile the suite uses (or make the comparison tolerant).
 
 ## How to use this file
 
@@ -1822,7 +1825,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Make `EngineHandlerHarness` the preferred surface for new engine tests so future helpers do not need re-exporting.
 - **Verification / done-when:** `cargo test -p resonance-audio --no-run 2>&1 | grep -c Executable` ≤ 10; `run-tests.py` wall clock recorded before/after; `grep -rn '__test_support' resonance-app/src` returns only `#[cfg(feature)]`-gated lines.
 
-### [ ] ARCH-04 — Entity ids are allocated in two places with hand-partitioned bases
+### [ ] ARCH-04 — (partial: A4-1..3 @0c09001c — `state/ids.rs`, collision test found+fixed a real engine hint-bump track/group collision; A4-4 app-owned ids → epic) Entity ids are allocated in two places with hand-partitioned bases
 - **Severity:** medium
 - **Category:** api-design
 - **Location:** engine allocators: `resonance-audio/src/engine/thread/mod.rs` + `engine/*.rs` (`next_clip_id`, `next_track_id`, `next_plugin_id`, `next_bus_id`, `next_send_id`, `next_group_id`, `next_take_group_id`, `next_asset_id`, …); app allocators: `resonance-app/src/state/plugin_index.rs:158` (`allocate_control_plugin_id`, base `CONTROL_PLUGIN_ID_BASE = 3_000_000_000` in `resonance-audio/src/types/mod.rs:34`), `resonance-app/src/state/aux_sends.rs:121` (`CONTROL_SEND_ID_BASE = 2_000_000_000`), `resonance-app/src/compose/state.rs:31` (`DERIVED_CLIP_ID_BASE = 1 << 40`), plus `next_return_bus_id`, `next_sub_track_id`, `next_lane_id`; the `AudioCommand::ReserveAssetIds` command (`types/commands.rs:95`) and the hint-vs-base rule in `engine/plugins.rs:244-265`.
@@ -1883,7 +1886,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Fix the `latency.rs` header to describe the `clap_host_latency.changed` path.
 - **Verification / done-when:** `grep -l 'wayland-plugin-gui' plugins/*/Cargo.toml` empty; `resonance-plugin/Cargo.toml` has no `iced` dependency; `grep -n "doesn't implement" resonance-audio/src/latency.rs` empty.
 
-### [ ] ARCH-09 — Undo snapshots deep-copy the whole project per edit
+### [ ] ARCH-09 — (partial: A9-1/A9-2 @018839d9 — plugin blobs shared via Arc, cheap gesture check, snapshot 425→289 µs; A9-3 `Arc<Vec<MidiNote>>` + PartialEq on ProjectFile open) Undo snapshots deep-copy the whole project per edit
 - **Severity:** low
 - **Category:** modularity
 - **Location:** `resonance-app/src/undo/snapshot.rs:178-230` (`snapshot_for_undo` calls `build_project_file` and clones every MIDI note vec, automation lane, chord track, and plugin state blob), `resonance-app/src/undo/history.rs:68` (capacity 200 via `resonance_audio::DEFAULT_HISTORY_CAPACITY`, oddly owned by the audio crate at `resonance-audio/src/limits.rs:60`).

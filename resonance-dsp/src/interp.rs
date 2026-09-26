@@ -26,6 +26,37 @@ pub fn hermite4(xm1: f32, x0: f32, x1: f32, x2: f32, frac: f32) -> f32 {
     ((c3 * frac + c2) * frac + c1) * frac + c0
 }
 
+/// 6-point, 5th-order Lagrange interpolation.
+///
+/// Interpolates between `x0` (at `frac = 0`) and `x1` (at `frac = 1`)
+/// through the six neighbours `xm2..x3`. Unlike [`bspline6`] it is an
+/// *interpolating* kernel — it passes through every sample, so a table
+/// read needs no prefiltering and has no passband droop to speak of —
+/// and it reproduces polynomials up to degree 5 exactly. On dense content
+/// (partials up to a third of the table rate) its folded images sit
+/// 10-20 dB below [`hermite4`]'s, at 1.5x the reads; the wavetable
+/// oscillator uses it for its densest (bass) mip levels (FU-G2a).
+#[inline]
+pub fn lagrange6(xm2: f32, xm1: f32, x0: f32, x1: f32, x2: f32, x3: f32, frac: f32) -> f32 {
+    // Node distances d_k = frac - k for k = -2..=3, then each basis
+    // polynomial is the product of the other five over its fixed
+    // denominator. Prefix/suffix products share the multiplies.
+    let (a, b, c, d, e, g) = (frac + 2.0, frac + 1.0, frac, frac - 1.0, frac - 2.0, frac - 3.0);
+    let ab = a * b;
+    let abc = ab * c;
+    let abcd = abc * d;
+    let eg = e * g;
+    let deg = d * eg;
+    let cdeg = c * deg;
+    let l_m2 = b * cdeg * (-1.0 / 120.0);
+    let l_m1 = a * cdeg * (1.0 / 24.0);
+    let l_0 = ab * deg * (-1.0 / 12.0);
+    let l_1 = abc * eg * (1.0 / 12.0);
+    let l_2 = abcd * g * (-1.0 / 24.0);
+    let l_3 = abcd * e * (1.0 / 120.0);
+    xm2 * l_m2 + xm1 * l_m1 + x0 * l_0 + x1 * l_1 + x2 * l_2 + x3 * l_3
+}
+
 /// 6-point, 5th-order uniform B-spline interpolation (ba todo #1083).
 ///
 /// Evaluates the quintic uniform B-spline through the six neighbours

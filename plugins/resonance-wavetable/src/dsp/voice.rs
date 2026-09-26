@@ -223,6 +223,21 @@ impl Voice {
         distribute_unison(&mut self.unison, self.unison_count, spread);
     }
 
+    /// Take a held voice over for a legato note: move the pitch target
+    /// (and, without glide, the pitch) and nothing else. Velocity stays the
+    /// first note's, as on a hardware mono synth — changing it here would
+    /// step the level mid-note.
+    pub fn legato(&mut self, note: u8, age: u64, glide: bool) {
+        self.note = note;
+        self.age = age;
+        self.target_pitch = note as f32;
+        if !glide {
+            self.current_pitch = note as f32;
+        }
+        self.mod_dirty = true;
+        self.osc_setup_dirty = true;
+    }
+
     pub fn release(&mut self) {
         if self.state == VoiceState::Playing {
             self.state = VoiceState::Releasing;

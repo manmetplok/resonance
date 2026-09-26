@@ -43,6 +43,16 @@ impl Default for GlobalSettings {
     }
 }
 
+/// A note-on at a frame offset inside the block, for
+/// [`DrumSampler::render_block`].
+#[derive(Clone, Copy, Debug)]
+pub struct Hit {
+    /// Frame within the block the hit starts at.
+    pub frame: usize,
+    pub note: u8,
+    pub velocity: f32,
+}
+
 /// One stereo output buffer pair for a single plugin output port. Callers
 /// build a slice of these (one per port) and hand it to `render_frame`.
 pub struct PortBuffers<'a> {
@@ -441,22 +451,37 @@ impl DrumSampler {
     }
 
     /// Render `frames` samples into each of the 7 output ports in
-    /// `outputs`. Expects `outputs.len() >= NUM_OUTPUT_PORTS` — the
-    /// caller in `lib.rs` builds the slice from the plugin's per-port
-    /// scratch buffers.
+    /// `outputs`, starting each of `hits` at its own frame. Expects
+    /// `outputs.len() >= NUM_OUTPUT_PORTS`.
     ///
-    /// Every voice started before the call sounds from frame 0. A caller
-    /// with events inside the block uses [`begin_block`](Self::begin_block),
-    /// [`render_span`](Self::render_span) and [`end_block`](Self::end_block)
-    /// instead, applying each event between spans at its own frame.
+    /// Voices started before the call (a `note_on` outside any block)
+    /// sound from frame 0. Hit offsets follow `process()`'s contract: one
+    /// past the block lands on its last frame, and one earlier than the
+    /// hit before it lands at the frame already reached. It used to take
+    /// no hits at all, so a caller with events inside the block could only
+    /// start them at frame 0 (FU-G1); `process()` itself interleaves
+    /// chokes and editor auditions too, so it drives
+    /// [`begin_block`](Self::begin_block) / [`render_span`](Self::render_span)
+    /// / [`end_block`](Self::end_block) directly.
     pub fn render_block(
         &mut self,
         outputs: &mut [PortBuffers<'_>],
         frames: usize,
         params: &DrumParams,
+        hits: &[Hit],
     ) {
         self.begin_block(outputs, frames, params);
-        self.render_span(outputs, 0, frames);
+        let last_frame = frames.saturating_sub(1);
+        let mut cursor = 0usize;
+        for hit in hits {
+            let at = hit.frame.min(last_frame).max(cursor);
+            if at > cursor {
+                self.render_span(outputs, cursor, at);
+                cursor = at;
+            }
+            self.note_on(hit.note, hit.velocity);
+        }
+        self.render_span(outputs, cursor, frames);
         self.end_block(outputs, frames, params);
     }
 

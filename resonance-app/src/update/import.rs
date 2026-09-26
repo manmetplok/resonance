@@ -417,7 +417,7 @@ fn confirm(app: &mut Resonance) -> Task<Message> {
             PlacementMode::NewTracks => {
                 for (name, kind, index) in &picked {
                     let notes = notes_of(*index);
-                    let track_id = app.registry.allocate_sub_track_id();
+                    let track_id = app.allocate_track_id();
                     tasks.push(app.update(Message::Track(TrackMessage::AddControlTrack {
                         id: track_id,
                         kind: match kind {

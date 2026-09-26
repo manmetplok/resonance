@@ -54,7 +54,7 @@ fn render_one_block(sampler: &mut DrumSampler, frames: usize) -> Vec<(Vec<f32>, 
                 right: r.as_mut_slice(),
             })
             .collect();
-        sampler.render_block(&mut ports, frames, &DrumParams::default());
+        sampler.render_block(&mut ports, frames, &DrumParams::default(), &[]);
     }
     port_data
 }

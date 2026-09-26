@@ -83,7 +83,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             // snapshot: this message classifies as `UndoAction::Record`, whose
             // pre-dispatch snapshot has neither the track nor the external entry,
             // so a single undo removes both and redo restores both.
-            let track_id = r.registry.allocate_sub_track_id();
+            let track_id = r.allocate_track_id();
             let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
                 id_hint: Some(track_id),
                 name: None,
@@ -507,7 +507,7 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
     }
 
     let source_name = source.name.clone();
-    let target_track_id = r.registry.allocate_sub_track_id();
+    let target_track_id = r.allocate_track_id();
     let track_name = format!("{source_name} bounce");
 
     let _ = r.engine.send(AudioCommand::AddTrack {
@@ -627,7 +627,7 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
         .find(|t| t.id == track_id)
         .map(|t| t.name.clone())
         .unwrap_or_default();
-    let target_track_id = r.registry.allocate_sub_track_id();
+    let target_track_id = r.allocate_track_id();
     let target_clip_id = r.compose.fresh_derived_clip_id();
 
     let track_name = format!("{source_name} bounce");
