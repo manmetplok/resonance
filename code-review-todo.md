@@ -23,7 +23,7 @@ master and updates this table. Agents do **not** edit this file.
 | F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | merged | eac3b10c |
 | G1 drums timing | DSP-01 | opus | merged | 50dad7db |
 | G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
-| G3 resampler | LIB-01 | opus | in progress |  |
+| G3 resampler | LIB-01 | opus | merged | ac640b82 |
 | H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | planning (read-only) | |
 | M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | in progress | |
 | M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | in progress | |
@@ -1542,7 +1542,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 
 ## Dynamics/EQ/delay/reverb/IR plugins + metering / music-theory / svs / common
 
-### [ ] LIB-01 — Workspace-wide sample-rate conversion is plain linear interpolation, with no anti-alias or anti-image filter
+### [x] LIB-01 — Workspace-wide sample-rate conversion is plain linear interpolation, with no anti-alias or anti-image filter — fixed @bbc5d3f3 (Kaiser windowed-sinc polyphase, zero added delay, ≤−91 dB stopband)
 - **Severity:** high
 - **Confidence:** high
 - **Category:** dsp
