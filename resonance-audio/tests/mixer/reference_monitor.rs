@@ -24,7 +24,7 @@ use resonance_audio::{
 fn player_with_active_pcm(pcm: Vec<f32>) -> ReferencePlayer {
     let mut player = ReferencePlayer::new();
     let (tx, _rx) = unbounded::<AudioEvent>();
-    let id = register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/ref.wav"));
+    let id = register_reference(&mut player, ReferenceId(1), PathBuf::from("/ref.wav"));
     handle_set_active_reference(&mut player, &tx, id);
     handle_reference_analyzed(&mut player, id, Arc::new(pcm), -14.0);
     player
@@ -163,7 +163,7 @@ fn reference_active_but_undecoded_stays_on_the_mix() {
     // the monitor must not engage, so the user keeps hearing the mix.
     let mut player = ReferencePlayer::new();
     let (tx, _rx) = unbounded::<AudioEvent>();
-    let id = register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/ref.wav"));
+    let id = register_reference(&mut player, ReferenceId(1), PathBuf::from("/ref.wav"));
     handle_set_active_reference(&mut player, &tx, id);
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);
     let shared = SharedState::default();

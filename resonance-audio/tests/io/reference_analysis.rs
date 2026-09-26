@@ -207,7 +207,7 @@ fn reference_analyzed_fills_registered_entry() {
 
     // The engine registers the entry up front (unanalysed)...
     let mut player = ReferencePlayer::new();
-    let id = register_reference(&mut player, None, path.clone());
+    let id = register_reference(&mut player, ReferenceId(1), path.clone());
     assert_eq!(player.entry_has_pcm(id), Some(false));
     assert_eq!(
         player.entry_integrated_lufs(id),

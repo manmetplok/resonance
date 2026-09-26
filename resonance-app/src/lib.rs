@@ -457,6 +457,12 @@ impl Resonance {
         let _ = engine.send(AudioCommand::ScanPlugins);
 
         let mut app = Self::assemble(engine, Host::Machine);
+        // The session's default "Track 1" (FU-D4a): app-allocated and
+        // sent synchronously, before iced's event loop can deliver any
+        // other message, so nothing can ever race this for id 1. See
+        // `send_startup_default_track`'s doc comment for why the engine
+        // no longer creates this track itself.
+        app.send_startup_default_track();
         // An untitled session that crashed leaves its autosave in the
         // scratch root: offer it over the startup screen (FU-M12a).
         crate::update::project_io::recovery::offer_orphaned_session(&mut app);

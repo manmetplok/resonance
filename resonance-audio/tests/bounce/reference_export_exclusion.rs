@@ -84,7 +84,7 @@ fn engine_with_dc_clip() -> EngineState {
 fn engage_reference_monitor(shared: &SharedState) {
     let mut player = ReferencePlayer::new();
     let (tx, _rx) = unbounded::<AudioEvent>();
-    let id = register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/ref.wav"));
+    let id = register_reference(&mut player, ReferenceId(1), PathBuf::from("/ref.wav"));
     handle_set_active_reference(&mut player, &tx, id);
     handle_reference_analyzed(&mut player, id, Arc::new(vec![REF_DC; FRAMES * 2]), -10.0);
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);

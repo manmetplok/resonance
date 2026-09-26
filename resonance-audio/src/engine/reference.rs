@@ -37,8 +37,8 @@ use resonance_metering::{LraMeter, LufsMeter, MeterSnapshot, PlrMeter, TruePeakM
 use super::SharedState;
 use crate::decode::decode_file;
 use crate::types::{
-    ABSource, AudioCommand, AudioEvent, ReferenceAnalysisStage, ReferenceId, ReferenceMarker,
-    SamplePos,
+    ABSource, AudioCommand, AudioEvent, EngineError, ReferenceAnalysisStage, ReferenceId,
+    ReferenceMarker, SamplePos,
 };
 
 /// Target size of the waveform overview emitted with a loaded reference.
@@ -99,8 +99,6 @@ pub struct ReferencePlayer {
     pub(crate) loudness_match: bool,
     pub(crate) ref_trim_db: f32,
     pub(crate) loop_to_mix: bool,
-    /// Monotonic [`ReferenceId`] allocator.
-    next_ref_id: u32,
 }
 
 impl Default for ReferencePlayer {
@@ -112,7 +110,6 @@ impl Default for ReferencePlayer {
             loudness_match: false,
             ref_trim_db: 0.0,
             loop_to_mix: false,
-            next_ref_id: 1,
         }
     }
 }
@@ -123,11 +120,11 @@ impl ReferencePlayer {
     }
 
     /// Drop every loaded reference and reset the A/B controls to their
-    /// defaults, including the id allocator. Used by `ClearAll` (project
-    /// close / load). The app hints every load's id from its own
-    /// session-monotonic allocator, so ids do not restart at 1. The caller
-    /// must `publish` afterwards so the audio-thread monitor stops reading
-    /// the dropped reference's PCM.
+    /// defaults. Used by `ClearAll` (project close / load). The engine
+    /// keeps no id allocator of its own (ARCH-04 D-5) — every reload's id
+    /// comes from the app's own session-monotonic allocator, so ids do
+    /// not restart at 1. The caller must `publish` afterwards so the
+    /// audio-thread monitor stops reading the dropped reference's PCM.
     pub fn clear(&mut self) {
         *self = ReferencePlayer::new();
     }
@@ -154,6 +151,13 @@ impl ReferencePlayer {
     #[doc(hidden)]
     pub fn entry_has_pcm(&self, id: ReferenceId) -> Option<bool> {
         self.entry(id).map(|e| e.pcm.is_some())
+    }
+
+    /// Number of loaded entries. Test accessor for a refused-duplicate
+    /// load's invariant: the count must not change (ARCH-04 D-5).
+    #[doc(hidden)]
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
     }
 
     /// Publish the current A/B state into the audio-thread
@@ -507,30 +511,41 @@ fn name_from_path(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-/// Register a reference entry on the engine thread and return its id,
-/// honouring an `id_hint` (e.g. on project load) or allocating a fresh
-/// monotonic [`ReferenceId`]. The entry starts unanalysed (no PCM,
-/// `NEG_INFINITY` loudness); the analysis worker fills it in later via
-/// [`handle_reference_analyzed`]. Pure (no I/O, no events) so the entry
-/// exists the instant the load command is dispatched.
-pub fn register_reference(
-    player: &mut ReferencePlayer,
-    id_hint: Option<ReferenceId>,
-    path: PathBuf,
-) -> ReferenceId {
-    let id = match id_hint {
-        Some(id) => {
-            // Honour the hinted id and bump the allocator past it so
-            // freshly-loaded references never collide with it.
-            player.next_ref_id = player.next_ref_id.max(id.0 + 1);
-            id
-        }
-        None => {
-            let id = ReferenceId(player.next_ref_id);
-            player.next_ref_id += 1;
-            id
-        }
-    };
+/// Refuse a load whose id is already live in `player`, rather than
+/// silently replacing the entry it names — the reference twin of
+/// `plugins::reject_if_plugin_id_in_use` (ARCH-04 D-5). The app is now
+/// the only allocator for reference ids; a collision here means the
+/// app's mirror and the engine's live set have drifted (a bug in the
+/// app's id bookkeeping, or a stale in-flight echo racing a fresh load
+/// onto the same id), not a legitimate retry — hence
+/// `EngineErrorKind::Internal`, not `Busy`.
+///
+/// Returns `true` (and has already reported the error) when the load
+/// must stop here.
+fn reject_if_reference_id_in_use(
+    player: &ReferencePlayer,
+    event_tx: &Sender<AudioEvent>,
+    id: ReferenceId,
+) -> bool {
+    if player.entry(id).is_some() {
+        let _ = event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            "reference id {} is already in use; refusing the load rather than replacing the \
+             live reference",
+            id.0
+        ))));
+        true
+    } else {
+        false
+    }
+}
+
+/// Register a reference entry on the engine thread under `id` and return
+/// it. The entry starts unanalysed (no PCM, `NEG_INFINITY` loudness); the
+/// analysis worker fills it in later via [`handle_reference_analyzed`].
+/// Pure (no I/O, no events) so the entry exists the instant the load
+/// command is dispatched. The caller ([`handle_load_reference_track`])
+/// has already refused a collision via [`reject_if_reference_id_in_use`].
+pub fn register_reference(player: &mut ReferencePlayer, id: ReferenceId, path: PathBuf) -> ReferenceId {
     let name = name_from_path(&path);
     player.entries.push(ReferenceEntry::new(id, name, path));
     id
@@ -669,16 +684,21 @@ fn reference_overview_peaks(interleaved: &[f32]) -> Vec<(f32, f32)> {
 /// import-to-pool path). The worker emits the analysis-progress +
 /// loaded/failed events and reports the decoded PCM back via
 /// `AudioCommand::ReferenceAnalyzed`. If the worker thread can't be
-/// spawned the load fails up front with `ReferenceLoadFailed`.
+/// spawned the load fails up front with `ReferenceLoadFailed`. `id` is
+/// mandatory (ARCH-04 D-5); a collision with a live reference is refused
+/// via [`reject_if_reference_id_in_use`] rather than honoured.
 pub fn handle_load_reference_track(
     player: &mut ReferencePlayer,
     event_tx: &Sender<AudioEvent>,
     cmd_tx: &Sender<AudioCommand>,
     sample_rate: u32,
-    id_hint: Option<ReferenceId>,
+    id: ReferenceId,
     path: PathBuf,
 ) {
-    let id = register_reference(player, id_hint, path.clone());
+    if reject_if_reference_id_in_use(player, event_tx, id) {
+        return;
+    }
+    register_reference(player, id, path.clone());
 
     let path_str = path.to_string_lossy().into_owned();
     let worker_event_tx = event_tx.clone();

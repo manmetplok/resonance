@@ -96,7 +96,7 @@ fn load_requested(r: &mut Resonance, path: PathBuf) {
         ReferenceAnalysisStage::Decoding,
     ));
     let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
-        id_hint: Some(id),
+        id,
         path,
     });
 }

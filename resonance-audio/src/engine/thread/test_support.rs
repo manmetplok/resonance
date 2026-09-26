@@ -26,10 +26,12 @@ use crate::engine::{
     automation::AutomationSnapshot, busses, master, plugins, takes, tracks, transport,
     OfflineRenderGuard, SharedState,
 };
+use crate::midi_clock::MidiClockEvent;
+use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer::CompRenderTable;
 use crate::types::*;
 
-use super::{HandlerCtx, HandlerState};
+use super::{engine_thread, EngineThreadParams, HandlerCtx, HandlerState};
 
 /// Owns every `Arc` a [`HandlerCtx`] borrows, plus the [`HandlerState`]
 /// the handlers mutate. `HandlerCtx` holds references rather than the
@@ -68,8 +70,12 @@ impl EngineHandlerHarness {
     /// A harness at the engine's cold-start state: no tracks, no clips,
     /// no plugins, every allocator at 1, nothing published.
     ///
-    /// Unlike the real thread this adds no default track — a handler
-    /// test says what it needs.
+    /// Same as the real thread's cold start since FU-D4a (it no longer
+    /// adds a default track unprompted either) — this harness just gets
+    /// there by rebuilding [`HandlerState::new`] directly rather than
+    /// running [`engine_thread`](super::engine_thread) end to end. A
+    /// handler test says what it needs; [`Self::startup_events`] is the
+    /// one that actually runs the real thread's startup.
     pub fn new() -> Self {
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
         let (cmd_tx_retry, _cmd_rx_retry) = crossbeam_channel::unbounded::<AudioCommand>();
@@ -103,6 +109,75 @@ impl EngineHandlerHarness {
             _cmd_rx_retry,
             state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
         }
+    }
+
+    /// Spawn the REAL [`engine_thread`] — not this harness's piecemeal
+    /// per-handler dispatch — with fake channels and no audio device,
+    /// queue it a `ShutDown` before it starts, and return every event it
+    /// emitted before exiting.
+    ///
+    /// The one hermetic way to observe what runs before the command loop
+    /// ever reads a command: `engine_thread`'s startup section used to
+    /// unprompted-insert a default track there (FU-D4a), a step no
+    /// per-handler harness call could ever exercise, since that code
+    /// doesn't live in any handler. `ShutDown` is queued on the command
+    /// channel before the thread is spawned (an unbounded channel, so
+    /// order of send-vs-spawn doesn't matter), so the loop's first
+    /// `recv_timeout` sees it and the thread exits right after the
+    /// one-time startup section runs; a real hang here would be a
+    /// correctness bug in `engine_thread` itself, worth `join`'s panic
+    /// rather than a silently-skipped test.
+    pub fn startup_events() -> Vec<AudioEvent> {
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
+        let cmd_tx_retry = cmd_tx.clone();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
+        let (live_midi_tx, _live_midi_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(8);
+        let (_live_midi_fwd_tx, live_midi_fwd_rx) = crossbeam_channel::bounded::<LiveMidiEvent>(8);
+        let (live_control_tx, live_control_rx) = crossbeam_channel::bounded::<LiveControlEvent>(8);
+        let (clock_tx, clock_rx) = crossbeam_channel::bounded::<MidiClockEvent>(8);
+        let (prod, _cons) = ringbuf::HeapRb::<f32>::new(1).split();
+
+        let _ = cmd_tx.send(AudioCommand::ShutDown);
+
+        let params = EngineThreadParams {
+            cmd_rx,
+            cmd_tx_retry,
+            event_tx,
+            shared: Arc::new(SharedState::default()),
+            tracks_arc: Arc::new(RwLock::new(IndexMap::new())),
+            busses_arc: Arc::new(RwLock::new(IndexMap::new())),
+            master_arc: Arc::new(RwLock::new(MasterBus::new())),
+            clips_arc: Arc::new(RwLock::new(Vec::new())),
+            midi_clips_arc: Arc::new(RwLock::new(Vec::new())),
+            tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
+            plugins_arc: Arc::new(RwLock::new(IndexMap::new())),
+            latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
+                crate::latency::LatencyComp::empty(),
+            )),
+            automation: Arc::new(arc_swap::ArcSwap::from_pointee(
+                AutomationSnapshot::default(),
+            )),
+            monitor_prod: Arc::new(Mutex::new(prod)),
+            live_midi_tx,
+            live_midi_fwd_rx,
+            live_control_tx,
+            live_control_rx,
+            clock_tx,
+            clock_rx,
+            sample_rate: 48_000,
+            buf_frames: 128,
+            quantum: 128,
+        };
+
+        let handle = std::thread::Builder::new()
+            .name("fu-d4a-engine-startup-test".into())
+            .spawn(move || engine_thread(params))
+            .expect("spawn engine_thread for FU-D4a startup test");
+        handle
+            .join()
+            .expect("engine_thread panicked in FU-D4a startup test");
+
+        event_rx.try_iter().collect()
     }
 
     /// Build the borrowed [`HandlerCtx`] and hand it, with the mutable
