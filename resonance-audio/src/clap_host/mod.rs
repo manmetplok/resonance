@@ -278,12 +278,12 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
 pub fn __instance_from_raw_for_test(
     build: impl FnOnce(*const clap_host) -> *const clap_sys::plugin::clap_plugin,
     sample_rate: u32,
-) -> Result<ClapInstance, String> {
+) -> Result<ClapInstance, bundle::ClapBundleError> {
     let host_data = create_host_data();
     let host_ptr = &host_data.clap_host as *const clap_host;
     let plugin = build(host_ptr);
     if plugin.is_null() {
-        return Err("test build fn returned a null plugin".to_string());
+        return Err(bundle::ClapBundleError::TestPluginNull);
     }
     bundle::build_instance(plugin, host_data, sample_rate)
 }
