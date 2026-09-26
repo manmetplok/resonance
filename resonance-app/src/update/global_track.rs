@@ -97,9 +97,43 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
         }
         GlobalTrackMessage::UpdateTempoEvent { index, bar, bpm } => {
             let bpm = resonance_audio::types::sanitize_bpm(bpm);
+            // `index` is the event's position when the drag started. The
+            // list is re-sorted below as the event crosses a neighbour,
+            // so the drag's identity is the selection `StartTempoDrag`
+            // set, which is kept pointing at the dragged event (code
+            // review VIEW-15) — Delete after the drag then removes it,
+            // not whatever slid into its old slot.
+            let tracking = matches!(
+                r.interaction.selected_global_event,
+                Some(sel) if sel.kind == state::GlobalTrackKind::Tempo
+            );
+            let index = match r.interaction.selected_global_event {
+                Some(sel) if tracking => sel.index,
+                _ => index,
+            };
+            // One bar, one tempo (ba todo #1382): a drag onto an occupied
+            // bar leaves the event where it was instead of stacking two.
+            let occupied = r
+                .tempo_events
+                .iter()
+                .enumerate()
+                .any(|(i, e)| i != index && e.bar == bar);
             if let (Some(event), Some(bpm)) = (r.tempo_events.get_mut(index), bpm) {
-                event.bar = if index == 0 { 0 } else { bar };
+                if index != 0 && !occupied {
+                    event.bar = bar;
+                }
                 event.bpm = bpm;
+                let moved_bar = event.bar;
+                // Keep the list sorted mid-drag so the preview tempo map
+                // is right, and follow the event to its new slot.
+                r.tempo_events.sort_by_key(|e| e.bar);
+                let pos = r.tempo_events.iter().position(|e| e.bar == moved_bar);
+                if let (true, Some(pos)) = (tracking, pos) {
+                    r.interaction.selected_global_event = Some(state::SelectedGlobalEvent {
+                        kind: state::GlobalTrackKind::Tempo,
+                        index: pos,
+                    });
+                }
                 r.rebuild_tempo_map();
                 r.sync_tempo_display();
                 let _ = r.engine.send(AudioCommand::SetBpm {
