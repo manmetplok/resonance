@@ -20,7 +20,10 @@ impl TimelineCanvas<'_> {
     /// outer `Scrollable` that wraps the canvas (see `view_timeline`).
     /// The vertical bar stays — tracks scroll inside the canvas so the
     /// ruler / section band / global-tracks header line up with their
-    /// lanes.
+    /// lanes. It hugs the right edge of the part of the canvas that is on
+    /// screen (the [`ViewportProbe`](crate::view::timeline::viewport_probe)
+    /// window), not the song's end; with no probe write yet it falls back
+    /// to the canvas edge (review VIEW-33).
     pub(in crate::view::timeline) fn scrollbar_rects(
         &self,
         bounds: Rectangle,
@@ -28,7 +31,18 @@ impl TimelineCanvas<'_> {
         use crate::view::timeline::scrollbar;
         let content_h = self.content_height_px();
         let header_h = self.fixed_header_height();
-        scrollbar::v_rects(bounds, content_h, self.scroll_offset_y, header_h, false)
+        let right_edge = self
+            .visible_viewport
+            .get()
+            .map_or(bounds.width, |v| v.x + v.width);
+        scrollbar::v_rects(bounds, right_edge, content_h, self.scroll_offset_y, header_h)
+    }
+
+    /// Test-only: [`scrollbar_rects`](Self::scrollbar_rects) for
+    /// `test_support` (VIEW-33).
+    #[doc(hidden)]
+    pub(crate) fn test_scrollbar_rects(&self, bounds: Rectangle) -> Option<ScrollbarRects> {
+        self.scrollbar_rects(bounds)
     }
 
     /// Hit-test a pointer press against a clip lane (MIDI or audio).

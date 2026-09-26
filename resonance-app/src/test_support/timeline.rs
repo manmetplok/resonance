@@ -66,6 +66,23 @@ impl Resonance {
             .unwrap_or(self.viewport.scroll_offset)
     }
 
+    /// Test-only: the left x of the timeline canvas's in-canvas vertical
+    /// scrollbar track (`None` when the lanes fit), for a canvas of
+    /// `canvas_size` of which `visible` (canvas-local; `None` = no probe
+    /// write yet) is on screen inside the outer `Scrollable` (VIEW-33).
+    #[doc(hidden)]
+    pub fn test_timeline_vscrollbar_x(
+        &self,
+        canvas_size: iced::Size,
+        visible: Option<iced::Rectangle>,
+    ) -> Option<f32> {
+        let canvas = self.timeline_canvas_data();
+        canvas.visible_viewport.set(visible);
+        canvas
+            .test_scrollbar_rects(iced::Rectangle::new(iced::Point::ORIGIN, canvas_size))
+            .map(|sb| sb.track.x)
+    }
+
     /// Test-only: whether playhead follow is paused by a manual scroll.
     #[doc(hidden)]
     pub fn test_follow_paused(&self) -> bool {

@@ -1265,23 +1265,8 @@ impl<'a> TimelineCanvas<'a> {
         // `draw_overlay_into`. Keeping it out of the cached path lets
         // the rest of the timeline geometry stay cached during playback.
 
-        // Smart scrollbar — drawn last so it sits above clips + playhead.
-        let track_color = Color::from_rgba(0.08, 0.08, 0.08, 0.8);
-        let thumb_color = Color::from_rgba(0.45, 0.45, 0.45, 0.85);
-
-        if let Some(sb) = self.scrollbar_rects(bounds) {
-            frame.fill_rectangle(
-                Point::new(sb.track.x, sb.track.y),
-                Size::new(sb.track.width, sb.track.height),
-                track_color,
-            );
-            frame.fill_rectangle(
-                Point::new(sb.thumb.x, sb.thumb.y),
-                Size::new(sb.thumb.width, sb.thumb.height),
-                thumb_color,
-            );
-        }
-
+        // The vertical scrollbar is drawn in the uncached overlay pass:
+        // it follows the horizontally-scrolled visible window (VIEW-33).
     }
 
     /// Draw the parts of the timeline that change every frame during
@@ -1392,6 +1377,22 @@ impl<'a> TimelineCanvas<'a> {
             state.take_promote_drag.as_ref(),
             cursor,
         );
+
+        // Smart scrollbar — drawn last so it sits above clips + playhead.
+        // Uncached: its x is the visible window's right edge, which moves
+        // with the outer `Scrollable` (review VIEW-33).
+        if let Some(sb) = self.scrollbar_rects(bounds) {
+            frame.fill_rectangle(
+                Point::new(sb.track.x, sb.track.y),
+                Size::new(sb.track.width, sb.track.height),
+                Color::from_rgba(0.08, 0.08, 0.08, 0.8),
+            );
+            frame.fill_rectangle(
+                Point::new(sb.thumb.x, sb.thumb.y),
+                Size::new(sb.thumb.width, sb.thumb.height),
+                Color::from_rgba(0.45, 0.45, 0.45, 0.85),
+            );
+        }
 
         // The ruler-height local is unused if neither overlay fires;
         // keep it so future overlay additions (e.g. selection brushes)
