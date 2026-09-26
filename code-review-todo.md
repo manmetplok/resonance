@@ -62,6 +62,7 @@ master and updates this table. Agents do **not** edit this file.
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
 | refactor-intent A-1 (ARCH-01) | A1-2 (3) external_instruments + devices from ProjectFile; slow-path double restore removed | opus | merged | 37ae683a |
+| refactor-intent A-2 (ARCH-01) | A1-2 (4) vocal_clip_lyrics from ProjectFile; canonical file/live lyric forms | opus | merged | cb850b0c |
 | refactor-intent E (ARCH-07) | A7-3 `model`/`decode` features in resonance-common; plugins set `default-features = false` (invariant) | sonnet | merged | 38d66942 |
 | refactor-intent A-11 (ARCH-06) | A1-3 remainder: 11 enums moved beside handlers, `message.rs` 1084 → 416 | sonnet | merged | d8bd59b7 |
 

@@ -790,6 +790,11 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 - Device-param resolution is shared as `ProjectExternalInstrument::device_params` (embedded user definition first, then registry). The fast path used to consult the registry only — the paths differ only if a user device definition was rescanned with different params between snapshot and undo.
 - `Resonance::test_snapshot_undo_extras` has no callers left; delete with `UndoExtras` in A-7.
 
+**A-2 landed (A1-2 step 4) @ cb850b0c.** Notes:
+- Canonical lyric forms on `VocalAudioRegistry`: file form `file_lyrics(clip, n)` (cut to note count, trailing empties stripped) and live form `restore_clip_lyrics` (padded to note count, no entry when empty). Disk load and both undo paths share the latter; the serializer uses the former (now also cuts at note count).
+- Unplanned: UPD-05's `freeze_content_fingerprint` now hashes the file form, else a padding-only restore marked frozen vocal tracks stale. `compute_track_freeze_fingerprint` (test-support only) still hashes the raw entry — switch it too if it is ever wired live.
+- Lyric entries for clips no longer in `midi_clips` are dropped on restore (vocal clips join `midi_clips` at install time, so no FU-H2a-style loss). `UndoExtras` is down to 5 fields.
+
 **E landed (A7-3) @ 38d66942.** `dirs` and `time` stay unconditional deps, not optional under `model`: the ungated `registry` module (used by drums) calls `dirs::data_dir()` and `time::OffsetDateTime`. `symphonia` is optional under `decode`. amp and `resonance-plugin` use no features; drums and ir use `decode`. `arch-invariants::plugins_disable_default_features_on_resonance_common` guards it.
 
 
