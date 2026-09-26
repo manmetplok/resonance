@@ -773,3 +773,552 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 - ARCH-08: the 11 plugin manifests no longer name `wayland-plugin-gui` or `egui` (`editor = ["dep:plugin-gui-core", "resonance-plugin/editor-widgets", …]`); `resonance_plugin::editor_host` was already the only source-level platform reference. `plugin-gui-core` stays a direct plugin dep on purpose — it is the platform-neutral half and ~100 `use plugin_gui_core::…` lines read it directly; routing those through `resonance-plugin` would be a large mechanical diff for no layering gain. The one remaining runtime mention in `plugins/` is `resonance-gate`'s macOS-only *dev*-dep on `cocoa-plugin-gui` (the NSApplication pump for `editor_open_cocoa`); the SDK could re-export `test_support` to remove it. `resonance-plugin/src/ui.rs` moved to `resonance_app::plugin_ui`; the SDK has no `iced` dependency. `latency.rs` header corrected.
 - ARCH-10: `tools/arch-invariants` (workspace member; `cargo test -p arch-invariants`) encodes: crate DAG (allowed edges per crate, any dep kind, manifest-declared so macOS edges are checked from Linux), GUI-toolkit/windowing/CLAP ownership, plugins never naming a runtime (manifest + source), `plugins/*` ⇔ members + cdylib (bundle.sh's checks, in the suite), the 11 app test groups closed, no inline `#[cfg(test)]` beyond the ARCHITECTURE.md exception, no `.engine.` under `view/`, no `_ =>` in `control/view_model/`. A3-2's "assert the resonance-audio test roots" belongs here once A3-1 lands.
 
+
+
+---
+
+# Part 2 — ARCH-04/05/06/07/09 (planned 2026-09-26, after H1/H2/H4)
+
+# ARCH-04 / 05 / 06 / 07 / 09 — incremental implementation plan (H5)
+
+Read-only architecture pass, 2026-09-26, against master `f57c6793` (H1, H2, H4
+merged; H3 branch `arch/H3-test-grouping` has no commits yet; `fix/review-M12`
+open with 9 commits). Every number below was re-measured on this tree; where
+the review text (from `09041eee`) is out of date it says so.
+
+Conventions per step: **Goal · Files/symbols · Approach · Test · Diff ·
+Conflict · Behaviour**. "NOW" = land in this campaign; "EPIC" = file in ba and
+drain later.
+
+---
+
+## Cross-cutting facts
+
+* **Open branches that bound conflict risk.** `fix/review-M12` (in progress)
+  touches `undo/classify.rs` (+21), `undo/mod.rs` (+10), `update/track.rs` (+4),
+  `update/clips.rs` (+5), `update/project_io/{mod,autosave}.rs`,
+  `engine_events/{clips,mod,project_io,tracks}.rs`, `state/project_io.rs`,
+  `project/io.rs`, `resonance-audio/src/engine/{clips,tracks,thread/mod}.rs`.
+  `arch/H3-test-grouping` will touch `resonance-audio/src/lib.rs` (A3-5) and
+  `resonance-audio/tests/**`. Everything marked NOW below avoids those files or
+  touches them by one additive line.
+* **`ba/todo-1059` "Split message.rs into per-domain submodules"** is an
+  approved, open ba todo with a stale `[X verify-failed @35fc6bf5]` tag (July).
+  Its branch made a `message/` *directory* (`message/{browser,clip,plugin,…}.rs`)
+  and is 124 files / 17k lines diverged from master. H2 already moved
+  `Transport`/`Bus`/`Master` the other way (enum beside its handler). Do **not**
+  rebase #1059; re-scope its text to A6-1's shape and let A6-1 close it.
+* Churn since 2026-09-01: `message.rs` 7 commits, `resonance-audio/src/lib.rs`
+  13, `resonance-app/src/lib.rs` 5, `undo/history.rs` 4, `undo/classify.rs` 2,
+  `types/events.rs` 1, `resonance-common/src` 4, `state/{tracks,plugin_index,aux_sends}.rs` 0.
+* No build was run (memory-exhaustion crash earlier today); all evidence is
+  `grep`, `git`, `cargo metadata`/`cargo tree --offline`.
+
+---
+
+## ARCH-04 — entity ids allocated in two places with hand-partitioned bases
+
+### Evidence, re-verified (still valid; one correction)
+
+Engine side — `HandlerState` (`resonance-audio/src/engine/thread/mod.rs:101-123`)
+owns **7 counters**: `next_track_id`, `next_bus_id`, `next_clip_id`,
+`next_asset_id`, `next_plugin_id`, `next_send_id`, `next_take_group_id`; plus
+`ReferencePlayer.next_ref_id` / `next_marker_id` (`engine/reference.rs:77,105`).
+**15 high-water bump sites** (`state.next_x_id = max(id + 1)`) in
+`engine/{midi/clips,reference,busses,plugins,takes,tracks,clips}.rs` and
+`thread/dispatch/clips.rs:25`, plus two "reserve" commands with no echo:
+`AudioCommand::ReserveAssetIds` (`commands.rs:95`) and `RestoreTakeGroups`
+(`commands.rs:492-505`, bumps group + clip counters).
+
+App side — **five allocators in four files, three copies of the same
+"skip while in use" loop**, and five numeric bases spread over five files:
+
+| Space | Allocator | Base | Where |
+|---|---|---|---|
+| plugin (control adds) | `allocate_control_plugin_id` | `CONTROL_PLUGIN_ID_BASE = 3_000_000_000` | `state/plugin_index.rs:158`; base in `resonance-audio/src/types/mod.rs:34`; engine honours hints below the base only (`engine/plugins.rs:282-310`) |
+| send (control adds) | `allocate_control_send_id` | `CONTROL_SEND_ID_BASE = 2_000_000_000` | `state/aux_sends.rs:106,121` |
+| sub-track / bounce target / **track group** | `allocate_sub_track_id` | `1_000_000_000` (unnamed, seeded `lib.rs:881`) | `state/tracks.rs:556`; groups via `update/group.rs:80` |
+| FX return bus | `allocate_return_bus_id` | `2_000_000_000` (unnamed, `lib.rs:882`) | `state/tracks.rs:571` |
+| derived (compose) clip | `next_derived_clip_id` | `DERIVED_CLIP_ID_BASE = 1 << 40` | `compose/state.rs:31` |
+| missing reference | local counter | `MISSING_ID_BASE = 1_000_000_000` | `replay/restore.rs:369` (app-only space, fine) |
+
+App-only spaces (never cross to the engine): markers `allocate_id`
+(`state/markers.rs:115`), automation `next_lane_id` (`state/automation.rs:42`),
+groove ids. STATE-04 (group-id counter) was fixed by three load-time bumps
+(`replay/mod.rs:287`, `replay/restore.rs:25`, `replay_diff.rs:1059`); FU-A1c
+(`allocate_sub_track_id` doesn't check the group registry) is still open.
+
+Senders: `id_hint: Some(..)` at 25 sites / 11 files (replay 10, `update/track.rs` 6,
+`mixer.rs` 3, `bus.rs` 2, …); `id_hint: None` (engine allocates) at 12 sites /
+8 files (`track.rs` 3, `mixer.rs` 2, `bus.rs` 2, `plugin.rs`, `master.rs`,
+`reference.rs`, `view/menus.rs`, `engine_events/presets.rs`).
+
+**Correction to the finding's "decide one owner: the app".** Two engine spaces
+are allocated *inside the engine at times the app cannot pre-decide*: clip ids
+for recorded takes (`recording.rs:484` at record-stop, per armed track, per
+loop pass) and take-group ids (`takes.rs:191`), and asset ids on the import
+worker (`import_pool.rs`). Moving those to the app means pre-reserving a block
+of ids per arm/import and passing it in the command — real design work, not a
+mechanical move. Everything else (track, bus, plugin, send, reference) is
+mechanical. So the epic is worth 5 todos, not 7, and the recording/import pair
+is the one to design first.
+
+### Steps
+
+**A4-1. Collision invariant test (NOW).**
+Goal: pin the partition that keeps the two owners apart today, so the epic can
+move spaces one at a time against a failing test.
+Files: new module `resonance-app/tests/io/id_allocation.rs` (register in
+`tests/io.rs`; neighbours `chord_track_persistence.rs`, `undo_snapshot_fixed_point.rs`).
+Approach: `Resonance::new_for_test_with_capture()`, load the demo, add one of
+each entity twice — once via the GUI message (`TrackMessage::AddTrack`,
+`AddBus`, `PluginMessage::Add…`, `MixerMessage::AddSend`, create-group,
+compose-derived clip) and once via control (`run_via_update` → the
+`allocate_control_*` paths) — drain echoes with the existing capture helpers,
+`test_build_project_file`, reload through `replay_loaded_project`, add again;
+assert every id space is a set (no duplicates) and every app counter is
+`> max(existing)`. Add a `const` assertion that the five bases are pairwise
+disjoint and ordered (`SUB_TRACK < RETURN_BUS == CONTROL_SEND < CONTROL_PLUGIN
+< DERIVED_CLIP`) — today the sub-track base (1e9) and the return-bus base (2e9)
+are unnamed literals.
+Test: itself. Diff: ~150 lines. Conflict: none (new module). Behaviour: none.
+Expected: green today except possibly the FU-A1c group case — write that case
+so it fails, then A4-3 fixes it.
+
+**A4-2. One table for the app side: `state/ids.rs` (NOW).**
+Goal: the "who allocates what, from where" answer lives in one file, and the
+three copied skip-loops become one function.
+Files: new `resonance-app/src/state/ids.rs` with the five base constants
+(re-export `CONTROL_PLUGIN_ID_BASE` from audio, name the two literals
+`SUB_TRACK_ID_BASE`, `RETURN_BUS_ID_BASE`, move `CONTROL_SEND_ID_BASE`,
+`DERIVED_CLIP_ID_BASE`, `MISSING_REFERENCE_ID_BASE`) and
+`pub fn allocate_unused(next: &mut u64, in_use: impl Fn(u64) -> bool) -> u64`;
+`state/tracks.rs:484-585`, `state/plugin_index.rs:150-170`,
+`state/aux_sends.rs:100-125`, `compose/state.rs:31`, `replay/restore.rs:369`,
+`lib.rs:881-894` (seed from the constants). Keep the allocator *methods* where
+they are (their callers don't move); only the bodies and constants change.
+Test: A4-1 stays green; existing `take_group_mirror`, control `track.add`
+tests. Diff: ~+80/-60. Conflict: low — the four state files have 0 commits
+since September; `lib.rs` seed lines are not in M12's diff. Behaviour: none.
+
+**A4-3. FU-A1c in the same place (NOW, optional, ~10 lines).**
+`allocate_sub_track_id` also skips ids present in `track_groups` (pass the
+registry's id set as the `in_use` closure from `update/group.rs:80` and the
+control `track.add` path). Test: the A4-1 group case flips green.
+
+**A4-4. App-owned ids, one space per todo (EPIC "app-owned entity ids").**
+Order by mechanical-ness: (1) plugins — flip the 5 `id_hint: None` plugin adds
+to `allocate_control_plugin_id` (rename to `allocate_plugin_id`), engine
+handler rejects a present id with `AudioEvent::Error`, delete `next_plugin_id`
++ the hint-vs-base rule (`plugins.rs:282-310`) + `CONTROL_PLUGIN_ID_BASE`;
+(2) sends; (3) busses (+ return-bus base folds in); (4) tracks (+ demo.rs,
+templates, sub-track base folds in); (5) references; (6) **design todo**:
+recording clip ids + take-group ids + import asset ids — app reserves a block
+at arm/import time (`AudioCommand::ArmTrack { clip_ids: Range }` or similar),
+engine never invents one; then delete `ReserveAssetIds`, `RestoreTakeGroups`'
+bump, and the 15 `max(id+1)` sites. Each todo ~100-300 lines; conflict medium
+(engine handlers are hot); behaviour none. Done-when as in the finding
+(`grep next_[a-z_]*_id resonance-audio/src/engine` empty).
+
+**Verdict:** NOW = A4-1 + A4-2 (+A4-3). The two-owner split is *stable* today
+because the ranges are disjoint; the epic's payoff is deleting 15 bump sites and
+2 reserve commands and making new entity types not re-decide ownership. It is
+not urgent.
+
+---
+
+## ARCH-05 — no error taxonomy / logging facade
+
+### Evidence, re-verified (counts updated; one consequence not borne out)
+
+| Crate | `Result<_, String>` | `eprintln!` | logging crate |
+|---|---|---|---|
+| resonance-audio | **46** (was 41) | **36** (root 21: `recording.rs` 9, `platform.rs` 8, `stream_errors.rs` 2, `output_pipewire.rs` 2; `engine/` 13; `mixer/callback/mod.rs` **1, latched**; `types/` 1) | none |
+| resonance-app | 25 | **49** (`src/*.rs` 16, `update/project_io/**` 16, `engine_events/` 9, …) | none (the review's `log::` hits were `rfd::…Dialog::new`) |
+| resonance-common | 20 | 6 | none |
+| resonance-plugin | 8 | 1 | none |
+| wayland-plugin-gui | 0 | 6 | none |
+| plugins/resonance-amp | 52 | 6 | none |
+| resonance-mcp, resonance-svs | 0 | 0 | `tracing 0.1` + `tracing-subscriber 0.3` (not in the workspace deps table; `thiserror = "2"` is) |
+
+`AudioEvent` still has four bare-string error variants — `Error(String)`
+(**38 emit sites**: `engine/clips.rs` 12, `plugins.rs` 7, `transport.rs` 4, …),
+`BounceError`, `TrackBounceError`, `StemExportError` — but it also already has
+**nine typed precedents**: `ExportError { kind: ExportErrorKind }` (5 kinds),
+`PluginLoadFailed { reason }`, `PluginScanFailed`, `ImportFailed`,
+`MixMeasureError`, `FreezeError`, `ReferenceLoadFailed`,
+`StemExportTargetError`, `PluginEditorError`. The app consumes `Error(String)`
+in exactly one place (`engine_events/dispatch.rs:42` → `transport::error`, a
+banner).
+
+**Not borne out:** "the control layer's `ErrorKind` mapping has to string-match
+or default". `update/control/` constructs `RpcError` 299 times
+(`invalid_params` 187, `not_found` 60, `busy` 25, `needs_confirmation` 11,
+`internal` 9, `unsupported` 7) and every one is decided *synchronously against
+the app mirror before any engine round-trip*; there is no `contains("…")` on
+engine text anywhere under `update/control/`. Engine failures reach a control
+client only through jobs (`render.*`, `project.*`, `vocal.render`), where
+`JobState::Failed` carries the string as `error`. So the taxonomy's consumer is
+weaker than claimed; what remains real is: (a) no level / filter / routing for
+85 stderr prints in the two big crates, (b) one RT-thread print, (c) every new
+failure path re-invents formatting, (d) the `Error(String)` catch-all lets the
+app only show a banner.
+
+### Steps
+
+**A5-1. Logging facade, no taxonomy (NOW; one commit per crate).**
+Goal: `eprintln!` gone from library crates; `RUST_LOG` works; default output
+unchanged.
+Files: workspace `Cargo.toml` (`tracing = "0.1"`, `tracing-subscriber = { version
+= "0.3", features = ["env-filter"] }` — same versions mcp/svs already pin);
+`resonance-app/src/main.rs` installs
+`tracing_subscriber::fmt().with_env_filter(EnvFilter::try_from_default_env().unwrap_or(LevelFilter::WARN.into())).with_writer(std::io::stderr).init()`;
+then sed per crate: `eprintln!(` → `tracing::warn!(` (or `error!`/`info!` by
+reading the message — most are warnings) in `resonance-audio` (36),
+`resonance-common` (6), `resonance-plugin` (1), `wayland-plugin-gui` (6),
+`resonance-app` (49). Tests: no subscriber → output dropped, which is what
+`run-tests.py` wants; `new_for_test` may call
+`tracing_subscriber::fmt::try_init()` behind `RESONANCE_TEST_LOG` if anyone
+misses the prints. Add to `tools/arch-invariants`: *no `eprintln!`/`println!`
+under `resonance-{audio,app,common,plugin}/src`* (allow-list: `main.rs`, the
+`svs` CLI, `bin/`), and *no `tracing::` macro under `resonance-audio/src/mixer/`*
+(RT rule — see A5-2).
+Diff: ~1 line per site + a `use` per file ≈ 120 lines; the invariant ~40.
+Conflict: **audio + common + plugin + wayland now** (none of those sites is in
+M12/H3's diff except `engine/clips.rs`/`tracks.rs` — check the 3 sites there
+against M12 before landing, or leave those two files for the app commit);
+**app after M12 merges** (16 of its 49 sites are under `update/project_io/`,
+which M12 edits). Behaviour: none by default (same text, same stderr, now with
+a `WARN resonance_audio::…` prefix).
+
+**A5-2. The one RT-thread print → engine-loop log (NOW, ~20 lines; fold into
+A5-1's audio commit).**
+`mixer/callback/mod.rs:171-180` `log_oversize_buffer` keeps its `AtomicBool`
+latch but stores `(requested, scratch)` into two `SharedState` atomics instead
+of printing; the engine loop's 16 ms tick (where H1 already reads
+`cycle_report`) logs it once. Test: extend `resonance-audio/tests/cycle_load.rs`
+(or the H3 `mixer` group) — render with an oversize buffer, assert the atomics
+are set and nothing was printed on the render thread (the invariant test is the
+static guard). Behaviour: none audible.
+
+**A5-3. `EngineError { kind, message }` for `AudioEvent::Error` (EPIC step 1).**
+New `resonance-audio/src/types/error.rs`: `EngineErrorKind { NotFound, Busy,
+Unsupported, Io, Plugin, Internal }` (mirrors `resonance_control::ErrorKind` +
+`Io`/`Plugin`), `EngineError::internal(msg)` so the 38 sites are one-token
+changes first, classified in a second pass (`clips.rs` is mostly `NotFound`,
+`plugins.rs` mostly `Plugin`). Then `BounceError`/`TrackBounceError`/
+`StemExportError` carry `EngineError` (or fold into the existing
+`ExportErrorKind`). `JobStatus.error` gains an optional `kind` so a control
+client sees `not_found` vs `io` for a failed render. Consumers: `transport::error`
+(banner keeps `.message`), `update/control/job.rs`. Diff ~150 lines. Conflict:
+medium (`engine/clips.rs`, `plugins.rs` are hot; M12 touches `clips.rs`).
+Behaviour: none.
+
+**A5-4. `Result<_, String>` → `thiserror` per module (EPIC step 2).**
+Audio: 20 files / 46 sites (`midi_io` 5, `midi_hardware` 5, `recording` 4,
+`io/wav` 4, `types/clip` 3, `clap_host/bundle` 3, …); common: 20 sites. One
+file per commit; each error type lives beside its module and converts into
+`EngineError` at the event boundary. Leave `resonance-amp` (52, internal to
+the NAM loader) alone. Diff ~20 lines per file. Conflict: low per file.
+
+**Verdict:** NOW = A5-1 (audio/common/plugin/wayland crates) + A5-2 + the
+invariant test; app-crate sweep right after M12 merges. Taxonomy = EPIC
+"engine error taxonomy" (A5-3, A5-4 as 3 todos). The finding's severity should
+be read as *consistency*, not *correctness*: nothing string-matches today.
+
+---
+
+## ARCH-06 — `Resonance` and `message.rs` hub files
+
+### Evidence, re-verified
+
+* `message.rs` **1764 lines** (was 1821; H2 moved `Transport`/`Bus`/`Master`
+  to `update/{transport,bus,master}.rs` with `pub use` re-exports —
+  `message.rs:30-32`). Still defines **27 sub-enums + `DropTarget` + `Message`**
+  (36 variants). 211 files import via `crate::message`, so moves stay invisible
+  to importers. Handler for every enum is a single `update/<domain>.rs` file
+  (`BounceMessage` is nested inside `TrackMessage::Bounce`, handled in
+  `update/track.rs:438-463`; `ArrangementMessage` is handled in
+  `update/compose/drum_groups.rs`).
+* Churn since 2026-08-01 by enum (hunks): `PluginMessage` **8**, `UiMessage` 4,
+  `Clip` 2, `Take` 2, `Arrangement`/`Track`/`Mixer`/`Viewport`/`Import`/`Pool`/
+  `Relink` 1, **the other 14 zero**. Sizes: `MidiEditor` 175 lines, `Ui` 151,
+  `Plugin` 137, `Clip` 119, `Track` 109, `Automation` 85, `ExternalInstrument` 82,
+  `Pool` 76, `Browser` 63, `Relink` 61, `Import` 58, `Take` 49, `Group` 47, …
+* `lib.rs` 997 lines; `Resonance` has **93 fields** (was 89); one `impl
+  Resonance` block from `:525` (constructors + `new_for_test*`) — the
+  "giant impl" half of the finding is gone, the "93 loose fields" half is not.
+  Loose-field groups with reference counts in `src/`: **master** 5 fields /
+  108 refs (`master_plugins` 66, also in `undo/snapshot.rs` and the control
+  view model); **midi devices** 7 / 55 (`midi_*`); **plugin catalog** 3 / 29
+  (`available_plugins`, `plugin_scan_failures`, `plugin_scan_in_progress`);
+  **banners** 3 / 60 (`error_message` 53); **input devices** 2 / 21;
+  **presets** 8 / 41; **modal/dialog** 7 / 68; **plugin mirror** 3 / 34.
+  `state/` already has 30 sub-state modules — the pattern exists.
+* `undo/classify.rs` 547 lines: **12 `Skip` catch-alls** (`Control`, `Viewport`,
+  `Ui`, `ProjectIo`, `Export`, `Import`, `Relink`, `Browser`, `Drag`, `Group`,
+  `MarkerUi`, `VocalTuning`) and **6 `Record` catch-alls** (`Pool`, `GlobalTrack`,
+  `ChordTrack`, `Arrangement`, `Master`, `Take`). Since STATE-07 (M4) a `Record`
+  that changes nothing is dropped by `same_state` — at the cost of a **second
+  full snapshot** per message (`undo/mod.rs:158`), so a `Record` catch-all on a
+  transient variant costs 2× O(project), not a bogus history entry. M12 adds 21
+  lines to `classify.rs`.
+
+### Steps
+
+**A6-1. Move the 14 zero-churn enums beside their handlers (NOW; = A1-3 slice 2).**
+Goal: `message.rs` ≈ 850 lines; the merge magnet loses half its mass.
+Files: cut each `pub enum XMessage` (+ its doc comment and only the `use`s it
+needs) from `message.rs` into its handler file, add `pub use
+crate::update::<d>::XMessage;` in `message.rs`. Set: `Group`→`update/group.rs`,
+`Marker`→`marker.rs`, `MarkerUi`→`marker_ui.rs`, `Export`→`export.rs`,
+`ExternalInstrument`→`external_instrument.rs`, `Freeze`→`freeze.rs`,
+`MidiClip`→`midi_clip.rs`, `MidiEditor`→`midi_editor.rs`,
+`VocalTuning`→`vocal_tuning.rs`, `Automation`→`automation.rs`,
+`GlobalTrack`→`global_track.rs`, `Browser`→`browser.rs`, `Drag`→`drag.rs`
+(+ `DropTarget`, or `state/drag.rs` since 5 of its 7 users are state/view),
+`ChordTrack`→`chord_track.rs`. **Skip this round:** `ProjectIo`
+(`update/project_io/mod.rs` is in M12), `Bounce` (nested in `Track`), and the
+1+-hunk enums (`Track`, `Clip`, `Mixer`, `Take`, `Pool`, `Relink`, `Import`,
+`Viewport`, `Arrangement`) until M12 merges; `Ui`/`Plugin` last.
+Approach: two commits of 7; each verified by `cargo check -p resonance-app
+--tests` and `git diff --stat` showing only `message.rs` + the target files.
+Test: compile is the test; the `io`/`timeline` group binaries exercise the
+handlers. Diff: ~-900 / +950 moved, ~14 lines added. Conflict: **low** — none of
+the 14 target files is in M12's or H3's diff and the enums have had zero hunks
+in eight weeks. Behaviour: none.
+
+**A6-2. Two smallest sub-states (NOW, optional).**
+`state::PluginCatalog { available, scan_failures, scan_in_progress }` (3 fields,
+29 refs) and `state::MidiDevices { inputs, outputs, last_refresh, clock_send_*,
+clock_recv_* }` (7 fields, 55 refs). Mechanical `r.available_plugins` →
+`r.plugin_catalog.available` sed over ~85 lines in `update/`, `view/`,
+`engine_events/`, `lib.rs`. Before landing: `git diff master...fix/review-M12 |
+grep -c 'available_plugins\|midi_'` must be 0 (M12 edits `engine_events/`).
+Diff ~120 lines. Behaviour: none.
+
+**A6-3. Remaining sub-states (EPIC "state tax", one todo each):** `MasterState`
+(108 refs — touches `undo/snapshot.rs`, `serialize.rs`, `view_model`),
+`Banners` (60), `InputDevices` (21), `PresetState` (41), `ModalState` (68),
+`PluginMirror` (34). Each a mechanical rename of 20-110 one-liners.
+Done-when: `Resonance` ≤ 40 fields.
+
+**A6-4. Exhaustive `undo_action` per enum (EPIC, after A6-1 completes and M12
+merges).** `impl XMessage { pub fn undo_action(&self) -> UndoAction }` beside
+each moved enum, exhaustive match (no `_`); `classify.rs` collapses to
+`Message::X(m) => m.undo_action()`. Start with the 12 `Skip` catch-all enums
+(each becomes an all-`Skip` exhaustive match — that *is* the point: a new
+variant fails to compile until classified), then the 6 `Record` ones (which
+also stops the double-snapshot on transient variants). Diff ~-400/+500.
+Conflict: `classify.rs` is in M12 → strictly after. Done-when:
+`grep -nE '\(_\) => UndoAction::(Skip|Record)' undo/classify.rs` empty.
+
+**Verdict:** NOW = A6-1 (+A6-2). Also: close or re-scope ba #1059 to A6-1's
+shape; its branch is unsalvageable.
+
+---
+
+## ARCH-07 — `resonance-common` is a model crate every plugin links
+
+### Evidence, re-verified (valid, but the compile-time cost is overstated)
+
+`resonance-common/src` = 3 999 LOC in 19 modules. **Model** (2 347 LOC, 59 %):
+`take` 733, `midi_map` 334, `device_definition` 328, `automation` 270,
+`freeze` 216, `device_registry` 162, `group_identity` 119,
+`external_instrument` 102, `track_group` 83. **Utilities** (1 589):
+`audio_probe` 402, `resample` 355, `wav` 279, `registry` 193, `atomic_file` 115,
+`drum_map` 88, `factory_presets` 73, `denormal` 52, `scan` 32. Heavy deps:
+`symphonia` → `wav`, `audio_probe`; `serde_json` → `device_definition`,
+`registry`, `factory_presets`, `midi_map`; `dirs` → `midi_map`,
+`device_registry`, `registry`; `time` → `registry`.
+
+What plugins actually import: `flush_denormals` ×12 (**all 11 plugins** — their
+only universal import), `scan_directory` (amp, ir), `registry` (drums, 4 files),
+`drum_map` (drums), `decode_wav_stereo`/`_channels` (drums, ir). 8 of 11
+plugins import *nothing but* `flush_denormals`. `resonance-plugin` itself
+depends on common for `scan_directory` (`loader.rs:57`) and `factory_presets`
+(`presets.rs:178-190`; 7 plugins use it through the SDK). All 11 plugins already
+depend on `resonance-dsp`. Audio + app: **103 files** import `resonance_common`.
+`cargo tree --offline -p resonance-eq --no-default-features`: `symphonia`,
+`serde_json`, `dirs`, `time` all present via common.
+
+**Correction:** `scripts/bundle.sh:108-115` builds every plugin in *one* cargo
+invocation, and the suite builds the workspace — with resolver 2, `symphonia`
+& co. are compiled once for the graph either way. The per-plugin *compile*
+cost the finding describes only exists for a standalone `cargo build -p
+resonance-eq`. The real, current costs are the **dependency surface** (a plugin
+can `use resonance_common::Take` today and nothing objects) and the
+**"lowest layer" rule having no home for utilities**. Both are fixable without
+a new crate.
+
+### Steps
+
+**A7-1. Allow-list invariant (NOW, ~40 lines).**
+`tools/arch-invariants/tests/architecture.rs`: new test
+`plugins_reach_only_common_utilities` — every `resonance_common::<ident>` in
+`plugins/*/src` and `resonance-plugin/src` must be in
+`{flush_denormals, scan_directory, registry, drum_map, decode_wav_stereo,
+decode_wav_channels, factory_presets, atomic_file}`; message: "DAW model types
+are not plugin API — add the utility to the list or move it down". Add the
+sentence to ARCHITECTURE.md's layering bullets. Exercise once (add `use
+resonance_common::Take;` to a plugin → fails → revert), note it in the doc
+comment like the existing tests do. Conflict: none. Behaviour: none.
+
+**A7-2. `flush_denormals` → `resonance-dsp` (NOW, ~30 lines).**
+`resonance-common/src/denormal.rs` → `resonance-dsp/src/denormal.rs` (+ `pub
+use` at the dsp root); update 12 plugin sites + `resonance-audio` (1) to
+`resonance_dsp::flush_denormals`; delete the module from common (no shim —
+common must keep zero internal deps per the arch table). Then the 8 plugins
+with no remaining `resonance_common::` import drop the manifest line (the SDK
+still pulls common transitively; that is fine and A7-1 guards the source
+level). Conflict: 1 line in each of 11 plugin files — low; the M-batches on
+plugins are merged. Behaviour: none (same intrinsics).
+
+**A7-3. Feature-gate the model inside common (EPIC, or NOW if a quiet slot
+appears; ~60 lines).** `[features] default = ["model", "decode"]`; `model`
+gates the nine model modules (+ optional `dirs`, `time`); `decode` gates `wav`
++ `audio_probe` (+ optional `symphonia`); `serde_json` stays unconditional
+(`registry`/`factory_presets` need it). `resonance-plugin` and the plugins:
+`default-features = false` (`features = ["decode"]` for drums, ir). Add to
+A7-1: a plugin's `resonance-common` dep must set `default-features = false`.
+This gives the type-level guarantee (a plugin *cannot* name `Take`) for 60
+lines instead of a crate split, and makes a standalone `-p <plugin>` build
+lean. Conflict: low (common: 4 commits since Sep). Behaviour: none.
+
+**A7-4. `resonance-model` crate split (DEFER; probably never).** 2 347 LOC
+moved, 103 importing files in audio/app (or a shim release), a new arch row,
+ARCHITECTURE.md. A7-3 delivers the same guarantees; only do this if a second
+model consumer appears (headless CLI, a `resonance-control` that wants the
+types).
+
+**Verdict:** NOW = A7-1 + A7-2. Recommend replacing the finding's crate split
+with A7-3 (feature gates) as a single ba todo.
+
+---
+
+## ARCH-09 — undo snapshots deep-copy the whole project per edit
+
+### Evidence, re-verified (valid; one thing got *worse* since the review)
+
+`snapshot_for_undo` (`undo/snapshot.rs:178-237`) = `build_project_file(self)`
++ a `Vec<MidiNote>` clone per MIDI clip + **7 remaining `UndoExtras` fields**
+(H2 removed `clip_fade_gain`, `compose_arrangements` and persisted
+`chord_track`; left: `compose_derived_clips`, `compose_next_derived_clip_id`,
+`vocal_clip_lyrics`, `automation_lanes`, `reference`, `track_freeze`,
+`external_instruments` + `_devices`) + a `Vec<u8>` clone per live plugin blob
+from `plugin_state_cache`. **New since the review:** STATE-07's no-op detection
+(`undo/mod.rs:158` → `same_state`, `snapshot.rs:101-140`) takes a *second* full
+snapshot at every gesture commit and compares note vectors element-wise — every
+gesture now costs 2× O(project). Coalescing (`record_coalesced`) and the control
+compound (`with_compound_undo`, one snapshot per `notes.insert_many`) already
+bound the burst cases the finding worried about.
+
+`DEFAULT_HISTORY_CAPACITY = 200` still lives in `resonance-audio/src/limits.rs:67`,
+re-exported by `resonance-audio/src/lib.rs:53` and `resonance-app/src/undo/mod.rs:22`,
+consumed only in `undo/history.rs:9,68` (no test imports it from audio).
+`MidiClipState.notes: Vec<MidiNote>` (`state/clips.rs:169`) — ~135 read sites,
+**~23 mutation sites in 13 files** (`engine_events/midi.rs` 8, `compose/regenerate.rs` 2,
+`project/io.rs` 2, `demo.rs` 2, 9 singles). `LoadedProject.midi_notes:
+HashMap<ClipId, Vec<MidiNote>>` (`project/model.rs:894`) used in 8 files;
+`plugin_state_cache: HashMap<_, Vec<u8>>` 17 refs / 13 files;
+`LoadedProject.plugin_states` 4 refs; `SaveCollector.plugin_states: Vec<(_, Vec<u8>)>`.
+
+### Steps
+
+**A9-1. Move `DEFAULT_HISTORY_CAPACITY` into the app (NOW, ~10 lines).**
+`resonance-app/src/undo/history.rs` gets `pub const DEFAULT_HISTORY_CAPACITY:
+usize = 200;`; delete `limits.rs:67`, `resonance-audio/src/lib.rs:53` (and the
+comment at `lib.rs:6`); `undo/mod.rs:22` re-exports from `history`. Test:
+`cargo check -p resonance-app --tests`; `tests/timeline/undo_history.rs` pins
+capacity behaviour. Conflict: M12 adds 10 lines to `undo/mod.rs` (additive,
+different region); H3 will edit audio `lib.rs` (one-line removal, trivially
+rebased either way). Behaviour: none.
+
+**A9-2. Plugin blobs as `Arc<[u8]>` (NOW, ~40 one-liners).**
+`plugin_state_cache: HashMap<PluginInstanceId, Arc<[u8]>>` (`lib.rs`),
+`LoadedProject.plugin_states` likewise, `SaveCollector.plugin_states` converts
+once at the `PluginStatesSaved` echo (`.into()`), `snapshot_for_undo`'s
+`collect` clones become refcount bumps, `same_state` compares
+`Arc::ptr_eq(a, b) || a == b`. Files: `undo/snapshot.rs` (5),
+`engine_events/plugins.rs` (5), `update/plugin_replace.rs` (2),
+`update/project_io/{serialize,instantiate,mod}.rs`, `replay/entity.rs` (2),
+`replay_diff.rs`, `state/tracks.rs`, `test_support/mixer_plugins.rs`,
+`engine_events/{presets,project_io}.rs`, `project/model.rs`, `project/io.rs`.
+Test: extend `tests/timeline/undo_history.rs` — load a plugin with a 1 MB fake
+blob (the `test_support/mixer_plugins.rs` fakes), record 50 note edits, assert
+`Arc::ptr_eq` between consecutive snapshots' blobs (deterministic, no memory
+measurement). Conflict: low — `engine_events/project_io.rs` and `project/io.rs`
+are in M12 (one line each; land after M12 or accept a trivial rebase).
+Behaviour: none. This is the part that matters for NAM/IR/wavetable blobs
+(KB–MB each × 200 entries).
+
+**A9-3. Notes as `Arc<Vec<MidiNote>>` (EPIC step).**
+`MidiClipState.notes` and `LoadedProject.midi_notes` values become
+`Arc<Vec<MidiNote>>`; the ~23 mutation sites use `Arc::make_mut`; the ~135
+reads compile unchanged through `Deref`; `same_state` short-circuits on
+`Arc::ptr_eq` before `midi_notes_equal`. Done-when test: snapshot a 2 000-note
+project 200 times after editing one clip and assert every *other* clip's notes
+are `ptr_eq` across snapshots. Diff ~80 lines / ~20 files. Conflict: medium —
+`engine_events/midi.rs` and the compose/vocal paths are app-vocal territory.
+Behaviour: none.
+
+**A9-4. Delta snapshots from the `Reconcile` diff (EPIC, only after ARCH-01
+step 3).** Unchanged from the finding: not before, two diff engines would be
+worse than one deep copy.
+
+**Verdict:** NOW = A9-1 + A9-2. A9-3 goes into the "state tax" epic next to
+the extras removal (A1-2 (3)-(8)), because once `UndoExtras` is gone
+`same_state` is `ProjectFile == ProjectFile` + Arc pointer checks and the
+second snapshot becomes cheap for free.
+
+---
+
+## ARCH-01 / ARCH-02 — remaining steps (from `arch-migration-plan.md`, post-H1/H2)
+
+ARCH-01: A1-2 (3) `external_instruments` → read `ProjectTrack.external_instrument`;
+(4) `vocal_clip_lyrics` (normalise padding first — H2 note); (5)
+`automation_lanes`; (6) `track_freeze` (keep UPD-05 baselines — FU-H2b); (7)
+`reference` (split content vs monitor state); (8) `compose_derived_clips` +
+counter (call `rebuild_derived_clips` on the fast path — FU-H2a); (9b) delete
+`UndoExtras`, `pending_undo_extras`, `finalize_undo_restore`; then the
+`Reconcile` trait (epic). A1-3 remainder = A6-1 above.
+ARCH-02: A2-4 `midi_clips` → `RenderGraph` via `retire::publish` (H1's
+primitive); A2-5 `busses`+`master`; A2-6 `tracks`; A2-7 `plugins`; A2-8 `clips`
+(+ internal engine-thread message for the load/freeze/analysis workers); A2-9
+the 500-clip hammer test. Per H1's correction the offline-path dropout is moot
+since MIX-02's gate; **read `SharedState::lock_misses` from a real session
+before scheduling A2-4** — if the per-map counters stay at zero under normal
+editing, the whole series is engine-thread latency hygiene, not a dropout fix,
+and belongs behind everything below.
+
+---
+
+## Next 10 architecture steps, in priority order (across all ARCH items)
+
+| # | Step | Files | Size | Conflict | Why here |
+|---|---|---|---|---|---|
+| 1 | **A6-1** move 14 zero-churn message enums beside their handlers (2 commits) | `message.rs`, 14 `update/*.rs` | ~900 lines moved, 14 added | low; none in M12/H3 | halves the merge magnet; pure move; enables A6-4 |
+| 2 | **A9-1 + A9-2** history capacity into the app; plugin blobs `Arc<[u8]>` | `undo/{history,mod,snapshot}.rs`, audio `limits.rs`/`lib.rs`, ~12 blob sites | ~50 lines | low (2 one-line touches in M12 files) | the one ARCH-09 cost that bites today (stateful plugins × 200) |
+| 3 | **A7-1 + A7-2** plugin allow-list invariant; `flush_denormals` → dsp; drop 8 manifest deps | `tools/arch-invariants`, `resonance-dsp`, 11 plugin files | ~70 lines | low | closes the layering hole for good; 8 plugins stop naming common |
+| 4 | **A5-1 (audio/common/plugin/wayland) + A5-2 + invariant** tracing facade, RT print off the callback | `Cargo.toml`, `main.rs`, ~50 sites, `mixer/callback/mod.rs`, `SharedState` | ~150 lines | low now (skip `engine/clips.rs`/`tracks.rs` until M12) | `RUST_LOG` for the first time; the RT rule becomes a test |
+| 5 | **A4-1 + A4-2 (+A4-3)** id-collision invariant test; `state/ids.rs` one table; FU-A1c | `tests/io/id_allocation.rs`, `state/ids.rs`, 4 state files, `lib.rs` seeds | ~230 lines | low (0 commits since Sep on those files) | pins the partition before anyone moves a space; fixes an open FU |
+| 6 | **A1-2 (3)(4)(5)** three more extras read from `ProjectFile` | `undo/snapshot.rs`, `replay_diff.rs`, `replay/entity.rs` | 3 commits, ~-70/+40 | low-medium (`replay_diff.rs` not in M12) | fixed-point test already guards; each shrinks `same_state` |
+| 7 | **A5-1 (app crate)** the 49 app `eprintln!` sites | `resonance-app/src/**` | ~60 lines | **after M12** (`update/project_io/`) | completes the facade; invariant flips to all four crates |
+| 8 | **A6-2 (+Banners)** `PluginCatalog`, `MidiDevices`, `Banners` sub-states | `lib.rs`, ~145 refs | ~170 one-liners | **after M12** (`engine_events/`) | 13 fields off `Resonance`; mechanical |
+| 9 | **A6-4** exhaustive `undo_action` for the 12 `Skip` catch-all enums | `classify.rs`, the moved enums' files | ~-250/+300 | **after M12 + #1** | new variants can no longer be silently non-undoable |
+| 10 | **A2-4** `midi_clips` onto `RenderGraph` (first map) | `engine/mod.rs`, `midi/{clips,live}.rs`, `play.rs`, `render_core.rs`, harnesses, ~27 tests | ~400 lines | medium; **after H3** (touches audio tests) and only if `lock_misses` shows misses | proves the ARCH-02 pattern end to end |
+
+After these: A1-2 (6)(7)(8)(9b) + `Reconcile` (epic "state tax"), A9-3 Arc
+notes (same epic), A6-3 remaining sub-states (same epic), A7-3 feature gates
+(one todo), A5-3/A5-4 taxonomy (epic "engine error taxonomy"), A4-4 (epic
+"app-owned entity ids", 5 todos + 1 design todo), A2-5…A2-9 (epic "engine
+render-graph publishing").
+
+### Epics to file in ba
+
+1. **state tax: one declarative project model** — A1-2 (3)-(9b), `Reconcile`,
+   A6-3, A6-4 remainder, A9-3, A9-4. (Absorbs #1059 after re-scoping.)
+2. **engine render-graph publishing** — A2-4…A2-9, gated on counter evidence.
+3. **engine error taxonomy** — A5-3, A5-4 (audio), A5-4 (common).
+4. **app-owned entity ids** — A4-4 (1)-(5) + the recording/import design todo.
+5. Single todo, not an epic: **resonance-common feature gates** (A7-3).
