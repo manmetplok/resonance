@@ -192,6 +192,12 @@ pub struct ProjectFile {
     /// before.
     #[serde(default)]
     pub take_groups: Vec<resonance_common::TakeGroup>,
+    /// The global chord track (epic #33): chord regions and key changes
+    /// over the song, in samples. Empty on legacy projects — every project
+    /// saved before this field existed, whose chord track was lost on
+    /// reload (ARCH-01 A1-2 9a).
+    #[serde(default)]
+    pub chord_track: ProjectChordTrack,
 }
 
 /// An empty project at the current format version with neutral
@@ -240,6 +246,7 @@ impl Default for ProjectFile {
             automation_lanes: Vec::new(),
             performance: ProjectPerformance::default(),
             take_groups: Vec::new(),
+            chord_track: ProjectChordTrack::default(),
         }
     }
 }
@@ -906,4 +913,96 @@ pub struct SaveCollector {
     /// [`AUTOSAVE_JSON`], leave `dirty` set, skip the recents list and
     /// versioned backups, and update `last_autosave_at` on completion.
     pub autosave: bool,
+}
+
+/// Persisted form of [`crate::chord_track::ChordTrack`]: the chord regions
+/// and key changes, in their sorted order. A plain serde mirror so the
+/// runtime type stays free of serialization concerns (matching the
+/// `ProjectSectionChord` ↔ `ChordState` split). The track's transient
+/// `last_error` (a parse-failure banner) is deliberately not persisted.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProjectChordTrack {
+    #[serde(default)]
+    pub regions: Vec<ProjectChordRegion>,
+    #[serde(default)]
+    pub key_changes: Vec<ProjectKeyChange>,
+}
+
+/// Persisted form of [`crate::chord_track::ChordRegion`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectChordRegion {
+    pub id: u64,
+    pub chord: resonance_music_theory::Chord,
+    pub start_sample: u64,
+    pub end_sample: u64,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+/// Persisted form of [`crate::chord_track::KeyChange`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectKeyChange {
+    pub id: u64,
+    pub start_sample: u64,
+    pub scale: resonance_music_theory::Scale,
+}
+
+impl From<&crate::chord_track::ChordTrack> for ProjectChordTrack {
+    fn from(track: &crate::chord_track::ChordTrack) -> Self {
+        Self {
+            regions: track
+                .regions
+                .iter()
+                .map(|r| ProjectChordRegion {
+                    id: r.id,
+                    chord: r.chord,
+                    start_sample: r.start_sample,
+                    end_sample: r.end_sample,
+                    pinned: r.pinned,
+                })
+                .collect(),
+            key_changes: track
+                .key_changes
+                .iter()
+                .map(|k| ProjectKeyChange {
+                    id: k.id,
+                    start_sample: k.start_sample,
+                    scale: k.scale,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl ProjectChordTrack {
+    /// The runtime chord track this block describes, re-sorted so a
+    /// hand-edited file cannot break the model's ordering invariant.
+    /// `last_error` starts clear: it is view feedback, not project state.
+    pub fn to_chord_track(&self) -> crate::chord_track::ChordTrack {
+        let mut track = crate::chord_track::ChordTrack {
+            regions: self
+                .regions
+                .iter()
+                .map(|r| crate::chord_track::ChordRegion {
+                    id: r.id,
+                    chord: r.chord,
+                    start_sample: r.start_sample,
+                    end_sample: r.end_sample,
+                    pinned: r.pinned,
+                })
+                .collect(),
+            key_changes: self
+                .key_changes
+                .iter()
+                .map(|k| crate::chord_track::KeyChange {
+                    id: k.id,
+                    start_sample: k.start_sample,
+                    scale: k.scale,
+                })
+                .collect(),
+            last_error: None,
+        };
+        track.resort();
+        track
+    }
 }

@@ -7,18 +7,17 @@
 //! `SetClipFade` / `SetClipGain`, with no engine read-getters involved.
 //!
 //! Undo is covered two ways: the message classifier (`classify`) assigns
-//! the right `Begin`/`Commit`/`Record` action to each message, and the
-//! `UndoExtras` snapshot/restore round-trip returns a clip's fade/gain to
-//! its pre-edit values while re-syncing the engine.
-
-use std::collections::HashMap;
+//! the right `Begin`/`Commit`/`Record` action to each message, and an undo
+//! snapshot — whose `ProjectFile` carries each clip's fade/gain — restores
+//! a clip's pre-edit values through both restore paths while re-syncing
+//! the engine.
 
 use resonance_app::message::{ClipMessage, Message};
 use resonance_app::state::ClipState;
-use resonance_app::undo::{classify, ClipFadeGain, UndoAction, UndoExtras};
+use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
 use resonance_audio::__test_support::Receiver;
-use resonance_audio::types::{AudioCommand, FadeCurve};
+use resonance_audio::types::{AudioCommand, AudioEvent, FadeCurve, TrackType};
 
 const SR: u32 = 48_000;
 const ZOOM: f32 = 100.0; // px per second (default)
@@ -463,11 +462,12 @@ fn snapshot_captures_fade_gain_and_restore_round_trips() {
 
     let snapshot = app.test_snapshot_for_undo();
     let captured = snapshot
-        .extras
-        .clip_fade_gain
-        .get(&7)
-        .copied()
-        .expect("snapshot captured clip 7 fade/gain");
+        .project
+        .file
+        .clips
+        .iter()
+        .find(|c| c.id == 7)
+        .expect("snapshot's project file carries clip 7");
     assert_eq!(captured.fade_in_frames, 24_000);
     assert!((captured.gain_db + 6.0).abs() < 1e-4);
 
@@ -477,14 +477,19 @@ fn snapshot_captures_fade_gain_and_restore_round_trips() {
     assert_eq!(clip_of(&app, 7).gain_db, 0.0);
     let _ = drain(&rx);
 
-    // ...and restore the captured extras: the mirror returns to the
-    // snapshot's values and the engine is re-synced via SetClipFade/Gain.
-    app.test_apply_clip_fade_gain_restore(&snapshot.extras.clip_fade_gain);
+    // ...and restore the snapshot. The shape is unchanged, so this is the
+    // diff replay: the mirror returns to the snapshot's values and the
+    // engine is re-synced via SetClipFade/Gain.
+    app.test_begin_restore_from_snapshot(snapshot);
     let c = clip_of(&app, 7);
     assert_eq!(c.fade_in_frames, 24_000);
     assert!((c.gain_db + 6.0).abs() < 1e-4);
 
     let cmds = drain(&rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a scalar-only restore takes the diff replay"
+    );
     assert!(cmds.iter().any(|c| matches!(
         c,
         AudioCommand::SetClipFade {
@@ -502,48 +507,66 @@ fn restore_skips_clips_whose_fade_gain_is_unchanged() {
     let (mut app, rx) = app_with_clip();
     let _ = drain(&rx);
 
-    // The clip is at defaults; a restore map that matches the current
-    // state must not emit any engine command.
-    let mut map: HashMap<u64, ClipFadeGain> = HashMap::new();
-    map.insert(
-        7,
-        ClipFadeGain {
-            fade_in_frames: 0,
-            fade_in_curve: FadeCurve::default(),
-            fade_out_frames: 0,
-            fade_out_curve: FadeCurve::default(),
-            gain_db: 0.0,
-        },
-    );
-    app.test_apply_clip_fade_gain_restore(&map);
+    // The clip is at defaults; restoring a snapshot that matches the
+    // current state must not re-send its fade/gain to the engine.
+    let snapshot = app.test_snapshot_for_undo();
+    app.test_begin_restore_from_snapshot(snapshot);
+    let cmds = drain(&rx);
     assert!(
-        drain(&rx).is_empty(),
-        "no-op restore should not re-send commands"
+        !cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::SetClipFade { .. } | AudioCommand::SetClipGain { .. }
+        )),
+        "no-op restore should not re-send fade/gain, got {cmds:?}"
     );
 }
 
 #[test]
-fn restore_into_finalize_undo_path_reapplies_fade_gain() {
-    // The full slow-path restore (`finalize_undo_restore`) also re-applies
-    // clip fade/gain from the extras.
+fn restore_into_full_replay_path_reapplies_fade_gain() {
+    // The full clear-and-replay restore also brings fade/gain back, from
+    // the snapshot's `ProjectFile` (`replay_audio_clips`), and it is the
+    // path a structural change — here, an added track — forces.
     let (mut app, rx) = app_with_clip();
+    app.test_dispatch(Message::Clip(ClipMessage::SetClipFadeInMs {
+        clip_id: 7,
+        ms: 250.0,
+    }));
+    app.test_dispatch(Message::Clip(ClipMessage::SetClipFadeInCurve {
+        clip_id: 7,
+        curve: FadeCurve::Exp,
+    }));
+    app.test_dispatch(Message::Clip(ClipMessage::SetClipGainDb {
+        clip_id: 7,
+        gain_db: 2.0,
+    }));
+    let snapshot = app.test_snapshot_for_undo();
+
+    app.test_dispatch(Message::Clip(ClipMessage::ResetClipFadeGain { clip_id: 7 }));
+    app.test_add_track(42, TrackType::Audio);
     let _ = drain(&rx);
 
-    let mut extras = UndoExtras::default();
-    extras.clip_fade_gain.insert(
-        7,
-        ClipFadeGain {
-            fade_in_frames: 12_000,
-            fade_in_curve: FadeCurve::Exp,
-            fade_out_frames: 0,
-            fade_out_curve: FadeCurve::default(),
-            gain_db: 2.0,
-        },
+    app.test_begin_restore_from_snapshot(snapshot);
+    assert!(
+        drain(&rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a structural change forces the full replay"
     );
-    app.test_finalize_undo_restore(extras);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
 
     let c = clip_of(&app, 7);
     assert_eq!(c.fade_in_frames, 12_000);
     assert_eq!(c.fade_in_curve, FadeCurve::Exp);
     assert!((c.gain_db - 2.0).abs() < 1e-4);
+    let cmds = drain(&rx);
+    assert!(cmds.iter().any(|c| matches!(
+        c,
+        AudioCommand::SetClipFade {
+            clip_id: 7,
+            fade_in_frames: 12_000,
+            fade_in_curve: FadeCurve::Exp,
+            ..
+        }
+    )));
+    assert!(cmds.iter().any(
+        |c| matches!(c, AudioCommand::SetClipGain { clip_id: 7, gain_db } if (*gain_db - 2.0).abs() < 1e-4)
+    ));
 }

@@ -133,11 +133,19 @@ impl Resonance {
     }
 
     /// Test-only: capture an undo snapshot of the current declarative
-    /// state. Used to prove the chord track survives the snapshot's
-    /// `extras` round-trip without driving the engine.
+    /// state, so a test can inspect what a restore would bring back or
+    /// hand it to [`Self::test_begin_restore_from_snapshot`].
     #[doc(hidden)]
     pub fn test_snapshot_for_undo(&self) -> crate::undo::UndoSnapshot {
         self.snapshot_for_undo()
+    }
+
+    /// Test-only: whether two snapshots describe the same undoable state
+    /// (project file, notes and extras) — the fixed-point check the
+    /// snapshot/restore invariant test runs after each restore path.
+    #[doc(hidden)]
+    pub fn test_snapshot_same_state(a: &crate::undo::UndoSnapshot, b: &crate::undo::UndoSnapshot) -> bool {
+        a.same_state(b)
     }
 
     /// Test-only: borrow the undo history, so the import-placement tests
@@ -164,13 +172,6 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_begin_restore_from_snapshot(&mut self, snapshot: crate::undo::UndoSnapshot) {
         self.begin_restore_from_snapshot(snapshot);
-    }
-
-    /// Test-only: apply the runtime-only undo extras, exercising the
-    /// slow-path restore of chord-track state without an engine replay.
-    #[doc(hidden)]
-    pub fn test_finalize_undo_restore(&mut self, extras: crate::undo::UndoExtras) {
-        self.finalize_undo_restore(extras);
     }
 
     /// Test-only: route a message through the *full* `update()` entry,

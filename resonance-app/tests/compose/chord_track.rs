@@ -1,6 +1,6 @@
 //! Unit coverage for the global chord-track data model (epic #33,
 //! doc #168, todo #439): sort invariants on insert, region/key lookups,
-//! and the undo snapshot round-trip via `UndoExtras`.
+//! and the undo snapshot round-trip through the snapshot's `ProjectFile`.
 
 use resonance_app::chord_track::{ChordRegion, ChordTrack, KeyChange};
 use resonance_app::{Resonance};
@@ -141,12 +141,13 @@ fn remove_key_change_drops_it() {
 
 // ---------------- Undo round-trip ----------------
 
-/// The chord track is declarative app state captured in the undo
-/// snapshot's `extras` (it isn't part of `ProjectFile` yet). A snapshot
-/// taken before an edit must restore the pre-edit track wholesale.
+/// The chord track rides in the undo snapshot's `ProjectFile`
+/// (`chord_track`). A snapshot taken before an edit must restore the
+/// pre-edit track wholesale.
 #[test]
 fn chord_track_survives_undo_snapshot_round_trip() {
     let (mut app, _task) = Resonance::new_for_test_on(resonance_app::state::ViewMode::Arrange);
+    app.test_set_active_project(true);
 
     // Stage an initial progression + key.
     {
@@ -158,9 +159,9 @@ fn chord_track_survives_undo_snapshot_round_trip() {
     // Capture the pre-edit state (what an undo would restore to).
     let snapshot = app.test_snapshot_for_undo();
     assert_eq!(
-        snapshot.extras.chord_track.regions.len(),
+        snapshot.project.file.chord_track.regions.len(),
         1,
-        "snapshot must carry the chord track in its extras"
+        "snapshot must carry the chord track in its project file"
     );
 
     // Mutate further — add a region the undo should discard.
@@ -168,8 +169,9 @@ fn chord_track_survives_undo_snapshot_round_trip() {
         .insert_region(region(3, 96_000, 192_000));
     assert_eq!(app.test_chord_track().regions.len(), 2);
 
-    // Restore via the extras-apply path (slow-path undo).
-    app.test_finalize_undo_restore(snapshot.extras);
+    // Restore the snapshot. Chord edits never change the project shape,
+    // so this is the diff replay — the path every chord undo takes.
+    app.test_begin_restore_from_snapshot(snapshot);
 
     let restored = app.test_chord_track();
     assert_eq!(

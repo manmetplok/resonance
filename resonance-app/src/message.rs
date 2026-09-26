@@ -2,7 +2,10 @@
 ///
 /// Messages are grouped into per-concern sub-enums that mirror the
 /// sub-state layout of [`crate::Resonance`]. Each sub-enum is handled by a
-/// dedicated arm of the top-level match in `update.rs`.
+/// dedicated arm of the top-level match in `update.rs`. A sub-enum may be
+/// declared beside its handler (`update/<domain>.rs`) and re-exported
+/// here, so `crate::message::<Domain>Message` always resolves; the rest
+/// move over one domain at a time (ARCH-01 A1-3 / ARCH-06).
 use crate::compose::ComposeMessage;
 use crate::control_socket::ControlMessage;
 use crate::presets::TrackPreset;
@@ -10,7 +13,7 @@ use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
     BrowserTab, ClipEdge, DraggedAsset, DropResolution, ExportMode, FolderScan, GridChoice,
-    GrooveSelection, LoopDragTarget, MembershipDragSubject, MembershipDropTarget,
+    GrooveSelection, MembershipDragSubject, MembershipDropTarget,
     MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, SelectedGlobalEvent,
     TempoAlignment, TempoChoice, ViewMode,
 };
@@ -23,6 +26,10 @@ use resonance_audio::types::{
 use resonance_audio::PoolImportOutcome;
 use resonance_common::{AutomationTarget, CurveKind, TakeGroupId, TakeId, TimelineRange};
 use resonance_music_theory::Scale;
+
+pub use crate::update::bus::BusMessage;
+pub use crate::update::master::MasterMessage;
+pub use crate::update::transport::TransportMessage;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -149,39 +156,6 @@ pub enum GroupMessage {
     /// Abandon the active membership drag with no change (released off any
     /// target, or `Esc`).
     CancelMembershipDrag,
-}
-
-#[derive(Debug, Clone)]
-pub enum TransportMessage {
-    Play,
-    Record,
-    Pause,
-    Stop,
-    SkipBack,
-    SkipForward,
-    /// Move the playhead to the given sample position (ruler click, etc.).
-    SeekToSample(u64),
-    SetBpmText(String),
-    CommitBpm,
-    ToggleMetronome,
-    CycleTimeSignature,
-    /// Set the time signature directly (control endpoint, doc #265 —
-    /// the GUI cycles via [`Self::CycleTimeSignature`]). Undoable like
-    /// the cycle path.
-    SetTimeSignature { numerator: u8, denominator: u8 },
-    ToggleLoop,
-    /// Set the loop range directly in samples (control endpoint, doc
-    /// #265 — the GUI drags via the loop-drag gesture messages).
-    /// `enabled: None` leaves the loop toggle unchanged. Undoable like
-    /// [`Self::ToggleLoop`].
-    SetLoopRange {
-        loop_in: u64,
-        loop_out: u64,
-        enabled: Option<bool>,
-    },
-    StartLoopDrag(LoopDragTarget),
-    UpdateLoopDrag(f32),
-    EndLoopDrag,
 }
 
 /// Arrangement-marker actions, routed like [`TransportMessage`] and
@@ -493,48 +467,6 @@ pub enum ExternalInstrumentMessage {
     RescanDefinitions,
 }
 
-#[derive(Debug, Clone)]
-pub enum BusMessage {
-    AddBus,
-    /// Add a bus whose id and name the *app* chose up front, so the
-    /// caller can use the id without waiting for the engine's `BusAdded`
-    /// echo. Same pattern as
-    /// [`MixerMessage::CreateReturnFromSend`](crate::message::MixerMessage::CreateReturnFromSend)
-    /// and the control API's `track.add`; the engine bumps its own
-    /// allocator past any id it receives as a hint.
-    AddBusWithId { id: BusId, name: String },
-    RemoveBus(BusId),
-    SetBusVolume(BusId, f32),
-    SetBusPan(BusId, f32),
-    ToggleBusMute(BusId),
-    ToggleBusFxBypass(BusId),
-    AddPluginToBus(BusId, ScannedPlugin),
-    /// Add a plugin to a bus whose instance id the *app* chose up front,
-    /// mirroring a placeholder slot into `BusState.plugins` immediately
-    /// so the caller can address it without waiting for the engine's
-    /// `BusPluginAdded` echo (ba doc #273, todo #1237). The bus twin of
-    /// [`PluginMessage::AddPluginToTrackWithId`](crate::message::PluginMessage::AddPluginToTrackWithId);
-    /// `engine_events::plugins::bus_added` is idempotent, so the echo
-    /// fills the placeholder's params in rather than pushing a
-    /// duplicate. The GUI never sends this.
-    AddPluginToBusWithId {
-        bus_id: BusId,
-        instance_id: PluginInstanceId,
-        plugin: ScannedPlugin,
-    },
-    RemovePluginFromBus(BusId, PluginInstanceId),
-    /// Reorder a bus's insert chain: move `instance_id` to `to_index`,
-    /// clamped to the last slot. Sends `AudioCommand::MovePluginInBus`
-    /// AND mirrors the new order into `BusState.plugins`, so a control
-    /// client reads its own write back in the same cycle; the engine's
-    /// `BusPluginMoved` echo replays the same move and is then a no-op.
-    MovePluginInBus {
-        bus_id: BusId,
-        instance_id: PluginInstanceId,
-        to_index: usize,
-    },
-}
-
 /// Aux-send + return-bus actions raised from the Mixer inspector's
 /// ROUTING group. Every variant maps to one engine command (or, for
 /// [`CreateReturnFromSend`](MixerMessage::CreateReturnFromSend), a short
@@ -607,34 +539,6 @@ pub enum FreezeMessage {
     /// Surfaces an error when the project has never been saved (no cache
     /// directory exists yet in that case).
     RevealFreezeCache,
-}
-
-#[derive(Debug, Clone)]
-pub enum MasterMessage {
-    ToggleMasterFxBypass,
-    AddPluginToMaster(ScannedPlugin),
-    /// Add a plugin to the master whose instance id the *app* chose up
-    /// front, mirroring a placeholder slot into `Resonance::master_plugins`
-    /// immediately so the caller can address it without waiting for the
-    /// engine's `MasterPluginAdded` echo. The master twin of
-    /// [`BusMessage::AddPluginToBusWithId`]; `engine_events::plugins::master_added`
-    /// is idempotent, so the echo fills the placeholder's params in
-    /// rather than pushing a duplicate. The GUI never sends this.
-    AddPluginToMasterWithId {
-        instance_id: PluginInstanceId,
-        plugin: ScannedPlugin,
-    },
-    RemovePluginFromMaster(PluginInstanceId),
-    /// Reorder the master insert chain: move `instance_id` to
-    /// `to_index`, clamped to the last slot. Sends
-    /// `AudioCommand::MovePluginInMaster` AND mirrors the new order into
-    /// `Resonance::master_plugins`, so a control client reads its own
-    /// write back in the same cycle; the engine's `MasterPluginMoved`
-    /// echo replays the same move and is then a no-op.
-    MovePluginInMaster {
-        instance_id: PluginInstanceId,
-        to_index: usize,
-    },
 }
 
 #[derive(Debug, Clone)]

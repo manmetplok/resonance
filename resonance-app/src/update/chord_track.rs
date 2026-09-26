@@ -4,8 +4,8 @@
 //! Each mutating message is classified `Record` in
 //! [`crate::undo::classify`], so every edit here pushes exactly one undo
 //! entry. The chord track itself lives in app state (see
-//! [`crate::chord_track`]) and is carried through undo via
-//! [`crate::undo::UndoExtras`]; nothing here touches the realtime engine.
+//! [`crate::chord_track`]) and rides through undo and save/load as
+//! `ProjectFile::chord_track`; nothing here touches the realtime engine.
 //!
 //! Positions arrive as raw sample positions and are snapped to the
 //! timeline grid with the same helper the clip-drag handlers use, so

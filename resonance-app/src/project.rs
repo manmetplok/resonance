@@ -42,7 +42,8 @@ pub use sections::{
 // Re-export model: format constants, all serde structs, and tag helpers.
 pub use model::{
     AUTOSAVE_JSON, PROJECT_FORMAT_VERSION, PROJECT_JSON,
-    LoadedProject, ProjectBus, ProjectClip, ProjectExternalInstrument, ProjectFile,
+    LoadedProject, ProjectBus, ProjectChordRegion, ProjectChordTrack, ProjectClip,
+    ProjectExternalInstrument, ProjectFile, ProjectKeyChange,
     ProjectMidiClip, ProjectMidiNote, ProjectPerformance, ProjectPlugin, ProjectPluginParam, ProjectPoolAsset,
     ProjectReference,
     ProjectReferenceMarker, ProjectReferenceSettings, ProjectSend, ProjectSidechainRoute,

@@ -1,9 +1,54 @@
 use iced::Task;
-use resonance_audio::types::{AudioCommand, TrackOutput};
+use resonance_audio::types::{AudioCommand, BusId, PluginInstanceId, ScannedPlugin, TrackOutput};
 
-use crate::message::{BusMessage, Message};
+use crate::message::Message;
 use crate::util::db_to_gain;
 use crate::Resonance;
+
+/// `Message::Bus` variants, handled by [`handle`] in this module.
+/// Declared here beside its handler and re-exported from `crate::message`
+/// (ARCH-01 A1-3).
+#[derive(Debug, Clone)]
+pub enum BusMessage {
+    AddBus,
+    /// Add a bus whose id and name the *app* chose up front, so the
+    /// caller can use the id without waiting for the engine's `BusAdded`
+    /// echo. Same pattern as
+    /// [`MixerMessage::CreateReturnFromSend`](crate::message::MixerMessage::CreateReturnFromSend)
+    /// and the control API's `track.add`; the engine bumps its own
+    /// allocator past any id it receives as a hint.
+    AddBusWithId { id: BusId, name: String },
+    RemoveBus(BusId),
+    SetBusVolume(BusId, f32),
+    SetBusPan(BusId, f32),
+    ToggleBusMute(BusId),
+    ToggleBusFxBypass(BusId),
+    AddPluginToBus(BusId, ScannedPlugin),
+    /// Add a plugin to a bus whose instance id the *app* chose up front,
+    /// mirroring a placeholder slot into `BusState.plugins` immediately
+    /// so the caller can address it without waiting for the engine's
+    /// `BusPluginAdded` echo (ba doc #273, todo #1237). The bus twin of
+    /// [`PluginMessage::AddPluginToTrackWithId`](crate::message::PluginMessage::AddPluginToTrackWithId);
+    /// `engine_events::plugins::bus_added` is idempotent, so the echo
+    /// fills the placeholder's params in rather than pushing a
+    /// duplicate. The GUI never sends this.
+    AddPluginToBusWithId {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        plugin: ScannedPlugin,
+    },
+    RemovePluginFromBus(BusId, PluginInstanceId),
+    /// Reorder a bus's insert chain: move `instance_id` to `to_index`,
+    /// clamped to the last slot. Sends `AudioCommand::MovePluginInBus`
+    /// AND mirrors the new order into `BusState.plugins`, so a control
+    /// client reads its own write back in the same cycle; the engine's
+    /// `BusPluginMoved` echo replays the same move and is then a no-op.
+    MovePluginInBus {
+        bus_id: BusId,
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
+}
 
 pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
     match m {

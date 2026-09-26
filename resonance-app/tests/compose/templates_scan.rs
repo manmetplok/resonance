@@ -54,6 +54,7 @@ fn make_minimal_project() -> ProjectFile {
         automation_lanes: Vec::new(),
         performance: Default::default(),
         take_groups: Vec::new(),
+        chord_track: Default::default(),
     }
 }
 

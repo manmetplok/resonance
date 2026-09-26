@@ -1,8 +1,39 @@
 use iced::Task;
-use resonance_audio::types::AudioCommand;
+use resonance_audio::types::{AudioCommand, PluginInstanceId, ScannedPlugin};
 
-use crate::message::{MasterMessage, Message};
+use crate::message::Message;
 use crate::Resonance;
+
+/// `Message::Master` variants, handled by [`handle`] in this module.
+/// Declared here beside its handler and re-exported from `crate::message`
+/// (ARCH-01 A1-3).
+#[derive(Debug, Clone)]
+pub enum MasterMessage {
+    ToggleMasterFxBypass,
+    AddPluginToMaster(ScannedPlugin),
+    /// Add a plugin to the master whose instance id the *app* chose up
+    /// front, mirroring a placeholder slot into `Resonance::master_plugins`
+    /// immediately so the caller can address it without waiting for the
+    /// engine's `MasterPluginAdded` echo. The master twin of
+    /// [`BusMessage::AddPluginToBusWithId`](crate::message::BusMessage::AddPluginToBusWithId); `engine_events::plugins::master_added`
+    /// is idempotent, so the echo fills the placeholder's params in
+    /// rather than pushing a duplicate. The GUI never sends this.
+    AddPluginToMasterWithId {
+        instance_id: PluginInstanceId,
+        plugin: ScannedPlugin,
+    },
+    RemovePluginFromMaster(PluginInstanceId),
+    /// Reorder the master insert chain: move `instance_id` to
+    /// `to_index`, clamped to the last slot. Sends
+    /// `AudioCommand::MovePluginInMaster` AND mirrors the new order into
+    /// `Resonance::master_plugins`, so a control client reads its own
+    /// write back in the same cycle; the engine's `MasterPluginMoved`
+    /// echo replays the same move and is then a no-op.
+    MovePluginInMaster {
+        instance_id: PluginInstanceId,
+        to_index: usize,
+    },
+}
 
 pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
     match m {

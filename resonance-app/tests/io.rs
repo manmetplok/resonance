@@ -23,6 +23,8 @@ mod autosave_write;
 mod browser_handlers;
 #[path = "io/chord_sheet_header.rs"]
 mod chord_sheet_header;
+#[path = "io/chord_track_persistence.rs"]
+mod chord_track_persistence;
 #[path = "io/engine_events_plugin_move_mirror.rs"]
 mod engine_events_plugin_move_mirror;
 #[path = "io/engine_events_pool_mirror.rs"]
@@ -75,6 +77,8 @@ mod replay_diff;
 mod save_keeps_dirty_for_late_edit;
 #[path = "io/take_lanes_persistence.rs"]
 mod take_lanes_persistence;
+#[path = "io/undo_snapshot_fixed_point.rs"]
+mod undo_snapshot_fixed_point;
 #[path = "io/user_definitions_rescan.rs"]
 mod user_definitions_rescan;
 #[path = "io/files_listing_fingerprint.rs"]

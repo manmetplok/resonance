@@ -2,9 +2,45 @@ use iced::Task;
 use resonance_audio::types::AudioCommand;
 
 use super::tempo_reanchor::{musical_anchors, reanchor_to_tempo};
-use crate::message::{Message, TransportMessage};
+use crate::message::Message;
 use crate::state::{LoopDragTarget, ViewMode};
 use crate::Resonance;
+
+/// `Message::Transport` variants, handled by [`handle`] in this module.
+/// Declared here beside its handler and re-exported from `crate::message`
+/// (ARCH-01 A1-3).
+#[derive(Debug, Clone)]
+pub enum TransportMessage {
+    Play,
+    Record,
+    Pause,
+    Stop,
+    SkipBack,
+    SkipForward,
+    /// Move the playhead to the given sample position (ruler click, etc.).
+    SeekToSample(u64),
+    SetBpmText(String),
+    CommitBpm,
+    ToggleMetronome,
+    CycleTimeSignature,
+    /// Set the time signature directly (control endpoint, doc #265 —
+    /// the GUI cycles via [`Self::CycleTimeSignature`]). Undoable like
+    /// the cycle path.
+    SetTimeSignature { numerator: u8, denominator: u8 },
+    ToggleLoop,
+    /// Set the loop range directly in samples (control endpoint, doc
+    /// #265 — the GUI drags via the loop-drag gesture messages).
+    /// `enabled: None` leaves the loop toggle unchanged. Undoable like
+    /// [`Self::ToggleLoop`].
+    SetLoopRange {
+        loop_in: u64,
+        loop_out: u64,
+        enabled: Option<bool>,
+    },
+    StartLoopDrag(LoopDragTarget),
+    UpdateLoopDrag(f32),
+    EndLoopDrag,
+}
 
 pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
     match m {

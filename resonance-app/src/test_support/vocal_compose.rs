@@ -349,6 +349,14 @@ impl Resonance {
         crate::update::project_io::restore_quantize(self, file);
     }
 
+    /// Test-only: overwrite a MIDI clip's per-note lyric side-table, as
+    /// the vocal lane's slur/override edits do, so a persistence test can
+    /// seed lyrics without generating a vocal line.
+    #[doc(hidden)]
+    pub fn test_set_clip_lyrics(&mut self, clip_id: resonance_audio::types::ClipId, lyrics: Vec<String>) {
+        self.compose.vocal_audio.clip_lyrics.insert(clip_id, lyrics);
+    }
+
     /// Test-only: borrow the global chord track.
     #[doc(hidden)]
     pub fn test_chord_track(&self) -> &crate::chord_track::ChordTrack {
