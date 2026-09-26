@@ -22,7 +22,7 @@
 //! slot, at whatever path the catalog now has for it. This is the
 //! "I moved my plugin folder, then rescanned" case. The slot keeps its
 //! instance id, and therefore keeps the settings parked against that id:
-//! the opaque CLAP blob in `plugin_state_cache` and the parameter values
+//! the opaque CLAP blob in `plugin_mirror.state_cache` and the parameter values
 //! in `pending_plugin_param_overrides` (ba todo #1308). When the engine
 //! answers `PluginAdded` for that id, `engine_events::plugins` pushes
 //! both into the new instance and the plugin comes back exactly as it
@@ -166,7 +166,7 @@ fn swap(
     // than left to the `PluginRemoved` echo so that a save taken in the
     // same frame cannot still write a `plugin_*.bin` for a slot that no
     // longer exists (the echo repeats it, idempotently).
-    r.plugin_state_cache.remove(&old_id);
+    r.plugin_mirror.state_cache.remove(&old_id);
     r.presets.pending_plugin_param_overrides.remove(&old_id);
     if r.sidechain.clear_plugin(old_id) && !matches!(locator, PluginLocator::Track(_)) {
         // The engine drops a key route itself on `RemovePlugin`, but not

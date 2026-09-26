@@ -990,7 +990,7 @@ pub struct LoadedProject {
     /// MIDI notes per clip id, read from the sibling `.mid` files.
     pub midi_notes: HashMap<ClipId, Vec<MidiNote>>,
     /// Opaque plugin state blobs. Shared (`Arc`) with
-    /// `Resonance::plugin_state_cache` so undo snapshots — which are
+    /// `Resonance::plugin_mirror.state_cache` so undo snapshots — which are
     /// `LoadedProject`s — hold references, not copies (ARCH-09 A9-2).
     pub plugin_states: HashMap<PluginInstanceId, Arc<[u8]>>,
 }

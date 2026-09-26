@@ -26,7 +26,8 @@ pub(super) fn all_plugin_states_saved(
     // Refresh the undo cache first, then (if a save was in progress)
     // hand the states off to the SaveCollector.
     for (instance_id, data) in &states {
-        r.plugin_state_cache
+        r.plugin_mirror
+            .state_cache
             .insert(*instance_id, std::sync::Arc::from(data.as_slice()));
     }
     // If a preset save was pending, build and save it now: the blobs

@@ -1,8 +1,8 @@
 //! Plugin-instance side-index and the `with_plugin_mut` accessor that
 //! relies on it.
 //!
-//! `Resonance::plugin_index` maps every live `PluginInstanceId` to the
-//! container that currently owns it (a track, a bus, or master).
+//! `Resonance::plugin_mirror.index` maps every live `PluginInstanceId` to
+//! the container that currently owns it (a track, a bus, or master).
 //! `with_plugin_mut` uses the index to jump straight to the owning chain
 //! instead of scanning every track / bus / master plugin vector — the
 //! pre-index path was the dominant cost on projects with many plugins.
@@ -40,7 +40,7 @@ impl Resonance {
         instance_id: PluginInstanceId,
         f: impl FnOnce(&mut PluginSlotState) -> R,
     ) -> Option<R> {
-        let result = match self.plugin_index.get(&instance_id).copied() {
+        let result = match self.plugin_mirror.index.get(&instance_id).copied() {
             Some(PluginLocator::Track(track_id)) => self
                 .registry
                 .tracks
@@ -109,14 +109,14 @@ impl Resonance {
         instance_id: PluginInstanceId,
         locator: PluginLocator,
     ) {
-        self.plugin_index.insert(instance_id, locator);
+        self.plugin_mirror.index.insert(instance_id, locator);
     }
 
     /// Drop `instance_id`'s side-index entry. Call after removing a
     /// slot, or for every instance under a track/bus that is being
     /// removed wholesale.
     pub(crate) fn remove_plugin_index(&mut self, instance_id: PluginInstanceId) {
-        self.plugin_index.remove(&instance_id);
+        self.plugin_mirror.index.remove(&instance_id);
     }
 
     /// Allocate a plugin instance id, for EVERY plugin add — GUI, control
@@ -138,7 +138,7 @@ impl Resonance {
     /// the app, so there is no neighbouring range to stay clear of, and
     /// it starts at 1.
     ///
-    /// The in-use scan checks the chains themselves, not `plugin_index`
+    /// The in-use scan checks the chains themselves, not `plugin_mirror.index`
     /// (a cache — a stale one must never hand out a live id), so it is
     /// what actually keeps two calls from returning the same id even
     /// though the counter alone cannot: a project loaded with ids the
@@ -146,7 +146,7 @@ impl Resonance {
     /// for.
     pub(crate) fn allocate_plugin_id(&mut self) -> PluginInstanceId {
         let (registry, master) = (&self.registry, &self.master_plugins);
-        super::ids::allocate_unused(&mut self.next_plugin_id, |id| {
+        super::ids::allocate_unused(&mut self.plugin_mirror.next_id, |id| {
             registry
                 .tracks
                 .iter()
@@ -159,26 +159,29 @@ impl Resonance {
         })
     }
 
-    /// Recompute the entire `plugin_index` from `registry.tracks`,
+    /// Recompute the entire `plugin_mirror.index` from `registry.tracks`,
     /// `registry.busses`, and `master_plugins`. Used after a full
     /// project replay or demo seed where the state is repopulated
     /// wholesale.
     pub(crate) fn rebuild_plugin_index(&mut self) {
-        self.plugin_index.clear();
+        self.plugin_mirror.index.clear();
         for track in &self.registry.tracks {
             for p in &track.plugins {
-                self.plugin_index
+                self.plugin_mirror
+                    .index
                     .insert(p.instance_id, PluginLocator::Track(track.id));
             }
         }
         for bus in &self.registry.busses {
             for p in &bus.plugins {
-                self.plugin_index
+                self.plugin_mirror
+                    .index
                     .insert(p.instance_id, PluginLocator::Bus(bus.id));
             }
         }
         for p in &self.master_plugins {
-            self.plugin_index
+            self.plugin_mirror
+                .index
                 .insert(p.instance_id, PluginLocator::Master);
         }
     }

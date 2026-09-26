@@ -163,7 +163,7 @@ fn restore_after_recovery(
     instance_id: PluginInstanceId,
     reposition: Option<AudioCommand>,
 ) {
-    if let Some(data) = r.plugin_state_cache.get(&instance_id) {
+    if let Some(data) = r.plugin_mirror.state_cache.get(&instance_id) {
         let _ = r.engine.send(AudioCommand::LoadPluginState {
             instance_id,
             data: data.to_vec(),
@@ -306,7 +306,7 @@ pub(super) fn track_removed(
     if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
-    r.plugin_state_cache.remove(&instance_id);
+    r.plugin_mirror.state_cache.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
@@ -327,7 +327,7 @@ pub(super) fn track_removed(
 /// the plugin actually landed on *after* its own clamping, so this replays
 /// that index rather than re-deriving it. Mirroring matters beyond the
 /// display: this `Vec`'s order is what project serialization writes, so a
-/// reorder only survives save/load if it lands here too. `plugin_index` is
+/// reorder only survives save/load if it lands here too. `plugin_mirror.index` is
 /// keyed by track, not by slot, so it needs no update.
 pub(super) fn track_moved(
     r: &mut Resonance,
@@ -547,7 +547,7 @@ pub(super) fn state_saved(
         }
     }
 
-    r.plugin_state_cache.insert(instance_id, data.into());
+    r.plugin_mirror.state_cache.insert(instance_id, data.into());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -660,7 +660,7 @@ pub(super) fn bus_removed(
     if r.mixer.selected_plugin == Some(instance_id) {
         r.mixer.selected_plugin = None;
     }
-    r.plugin_state_cache.remove(&instance_id);
+    r.plugin_mirror.state_cache.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
@@ -754,7 +754,7 @@ pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     if r.mixer.selected_plugin == Some(instance_id) {
         r.mixer.selected_plugin = None;
     }
-    r.plugin_state_cache.remove(&instance_id);
+    r.plugin_mirror.state_cache.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.

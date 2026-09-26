@@ -385,7 +385,7 @@ pub struct PluginSlotState {
 ///
 /// The slot outlives the instance on purpose: it is what carries the
 /// missing plugin's preserved settings (its opaque blob in
-/// `plugin_state_cache`, its parameter values in
+/// `plugin_mirror.state_cache`, its parameter values in
 /// `pending_plugin_param_overrides` — ba todo #1308), and it is what
 /// holds the plugin's POSITION in the chain. Removing it is the one
 /// gesture that throws those away, so nothing does it automatically.

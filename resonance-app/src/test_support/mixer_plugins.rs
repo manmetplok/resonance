@@ -86,7 +86,7 @@ impl Resonance {
     /// invariant check on the plugin space.
     #[doc(hidden)]
     pub fn test_next_plugin_id(&self) -> resonance_audio::types::PluginInstanceId {
-        self.next_plugin_id
+        self.plugin_mirror.next_id
     }
 
     /// Test-only: read the mirrored aux-send graph. Driven from
@@ -309,7 +309,7 @@ impl Resonance {
         instance_id: resonance_audio::types::PluginInstanceId,
         data: Vec<u8>,
     ) {
-        self.plugin_state_cache.insert(instance_id, data.into());
+        self.plugin_mirror.state_cache.insert(instance_id, data.into());
     }
 
     /// Test-only: the chain as `(instance_id, clap_plugin_id, missing)`

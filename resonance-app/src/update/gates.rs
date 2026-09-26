@@ -419,14 +419,15 @@ impl crate::Resonance {
     }
 
     /// The track owning a plugin instance, by instance id. Prefers the
-    /// `plugin_index` side-table, falling back to a scan so a desynced
-    /// index degrades to O(n) instead of a miss (mirrors `with_plugin_mut`).
+    /// `plugin_mirror.index` side-table, falling back to a scan so a
+    /// desynced index degrades to O(n) instead of a miss (mirrors
+    /// `with_plugin_mut`).
     fn track_of_plugin(
         &self,
         instance_id: resonance_audio::types::PluginInstanceId,
     ) -> Option<resonance_audio::types::TrackId> {
         if let Some(crate::state::PluginLocator::Track(track_id)) =
-            self.plugin_index.get(&instance_id).copied()
+            self.plugin_mirror.index.get(&instance_id).copied()
         {
             return Some(track_id);
         }

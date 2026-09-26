@@ -360,7 +360,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.io.loading = true;
             r.io.pending_load = Some(loaded);
             r.undo.clear();
-            r.plugin_state_cache.clear();
+            r.plugin_mirror.state_cache.clear();
             // Both are re-seeded from the incoming file by `replay_plugins`.
             // Dropping them together keeps a previous project's blob or
             // parked parameter list from being written into this one under

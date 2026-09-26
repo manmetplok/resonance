@@ -265,7 +265,7 @@ pub(super) fn replay_master(
 /// generic `AudioEvent::Error` and no `PluginAdded`, so the placeholder
 /// stays in the chain with an empty `params` mirror and the engine has
 /// no instance to save state from. Everything this loop parks app-side —
-/// the opaque blob in `plugin_state_cache`, the parameter values in
+/// the opaque blob in `plugin_mirror.state_cache`, the parameter values in
 /// `pending_plugin_param_overrides` — is therefore the *only* surviving
 /// copy of that plugin's settings, and every project-writing path reads
 /// it back so a Save As on a machine without the plugin no longer
@@ -291,8 +291,7 @@ pub(super) fn replay_plugins(
             // its own fresh blob on the `PluginStateSaved` echo that
             // follows `PluginAdded`; a missing one never does, and this
             // copy is what the next save writes.
-            r.plugin_state_cache
-                .insert(pp.instance_id, std::sync::Arc::clone(state_data));
+            r.plugin_mirror.state_cache.insert(pp.instance_id, std::sync::Arc::clone(state_data));
         }
         // Park the saved parameter overrides until `PluginAdded` reports
         // this instance's param list. Applying them here would be undone:

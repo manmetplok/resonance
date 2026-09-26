@@ -714,7 +714,8 @@ fn push_plugin_states(
     for pp in plugins {
         if let Some(blob) = target.plugin_states.get(&pp.instance_id) {
             if r
-                .plugin_state_cache
+                .plugin_mirror
+                .state_cache
                 .get(&pp.instance_id)
                 .is_some_and(|live| std::sync::Arc::ptr_eq(live, blob))
             {
@@ -729,7 +730,8 @@ fn push_plugin_states(
             // the engine now holds. For an instance that isn't live (a
             // missing `.clap`) this is the only copy that exists, and it
             // has to survive undo/redo as well as save (ba doc #275, P5).
-            r.plugin_state_cache
+            r.plugin_mirror
+                .state_cache
                 .insert(pp.instance_id, std::sync::Arc::clone(blob));
         }
     }
