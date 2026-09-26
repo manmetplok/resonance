@@ -159,13 +159,12 @@ Say so when you do it — the phrase only realigns with the downbeat every 7 bar
 `${CLAUDE_SKILL_DIR}/references/grooves.md` has the realignment table for the
 common groupings.
 
-**One trap in both directions:** `arrangement_insert_bars` /
-`arrangement_remove_bars` do **not** move tempo or signature events (confirmed
-defect, ba todo #1388). Insert 8 bars before the bridge and the 7/8 event stays
-at its old bar while the bridge moves past it, leaving your odd-metre drums in
-4/4 and four bars of the previous section in 7/8. If you or anyone else inserts
-or removes bars, re-read `global_list_events` and put the events back where the
-music went.
+**Inserting or removing bars keeps the meter with the music:**
+`arrangement_insert_bars` / `arrangement_remove_bars` move tempo and signature
+events along with the clips and sections (the one at bar 1 stays put; an event
+inside a removed span is clamped onto the cut). Insert 8 bars before the bridge
+and its 7/8 event moves with it. Do not move the events again by hand — read the
+result's `signature_events_moved` or `global_list_events` if you want to check.
 
 ## 4. Velocity is the difference between a part and a grid
 
