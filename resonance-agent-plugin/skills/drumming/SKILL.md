@@ -100,8 +100,12 @@ on a non-empty clip it refuses with a summary until you pass `confirm: true`),
 and `mcp__resonance__notes_import_midi` when the part runs to thousands of
 notes.
 
-`start_beat` is **0-based and clip-relative**. Bars in the arrangement are
-1-based. Velocity is 1–127.
+`start_beat` is **0-based and clip-relative**, counted in **quarter notes**
+whatever the meter — a 6/8 bar spans 3.0 of them, a 7/8 bar 3.5. Bars in the
+arrangement are 1-based, and the `beat` of a timeline `{bar, beat}` position
+(seek, loop, clip_*, the playhead in song_summary) is 1-based in the
+**signature's** beat — an eighth in 6/8 — so a 6/8 bar there has beats 1–6.
+Velocity is 1–127.
 
 ## 3. Odd metre: find out what the meter actually is, then choose
 

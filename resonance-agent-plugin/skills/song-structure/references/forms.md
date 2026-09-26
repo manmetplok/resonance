@@ -112,7 +112,8 @@ At tempo *T* BPM in 4/4, one bar is `240 / T` seconds.
 
 A section starting at bar *S* has its bar *N* at `S + N - 1`. The next section
 starts at `S + length`. Both are 1-based; clip- and section-relative beats are
-0-based.
+0-based quarter notes. A timeline `{bar, beat}` counts `beat` from 1 in the
+signature's beat unit (an eighth in 6/8), the same way song views report it.
 
 **The table above assumes one tempo and one meter throughout.** The DAW has a
 tempo track as well as a signature track, and `song_summary` reports both
