@@ -447,8 +447,7 @@ pub(super) fn notes_edited(r: &mut Resonance, clip_id: ClipId, notes: Vec<MidiNo
 /// the undo snapshot, and shows up in the apply picker (#394/#395). The
 /// name is the one the user typed into the Extract field
 /// ([`MidiQuantizePanelState::pending_groove_name`](crate::state::MidiQuantizePanelState)),
-/// or an auto-numbered default when that was blank. The legacy unnamed
-/// list is kept in sync for any older readers.
+/// or an auto-numbered default when that was blank.
 pub(super) fn groove_extracted(r: &mut Resonance, template: GrooveTemplate) {
     let id = r.quantize.next_groove_id();
     let name = r
@@ -460,7 +459,6 @@ pub(super) fn groove_extracted(r: &mut Resonance, template: GrooveTemplate) {
     r.quantize.groove_library.push(crate::state::UserGroove {
         id,
         name,
-        template: template.clone(),
+        template,
     });
-    r.groove_library.push(template);
 }

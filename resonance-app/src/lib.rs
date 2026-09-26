@@ -130,11 +130,6 @@ pub struct Resonance {
     /// matching `MidiNote*` echo drains one entry and no-ops. Empty for
     /// GUI edits.
     pub(crate) control_pending_note_echoes: state::PendingNoteEchoes,
-    /// App-side groove library: templates extracted from clips via the
-    /// engine's `ExtractGrooveFromClip` command. Populated purely from
-    /// `GrooveExtracted` engine events (ba todo #390) so the Compose /
-    /// quantize UI can later offer them as "apply groove" presets.
-    pub(crate) groove_library: Vec<resonance_audio::quantize::GrooveTemplate>,
     /// Compose tab state: section definitions, placements, chord progressions.
     pub(crate) compose: compose::ComposeState,
     /// Parameter-automation lanes, mirrored one-way from engine events,
@@ -676,7 +671,6 @@ impl Resonance {
             clips: Vec::new(),
             midi_clips: Vec::new(),
             control_pending_note_echoes: state::PendingNoteEchoes::default(),
-            groove_library: Vec::new(),
             compose: compose::ComposeState::default(),
             automation: state::AutomationState::default(),
             quantize: state::QuantizeState::default(),

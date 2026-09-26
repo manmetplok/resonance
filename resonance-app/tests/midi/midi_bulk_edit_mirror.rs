@@ -100,7 +100,7 @@ fn notes_edited_can_grow_and_shrink_the_note_count() {
 #[test]
 fn groove_extracted_appends_to_the_groove_library() {
     let (mut app, _task) = Resonance::new_for_test();
-    assert!(app.test_groove_library().is_empty());
+    assert!(app.test_quantize().groove_library.is_empty());
 
     let template = GrooveTemplate {
         steps_per_bar: 4,
@@ -111,15 +111,15 @@ fn groove_extracted_appends_to_the_groove_library() {
         template: template.clone(),
     });
 
-    let lib = app.test_groove_library();
+    let lib = &app.test_quantize().groove_library;
     assert_eq!(lib.len(), 1);
-    assert_eq!(lib[0].steps_per_bar, 4);
-    assert_eq!(lib[0].timing_offsets_ticks, vec![0, 12, -6, 4]);
+    assert_eq!(lib[0].template.steps_per_bar, 4);
+    assert_eq!(lib[0].template.timing_offsets_ticks, vec![0, 12, -6, 4]);
 
     // A second extraction grows the library; templates accumulate.
     app.test_apply_engine_event(AudioEvent::GrooveExtracted {
         template: GrooveTemplate::identity(8),
     });
-    assert_eq!(app.test_groove_library().len(), 2);
-    assert_eq!(app.test_groove_library()[1].steps_per_bar, 8);
+    assert_eq!(app.test_quantize().groove_library.len(), 2);
+    assert_eq!(app.test_quantize().groove_library[1].template.steps_per_bar, 8);
 }
