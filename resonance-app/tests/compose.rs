@@ -17,6 +17,8 @@ mod common;
 mod builtin_templates;
 #[path = "compose/chord_box_layout.rs"]
 mod chord_box_layout;
+#[path = "compose/chord_lane_drag_preview.rs"]
+mod chord_lane_drag_preview;
 #[path = "compose/chord_generator_modes.rs"]
 mod chord_generator_modes;
 #[path = "compose/chord_schema_inspector.rs"]
