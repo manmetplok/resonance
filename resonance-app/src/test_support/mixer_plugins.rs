@@ -216,7 +216,7 @@ impl Resonance {
     /// engine-event mirroring tests can assert bindings / learn state.
     #[doc(hidden)]
     pub fn test_midi_map(&self) -> &state::MidiMapState {
-        &self.midi_map
+        &self.devices.midi_map
     }
 
     /// Test-only: arm MIDI Learn for `target` (the UI-side step that
@@ -224,7 +224,7 @@ impl Resonance {
     /// verify the capture handler clears learn mode.
     #[doc(hidden)]
     pub fn test_arm_midi_learn(&mut self, target: resonance_common::MidiTarget) {
-        self.midi_map.learn_target = Some(target);
+        self.devices.midi_map.learn_target = Some(target);
     }
 
     /// Test-only: push a plugin slot onto a track's chain (bypassing the
@@ -663,7 +663,7 @@ impl Resonance {
         &self,
         track_id: resonance_audio::types::TrackId,
     ) -> Option<state::ExternalInstrumentState> {
-        self.external_instruments.get(&track_id).cloned()
+        self.devices.external_instruments.get(&track_id).cloned()
     }
 
     /// Test-only: layer extra device definitions from `dir` into the device
@@ -672,7 +672,7 @@ impl Resonance {
     /// a real user data dir. (epic #40, doc #201 §5.)
     #[doc(hidden)]
     pub fn test_scan_device_dir(&mut self, dir: &std::path::Path) {
-        self.device_registry.scan_dir(dir);
+        self.devices.registry.scan_dir(dir);
     }
 
     /// Test-only: derive the lifecycle [`state::ExternalInstrumentStatus`] for
@@ -683,7 +683,7 @@ impl Resonance {
         &self,
         track_id: resonance_audio::types::TrackId,
     ) -> Option<state::ExternalInstrumentStatus> {
-        let ext = self.external_instruments.get(&track_id)?;
+        let ext = self.devices.external_instruments.get(&track_id)?;
         let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
         Some(ext.status(track))
     }
@@ -760,10 +760,11 @@ impl Resonance {
         track_id: resonance_audio::types::TrackId,
     ) -> Vec<String> {
         let device_params: &[resonance_common::DeviceParam] = self
+            .devices
             .external_instruments
             .get(&track_id)
             .and_then(|ext| ext.device_id.as_deref())
-            .and_then(|id| self.device_registry.get(id))
+            .and_then(|id| self.devices.registry.get(id))
             .map(|def| def.params.as_slice())
             .unwrap_or(&[]);
         let plugins = self
@@ -781,7 +782,7 @@ impl Resonance {
     /// to assert that a `RescanDefinitions` dispatch picks up new files.
     #[doc(hidden)]
     pub fn test_device_registry_ids(&self) -> Vec<String> {
-        self.device_registry
+        self.devices.registry
             .list()
             .iter()
             .map(|d| d.id.clone())
@@ -799,7 +800,7 @@ impl Resonance {
         registry.scan_bundled();
         registry.scan_dir(user_dir);
         self.ui.view_caches.rebuild_device_choices(&registry.list());
-        self.device_registry = registry;
+        self.devices.registry = registry;
     }
 
     /// Test-only: return the ids offered by the device-preset pick-list cache

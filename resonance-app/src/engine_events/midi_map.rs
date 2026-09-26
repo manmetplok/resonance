@@ -17,13 +17,13 @@ use crate::Resonance;
 /// the per-binding stream emitted by `SetControllerMap` / project-load
 /// replay, which simply arrives as a sequence of these.
 pub(super) fn binding_changed(r: &mut Resonance, binding: MidiBinding) {
-    r.midi_map.upsert(binding);
+    r.devices.midi_map.upsert(binding);
 }
 
 /// Mirror `MidiBindingCleared`: drop the binding from the active set (echo
 /// of `ClearMidiBinding`, or one per binding of `ClearAllMidiBindings`).
 pub(super) fn binding_cleared(r: &mut Resonance, id: BindingId) {
-    r.midi_map.clear(id);
+    r.devices.midi_map.clear(id);
 }
 
 /// Handle `MidiLearnCaptured`: the engine captured `source` for the armed
@@ -31,22 +31,22 @@ pub(super) fn binding_cleared(r: &mut Resonance, id: BindingId) {
 /// `SetMidiBinding` so the engine adopts it (and echoes it back), and leave
 /// learn mode.
 pub(super) fn learn_captured(r: &mut Resonance, target: MidiTarget, source: ControlSource) {
-    let id = r.midi_map.alloc_id();
+    let id = r.devices.midi_map.alloc_id();
     let binding = MidiBinding::new(id, source, target);
-    r.midi_map.upsert(binding);
+    r.devices.midi_map.upsert(binding);
     let _ = r.engine.send(AudioCommand::SetMidiBinding { binding });
-    r.midi_map.learn_target = None;
+    r.devices.midi_map.learn_target = None;
 }
 
 /// Handle `ControlSurfaceParamChanged`: a hardware move drove `target` to
 /// `value_norm`. Stash it as a transient display hint so the view can tint
 /// the matching on-screen control.
 pub(super) fn param_changed(r: &mut Resonance, target: MidiTarget, value_norm: f32) {
-    r.midi_map.live_values.insert(target, value_norm);
+    r.devices.midi_map.live_values.insert(target, value_norm);
 }
 
 /// Mirror `ControlSurfaceDevicesChanged`: refresh the list of available
 /// control-surface MIDI input ports for the device picker.
 pub(super) fn devices_changed(r: &mut Resonance, inputs: Vec<String>) {
-    r.midi_map.available_inputs = inputs;
+    r.devices.midi_map.available_inputs = inputs;
 }

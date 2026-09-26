@@ -30,13 +30,13 @@ pub(super) fn input_devices_listed(
     devices: Vec<InputDeviceInfo>,
     default_name: Option<String>,
 ) {
-    r.input_devices.devices = devices;
-    r.input_devices.default_name = default_name;
+    r.devices.input.devices = devices;
+    r.devices.input.default_name = default_name;
     // Refresh the cached `Rc<[InputDeviceInfo]>` used by the mixer
     // inspector and bounce-dialog pickers so they stop cloning the
     // full Vec every frame.
     r.ui.view_caches
-        .rebuild_input_devices(&r.input_devices.devices);
+        .rebuild_input_devices(&r.devices.input.devices);
 }
 
 pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
@@ -157,15 +157,15 @@ pub(super) fn export_error(
 }
 
 pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
-    r.midi_devices.midi_input_devices = devices;
+    r.devices.midi.midi_input_devices = devices;
     r.ui.view_caches
-        .rebuild_midi_input(&r.midi_devices.midi_input_devices);
+        .rebuild_midi_input(&r.devices.midi.midi_input_devices);
 }
 
 pub(super) fn midi_output_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
-    r.midi_devices.midi_output_devices = devices;
+    r.devices.midi.midi_output_devices = devices;
     r.ui.view_caches
-        .rebuild_midi_output(&r.midi_devices.midi_output_devices);
+        .rebuild_midi_output(&r.devices.midi.midi_output_devices);
 }
 
 pub(super) fn midi_clock_started(r: &mut Resonance) {

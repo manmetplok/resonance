@@ -161,5 +161,6 @@ impl ExternalInstrumentState {
 
 /// Map of every external-instrument track to its config + device status.
 /// Keyed by `TrackId`; absence means the track is a plain track. Lives on
-/// [`crate::Resonance`] alongside the other runtime maps.
+/// [`state::DeviceState`](crate::state::DeviceState) (A-12f) alongside the
+/// other hardware/external-device state.
 pub type ExternalInstrumentMap = HashMap<TrackId, ExternalInstrumentState>;

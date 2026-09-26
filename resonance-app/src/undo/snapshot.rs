@@ -447,12 +447,13 @@ impl crate::Resonance {
         after_clear_all: bool,
     ) {
         if after_clear_all {
-            self.external_instruments.clear();
+            self.devices.external_instruments.clear();
         }
         // Drop external mode from tracks absent in the target snapshot. Clear
         // their engine device-param map too, so a track leaving external mode
         // doesn't leave stale bindings behind on the engine side.
         let stale: Vec<TrackId> = self
+            .devices
             .external_instruments
             .keys()
             .copied()
@@ -464,7 +465,7 @@ impl crate::Resonance {
             })
             .collect();
         for id in stale {
-            self.external_instruments.remove(&id);
+            self.devices.external_instruments.remove(&id);
             let _ = self
                 .engine
                 .send(AudioCommand::ClearExternalInstrument { track_id: id });
@@ -489,13 +490,14 @@ impl crate::Resonance {
             // map, and the selection is kept so a later rescan can recover
             // it.
             if !after_clear_all || ext.device_id.is_some() {
-                let params = ext.device_params(&self.device_registry);
+                let params = ext.device_params(&self.devices.registry);
                 let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
                     track_id: id,
                     params,
                 });
             }
             let state = self
+                .devices
                 .external_instruments
                 .entry(id)
                 .or_insert_with(|| crate::state::ExternalInstrumentState::new(id));

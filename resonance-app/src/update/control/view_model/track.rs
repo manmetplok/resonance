@@ -87,7 +87,7 @@ fn track_kind(app: &Resonance, t: &TrackState) -> TrackKind {
     // `external_instruments` map). It's reported as its own kind so a
     // client sees the same spelling `track.add` takes, and knows the
     // `external.*` methods apply.
-    if app.external_instruments.contains_key(&t.id) {
+    if app.devices.external_instruments.contains_key(&t.id) {
         return TrackKind::External;
     }
     match t.track_type {
@@ -112,7 +112,7 @@ fn track_kind(app: &Resonance, t: &TrackState) -> TrackKind {
 /// track reading `external:unconfigured` here while `external.status` said
 /// `live` was two answers to one question (ba doc #275 P1.5).
 fn instrument_summary(app: &Resonance, t: &TrackState) -> Option<String> {
-    if let Some(ext) = app.external_instruments.get(&t.id) {
+    if let Some(ext) = app.devices.external_instruments.get(&t.id) {
         return Some(match ext.device_id.as_deref() {
             Some(device) => format!("external:{device}"),
             None => format!(

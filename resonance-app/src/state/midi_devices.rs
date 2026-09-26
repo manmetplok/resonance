@@ -1,6 +1,7 @@
 //! Hardware MIDI device lists and MIDI clock sync settings (ARCH-06 A6-2).
 //!
-//! Held as a sub-struct on [`Resonance`](crate::Resonance) so handlers
+//! Held as a sub-struct on [`state::DeviceState`](crate::state::DeviceState)
+//! (A-12f) — itself a field on [`Resonance`](crate::Resonance) — so handlers
 //! that only care about MIDI I/O configuration can take
 //! `&MidiDevices` / `&mut MidiDevices` instead of the whole app.
 

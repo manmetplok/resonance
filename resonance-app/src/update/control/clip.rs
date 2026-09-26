@@ -431,7 +431,7 @@ pub(crate) fn import_result(app: &Resonance, paths: &[String]) -> pool_proto::Im
 /// impossible over the API and had to be spliced outside the project
 /// (ba doc #275 P2).
 fn takes_audio_clips(app: &Resonance, track: &crate::state::TrackState) -> bool {
-    track.track_type == TrackType::Audio || app.external_instruments.contains_key(&track.id)
+    track.track_type == TrackType::Audio || app.devices.external_instruments.contains_key(&track.id)
 }
 
 fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {

@@ -87,12 +87,13 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
             // SIGNAL group reads "Signal · Return" (the metered signal is
             // the hardware return) and ROUTING becomes the External
             // Instrument group.
-            let is_external = r.external_instruments.contains_key(&track.id);
+            let is_external = r.devices.external_instruments.contains_key(&track.id);
             // Derived lifecycle status drives the inspector header badge,
             // the onboarding card, and the device-offline alert (todo
             // #459). Computed from the config + live device flags so it can
             // never drift out of sync with the state it renders.
             let ext_status = r
+                .devices
                 .external_instruments
                 .get(&track.id)
                 .map(|ext| ext.status(track));
@@ -223,9 +224,9 @@ pub(crate) fn inspector_fingerprint(
     // is picked or a device goes offline.
     t.monitor_enabled.hash(&mut h);
     t.record_armed.hash(&mut h);
-    let is_external = r.external_instruments.contains_key(&t.id);
+    let is_external = r.devices.external_instruments.contains_key(&t.id);
     is_external.hash(&mut h);
-    if let Some(ext) = r.external_instruments.get(&t.id) {
+    if let Some(ext) = r.devices.external_instruments.get(&t.id) {
         // Selected device preset drives the device picker + active
         // "<model> preset →" affordance; without it the lazy region wouldn't
         // redraw when a preset is picked or cleared.
@@ -292,19 +293,19 @@ pub(crate) fn inspector_fingerprint(
     Rc::as_ptr(&r.ui.view_caches.output_choices).hash(&mut h);
     Rc::as_ptr(&r.ui.view_caches.fx_plugins).hash(&mut h);
     Rc::as_ptr(&r.ui.view_caches.instrument_plugins).hash(&mut h);
-    // Audio input picker uses `r.input_devices.devices` directly (its options
+    // Audio input picker uses `r.devices.input.devices` directly (its options
     // include the per-device channel count, which the cached choice
     // lists above don't carry).
-    r.input_devices.devices.len().hash(&mut h);
-    for d in &r.input_devices.devices {
+    r.devices.input.devices.len().hash(&mut h);
+    for d in &r.devices.input.devices {
         d.name.hash(&mut h);
         d.channels.hash(&mut h);
     }
     // Live MIDI device list too — the audio block isn't a strict
     // function of the cached lists since the stale-override branch
     // peeks at `midi_input_devices` directly.
-    r.midi_devices.midi_input_devices.len().hash(&mut h);
-    r.midi_devices.midi_output_devices.len().hash(&mut h);
+    r.devices.midi.midi_input_devices.len().hash(&mut h);
+    r.devices.midi.midi_output_devices.len().hash(&mut h);
     h.finish()
 }
 

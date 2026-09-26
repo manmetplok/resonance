@@ -79,8 +79,8 @@ impl Reconcile for Transport {
         if differs(old, new, |f| {
             (f.midi_clock_send_enabled, f.midi_clock_send_device.clone())
         }) {
-            r.midi_devices.midi_clock_send_enabled = new.midi_clock_send_enabled;
-            r.midi_devices.midi_clock_send_device = new.midi_clock_send_device.clone();
+            r.devices.midi.midi_clock_send_enabled = new.midi_clock_send_enabled;
+            r.devices.midi.midi_clock_send_device = new.midi_clock_send_device.clone();
             let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
                 device: new.midi_clock_send_device.clone(),
                 enabled: new.midi_clock_send_enabled,
@@ -89,8 +89,8 @@ impl Reconcile for Transport {
         if differs(old, new, |f| {
             (f.midi_clock_recv_enabled, f.midi_clock_recv_device.clone())
         }) {
-            r.midi_devices.midi_clock_recv_enabled = new.midi_clock_recv_enabled;
-            r.midi_devices.midi_clock_recv_device = new.midi_clock_recv_device.clone();
+            r.devices.midi.midi_clock_recv_enabled = new.midi_clock_recv_enabled;
+            r.devices.midi.midi_clock_recv_device = new.midi_clock_recv_device.clone();
             let _ = r.engine.send(AudioCommand::SetMidiClockInput {
                 device: new.midi_clock_recv_device.clone(),
                 enabled: new.midi_clock_recv_enabled,

@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use resonance_common::{BindingId, ControlSource, MidiBinding, MidiTarget};
 
 /// GUI-side mirror of the controller mapping. Held as a sub-struct on
-/// `Resonance` so handlers that only touch mapping take `&mut MidiMapState`.
+/// [`state::DeviceState`](crate::state::DeviceState) (A-12f) so handlers
+/// that only touch mapping take `&mut MidiMapState`.
 #[derive(Debug, Clone, Default)]
 pub struct MidiMapState {
     /// Active bindings keyed by id. Reconstructed purely from

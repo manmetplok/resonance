@@ -75,12 +75,11 @@ pub(crate) struct PendingPluginPresetSave {
 pub struct Resonance {
     pub engine: AudioEngine,
     pub sample_rate: u32,
-    /// Hardware audio input device list and the OS default (ARCH-06
-    /// A6-2). See `state::InputDevices`.
-    pub(crate) input_devices: state::InputDevices,
-    /// Hardware MIDI device lists and clock sync settings (ARCH-06 A6-2).
-    /// See `state::MidiDevices`.
-    pub(crate) midi_devices: state::MidiDevices,
+    /// Hardware/external-device state (ARCH-06 second tier, A-12f): the
+    /// audio input and MIDI device lists, the device-definition registry,
+    /// per-track external-instrument config, and the MIDI-learn binding
+    /// mirror. See `state::DeviceState`.
+    pub(crate) devices: state::DeviceState,
     /// CLAP plugin scan result (ARCH-06 A6-2): what's available, what
     /// failed to load, and whether a rescan is in flight. See
     /// `state::PluginCatalog`.
@@ -156,11 +155,6 @@ pub struct Resonance {
     /// realtime engine. See `chord_track`.
     pub(crate) chord_track: chord_track::ChordTrack,
 
-    /// MIDI Learn / hardware control-surface mapping, mirrored from the
-    /// engine's active binding set. A pure projection of `MidiBinding*` /
-    /// `ControlSurface*` events — see `state::MidiMapState`.
-    pub(crate) midi_map: MidiMapState,
-
     // Sub-state groupings. See `state.rs` for definitions.
     pub(crate) transport: TransportState,
     pub(crate) viewport: ArrangeViewport,
@@ -198,20 +192,6 @@ pub struct Resonance {
     pub(crate) take_groups: state::TakeGroupState,
     /// Session-local undo/redo history. Cleared on project load.
     pub(crate) undo: UndoHistory,
-    /// External-instrument tracks: per-track bank/program/latency config plus
-    /// runtime device-offline flags (doc #169, epic #39). Absence means the
-    /// track is a plain track. The MIDI-out / audio-return / monitor / arm
-    /// fields live on the track itself; this map holds only the
-    /// external-specific bits. Config (not the offline flags) round-trips
-    /// undo via `ProjectTrack::external_instrument` in the snapshot's file.
-    pub(crate) external_instruments: crate::state::ExternalInstrumentMap,
-    /// Device-definition registry (epic #40, doc #201 §2): the bundled
-    /// device presets plus any user-authored ones, scanned once at startup.
-    /// The External-Instrument inspector's device-preset picker reads
-    /// `list()`; selecting a preset resolves its `params` (via `get(id)`)
-    /// into the `SetTrackDeviceParams` command. Read-only after
-    /// construction (a rescan/reload is a later todo).
-    pub(crate) device_registry: resonance_common::DeviceDefinitionRegistry,
     /// App-side track-freeze orchestration: per-track freeze status plus
     /// the active "freeze selected / all" batch queue. Driven by the
     /// `FreezeMessage` handlers (ba todo #574) and the engine freeze-event
@@ -590,8 +570,13 @@ impl Resonance {
         let mut app = Self {
             engine,
             sample_rate: 44100, // overwritten by SampleRateDetected event
-            input_devices: state::InputDevices::default(),
-            midi_devices: state::MidiDevices::default(),
+            devices: state::DeviceState {
+                input: state::InputDevices::default(),
+                midi: state::MidiDevices::default(),
+                registry: device_registry,
+                external_instruments: std::collections::HashMap::new(),
+                midi_map: MidiMapState::default(),
+            },
             plugin_catalog: state::PluginCatalog::default(),
             missing_plugins: crate::state::MissingPluginState::default(),
             ui: state::UiTransientState {
@@ -652,8 +637,6 @@ impl Resonance {
             tempo_map: TempoMap::default(),
             chord_track: chord_track::ChordTrack::new(),
 
-            midi_map: MidiMapState::default(),
-
             transport: TransportState::default(),
             viewport: ArrangeViewport::default(),
             markers: state::ArrangementMarkers::default(),
@@ -679,8 +662,6 @@ impl Resonance {
             sidechain: state::SidechainState::default(),
             take_groups: state::TakeGroupState::default(),
             undo: UndoHistory::new(),
-            external_instruments: std::collections::HashMap::new(),
-            device_registry,
             plugin_mirror: state::PluginMirror {
                 next_id: 1,
                 ..Default::default()

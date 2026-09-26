@@ -162,7 +162,7 @@ pub(super) fn recording_finished(
     // map is the marker (cf. todo #457). Engine-owned, non-undoable
     // toggle like monitor/arm: mirror optimistically and dispatch; the
     // engine echoes `TrackPlaybackSourceChanged`.
-    if r.external_instruments.contains_key(&track_id) {
+    if r.devices.external_instruments.contains_key(&track_id) {
         let source = resonance_common::PlaybackSource::Recorded;
         if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
             track.playback_source = source;
