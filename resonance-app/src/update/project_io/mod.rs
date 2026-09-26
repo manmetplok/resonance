@@ -112,9 +112,11 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             return dialogs::open_project_dialog();
         }
         ProjectIoMessage::OpenPathSelected(Some(path)) => {
+            // Path and engine dir are only repointed once the load
+            // succeeds (`ProjectLoaded(Ok)`): a failed open must leave
+            // the still-open project tied to its own folder.
             let path = std::path::PathBuf::from(path);
-            r.io.project_path = Some(path.clone());
-            let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+            r.io.pending_open_path = Some(path.clone());
             return dialogs::load_project_task(path);
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
@@ -132,8 +134,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 crate::recent::remove(&mut r.io.recent_projects, &path);
                 return Task::none();
             }
-            r.io.project_path = Some(path.clone());
-            let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+            r.io.pending_open_path = Some(path.clone());
             return dialogs::load_project_task(path);
         }
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
@@ -188,6 +189,13 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::ProjectLoaded(Ok(loaded)) => {
+            // Adopt the opened path now that the load succeeded — before
+            // `ClearAll`, since `all_cleared` restores `project_path`
+            // around the replay.
+            if let Some(path) = r.io.pending_open_path.take() {
+                let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
+                r.io.project_path = Some(path);
+            }
             // Resolve a control-initiated load job (todo #1149). Keyed
             // off this existing completion message per doc #265; the
             // engine replay that follows is synchronous within this
@@ -220,6 +228,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::ProjectLoaded(Err(e)) => {
+            r.io.pending_open_path = None;
             r.control.jobs.fail_token(
                 &crate::control_jobs::JobToken::ProjectLoad,
                 e.clone(),

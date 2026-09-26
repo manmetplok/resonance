@@ -45,6 +45,11 @@ pub struct ProjectIoState {
     pub save_state: Option<crate::project::SaveCollector>,
     pub loading: bool,
     pub pending_load: Option<Box<crate::project::LoadedProject>>,
+    /// Target of a disk open whose async load is still in flight. Only
+    /// adopted as `project_path` (and sent as the engine's project dir)
+    /// once the load succeeds, so a failed open leaves the current
+    /// project's path alone (code review STATE-01 / UPD-01).
+    pub pending_open_path: Option<std::path::PathBuf>,
     /// Runtime-only state to re-apply after an undo/redo restore, once
     /// `replay_loaded_project` has rebuilt the declarative project.
     /// `None` for a normal project load, `Some` for undo/redo.

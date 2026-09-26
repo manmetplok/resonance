@@ -186,8 +186,9 @@ fn open_starts_a_job_that_fails_with_the_load_error() {
         ),
     ));
     assert_eq!(job_status(&mut app, job).state, JobState::Pending);
-    // The open routed through the path-carrying message: the path is set.
-    assert_eq!(app.test_project_path(), Some(target.as_path()));
+    // The open routed through the path-carrying message, but the path is
+    // only adopted once the load succeeds (code review STATE-01 / UPD-01).
+    assert_eq!(app.test_project_path(), None);
 
     // The async load fails → the job fails with the message.
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Err(
@@ -196,6 +197,8 @@ fn open_starts_a_job_that_fails_with_the_load_error() {
     let status = job_status(&mut app, job);
     assert_eq!(status.state, JobState::Error);
     assert_eq!(status.error.as_deref(), Some("corrupt project.json"));
+    // A failed open never repoints the current project at the target.
+    assert_eq!(app.test_project_path(), None);
 }
 
 // ---------------- project.save / project.save_as ----------------

@@ -296,7 +296,7 @@ fn save_impl(
 /// same `ProjectSave` / `ProjectLoad` / `ProjectNew` token and its
 /// completion event cannot resolve the wrong client's job.
 fn busy_guard(app: &Resonance) -> Option<RpcError> {
-    if app.io.loading || app.io.pending_load.is_some() {
+    if app.io.loading || app.io.pending_load.is_some() || app.io.pending_open_path.is_some() {
         return Some(RpcError::busy("a project load is in progress"));
     }
     if app.io.saving || app.io.save_state.is_some() {
