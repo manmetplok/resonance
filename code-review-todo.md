@@ -25,7 +25,7 @@ master and updates this table. Agents do **not** edit this file.
 | G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
 | G3 resampler | LIB-01 | opus | merged | ac640b82 |
 | H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | planned → `arch-migration-plan.md`; NOW-steps queued behind M3 (audio) and M4 (undo) to avoid conflicts | |
-| M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | in progress | |
+| M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | merged | e996ad33 |
 | M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | in progress | |
 | M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | in progress | |
 | M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
@@ -1267,7 +1267,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 
 ## Plugin framework / GUI runtimes
 
-### [ ] PLG-01 — First-party plugins never send `clap_host_gui.closed()`, so the host's #1347 handling never runs and the app keeps a closed editor marked "open"
+### [x] PLG-01 — First-party plugins never send `clap_host_gui.closed()`, so the host's #1347 handling never runs and the app keeps a closed editor marked "open" — fixed @0cfc9979 (host request_callback now runs on_main_thread)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1277,7 +1277,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Wire the notification into the shared bridge, not into each of the 11 plugins. (1) Keep a `HostSharedHandle`-backed "gui closed" callback in `HostHandle`, retired the same way as the existing callbacks, and add `HostHandle::gui_closed(was_destroyed)` (or a bridge-private equivalent). (2) Have `RuntimeEditorHandle` / the runtime `Editor` take a close callback, e.g. an `EditorOptions::on_closed: Option<Arc<dyn Fn() + Send + Sync>>` that the runtime calls after `app.on_close()`, so every factory gets it through `editor_host`. (3) CLAP marks `closed` as `[main-thread]`. So either latch it and call it from `on_main_thread` after a `request_callback`, or document that the Resonance host tolerates any thread (it only stores atomics). Note that Resonance's `host_request_callback` is currently a no-op, which the latch route would have to fix too.
 - **Verification:** Add a headless test in `resonance-plugin/tests/` (next to `clap_bridge_params_state.rs`) that drives `RuntimeEditorHandle`'s close callback through a fake `PluginEditor` and asserts the host's `closed` fires once. Then by hand: `WPG_TEST_CLOSE_AT=30 cargo test -p resonance-gate --test editor_open -- --ignored --nocapture`, extended to assert the closed callback fired. `CPG_TEST_CLOSE_AT` does the same with `editor_open_cocoa` on macOS.
 
-### [ ] PLG-02 — Wayland runtime never calls `eglTerminate` on its per-connection EGLDisplay: every editor open leaks a DRI screen and DRM fd, and a reopen can pick up stale driver state
+### [x] PLG-02 — Wayland runtime never calls `eglTerminate` on its per-connection EGLDisplay: every editor open leaks a DRI screen and DRM fd, and a reopen can pick up stale driver state — fixed @fbce9c16
 - **Severity:** medium
 - **Confidence:** medium (the leak is certain; the stale-state reuse depends on the allocator returning the freed `wl_display` address)
 - **Category:** resource-leak
@@ -1287,7 +1287,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Call `self.egl.terminate(self.display)` in `EglContext::drop` after destroying the surface and context. It is safe because nothing else shares this display: it is keyed on the editor's private connection. Make sure it runs before the `Connection` drops; it does today, because `egl_ctx` is dropped explicitly before `state`/`conn` in `run_inner`. Correct the comment. As a belt-and-braces option, pass the display attribute list with `EGL_TRACK_REFERENCES_KHR` where available.
 - **Verification:** By hand, from a Wayland session: extend `wayland-plugin-gui/tests/editor_size.rs` (ignored) with a loop that opens and destroys an `Editor` 20 times and asserts that the count of `/proc/self/fd` entries pointing at `/dev/dri/*` does not grow, and that the 20th open still paints (size settles). Run it with `cargo test -p wayland-plugin-gui --test editor_size -- --ignored --nocapture` and re-run `editor_open`.
 
-### [ ] PLG-03 — Cocoa: a panic in a plugin's `ui()` unwinds out of `drawRect:` and takes down the whole host (Wayland only loses the editor thread)
+### [x] PLG-03 — Cocoa: a panic in a plugin's `ui()` unwinds out of `drawRect:` and takes down the whole host (Wayland only loses the editor thread) — fixed @fd420c5f (Cocoa code NOT compiled — needs macOS check)
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** unsafe/ffi
@@ -1297,7 +1297,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Wrap every entry into plugin code in the view (`app.ui`, `app.on_close`) in `std::panic::catch_unwind(AssertUnwindSafe(...))`. On a panic, log it, mark the editor dead (`alive=false`), reset `in_paint`, stop the timer, and close the window through the same path as a user close, so the host is notified once PLG-01 lands. Replace the `expect` in `EditorMain::create` with an `EditorError`.
 - **Verification:** Add a `harness = false` ignored test in `cocoa-plugin-gui/tests/`, modelled on `modal_reentrancy.rs`, whose `EditorApp::ui` panics on frame 3. Assert that the process keeps pumping and `Editor::set_size` returns `Err(ChannelClosed)`. Run it by hand from a logged-in macOS session with `-- --ignored`. For parity, add a Wayland counterpart to `editor_size.rs`.
 
-### [ ] PLG-04 — Wayland `hide()` doesn't hide: the window stays mapped with a frozen frame, keeps taking input, and replays the queued clicks on the next `show()`
+### [x] PLG-04 — Wayland `hide()` doesn't hide: the window stays mapped with a frozen frame, keeps taking input, and replays the queued clicks on the next `show()` — fixed @f28918c6
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
