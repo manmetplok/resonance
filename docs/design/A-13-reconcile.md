@@ -6,7 +6,8 @@ master `d6d89413`. This document covers the trait, the driver, and the first
 slice (A-13a, roadmap group 1); §7 records the second (A-13b, group 2,
 written against master `c325335a`), §8 the third (A-13c, group 4, against
 master `d538d5cf`; group 3 waits for D-2/D-3), §9 the fourth (A-13d, group
-5, against master `85b38b32`). Later slices move one group at a time.
+5, against master `85b38b32`), §10 the fifth (A-13e, group 3, against
+master `1853dd1e`). Later slices move one group at a time.
 
 ## 1. The problem
 
@@ -694,3 +695,165 @@ routing (sends, sidechain routes).
   full path's top-of-replay `vocal_audio.clear()` (lyrics, render epochs)
   can fold into `ClipLyrics` / `VocalAudioClips` then. `ctx.midi_notes`
   stays: the file will still not carry notes.
+
+## 10. Group (3): A-13e
+
+### Domains
+
+`Stage` is now `Globals, Timeline, Routing, Clips, Content, Tail`; 25
+domains (`reconcile_order::the_table_is_the_agreed_order`). Code:
+`reconcile/routing.rs`.
+
+| Stage | Domain | Body by origin |
+|---|---|---|
+| Routing (1st) | `sends` | after `ClearAll`: empty `r.aux.sends` (+ `last_rejection`), then `AddAuxSend` + mirror per send. Diff: `RemoveAuxSend` + mirror drop for every send `old` has and `new` lacks (**removals first**), then per send that is new or changed: `SetAuxSend` when `old` has its id, else `AddAuxSend` (D-2); unchanged sends send nothing. |
+| Routing (2nd) | `sidechain_routes` | after `ClearAll`: empty `r.sidechain`, then `SetSidechainRoute` + mirror per route. Diff: `ClearSidechainRoute` for every keyed plugin `new` no longer keys (first), then `SetSidechainRoute` per new or changed route. |
+
+One body validates every edge it sends, on every origin: an unknown source
+kind, a missing source track/bus, a missing destination bus (sends) or a
+target plugin id absent from the file's chains (routes) drops the edge with
+a warning and does not mirror it. On the diff path this is a no-op for any
+snapshot the app took: `structurally_compatible` makes the track, bus and
+plugin id sets of `old` and `new` equal, and the live mirrors never hold an
+edge onto a missing endpoint (deleting an endpoint prunes its edges, ba
+#1269). Before, the diff path dropped only an unknown source kind, silently,
+and would have sent (and mirrored) an edge onto a missing endpoint that the
+engine then rejected.
+
+Deleted: `replay_sends`, `replay_sidechain_routes`,
+`saved_plugin_instance_ids` (now `routing::plugin_instance_ids`),
+`apply_sends`, `apply_sidechain_routes`; `wipe_registry`'s
+`aux.sends.clear()` / `aux.last_rejection = None` / `sidechain.clear()`
+moved into the domains' `old = None` arm. Nothing between the wipe and
+`Routing` (tracks, busses, master, track outputs) reads either mirror.
+
+### Where the stages sit now
+
+```
+Full path (replay_loaded_project)
+  vocal_audio.clear, SetProjectDir,
+  ── Globals ── ── Timeline ──,
+  wipe_registry, tracks/busses/master/outputs,
+  ── Routing ── ── Clips ──, finalize_plugin_chains,
+  ── Content ── ── Tail ──
+
+Diff path (try_diff_replay)
+  ── Globals ── ── Timeline ──,
+  tracks, busses, master,
+  ── Routing ──,
+  plugin blobs + params,
+  ── Clips ── ── Content ── ── Tail ──,
+  resort
+```
+
+The only inline code left between `Timeline` and `Clips` is entities:
+tracks, busses, master and (full path) the track outputs; plugin blobs and
+params (diff path).
+
+### Ordering changes
+
+Full path: none. `Routing` runs exactly where `replay_sends` /
+`replay_sidechain_routes` ran (the tail of `replay_tracks_and_busses`, after
+the master chain and the `SetTrackOutput`s, before `Clips`), with the same
+commands. Guard:
+`the_full_path_sends_routing_after_the_master_chain_and_before_the_clips`.
+
+Diff path: sends and key routes move from between `apply_busses` and
+`apply_master` to after `apply_master` (still before the plugin blobs and
+params, still sends before routes). What `apply_master` sends is
+`SetMasterFxBypass` and `SetPluginBypass` for master slots; app-side it
+writes `r.master_fx_bypassed` and the master slots' `plugin_name` /
+`bypassed`. Checked against the engine handlers (all on the one control
+thread, FIFO):
+
+* `handle_add_aux_send` / `handle_set_aux_send` / `handle_remove_aux_send`
+  (`engine/busses.rs`) read `ctx.busses`, `ctx.tracks` (endpoint checks) and
+  `state.aux_sends` (id collision, cycle check); they write
+  `state.aux_sends` and republish the render snapshot. No plugin, master
+  chain or bypass state.
+* `sidechain::handle_set` / `handle_clear` read and write only
+  `state.sidechain_routes` and its published snapshot. They do not check
+  that the plugin exists (a route onto a plugin with no key port is stored
+  harmlessly; the mixer decides at render time).
+* `handle_set_master_fx_bypass` (`engine/master.rs`) writes only
+  `shared.master_fx_bypass`; `handle_set_plugin_bypass` reads `ctx.plugins`
+  and writes the slot's bypass flag. Neither reads a send or a route.
+
+So the two groups touch disjoint engine state and commute. The echoes
+(`AuxSendChanged` / `AuxSendRemoved` / `SidechainRouteChanged` vs
+`MasterFxBypassChanged` / `PluginBypassChanged`) update disjoint app
+mirrors, so their relative order does not matter either. App-side, the
+routing domains read `r.registry` tracks/busses and `new`'s plugin ids,
+none of which `apply_master` writes. Guard:
+`a_diff_undo_sends_routing_after_the_master_and_before_the_clips` (fails on
+the A-13d order, where `SetAuxSend` preceded `SetMasterFxBypass`).
+
+Every existing guard (fixed-point, `undo_restore_flag`, `io::replay`,
+`aux_send_*`, `control_sends`, `sidechain_persistence`, `id_allocation`)
+passed unchanged.
+
+### What's next: group (6), structural
+
+What is left inline: `wipe_registry`, `replay_tracks_and_busses`
+(`replay_track` / `replay_bus` / `replay_master`, each with its plugin chain
+via `replay_plugins`, plus sub-track creation, `migrate_old_generate_params`,
+the resorts and the `SetTrackOutput`s) and `finalize_plugin_chains` on the
+full path; `apply_tracks` / `apply_busses` / `apply_master` /
+`push_all_plugin_states` / `apply_all_plugin_params` and the final resort
+on the diff path; `structurally_compatible` choosing between them. Proposed
+split, one todo each, strictly in order (all touch `replay*/`), and **after
+D-4** (which re-keys track add sites in `replay/entity.rs`):
+
+1. **A-13f — entity scalars as domains, shape still gated.** New
+   `Stage::Entities` between `Timeline` and `Routing`: `tracks`, `busses`,
+   `master`, `track_outputs`, then `plugin_state` (blob + params). Full arm =
+   today's `replay_*` bodies (add + every scalar); diff arm = today's
+   `apply_*` (changed scalars only). `plugin_state`'s full arm is the blob /
+   param-override parking now inside `replay_plugins`, its diff arm
+   `push_all_plugin_states` + `apply_all_plugin_params`; the full path's
+   `SetPluginBypass` moves with it or stays in the add body (decide by
+   echo order: `PluginAdded` must still overwrite the placeholder). Keep
+   `structurally_compatible`; `wipe_registry`'s entity clears move into the
+   `old = None` arms. Order change to prove: the diff path's plugin
+   blobs/params would move before `Routing` (routing touches no plugin
+   state — same evidence as above). `finalize_plugin_chains` + the resorts
+   become a last `Entities` domain (`entity_order`), full arm sort + index
+   rebuild, diff arm resort (moving the diff resort from after `Tail` to
+   before `Routing` needs its readers checked: `rebuild_output`,
+   `refresh_track_count`, anything in `Clips`..`Tail` iterating
+   `registry.tracks` in order). Guards: trace tests, fixed point, a
+   command-order test per moved piece.
+2. **A-13g — shrink the gate to what the diff arms can't do.** The
+   app-side id-set checks in `structurally_compatible` (section
+   definitions / placements, drum groups / patterns, track groups,
+   markers) cover domains that are restored whole on both paths since
+   A-13a/c. Drop them one at a time, each with a diff-undo test across an
+   add/remove of that entity that asserts the fixed point. Watch
+   `drum_patterns`' `clear_on_empty` (§8) and `DerivedClips` (placements
+   key derived clips).
+3. **A-13h — add/remove arms for busses and plugin instances.** Diff arms
+   gain "add what `old` lacks" (the full arm's add body: `AddBus`,
+   `AddPlugin*` with id hint + blob) and "remove what `new` lacks"
+   (`RemoveBus`, `RemovePlugin*`, pruning edges first — `Routing` already
+   handles edge removal, but it runs after `Entities`, so removals must
+   split: a `RoutingRemovals` pre-pass before entity removal, or entity
+   removal in a late stage). Reorder = `MovePluginIn*`. Drops the bus and
+   plugin checks from the gate.
+4. **A-13i — add/remove tracks (incl. sub-tracks, track type change as
+   remove + add) and clips.** Track add/remove on the diff path; the clip
+   domains' diff arm gains `load_audio_clip` / `load_midi_clip` for ids
+   `old` lacks and `DeleteClip` / `DeleteMidiClip` for ids `new` lacks;
+   external instruments / freeze / lanes of an added track need their
+   `after_clear_all` behaviour per track, not per restore.
+5. **A-13j — delete the fallback.** With the gate always true for undo,
+   `structurally_compatible`, the undo `ClearAll`, `io.restoring_undo`
+   (FU-A7a's `pending_load` payload) and `Origin::UndoFull` go; the
+   `live` carry shrinks (`project_path` is `project_dir` once nothing
+   `take()`s it). Disk load keeps `ClearAll` + `old = None`. The two
+   entry points merge into one `reconcile_all(old, new, ctx)`, and
+   `Stage` collapses to the table order. Audible win: no plugin
+   re-instantiation on a structural undo.
+
+Each of 3–5 changes engine traffic on structural undo (no `ClearAll`), so
+each needs a capture test for the new commands and a fixed-point run over
+an add/remove of the entity it covers.

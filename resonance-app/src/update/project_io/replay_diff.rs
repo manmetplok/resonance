@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use resonance_audio::types::*;
 
 use crate::project::{
-    send_source_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile,
-    ProjectMidiClip, ProjectPlugin, ProjectSend, ProjectTrack,
+    LoadedProject, ProjectBus, ProjectClip, ProjectFile, ProjectMidiClip, ProjectPlugin,
+    ProjectTrack,
 };
 use crate::util::db_to_gain;
 use crate::Resonance;
@@ -82,24 +82,18 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // -- Busses --------------------------------------------------------
     apply_busses(r, &current, target_file);
 
-    // -- Aux sends -----------------------------------------------------
-    // A send is a plain routing edge: `AddAuxSend` creates one, `SetAuxSend`
-    // edits one in place, and `RemoveAuxSend` drops one (ARCH-04 D-2), all
-    // three surgical, so adding or removing a send never has to force the
-    // slow path (unlike a plugin instance, which can only be re-created
-    // wholesale). Reconciled after the
-    // busses so a send restored alongside its return bus lands second.
-    apply_sends(r, &current, target_file);
-
-    // -- Sidechain key routes ------------------------------------------
-    // A key route is another plain routing edge — `SetSidechainRoute`
-    // upserts one and `ClearSidechainRoute` drops one, both surgical — so
-    // keying and unkeying a plugin never forces the slow path either
-    // (ba todo #1311).
-    apply_sidechain_routes(r, &current, target_file);
-
     // -- Master FX -----------------------------------------------------
     apply_master(r, &current, target_file);
+
+    // -- Migrated domains: routing (ARCH-01 A-13e) ----------------------
+    // Aux sends, then sidechain key routes, by diff against `current`
+    // (removals first). Both are plain routing edges with surgical add /
+    // edit / remove commands, so adding or removing one never forces the
+    // slow path. After the master as on the full path (A-13e: they used to
+    // go out between the busses and the master; the engine's send and
+    // route tables are independent of the master bypass and plugin bypass
+    // flags `apply_master` writes).
+    reconcile_stage(r, Stage::Routing, Some(&current), target_file, &ctx);
 
     // -- Plugin state blobs --------------------------------------------
     // Re-push a snapshot's blob only when the cache moved on since it was
@@ -538,127 +532,6 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
             slot.plugin_name = pp.plugin_name.clone();
         }
         apply_plugin_bypass(&r.engine, &mut bus.plugins, &b.plugins);
-    }
-}
-
-/// Reconcile the aux-send graph (ba doc #273) to the target snapshot:
-/// upsert every send that is new or changed, drop every send the target
-/// no longer has, and mirror both onto [`crate::state::AuxSendState`].
-///
-/// Sends whose fields already match are left untouched, so the common
-/// undo (a fader move somewhere else entirely) emits no send traffic at
-/// all — the same "only push what changed" rule the track and bus
-/// appliers follow.
-fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
-    let a_by_id: HashMap<u64, &ProjectSend> = a.sends.iter().map(|s| (s.id, s)).collect();
-
-    // Removals drain FIRST so the reconciliation is order-independent.
-    // Upserting first means a send that REPLACES another edge is checked
-    // for feedback loops against a graph that still holds the edge it
-    // replaces: undo across "delete bus A->B, create bus B->A" would
-    // have the new edge rejected as a loop, then the old one removed,
-    // leaving the engine with neither while the mirror shows the new one.
-    let target_ids: std::collections::HashSet<u64> = b.sends.iter().map(|s| s.id).collect();
-    for sa in &a.sends {
-        if !target_ids.contains(&sa.id) {
-            let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id: sa.id });
-            r.aux.remove(sa.id);
-        }
-    }
-
-    for sb in &b.sends {
-        let existed_before = a_by_id.get(&sb.id);
-        if existed_before.copied() == Some(sb) {
-            continue;
-        }
-        // Unknown source kind: drop rather than guess (see
-        // `send_source_from_tag`).
-        let Some(source) = send_source_from_tag(&sb.source_kind, sb.source_id) else {
-            continue;
-        };
-        // ARCH-04 D-2: `existed_before` tells us whether the engine
-        // already has this id (an edit — `a` was built from the mirror
-        // BEFORE this reconciliation ran) or not (a send this undo/redo
-        // step is bringing back that the current state doesn't have).
-        let _ = r.engine.send(if existed_before.is_some() {
-            AudioCommand::SetAuxSend {
-                id: sb.id,
-                source,
-                dest: sb.dest_bus,
-                level_db: sb.level_db,
-                pre_fader: sb.pre_fader,
-                enabled: sb.enabled,
-            }
-        } else {
-            AudioCommand::AddAuxSend {
-                id: sb.id,
-                source,
-                dest: sb.dest_bus,
-                level_db: sb.level_db,
-                pre_fader: sb.pre_fader,
-                enabled: sb.enabled,
-            }
-        });
-        r.aux.upsert(AuxSend {
-            id: sb.id,
-            source,
-            dest: sb.dest_bus,
-            level_db: sb.level_db,
-            pre_fader: sb.pre_fader,
-            enabled: sb.enabled,
-        });
-    }
-}
-
-/// Reconcile the sidechain key routes (ba doc #157/#159, todo #1311) to
-/// the target snapshot: clear every route the target no longer has, then
-/// upsert every route that is new or changed, mirroring both onto
-/// [`crate::state::SidechainState`].
-///
-/// Removals drain first for the same order-independence reason
-/// [`apply_sends`] gives, though the stakes are lower here: a route is
-/// keyed by target plugin and simply replaces whatever that plugin had,
-/// so there is no cycle check to fool. Routes whose fields already match
-/// are left alone, so the common undo emits no key traffic at all.
-fn apply_sidechain_routes(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
-    let target_plugins: std::collections::HashSet<u64> = b
-        .sidechain_routes
-        .iter()
-        .map(|route| route.plugin_instance_id)
-        .collect();
-    for ra in &a.sidechain_routes {
-        if !target_plugins.contains(&ra.plugin_instance_id) {
-            let _ = r.engine.send(AudioCommand::ClearSidechainRoute {
-                plugin: ra.plugin_instance_id,
-            });
-            r.sidechain.clear_plugin(ra.plugin_instance_id);
-        }
-    }
-
-    let a_by_plugin: HashMap<u64, &crate::project::ProjectSidechainRoute> = a
-        .sidechain_routes
-        .iter()
-        .map(|route| (route.plugin_instance_id, route))
-        .collect();
-    for rb in &b.sidechain_routes {
-        if a_by_plugin.get(&rb.plugin_instance_id).copied() == Some(rb) {
-            continue;
-        }
-        // Unknown source kind: drop rather than guess (see
-        // `send_source_from_tag`).
-        let Some(source) = send_source_from_tag(&rb.source_kind, rb.source_id) else {
-            continue;
-        };
-        let _ = r.engine.send(AudioCommand::SetSidechainRoute {
-            plugin: rb.plugin_instance_id,
-            source,
-            enabled: rb.enabled,
-        });
-        r.sidechain.upsert(resonance_audio::types::SidechainRoute {
-            plugin: rb.plugin_instance_id,
-            source,
-            enabled: rb.enabled,
-        });
     }
 }
 
