@@ -146,6 +146,16 @@ impl Resonance {
         let _ = crate::engine_events::handle_engine_event(self, event);
     }
 
+    /// Test-only: like [`Self::test_handle_engine_event`], but hand back
+    /// the `Task` the event produced (e.g. the post-load `scroll_to`).
+    #[doc(hidden)]
+    pub fn test_engine_event_task(
+        &mut self,
+        event: resonance_audio::types::AudioEvent,
+    ) -> iced::Task<crate::message::Message> {
+        crate::engine_events::handle_engine_event(self, event)
+    }
+
     /// Test-only: capture an undo snapshot of the current declarative
     /// state, so a test can inspect what a restore would bring back or
     /// hand it to [`Self::test_begin_restore_from_snapshot`].

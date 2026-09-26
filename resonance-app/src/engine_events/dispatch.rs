@@ -559,7 +559,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
         E::AllPluginStatesSaved { states } => {
             return project_io::all_plugin_states_saved(r, states)
         }
-        E::AllCleared => project_io::all_cleared(r),
+        E::AllCleared => return project_io::all_cleared(r),
 
         // Automation lanes (doc #162 §3, todo #378): one-way engine→app
         // mirror of lane state into `AutomationState`, plus the throttled

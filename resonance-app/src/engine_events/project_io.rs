@@ -183,7 +183,8 @@ fn report_clips_without_audio(r: &mut Resonance, save: &crate::project::SaveColl
     }
 }
 
-pub(super) fn all_cleared(r: &mut Resonance) {
+pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
+    let mut task = Task::none();
     if let Some(loaded) = r.io.pending_load.take() {
         // Extract project_path before replay (replay clears it)
         let path = r.io.project_path.clone();
@@ -232,6 +233,22 @@ pub(super) fn all_cleared(r: &mut Resonance) {
                 .engine
                 .send(AudioCommand::ResendExternalInstrumentPatches);
 
+            // A new project starts at its beginning. The horizontal
+            // offset is the outer `Scrollable`'s, so scroll it for real
+            // and mark the report that follows as the echo of this
+            // `scroll_to` (not a manual scroll); state and widget then
+            // agree from the next frame (code review FU-V3a).
+            r.viewport.scroll_offset = 0.0;
+            r.viewport.scroll_offset_y = 0.0;
+            r.viewport.follow_pending_x = Some(0.0);
+            task = iced::widget::operation::scroll_to(
+                crate::state::ARRANGE_SCROLL_ID,
+                iced::widget::scrollable::AbsoluteOffset {
+                    x: Some(0.0),
+                    y: None,
+                },
+            );
+
             // A genuine project load (not an undo/redo replay) whose media
             // pool references files that aren't on disk: surface the
             // missing-files relink modal so the user can locate them (doc
@@ -267,4 +284,5 @@ pub(super) fn all_cleared(r: &mut Resonance) {
             }
         }
     }
+    task
 }

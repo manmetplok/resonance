@@ -157,9 +157,12 @@ fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
     r.transport.loop_out = project.loop_out;
     r.transport.playhead = 0;
 
-    // Reset transient UI state so the new project starts clean.
-    r.viewport.scroll_offset = 0.0;
-    r.viewport.scroll_offset_y = 0.0;
+    // Reset transient UI state so the new project starts clean. The
+    // scroll position is NOT reset here: this replay also serves a
+    // slow-path undo, which must not move the view, and the horizontal
+    // offset belongs to the outer `Scrollable` — a disk load scrolls that
+    // for real in `engine_events::project_io::all_cleared` (code review
+    // FU-V3a).
     r.interaction.selected_clip = None;
     r.mixer.selected_plugin = None;
     r.interaction.clip_drag = None;
