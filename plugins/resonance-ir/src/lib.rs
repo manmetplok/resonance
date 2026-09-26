@@ -204,7 +204,7 @@ impl ResonancePlugin for ResonanceIr {
         };
         let left = &mut *main.left;
         let right = &mut *main.right;
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         // Check mailbox for newly loaded convolver — start crossfade.
         if let Some(conv) = self.convolver_mailbox.try_take() {

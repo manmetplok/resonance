@@ -46,7 +46,7 @@ use context::BlockTiming;
 /// Runs on the audio callback thread: allocation-free (it only writes into
 /// the caller's pre-allocated [`CallbackScratch`]) and non-blocking.
 pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratch<'_>) {
-    resonance_common::flush_denormals();
+    resonance_dsp::flush_denormals();
 
     // The one "offline render in progress" gate (code review MIX-02 /
     // ENG-05). Every offline renderer (export, stems, bounce in place,

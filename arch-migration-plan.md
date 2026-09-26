@@ -1206,6 +1206,16 @@ types).
 **Verdict:** NOW = A7-1 + A7-2. Recommend replacing the finding's crate split
 with A7-3 (feature gates) as a single ba todo.
 
+**Progress (H7, branch `arch/H7-plugin-deps`):** A7-2 done — `flush_denormals`
+now in `resonance-dsp` (no shim); compressor, delay, eq, gate,
+granular-delay, mastering, reverb, wavetable dropped `resonance-common`.
+A7-1 done — `plugins_reach_only_common_utilities` (allow-list
+`PLUGIN_COMMON_ITEMS`: scan_directory, registry, drum_map,
+decode_wav_stereo, decode_wav_channels, factory_presets; scans every target
+of each plugin + `resonance-plugin`; `atomic_file` left out as unused) and
+`only_listed_plugins_depend_on_resonance_common` (`PLUGINS_ON_COMMON` = amp,
+drums, ir). A7-3 still open.
+
 ---
 
 ## ARCH-09 — undo snapshots deep-copy the whole project per edit
