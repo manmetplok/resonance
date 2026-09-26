@@ -57,7 +57,10 @@ impl FirDesigner {
             scratch: vec![Complex::new(0.0, 0.0); geometry.fft_size],
             hann,
             h: vec![0.0; geometry.fir_len],
-            biquads: Vec::new(),
+            // Reserved up front: `design` may run on the audio thread
+            // (the inline fallback), where the first push must not
+            // allocate.
+            biquads: Vec::with_capacity(2 * super::NUM_BANDS),
         }
     }
 

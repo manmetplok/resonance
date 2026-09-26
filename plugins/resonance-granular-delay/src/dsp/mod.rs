@@ -315,6 +315,12 @@ impl GranularDsp {
     /// repeat lands exactly one delay after its source even when the
     /// host block is longer than the delay, and a 1024-frame bounce
     /// renders the same as a 128-frame live quantum.
+    ///
+    /// Every route is also chunked to the scratch capacity (the max
+    /// block declared at construction): a host that delivers a larger
+    /// block renders exactly as if it had sent capacity-sized calls,
+    /// where the tail used to stay dry with the write head and the grain
+    /// clock skipping it (DSP-15).
     pub fn process_block(
         &mut self,
         left: &mut [f32],
@@ -324,13 +330,15 @@ impl GranularDsp {
         params: &BlockParams,
     ) {
         let frames = frames.min(left.len()).min(right.len());
-        if !params.fb_route.feeds_buffer() {
-            self.process_chunk(left, right, frames, smoothers, params);
-            return;
-        }
+        let capacity = self.grains.capacity().max(1);
+        let chunk = if params.fb_route.feeds_buffer() {
+            FEEDBACK_CHUNK.min(capacity)
+        } else {
+            capacity
+        };
         let mut start = 0;
         while start < frames {
-            let n = (frames - start).min(FEEDBACK_CHUNK);
+            let n = (frames - start).min(chunk);
             let end = start + n;
             self.process_chunk(
                 &mut left[start..end],

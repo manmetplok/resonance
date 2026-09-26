@@ -47,7 +47,7 @@ fn only_the_compressing_band_reports_reduction() {
         ..BandConfig::default()
     };
 
-    let n = Multiband::latency() + 12_000;
+    let n = Multiband::latency_for(SR) + 12_000;
     let mut mb = Multiband::new(SR, n);
     let (mut l, mut r) = sine_stereo(50.0, 0.6, n);
     mb.process_stereo(&mut l, &mut r, &cfg);
@@ -79,7 +79,7 @@ fn a_lower_threshold_reports_more_reduction() {
             attack_ms: 1.0,
             ..BandConfig::default()
         };
-        let n = Multiband::latency() + 12_000;
+        let n = Multiband::latency_for(SR) + 12_000;
         let mut mb = Multiband::new(SR, n);
         let (mut l, mut r) = sine_stereo(50.0, 0.6, n);
         mb.process_stereo(&mut l, &mut r, &cfg);

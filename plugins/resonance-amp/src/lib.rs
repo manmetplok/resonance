@@ -67,6 +67,8 @@ pub struct ResonanceAmp {
     /// processing loop overwrites it in place. Sized from
     /// `max_buffer_size` in `initialize`.
     input_scratch: Vec<f32>,
+    /// Right-channel twin of `input_scratch`, for the tuner's mono sum.
+    input_scratch_r: Vec<f32>,
 }
 
 impl ResonanceAmp {
@@ -156,6 +158,7 @@ impl ResonancePlugin for ResonanceAmp {
             load_request,
             loader: None,
             input_scratch: Vec::new(),
+            input_scratch_r: Vec::new(),
         }
     }
 
@@ -176,6 +179,7 @@ impl ResonancePlugin for ResonanceAmp {
 
         self.tuner = Some(Tuner::new(sample_rate));
         self.input_scratch = vec![0.0; max_buffer_size as usize];
+        self.input_scratch_r = vec![0.0; max_buffer_size as usize];
         self.viz.store_engine_sample_rate(sample_rate);
 
         let path = self.params.model_path.lock().clone();
@@ -259,6 +263,8 @@ impl ResonancePlugin for ResonanceAmp {
         // it. Used by the scope view and the tuner.
         let copy_n = frames.min(self.input_scratch.len());
         self.input_scratch[..copy_n].copy_from_slice(&left[..copy_n]);
+        let copy_r = copy_n.min(self.input_scratch_r.len()).min(right.len());
+        self.input_scratch_r[..copy_r].copy_from_slice(&right[..copy_r]);
 
         // Check mailbox for newly loaded model — start crossfade. The
         // model is already primed on the loader thread, so the fade only
@@ -297,9 +303,10 @@ impl ResonancePlugin for ResonanceAmp {
             .push_slice(&self.input_scratch[..copy_n], &left[..copy_n]);
 
         // Feed the tuner with the dry input (pre-gain, pre-model) so
-        // the amp's nonlinear harmonics don't confuse the pitch tracker.
+        // the amp's nonlinear harmonics don't confuse the pitch tracker —
+        // as the mono sum, so a guitar on either input tunes (DSP-11).
         if let Some(tuner) = self.tuner.as_mut() {
-            tuner.feed(&self.input_scratch[..copy_n]);
+            tuner.feed_stereo(&self.input_scratch[..copy_r], &self.input_scratch_r[..copy_r]);
             if let Some((hz, conf)) = tuner.analyze() {
                 self.viz.store_tuner(hz, conf);
             }

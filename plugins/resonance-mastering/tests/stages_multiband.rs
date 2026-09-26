@@ -17,7 +17,7 @@ fn disabled_is_pure_delay() {
     // so the output must be bit-exactly the input delayed by the
     // reported latency, zero-padded at the start.
     let sr = 48_000.0_f32;
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(sr);
     let n = latency + 2048;
     let mut mb = Multiband::new(sr, n);
 
@@ -47,7 +47,7 @@ fn toggling_enable_stays_continuous() {
     // filter state, so the output must track the delayed input across
     // both toggles (and through the filters' warm-up) without a glitch.
     let sr = 48_000.0_f32;
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(sr);
     let block = 512;
     let seg = latency + 2048;
     let n = 3 * seg;
@@ -86,7 +86,7 @@ fn enabled_without_compression_reconstructs_delayed_input() {
     // All compressors off → bands sum to delayed input (modulo FIR
     // truncation / Hann-window ripple in the crossover lowpasses).
     let sr = 48_000.0_f32;
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(sr);
     let n = latency + 2048;
     let mut mb = Multiband::new(sr, n);
     let cfg = MultibandConfig {
@@ -114,7 +114,7 @@ fn compressing_a_band_attenuates_only_that_band() {
     // Feed a 50 Hz sine (lives in band_0) through with only band_0
     // compressing hard. Output should be quieter than input.
     let sr = 48_000.0_f32;
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(sr);
     let n = latency + 4096;
     let mut mb = Multiband::new(sr, n);
     let mut cfg = MultibandConfig {
@@ -141,7 +141,7 @@ fn oversized_block_processes_all_frames() {
     // The stage must chunk internally instead of silently capping (the
     // old behaviour left every frame past max_buffer untouched).
     let sr = 48_000.0_f32;
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(sr);
     let n = latency + 2048;
     let max_buffer = 256; // far smaller than the block we send
     let mut mb = Multiband::new(sr, max_buffer);
@@ -212,7 +212,7 @@ fn side_only_high_band_content_is_compressed() {
     // mono-sum detector read this as silence and the band compressor
     // never engaged; the max-of-channels detector must compress it.
     let sr = 48_000.0_f32;
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(sr);
     let block = 512;
     let n = latency + 24_000;
     let mut mb = Multiband::new(sr, block);

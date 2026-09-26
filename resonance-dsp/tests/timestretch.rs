@@ -151,6 +151,40 @@ fn output_gain_is_sane() {
     }
 }
 
+/// DSP-14: steady-state level is preserved to within ±0.2 dB. WSOLA
+/// used to run +2.5 dB hot: it overlap-added raw frames through the
+/// synthesis window but normalised by the phase vocoder's Σw² (right
+/// only for frames windowed twice), a gain of Σw/Σw² = 4/3 for Hann at
+/// 75 %.
+///
+/// Noise pins both algorithms unstretched. Stretched, overlapping
+/// frames of noise are decorrelated, so they sum partly in power rather
+/// than amplitude and no fixed normalisation is unity on them; the
+/// stretched cases therefore use a tone, whose frames overlap coherently.
+#[test]
+fn steady_state_level_is_unity() {
+    let noise_in = noise(96_000, 0x1234_5678);
+    let tone_in = sine(220.0, 96_000);
+    let cases = [
+        (StretchAlgorithm::Tonal, 1.0f32, &noise_in),
+        (StretchAlgorithm::Transient, 1.0, &noise_in),
+        (StretchAlgorithm::Tonal, 1.5, &tone_in),
+        (StretchAlgorithm::Transient, 1.5, &tone_in),
+    ];
+    for (algo, ratio, input) in cases {
+        let in_rms = rms(&input[8_192..88_000]);
+        let out = TimeStretch::process(SR, algo, ratio, 0.0, input);
+        // Skip the priming edge and the flush tail.
+        let end = ((88_000.0 * ratio) as usize).min(out.len());
+        let out_rms = rms(&out[(8_192.0 * ratio) as usize..end]);
+        let db = 20.0 * (out_rms / in_rms).log10();
+        assert!(
+            db.abs() < 0.2,
+            "{algo:?} ratio {ratio}: level {db:+.2} dB (want within ±0.2 dB)"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 5. Determinism: streaming == offline (live == bounce)
 // ---------------------------------------------------------------------------

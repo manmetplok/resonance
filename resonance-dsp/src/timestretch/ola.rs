@@ -45,7 +45,21 @@ impl Ola {
 
     /// Add `frame` (already windowed) weighted by `window`, at the
     /// current synthesis position, then advance the position by `hop`.
+    /// The frame carries the window twice (analysis + synthesis), so
+    /// the normalising weight is `Σw²` — the phase vocoder's case.
     pub fn add_frame(&mut self, frame: &[f32], window: &[f32], hop: f64) {
+        self.add(frame, window, hop, true);
+    }
+
+    /// Add a raw (unwindowed) `frame` through the synthesis `window`: it
+    /// carries the window once, so the normalising weight is `Σw`.
+    /// WSOLA's case; normalising it by `Σw²` ran it `Σw/Σw²` (4/3 for
+    /// Hann at 75 % overlap, +2.5 dB) hot (DSP-14).
+    pub fn add_raw_frame(&mut self, frame: &[f32], window: &[f32], hop: f64) {
+        self.add(frame, window, hop, false);
+    }
+
+    fn add(&mut self, frame: &[f32], window: &[f32], hop: f64, windowed: bool) {
         let start = self.pos.round() as usize;
         let rel = start - self.base;
         let end = rel + frame.len();
@@ -55,7 +69,11 @@ impl Ola {
         }
         for j in 0..frame.len() {
             self.signal[rel + j] += frame[j] * window[j];
-            self.weight[rel + j] += window[j] * window[j];
+            self.weight[rel + j] += if windowed {
+                window[j] * window[j]
+            } else {
+                window[j]
+            };
         }
         self.pos += hop;
     }

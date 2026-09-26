@@ -14,7 +14,10 @@
 pub mod delay;
 pub mod lowpass;
 
+use std::sync::Arc;
+
 use crate::stages::glue_compressor::{GlueCompressor, GlueCompressorConfig};
+use crate::stages::linear_phase_eq::DesignWorker;
 use delay::DelayLine;
 use lowpass::LinearPhaseLowpass;
 use resonance_dsp::db_to_linear;
@@ -134,14 +137,23 @@ pub struct Multiband {
 }
 
 impl Multiband {
+    /// A multiband whose crossovers design on their own worker thread.
     pub fn new(sample_rate: f32, max_buffer: usize) -> Self {
+        Self::with_worker(sample_rate, max_buffer, Some(&DesignWorker::spawn()))
+    }
+
+    /// A multiband whose crossovers design through `worker` (or always
+    /// inline with `None`; the output is identical either way).
+    pub fn with_worker(sample_rate: f32, max_buffer: usize, worker: Option<&Arc<DesignWorker>>) -> Self {
         let default = MultibandConfig::default();
-        let delay_len = LinearPhaseLowpass::latency();
+        let xo = |hz| LinearPhaseLowpass::with_worker(sample_rate, hz, worker);
+        let xo1 = xo(default.crossover_hz[0]);
+        let delay_len = xo1.latency();
         Self {
             max_buffer,
-            xo1: LinearPhaseLowpass::new(sample_rate, default.crossover_hz[0]),
-            xo2: LinearPhaseLowpass::new(sample_rate, default.crossover_hz[1]),
-            xo3: LinearPhaseLowpass::new(sample_rate, default.crossover_hz[2]),
+            xo1,
+            xo2: xo(default.crossover_hz[1]),
+            xo3: xo(default.crossover_hz[2]),
             band_comps: [
                 GlueCompressor::new(sample_rate),
                 GlueCompressor::new(sample_rate),
@@ -174,9 +186,41 @@ impl Multiband {
         self.was_enabled = false;
     }
 
-    /// Stage latency in samples (identical to one linear-phase lowpass).
-    pub const fn latency() -> usize {
-        LinearPhaseLowpass::latency()
+    /// Stage latency in samples (identical to one linear-phase lowpass;
+    /// scales with the sample rate).
+    pub fn latency(&self) -> usize {
+        self.xo1.latency()
+    }
+
+    /// [`Self::latency`] of a multiband built for `sample_rate`.
+    pub fn latency_for(sample_rate: f32) -> usize {
+        LinearPhaseLowpass::latency_for(sample_rate)
+    }
+
+    /// Stagger the three crossovers' FFT iterations, per crossover and
+    /// channel (see [`LinearPhaseLowpass::set_phase_offsets`]).
+    pub fn set_phase_offsets(&mut self, offsets: [[usize; 2]; 3]) {
+        self.xo1.set_phase_offsets(offsets[0]);
+        self.xo2.set_phase_offsets(offsets[1]);
+        self.xo3.set_phase_offsets(offsets[2]);
+    }
+
+    /// Samples until each crossover channel's next FFT iteration.
+    pub fn iteration_countdowns(&self) -> [[usize; 2]; 3] {
+        [
+            self.xo1.iteration_countdowns(),
+            self.xo2.iteration_countdowns(),
+            self.xo3.iteration_countdowns(),
+        ]
+    }
+
+    /// Crossover designs taken from the worker vs. designed inline,
+    /// summed over the three lowpasses (diagnostics).
+    pub fn design_counts(&self) -> (u64, u64) {
+        [&self.xo1, &self.xo2, &self.xo3]
+            .iter()
+            .map(|x| x.design_counts())
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
     }
 
     /// Current gain reduction of each band's compressor in dB (positive
