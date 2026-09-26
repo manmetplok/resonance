@@ -118,12 +118,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // check ignores them.
     reconcile_stage(r, Stage::Tail, Some(&current), target_file, &ctx);
 
-    // -- Sort track / bus registry so view-layer invariant holds -------
-    r.registry.resort_tracks();
-    r.registry.resort_busses();
-    r.ui.view_caches.rebuild_output(&r.registry.busses);
-    r.compose.refresh_track_count(&r.registry.tracks);
-
     true
 }
 

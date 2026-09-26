@@ -140,9 +140,10 @@ pub enum Stage {
     /// track or clip is restored.
     Timeline,
     /// The entities: tracks, busses, the master chain, the track outputs,
-    /// then each plugin's state (blob, bypass, params). Right after
-    /// `Timeline` on both paths. After a `ClearAll` every entity is added;
-    /// on the diff path only changed scalars are sent.
+    /// then each plugin's state (blob, bypass, params), then the registry
+    /// order. Right after `Timeline` on both paths. After a `ClearAll`
+    /// every entity is added; on the diff path only changed scalars are
+    /// sent.
     Entities,
     /// The routing edges between entities: aux sends, then sidechain key
     /// routes. Both paths: right after every track, bus and the master
@@ -213,6 +214,9 @@ pub(crate) const DOMAINS: &[Domain] = &[
     // After every chain it names is added / matched: blobs, then per-slot
     // bypass, then params (which win over the blob).
     domain::<plugin_state::PluginState>(Stage::Entities),
+    // Last: resorts every registry the domains above filled or re-ordered,
+    // and (after a `ClearAll`) the plugin chains + side-index.
+    domain::<entities::EntityOrder>(Stage::Entities),
     // After every entity they connect. Sends before key routes, as both
     // paths always had it (the two are independent tables in the engine).
     domain::<routing::Sends>(Stage::Routing),

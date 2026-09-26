@@ -5,48 +5,35 @@
 //!
 //! ## Module layout
 //! - `mod.rs` (this file): public entry point [`replay_loaded_project`] and
-//!   the per-domain helpers that structure it.
+//!   the re-exported restore helpers.
 //! - `restore.rs`: standalone restore helpers (`restore_performance`,
 //!   `restore_quantize`, `restore_pool`, `restore_references`,
 //!   `restore_drum_patterns`, `restore_tempo_events`, `replay_take_groups`)
 //!   used both here and by the diff-based undo replay path.
 //!
 //! Domains migrated to the `Reconcile` driver (`super::reconcile`, ARCH-01
-//! A-13) are not restored inline here: [`replay_loaded_project`] opens
-//! with `Stage::Globals` and `Stage::Timeline`, runs `Stage::Routing` and
-//! `Stage::Clips` after the tracks, busses and master, and ends with
-//! `Stage::Content` and `Stage::Tail` — the same stages, in the same
-//! sequence, `try_diff_replay` runs.
+//! A-13) are not restored inline here: all [`replay_loaded_project`] does
+//! is `SetProjectDir` and every `Stage` in sequence (`reconcile_all_stages`)
+//! — the same stages, in the same sequence, `try_diff_replay` runs.
 
 mod restore;
 
 use resonance_audio::types::*;
 
 use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
-use crate::project::{LoadedProject, ProjectFile};
+use crate::project::LoadedProject;
 use crate::Resonance;
 
 // Re-export helpers consumed by sibling modules (undo replay, diff replay).
+// The registry wipe, the entity replay and the plugin-chain finalisation
+// that used to live here are the `Stage::Entities` reconcile domains
+// (ARCH-01 A-13f).
 pub use super::reconcile::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use restore::{
     replay_take_groups, restore_drum_patterns, restore_performance, restore_pool,
     restore_pool_assets, restore_quantize, restore_track_groups,
     reconcile_references, restore_references, restore_tempo_events, ReferenceMonitorSource,
 };
-
-/// Snapshot of the saved plugin-chain ordering for every track, bus, and the
-/// master chain. Collected from the project file *before* the registry is
-/// wiped, then re-applied *after* all tracks and plugins have been replayed.
-///
-/// `track_added` / `bus_added` / `master_added` push a new slot at the end
-/// whenever they see an `instance_id` that isn't already in the slot list —
-/// a `PluginAdded` event arriving out of order would silently scramble the
-/// saved chain. The post-replay sort in [`finalize_plugin_chains`] restores it.
-struct SavedPluginOrder {
-    tracks: std::collections::HashMap<TrackId, Vec<u64>>,
-    busses: std::collections::HashMap<BusId, Vec<u64>>,
-    master: Vec<u64>,
-}
 
 /// Replay a loaded project into the engine and rebuild GUI state. Called
 /// after `AudioEvent::AllCleared` confirms the engine is empty.
@@ -97,13 +84,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     reconcile_stage(r, Stage::Globals, None, project, &ctx);
     reconcile_stage(r, Stage::Timeline, None, project, &ctx);
 
-    // Collect the saved plugin-chain order so we can re-impose it after
-    // all async PluginAdded events have settled.
-    let saved_plugin_order = saved_plugin_order(project);
-
-    // Tracks (with their plugin chains), busses, the master chain, then
-    // the track outputs once every bus exists — each registry emptied by
-    // its own domain first (every entity added: `old` is `None`).
+    // Tracks (with their plugin chains), busses, the master chain, the
+    // track outputs once every bus exists, each plugin's blob / bypass /
+    // parked params, then the registry resort, the saved plugin-slot order
+    // and the plugin side-index — each registry emptied by its own domain
+    // first (every entity added: `old` is `None`).
     reconcile_stage(r, Stage::Entities, None, project, &ctx);
 
     // The aux sends, then the sidechain key routes (every one sent: `old`
@@ -118,9 +103,6 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // anything else) and the vocal audio-clip map.
     reconcile_stage(r, Stage::Clips, None, project, &ctx);
 
-    // Re-impose the saved plugin-slot order and refresh the side-index.
-    finalize_plugin_chains(r, &saved_plugin_order);
-
     // References, pool (after the clips, whose asset refs it counts),
     // quantize, performance, track groups, and the cycle-record take lanes
     // (each audio take's WAV resolved against the project directory, so a
@@ -133,65 +115,4 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // warning, and freeze last (a disk load's baseline fingerprints the
     // replayed content, lanes included).
     reconcile_stage(r, Stage::Tail, None, project, &ctx);
-}
-
-// ---------------------------------------------------------------------------
-// Per-domain helpers
-// ---------------------------------------------------------------------------
-
-/// Collect the saved plugin-chain order from the project file, so
-/// [`finalize_plugin_chains`] can re-impose it after replay.
-///
-/// The registry mirrors this used to wipe are emptied by their own
-/// reconcile domains, each just before it re-seeds its mirror: tracks,
-/// busses, master and the plugin side-index by `Stage::Entities`; audio
-/// and MIDI clips by `AudioClips` / `MidiClips`; aux sends and key routes
-/// by `Stage::Routing`; external instruments by `ExternalInstruments`;
-/// take lanes by `TakeGroups`. Nothing in between reads them.
-fn saved_plugin_order(project: &ProjectFile) -> SavedPluginOrder {
-    // Stash saved plugin-slot order per track / bus / master so we can
-    // re-apply it after all replays + late `PluginAdded` events have
-    // resolved. See [`finalize_plugin_chains`] for the sort that restores it.
-    let mut tracks =
-        std::collections::HashMap::with_capacity(project.tracks.len());
-    let mut busses =
-        std::collections::HashMap::with_capacity(project.busses.len());
-    for pt in &project.tracks {
-        tracks.insert(pt.id, pt.plugins.iter().map(|p| p.instance_id).collect());
-    }
-    for pb in &project.busses {
-        busses.insert(pb.id, pb.plugins.iter().map(|p| p.instance_id).collect());
-    }
-    let master = project
-        .master_plugins
-        .iter()
-        .map(|p| p.instance_id)
-        .collect();
-
-    SavedPluginOrder { tracks, busses, master }
-}
-
-/// Re-impose the saved plugin-chain order on every track, bus, and the
-/// master chain, then rebuild the `plugin_mirror.index` side-index. Sorting in
-/// place is cheap (Rust's sort is adaptive — already-sorted slices are O(n))
-/// and safely no-ops in the common case where placeholders + events landed
-/// in the expected order.
-fn finalize_plugin_chains(r: &mut Resonance, saved: &SavedPluginOrder) {
-    for track in &mut r.registry.tracks {
-        if let Some(order) = saved.tracks.get(&track.id) {
-            sort_plugins_by_saved_order(&mut track.plugins, order);
-        }
-    }
-    for bus in &mut r.registry.busses {
-        if let Some(order) = saved.busses.get(&bus.id) {
-            sort_plugins_by_saved_order(&mut bus.plugins, order);
-        }
-    }
-    sort_plugins_by_saved_order(&mut r.master.plugins, &saved.master);
-
-    // Re-populate the `with_plugin_mut` side-index from the wholesale
-    // replay we just performed. Per-slot inserts would also work but
-    // a single rebuild is simpler and keeps the entity helpers focused
-    // on their own concern.
-    r.rebuild_plugin_index();
 }

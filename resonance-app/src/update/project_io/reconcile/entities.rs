@@ -33,8 +33,9 @@ use crate::Resonance;
 ///   plugin side-index are emptied, the app track-id counter is bumped
 ///   past every saved id, then every track goes out (`AddTrack` /
 ///   `AddInstrumentTrack` / `AddVocalTrack` / `CreateSubTrack` + every
-///   scalar + its plugin chain) and is mirrored. Then the legacy
-///   generate-params migration, which reads the replayed track roles.
+///   scalar + its plugin chain) and is mirrored in file order. Then the
+///   legacy generate-params migration, which reads the replayed track
+///   roles.
 /// * Diff: per track, each scalar that differs from `old` is sent; the
 ///   mirror takes every field (name, order, …) from `new`.
 ///
@@ -68,13 +69,10 @@ impl Reconcile for Tracks {
             for pt in &new.tracks {
                 replay_track(r, pt);
             }
-            // Defensive: older project files weren't guaranteed to be saved
-            // in .order sequence, and replay relies on the registry staying
-            // sorted by .order for the view layer's invariant.
-            r.registry.resort_tracks();
-            r.compose.refresh_track_count(&r.registry.tracks);
             // Migrate old generate_params + track roles to lane_generators
             // for projects predating the unified lane generator system.
+            // Keyed by track id, so the registry's order (sorted later, by
+            // `EntityOrder`) does not matter.
             r.compose.migrate_old_generate_params(&r.registry.tracks);
             return;
         };
@@ -109,9 +107,6 @@ impl Reconcile for Busses {
             for pb in &new.busses {
                 replay_bus(r, pb);
             }
-            r.registry.resort_busses();
-            // Output-destination picker depends on the bus list.
-            r.ui.view_caches.rebuild_output(&r.registry.busses);
             return;
         };
         let old_by_id: HashMap<u64, &ProjectBus> = old.busses.iter().map(|b| (b.id, b)).collect();
@@ -192,6 +187,55 @@ impl Reconcile for TrackOutputs {
                 output,
             });
         }
+    }
+}
+
+/// Last in `Entities`, on every origin: the registry resorted by `.order`
+/// (the view layer's invariant — older files were not guaranteed to be
+/// saved in order, and a diff restore may have changed an `.order`), the
+/// output-destination picker rebuilt from the bus list, the compose
+/// instrument-lane count refreshed.
+///
+/// After a `ClearAll` also: each chain re-sorted into its saved order
+/// (stable, so a no-op when the placeholders went in in order) and the
+/// plugin side-index rebuilt from the replayed chains. The diff path's
+/// chains cannot have moved: `structurally_compatible` requires the same
+/// instance ids in the same order, and its index is live.
+pub(crate) struct EntityOrder;
+
+impl Reconcile for EntityOrder {
+    const NAME: &'static str = "entity_order";
+
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _ctx: &ReconcileCtx<'_>) {
+        r.registry.resort_tracks();
+        r.registry.resort_busses();
+        r.ui.view_caches.rebuild_output(&r.registry.busses);
+        r.compose.refresh_track_count(&r.registry.tracks);
+        if old.is_some() {
+            return;
+        }
+        let saved_ids = |plugins: &[ProjectPlugin]| -> Vec<u64> {
+            plugins.iter().map(|p| p.instance_id).collect()
+        };
+        let tracks: HashMap<TrackId, Vec<u64>> =
+            new.tracks.iter().map(|pt| (pt.id, saved_ids(&pt.plugins))).collect();
+        let busses: HashMap<BusId, Vec<u64>> =
+            new.busses.iter().map(|pb| (pb.id, saved_ids(&pb.plugins))).collect();
+        for track in &mut r.registry.tracks {
+            if let Some(order) = tracks.get(&track.id) {
+                sort_plugins_by_saved_order(&mut track.plugins, order);
+            }
+        }
+        for bus in &mut r.registry.busses {
+            if let Some(order) = busses.get(&bus.id) {
+                sort_plugins_by_saved_order(&mut bus.plugins, order);
+            }
+        }
+        sort_plugins_by_saved_order(&mut r.master.plugins, &saved_ids(&new.master_plugins));
+        // Re-populate the `with_plugin_mut` side-index from the wholesale
+        // replay. Per-slot inserts would also work but a single rebuild is
+        // simpler and keeps the add bodies focused on their own concern.
+        r.rebuild_plugin_index();
     }
 }
 

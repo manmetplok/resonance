@@ -221,6 +221,7 @@ fn the_table_is_the_agreed_order() {
             (Stage::Entities, "master"),
             (Stage::Entities, "track_outputs"),
             (Stage::Entities, "plugin_state"),
+            (Stage::Entities, "entity_order"),
             (Stage::Routing, "sends"),
             (Stage::Routing, "sidechain_routes"),
             (Stage::Clips, "audio_clips"),
@@ -642,4 +643,23 @@ fn a_diff_undo_restores_plugin_state_before_routing() {
         master < state && state < bypass && bypass < param && param < send,
         "{master} < {state} < {bypass} < {param} < {send}"
     );
+}
+
+/// Diff path (A-13f): the registry resort, the output-picker rebuild and
+/// the lane count moved from after `Tail` to the end of `Entities`
+/// (`EntityOrder`; the trace tests pin the position). An undo that swaps
+/// two tracks' `.order` and renames a bus leaves the registry sorted.
+#[test]
+fn a_diff_undo_resorts_the_registry() {
+    let mut app = app_with_routing();
+    app.test_push_track(TrackState::new_instrument(KICK + 1, 1));
+    let mut target = app.test_snapshot_for_undo();
+    for pt in &mut target.project.file.tracks {
+        pt.order = if pt.id == KICK { 1 } else { 0 };
+    }
+    target.project.file.busses[0].name = "Drums".to_string();
+    app.test_begin_restore_from_snapshot(target);
+    let ids: Vec<_> = app.test_registry().tracks.iter().map(|t| t.id).collect();
+    assert_eq!(ids, vec![KICK + 1, KICK], "sorted by the restored .order");
+    assert_eq!(app.test_registry().busses[0].name, "Drums");
 }
