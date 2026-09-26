@@ -22,6 +22,7 @@ pub mod vocal_lane;
 pub mod vocal_roll;
 
 pub use layout::{
-    section_bars_in_range, section_total_beats, section_total_ticks, tempo_map_hash,
+    bar_to_section_tick, bars_span, sample_to_section_tick, section_bars_in_range,
+    section_bars_in_range_every, section_total_beats, section_total_ticks, tempo_map_hash,
     visible_x_window, workspace_width, BarUnit, SectionBar, WORKSPACE_PAD_X,
 };

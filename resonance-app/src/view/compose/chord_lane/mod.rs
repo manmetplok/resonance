@@ -180,9 +180,7 @@ impl<'a> ChordLaneCanvas<'a> {
 
     /// Total beats in the section, summing per-bar numerators.
     pub(super) fn total_beats(&self) -> u32 {
-        (0..self.definition.length_bars)
-            .map(|b| self.tempo_map.numerator_at_bar(self.start_bar + b) as u32)
-            .sum()
+        super::section_total_beats(self.tempo_map, self.start_bar, self.definition.length_bars)
     }
 }
 

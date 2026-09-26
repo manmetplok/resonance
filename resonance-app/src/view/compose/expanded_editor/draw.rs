@@ -15,6 +15,10 @@ use crate::theme;
 
 use super::{ExpandedEditorCanvas, TOOLBAR_HEIGHT};
 
+/// Closest two bar lines may sit in the beat grid; denser sections draw
+/// every n-th bar (FU-V2c).
+const MIN_BAR_LINE_PX: f32 = 4.0;
+
 // ---------------------------------------------------------------------------
 // Drawing helpers
 // ---------------------------------------------------------------------------
@@ -81,12 +85,24 @@ impl<'a> ExpandedEditorCanvas<'a> {
         let tpb = TICKS_PER_QUARTER_NOTE;
         let total_ticks = self.section_ticks();
 
-        // Walk bars for correct placement with varying time signatures.
-        let mut tick_pos: u64 = 0;
-        for bar_offset in 0..self.section_length_bars {
-            let bar = self.start_bar + bar_offset;
-            let num = self.tempo_map.numerator_at_bar(bar) as u64;
-            let bar_ticks = self.tempo_map.bar_len_ticks_at(bar);
+        // Walk only the bars on screen (FU-V2c): the visible tick range,
+        // thinned to one bar line per `MIN_BAR_LINE_PX` — the editor fits
+        // the whole section, so at 100 000 bars every bar is "visible".
+        let lo_tick = viewport.x_local_to_tick(0.0) as f64;
+        let hi_tick = viewport.x_local_to_tick(grid_w) as f64;
+        let bar_px = grid_w / self.section_length_bars as f32;
+        let stride = (MIN_BAR_LINE_PX / bar_px.max(f32::MIN_POSITIVE)).ceil().max(1.0) as u32;
+        let bars = crate::view::compose::section_bars_in_range_every(
+            self.tempo_map,
+            self.start_bar,
+            self.section_length_bars,
+            crate::view::compose::BarUnit::Ticks,
+            lo_tick,
+            hi_tick,
+            stride,
+        );
+        for b in bars {
+            let (bar_offset, tick_pos, num) = (b.offset, b.tick, b.beats as u64);
 
             // Bar line — LINE, 1px hairline like the rest of the redesign.
             let x = grid_x + viewport.tick_to_x_local(tick_pos);
@@ -108,7 +124,10 @@ impl<'a> ExpandedEditorCanvas<'a> {
                 }
             }
 
-            // Beat lines — LINE_2 hairlines.
+            // Beat lines — LINE_2 hairlines, only on bars drawn one by one.
+            if stride > 1 {
+                continue;
+            }
             for beat in 1..num {
                 let beat_tick = tick_pos + beat * tpb;
                 let bx = grid_x + viewport.tick_to_x_local(beat_tick);
@@ -120,11 +139,9 @@ impl<'a> ExpandedEditorCanvas<'a> {
                     );
                 }
             }
-
-            tick_pos += bar_ticks;
         }
         // Final bar line at section end
-        let x = grid_x + viewport.tick_to_x_local(tick_pos);
+        let x = grid_x + viewport.tick_to_x_local(total_ticks);
         if x >= grid_x && x <= grid_x + grid_w {
             frame.fill_rectangle(
                 Point::new(x, TOOLBAR_HEIGHT),
@@ -142,7 +159,10 @@ impl<'a> ExpandedEditorCanvas<'a> {
                 a: 0.5,
                 ..theme::LINE_2
             };
-            for idx in 0..=(total_ticks / sub) {
+            // Only the subdivisions on screen, not the section's worth.
+            let first = viewport.x_local_to_tick(0.0) / sub;
+            let last = (viewport.x_local_to_tick(grid_w) / sub + 1).min(total_ticks / sub);
+            for idx in first..=last {
                 let tick = idx * sub;
                 if tick.is_multiple_of(tpb) {
                     continue;

@@ -92,19 +92,11 @@ impl<'a> ComposeGlobalTracksCanvas<'a> {
     }
 
     /// Convert a bar number to a section-relative tick position.
+    /// Clamped to the section end; O(signature changes), not O(bars)
+    /// (FU-V2c).
     fn bar_to_section_tick(&self, bar: u32) -> f64 {
-        let mut tick: f64 = 0.0;
-        let end = bar.min(self.start_bar + self.section_length_bars);
-        if bar > self.start_bar {
-            for b in self.start_bar..end {
-                tick += self.tempo_map.bar_len_ticks_at(b) as f64;
-            }
-        } else if bar < self.start_bar {
-            for b in bar..self.start_bar {
-                tick -= self.tempo_map.bar_len_ticks_at(b) as f64;
-            }
-        }
-        tick
+        let end = bar.min(self.start_bar.saturating_add(self.section_length_bars));
+        crate::view::compose::bar_to_section_tick(self.tempo_map, self.start_bar, end)
     }
 }
 

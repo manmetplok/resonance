@@ -413,19 +413,23 @@ impl<'a> VocalLaneCanvas<'a> {
             return;
         }
         let beat_px = lane_rect.width / total_beats as f32;
-        let mut beat_pos: u32 = 0;
-        for bar_offset in 0..self.length_bars {
-            let bar = self.start_bar + bar_offset;
-            let num = self.tempo_map.numerator_at_bar(bar) as u32;
-            if bar_offset > 0 {
-                let x = lane_rect.x + beat_pos as f32 * beat_px;
-                frame.fill_rectangle(
-                    Point::new(x, lane_rect.y),
-                    Size::new(1.0, lane_rect.height),
-                    theme::LINE_2,
-                );
-            }
-            beat_pos += num;
+        // Only the bars in the visible window (FU-V2c).
+        let (win_lo, win_hi) = self.visible_x;
+        let bars = crate::view::compose::section_bars_in_range(
+            self.tempo_map,
+            self.start_bar,
+            self.length_bars,
+            crate::view::compose::BarUnit::Beats,
+            ((win_lo - lane_rect.x) / beat_px) as f64,
+            ((win_hi - lane_rect.x) / beat_px) as f64,
+        );
+        for bar in bars.iter().filter(|b| b.offset > 0) {
+            let x = lane_rect.x + bar.beat as f32 * beat_px;
+            frame.fill_rectangle(
+                Point::new(x, lane_rect.y),
+                Size::new(1.0, lane_rect.height),
+                theme::LINE_2,
+            );
         }
     }
 }

@@ -118,6 +118,7 @@ pub fn view<'a>(
         derived_clips: &app.compose.derived_clips,
         definition_id: definition.id,
         placement_id: placement.id,
+        visible_x: super::visible_x_window(app.compose.workspace_view),
     };
 
     container(
@@ -150,6 +151,10 @@ pub(super) struct VocalLaneCanvas<'a> {
     pub(super) derived_clips: &'a std::collections::HashMap<(u64, u64, TrackId), ClipId>,
     pub(super) definition_id: u64,
     pub(super) placement_id: u64,
+    /// Canvas-x window that may be on screen
+    /// ([`super::visible_x_window`]); the bar grid draws only the bars
+    /// inside it (FU-V2c).
+    pub(super) visible_x: (f32, f32),
 }
 
 /// Local canvas state — tracks the last single-click on a vocal lane
@@ -184,6 +189,8 @@ impl VocalLaneCanvas<'_> {
         super::tempo_map_hash(self.tempo_map).hash(&mut h);
         self.start_bar.hash(&mut h);
         self.length_bars.hash(&mut h);
+        self.visible_x.0.to_bits().hash(&mut h);
+        self.visible_x.1.to_bits().hash(&mut h);
         match &self.selected_lane {
             SelectedLane::Instrument(t) => Some(*t),
             _ => None,
