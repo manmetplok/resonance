@@ -2423,7 +2423,7 @@ fn an_import_finishing_after_clear_all_is_dropped() {
     let project = dir.join("project");
     std::fs::create_dir_all(project.join("audio")).unwrap();
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.set_project_dir(project.clone());
     let clip_id = engine.next_clip_id();
     engine.import_clip(7, source.display().to_string(), 0);
