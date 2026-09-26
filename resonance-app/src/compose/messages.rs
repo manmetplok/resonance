@@ -394,6 +394,14 @@ impl ComposeMessage {
             Self::DrumGroups(m) => m.undo_action(),
             Self::Arrangement(m) => m.undo_action(),
             Self::Expression { msg, .. } => msg.undo_action(),
+            // Keyed by lane (definition + track) so a lane-inspector text
+            // field can coalesce (FU-A10a) — `LaneInspectorMsg` itself
+            // doesn't carry the lane identity.
+            Self::LaneInspector {
+                definition_id,
+                track_id,
+                msg,
+            } => msg.undo_action(*definition_id, *track_id),
             // Everything else in Compose mutates project state.
             Self::CreateMidiClipInSection { .. }
             | Self::ConfirmCreateSection
@@ -422,8 +430,7 @@ impl ComposeMessage {
             | Self::ControlSetPronunciation { .. }
             | Self::ControlClearPronunciation { .. }
             | Self::ControlRenderVocal { .. }
-            | Self::ChordInspector { .. }
-            | Self::LaneInspector { .. } => UndoAction::Record,
+            | Self::ChordInspector { .. } => UndoAction::Record,
         }
     }
 }
@@ -752,6 +759,103 @@ pub enum LaneInspectorMsg {
     Regenerate,
 }
 
+impl LaneInspectorMsg {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here via `ComposeMessage::LaneInspector`). Exhaustive on
+    /// purpose — no `_` arm — so a new variant does not compile until
+    /// someone decides what undo does with it (ARCH-06 A6-4).
+    ///
+    /// Takes `definition_id`/`track_id` — the enclosing
+    /// `ComposeMessage::LaneInspector`'s lane identity — because the two
+    /// text fields below coalesce per lane, and `LaneInspectorMsg` itself
+    /// doesn't carry that identity.
+    pub(crate) fn undo_action(
+        &self,
+        definition_id: u64,
+        track_id: TrackId,
+    ) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            // Typed straight into the project on every keystroke, with no
+            // begin/commit pair — coalesce per lane (FU-A10a; was one
+            // undo entry per keystroke).
+            Self::SetVocalTheme(_) => {
+                UndoAction::RecordCoalesced(CoalesceKey::VocalTheme(definition_id, track_id))
+            }
+            // Same as `SetVocalTheme`, keyed additionally by which draft
+            // line so editing two lines in a row is two entries but
+            // retyping one is one (FU-A10a).
+            Self::SetVocalLineText(line_n, _) => UndoAction::RecordCoalesced(
+                CoalesceKey::VocalLineText(definition_id, track_id, *line_n),
+            ),
+            // Every other lane-inspector edit is a discrete pick, toggle
+            // or action — not a keystroke/knob burst — and records
+            // atomically like the rest of Compose.
+            Self::SetGenerator(..)
+            | Self::SetBassStyle(..)
+            | Self::SetBassBaseNote(..)
+            | Self::SetBassVelocity(..)
+            | Self::SetBassMotifMode(..)
+            | Self::SetBassMotifPhrase(..)
+            | Self::SetMelodyStyle(..)
+            | Self::SetMelodyRegisterLow(..)
+            | Self::SetMelodyRegisterHigh(..)
+            | Self::SetMelodyNoteValue(..)
+            | Self::SetMelodyRestDensity(..)
+            | Self::SetMelodyVelocity(..)
+            | Self::SetMelodyArticulation(..)
+            | Self::SetMelodyContour(..)
+            | Self::SetMelodyPhraseLen(..)
+            | Self::ToggleMelodyFillVocalGaps
+            | Self::SetPadRegisterLow(..)
+            | Self::SetPadRegisterHigh(..)
+            | Self::SetPadVelocity(..)
+            | Self::SetVocalMood(..)
+            | Self::SetVocalPov(..)
+            | Self::SetVocalRhyme(..)
+            | Self::SetVocalLines(..)
+            | Self::SetVocalSyllablesMin(..)
+            | Self::SetVocalSyllablesMax(..)
+            | Self::ToggleVocalMatchSyllables
+            | Self::ToggleVocalAvoidCliches
+            | Self::ToggleVocalLockLine(..)
+            | Self::VocalBulkLyricsAction(..)
+            | Self::RerollUnlockedLyrics
+            | Self::AutoSyllabifyLyrics
+            | Self::SetVocalVoiceType(..)
+            | Self::SetVocalRangeLow(..)
+            | Self::SetVocalRangeHigh(..)
+            | Self::SetVocalStyle(..)
+            | Self::SetVocalContour(..)
+            | Self::SetVocalSyllableMode(..)
+            | Self::SetVocalChordToneAnchor(..)
+            | Self::SetVocalLeapRange(..)
+            | Self::SetVocalPhraseLength(..)
+            | Self::SetVocalBreath(..)
+            | Self::ToggleVocalStayInScale
+            | Self::ToggleVocalAvoidClashes
+            | Self::ToggleVocalUseSectionMotif
+            | Self::SetVocalTimbre(..)
+            | Self::SetVocalVoicebank(..)
+            | Self::SetVocalSinger(..)
+            | Self::SetVocalSingerMeiji(..)
+            | Self::SetVocalVibrato(..)
+            | Self::SetVocalVibratoRate(..)
+            | Self::SetVocalTension(..)
+            | Self::SetVocalTensionVelocityAmount(..)
+            | Self::SetVocalTensionContourAmount(..)
+            | Self::SetVocalPortamentoMs(..)
+            | Self::SetVocalArticulation(..)
+            | Self::SetVocalConsonantEmphasis(..)
+            | Self::GenerateVocalAll
+            | Self::GenerateVocalLyricsOnly
+            | Self::GenerateVocalMelodyOnly
+            | Self::RerenderVocalAudio
+            | Self::Regenerate => UndoAction::Record,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Drum groups
 // ---------------------------------------------------------------------------
@@ -872,7 +976,7 @@ impl DrumGroupsMessage {
     /// variant does not compile until someone decides what undo does with
     /// it (ARCH-06 A6-4).
     pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
-        use crate::undo::UndoAction;
+        use crate::undo::{CoalesceKey, DrumGroupKnob, UndoAction};
         match self {
             // Focus, the manager modal and the inline rename's begin /
             // typing / cancel only touch `DrumrollViewState`, which is
@@ -888,6 +992,33 @@ impl DrumGroupsMessage {
             | Self::CloseManager
             | Self::ManagerSelectGroup { .. }
             | Self::ManagerSetFilter(..) => UndoAction::Skip,
+            // The manager's group-name field records one keystroke at a
+            // time straight into the project, with no begin/commit pair
+            // like the pattern chip's rename above — coalesce it instead
+            // (FU-A10a; was one undo entry per keystroke).
+            Self::RenameGroup { group_id, .. } => {
+                UndoAction::RecordCoalesced(CoalesceKey::DrumGroupName(*group_id))
+            }
+            // The right-rail generator knobs deliver one message per
+            // slider step; coalesce per group *and* per knob so dragging
+            // density then swing on the same group is two entries, not
+            // one, but repeated steps on the same knob merge (FU-A10a;
+            // was one entry per step).
+            Self::SetGroupDensity { group_id, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Density),
+            ),
+            Self::SetGroupSwing { group_id, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Swing),
+            ),
+            Self::SetGroupAccent { group_id, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Accent),
+            ),
+            Self::SetGroupHumanize { group_id, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Humanize),
+            ),
+            Self::SetGroupFills { group_id, .. } => UndoAction::RecordCoalesced(
+                CoalesceKey::DrumGroupParam(*group_id, DrumGroupKnob::Fills),
+            ),
             // Pattern-bank and group edits mutate the persisted drum
             // patterns / section assignment.
             Self::AssignPattern { .. }
@@ -899,7 +1030,6 @@ impl DrumGroupsMessage {
             | Self::CommitRenamePattern
             | Self::AddGroup
             | Self::DeleteGroup { .. }
-            | Self::RenameGroup { .. }
             | Self::SetGroupColor { .. }
             | Self::TogglePadAssignment { .. }
             | Self::ClearGroupPads { .. }
@@ -907,11 +1037,6 @@ impl DrumGroupsMessage {
             | Self::SetGroupCycle { .. }
             | Self::SetGroupPhase { .. }
             | Self::SetGroupMeter { .. }
-            | Self::SetGroupDensity { .. }
-            | Self::SetGroupSwing { .. }
-            | Self::SetGroupAccent { .. }
-            | Self::SetGroupHumanize { .. }
-            | Self::SetGroupFills { .. }
             | Self::SetPadWeight { .. }
             | Self::GenerateGroup { .. }
             | Self::GenerateAllGroups
