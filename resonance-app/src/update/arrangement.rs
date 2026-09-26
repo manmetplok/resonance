@@ -74,6 +74,26 @@ use super::tempo_reanchor::{musical_anchors, reanchor_to_tempo};
 use crate::state::{SignatureEvent, TempoEvent};
 use crate::Resonance;
 
+/// Arrangement-marker actions, routed like [`TransportMessage`] and
+/// handled by `update/marker.rs`. The mutating variants
+/// (`AddAtPlayhead`, `Rename`, `Recolor`, `Delete`, `MoveStart`,
+/// `SetRegionEnd`, `LoopToRegion`, `SeedFromSections`) record an undo
+/// entry; the navigation variants (`JumpToNext`, `JumpToPrev`, `JumpTo`,
+/// `PlayFromMarker`) only move the playhead / transport and are not
+/// undoable, mirroring `SeekToSample` / `Play`.
+/// Structural bar shifts. Both variants move everything after the cut
+/// and are recorded as a single undo entry — the whole point of having
+/// them at all is that a restructure is one transaction rather than a
+/// few hundred per-object calls that can be interrupted half-done.
+#[derive(Debug, Clone, Copy)]
+pub enum ArrangementMessage {
+    /// Open `count` bars at 1-based `at_bar`.
+    InsertBars { at_bar: u32, count: u32 },
+    /// Close `count` bars at 1-based `at_bar`, deleting what starts
+    /// inside them.
+    RemoveBars { at_bar: u32, count: u32 },
+}
+
 /// One structural shift's outcome, as the control layer reports it.
 #[derive(Debug, Clone, Default)]
 pub struct ShiftOutcome {
