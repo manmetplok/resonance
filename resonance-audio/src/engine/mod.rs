@@ -286,6 +286,12 @@ pub struct SharedState {
     /// The callback's one-shot oversize-buffer warning, logged by the
     /// engine loop — never the audio thread (code review ARCH-05 A5-2).
     pub oversize_buffer: crate::cycle_load::OversizeBufferLatch,
+    /// Plugins an offline render's reset took down: active before, and
+    /// neither the stop/start cycle nor a full reactivation brought them
+    /// back (FU-M8b). Pushed by the bounce workers, drained and reported
+    /// by the engine loop — each instance once, since a plugin already
+    /// inactive at the next render is not pushed again.
+    pub plugins_dead_after_reset: parking_lot::Mutex<Vec<crate::types::PluginInstanceId>>,
     /// Replaced snapshots kept alive until the engine loop's sweep finds
     /// no reader pinning them (code review MIX-04 / ARCH-02 A2-2). Every
     /// `ArcSwap` the callback reads is published through
@@ -434,6 +440,7 @@ impl Default for SharedState {
             lock_misses: crate::cycle_load::LockMissCounters::new(),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
             oversize_buffer: crate::cycle_load::OversizeBufferLatch::default(),
+            plugins_dead_after_reset: parking_lot::Mutex::new(Vec::new()),
             retired: retire::Retired::new(),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),

@@ -166,7 +166,7 @@ pub fn to_freeze_cache(
     let mut writer = hound::WavWriter::create(output.temp(), spec)
         .map_err(|e| format!("Failed to create freeze-cache WAV: {e}"))?;
 
-    reset_plugins(plugins);
+    reset_plugins(plugins, shared);
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));

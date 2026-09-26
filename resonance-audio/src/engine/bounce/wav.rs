@@ -443,7 +443,7 @@ pub(crate) fn run_export(
         // meters without writing anything. `reset_plugins` (CLAP `reset`,
         // code review ENG-04) before each pass makes the render
         // deterministic so pass 2 reproduces the measured pass exactly.
-        reset_plugins(plugins);
+        reset_plugins(plugins, shared);
         let mut measure = LoudnessMeasure::new(sample_rate);
         match render_range(
             &ctx,
@@ -475,7 +475,7 @@ pub(crate) fn run_export(
         // PASS 2 — apply: re-render, trim by `gain_db`, brick-wall limit
         // true peaks to the ceiling, feed the sink, and re-measure the
         // limited output for the achieved loudness report.
-        reset_plugins(plugins);
+        reset_plugins(plugins, shared);
         let mut limiter = TruePeakLimiter::new(sample_rate as f32, gain_db, normalize.ceiling_dbtp);
         let mut remeasure = LoudnessMeasure::new(sample_rate);
         let mut stage: Vec<f32> = Vec::new();
@@ -528,7 +528,7 @@ pub(crate) fn run_export(
         (lufs, measured.true_peak_dbtp)
     } else {
         // Single pass — byte-for-byte the pre-normalization export.
-        reset_plugins(plugins);
+        reset_plugins(plugins, shared);
         let outcome = render_range(
             &ctx,
             &mut scratch,

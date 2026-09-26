@@ -607,6 +607,16 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
             );
         }
 
+        // Plugins an offline render's reset left dead (FU-M8b).
+        if let Some(mut dead) = ctx.shared.plugins_dead_after_reset.try_lock() {
+            for id in dead.drain(..) {
+                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                    "Plugin instance {id} failed to restart after an offline render; it is \
+                     deactivated and will stay silent."
+                )));
+            }
+        }
+
         // Audition preview housekeeping: emit AuditionStopped on a natural
         // finish, keep the sync-to-tempo ratio current, and throttle the
         // AuditionPosition events that drive the preview scrub playhead.
