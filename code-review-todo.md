@@ -88,6 +88,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-13e (ARCH-01) | Reconcile group 3: `Routing` stage (sends, sidechain routes); diff-path sends now after master (engine state proven disjoint) | opus | merged | ee067a01 |
 | refactor-intent A-13f (ARCH-01) | `Stage::Entities` (tracks, busses, master, track_outputs, plugin_state, entity_order); both paths = setup + `reconcile_all_stages`; plugin bypass after blob on both paths | opus | merged | b7531c90 |
 | refactor-intent A-13g (ARCH-01) | Structural gate drops sections, placements, drum patterns, legacy drum groups, track groups, markers — those undos take the diff path | opus | merged | 37b049a4 |
+| refactor-intent A-13h (ARCH-01) | Diff-path add/remove/reorder of busses + plugins; `Stage::Removals`; per-instance fresh/live; `RestoreEchoes` ledger; gate drops bus + plugin-chain checks | opus | merged | 67559bad |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
