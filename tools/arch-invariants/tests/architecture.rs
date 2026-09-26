@@ -523,6 +523,61 @@ fn app_test_binaries_are_the_known_groups() {
     );
 }
 
+/// The same rule for `resonance-audio/tests/` (code review ARCH-03): its
+/// 129 one-file targets were grouped into seven by source area, plus the
+/// four that own process-global state and so need a process of their own —
+/// a `#[global_allocator]` (`sidechain_taps`, `retire_queue`; one per
+/// binary), a lowered `RLIMIT_FSIZE` (`recording_write_failure`), and the
+/// one-shot engine-disconnect latch (`engine_send_disconnected`). A new
+/// test is a module in a group; a new standalone needs one of those
+/// reasons, and an entry here saying which.
+///
+/// Exercised 2026-09-26: created `resonance-audio/tests/scratch.rs` →
+/// failed with `scratch.rs: new top-level test file`; deleted.
+#[test]
+fn audio_test_binaries_are_the_known_groups() {
+    let root = workspace_root();
+    let known: BTreeSet<&str> = [
+        // groups
+        "bounce",
+        "clap_host",
+        "engine",
+        "io",
+        "midi_hw",
+        "mixer",
+        "types",
+        // standalone: process-global state
+        "engine_send_disconnected",
+        "recording_write_failure",
+        "retire_queue",
+        "sidechain_taps",
+    ]
+    .into_iter()
+    .collect();
+    let actual: BTreeSet<String> = fs::read_dir(root.join("resonance-audio/tests"))
+        .expect("resonance-audio/tests exists")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "rs"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let mut violations: Vec<String> = actual
+        .iter()
+        .filter(|s| !known.contains(s.as_str()))
+        .map(|s| format!("{s}.rs: new top-level test file — add a module to a group binary instead"))
+        .collect();
+    violations.extend(
+        known
+            .iter()
+            .filter(|k| !actual.contains(**k))
+            .map(|k| format!("{k}.rs: test binary is gone — update this list if that was deliberate")),
+    );
+    report(
+        "CLAUDE.md → Tests: resonance-audio/tests/ holds exactly the group binaries",
+        &violations,
+    );
+}
+
 /// ARCHITECTURE.md → Test Layout: "Tests live in `<crate>/tests/`, not in
 /// `#[cfg(test)] mod tests` blocks inside source files", with the
 /// documented `resonance-app` private-helper exception ("shrink this list
