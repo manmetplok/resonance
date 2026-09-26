@@ -423,12 +423,12 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
     }
 
     // Read plugin state blobs for every track, bus, and master plugin.
-    let mut plugin_states: HashMap<PluginInstanceId, Vec<u8>> = HashMap::new();
+    let mut plugin_states: HashMap<PluginInstanceId, std::sync::Arc<[u8]>> = HashMap::new();
     let mut load_plugin_state = |plugin: &ProjectPlugin| {
         let state_path = project_dir.join(&plugin.state_file);
         match std::fs::read(&state_path) {
             Ok(data) => {
-                plugin_states.insert(plugin.instance_id, data);
+                plugin_states.insert(plugin.instance_id, data.into());
             }
             Err(e) => {
                 tracing::warn!(

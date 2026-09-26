@@ -46,7 +46,7 @@ pub(super) fn add(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
     // registry a beat later — same pattern as the external-instrument
     // add). `AddControlTrack` carries the hint + name + drums promotion
     // as one undoable step.
-    let track_id = app.registry.allocate_sub_track_id();
+    let track_id = app.allocate_track_id();
     let task = run_via_update(
         app,
         Message::Track(TrackMessage::AddControlTrack {

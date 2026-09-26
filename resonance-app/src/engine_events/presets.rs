@@ -74,7 +74,7 @@ pub(super) fn finish_preset_save(r: &mut Resonance, pending: &crate::PendingPres
             plugin_name: p.plugin_name.clone(),
             clap_plugin_id: p.clap_plugin_id.clone(),
             clap_file_path: p.clap_file_path.clone(),
-            state: r.plugin_state_cache.get(&p.instance_id).cloned(),
+            state: r.plugin_state_cache.get(&p.instance_id).map(|b| b.to_vec()),
         })
         .collect();
 

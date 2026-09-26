@@ -97,7 +97,7 @@ pub fn plugin_states_for_save(
                 continue;
             }
             if let Some(blob) = r.plugin_state_cache.get(&slot.instance_id) {
-                out.push((slot.instance_id, blob.clone()));
+                out.push((slot.instance_id, blob.to_vec()));
             }
         }
     };

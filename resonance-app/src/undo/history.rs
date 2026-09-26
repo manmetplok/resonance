@@ -6,9 +6,12 @@
 
 use std::collections::VecDeque;
 
-use resonance_audio::DEFAULT_HISTORY_CAPACITY;
-
 use super::snapshot::{CoalesceKey, UndoSnapshot};
+
+/// Maximum number of undo history entries retained. Not
+/// user-configurable yet. Undo is purely an app concern, so the bound
+/// lives here rather than in the audio crate's limits (ARCH-09 A9-1).
+pub const DEFAULT_HISTORY_CAPACITY: usize = 200;
 
 /// Bounded undo / redo stack with a pending-transaction slot for
 /// multi-message gestures (clip drag, trim, loop drag, MIDI note drag)

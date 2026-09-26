@@ -136,7 +136,12 @@ pub(crate) fn handle_add_track(
         state.next_track_id += 1;
         i
     });
-    if id_hint.is_some() {
+    // A hint below the app's base is an engine-allocated id coming back
+    // on the project-load replay, and the counter has to move past it.
+    // One at or above the base is app-owned (`SUB_TRACK_ID_BASE`): the
+    // app skips ids it holds, so the engine must never start handing
+    // out ids in that range itself.
+    if id_hint.is_some() && id < SUB_TRACK_ID_BASE {
         state.next_track_id = state.next_track_id.max(id + 1);
     }
     let name = name.unwrap_or_else(|| format!("Track {}", id));
@@ -170,8 +175,12 @@ pub(crate) fn handle_create_sub_track(
     name: String,
 ) {
     // Bump `next_track_id` past `sub_id` even on the no-op path so an
-    // idempotent replay still leaves the counter in the right place.
-    state.next_track_id = state.next_track_id.max(sub_id + 1);
+    // idempotent replay still leaves the counter in the right place —
+    // but only for an id below the app's base (see `handle_add_track`);
+    // sub-tracks normally live in the app-owned range.
+    if sub_id < SUB_TRACK_ID_BASE {
+        state.next_track_id = state.next_track_id.max(sub_id + 1);
+    }
     // Idempotent: skip if this sub-track already exists. Project load
     // replays saved sub-tracks, then PluginAdded re-fires the
     // auto-create path; the second hit should be a no-op.

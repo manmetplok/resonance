@@ -1362,3 +1362,39 @@ render-graph publishing").
 3. **engine error taxonomy** — A5-3, A5-4 (audio), A5-4 (common).
 4. **app-owned entity ids** — A4-4 (1)-(5) + the recording/import design todo.
 5. Single todo, not an epic: **resonance-common feature gates** (A7-3).
+
+### Progress note — H8b (2026-09-26): ARCH-09 A9-1/A9-2, ARCH-04 A4-1/A4-2/A4-3, FU-A1c
+
+Landed on `arch/H8b-undo-ids` (four commits). Corrections to the plan above:
+
+* **A9-2, `same_state` cost.** The blob `Arc` change is as planned. The
+  gesture-end check no longer builds a second snapshot
+  (`Resonance::gesture_changed_since`: notes compared in place, extras
+  against a small fresh capture, only the `ProjectFile` rebuilt), but the
+  probe (`tests/timeline/undo_history.rs::snapshot_cost_probe_on_demo_project`,
+  debug build, demo + 6 × 1 MiB blobs) shows what is left is not the
+  copies: `build_project_file` 283 µs + two `serde_json::to_value` 167 µs
+  each, against a gesture check of 692 µs (was 822 µs) and a snapshot of
+  289 µs (was 425 µs). The serialized compare exists only because the
+  `ProjectFile` tree has no `PartialEq`; deriving it needs ~20 one-line
+  derives across `project/{model,sections}.rs`, `compose/{drumroll/*,
+  generate,lane_generator}.rs`, `state/markers.rs`,
+  `resonance-audio/src/types/tempo/map.rs` and
+  `resonance-music-theory/src/generator/mod.rs` (`GeneratorSpec`) — tried,
+  reverted as out of scope for a minimal-diff step; it is the cheap half
+  of A9-3 and would make `same_state` a struct walk.
+* **A4-1 found a real collision the plan called stable.** "The two-owner
+  split is stable today because the ranges are disjoint" held only for
+  plugins: `AddTrack`/`AddInstrumentTrack`/`AddVocalTrack`/`CreateSubTrack`,
+  `AddBus` and `SetAuxSend` bumped the engine counter past *any* hint, so
+  one control `track.add`, one Cmd-G group and one GUI "Add track" put a
+  track on the group's id (a group is app-only; the engine cannot skip
+  it). Fixed by applying the plugin rule to those paths (bump only for
+  hints below the app base); the four bases now live in
+  `resonance-audio/src/types/mod.rs` and `state/ids.rs` re-exports them.
+  The "in-flight echo" window for busses/sends is closed by the same rule.
+* **A4-3 shape.** `allocate_sub_track_id` moved from `TrackRegistry` to
+  `Resonance::allocate_track_id` (it needs the group registry); 11 call
+  sites (the plan counted 3 copies + group.rs; `update/track.rs` had 3).
+* A4-4 remains the epic; the invariant test is the one to move each space
+  against.

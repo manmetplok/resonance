@@ -214,3 +214,98 @@ fn clear_empties_everything() {
     assert!(!h.can_redo());
     assert!(!h.has_pending());
 }
+
+// ---------------------------------------------------------------------------
+// Snapshot cost probe (ARCH-09)
+// ---------------------------------------------------------------------------
+
+/// Rough cost probe, not a benchmark: how long one undo snapshot of the
+/// demo project takes, and how long the STATE-07 gesture-end check
+/// (`commit_undo_gesture`'s "did anything change?") takes, with a 1 MiB
+/// state blob parked on every demo plugin instance. Prints, never
+/// asserts on time — run with `--nocapture` and read the numbers.
+#[test]
+fn snapshot_cost_probe_on_demo_project() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    let (mut app, _task, _rx) = resonance_app::Resonance::new_for_test_with_capture();
+    resonance_app::demo::seed_demo_content(&mut app);
+    let instance_ids: Vec<u64> = app
+        .test_registry()
+        .tracks
+        .iter()
+        .flat_map(|t| t.plugins.iter().map(|p| p.instance_id))
+        .chain(
+            app.test_registry()
+                .busses
+                .iter()
+                .flat_map(|b| b.plugins.iter().map(|p| p.instance_id)),
+        )
+        .collect();
+    for id in &instance_ids {
+        app.test_seed_plugin_state(*id, vec![0xA5; 1 << 20]);
+    }
+
+    const N: u32 = 200;
+    let t = Instant::now();
+    for _ in 0..N {
+        black_box(app.test_build_project_file());
+    }
+    let per_file = t.elapsed() / N;
+    let file = app.test_build_project_file();
+    let t = Instant::now();
+    for _ in 0..N {
+        black_box(serde_json::to_value(&file).unwrap());
+    }
+    let per_json = t.elapsed() / N;
+    let t = Instant::now();
+    for _ in 0..N {
+        black_box(app.test_snapshot_for_undo());
+    }
+    let per_snapshot = t.elapsed() / N;
+
+    let before = app.test_snapshot_for_undo();
+    let t = Instant::now();
+    for _ in 0..N {
+        black_box(app.test_gesture_changed_since(&before));
+    }
+    let per_gesture_check = t.elapsed() / N;
+
+    eprintln!(
+        "snapshot cost probe: {} plugin blobs x 1 MiB, {} midi clips; \
+         build_project_file = {per_file:?}, serde_json::to_value(file) = {per_json:?}, \
+         snapshot_for_undo = {per_snapshot:?}, gesture-end change check = {per_gesture_check:?}",
+        instance_ids.len(),
+        app.test_midi_clips().len(),
+    );
+}
+
+/// Consecutive snapshots share a plugin's state blob instead of each
+/// carrying its own copy (ARCH-09 A9-2): with 200 retained entries and
+/// KB–MB NAM/IR/wavetable blobs that is the difference between the
+/// history costing Σ(blobs) and 200 × Σ(blobs).
+#[test]
+fn consecutive_snapshots_share_plugin_state_blobs() {
+    use std::sync::Arc;
+
+    let (mut app, _task, _rx) = resonance_app::Resonance::new_for_test_with_capture();
+    resonance_app::demo::seed_demo_content(&mut app);
+    let track = app.test_registry().tracks[0].id;
+    let instance = app.test_track_plugin_instance_ids(track)[0];
+    app.test_seed_plugin_state(instance, vec![0x5A; 1 << 20]);
+
+    let a = app.test_snapshot_for_undo();
+    // An edit between the two snapshots; the blob is untouched by it.
+    app.test_dispatch(resonance_app::message::Message::Transport(
+        resonance_app::message::TransportMessage::ToggleMetronome,
+    ));
+    let b = app.test_snapshot_for_undo();
+
+    let (blob_a, blob_b) = (&a.project.plugin_states[&instance], &b.project.plugin_states[&instance]);
+    assert_eq!(blob_a.len(), 1 << 20);
+    assert!(
+        Arc::ptr_eq(blob_a, blob_b),
+        "two snapshots of an unchanged plugin must point at the same blob"
+    );
+}

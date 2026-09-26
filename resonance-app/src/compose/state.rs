@@ -22,13 +22,9 @@ use super::section::{
 };
 use super::vocal_svs::SvsRenderCache;
 
-/// Starting point for app-allocated derived clip ids. Chosen high enough
-/// that it will never collide with engine-allocated clip ids (which count
-/// up monotonically from 1 via `CreateMidiClip`), yet small enough to
-/// leave headroom for a very long session. The engine bumps its own
-/// allocator past any id seen via `LoadMidiClipDirect`, so using values
-/// above this base is always safe.
-pub const DERIVED_CLIP_ID_BASE: u64 = 1 << 40;
+/// Starting point for app-allocated derived clip ids; see
+/// [`crate::state::ids`] for the partition it belongs to.
+pub use crate::state::ids::DERIVED_CLIP_ID_BASE;
 
 /// Sample tolerance when re-associating a loaded clip with the bar it was
 /// generated for (see [`ComposeState::rebuild_derived_clips`]). Generation

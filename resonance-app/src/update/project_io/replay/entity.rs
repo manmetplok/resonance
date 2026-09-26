@@ -12,13 +12,13 @@ use crate::Resonance;
 pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     // Repair sub-track id collisions left by buggier prior versions. If
     // the saved id is already in use by an earlier-loaded track, allocate
-    // a fresh sub-track id from `next_sub_track_id` (which the pre-loop
+    // a fresh app-side id from `next_sub_track_id` (which the pre-loop
     // bump already advanced past every saved sub-track id, so this won't
     // collide with later siblings either).
     let track_id = if pt.sub_track.is_some()
         && r.registry.tracks.iter().any(|t| t.id == pt.id)
     {
-        let new_id = r.registry.allocate_sub_track_id();
+        let new_id = r.allocate_track_id();
         tracing::warn!(
             "replay_track: sub-track {:?} id {} collided with existing track; remapped to {}",
             pt.name, pt.id, new_id
@@ -326,7 +326,7 @@ pub(super) fn replay_plugins(
         if let Some(state_data) = loaded.plugin_states.get(&pp.instance_id) {
             let _ = r.engine.send(AudioCommand::LoadPluginState {
                 instance_id: pp.instance_id,
-                data: state_data.clone(),
+                data: state_data.to_vec(),
             });
             // Keep the blob app-side, byte for byte, as the plugin's
             // last known state. A live plugin overwrites this entry with
@@ -334,7 +334,7 @@ pub(super) fn replay_plugins(
             // follows `PluginAdded`; a missing one never does, and this
             // copy is what the next save writes.
             r.plugin_state_cache
-                .insert(pp.instance_id, state_data.clone());
+                .insert(pp.instance_id, std::sync::Arc::clone(state_data));
         }
         // Park the saved parameter overrides until `PluginAdded` reports
         // this instance's param list. Applying them here would be undone:

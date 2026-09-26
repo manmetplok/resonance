@@ -105,17 +105,11 @@ impl AuxSendState {
     /// hint, so it must not clash with one the engine allocated itself.
     pub fn allocate_control_send_id(&mut self) -> SendId {
         if self.next_control_send_id == 0 {
-            self.next_control_send_id = CONTROL_SEND_ID_BASE;
+            self.next_control_send_id = super::ids::CONTROL_SEND_ID_BASE;
         }
-        loop {
-            let candidate = self.next_control_send_id;
-            self.next_control_send_id += 1;
-            if !self.sends.iter().any(|s| s.id == candidate) {
-                return candidate;
-            }
-        }
+        let sends = &self.sends;
+        super::ids::allocate_unused(&mut self.next_control_send_id, |id| {
+            sends.iter().any(|s| s.id == id)
+        })
     }
 }
-
-/// Start of the app-side send-id range (the engine counts up from 0).
-const CONTROL_SEND_ID_BASE: SendId = 2_000_000_000;
