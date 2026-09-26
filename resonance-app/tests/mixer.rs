@@ -83,3 +83,7 @@ mod delete_track_confirm_undo;
 mod tick_gating;
 #[path = "mixer/track_group_registry.rs"]
 mod track_group_registry;
+#[path = "mixer/pan_knob_drag.rs"]
+mod pan_knob_drag;
+#[path = "mixer/plugin_panel_fingerprint.rs"]
+mod plugin_panel_fingerprint;

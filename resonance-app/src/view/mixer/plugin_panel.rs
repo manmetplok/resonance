@@ -24,29 +24,6 @@ impl crate::Resonance {
             .chain(self.master_plugins.iter())
             .find(|p| p.instance_id == selected_id)?;
 
-        // `hidden` params are dropped rather than drawn: CLAP's
-        // IS_HIDDEN is the plugin asking that a parameter not be
-        // presented as a control (it stays in the app's mirror because
-        // it is still automatable and still saved — ba todo #1290).
-        let ui_params: Vec<resonance_plugin::ui::UiParam> = plugin
-            .params
-            .iter()
-            .filter(|p| !p.hidden)
-            .map(|p| resonance_plugin::ui::UiParam {
-                id: p.id,
-                name: p.name.clone(),
-                min_value: p.min_value,
-                max_value: p.max_value,
-                default_value: p.default_value,
-                current_value: p.current_value,
-                // The plugin's own formatting, when it has one. Where
-                // this panel printed "0.40" it now prints the "40 %"
-                // the plugin's editor shows.
-                text: p.text.clone(),
-                stepped: p.stepped,
-            })
-            .collect();
-
         let inst_id = selected_id;
         // A slot with nothing behind it has no parameters to draw — and
         // drawing an empty generic panel is exactly the "dead slot that
@@ -56,19 +33,28 @@ impl crate::Resonance {
         let mapped: Element<'_, Message> = match plugin.availability.reason() {
             Some(reason) => self.missing_plugin_body(plugin, reason),
             None => {
-                let plugin_element = match &plugin.custom {
-                    PluginCustomState::Generic => {
-                        resonance_plugin::ui::view_generic_params(&ui_params)
-                    }
-                };
-                plugin_element.map(move |event| {
-                    use resonance_plugin::ui::PluginUiEvent;
-                    match event {
-                        PluginUiEvent::SetParam(param_id, value) => {
-                            Message::Plugin(PluginMessage::SetPluginParam(inst_id, param_id, value))
+                // The parameter list sits in a `lazy` region keyed on every
+                // field it draws, so the Mixer's fast meter tick reuses the
+                // built widgets instead of cloning each parameter's name and
+                // text and rebuilding a row per parameter every frame
+                // (ui-work.md §11, review VIEW-26).
+                let fp = plugin_params_fingerprint(plugin);
+                iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+                    let plugin_element = match &plugin.custom {
+                        PluginCustomState::Generic => {
+                            resonance_plugin::ui::view_generic_params(&ui_params(plugin))
                         }
-                    }
+                    };
+                    plugin_element.map(move |event| {
+                        use resonance_plugin::ui::PluginUiEvent;
+                        match event {
+                            PluginUiEvent::SetParam(param_id, value) => Message::Plugin(
+                                PluginMessage::SetPluginParam(inst_id, param_id, value),
+                            ),
+                        }
+                    })
                 })
+                .into()
             }
         };
 
@@ -216,4 +202,51 @@ impl crate::Resonance {
             self.view_caches.fx_plugins.clone()
         }
     }
+}
+
+/// The generic parameter panel's rows. `hidden` params are dropped rather
+/// than drawn: CLAP's IS_HIDDEN is the plugin asking that a parameter not
+/// be presented as a control (it stays in the app's mirror because it is
+/// still automatable and still saved — ba todo #1290).
+fn ui_params(plugin: &PluginSlotState) -> Vec<resonance_plugin::ui::UiParam> {
+    plugin
+        .params
+        .iter()
+        .filter(|p| !p.hidden)
+        .map(|p| resonance_plugin::ui::UiParam {
+            id: p.id,
+            name: p.name.clone(),
+            min_value: p.min_value,
+            max_value: p.max_value,
+            default_value: p.default_value,
+            current_value: p.current_value,
+            // The plugin's own formatting, when it has one. Where
+            // this panel printed "0.40" it now prints the "40 %"
+            // the plugin's editor shows.
+            text: p.text.clone(),
+            stepped: p.stepped,
+        })
+        .collect()
+}
+
+/// Lazy key of the generic parameter panel: the instance plus every
+/// field [`ui_params`] carries into the rows. Hashing is allocation-free,
+/// so a frame with nothing changed costs one pass over the params and no
+/// widget rebuild.
+pub(crate) fn plugin_params_fingerprint(plugin: &PluginSlotState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    plugin.instance_id.hash(&mut h);
+    std::mem::discriminant(&plugin.custom).hash(&mut h);
+    for p in plugin.params.iter().filter(|p| !p.hidden) {
+        p.id.hash(&mut h);
+        p.name.hash(&mut h);
+        p.min_value.to_bits().hash(&mut h);
+        p.max_value.to_bits().hash(&mut h);
+        p.default_value.to_bits().hash(&mut h);
+        p.current_value.to_bits().hash(&mut h);
+        p.text.hash(&mut h);
+        p.stepped.hash(&mut h);
+    }
+    h.finish()
 }

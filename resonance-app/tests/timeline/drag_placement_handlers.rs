@@ -17,6 +17,8 @@ use iced::Point;
 use resonance_app::message::{DragMessage, DropTarget, Message};
 use resonance_app::state::{DragPlacement, DraggedAsset, DropResolution};
 use resonance_app::undo::{classify, UndoAction};
+use resonance_app::state::{TrackGroupRegistry, TrackState};
+use resonance_app::view::arrange_layout::{ArrangeAutomationRows, ArrangeRowLayout};
 use resonance_app::view::timeline::placement::{resolve_drop, PlacementGeometry};
 use resonance_app::Resonance;
 use resonance_audio::__test_support::Receiver;
@@ -33,7 +35,6 @@ const SR: u32 = 48_000;
 fn geo() -> PlacementGeometry {
     PlacementGeometry {
         header_height: 60.0,
-        track_height: 96.0,
         scroll_offset_y: 0.0,
         zoom: 100.0, // px per second
         sample_rate: SR,
@@ -42,14 +43,29 @@ fn geo() -> PlacementGeometry {
     }
 }
 
+/// A flat (ungrouped, nothing expanded) layout of `ids`: 96 px rows.
+fn flat_layout(ids: &[u64]) -> ArrangeRowLayout {
+    let tracks: Vec<TrackState> = ids
+        .iter()
+        .enumerate()
+        .map(|(order, &id)| TrackState::new_instrument(id, order))
+        .collect();
+    let refs: Vec<&TrackState> = tracks.iter().collect();
+    ArrangeRowLayout::build(
+        &refs,
+        &TrackGroupRegistry::new(),
+        &ArrangeAutomationRows::default(),
+    )
+}
+
 #[test]
 fn resolve_drop_targets_existing_lane_and_snaps() {
     let tm = TempoMap::default();
-    let tracks = vec![1_u64, 2, 3];
+    let tracks = flat_layout(&[1, 2, 3]);
     // x = 300 px → 3.0 s → 144_000 samples, already a beat boundary at
     // 120 BPM (24_000 samples/beat). y = 200 falls in lane index 1
     // (lanes start at y=60, each 96 tall: lane 1 spans 156..252).
-    let res = resolve_drop(&geo(), &tm, &tracks, Point::new(300.0, 200.0));
+    let res = resolve_drop(&geo(), &tm, &tracks, Point::new(300.0, 200.0)).unwrap();
     match res.target {
         DropTarget::ExistingTrack {
             track_id,
@@ -68,9 +84,9 @@ fn resolve_drop_targets_existing_lane_and_snaps() {
 #[test]
 fn resolve_drop_below_last_lane_is_new_track_zone() {
     let tm = TempoMap::default();
-    let tracks = vec![1_u64, 2, 3];
+    let tracks = flat_layout(&[1, 2, 3]);
     // y = 400 is below the last lane (lanes end at 60 + 3*96 = 348).
-    let res = resolve_drop(&geo(), &tm, &tracks, Point::new(300.0, 400.0));
+    let res = resolve_drop(&geo(), &tm, &tracks, Point::new(300.0, 400.0)).unwrap();
     assert!(
         matches!(res.target, DropTarget::NewTrack { start_sample } if start_sample == 144_000),
         "below the last lane resolves to the new-track zone, got {:?}",
@@ -82,7 +98,7 @@ fn resolve_drop_below_last_lane_is_new_track_zone() {
 #[test]
 fn resolve_drop_with_no_tracks_is_new_track_zone() {
     let tm = TempoMap::default();
-    let res = resolve_drop(&geo(), &tm, &[], Point::new(120.0, 80.0));
+    let res = resolve_drop(&geo(), &tm, &flat_layout(&[]), Point::new(120.0, 80.0)).unwrap();
     assert!(matches!(res.target, DropTarget::NewTrack { .. }));
     assert_eq!(res.lane_index, None);
 }
@@ -357,4 +373,82 @@ fn drag_messages_are_transient() {
             "drag previews never record undo directly"
         );
     }
+}
+
+// --------------------------------------------------------------------
+// VIEW-14: drop lane under mixed row heights
+// --------------------------------------------------------------------
+
+/// Hover the media-browser drag over the timeline canvas at canvas-space
+/// `(x, y)` and return the drop resolution the canvas publishes.
+fn hover_resolution(app: &Resonance, x: f32, y: f32) -> Option<DropResolution> {
+    let mut state = resonance_app::view::timeline::TimelineState::default();
+    let event = iced::Event::Mouse(iced::mouse::Event::CursorMoved {
+        position: Point::new(x, y),
+    });
+    match app.test_timeline_canvas_event(&mut state, &event, x, y) {
+        Some(Message::Drag(DragMessage::Hover { resolved, .. })) => resolved,
+        other => panic!("expected a drag hover, got {other:?}"),
+    }
+}
+
+/// With automation lanes expanded under the first track, rows no longer
+/// share one 96 px pitch. A drop over the second track's lane must land
+/// on the second track (it used to resolve `floor(y / 96)` and hit the
+/// third), and a drop over an automation sub-row is no target at all.
+#[test]
+fn drop_resolves_lane_through_the_row_layout() {
+    use resonance_app::message::AutomationMessage;
+    use resonance_app::view::arrange_layout::ArrangeRowKind;
+    use resonance_common::{AutomationTarget, CurveKind};
+
+    let (mut app, _task) = Resonance::new_for_test();
+    resonance_app::demo::seed_demo_content(&mut app);
+    let layout = app.test_arrange_row_layout();
+    let first = layout.rows()[0].track_id().expect("first row is a track");
+    for target in [
+        AutomationTarget::TrackGain(first),
+        AutomationTarget::TrackPan(first),
+        AutomationTarget::TrackMute(first),
+    ] {
+        let _ = app.update(Message::Automation(AutomationMessage::AddBreakpoint {
+            target,
+            time_frames: 0,
+            value: 0.5,
+            curve: CurveKind::Linear,
+        }));
+    }
+    let _ = app.update(Message::Automation(AutomationMessage::ToggleTrackExpanded(first)));
+    let _ = app.update(Message::Drag(DragMessage::Start(sample_asset())));
+
+    let layout = app.test_arrange_row_layout();
+    let header = app.test_arrange_header_offset();
+    let second = layout
+        .rows()
+        .iter()
+        .filter_map(|r| r.track_id())
+        .nth(1)
+        .expect("a second track row");
+    let (second_y, _) = layout.track_row_rect(second).unwrap();
+
+    let res = hover_resolution(&app, 200.0, header + second_y + 10.0)
+        .expect("a track lane is a drop target");
+    assert!(
+        matches!(res.target, DropTarget::ExistingTrack { track_id, .. } if track_id == second),
+        "drop over the second track's lane landed on {:?}",
+        res.target
+    );
+    let lane = res.lane_index.expect("existing lane has a row index");
+    assert_eq!(layout.rows()[lane].kind, ArrangeRowKind::Track(second));
+
+    let auto_row = layout
+        .rows()
+        .iter()
+        .find(|r| matches!(r.kind, ArrangeRowKind::AutomationLane { .. }))
+        .expect("expanded automation row");
+    assert_eq!(
+        hover_resolution(&app, 200.0, header + auto_row.y_top + 5.0),
+        None,
+        "an automation sub-row is not a clip drop target"
+    );
 }

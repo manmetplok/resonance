@@ -117,3 +117,7 @@ mod undo_coalesce;
 mod undo_history;
 #[path = "timeline/editor_key_focus.rs"]
 mod editor_key_focus;
+#[path = "timeline/vertical_scroll_clamp.rs"]
+mod vertical_scroll_clamp;
+#[path = "timeline/clip_drag_tempo_snap.rs"]
+mod clip_drag_tempo_snap;

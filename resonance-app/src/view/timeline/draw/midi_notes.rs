@@ -149,17 +149,33 @@ impl TimelineCanvas<'_> {
             ..theme::WARM
         };
 
+        // Coverage is answered by a sweep over the sorted notes rather than
+        // a scan of every note per column, and only the columns inside the
+        // cull window are visited for drawing (review VIEW-28).
+        let mut coverage = crate::view::timeline::cull::CoverageSweep::new(
+            clip.notes
+                .iter()
+                .map(|n| {
+                    let s = n.start_tick as f32 - clip.trim_start_ticks as f32;
+                    (s, s + n.duration_ticks as f32)
+                })
+                .collect(),
+        );
+        let (lo, hi) = crate::view::timeline::cull::clip_px_range(x, w, self.cull_window());
         let start_px = (-x).max(0.0);
         let mut px = start_px;
         while px < w {
+            if px > hi {
+                break;
+            }
+            if px + 1.0 < lo {
+                px += 1.0;
+                continue;
+            }
             // Clip-space tick under this column.
             let tick = (px / w) * total_ticks;
             // Audio only where a note sounds (coverage gate).
-            let sounding = clip.notes.iter().any(|n| {
-                let s = n.start_tick as f32 - clip.trim_start_ticks as f32;
-                tick >= s && tick < s + n.duration_ticks as f32
-            });
-            if sounding {
+            if coverage.covers(tick) {
                 // Deterministic per-column amplitude in [0.25, 0.95] from an
                 // integer hash of the column index — looks like dense
                 // rendered audio without any platform-dependent maths.
@@ -210,6 +226,7 @@ impl TimelineCanvas<'_> {
             let note_range = (range_max - range_min).max(1) as f32;
 
             let total_ticks = clip.duration_ticks as f32;
+            let (lo, hi) = crate::view::timeline::cull::clip_px_range(x, w, self.cull_window());
             if total_ticks > 0.0 {
                 let note_color = Color {
                     a: 0.85,
@@ -230,6 +247,10 @@ impl TimelineCanvas<'_> {
 
                     let nx = x + (visible_start / total_ticks) * w;
                     let nw = ((visible_end - visible_start) / total_ticks) * w;
+                    // Off-screen notes are not tessellated (review VIEW-28).
+                    if nx + nw.max(1.0) < x + lo || nx > x + hi {
+                        continue;
+                    }
 
                     let ny = note_area_y
                         + (1.0 - (note.note as f32 - range_min as f32) / note_range)

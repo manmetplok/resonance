@@ -492,13 +492,12 @@ impl TimelineCanvas<'_> {
         // Capture so the release lands here too.
         if self.drag.is_some() {
             let geo = self.placement_geometry();
-            let track_ids = self.arrange_track_ids();
-            let resolved = Some(super::super::placement::resolve_drop(
+            let resolved = super::super::placement::resolve_drop(
                 &geo,
                 self.tempo_map,
-                &track_ids,
+                self.arrange_layout(),
                 pos,
-            ));
+            );
             return captured(Message::Drag(DragMessage::Hover {
                 cursor: pos,
                 resolved,

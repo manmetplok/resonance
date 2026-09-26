@@ -27,7 +27,9 @@ const SWEEP: f32 = std::f32::consts::PI * 1.5;
 
 #[derive(Default)]
 pub struct KnobState {
-    /// Where the mouse was when the drag began, in bounds-relative pixels.
+    /// Where the mouse was when the drag began, in absolute window
+    /// pixels — the drag keeps tracking once the cursor leaves the
+    /// 28 px knob, since full travel is `DRAG_RANGE_PX`.
     drag_anchor_y: Option<f32>,
     /// Value at the moment the drag began — deltas are applied against this
     /// so repeated small moves don't accumulate rounding error.
@@ -85,7 +87,10 @@ where
     .into()
 }
 
-struct PanKnob<'a, Message> {
+/// The pan knob's canvas program. Public (hidden) so tests can drive
+/// its `update` directly; build one with [`pan_knob_program`].
+#[doc(hidden)]
+pub struct PanKnob<'a, Message> {
     value: f32,
     /// Live automated value (-1..=1) when a Read-enabled lane drives the
     /// knob, else `None`. Display-only — never fed back to `on_change`.
@@ -214,7 +219,7 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
                     state.drag_anchor_y = None;
                     return Some(canvas::Action::publish((self.on_change)(0.0)).and_capture());
                 }
-                state.drag_anchor_y = Some(pos.y);
+                state.drag_anchor_y = cursor.position().map(|p| p.y);
                 state.drag_anchor_value = self.value;
                 Some(canvas::Action::capture())
             }
@@ -224,7 +229,9 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
             }
             iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let anchor_y = state.drag_anchor_y?;
-                let pos = cursor.position_in(bounds)?;
+                // Absolute position: the press captured the gesture, so the
+                // drag continues while the cursor is outside the knob.
+                let pos = cursor.position()?;
                 // Drag up = increase (pan right). Drag range is DRAG_RANGE_PX
                 // for the full -1..=1 span.
                 let dy = anchor_y - pos.y;
@@ -237,6 +244,20 @@ impl<'a, Message> canvas::Program<Message> for PanKnob<'a, Message> {
             }
             _ => None,
         }
+    }
+}
+
+/// Test-only: the bare [`PanKnob`] program behind [`pan_knob`], so a
+/// test can feed events to its `update`.
+#[doc(hidden)]
+pub fn pan_knob_program<'a, Message, F>(value: f32, on_change: F) -> PanKnob<'a, Message>
+where
+    F: 'a + Fn(f32) -> Message,
+{
+    PanKnob {
+        value: value.clamp(-1.0, 1.0),
+        automated: None,
+        on_change: Box::new(on_change),
     }
 }
 

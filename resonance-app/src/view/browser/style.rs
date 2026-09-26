@@ -20,56 +20,90 @@ pub(crate) const THUMB_W: f32 = 48.0;
 /// Fixed height of the mini waveform thumbnail in pool / files rows.
 pub(crate) const THUMB_H: f32 = 26.0;
 
-/// A simple stateless [`canvas::Program`] that draws a waveform bar-chart
-/// from `(min, max)` peak pairs. Shared by the Pool asset thumbnail and the
-/// Files-tab audio rows; not a live visual so no cache is needed. When
-/// `muted` (a missing pool asset) it draws in a faint BAD tint; otherwise
-/// in WARM amber. An empty `peaks` slice draws just the centre baseline —
-/// the idle state for a file whose waveform could not be decoded.
+/// A [`canvas::Program`] that draws a waveform bar-chart from `(min, max)`
+/// peak pairs. Shared by the Pool asset thumbnail and the Files-tab audio
+/// rows. When `muted` (a missing pool asset) it draws in a faint BAD tint;
+/// otherwise in WARM amber. An empty `peaks` slice draws just the centre
+/// baseline — the idle state for a file whose waveform could not be
+/// decoded.
+///
+/// The geometry is cached per widget ([`WaveThumbnailState`]) and keyed on
+/// the peaks and tint, so a redraw with nothing changed — the browser
+/// repaints every tick while an audition plays — reuses it instead of
+/// re-tessellating every visible thumbnail (review VIEW-27). `peaks` is a
+/// `Cow` so a row inside a `lazy` region can own its copy.
 pub(crate) struct WaveThumbnail<'a> {
-    pub(crate) peaks: &'a [(f32, f32)],
+    pub(crate) peaks: std::borrow::Cow<'a, [(f32, f32)]>,
     pub(crate) muted: bool,
 }
 
+/// Per-widget geometry cache for [`WaveThumbnail`].
+#[derive(Default)]
+pub(crate) struct WaveThumbnailState {
+    cache: canvas::Cache,
+    key: std::cell::Cell<Option<u64>>,
+}
+
+impl WaveThumbnail<'_> {
+    /// Cache key: everything the thumbnail draws besides its size (the
+    /// `Cache` itself tracks bounds).
+    pub(crate) fn cache_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.muted.hash(&mut h);
+        self.peaks.len().hash(&mut h);
+        for &(lo, hi) in self.peaks.iter() {
+            lo.to_bits().hash(&mut h);
+            hi.to_bits().hash(&mut h);
+        }
+        h.finish()
+    }
+}
+
 impl canvas::Program<Message> for WaveThumbnail<'_> {
-    type State = ();
+    type State = WaveThumbnailState;
 
     fn draw(
         &self,
-        _state: &(),
+        state: &WaveThumbnailState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let w = bounds.width;
-        let h = bounds.height;
-        let mid = h / 2.0;
-
-        // Backdrop
-        frame.fill_rectangle(Point::ORIGIN, Size::new(w, h), theme::BG_3);
-        // Centre zero line
-        frame.fill_rectangle(Point::new(0.0, mid - 0.5), Size::new(w, 1.0), theme::LINE_2);
-
-        if !self.peaks.is_empty() {
-            let bar_color: Color = if self.muted {
-                Color { a: 0.45, ..theme::BAD }
-            } else {
-                Color { a: 0.75, ..theme::WARM }
-            };
-            let col_w = w / self.peaks.len() as f32;
-            let bar_w = col_w.max(1.0);
-            for (i, &(min_v, max_v)) in self.peaks.iter().enumerate() {
-                let x = i as f32 * col_w;
-                let top = mid - max_v.clamp(-1.0, 1.0) * mid;
-                let bot = mid - min_v.clamp(-1.0, 1.0) * mid;
-                let bar_h = (bot - top).max(1.0);
-                frame.fill_rectangle(Point::new(x, top), Size::new(bar_w, bar_h), bar_color);
-            }
+        let key = self.cache_key();
+        if state.key.get() != Some(key) {
+            state.cache.clear();
+            state.key.set(Some(key));
         }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
+            let w = bounds.width;
+            let h = bounds.height;
+            let mid = h / 2.0;
 
-        vec![frame.into_geometry()]
+            // Backdrop
+            frame.fill_rectangle(Point::ORIGIN, Size::new(w, h), theme::BG_3);
+            // Centre zero line
+            frame.fill_rectangle(Point::new(0.0, mid - 0.5), Size::new(w, 1.0), theme::LINE_2);
+
+            if !self.peaks.is_empty() {
+                let bar_color: Color = if self.muted {
+                    Color { a: 0.45, ..theme::BAD }
+                } else {
+                    Color { a: 0.75, ..theme::WARM }
+                };
+                let col_w = w / self.peaks.len() as f32;
+                let bar_w = col_w.max(1.0);
+                for (i, &(min_v, max_v)) in self.peaks.iter().enumerate() {
+                    let x = i as f32 * col_w;
+                    let top = mid - max_v.clamp(-1.0, 1.0) * mid;
+                    let bot = mid - min_v.clamp(-1.0, 1.0) * mid;
+                    let bar_h = (bot - top).max(1.0);
+                    frame.fill_rectangle(Point::new(x, top), Size::new(bar_w, bar_h), bar_color);
+                }
+            }
+        });
+        vec![geometry]
     }
 }
 

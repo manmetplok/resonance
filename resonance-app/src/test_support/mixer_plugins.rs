@@ -254,6 +254,13 @@ impl Resonance {
         crate::view::mixer::slot_pill_label(plugin_name, missing)
     }
 
+    /// Test-only: the lazy key of the plugin parameter panel for `slot`
+    /// (review VIEW-26). A pure function of the slot.
+    #[doc(hidden)]
+    pub fn test_plugin_params_fingerprint(slot: &state::PluginSlotState) -> u64 {
+        crate::view::mixer::plugin_params_fingerprint(slot)
+    }
+
     /// Test-only: the bus twin of [`Self::test_push_track_plugin`].
     #[doc(hidden)]
     pub fn test_push_bus_plugin(

@@ -75,3 +75,5 @@ mod save_keeps_dirty_for_late_edit;
 mod take_lanes_persistence;
 #[path = "io/user_definitions_rescan.rs"]
 mod user_definitions_rescan;
+#[path = "io/files_listing_fingerprint.rs"]
+mod files_listing_fingerprint;

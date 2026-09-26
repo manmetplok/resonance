@@ -72,7 +72,7 @@ fn pool_asset_row<'a>(asset: &'a PoolAsset, usage: u32, sample_rate: u32) -> Ele
 
     // --- Mini waveform thumbnail ------------------------------------------
     let thumbnail = Canvas::new(WaveThumbnail {
-        peaks: &asset.thumbnail_peaks,
+        peaks: std::borrow::Cow::Borrowed(&asset.thumbnail_peaks),
         muted: asset.missing,
     })
     .width(Length::Fixed(THUMB_W))

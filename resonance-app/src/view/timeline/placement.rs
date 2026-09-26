@@ -16,11 +16,12 @@
 //! `scroll_offset_y` is folded in here.
 
 use iced::Point;
-use resonance_audio::types::{TempoMap, TrackId};
+use resonance_audio::types::TempoMap;
 
 use super::snap::snap_sample_to_grid_tempo;
 use crate::message::DropTarget;
 use crate::state::DropResolution;
+use crate::view::arrange_layout::ArrangeRowLayout;
 
 /// The timeline layout constants a drop needs to map pixels ↔ (lane,
 /// sample). Snapshotted from the canvas / viewport at the moment of the
@@ -30,8 +31,6 @@ pub struct PlacementGeometry {
     /// Y where regular track rows begin (ruler + section band + global
     /// tracks) — `TimelineCanvas::fixed_header_height()`.
     pub header_height: f32,
-    /// Per-lane row height (`theme::TRACK_HEIGHT`).
-    pub track_height: f32,
     /// Internal vertical scroll offset.
     pub scroll_offset_y: f32,
     /// Horizontal zoom in pixels per second.
@@ -50,23 +49,36 @@ fn x_to_sample(x: f32, zoom: f32, sample_rate: u32) -> u64 {
     (seconds * sample_rate as f64).max(0.0) as u64
 }
 
-/// The lane index a content-space y falls in, or `None` when it is below
-/// the last lane (the new-audio-track drop zone). A y above the first lane
-/// clamps to lane 0 so a drag drifting up into the ruler still targets the
-/// top track rather than snapping to "new track".
-fn lane_at(y: f32, geo: &PlacementGeometry, lane_count: usize) -> Option<usize> {
-    if lane_count == 0 {
-        return None;
-    }
+/// Where a content-space y lands for a drop.
+enum LaneHit {
+    /// Over the clip lane of the arrange row at this layout index.
+    Row(usize),
+    /// Below the last row: the new-audio-track drop zone.
+    NewTrack,
+    /// Over a row that is not a clip lane (group header, automation or
+    /// take sub-row): not a drop target.
+    None,
+}
+
+/// Resolve y against the shared [`ArrangeRowLayout`] — the same rows the
+/// canvas draws, with their mixed pitches (group headers, expanded
+/// automation and take sub-rows, collapsed groups). A y above the first
+/// row clamps to the first track row so a drag drifting up into the ruler
+/// still targets the top track rather than "new track".
+fn lane_at(y: f32, geo: &PlacementGeometry, layout: &ArrangeRowLayout) -> LaneHit {
+    let rows = layout.rows();
     let rel = y + geo.scroll_offset_y - geo.header_height;
-    if rel < 0.0 {
-        return Some(0);
+    if rel >= layout.total_height() {
+        return LaneHit::NewTrack;
     }
-    let idx = (rel / geo.track_height).floor() as usize;
-    if idx >= lane_count {
-        None
+    let index = if rel < 0.0 {
+        rows.iter().position(|r| r.track_id().is_some())
     } else {
-        Some(idx)
+        rows.iter().position(|r| rel >= r.y_top && rel < r.y_bottom())
+    };
+    match index {
+        Some(i) if rows[i].track_id().is_some() => LaneHit::Row(i),
+        _ => LaneHit::None,
     }
 }
 
@@ -81,16 +93,17 @@ pub fn bar_label(sample: u64, sample_rate: u32, tempo_map: &TempoMap) -> String 
 
 /// Resolve a cursor point (canvas content coords) into a drop target.
 ///
-/// `track_ids` are the arrange-sorted, arrange-visible track ids (same
-/// order the canvas draws lanes in). The returned [`DropResolution`] carries
-/// the grid-snapped [`DropTarget`], the targeted lane index (or `None` for
-/// the new-track zone), and a bar label for the tooltip.
+/// `layout` is the canvas's arrange-row layout. The returned
+/// [`DropResolution`] carries the grid-snapped [`DropTarget`], the targeted
+/// row's index in `layout.rows()` (or `None` for the new-track zone), and a
+/// bar label for the tooltip. `None` when the cursor is over a row that
+/// accepts no clip (group header, automation or take sub-row).
 pub fn resolve_drop(
     geo: &PlacementGeometry,
     tempo_map: &TempoMap,
-    track_ids: &[TrackId],
+    layout: &ArrangeRowLayout,
     cursor: Point,
-) -> DropResolution {
+) -> Option<DropResolution> {
     let raw_sample = x_to_sample(cursor.x, geo.zoom, geo.sample_rate);
     let start_sample = snap_sample_to_grid_tempo(
         raw_sample,
@@ -101,18 +114,21 @@ pub fn resolve_drop(
         tempo_map,
     );
 
-    let lane_index = lane_at(cursor.y, geo, track_ids.len());
-    let target = match lane_index.and_then(|i| track_ids.get(i)) {
-        Some(&track_id) => DropTarget::ExistingTrack {
-            track_id,
-            start_sample,
-        },
-        None => DropTarget::NewTrack { start_sample },
+    let (target, lane_index) = match lane_at(cursor.y, geo, layout) {
+        LaneHit::Row(i) => (
+            DropTarget::ExistingTrack {
+                track_id: layout.rows()[i].track_id()?,
+                start_sample,
+            },
+            Some(i),
+        ),
+        LaneHit::NewTrack => (DropTarget::NewTrack { start_sample }, None),
+        LaneHit::None => return None,
     };
 
-    DropResolution {
+    Some(DropResolution {
         target,
         lane_index,
         bar_label: bar_label(start_sample, geo.sample_rate, tempo_map),
-    }
+    })
 }
