@@ -16,6 +16,14 @@ use super::{
 };
 
 pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
+    let task = route_engine_event(r, event);
+    // A take that landed mid-drag closed the open gesture; re-open it on
+    // the post-take state (FU-A2a).
+    r.resume_split_gesture();
+    task
+}
+
+fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
     use AudioEvent as E;
     match event {
         // Transport / clock / device events
