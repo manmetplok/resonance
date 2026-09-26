@@ -181,7 +181,7 @@ fn applying_a_preset_asks_the_engine_for_the_right_kind_of_track() {
     assert!(
         commands.iter().any(|c| matches!(
             c,
-            AudioCommand::AddInstrumentTrack { id_hint: Some(id), .. } if *id == new_id
+            AudioCommand::AddInstrumentTrack { id, .. } if *id == new_id
         )),
         "an instrument preset makes an instrument track, at the id the reply promised: \
          {commands:?}"

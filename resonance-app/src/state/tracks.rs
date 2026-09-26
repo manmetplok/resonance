@@ -478,13 +478,17 @@ pub struct TrackRegistry {
     pub busses: Vec<BusState>,
     pub next_track_order: usize,
     pub next_bus_order: usize,
-    /// Id counter for auto-created sub-tracks, control-API tracks and
-    /// track groups (one id space). Seeded at
-    /// [`SUB_TRACK_ID_BASE`](super::ids::SUB_TRACK_ID_BASE), a high range
-    /// engine-allocated track ids (counting up from 1) never reach;
-    /// consumed through `Resonance::allocate_track_id`, which also skips
-    /// the ids tracks and groups already hold.
-    pub next_sub_track_id: u64,
+    /// Id counter for EVERY track the app creates (ARCH-04 D-4): the
+    /// engine has no track allocator of its own left, so
+    /// `AudioCommand::AddTrack` / `AddInstrumentTrack` / `AddVocalTrack`
+    /// always carry a concrete `id` from here — the GUI's plain "Add
+    /// Track" and its instrument/vocal/external siblings, sub-tracks,
+    /// bounce targets, `track.add`, and track groups alike (tracks and
+    /// groups share this one id space). Seeded at 1, same as the
+    /// engine's own counter used to be, so a fresh project's ids are
+    /// unchanged. Consumed through `Resonance::allocate_track_id`, which
+    /// also skips the ids tracks and groups already hold.
+    pub next_track_id: u64,
     /// Id counter for EVERY bus the app creates (ARCH-04 D-3): the engine
     /// has no bus allocator of its own left, so `AudioCommand::AddBus`
     /// always carries a concrete `id` from here — the GUI's plain "Add

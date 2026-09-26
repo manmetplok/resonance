@@ -18,11 +18,11 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
     r.track_groups = crate::state::TrackGroupRegistry::new();
     for tg in &project.track_groups {
         r.track_groups.add_group(tg.clone());
-        // Group ids share the sub-track counter: advance it past every
-        // loaded group, or the next Cmd-G / sub-track reuses a saved
+        // Groups share the track-id counter: advance it past every
+        // loaded group, or the next Cmd-G / track add reuses a saved
         // group's id (code review STATE-04).
-        if tg.id >= r.registry.next_sub_track_id {
-            r.registry.next_sub_track_id = tg.id + 1;
+        if tg.id >= r.registry.next_track_id {
+            r.registry.next_track_id = tg.id + 1;
         }
     }
 }

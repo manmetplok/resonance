@@ -64,6 +64,8 @@ mod reference_handlers;
 mod take_removal;
 #[path = "engine/tempo_handlers.rs"]
 mod tempo_handlers;
+#[path = "engine/track_id_duplicate_rejected.rs"]
+mod track_id_duplicate_rejected;
 #[path = "engine/track_plugin_chain.rs"]
 mod track_plugin_chain;
 #[path = "engine/track_plugin_move.rs"]

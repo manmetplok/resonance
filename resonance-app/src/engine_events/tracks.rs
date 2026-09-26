@@ -8,11 +8,14 @@ use crate::Resonance;
 /// Handle the silent-drop case (`TrackAdded` for an id already present in
 /// the registry). Project load replays saved tracks app-side first, then
 /// hands them to the engine which echoes `TrackAdded` back — that path
-/// legitimately hits the guard. But if the engine's id allocator hands
-/// out a colliding id (historical bug: `handle_create_sub_track` not
-/// bumping `next_track_id`), we'd silently drop a user `+` click *and*
-/// leave `pending_track_preset` armed for the next add to inherit. Clear
-/// the slot here so a recovery click doesn't apply the wrong preset.
+/// legitimately hits the guard. Since ARCH-04 D-4 a colliding id is
+/// refused outright by the engine (`tracks::reject_if_track_id_in_use`,
+/// no `TrackAdded` at all), but a duplicate echo could still in
+/// principle reach here (a resend, a stale test double); if it does
+/// while a preset add is pending, we'd otherwise silently drop a user
+/// `+` click *and* leave `pending_track_preset` armed for the next add
+/// to inherit. Clear the slot here so a recovery click doesn't apply the
+/// wrong preset.
 fn drop_duplicate_track_added(r: &mut Resonance, track_id: TrackId) {
     if r.presets.pending_track_preset.is_some() {
         tracing::warn!(

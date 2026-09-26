@@ -1,6 +1,19 @@
 //! Core types for the Resonance audio engine. Split into sub-modules by
 //! concern — everything is re-exported so `use resonance_audio::types::*`
 //! keeps working unchanged.
+/// Unlike [`ClipId`] below, this space has no engine-vs-app partition any
+/// more (ARCH-04 D-4, same shape as [`PluginInstanceId`]): the app
+/// allocates every track id (`Resonance::allocate_track_id`) — the plain
+/// GUI "Add Track", instrument/vocal adds, sub-tracks, bounce targets,
+/// the control API and project-load replay all draw from it — and the
+/// engine only ever honours the id it is given. `AudioCommand::AddTrack`
+/// / `AddInstrumentTrack` / `AddVocalTrack` carry a concrete `id`, not an
+/// optional hint, and the add is rejected with `EngineError::internal`
+/// if that id is already live. There is no base to name here because
+/// there is only one owner — except that track ids stay below
+/// `resonance_app::state::ids::BUS_ID_BASE`, for the same reason
+/// [`BusId`] gives for keeping its own range: `song.summary` /
+/// `song.tracks` list tracks and busses in one id-addressed sequence.
 pub type TrackId = u64;
 pub type ClipId = u64;
 pub type SamplePos = u64;
@@ -40,15 +53,6 @@ pub type SendId = u64;
 /// import-lifecycle events. Independent of [`ClipId`]: an asset lives in
 /// the project pool and may back zero, one, or many clips.
 pub type AssetId = u64;
-
-/// First track id the app allocates itself — sub-tracks, bounce targets,
-/// control-API adds, and track groups (app-only entities that share the
-/// track id space). The engine's own tracks count up from 1, and the
-/// track add paths bump `next_track_id` only for hints *below* this
-/// base: a hint at or above it is app-owned, and bumping past it would
-/// put the next GUI add (`id_hint: None`) onto an id the app may already
-/// hold for a group the engine never hears about.
-pub const SUB_TRACK_ID_BASE: TrackId = 1_000_000_000;
 
 /// First clip id the app allocates itself — the clips it derives from
 /// chords, drum patterns and vocal renders, and the other clips it must

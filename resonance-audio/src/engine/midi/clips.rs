@@ -19,22 +19,11 @@ use crate::quantize::{
 use crate::types::*;
 
 use super::super::thread::{HandlerCtx, HandlerState};
+use super::super::tracks::reject_if_track_id_in_use;
 
-pub(crate) fn handle_add_instrument_track(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    id_hint: Option<TrackId>,
-    name: Option<String>,
-) {
-    let id = id_hint.unwrap_or_else(|| {
-        let i = state.next_track_id;
-        state.next_track_id += 1;
-        i
-    });
-    // Same hint rule as `tracks::handle_add_track`: app-owned ids
-    // (`SUB_TRACK_ID_BASE` and up) never move the engine's counter.
-    if id_hint.is_some() && id < SUB_TRACK_ID_BASE {
-        state.next_track_id = state.next_track_id.max(id + 1);
+pub(crate) fn handle_add_instrument_track(ctx: &HandlerCtx, id: TrackId, name: Option<String>) {
+    if reject_if_track_id_in_use(ctx, id) {
+        return;
     }
     let name = name.unwrap_or_else(|| format!("Instrument {}", id));
     let track = Track::with_type(id, name, TrackType::Instrument);
@@ -48,21 +37,9 @@ pub(crate) fn handle_add_instrument_track(
 /// `TrackType::Vocal` so the view layer can route it to the vocal lane.
 /// Live MIDI input still works (vocal accepts MIDI for staff capture);
 /// playback runs through the audio-clip path.
-pub(crate) fn handle_add_vocal_track(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    id_hint: Option<TrackId>,
-    name: Option<String>,
-) {
-    let id = id_hint.unwrap_or_else(|| {
-        let i = state.next_track_id;
-        state.next_track_id += 1;
-        i
-    });
-    // Same hint rule as `tracks::handle_add_track`: app-owned ids
-    // (`SUB_TRACK_ID_BASE` and up) never move the engine's counter.
-    if id_hint.is_some() && id < SUB_TRACK_ID_BASE {
-        state.next_track_id = state.next_track_id.max(id + 1);
+pub(crate) fn handle_add_vocal_track(ctx: &HandlerCtx, id: TrackId, name: Option<String>) {
+    if reject_if_track_id_in_use(ctx, id) {
+        return;
     }
     let name = name.unwrap_or_else(|| format!("Vocal {}", id));
     let track = Track::with_type(id, name, TrackType::Vocal);

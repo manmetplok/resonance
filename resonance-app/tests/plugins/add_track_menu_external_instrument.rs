@@ -48,17 +48,14 @@ fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<Audi
 
 /// The app-allocated id the `AddExternalInstrumentTrack` reducer hands to the
 /// engine. Read back from the emitted command so the test stays correct even
-/// if the base sub-track counter changes.
+/// if the track-id counter's starting point changes.
 fn allocated_id_from_add(cmds: &[AudioCommand]) -> TrackId {
     for cmd in cmds {
-        if let AudioCommand::AddInstrumentTrack {
-            id_hint: Some(id), ..
-        } = cmd
-        {
+        if let AudioCommand::AddInstrumentTrack { id, .. } = cmd {
             return *id;
         }
     }
-    panic!("expected an AddInstrumentTrack with an app-allocated id_hint; got {cmds:?}");
+    panic!("expected an AddInstrumentTrack with an app-allocated id; got {cmds:?}");
 }
 
 /// Dispatching the Add Track menu's "Ext Instrument" message creates the

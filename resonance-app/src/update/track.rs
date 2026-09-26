@@ -19,11 +19,11 @@ pub enum TrackMessage {
     AddVocalTrack,
     /// Add a track with a caller-allocated id (control endpoint, doc
     /// #265, todo #1152). Unlike the GUI adds, the id is allocated
-    /// app-side and passed to the engine as `id_hint` so the control
-    /// reply can return the real `track_id` immediately; `drums` comes
-    /// up as an instrument track whose instrument type is set to Drum
-    /// when the engine echo mirrors it. Undoable as one step, like the
-    /// other adds.
+    /// *before* this message is built (not inside the handler), so the
+    /// control reply can return the real `track_id` immediately; `drums`
+    /// comes up as an instrument track whose instrument type is set to
+    /// Drum when the engine echo mirrors it. Undoable as one step, like
+    /// the other adds.
     AddControlTrack {
         id: TrackId,
         kind: crate::state::ControlTrackKind,
@@ -62,10 +62,11 @@ pub enum TrackMessage {
     SetTrackOutput(TrackId, TrackOutput),
     /// Create a new track from a preset template.
     ///
-    /// `id_hint` is the app-allocated track id, so a caller can address
-    /// the new track without waiting for the engine's `*TrackAdded`
-    /// echo; `None` lets the engine allocate, which is the GUI's path
-    /// (the same split as `PluginMessage::AddPluginToTrackWithId`).
+    /// `id_hint`, if given, is the caller-allocated track id (the control
+    /// endpoint's path), so the caller can address the new track without
+    /// waiting for the engine's `*TrackAdded` echo. `None` is the GUI's
+    /// path — the handler allocates a fresh id itself (ARCH-04 D-4; the
+    /// engine has no allocator of its own left for either case any more).
     /// `name` overrides the preset's own name for the track only — the
     /// preset keeps its name in the library (ba todo #1303).
     AddTrackFromPreset {
@@ -291,22 +292,22 @@ pub fn classify_bounce(
 pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
     match m {
         TrackMessage::AddTrack => {
-            let _ = r.engine.send(AudioCommand::AddTrack {
-                id_hint: None,
-                name: None,
-            });
+            // App-allocated since ARCH-04 D-4 — the engine has no track
+            // counter of its own left — but still fire-and-forget: the
+            // GUI waits for the `TrackAdded` echo to mirror the track,
+            // same as before D-4.
+            let id = r.allocate_track_id();
+            let _ = r.engine.send(AudioCommand::AddTrack { id, name: None });
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddInstrumentTrack => {
-            let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
-                id_hint: None,
-                name: None,
-            });
+            let id = r.allocate_track_id();
+            let _ = r.engine.send(AudioCommand::AddInstrumentTrack { id, name: None });
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddExternalInstrumentTrack => {
             // Same track creation as `AddInstrumentTrack`, but the id is
-            // allocated app-side (like the audio-drop new-track path) so we can
+            // allocated up front (rather than fire-and-forget) so we can
             // immediately enable external mode on it. The engine echoes
             // `InstrumentTrackAdded` for this id a beat later, which mirrors the
             // track into the registry. Enabling external mode here — before the
@@ -320,38 +321,37 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             // so a single undo removes both and redo restores both.
             let track_id = r.allocate_track_id();
             let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
-                id_hint: Some(track_id),
+                id: track_id,
                 name: None,
             });
             crate::update::external_instrument::enable_external_instrument(r, track_id);
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddVocalTrack => {
-            let _ = r.engine.send(AudioCommand::AddVocalTrack {
-                id_hint: None,
-                name: None,
-            });
+            let id = r.allocate_track_id();
+            let _ = r.engine.send(AudioCommand::AddVocalTrack { id, name: None });
             r.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddControlTrack { id, kind, name } => {
             use crate::state::ControlTrackKind;
-            // Id-hinted add so the control reply can return `id`
-            // immediately; the engine echoes `*TrackAdded { id }` which
-            // mirrors the track into the registry. Drums queue a
-            // deferred instrument-type set for that echo.
+            // The id is already allocated (by the control handler, so the
+            // reply can return it immediately); the engine echoes
+            // `*TrackAdded { id }` which mirrors the track into the
+            // registry. Drums queue a deferred instrument-type set for
+            // that echo.
             let cmd = match kind {
                 ControlTrackKind::Vocal => AudioCommand::AddVocalTrack {
-                    id_hint: Some(id),
+                    id,
                     name: name.clone(),
                 },
                 ControlTrackKind::Audio => AudioCommand::AddTrack {
-                    id_hint: Some(id),
+                    id,
                     name: name.clone(),
                 },
                 ControlTrackKind::Instrument
                 | ControlTrackKind::Drums
                 | ControlTrackKind::External => AudioCommand::AddInstrumentTrack {
-                    id_hint: Some(id),
+                    id,
                     name: name.clone(),
                 },
             };
@@ -610,18 +610,24 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             id_hint,
             name,
         } => {
+            // `id_hint` is `Some` from the control endpoint (which had to
+            // allocate before building this message, to return the id in
+            // its reply) and `None` from the GUI's preset picker, which
+            // allocates right here instead — either way every add carries
+            // a concrete `id` (ARCH-04 D-4).
+            let id = id_hint.unwrap_or_else(|| r.allocate_track_id());
             let track_name = Some(name.unwrap_or_else(|| preset.name.clone()));
             let cmd = match preset.track_type.as_str() {
                 "instrument" => AudioCommand::AddInstrumentTrack {
-                    id_hint,
+                    id,
                     name: track_name,
                 },
                 "vocal" => AudioCommand::AddVocalTrack {
-                    id_hint,
+                    id,
                     name: track_name,
                 },
                 _ => AudioCommand::AddTrack {
-                    id_hint,
+                    id,
                     name: track_name,
                 },
             };
@@ -750,7 +756,7 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
     let track_name = format!("{source_name} bounce");
 
     let _ = r.engine.send(AudioCommand::AddTrack {
-        id_hint: Some(target_track_id),
+        id: target_track_id,
         name: Some(track_name),
     });
     let _ = r.engine.send(AudioCommand::BounceTrackRealtimeToAudio {
@@ -888,7 +894,7 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
     });
 
     let _ = r.engine.send(AudioCommand::AddTrack {
-        id_hint: Some(target_track_id),
+        id: target_track_id,
         name: Some(track_name),
     });
     let _ = r.engine.send(AudioCommand::BounceTrackToAudio {

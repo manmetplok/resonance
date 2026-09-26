@@ -288,7 +288,7 @@ fn test_allocate_id_unique_and_skips_existing() {
 fn test_allocate_id_resumes_after_rebuild_from_vec() {
     // Rebuilding from a persisted Vec restores the counter to max+1, so the
     // first allocation after load can't collide with a loaded marker —
-    // mirroring how the track registry restores next_sub_track_id on load.
+    // mirroring how the track registry restores next_track_id on load.
     let vec = vec![
         ArrangementMarker::new_point(5, "A".to_string(), [0, 0, 0], 0),
         ArrangementMarker::new_point(9, "B".to_string(), [0, 0, 0], 100),
