@@ -52,7 +52,7 @@ master and updates this table. Agents do **not** edit this file.
 | A5 audio follow-ups 2 | FU-D3, D4, F2b, M3a, M3c, A4a, A4b, A4c | opus | merged | a2a53c5f |
 | U1 undo follow-ups | FU-A1a, A2a, A2b, M4c, H2a, H2b, H2c | opus | merged | b611a4f5 |
 | R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | in progress | |
-| T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | in progress | |
+| T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | merged | 51000f97 |
 | V5 vocal data loss + canvas leftovers | FU-C1a, FU-C1b, FU-V2c, FU-V3c | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | merged | b9a5e1a4 |
@@ -138,7 +138,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M12a** (medium) autosave crash detection + recovery prompt (#466/#467 on `ba/epic-32`, ~1000 lines) and the autosave settings UI (#471) not ported — need their own todos.
 - [ ] **FU-M12b** (low) [dir-scan part fixed @78fd7021] autosave of a never-saved project uses the real user cache dir; backup side-file folder can be orphaned by a crash mid-backup; `SetProjectDir` folder scan runs on the engine command thread.
 - [x] **FU-M12c** — fixed (C1); (low) possibly flaky: `io preset_name_collisions::a_file_holding_another_preset_is_never_overwritten` failed once under full-suite load.
-- [ ] **FU-H3a** (low) crate-level `allow(dead_code, unused_imports)` when `test-internals` is off — reviewer may prefer per-item cfg gating; broken intra-doc link to gated `RolledAudioTake` from `project/take_audio.rs`; stale binary counts in run-tests.py docstring / CLAUDE.md.
+- [x] **FU-H3a** — done @d0f5ab01 (crate-level allow kept by design: ~150 items; doc link + counts fixed); (low) crate-level `allow(dead_code, unused_imports)` when `test-internals` is off — reviewer may prefer per-item cfg gating; broken intra-doc link to gated `RolledAudioTake` from `project/take_audio.rs`; stale binary counts in run-tests.py docstring / CLAUDE.md.
 - [x] **FU-H6a** — fixed @359709b8; (medium) ARCH-05 app sweep: convert resonance-app's ~49 `eprintln!` to tracing, then remove resonance-app's exemption from `library_crates_log_through_tracing_not_stderr`.
 - [x] **FU-H6b** — fixed @8bd64f1d; (low) cpal error callbacks in `engine/mod.rs` / `platform.rs` still format+log on the ALSA audio worker thread (rate-limited; outside the `mixer/` invariant) — route via atomics like the oversize latch.
 - [x] **FU-H6c** — fixed @359709b8; (low) default tracing filter string duplicated in `resonance-app/src/main.rs` and `resonance-plugin/src/logging.rs`; log lines now carry `LEVEL target:` prefixes.
@@ -147,10 +147,10 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-A4a** — fixed @ab066bb5; (low) a carried note-on is dropped when a panic had to be parked (busy lock); MIDI-clip lock contention during piano-roll edits still flushes held notes.
 - [x] **FU-A4b** — fixed @6dbbeeec; (low) after a project switch, the import modal rows of a stale pool batch get no final event — verify the app clears them on load.
 - [x] **FU-A4c** — fixed @b40d19d9; (low) mismatched-rate freeze cache conversion runs on the engine command thread (~2.7 ms per audio second); backend stream-error text no longer logged (kind only).
-- [ ] **FU-P1a** (low, test infra) EQ `dsp_golden` differs in last bits between debug and release — always bless under the debug profile the suite uses (or make the comparison tolerant).
-- [ ] **FU-A5a** (medium, flaky) `resonance-audio` `io::import_audio_to_pool::a_pool_import_outlived_by_its_project_never_lands_after_clear_all` failed once under full-suite load (passes 6/6 standalone) — make its timing deterministic.
+- [x] **FU-P1a** — fixed @2b659ca7 (bit-exact; was compile-time powi folding); (low, test infra) EQ `dsp_golden` differs in last bits between debug and release — always bless under the debug profile the suite uses (or make the comparison tolerant).
+- [x] **FU-A5a** — fixed @5461de45; (medium, flaky) `resonance-audio` `io::import_audio_to_pool::a_pool_import_outlived_by_its_project_never_lands_after_clear_all` failed once under full-suite load (passes 6/6 standalone) — make its timing deterministic.
 - [x] **FU-A5b** — fixed (C1); (low) import dialog doesn't show `ImportedSmf::tempo_points_clamped` yet (small hunk in `update/import.rs`).
-- [ ] **FU-A5c** (low) FU-M3c only checks the keyed plugin's own bypass (not chain-level FX bypass / muted consumer); frozen tracks play the live chain during async cache conversion (~100s of ms).
+- [x] **FU-A5c** — fixed @22757a50; (low) FU-M3c only checks the keyed plugin's own bypass (not chain-level FX bypass / muted consumer); frozen tracks play the live chain during async cache conversion (~100s of ms).
 - [ ] **FU-C1a** (HIGH, data loss) after a project reload the vocal-clip map points at `clip_<id>.wav`; re-rendering a vocal calls `unlink_if_exists(old_path)` in `vocal_audio_install` and deletes the file the saved project and undo snapshots reference.
 - [ ] **FU-C1b** (low) stray `vocal_*.wav` files from before the project-audio-dir fix remain in sibling `audio/` folders.
 
