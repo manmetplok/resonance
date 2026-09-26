@@ -29,6 +29,7 @@ use crate::multi_out_harness;
 
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use clap_sys::audio_buffer::clap_audio_buffer;
@@ -71,6 +72,9 @@ const TWO_CHUNKS: u64 = 2 * CHUNK as u64;
 
 struct MonitorState {
     active: bool,
+    /// `process()` calls, when the test wants to know whether this
+    /// instance ran at all.
+    calls: Option<Arc<AtomicUsize>>,
 }
 
 unsafe fn monitor_state<'a>(plugin: *const clap_plugin) -> &'a mut MonitorState {
@@ -106,7 +110,10 @@ unsafe extern "C" fn m_main_thread(_plugin: *const clap_plugin) {}
 /// Overwriting rather than mixing is what makes the assertions exact: the
 /// rendered level *is* the key level, so a test reads the key the mixer
 /// actually delivered rather than inferring it from a gain change.
-unsafe extern "C" fn m_process(_plugin: *const clap_plugin, process: *const clap_process) -> i32 {
+unsafe extern "C" fn m_process(plugin: *const clap_plugin, process: *const clap_process) -> i32 {
+    if let Some(calls) = &monitor_state(plugin).calls {
+        calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     let p = &*process;
     let frames = p.frames_count as usize;
 
@@ -193,9 +200,16 @@ unsafe extern "C" fn m_get_extension(
 }
 
 fn key_monitor() -> PluginSlot {
+    key_monitor_with_calls(None)
+}
+
+fn key_monitor_with_calls(calls: Option<Arc<AtomicUsize>>) -> PluginSlot {
     let inst = __instance_from_raw_for_test(
         move |_host| {
-            let state = Box::into_raw(Box::new(MonitorState { active: false }));
+            let state = Box::into_raw(Box::new(MonitorState {
+                active: false,
+                calls,
+            }));
             let plugin = Box::new(clap_plugin {
                 desc: ptr::null(),
                 plugin_data: state as *mut c_void,
@@ -600,6 +614,47 @@ fn a_muted_key_bus_still_keys_in_the_mixdown() {
 
     let got = render_second_chunk(&state, StemSource::Master);
     assert_keyed(got, at_master(KEY_LEVEL), "muted key bus, mixdown");
+}
+
+/// A muted key source whose only consumer is bypassed is not rendered at
+/// all (FU-M3c): nothing reads its key, so the key-only render is pure
+/// CPU. Un-bypassing the consumer brings the key-only render back.
+#[test]
+fn a_muted_key_bus_whose_consumer_is_bypassed_does_not_render() {
+    const PROBE_ID: PluginInstanceId = 901;
+    let state = fixture();
+    let calls = Arc::new(AtomicUsize::new(0));
+    state
+        .plugins
+        .write()
+        .insert(PROBE_ID, key_monitor_with_calls(Some(Arc::clone(&calls))));
+    state.add_bus(BUS, "Ghost");
+    state.busses.read().get(&BUS).unwrap().set_muted(true);
+    state.busses.write().get_mut(&BUS).unwrap().plugin_ids.push(PROBE_ID);
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    route(&state, SendSource::Bus(BUS));
+    let consumer_bypass = |v: bool| {
+        state
+            .plugins
+            .read()
+            .get(&MONITOR_ID)
+            .unwrap()
+            .bypass
+            .set_bypassed_settled(v)
+    };
+
+    consumer_bypass(true);
+    render_second_chunk(&state, StemSource::Master);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a muted key bus nobody reads must not run its chain"
+    );
+
+    consumer_bypass(false);
+    let got = render_second_chunk(&state, StemSource::Master);
+    assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    assert_keyed(got, at_master(NO_KEY), "muted key bus keyed by its probe");
 }
 
 use resonance_audio::test_support::MixAudioHarness;

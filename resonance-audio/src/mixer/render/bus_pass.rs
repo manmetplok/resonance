@@ -9,7 +9,7 @@ use crate::mixer::automation_apply::{auto_gain_ramp, auto_muted};
 use crate::mixer::common::{ramped_stereo_peaks, sum_to_output};
 use crate::types::*;
 
-use super::context::{run_fx_chain, BlockCtx, BlockScratch};
+use super::context::{key_consumed, run_fx_chain, BlockCtx, BlockScratch};
 use super::routing::apply_bus_aux_sends;
 use super::strategy::RenderStrategy;
 
@@ -61,7 +61,9 @@ fn render_one_bus(
     let ((bus_gain_l, bus_gain_r), key_only) =
         match strategy.bus_disposition(bus, bus_auto_gain, bus_auto_mute) {
             Some(gains) => (gains, false),
-            None if scratch.sidechain.is_tapped(bus_tap) => (((0.0, 0.0), (0.0, 0.0)), true),
+            None if key_consumed(ctx, scratch.sidechain, bus_tap) => {
+                (((0.0, 0.0), (0.0, 0.0)), true)
+            }
             None => return,
         };
 

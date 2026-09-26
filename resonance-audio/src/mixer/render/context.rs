@@ -170,6 +170,31 @@ impl<'a> BlockCtx<'a> {
 ///   instead of being skipped, which keeps its latency (and therefore the
 ///   whole comp table) untouched across the toggle.
 ///
+/// Whether a SILENCED `source` must still render for its sidechain key
+/// (code review MIX-05): some enabled route taps it AND that route's
+/// plugin is present and not bypassed — a bypassed (or removed) keyed
+/// plugin does not read its key, so a muted source feeding only such
+/// consumers renders nothing (FU-M3c). Audible sources capture whenever
+/// they are tapped; this only gates the key-only render. A keyed plugin
+/// being un-bypassed gets its first key one block later, during its
+/// bypass crossfade. Allocation- and lock-free.
+pub(crate) fn key_consumed(
+    ctx: &BlockCtx<'_>,
+    sidechain: &SidechainTaps,
+    source: SendSource,
+) -> bool {
+    sidechain.is_tapped(source)
+        && ctx.inputs.sidechain_routes.iter().any(|r| {
+            r.enabled
+                && r.source == source
+                && ctx
+                    .inputs
+                    .plugins
+                    .get(&r.plugin)
+                    .is_some_and(|slot| !slot.bypass.bypassed())
+        })
+}
+
 /// Returns whether any plugin actually ran; a plugin whose instance is
 /// missing, or (live) whose lock is contended, is skipped for this block.
 pub(crate) fn run_fx_chain(
