@@ -69,6 +69,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-6 (ARCH-01) | A1-2 (8) derived-clip map → `ProjectFile.derived_clips`; derived counter session-monotonic; `UndoExtras` empty | opus | merged | 4c76bb78 |
 | refactor-intent A-7 (ARCH-01) | A1-2 (9b) `UndoExtras` deleted; snapshot = `LoadedProject`; `io.restoring_undo` flag | opus | merged | 3e4496e9 |
 | FU-A6a (from A-6) | Clip-id collision: engine bumped `next_clip_id` into the derived range (drawn clip = next derived clip id; also on reopen via STATE-08 WAV scan). Engine now reserves only below `DERIVED_CLIP_ID_BASE` | opus | merged | 6942f712 |
+| FU-A4a (from A-4) | Undo/redo re-attach frozen caches (`SetTrackFrozenSource`) on both paths; undecodable cache → Stale | opus | merged | 5dc2fa1e |
 | FU-A10a (from A-10) | Coalesced undo: track name, drum group name + 5 knobs, vocal theme / line text; `BounceInPlace` → Skip + recorded `BounceInPlaceOffline` | sonnet | merged | a8a5f234 |
 | FU-A10b (from A-10) | Coalesced undo: 16 lane-inspector + 3 chord-inspector sliders; bulk-lyrics edits coalesce, cursor moves skip | sonnet | merged | e4869177 |
 | refactor-intent A-13a (ARCH-01) | `Reconcile` trait + `DOMAINS` table + staged driver; tempo, chord, markers, pool, quantize, performance, track groups, take groups migrated | opus | merged | b18300be |
