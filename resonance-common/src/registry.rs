@@ -7,8 +7,27 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-use crate::atomic_file::{atomic_write, quarantine_corrupt};
+use crate::atomic_file::{atomic_write, quarantine_corrupt, AtomicWriteError};
+
+/// Failure persisting the installed-content registry.
+#[derive(Debug, Error)]
+pub enum RegistryError {
+    /// No `$XDG_DATA_HOME` (or platform equivalent) could be determined.
+    #[error("no data dir")]
+    NoDataDir,
+    #[error("mkdir {}: {source}", path.display())]
+    Mkdir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("serialize registry: {0}")]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    Write(#[from] AtomicWriteError),
+}
 
 /// Type of installed content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,19 +123,21 @@ pub fn load_registry_from(path: &Path) -> InstalledRegistry {
 }
 
 /// Persist the registry to disk. Creates parent directories as needed.
-pub fn save_registry(registry: &InstalledRegistry) -> Result<(), String> {
-    let path = registry_path().ok_or_else(|| "no data dir".to_string())?;
+pub fn save_registry(registry: &InstalledRegistry) -> Result<(), RegistryError> {
+    let path = registry_path().ok_or(RegistryError::NoDataDir)?;
     save_registry_to(registry, &path)
 }
 
 /// Save to a specific path (useful for testing).
-pub fn save_registry_to(registry: &InstalledRegistry, path: &Path) -> Result<(), String> {
+pub fn save_registry_to(registry: &InstalledRegistry, path: &Path) -> Result<(), RegistryError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| RegistryError::Mkdir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
-    let json =
-        serde_json::to_string_pretty(registry).map_err(|e| format!("serialize registry: {e}"))?;
-    atomic_write(path, json.as_bytes()).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(registry)?;
+    atomic_write(path, json.as_bytes())?;
     Ok(())
 }
 
@@ -144,7 +165,7 @@ pub fn is_installed(name: &str, content_type: &ContentType) -> bool {
 
 /// Mark an item as installed. Replaces any existing entry with the same
 /// name + type so we don't accumulate duplicates from re-downloads.
-pub fn mark_installed(item: InstalledItem) -> Result<(), String> {
+pub fn mark_installed(item: InstalledItem) -> Result<(), RegistryError> {
     let mut reg = load_registry();
     reg.items.retain(|existing| {
         !(existing.name == item.name && existing.content_type == item.content_type)
@@ -154,7 +175,7 @@ pub fn mark_installed(item: InstalledItem) -> Result<(), String> {
 }
 
 /// Remove an installed item by name and type.
-pub fn remove_installed(name: &str, content_type: &ContentType) -> Result<(), String> {
+pub fn remove_installed(name: &str, content_type: &ContentType) -> Result<(), RegistryError> {
     let mut reg = load_registry();
     reg.items
         .retain(|item| !(item.name == name && item.content_type == *content_type));
