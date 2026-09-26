@@ -91,9 +91,9 @@ pub fn chord_sheet_dialog(data: Vec<u8>) -> Task<Message> {
 }
 
 /// Kick off an async load of the project on `path`.
-pub fn load_project_task(path: std::path::PathBuf) -> Task<Message> {
+pub fn load_project_task(path: std::path::PathBuf, token: u64) -> Task<Message> {
     Task::perform(
         async move { project::load_project(&path).map(Box::new) },
-        |r| Message::ProjectIo(ProjectIoMessage::ProjectLoaded(r)),
+        move |r| Message::ProjectIo(ProjectIoMessage::OpenLoadFinished(token, r)),
     )
 }
