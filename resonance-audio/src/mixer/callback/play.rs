@@ -83,7 +83,7 @@ pub(super) fn render_playing_block(
     // than skipped — and drop captured keys, which belong to the old
     // position.
     if scratch.continuity.jumped(playhead) {
-        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash);
+        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash, false);
         scratch.sidechain.clear();
     }
 

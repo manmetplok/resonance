@@ -452,7 +452,7 @@ fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
             if let Some(&inst_id) = track.plugins().first() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
                     if let Some(mut inst) = mutex.try_lock() {
-                        inst.0.all_notes_off();
+                        inst.0.all_notes_off_and_drop_carried();
                         inst.0.process(&mut silent_l, &mut silent_r, 64);
                     }
                 }

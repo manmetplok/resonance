@@ -106,7 +106,7 @@ pub(super) fn render_arrangement(
     );
 
     // Flush instrument voices at the seam.
-    panic_instrument_tracks(inputs.tracks, inputs.plugins, scratch.midi_stash);
+    panic_instrument_tracks(inputs.tracks, inputs.plugins, scratch.midi_stash, true);
 
     // The output stays continuous across the wrap: the PDC lines carry
     // their pre-seam tail into the post-wrap sub-block instead of reading

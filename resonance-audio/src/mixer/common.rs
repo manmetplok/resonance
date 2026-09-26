@@ -262,10 +262,16 @@ pub(super) fn ramped_stereo_peaks(
 /// after the playhead snaps back to `loop_in`. If the lock is contended,
 /// the panic is parked in the MIDI stash and fires on the next
 /// successful lock instead of being lost.
+///
+/// `at_seam` keeps the note events an instrument carried past the head
+/// sub-block — they belong to the tail, after the seam. Every other
+/// panic (Stop, relocate) drops them too (FU-F2a); a parked panic always
+/// does (see `MidiStash::deliver`).
 pub(super) fn panic_instrument_tracks(
     tracks_guard: &IndexMap<TrackId, Track>,
     plugins_guard: &PluginMap,
     midi_stash: &mut super::midi_stash::MidiStash,
+    at_seam: bool,
 ) {
     for track in tracks_guard.values() {
         if !track.track_type.accepts_midi() {
@@ -278,7 +284,11 @@ pub(super) fn panic_instrument_tracks(
             continue;
         };
         if let Some(mut inst) = mutex.try_lock() {
-            inst.0.all_notes_off();
+            if at_seam {
+                inst.0.all_notes_off();
+            } else {
+                inst.0.all_notes_off_and_drop_carried();
+            }
             // Stashed pre-seam events are superseded by the panic.
             midi_stash.discard(inst_id);
         } else {

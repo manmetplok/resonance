@@ -41,8 +41,10 @@ impl NoteSink for SyncClapInstance {
         self.0.arm_idle_hold();
         self.0.queue_note_off(key, sample_offset);
     }
+    // A parked panic lands a block or more late, past any seam its
+    // carried events were timed against — drop them (FU-F2a).
     fn all_notes_off(&mut self) {
-        self.0.all_notes_off();
+        self.0.all_notes_off_and_drop_carried();
     }
 }
 
