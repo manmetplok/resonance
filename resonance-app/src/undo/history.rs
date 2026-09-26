@@ -192,6 +192,16 @@ impl UndoHistory {
         self.coalesce_key = None;
     }
 
+    /// Every snapshot the history holds — undo, redo and an open
+    /// gesture's — for the save-time clip WAV GC (FU-V5a), which must keep
+    /// whatever any of them can restore.
+    pub fn snapshots(&self) -> impl Iterator<Item = &UndoSnapshot> {
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .chain(self.pending.iter())
+    }
+
     /// End any in-progress coalesce run, so the next coalesced record
     /// starts a fresh entry.
     pub fn break_coalesce(&mut self) {

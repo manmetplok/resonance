@@ -85,6 +85,9 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
         r.autosave_settings().backup_retention
     };
 
+    let clip_gc_keep = (!autosave)
+        .then(|| r.clip_gc_keep(&project_file, save.clip_files.keys().copied()));
+
     let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
         .midi_clips
         .iter()
@@ -111,10 +114,46 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
                     tracing::warn!("Versioned backup failed: {e}");
                 }
             }
+            // After the backup, so the reaper reads the snapshot it names.
+            if let Some(keep) = clip_gc_keep.flatten() {
+                match crate::project::clip_gc::reap_unreferenced_clip_wavs(&path, &keep) {
+                    Ok(removed) if !removed.is_empty() => {
+                        tracing::info!("[save] removed {} unreferenced clip WAV(s)", removed.len())
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("[save] clip WAV GC skipped: {e}"),
+                }
+            }
             Ok(())
         },
         move |r| Message::ProjectIo(ProjectIoMessage::ProjectSaved(r, autosave)),
     )
+}
+
+impl Resonance {
+    /// The clip ids a manual save's WAV GC must keep (code review
+    /// FU-V5a): the project being written, the engine's clip list the
+    /// save collected, the app mirror and every undo/redo snapshot.
+    /// `None` — skip the GC — while recording, whose take is written under
+    /// an id nothing names yet. The bundle's own JSONs (autosave, backups)
+    /// are read by the reaper itself.
+    pub(crate) fn clip_gc_keep(
+        &self,
+        file: &crate::project::ProjectFile,
+        engine_clips: impl IntoIterator<Item = ClipId>,
+    ) -> Option<std::collections::BTreeSet<ClipId>> {
+        use crate::project::clip_gc::collect_clip_ids;
+        if self.transport.recording {
+            return None;
+        }
+        let mut keep: std::collections::BTreeSet<ClipId> = engine_clips.into_iter().collect();
+        collect_clip_ids(file, &mut keep);
+        keep.extend(self.clips.iter().map(|c| c.id));
+        for snapshot in self.undo.snapshots() {
+            collect_clip_ids(&snapshot.project.file, &mut keep);
+        }
+        Some(keep)
+    }
 }
 
 /// Surface any clip whose audio file is **not** in the bundle the save

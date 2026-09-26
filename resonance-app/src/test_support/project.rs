@@ -33,6 +33,17 @@ impl Resonance {
         let _ = crate::engine_events::handle_engine_event(self, event);
     }
 
+    /// Test-only: the clip ids a manual save's WAV GC would keep right now
+    /// (FU-V5a), with `engine_clips` standing in for the engine's report.
+    #[doc(hidden)]
+    pub fn test_clip_gc_keep(
+        &self,
+        engine_clips: &[resonance_audio::types::ClipId],
+    ) -> Option<std::collections::BTreeSet<resonance_audio::types::ClipId>> {
+        let file = crate::update::build_project_file(self);
+        self.clip_gc_keep(&file, engine_clips.iter().copied())
+    }
+
     /// Test-only: the save whose engine round-trip is collecting, as
     /// `(target dir, is_autosave)`, or `None` when none is.
     #[doc(hidden)]
