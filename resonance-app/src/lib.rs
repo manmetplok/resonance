@@ -39,6 +39,7 @@ pub use test_support::SendSlotAffordances;
 pub mod theme;
 pub mod undo;
 pub mod update;
+pub mod user_dirs;
 pub mod util;
 pub mod view;
 
@@ -754,6 +755,12 @@ impl Resonance {
     /// decides only what gets read from outside the process; the resulting
     /// struct is put together identically either way.
     fn assemble(engine: AudioEngine, host: Host) -> Self {
+        if matches!(host, Host::None) {
+            // Not reading the user's state is half of it: a test app also
+            // must not *write* it (recents on save/load, presets, settings)
+            // nor let a later read see the real files (STATE-14 / FU-D5).
+            user_dirs::enter_hermetic();
+        }
         let (recent_projects, settings) = match host {
             Host::Machine => (recent::load(), settings::load()),
             Host::None => (Vec::new(), settings::AppSettings::default()),

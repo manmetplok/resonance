@@ -79,3 +79,5 @@ mod take_lanes_persistence;
 mod user_definitions_rescan;
 #[path = "io/files_listing_fingerprint.rs"]
 mod files_listing_fingerprint;
+#[path = "io/hermetic_user_state.rs"]
+mod hermetic_user_state;

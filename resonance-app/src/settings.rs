@@ -76,7 +76,7 @@ pub struct AppSettings {
 }
 
 fn settings_file_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join(APP_DIR).join(FILE_NAME))
+    crate::user_dirs::config_dir().map(|d| d.join(APP_DIR).join(FILE_NAME))
 }
 
 /// Load settings from disk, falling back to defaults on any error

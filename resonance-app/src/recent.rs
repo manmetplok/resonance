@@ -1,5 +1,5 @@
 //! Recent-projects store, persisted as JSON at
-//! `dirs::config_dir()/resonance/recent.json`. Loaded once at app
+//! `user_dirs::config_dir()/resonance/recent.json`. Loaded once at app
 //! startup and refreshed whenever a project is opened or saved.
 //!
 //! All I/O errors are swallowed (logged to stderr); a broken or
@@ -22,7 +22,7 @@ pub struct RecentEntry {
 }
 
 fn recent_file_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join(APP_DIR).join(FILE_NAME))
+    crate::user_dirs::config_dir().map(|d| d.join(APP_DIR).join(FILE_NAME))
 }
 
 fn now_secs() -> u64 {

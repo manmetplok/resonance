@@ -176,7 +176,7 @@ fn presets_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os(PRESET_DIR_ENV) {
         return Some(PathBuf::from(dir));
     }
-    dirs::data_dir().map(|d| d.join("resonance/track-presets"))
+    crate::user_dirs::data_dir().map(|d| d.join("resonance/track-presets"))
 }
 
 /// Environment override for [`presets_dir`].
