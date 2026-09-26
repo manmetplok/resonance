@@ -148,3 +148,26 @@ fn returning_from_the_reference_flushes_voices_whose_note_off_was_skipped() {
     );
     assert!(!rec.any_held(), "the skipped NoteOff must not leave the note hanging");
 }
+
+/// Stop while the audio thread holds the instrument: the engine's own
+/// panic is a `try_lock` and may be skipped, so the stopped branch
+/// flushes the playing run's voices itself — and, since an instrument
+/// with queued events is now processed while stopped (MIX-08), the
+/// NoteOffs actually reach it instead of waiting for the next Play.
+#[test]
+fn stopping_flushes_voices_from_the_audio_thread() {
+    let (mut h, rec) = harness(16);
+    for _ in 0..3 {
+        h.render();
+    }
+    assert!(rec.lock().held[60]);
+
+    h.shared().playing.store(false, Ordering::Relaxed);
+    for _ in 0..2 {
+        h.render();
+    }
+    assert!(
+        !rec.lock().any_held(),
+        "no voice may outlive the stop, even when the engine's panic was skipped"
+    );
+}

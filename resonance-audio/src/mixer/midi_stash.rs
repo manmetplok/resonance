@@ -31,10 +31,14 @@ pub trait NoteSink {
 }
 
 impl NoteSink for SyncClapInstance {
+    // Live notes (preview, controller, their stash replays) keep the
+    // instrument processed while stopped (code review MIX-08).
     fn note_on(&mut self, key: u8, velocity: f32, sample_offset: u32) {
+        self.0.arm_idle_hold();
         self.0.queue_note_on(key, velocity, sample_offset);
     }
     fn note_off(&mut self, key: u8, sample_offset: u32) {
+        self.0.arm_idle_hold();
         self.0.queue_note_off(key, sample_offset);
     }
     fn all_notes_off(&mut self) {

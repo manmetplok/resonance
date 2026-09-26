@@ -25,6 +25,7 @@ use crate::types::*;
 use super::common::{
     latch_transport, ramped_stereo_peaks, sum_to_output, track_stereo_gains, TransportSnap,
 };
+use super::midi_stash::MidiStash;
 
 // ---------------------------------------------------------------------------
 // Ring pacing
@@ -192,19 +193,41 @@ fn process_monitor_track(
         track_buf_r[f] = monitor_temp[base + right_port];
     }
 
-    // Process through plugin chain. Chain- and slot-level bypass go
-    // through the same click-free crossfade as the arrangement render
-    // (`crate::bypass`), so toggling a bypass while monitoring — which is
-    // exactly when a guitarist A/Bs an amp sim — cannot click either.
-    let chain_stage = track.fx_bypass().stage(sample_rate, mix_frames, true);
+    run_track_chain(
+        track,
+        &mut track_buf_l[..mix_frames],
+        &mut track_buf_r[..mix_frames],
+        plugins_guard,
+        fx_dry,
+        transport_snap,
+        sample_rate,
+    );
+
+    mix_frames
+}
+
+/// Run a track's whole plugin chain in place over `buf_l` / `buf_r`, off
+/// the timeline (monitor pass-through, stopped-transport instruments).
+/// Chain- and slot-level bypass go through the same click-free crossfade
+/// as the arrangement render (`crate::bypass`), so toggling a bypass while
+/// monitoring — which is exactly when a guitarist A/Bs an amp sim —
+/// cannot click either.
+fn run_track_chain(
+    track: &Track,
+    buf_l: &mut [f32],
+    buf_r: &mut [f32],
+    plugins_guard: &PluginMap,
+    fx_dry: &mut FxDryScratch,
+    transport_snap: Option<TransportSnap>,
+    sample_rate: u32,
+) {
+    let frames = buf_l.len().min(buf_r.len());
+    let chain_stage = track.fx_bypass().stage(sample_rate, frames, true);
     let (chain_dry, slot_dry) = fx_dry.split();
     run_faded(
         chain_stage,
-        mix_frames,
-        (
-            &mut track_buf_l[..mix_frames],
-            &mut track_buf_r[..mix_frames],
-        ),
+        frames,
+        (&mut buf_l[..frames], &mut buf_r[..frames]),
         chain_dry,
         |buf_l, buf_r| {
             let mut ran = false;
@@ -213,7 +236,7 @@ fn process_monitor_track(
                 let Some(slot) = plugins_guard.get(&plugin_id) else {
                     continue;
                 };
-                let slot_stage = slot.stage(sample_rate, mix_frames, true);
+                let slot_stage = slot.stage(sample_rate, frames, true);
                 if slot_stage == FadeStage::Dry {
                     continue;
                 }
@@ -224,11 +247,11 @@ fn process_monitor_track(
                 slot.sync_own_bypass(&mut inst.0);
                 ran |= run_faded(
                     slot_stage,
-                    mix_frames,
+                    frames,
                     (&mut *buf_l, &mut *buf_r),
                     (&mut *slot_dry.0, &mut *slot_dry.1),
                     |l, r| {
-                        inst.0.process(l, r, mix_frames);
+                        inst.0.process(l, r, frames);
                         true
                     },
                 );
@@ -236,8 +259,6 @@ fn process_monitor_track(
             ran
         },
     );
-
-    mix_frames
 }
 
 /// Monitor pass-through for the count-in and stopped branches of
@@ -298,6 +319,92 @@ pub(super) fn mix_monitor_passthrough(
             gain_r,
         );
         track.set_last_gains(target_l, target_r);
+    }
+    mixed_any
+}
+
+/// Stopped-transport instrument pass (code review MIX-08): process every
+/// instrument that has live notes waiting or still releasing (see
+/// `ClapInstance::wants_idle_process`), from silence, through its track's
+/// chain and fader into the output. Piano-roll preview notes and a MIDI
+/// controller played while stopped used to be queued into instruments
+/// that were never processed — silent, piling up to the queue cap, then
+/// bursting on the next Play. An idle instrument is not processed at all,
+/// which bounds the cost.
+///
+/// `monitored` says whether [`mix_monitor_passthrough`] ran this block;
+/// a track it already processed is skipped here. Muted / solo-suppressed
+/// tracks still run (so their queue drains and voices release) but are
+/// not heard. Returns whether any track was mixed audibly.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn mix_idle_instruments(
+    data: &mut [f32],
+    channels: usize,
+    frames: usize,
+    tracks_guard: &IndexMap<TrackId, Track>,
+    plugins_guard: &PluginMap,
+    midi_stash: &mut MidiStash,
+    track_buf_l: &mut [f32],
+    track_buf_r: &mut [f32],
+    fx_dry: &mut FxDryScratch,
+    transport_snap: Option<TransportSnap>,
+    sample_rate: u32,
+    monitored: bool,
+) -> bool {
+    let any_solo = any_top_level_solo(tracks_guard.values());
+    let frames = frames.min(track_buf_l.len()).min(track_buf_r.len());
+    let mut mixed_any = false;
+    for track in tracks_guard.values() {
+        if track.sub_track_of.is_some() || !track.runs_internal_instrument() {
+            continue;
+        }
+        let audible = !track.muted() && (!any_solo || track.soloed());
+        if monitored && audible && track.monitor_enabled() {
+            continue;
+        }
+        let Some(&inst_id) = track.plugins().first() else {
+            continue;
+        };
+        let Some(slot) = plugins_guard.get(&inst_id) else {
+            continue;
+        };
+        {
+            let Some(mut inst) = slot.try_lock() else {
+                continue;
+            };
+            // Events parked under contention go first, as on the
+            // arrangement path.
+            midi_stash.deliver(inst_id, &mut *inst);
+            if !inst.0.wants_idle_process() {
+                continue;
+            }
+        }
+        let (buf_l, buf_r) = (&mut track_buf_l[..frames], &mut track_buf_r[..frames]);
+        buf_l.fill(0.0);
+        buf_r.fill(0.0);
+        run_track_chain(
+            track,
+            buf_l,
+            buf_r,
+            plugins_guard,
+            fx_dry,
+            transport_snap,
+            sample_rate,
+        );
+        let (target_l, target_r) = if audible {
+            track_stereo_gains(track)
+        } else {
+            (0.0, 0.0)
+        };
+        let (last_l, last_r) = track.last_gains();
+        let gain_l = (last_l, target_l);
+        let gain_r = (last_r, target_r);
+        let (peak_l, peak_r) = ramped_stereo_peaks(buf_l, buf_r, frames, gain_l, gain_r);
+        track.update_peak_l(peak_l);
+        track.update_peak_r(peak_r);
+        sum_to_output(data, channels, frames, buf_l, buf_r, gain_l, gain_r);
+        track.set_last_gains(target_l, target_r);
+        mixed_any |= audible;
     }
     mixed_any
 }

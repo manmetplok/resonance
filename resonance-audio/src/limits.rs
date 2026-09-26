@@ -17,6 +17,13 @@ pub const MAX_BUSSES: usize = 32;
 /// Used to pre-allocate the input ring buffer.
 pub const MAX_INPUT_CHANNELS: usize = 32;
 
+/// Seconds an instrument keeps being processed while the transport is
+/// stopped after its last note event (piano-roll preview, live MIDI, a
+/// Stop / seek panic), so the release tail plays out instead of freezing
+/// until the next Play. Bounds the stopped-transport cost: an idle
+/// instrument is not processed at all (code review MIX-08).
+pub const IDLE_HOLD_SECS: u32 = 3;
+
 /// Maximum MIDI events collected per buffer per track. Prevents the
 /// pre-allocated `note_event_buf` Vec from reallocating on the audio
 /// thread. Events beyond this count are silently dropped for the

@@ -226,6 +226,9 @@ impl ClapInstance {
         }
 
         let frames = frames.min(8192);
+        // The stopped-transport window counts down in rendered frames
+        // (`ClapInstance::wants_idle_process`, code review MIX-08).
+        self.idle_hold_frames = self.idle_hold_frames.saturating_sub(frames as u32);
 
         // Point CLAP input buffers at the main output pair (in-place
         // processing — CLAP allows aliased in/out pointers).
