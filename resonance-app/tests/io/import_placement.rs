@@ -11,7 +11,7 @@
 use resonance_app::message::{DropTarget, Message, PoolMessage};
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
 use resonance_common::AudioFormat;
 use std::path::PathBuf;

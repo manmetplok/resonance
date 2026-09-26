@@ -20,7 +20,7 @@ use resonance_audio::types::AudioCommand;
 
 /// App with an active, saved project so the startup-modal gate lets Pool
 /// messages through and `import()` has a `project_path` to write into.
-fn app_with_project() -> (Resonance, resonance_audio::__test_support::Receiver<AudioCommand>) {
+fn app_with_project() -> (Resonance, resonance_audio::test_support::Receiver<AudioCommand>) {
     let (mut app, _task) = Resonance::new_for_test();
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/proj/song.rproj"));
@@ -28,7 +28,7 @@ fn app_with_project() -> (Resonance, resonance_audio::__test_support::Receiver<A
     (app, rx)
 }
 
-fn drain(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
+fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
     let mut cmds = Vec::new();
     while let Ok(cmd) = rx.try_recv() {
         cmds.push(cmd);

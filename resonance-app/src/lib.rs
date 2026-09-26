@@ -731,7 +731,7 @@ impl Resonance {
     pub fn new_for_test_with_capture() -> (
         Self,
         iced::Task<Message>,
-        resonance_audio::__test_support::Receiver<AudioCommand>,
+        crossbeam_channel::Receiver<AudioCommand>,
     ) {
         let (engine, cmd_rx) = AudioEngine::for_test_capture();
         (Self::assemble(engine, Host::None), iced::Task::none(), cmd_rx)

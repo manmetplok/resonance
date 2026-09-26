@@ -94,7 +94,7 @@ fn deliver_plugin_states(app: &mut Resonance) {
     });
 }
 
-fn drain(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
+fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 

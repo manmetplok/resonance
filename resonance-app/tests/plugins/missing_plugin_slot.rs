@@ -578,7 +578,7 @@ fn a_replacement_is_moved_to_the_engine_index_not_the_app_index() {
 /// the engine position the app asked for. Reads the add first so it
 /// cannot be fooled by a move aimed at some other instance.
 fn replacement_move_index(
-    rx: resonance_audio::__test_support::Receiver<AudioCommand>,
+    rx: resonance_audio::test_support::Receiver<AudioCommand>,
 ) -> Option<usize> {
     let cmds: Vec<AudioCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     let added = cmds.iter().find_map(|c| match c {

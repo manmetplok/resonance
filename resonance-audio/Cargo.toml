@@ -48,13 +48,22 @@ ogg = { version = "0.9", optional = true }
 default = ["mp3", "opus"]
 mp3 = ["dep:mp3lame-encoder"]
 opus = ["dep:opus", "dep:ogg"]
+# The engine-internals test surface (`resonance_audio::test_support` and
+# the other gated re-exports in `src/lib.rs`, code review ARCH-03). No
+# normal dependency enables it: only this crate's own tests and benches
+# (the self dev-dependency below) and resonance-app's dev-dependency do.
+test-internals = []
 
 [dev-dependencies]
-# Used by tests/import_audio_to_pool.rs to author mono / multi-rate
+# Turns on `test-internals` for this crate's own tests and benches. As a
+# dev-dependency, resolver 2 unifies the feature into test/bench builds
+# only — `cargo build` of this crate or of resonance-app never sees it.
+resonance-audio = { path = ".", features = ["test-internals"] }
+# Used by tests/io/import_audio_to_pool.rs to author mono / multi-rate
 # source WAVs (the public `transcode_to_wav` only writes stereo).
 hound.workspace = true
-# Used by tests/clip_warp.rs for WarpMarker / WarpAlgorithm serde round-trips,
-# and tests/export_settings.rs for ExportSettings serde round-trips.
+# Used by tests/types/clip_warp.rs for WarpMarker / WarpAlgorithm serde round-trips,
+# and tests/bounce/export_settings.rs for ExportSettings serde round-trips.
 serde_json.workspace = true
 # Per-block render-path benchmarks (benches/render_path.rs).
 criterion.workspace = true

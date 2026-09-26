@@ -32,7 +32,7 @@
 
 use resonance_app::message::{Message, TakeMessage};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::{EngineHandlerHarness, Receiver};
+use resonance_audio::test_support::{EngineHandlerHarness, Receiver};
 use resonance_audio::types::*;
 use resonance_common::{TakeContent, TimelineRange};
 

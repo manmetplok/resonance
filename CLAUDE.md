@@ -38,6 +38,11 @@ Four things to know before adding tests (background in ba doc #285):
   the group binaries (`mixer`, `timeline`, `compose`, `control`, …) instead.
   Every extra target re-monomorphizes the whole app plus iced, which is why
   240 of them cost 193s to relink after a one-line change and 11 cost 8s.
+  The same holds for `resonance-audio/tests/` (groups `mixer`, `engine`,
+  `bounce`, `clap_host`, `types`, `midi_hw`, `io`); a standalone file there
+  is only for process-global state (a `#[global_allocator]`, an rlimit, a
+  global latch). Its engine internals are `resonance_audio::test_support`,
+  behind the `test-internals` feature that tests get via dev-dependency.
 - **Re-bless goldens with `RESONANCE_BLESS=1`**, e.g.
   `RESONANCE_BLESS=1 cargo test -p resonance-app --test mixer`. This machine is
   canonical for golden images.

@@ -14,7 +14,7 @@ use resonance_app::message::{Message, TransportMessage};
 use resonance_app::state::TempoEvent;
 use resonance_app::update::tick;
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
 
 const TRACK: u64 = 1;
@@ -254,7 +254,7 @@ fn engine_latch_guard() -> std::sync::MutexGuard<'static, ()> {
     let guard = ENGINE_LATCH_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    resonance_audio::__test_support::__reset_engine_disconnect_latch_for_test();
+    resonance_audio::test_support::__reset_engine_disconnect_latch_for_test();
     guard
 }
 

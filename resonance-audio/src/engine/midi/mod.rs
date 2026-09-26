@@ -29,8 +29,8 @@ pub(crate) use clips::{
 };
 
 /// Test surface for the bulk MIDI-edit handlers (quantize / humanize /
-/// groove). Exposed under `__test_support` (via `lib.rs`) so the
-/// engine tests in `tests/midi_bulk_edits.rs` can drive each code path —
+/// groove). Exposed under `test_support` (via `lib.rs`) so the
+/// engine tests in `tests/engine/midi_bulk_edits.rs` can drive each code path —
 /// missing-clip no-op, atomic apply, selection-respecting, and the bulk
 /// `MidiNotesEdited` / `GrooveExtracted` event emission — without bringing
 /// up the engine thread.
@@ -40,8 +40,8 @@ pub use clips::{
 };
 
 /// Test surface for the MIDI clip move/trim handlers. Exposed under
-/// `__test_support` (via `lib.rs`) so the regression test in
-/// `tests/midi_clip_handlers.rs` can drive both code paths — missing-clip
+/// `test_support` (via `lib.rs`) so the regression test in
+/// `tests/engine/midi_clip_handlers.rs` can drive both code paths — missing-clip
 /// no-op and happy-path — without bringing up the engine thread.
 pub use clips::{move_midi_clip_in_place, trim_midi_clip_in_place};
 pub(crate) use clock::{
@@ -54,8 +54,8 @@ pub(crate) use hardware::{
     handle_set_track_midi_input, handle_set_track_midi_output,
 };
 /// Test surface for the device-param command boundary. Exposed under
-/// `__test_support` (via `lib.rs`) so the integration test in
-/// `tests/device_params_handler.rs` can drive the mutation + event
+/// `test_support` (via `lib.rs`) so the integration test in
+/// `tests/engine/device_params_handler.rs` can drive the mutation + event
 /// emission (including the missing-track no-op branch) without spinning up
 /// the engine thread.
 pub use hardware::set_track_device_params_in_place;
@@ -65,14 +65,14 @@ pub(crate) use live::{
     handle_live_midi_event, handle_send_note_off, handle_send_note_on,
 };
 /// Test surface for the live-note contention path. Exposed under
-/// `__test_support` (via `lib.rs`) so the regression test in
-/// `tests/live_note_retry_order.rs` can verify that a contended-then-
+/// `test_support` (via `lib.rs`) so the regression test in
+/// `tests/midi_hw/live_note_retry_order.rs` can verify that a contended-then-
 /// retried NoteOn never lands after its NoteOff, without a live CLAP
 /// plugin.
 pub use live::deliver_or_stash;
 /// Test surface for the live-input arrival → intra-block sample offset
-/// conversion. Exposed under `__test_support` (via `lib.rs`) so the
-/// test in `tests/live_arrival_offset.rs` can drive the pure function
+/// conversion. Exposed under `test_support` (via `lib.rs`) so the
+/// test in `tests/midi_hw/live_arrival_offset.rs` can drive the pure function
 /// without the engine thread.
 pub use live::live_arrival_sample_offset;
 pub use outbound::{

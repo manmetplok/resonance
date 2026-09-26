@@ -20,7 +20,7 @@ fn send_returns_err_when_command_channel_disconnected() {
     // The shared one-shot stderr latch is process-wide; reset it so
     // the test doesn't depend on whether some other integration test
     // already tripped it.
-    resonance_audio::__test_support::__reset_engine_disconnect_latch_for_test();
+    resonance_audio::test_support::__reset_engine_disconnect_latch_for_test();
 
     let engine = AudioEngine::for_test_disconnected();
 
@@ -41,7 +41,7 @@ fn send_disconnect_is_sticky() {
     // Once the receiver is dropped, every subsequent send must also
     // fail — there is no "auto-reconnect", and call sites shouldn't be
     // tempted to retry hoping the channel comes back.
-    resonance_audio::__test_support::__reset_engine_disconnect_latch_for_test();
+    resonance_audio::test_support::__reset_engine_disconnect_latch_for_test();
 
     let engine = AudioEngine::for_test_disconnected();
 
@@ -57,7 +57,7 @@ fn send_disconnect_is_sticky() {
 fn engine_send_error_display_includes_command_name() {
     // Wraps the original command in its Debug form so a log line is
     // actually useful for diagnosing which command was dropped.
-    resonance_audio::__test_support::__reset_engine_disconnect_latch_for_test();
+    resonance_audio::test_support::__reset_engine_disconnect_latch_for_test();
 
     let engine = AudioEngine::for_test_disconnected();
     let err = engine.send(AudioCommand::Pause).unwrap_err();

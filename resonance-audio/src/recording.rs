@@ -620,7 +620,7 @@ impl RolledAudioTake {
     /// [`resonance_common::Take::audible_extent`]).
     ///
     /// Defined here, on the value the emit site reads, so the capture path
-    /// and `tests/loop_record_takes.rs` cannot describe it differently.
+    /// and `tests/engine/loop_record_takes.rs` cannot describe it differently.
     pub fn extent(&self) -> resonance_common::TimelineRange {
         resonance_common::TimelineRange::new(self.start_sample, self.duration_samples)
     }

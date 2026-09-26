@@ -23,6 +23,9 @@ printpdf = { version = "0.9", default-features = false }
 time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
+# The engine-internals test surface (`resonance_audio::test_support`, ARCH-03)
+# for tests only; resolver 2 keeps it out of `cargo build -p resonance-app`.
+resonance-audio = { path = "../resonance-audio", features = ["test-internals"] }
 iced_test = "0.14"
 tempfile = "3"
 hound.workspace = true

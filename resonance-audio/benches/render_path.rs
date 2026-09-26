@@ -11,7 +11,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     mix_track_clips, sum_to_output, sum_to_stereo, RenderBenchHarness,
 };
 use resonance_audio::{collect_midi_events_bounce, ABMeterTap};

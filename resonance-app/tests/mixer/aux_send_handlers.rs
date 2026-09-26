@@ -9,7 +9,7 @@
 use resonance_app::message::{Message, MixerMessage};
 use resonance_app::undo::{classify, CoalesceKey, UndoAction};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AuxSend, SendSource};
 
 /// Build an app with a capturing engine; return the app and the receiver

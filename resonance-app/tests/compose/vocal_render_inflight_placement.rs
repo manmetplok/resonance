@@ -69,7 +69,7 @@ fn ready(definition: u64, placement: u64, queued_start: u64) -> Message {
     })))
 }
 
-fn loaded_starts(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<u64> {
+fn loaded_starts(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<u64> {
     rx.try_iter()
         .filter_map(|cmd| match cmd {
             AudioCommand::LoadClipFromWav { start_sample, .. } => Some(start_sample),

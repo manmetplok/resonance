@@ -66,7 +66,7 @@ pub(super) fn lock_plugin_for_bounce(
 /// Generic backbone for [`lock_plugin_for_bounce`]. Lives separately so
 /// integration tests can hammer it against a plain `Mutex<u32>` without
 /// having to materialise a real CLAP plugin. Exposed via the
-/// `__test_support` module in `lib.rs`.
+/// `test_support` module in `lib.rs`.
 #[inline]
 pub fn try_lock_with_backoff<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Fast path: no contention.

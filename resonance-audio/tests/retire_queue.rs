@@ -20,7 +20,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread::{self, ThreadId};
 
 use arc_swap::ArcSwap;
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     publish_retiring, EngineHandlerHarness, MixAudioHarness, Retired, SharedState,
 };
 use resonance_audio::types::*;
@@ -209,10 +209,10 @@ fn engine_handlers_retire_every_replaced_snapshot() {
     let held_comp = h.published_comp_table();
     let slot = TimelineRange::new(0, 48_000);
     let mut g1 = TakeGroup::new(1, 7, slot);
-    resonance_audio::__test_support::push_take(&mut g1, slot, &TakeContent::Audio { clip_ref: 100 });
+    resonance_audio::test_support::push_take(&mut g1, slot, &TakeContent::Audio { clip_ref: 100 });
     h.seed_take_group(g1);
     let mut g2 = TakeGroup::new(2, 7, slot);
-    resonance_audio::__test_support::push_take(&mut g2, slot, &TakeContent::Audio { clip_ref: 200 });
+    resonance_audio::test_support::push_take(&mut g2, slot, &TakeContent::Audio { clip_ref: 200 });
     h.seed_take_group(g2);
     assert_eq!(retired_len(&h), 2, "both replaced tables retired");
     assert!(h.shared().retired.holds(&held_comp));
