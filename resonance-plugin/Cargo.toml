@@ -5,7 +5,6 @@ edition = "2021"
 
 [features]
 default = []
-ui = ["iced"]
 # egui widget helpers bound to this crate's param types, for plugin editors
 # built on `plugin-gui-core` widgets + the platform GUI runtime. Off by
 # default so DSP-only consumers stay lean. The runtime deps live in target
@@ -26,7 +25,6 @@ dirs.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-iced = { workspace = true, optional = true }
 plugin-gui-core = { path = "../plugin-gui-core", optional = true }
 
 # The platform GUI runtimes behind `editor_host::RuntimeEditor`. Target-gated

@@ -1,4 +1,4 @@
-//! Drums plugin editor: an egui UI hosted in `wayland-plugin-gui`.
+//! Drums plugin editor: an egui UI hosted by the platform GUI runtime.
 //!
 //! Layout: a top chrome bar (traffic-light dots + Resonance / Drums brand)
 //! sits above a tab bar with the module nav (Pads · Mics · Articulations ·
@@ -8,7 +8,7 @@
 //! status bar (sample rate, buffer size, OUT meter) sits along the
 //! bottom edge.
 //!
-//! Every control comes from `wayland_plugin_gui::widgets` — the knobs
+//! Every control comes from `plugin_gui_core::widgets` — the knobs
 //! always did, and ba todo #1335 retired the local `editor/widgets/`
 //! copies of the chip, the segmented control and the slider. That
 //! module's own comment admitted they were "duplicated from
@@ -25,6 +25,8 @@ mod pad_inspector;
 mod theme;
 
 pub use factory::DrumsEditorFactory;
+
+use plugin_gui_core::egui;
 
 // Re-exported so the per-section modules (`pad_inspector`, `kit_browser`)
 // can keep their existing `super::reload_kit` import path. The helper

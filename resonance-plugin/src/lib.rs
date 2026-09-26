@@ -25,9 +25,6 @@ pub mod editor_host;
 #[cfg(feature = "editor-widgets")]
 pub mod preset_ui;
 
-#[cfg(feature = "ui")]
-pub mod ui;
-
 // Re-export core types for convenient use
 pub use clap_bridge::ClapBridge;
 pub use formatters::*;

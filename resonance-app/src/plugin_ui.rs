@@ -1,8 +1,10 @@
-/// Plugin UI types and shared widgets for Resonance plugins.
-///
-/// This module provides the shared event type, param data struct, theme constants,
-/// and reusable widget helpers that plugin UIs are built from.
-pub use iced;
+//! The host's generic parameter panel for plugins without a custom UI:
+//! the `UiParam` rows the mixer inspector draws, the event they emit, and
+//! the display rule `param_display`.
+//!
+//! This is host-side iced code. It used to live in `resonance-plugin` behind
+//! a `ui` feature, which gave every plugin author an optional iced dependency
+//! in their SDK for nothing; the app is its only consumer (ARCH-08).
 
 use iced::widget::{button, column, row, slider, text};
 use iced::{Element, Font, Length};

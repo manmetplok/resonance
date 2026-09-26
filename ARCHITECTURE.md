@@ -16,8 +16,8 @@ resonance-music-theory ──┬─► resonance-app                   (pure the
                          └─► resonance-granular-delay plugin (scale-quantized grain pitch)
 resonance-common ──► resonance-audio, every plugin
 resonance-plugin ──┬─► every plugin, resonance-app (UI helpers)
-                   └─► wayland-plugin-gui ──► every plugin (editor feature)
-plugin-gui-core ──► wayland-plugin-gui, cocoa-plugin-gui, resonance-plugin (editor contract + widgets)
+                   └─► wayland-plugin-gui / cocoa-plugin-gui  (cfg-selected runtime; no plugin names one)
+plugin-gui-core ──► wayland-plugin-gui, cocoa-plugin-gui, resonance-plugin, every plugin (editor contract + widgets)
 ```
 
 Hard rules — these are load-bearing for build times, testability, and cognitive load:
@@ -27,9 +27,11 @@ Hard rules — these are load-bearing for build times, testability, and cognitiv
 - `resonance-dsp`, `resonance-metering`, `resonance-common` are framework-agnostic — no Iced, no CLAP, no plugin trait. They're reusable building blocks.
 - `resonance-svs` (singing-voice synthesis) depends only on `resonance-music-theory`. It renders DiffSinger `.ds` segments to audio headless, and ships its own CLI binary so the pipeline can be exercised without booting the app.
 - `plugin-gui-core` is the platform-neutral half of the editor stack: the `EditorApp`/`EditorOptions`/`EditorError` contract, the fleet theme, and the pure egui widget set. No windowing code; builds on every OS.
-- `wayland-plugin-gui` is the Linux editor runtime — it hosts an egui UI in its own Wayland window/thread, building on `plugin-gui-core` for the shared contract (and re-exporting it, so plugins have one import surface). It is the optional `editor`-feature dep of every plugin and knows nothing about any specific plugin or the app. Its windowing body is Linux-only; other targets get a stub `Editor` so the workspace builds everywhere.
+- `wayland-plugin-gui` is the Linux editor runtime — it hosts an egui UI in its own Wayland window/thread, building on `plugin-gui-core` for the shared contract (and re-exporting it, so plugins have one import surface). No plugin depends on it directly: `resonance-plugin`'s `editor-widgets` feature pulls in the runtime for the current target and re-exports it as `editor_host::RuntimeEditor`, so a plugin's `editor` feature names only `plugin-gui-core` and `resonance-plugin/editor-widgets` (ARCH-08; `tools/arch-invariants` fails the build otherwise). It knows nothing about any specific plugin or the app. Its windowing body is Linux-only; other targets get a stub `Editor` so the workspace builds everywhere.
 - `cocoa-plugin-gui` is the macOS editor runtime — same public `Editor` surface, inverted mechanics: the window lives on the AppKit main thread (which AppKit requires) and the `Send` handle dispatches onto it; rendering is NSOpenGLView + the same egui_glow painter. Windowing body macOS-only, stub elsewhere. Plugins reach whichever runtime matches the platform through `resonance_plugin::editor_host` (migration tracked in `macos-editor-plan.md` item 3c).
 - `resonance-app` is allowed to depend on everything; it is the integration layer.
+
+These rules are tests, not only prose: `tools/arch-invariants/tests/architecture.rs` reads `cargo metadata` and fails the suite on an internal dependency that is not an edge of the diagram, a plugin manifest or source that names a platform runtime, a GUI toolkit or windowing stack outside its crate, an inline `#[cfg(test)]` beyond the documented exception, or a new top-level file in `resonance-app/tests/` (ARCH-10). Adding a crate means deciding its layer here and adding its row there.
 
 When extending: add new building blocks to the lowest layer they fit, not the most convenient one. A new filter goes in `resonance-dsp`, not in the plugin that needs it first.
 
@@ -55,8 +57,8 @@ Discipline:
 
 - `dsp.rs` is the pure-DSP boundary. It must be testable without the plugin framework. Plugins ship integration tests in `tests/` that drive `dsp.rs` directly.
 - `params.rs` defines parameters as code, not as a serialized blob. Adding a parameter is a code change, not a config change.
-- The editor is **feature-gated** (`default = ["editor"]`). Headless builds for tests/CI use `--no-default-features` and skip the egui/wayland deps.
-- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 11 plugins re-exports the shared design system with `pub use wayland_plugin_gui::theme::lavender::*` (which itself re-exports `plugin-gui-core`'s canonical tokens — see above), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
+- The editor is **feature-gated** (`default = ["editor"]`). Headless builds for tests/CI use `--no-default-features` and skip the egui and platform-runtime deps.
+- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 11 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens — see above), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
 
 ## Mastering as the Reference Decomposition
 

@@ -8,7 +8,7 @@
 #![cfg(feature = "editor")]
 
 use resonance_granular_delay::editor::hero::{HeroLayout, PITCH_RANGE_ST, TAP_HIT_HALF_W};
-use wayland_plugin_gui::egui;
+use plugin_gui_core::egui;
 
 const MAX_DELAY_MS: f32 = 4000.0;
 

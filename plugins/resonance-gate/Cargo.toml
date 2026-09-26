@@ -11,7 +11,7 @@ crate-type = ["cdylib", "lib"]
 # Editor ships by default so the bundled .clap has a GUI.
 # Turn it off (`--no-default-features`) for a headless DSP build.
 default = ["editor"]
-editor = ["dep:wayland-plugin-gui", "dep:plugin-gui-core", "dep:egui", "resonance-plugin/editor-widgets"]
+editor = ["dep:plugin-gui-core", "resonance-plugin/editor-widgets"]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
@@ -19,9 +19,12 @@ resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
 resonance-metering = { path = "../../resonance-metering" }
 
-wayland-plugin-gui = { path = "../../wayland-plugin-gui", optional = true }
+# Only the platform-neutral half of the editor stack is named here. The
+# platform GUI runtime (Wayland today, Cocoa on macOS) is selected by
+# `resonance-plugin`'s `editor-widgets` feature and reached through
+# `resonance_plugin::editor_host`; `egui` comes via `plugin_gui_core::egui`
+# (ARCH-08).
 plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
-egui = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Only the factory-preset test parses JSON directly; the plugin itself
