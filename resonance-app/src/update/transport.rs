@@ -191,7 +191,8 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         }
         TransportMessage::UpdateLoopDrag(x) => {
             if r.transport.dragging_loop.is_some() {
-                let seconds = (x + r.viewport.scroll_offset) / r.viewport.zoom;
+                // Pointer x is in canvas content space (review VIEW-10).
+                let seconds = x / r.viewport.zoom;
                 let raw = (seconds.max(0.0) as f64 * r.sample_rate as f64) as u64;
                 let sample = crate::view::timeline::snap_sample_to_grid_tempo(
                     raw,

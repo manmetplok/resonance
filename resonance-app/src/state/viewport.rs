@@ -19,6 +19,11 @@ pub enum ViewMode {
 pub struct ArrangeViewport {
     /// Horizontal zoom in pixels per second.
     pub zoom: f32,
+    /// NOT the arrange timeline's horizontal scroll: that is owned by the
+    /// outer `Scrollable` in `view_timeline`, and the canvas works in
+    /// content coordinates with its own offset pinned to 0. Pointer →
+    /// sample conversions must never add this (review VIEW-10); it is
+    /// only fed by the canvas's dormant in-canvas scrollbar path.
     pub scroll_offset: f32,
     pub scroll_offset_y: f32,
     pub viewport_width: f32,
