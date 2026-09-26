@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::types::*;
 
 use super::plugins::{
-    allocate_plugin_instance_id, ensure_bundle, report_plugin_load_failure, resolve_plugin_id,
+    ensure_bundle, reject_if_plugin_id_in_use, report_plugin_load_failure, resolve_plugin_id,
 };
 use super::thread::{HandlerCtx, HandlerState};
 
@@ -21,21 +21,24 @@ pub(crate) fn handle_add_plugin_to_master(
     state: &mut HandlerState,
     clap_file_path: String,
     clap_plugin_id: String,
-    id_hint: Option<PluginInstanceId>,
+    id: PluginInstanceId,
 ) {
+    if reject_if_plugin_id_in_use(ctx, id, &clap_plugin_id) {
+        return;
+    }
     let path = Path::new(&clap_file_path);
     let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
         Ok(idx) => idx,
         Err(reason) => {
-            report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
             return;
         }
     };
     let actual_plugin_id =
         match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id.clone()) {
-            Ok(id) => id,
+            Ok(resolved) => resolved,
             Err(reason) => {
-                report_plugin_load_failure(ctx, id_hint, &clap_plugin_id, &clap_file_path, reason);
+                report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
                 return;
             }
         };
@@ -47,7 +50,7 @@ pub(crate) fn handle_add_plugin_to_master(
         .unwrap_or_else(|| actual_plugin_id.clone());
     match state.bundles[bundle_idx].create_instance(&actual_plugin_id, ctx.sample_rate) {
         Ok(instance) => {
-            let instance_id = allocate_plugin_instance_id(&mut state.next_plugin_id, id_hint);
+            let instance_id = id;
             let params = instance.query_params();
             let has_gui = instance.has_gui();
             let has_sidechain_input = instance.has_sidechain_input();
@@ -68,7 +71,7 @@ pub(crate) fn handle_add_plugin_to_master(
         }
         Err(e) => report_plugin_load_failure(
             ctx,
-            id_hint,
+            Some(id),
             &actual_plugin_id,
             &clap_file_path,
             format!("Failed to create plugin instance: {}", e),

@@ -1,24 +1,32 @@
-//! Entity ids never collide across the two allocators (ARCH-04 A4-1).
+//! Entity ids never collide across the app's allocators, or with the
+//! engine's own remaining ones (ARCH-04 A4-1, updated for D-1).
 //!
 //! The engine allocates the ids of everything the GUI adds without a
-//! hint; the app allocates the ids it needs synchronously (control-API
-//! adds, FX returns, sub-tracks, track groups) from the bases named in
-//! `resonance_app::state::ids`. This pins the partition that keeps the
-//! two apart today, so the epic that moves ownership to the app
-//! (A4-4) can migrate one space at a time against a test: the demo
-//! project gets one of each entity added through the GUI path *and*
-//! through the control path, is saved, reloaded, and gets the same adds
-//! again; every id space must still be a set afterwards, and every app
-//! counter must sit above every id its space holds.
+//! hint (tracks, busses, sends); the app allocates the ids it needs
+//! synchronously (control-API adds, FX returns, sub-tracks, track
+//! groups) from the bases named in `resonance_app::state::ids`. This
+//! pins the partition that keeps the two apart today, so the epic that
+//! moves ownership to the app (A4-4) can migrate one space at a time
+//! against a test: the demo project gets one of each entity added
+//! through the GUI path *and* through the control path, is saved,
+//! reloaded, and gets the same adds again; every id space must still be
+//! a set afterwards, and every app counter must sit above every id its
+//! space holds.
 //!
-//! The engine's part is played by [`FakeEngine`], which follows the
-//! allocation rules in `resonance-audio/src/engine/{tracks,busses,
-//! plugins}.rs` to the letter — including the one that matters: a hint
-//! at or above the app's base is taken but never moves the engine's
-//! counter. Before that rule covered tracks (it was plugin-only) this
-//! test failed on its second round: the engine, dragged to 1e9+2 by the
-//! control adds, handed a GUI "Add track" the id of the group the app
-//! had created — a group the engine never hears about.
+//! **Plugins landed D-1**: there is no more engine-vs-app split for
+//! `PluginInstanceId`. Every add — GUI or control, track/bus/master —
+//! now allocates through `Resonance::allocate_plugin_id`, and
+//! [`FakeEngine::plugin`] just echoes the id it was given straight back,
+//! the way the real `handle_add_plugin`/`handle_add_plugin_to_bus`/
+//! `handle_add_plugin_to_master` do (no counter, no hint, no base). The
+//! remaining `FakeEngine` allocators (track, bus, send) still follow the
+//! allocation rules in `resonance-audio/src/engine/{tracks,busses}.rs` to
+//! the letter — including the one that matters: a hint at or above the
+//! app's base is taken but never moves the engine's counter. Before that
+//! rule covered tracks (it was plugin-only) this test failed on its
+//! second round: the engine, dragged to 1e9+2 by the control adds, handed
+//! a GUI "Add track" the id of the group the app had created — a group
+//! the engine never hears about.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -26,8 +34,7 @@ use std::path::PathBuf;
 use resonance_app::message::*;
 use resonance_app::project;
 use resonance_app::state::ids::{
-    CONTROL_PLUGIN_ID_BASE, CONTROL_SEND_ID_BASE, DERIVED_CLIP_ID_BASE, RETURN_BUS_ID_BASE,
-    SUB_TRACK_ID_BASE,
+    CONTROL_SEND_ID_BASE, DERIVED_CLIP_ID_BASE, RETURN_BUS_ID_BASE, SUB_TRACK_ID_BASE,
 };
 use resonance_app::{demo, Resonance, TestChain};
 use resonance_audio::test_support::Receiver;
@@ -48,7 +55,6 @@ struct FakeEngine {
     next_track: u64,
     next_bus: u64,
     next_send: u64,
-    next_plugin: u64,
 }
 
 impl FakeEngine {
@@ -57,14 +63,12 @@ impl FakeEngine {
             next_track: 1,
             next_bus: 1,
             next_send: 1,
-            next_plugin: 1,
         }
     }
 
     /// `engine/tracks.rs`, `engine/midi/clips.rs`, `engine/busses.rs`
-    /// (busses and sends), `engine/plugins.rs`: honour a hint, and bump
-    /// the counter past it only when it is below the app's base for
-    /// that space.
+    /// (busses and sends): honour a hint, and bump the counter past it
+    /// only when it is below the app's base for that space.
     fn allocate(next: &mut u64, hint: Option<u64>, app_base: u64) -> u64 {
         match hint {
             Some(h) => {
@@ -93,8 +97,11 @@ impl FakeEngine {
         Self::allocate(&mut self.next_send, hint, CONTROL_SEND_ID_BASE)
     }
 
-    fn plugin(&mut self, hint: Option<u64>) -> u64 {
-        Self::allocate(&mut self.next_plugin, hint, CONTROL_PLUGIN_ID_BASE)
+    /// D-1: the engine has no plugin-id counter left. It honours
+    /// whatever id `AddPlugin`/`AddPluginToBus`/`AddPluginToMaster`
+    /// carries, full stop — this just plays that back as the echo.
+    fn plugin(&mut self, id: u64) -> u64 {
+        id
     }
 }
 
@@ -151,10 +158,10 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                 track_id,
                 clap_file_path,
                 clap_plugin_id,
-                id_hint,
+                id,
                 ..
             } => {
-                let instance_id = engine.plugin(id_hint);
+                let instance_id = engine.plugin(id);
                 app.test_apply_engine_event(AudioEvent::PluginAdded {
                     track_id,
                     instance_id,
@@ -166,6 +173,40 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                     has_sidechain_input: false,
                     output_port_count: 1,
                     output_port_names: vec!["Main".to_owned()],
+                });
+            }
+            AudioCommand::AddPluginToBus {
+                bus_id,
+                clap_file_path,
+                clap_plugin_id,
+                id,
+            } => {
+                let instance_id = engine.plugin(id);
+                app.test_apply_engine_event(AudioEvent::BusPluginAdded {
+                    bus_id,
+                    instance_id,
+                    plugin_name: clap_plugin_id.clone(),
+                    clap_plugin_id,
+                    clap_file_path,
+                    params: Vec::new(),
+                    has_gui: false,
+                    has_sidechain_input: false,
+                });
+            }
+            AudioCommand::AddPluginToMaster {
+                clap_file_path,
+                clap_plugin_id,
+                id,
+            } => {
+                let instance_id = engine.plugin(id);
+                app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+                    instance_id,
+                    plugin_name: clap_plugin_id.clone(),
+                    clap_plugin_id,
+                    clap_file_path,
+                    params: Vec::new(),
+                    has_gui: false,
+                    has_sidechain_input: false,
                 });
             }
             AudioCommand::LoadMidiClipDirect {
@@ -245,7 +286,8 @@ fn fixture(tag: &str) -> Fixture {
     engine.next_track = ids.tracks.iter().copied().max().unwrap_or(0) + 1;
     engine.next_bus = ids.busses.iter().copied().max().unwrap_or(0) + 1;
     engine.next_send = ids.sends.iter().copied().max().unwrap_or(0) + 1;
-    engine.next_plugin = ids.plugins.iter().copied().max().unwrap_or(0) + 1;
+    // No `next_plugin` to advance: D-1 deleted the engine's plugin
+    // counter, so `FakeEngine::plugin` has nothing to seed.
     app.test_set_active_project(true);
     app.test_set_project_path(project.clone());
     Fixture {
@@ -327,12 +369,18 @@ fn assert_partition_holds(app: &Resonance, when: &str) {
     if app.test_aux_next_control_send_id() != 0 {
         above(app.test_aux_next_control_send_id(), CONTROL_SEND_ID_BASE, &ids.sends, "send");
     }
-    above(
-        app.test_next_control_plugin_id(),
-        CONTROL_PLUGIN_ID_BASE,
-        &ids.plugins,
-        "plugin",
-    );
+    // D-1: no base and no "counter stays above every held id" invariant
+    // for plugins any more — the app is the sole allocator, but plugin
+    // ids can also land in the mirror without ever passing through it
+    // (`demo::seed_demo_content`'s fixture ids, a project loaded with
+    // ids from a session that ran ahead of this one's counter). What
+    // `allocate_plugin_id` actually guarantees is that its OWN in-use
+    // scan never hands out an id already live, regardless of the
+    // counter's position — which is exactly what the `assert_set` above
+    // is for: any real collision shows up there as a repeated id the
+    // moment a scan-protected allocation coexists with an out-of-band
+    // one, which is precisely what `add_round`'s GUI + control adds onto
+    // the demo's seeded content already drives.
     assert!(
         app.compose_state().next_derived_clip_id >= DERIVED_CLIP_ID_BASE,
         "{when}: derived-clip counter below its base"
@@ -409,6 +457,45 @@ fn add_round(f: &mut Fixture, round: &str) {
     )
     .result()
     .expect("track.add_effect succeeds");
+    echo(app, rx, engine);
+
+    // Plugins on a bus and on master, GUI and control (ARCH-04 D-1):
+    // every one of these now draws from the SAME app allocator as the
+    // track adds above, so the id spaces mixing here is the point —
+    // before D-1 the GUI ones would have come from the engine's own
+    // counter instead.
+    app.test_dispatch(Message::Bus(BusMessage::AddPluginToBus(
+        gui_bus,
+        ScannedPlugin {
+            clap_file_path: "/plugins/eq.clap".to_owned(),
+            clap_plugin_id: EQ.to_owned(),
+            name: "Resonance EQ".to_owned(),
+            vendor: "Resonance".to_owned(),
+            is_instrument: false,
+            ..Default::default()
+        },
+    )));
+    echo(app, rx, engine);
+    let _: serde_json::Value = call(
+        app,
+        "bus.add_effect",
+        serde_json::json!({ "bus_id": control_bus, "plugin_id": EQ }),
+    )
+    .result()
+    .expect("bus.add_effect succeeds");
+    echo(app, rx, engine);
+    app.test_dispatch(Message::Master(MasterMessage::AddPluginToMaster(ScannedPlugin {
+        clap_file_path: "/plugins/eq.clap".to_owned(),
+        clap_plugin_id: EQ.to_owned(),
+        name: "Resonance EQ".to_owned(),
+        vendor: "Resonance".to_owned(),
+        is_instrument: false,
+        ..Default::default()
+    })));
+    echo(app, rx, engine);
+    let _: serde_json::Value = call(app, "master.add_effect", serde_json::json!({ "plugin_id": EQ }))
+        .result()
+        .expect("master.add_effect succeeds");
     echo(app, rx, engine);
 
     // Sends: GUI (engine-allocated) and control (app-allocated), from
@@ -528,11 +615,106 @@ fn a_new_track_never_takes_a_group_id() {
 fn the_app_id_bases_are_ordered_and_disjoint() {
     assert!(SUB_TRACK_ID_BASE < RETURN_BUS_ID_BASE);
     assert_eq!(RETURN_BUS_ID_BASE, CONTROL_SEND_ID_BASE);
-    assert!(CONTROL_SEND_ID_BASE < CONTROL_PLUGIN_ID_BASE);
-    assert!(CONTROL_PLUGIN_ID_BASE < DERIVED_CLIP_ID_BASE);
+    assert!(CONTROL_SEND_ID_BASE < DERIVED_CLIP_ID_BASE);
     // A fresh app seeds its counters from the bases.
     let (app, _task) = Resonance::new_for_test();
     assert_eq!(app.test_registry().next_sub_track_id, SUB_TRACK_ID_BASE);
     assert_eq!(app.test_registry().next_return_bus_id, RETURN_BUS_ID_BASE);
-    assert_eq!(app.test_next_control_plugin_id(), CONTROL_PLUGIN_ID_BASE);
+    // D-1: plugins have no base — the app is the only allocator left, so
+    // it starts at 1 like the engine's counters used to.
+    assert_eq!(app.test_next_plugin_id(), 1);
+}
+
+/// ARCH-04 D-1: every plugin add — GUI or control, on a track, a bus, or
+/// master — now goes through the same app allocator
+/// (`Resonance::allocate_plugin_id`), so a GUI add on a track and a
+/// control add on a bus can no longer land on the same id by construction
+/// (before D-1 they came from disjoint ranges; now they come from the
+/// same counter's in-use scan). This drives every one of those six add
+/// paths, plus undo of one of them, and checks the plugin space stays a
+/// set throughout — including that undoing an add does not let the next
+/// add reuse the id undo just freed (the same STATE-08-style monotonicity
+/// `ids_stay_unique_across_gui_and_control_adds_and_a_reload` pins for
+/// tracks and busses across a reload).
+#[test]
+fn every_plugin_add_path_gets_a_unique_app_id_including_across_undo() {
+    let mut f = fixture("plugin-paths");
+    add_round(&mut f, "first");
+    assert_partition_holds(&f.app, "after one round of track/bus/master adds");
+    let ids_before = live_ids(&f.app);
+    assert!(
+        ids_before.plugins.len() >= 6,
+        "add_round adds a plugin via both GUI and control on the track, \
+         the bus, and master: {:?}",
+        ids_before.plugins
+    );
+
+    // A fresh, self-contained add-then-undo-then-add, so this doesn't
+    // depend on which of `add_round`'s several undo-recorded actions
+    // happens to be last. Add a plugin, undo it, add again: if undo
+    // rewound the allocator instead of merely removing the mirrored
+    // slot, the second add would reuse the id the first one held.
+    //
+    // Uses `update()`, not `test_dispatch` (which bypasses undo
+    // bookkeeping on purpose — see its doc comment): `record_undo` has to
+    // run before the add dispatches to snapshot the pre-add state, or
+    // `Message::Undo` (also only wired up inside `update()`) has nothing
+    // to restore.
+    let target_track = f.app.test_registry().tracks[0].id;
+    let add_eq = || PluginMessage::AddPluginToTrack(
+        target_track,
+        ScannedPlugin {
+            clap_file_path: "/plugins/eq.clap".to_owned(),
+            clap_plugin_id: EQ.to_owned(),
+            name: "Resonance EQ".to_owned(),
+            vendor: "Resonance".to_owned(),
+            is_instrument: false,
+            ..Default::default()
+        },
+    );
+    let _ = f.app.update(Message::Plugin(add_eq()));
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    let first_id = f
+        .app
+        .test_chain_slots(TestChain::Track(target_track))
+        .last()
+        .expect("the first add landed")
+        .0;
+
+    let _ = f.app.update(Message::Undo);
+    // A plugin add is a structural change, so undo takes the
+    // ClearAll -> replay path (same as
+    // `control_track_remove_effect::the_removal_is_recorded_on_the_undo_stack`)
+    // rather than the fast fader/knob diff-replay: it only STARTS the
+    // restore, asynchronously, by sending `ClearAll` and stashing the
+    // pre-add snapshot in `io.pending_load`. Play the engine's
+    // `AllCleared` echo back to actually finish it.
+    assert!(
+        std::iter::from_fn(|| f.rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
+        "undo must find the add and start restoring the pre-add snapshot"
+    );
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(
+        f.app
+            .test_chain_slots(TestChain::Track(target_track))
+            .iter()
+            .all(|s| s.0 != first_id),
+        "undo removed the slot the first add created"
+    );
+
+    let _ = f.app.update(Message::Plugin(add_eq()));
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    let second_id = f
+        .app
+        .test_chain_slots(TestChain::Track(target_track))
+        .last()
+        .expect("the second add landed")
+        .0;
+
+    assert_ne!(
+        second_id, first_id,
+        "undo must not rewind the allocator: the post-undo add reused the \
+         id the undone add held"
+    );
+    assert_partition_holds(&f.app, "after undo + a fresh add");
 }

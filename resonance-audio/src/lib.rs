@@ -168,9 +168,6 @@ pub mod test_support {
     /// The "crossfade or land immediately" rule every bypass handler
     /// shares — see `tests/clap_host/plugin_bypass.rs`.
     pub use crate::engine::plugins::apply_bypass_request;
-    /// The engine's plugin instance-id allocation rule, shared by the
-    /// track / bus / master add paths — see `tests/clap_host/plugin_id_ranges.rs`.
-    pub use crate::engine::plugins::allocate_plugin_instance_id;
     /// The add-failure report every chain's add path goes through, and
     /// the two lookups that can produce a reason for it — see
     /// `tests/clap_host/plugin_load_failure.rs` (ba doc #275 P5, todo #1309).

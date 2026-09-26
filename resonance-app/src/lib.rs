@@ -394,13 +394,13 @@ pub struct Resonance {
         crate::state::PluginLocator,
     >,
 
-    /// Next plugin instance id the APP will hand the engine as an
-    /// `id_hint`, so a control-API add can report the slot it created
-    /// without waiting for the `PluginAdded` echo (ba doc #273, todo
-    /// #1234). Seeded to
-    /// [`CONTROL_PLUGIN_ID_BASE`](crate::state::plugin_index::CONTROL_PLUGIN_ID_BASE);
-    /// see `allocate_control_plugin_id` for the range convention.
-    pub(crate) next_control_plugin_id: resonance_audio::types::PluginInstanceId,
+    /// Next plugin instance id the app will hand the engine — every
+    /// plugin add now allocates from here (ARCH-04 D-1), not only a
+    /// control-API add that has to report the slot it created without
+    /// waiting for the `PluginAdded` echo (ba doc #273, todo #1234).
+    /// Starts at 1: there is no engine-side counter left to stay above,
+    /// so no base. See `allocate_plugin_id`.
+    pub(crate) next_plugin_id: resonance_audio::types::PluginInstanceId,
 
     /// Persistent application settings (autosave config, …), loaded from
     /// `config_dir()/resonance/settings.json` on startup. Read via
@@ -905,7 +905,7 @@ impl Resonance {
             device_registry,
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),
-            next_control_plugin_id: state::ids::CONTROL_PLUGIN_ID_BASE,
+            next_plugin_id: 1,
             confirm_delete_track: None,
             bounce_dialog: None,
             import_dialog: None,

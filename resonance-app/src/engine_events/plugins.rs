@@ -379,17 +379,22 @@ pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
 
 /// An add that produced no instance (ba doc #275 P5, todo #1309).
 ///
-/// Two outcomes, decided by whether the failure names a slot:
+/// Since ARCH-04 D-1 every add carries an app-allocated id, so
+/// `instance_id` is always `Some` here — what still varies is whether a
+/// slot was already mirrored *for* that id when the failure lands. Two
+/// outcomes, decided by whether marking a slot missing actually finds one:
 ///
-/// * **it does** — the project-load replay and the control API both
-///   pass an `id_hint`, so the slot that was created optimistically for
-///   this instance is marked [`PluginAvailability::Missing`] and the
-///   load warning is raised. The slot KEEPS its position in the chain
-///   and keeps the preserved settings hanging off it (ba todo #1308);
-///   only an explicit remove throws those away.
-/// * **it does not** — the mixer's "+ FX" picker lets the engine
-///   allocate, so a failure there added nothing and there is no slot to
-///   mark. It surfaces as a plain error, which is all it ever was.
+/// * **it does** — the project-load replay and the control API's
+///   `...WithId` paths mirror a placeholder slot up front, so this
+///   instance is marked [`PluginAvailability::Missing`] and the load
+///   warning is raised. The slot KEEPS its position in the chain and
+///   keeps the preserved settings hanging off it (ba todo #1308); only an
+///   explicit remove throws those away.
+/// * **it does not** — the mixer's "+ FX" picker (`AddPluginToTrack` and
+///   its bus/master siblings) doesn't mirror anything until the
+///   `PluginAdded` echo lands, so a failure there finds no slot to mark
+///   even though the id was known. It surfaces as a plain error, which
+///   is all it ever was.
 pub(super) fn load_failed(
     r: &mut Resonance,
     instance_id: Option<PluginInstanceId>,

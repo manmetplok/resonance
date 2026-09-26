@@ -18,33 +18,41 @@
 //! | track + track group (one space) | [`SUB_TRACK_ID_BASE`] | [`Resonance::allocate_track_id`](crate::Resonance::allocate_track_id) | counter bumps only for hints *below* the base |
 //! | bus | [`RETURN_BUS_ID_BASE`] | `TrackRegistry::allocate_return_bus_id` | counter bumps only for hints *below* the base |
 //! | aux send | [`CONTROL_SEND_ID_BASE`] | `AuxSendState::allocate_control_send_id` | counter bumps only for hints *below* the base |
-//! | plugin instance | [`CONTROL_PLUGIN_ID_BASE`] | `Resonance::allocate_control_plugin_id` | counter bumps only for hints *below* the base |
 //! | derived (compose) clip | [`DERIVED_CLIP_ID_BASE`] | `ComposeState::allocate_derived_clip_id` | counter bumps past any id loaded directly |
 //! | missing reference | [`MISSING_REFERENCE_ID_BASE`] | local counter in `replay::restore` | never sees one (app-only) |
+//!
+//! **Plugin instance ids are no longer a partition** (ARCH-04 D-1): the
+//! app is the ONLY allocator (`Resonance::allocate_plugin_id`, in
+//! `state/plugin_index.rs`), the engine has no counter of its own left,
+//! and every add — GUI, control API, presets, templates, project-load
+//! replay — carries a concrete id the engine either honours or refuses
+//! (`EngineErrorKind::Internal`) if it collides with a live instance.
+//! There is no base to name because there is no neighbouring range to
+//! stay clear of.
 //!
 //! Markers, automation lanes and grooves are app-only spaces with their
 //! own counters; the engine never hears their ids.
 //!
-//! The last column is what makes each range a real partition rather
-//! than a convention: the engine takes an app-range hint but never
-//! moves its own counter for it, so an engine allocation (`id_hint:
-//! None`) can never land on an id the app holds — including a track
-//! group's, which the engine never hears about. Until ARCH-04 A4-1
+//! The last column is what makes each of the REMAINING ranges a real
+//! partition rather than a convention: the engine takes an app-range
+//! hint but never moves its own counter for it, so an engine allocation
+//! (`id_hint: None`) can never land on an id the app holds — including a
+//! track group's, which the engine never hears about. Until ARCH-04 A4-1
 //! the track, bus and send paths bumped past *any* hint, so one control
 //! `track.add` followed by a Cmd-G group and a GUI "Add track" put a
 //! track on the group's id. The in-use scan in [`allocate_unused`] is
 //! belt and braces on top of the split, not the thing that makes it
-//! safe: it only sees ids the app already mirrors.
+//! safe: it only sees ids the app already mirrors. (D-2 through D-5 fold
+//! the send, bus, track and reference rows into the same "app is the
+//! only owner" shape this row already is.)
 
 use resonance_audio::types::TrackId;
 
-// The four bases the engine also honours are defined beside the engine's
-// id types (`resonance-audio/src/types/mod.rs`): the partition only
-// works when both sides agree on it, and the engine's add paths bump
-// their counters only for hints below these.
-pub use resonance_audio::types::{
-    CONTROL_PLUGIN_ID_BASE, CONTROL_SEND_ID_BASE, RETURN_BUS_ID_BASE, SUB_TRACK_ID_BASE,
-};
+// The three bases the engine also honours are defined beside the
+// engine's id types (`resonance-audio/src/types/mod.rs`): the partition
+// only works when both sides agree on it, and the engine's add paths
+// bump their counters only for hints below these.
+pub use resonance_audio::types::{CONTROL_SEND_ID_BASE, RETURN_BUS_ID_BASE, SUB_TRACK_ID_BASE};
 
 /// First id the compose model hands out for the clips it derives from
 /// chords / drum patterns. Chosen high enough that engine-allocated clip
@@ -67,8 +75,7 @@ pub const MISSING_REFERENCE_ID_BASE: u32 = 1_000_000_000;
 const _: () = {
     assert!(SUB_TRACK_ID_BASE < RETURN_BUS_ID_BASE);
     assert!(RETURN_BUS_ID_BASE == CONTROL_SEND_ID_BASE);
-    assert!(CONTROL_SEND_ID_BASE < CONTROL_PLUGIN_ID_BASE);
-    assert!(CONTROL_PLUGIN_ID_BASE < DERIVED_CLIP_ID_BASE);
+    assert!(CONTROL_SEND_ID_BASE < DERIVED_CLIP_ID_BASE);
 };
 
 /// Hand out the next id from `next`, skipping any candidate `in_use`

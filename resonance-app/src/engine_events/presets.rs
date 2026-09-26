@@ -39,18 +39,20 @@ pub(super) fn apply_preset_to_track(
     });
 
     for pp in &preset.plugins {
+        let id = r.allocate_plugin_id();
         let _ = r.engine.send(AudioCommand::AddPlugin {
             track_id,
             clap_file_path: pp.clap_file_path.clone(),
             clap_plugin_id: pp.clap_plugin_id.clone(),
-            id_hint: None,
+            id,
         });
     }
 
-    // Plugin state loading is deferred: we don't know the instance ids
-    // yet (they're assigned by the engine). The PluginAdded event will
-    // fire for each plugin. We store the preset plugin states so we can
-    // match them up.
+    // Plugin state loading is deferred until each plugin's `PluginAdded`
+    // echo confirms the engine actually created the instance (pushing a
+    // state blob in before that would race the plugin's own defaults, and
+    // there is no mirrored slot yet for the echo to fill in). We store
+    // the preset plugin states so we can match them up in order.
     if preset.plugins.iter().any(|p| p.state.is_some()) {
         let states: Vec<Option<Vec<u8>>> =
             preset.plugins.iter().map(|p| p.state.clone()).collect();

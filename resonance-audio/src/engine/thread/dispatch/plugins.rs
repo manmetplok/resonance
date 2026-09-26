@@ -15,14 +15,14 @@ pub(super) fn dispatch_plugins(
             track_id,
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         } => plugins::handle_add_plugin(
             ctx,
             state,
             track_id,
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         ),
         AudioCommand::RemovePlugin {
             track_id,

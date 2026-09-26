@@ -39,14 +39,14 @@ pub(super) fn dispatch_busses(
             bus_id,
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         } => busses::handle_add_plugin_to_bus(
             ctx,
             state,
             bus_id,
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         ),
         AudioCommand::RemovePluginFromBus {
             bus_id,
@@ -76,13 +76,13 @@ pub(super) fn dispatch_busses(
         AudioCommand::AddPluginToMaster {
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         } => master::handle_add_plugin_to_master(
             ctx,
             state,
             clap_file_path,
             clap_plugin_id,
-            id_hint,
+            id,
         ),
         AudioCommand::RemovePluginFromMaster { instance_id } => {
             master::handle_remove_plugin_from_master(ctx, instance_id)

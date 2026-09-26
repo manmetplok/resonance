@@ -404,7 +404,7 @@ fn add_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message
     // `bus.plugin_params` and `bus.set_plugin_param` can address the
     // plugin in the same cycle as this reply instead of racing the
     // engine's `BusPluginAdded` echo.
-    let instance_id = app.allocate_control_plugin_id();
+    let instance_id = app.allocate_plugin_id();
     let task = super::run_via_update(
         app,
         Message::Bus(BusMessage::AddPluginToBusWithId {

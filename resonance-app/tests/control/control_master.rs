@@ -222,18 +222,16 @@ fn seed_plugins(app: &mut Resonance) {
     });
 }
 
-/// The instance id the app hinted on the most recent master add. The
-/// control path allocates it app-side and mirrors the slot immediately,
-/// so the engine's echo has to carry the same id or it would land as a
-/// second plugin.
+/// The instance id the app allocated on the most recent master add. The
+/// control path mirrors the slot immediately, so the engine's echo has
+/// to carry the same id or it would land as a second plugin.
 fn hinted(rx: &crossbeam_channel::Receiver<AudioCommand>) -> u64 {
     std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|c| match c {
-            AudioCommand::AddPluginToMaster { id_hint, .. } => Some(id_hint),
+            AudioCommand::AddPluginToMaster { id, .. } => Some(id),
             _ => None,
         })
         .expect("an AddPluginToMaster reached the engine")
-        .expect("the control path hints the instance id")
 }
 
 /// Mirror the engine's `PluginAdded` echo for the master chain, the way

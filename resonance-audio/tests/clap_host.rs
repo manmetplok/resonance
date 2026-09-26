@@ -32,8 +32,8 @@ mod clap_plugin_drop_order;
 mod plugin_bypass;
 #[path = "clap_host/plugin_editor_state.rs"]
 mod plugin_editor_state;
-#[path = "clap_host/plugin_id_ranges.rs"]
-mod plugin_id_ranges;
+#[path = "clap_host/plugin_id_duplicate_rejected.rs"]
+mod plugin_id_duplicate_rejected;
 #[path = "clap_host/plugin_load_failure.rs"]
 mod plugin_load_failure;
 #[path = "clap_host/plugin_output_scrub.rs"]
