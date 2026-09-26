@@ -65,7 +65,7 @@ const BAD_RGB: [u8; 3] = [0xe8, 0x7b, 0x8b];
 
 /// Which of the four ribbon span *types* a rendered span is. Drives its
 /// colour, shape (hatch / dash), and text so the four read as distinct.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RibbonSpanKind {
     /// A normal pattern span — tinted by the pattern colour, `Name ×N`.
     Normal,
@@ -80,7 +80,7 @@ pub enum RibbonSpanKind {
 /// One renderable ribbon span, in section-relative bar coordinates. For
 /// [`RibbonSpanKind::Overflow`], `bar_end` extends past the section's
 /// `length_bars` — the drawer clamps that overhang to [`OVERFLOW_CAP_PX`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RibbonSpan {
     /// First bar of the span (inclusive, 0-based within the section).
     pub bar_start: u32,
@@ -243,18 +243,66 @@ impl RibbonCanvas {
     }
 }
 
+/// The ribbon's geometry cache: it draws no hover or playhead, so the
+/// whole strip renders through a fingerprinted [`canvas::Cache`] and the
+/// 16 ms app tick reuses it instead of re-tessellating every span and
+/// hatch loop (review VIEW-32).
+#[derive(Debug, Default)]
+pub struct RibbonCanvasState {
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<u64>,
+}
+
+impl RibbonCanvas {
+    /// Hash of everything the ribbon paints.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.spans.hash(&mut h);
+        self.length_bars.hash(&mut h);
+        self.selected_entry_index.hash(&mut h);
+        self.section_name.hash(&mut h);
+        self.content_width.to_bits().hash(&mut h);
+        h.finish()
+    }
+}
+
 impl canvas::Program<Message> for RibbonCanvas {
-    type State = ();
+    type State = RibbonCanvasState;
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let fp = self.fingerprint();
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            self.draw_into(frame, bounds);
+        });
+        vec![geometry]
+    }
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        self.update_inner(state, event, bounds, cursor)
+    }
+}
+
+impl RibbonCanvas {
+    /// Paint the whole ribbon into the cached frame.
+    fn draw_into(&self, frame: &mut Frame, bounds: Rectangle) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG_1);
 
         // --- Side tag: "TILING" kicker + section name -------------------
@@ -319,15 +367,13 @@ impl canvas::Program<Message> for RibbonCanvas {
             }
             let selected = span.entry_index.is_some()
                 && span.entry_index == self.selected_entry_index;
-            draw_span(&mut frame, sx, w, span, selected);
+            draw_span(frame, sx, w, span, selected);
         }
-
-        vec![frame.into_geometry()]
     }
 
-    fn update(
+    fn update_inner(
         &self,
-        _state: &mut Self::State,
+        _state: &mut RibbonCanvasState,
         event: &iced::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,

@@ -81,6 +81,8 @@ mod generator_section;
 mod global_tracks_edit_cycle;
 #[path = "compose/global_tracks_shelf.rs"]
 mod global_tracks_shelf;
+#[path = "compose/ribbon_cache_fingerprint.rs"]
+mod ribbon_cache_fingerprint;
 #[path = "compose/section_delete_cleanup.rs"]
 mod section_delete_cleanup;
 #[path = "compose/section_resize_rederive.rs"]
