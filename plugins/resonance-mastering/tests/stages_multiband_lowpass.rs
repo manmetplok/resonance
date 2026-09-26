@@ -4,7 +4,7 @@ use resonance_mastering::stages::multiband::lowpass::LinearPhaseLowpass;
 fn lowpass_attenuates_above_cutoff() {
     let sr = 48_000.0_f32;
     let mut lp = LinearPhaseLowpass::new(sr, 1000.0);
-    let latency = LinearPhaseLowpass::latency();
+    let latency = lp.latency();
     let n = latency + 4096;
 
     // 5 kHz sine — well above 1 kHz cutoff → should be much quieter.
@@ -27,7 +27,7 @@ fn lowpass_attenuates_above_cutoff() {
 fn lowpass_passes_below_cutoff() {
     let sr = 48_000.0_f32;
     let mut lp = LinearPhaseLowpass::new(sr, 1000.0);
-    let latency = LinearPhaseLowpass::latency();
+    let latency = lp.latency();
     let n = latency + 4096;
 
     // 200 Hz sine — well below 1 kHz → should pass near-unity.

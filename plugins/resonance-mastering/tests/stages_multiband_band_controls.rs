@@ -59,7 +59,7 @@ fn run(cfg: &MultibandConfig, l: &mut [f32], r: &mut [f32]) {
 /// the low band and one with a slow release, must not sound the same.
 #[test]
 fn a_per_band_release_change_is_audible() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let on_n = 12_000; // 250 ms of tone
     let total = latency + 36_000;
 
@@ -107,7 +107,7 @@ fn a_per_band_release_change_is_audible() {
 
 #[test]
 fn a_per_band_attack_change_is_audible() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let total = latency + 12_000;
 
     let mut slow = MultibandConfig {
@@ -142,7 +142,7 @@ fn a_per_band_attack_change_is_audible() {
 
 #[test]
 fn a_per_band_knee_change_is_audible() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let total = latency + 12_000;
 
     let mut hard = MultibandConfig {
@@ -178,7 +178,7 @@ fn a_per_band_knee_change_is_audible() {
 
 #[test]
 fn a_per_band_mix_change_is_audible() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let total = latency + 12_000;
 
     let mut wet = MultibandConfig {
@@ -213,7 +213,7 @@ fn a_per_band_mix_change_is_audible() {
 
 #[test]
 fn band_gain_applies_with_the_compressor_disabled() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let total = latency + 12_000;
 
     let flat = MultibandConfig {
@@ -241,7 +241,7 @@ fn band_gain_applies_with_the_compressor_disabled() {
 
 #[test]
 fn band_gain_cuts_as_well_as_boosts_with_the_compressor_disabled() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let total = latency + 12_000;
 
     let flat = MultibandConfig {
@@ -270,7 +270,7 @@ fn band_gain_cuts_as_well_as_boosts_with_the_compressor_disabled() {
 /// gain has the same effect whether that band's compressor is running.
 #[test]
 fn band_gain_is_independent_of_the_compressor_enable() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let total = latency + 12_000;
     let window = latency + 4_000..total;
 
@@ -313,7 +313,7 @@ fn band_gain_is_independent_of_the_compressor_enable() {
 /// exactness, which is what the next two tests are for.
 #[test]
 fn the_neutral_stage_reconstructs_the_input() {
-    let latency = Multiband::latency();
+    let latency = Multiband::latency_for(SR);
     let total = latency + 4_096;
     let cfg = MultibandConfig {
         enabled: true,

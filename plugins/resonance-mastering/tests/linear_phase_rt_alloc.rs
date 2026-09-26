@@ -1,6 +1,8 @@
 //! No-allocation guard for the linear-phase filters' audio path
-//! (FU-M2a): automating EQ bands must not touch the heap on the audio
-//! thread — neither the worker hand-off nor the inline design fallback.
+//! (FU-M2a, FU-M2b / DSP-12): automating EQ bands and sweeping the
+//! multiband crossovers must not touch the heap on the audio thread —
+//! neither the worker hand-off nor the inline design fallback. The
+//! crossover redesign used to build a `Vec` per cutoff move.
 //!
 //! Own test binary: it installs a counting global allocator. The count
 //! is per thread, so the design worker's own (construction-time)
@@ -12,6 +14,7 @@ use std::cell::Cell;
 use resonance_mastering::stages::linear_phase_eq::{
     BandConfig, BandType, DesignWorker, LinearPhaseEq, NUM_BANDS,
 };
+use resonance_mastering::stages::multiband::{Multiband, MultibandConfig};
 
 thread_local! {
     static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
@@ -61,12 +64,30 @@ fn bands(block: usize) -> [BandConfig; NUM_BANDS] {
     b
 }
 
+fn crossovers(block: usize) -> MultibandConfig {
+    let mut cfg = MultibandConfig {
+        enabled: true,
+        ..MultibandConfig::default()
+    };
+    let t = (block as f32) * 0.05;
+    cfg.crossover_hz = [
+        120.0 + 60.0 * t.sin(),
+        800.0 + 200.0 * t.cos(),
+        4000.0 + 900.0 * t.sin(),
+    ];
+    cfg
+}
+
 #[test]
 fn automating_linear_phase_filters_never_allocates() {
     let worker = DesignWorker::spawn();
     let mut eqs = [
         LinearPhaseEq::with_worker(SR, Some(&worker)),
         LinearPhaseEq::with_worker(SR, None),
+    ];
+    let mut mbs = [
+        Multiband::with_worker(SR, BLOCK, Some(&worker)),
+        Multiband::with_worker(SR, BLOCK, None),
     ];
     let mut l = vec![0.0f32; BLOCK];
     let mut r = vec![0.0f32; BLOCK];
@@ -83,15 +104,19 @@ fn automating_linear_phase_filters_never_allocates() {
         for eq in eqs.iter_mut() {
             eq.process_stereo(&mut l, &mut r, &bands(block));
         }
+        for mb in mbs.iter_mut() {
+            mb.process_stereo(&mut l, &mut r, &crossovers(block));
+        }
     }
     let allocs = thread_allocs() - before;
 
     let designs: u64 = eqs
         .iter()
         .map(|e| e.design_counts())
+        .chain(mbs.iter().map(|m| m.design_counts()))
         .map(|(w, i)| w + i)
         .sum();
-    assert!(designs > 20, "the sweep barely redesigned ({designs} designs)");
+    assert!(designs > 50, "the sweep barely redesigned ({designs} designs)");
     assert!(l.iter().any(|v| v.abs() > 1e-3), "output is silent");
     assert_eq!(allocs, 0, "{allocs} allocations on the audio thread");
 }

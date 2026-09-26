@@ -61,22 +61,23 @@ pub const BYPASS_XFADE_SECONDS: f32 = 0.010;
 
 impl Chain {
     pub fn new(sample_rate: f32, max_buffer: usize, viz: &MasteringViz) -> Self {
-        // One background FIR designer for both EQs (FU-M2a); dropped
-        // with the chain, off the audio thread.
+        // One background FIR designer for all five linear-phase filters
+        // (FU-M2a/FU-M2b); dropped with the chain, off the audio thread.
         let worker = DesignWorker::spawn();
         let corrective_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
         let tonal_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
+        let multiband = Multiband::with_worker(sample_rate, max_buffer, Some(&worker));
         let limiter = Limiter::new(sample_rate);
         let max_latency = corrective_eq.latency()
             + tonal_eq.latency()
-            + Multiband::latency()
+            + multiband.latency()
             + limiter.latency();
         Self {
             corrective_eq,
             glue_compressor: GlueCompressor::new(sample_rate),
             saturator: Saturator::new(sample_rate),
             tonal_eq,
-            multiband: Multiband::new(sample_rate, max_buffer),
+            multiband,
             imager: Imager::new(sample_rate),
             limiter,
             dither: Dither::new(),
@@ -116,7 +117,7 @@ impl Chain {
     pub fn latency(&self) -> u32 {
         (self.corrective_eq.latency()
             + self.tonal_eq.latency()
-            + Multiband::latency()
+            + self.multiband.latency()
             + self.limiter.latency()) as u32
     }
 
