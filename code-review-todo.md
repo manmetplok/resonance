@@ -46,6 +46,7 @@ master and updates this table. Agents do **not** edit this file.
 | H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | in progress | |
 | H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
 | H8 message enums + undo blobs + ids | ARCH-06 A6-1, ARCH-09 A9-1/2, ARCH-04 A4-1/2/3 | — | queued (after V4/H3) | |
+| P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
