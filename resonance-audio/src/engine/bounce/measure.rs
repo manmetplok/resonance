@@ -137,9 +137,13 @@ pub fn measure_mix(
         fail("Stop transport before measuring the mix".into());
         return;
     }
-    let Some((start, end)) =
-        range.or_else(|| stem_project_range(clips, midi_clips, tempo_map, sample_rate))
-    else {
+    // The default range is the one the export renders — the project
+    // extent plus the shared FX tail (code review ENG-07) — so the
+    // reported loudness is the exported file's.
+    let Some((start, end)) = range.or_else(|| {
+        stem_project_range(clips, midi_clips, tempo_map, sample_rate)
+            .map(|(s, e)| (s, e + super::super::bounce_common::offline_tail_frames(sample_rate)))
+    }) else {
         fail("No audio to measure".into());
         return;
     };

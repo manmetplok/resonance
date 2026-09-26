@@ -2,8 +2,10 @@
 //! pluggable encoder sink (doc #196).
 //!
 //! Includes master FX + master volume + hard-clip so the file plays back
-//! identically outside the app. The render loop is format-agnostic — it
-//! produces interleaved stereo `f32` frames and hands them to the active
+//! identically outside the app (a normalized export skips the hard clip
+//! and lets its true-peak limiter set the ceiling — code review ENG-06).
+//! The render loop is format-agnostic — it produces interleaved stereo
+//! `f32` frames and hands them to the active
 //! [`EncoderSink`](super::encoder::EncoderSink), optionally through an
 //! export-time [`ResampleStage`](super::resample::ResampleStage). The
 //! default 32-bit-float WAV path is byte-for-byte the legacy `BounceToWav`
@@ -32,6 +34,7 @@ use super::render::{
     ChunkScratch, BOUNCE_CHUNK,
 };
 use super::resample::ResampleStage;
+use super::PartialFile;
 
 /// Which engine-event family an export run reports through. The legacy
 /// `BounceToWav` shim keeps emitting `Bounce*` events (`Bounce` variant);
@@ -279,16 +282,18 @@ fn render_range(
 }
 
 /// Drop the partial output file and report a cancel. Shared by every
-/// export pass so a cancel never leaves a half-rendered file behind.
-/// The cancel token is per-render, so there is nothing to clear here.
+/// export pass so a cancel never leaves a half-rendered file behind —
+/// and, since the render writes to a temp file (code review ENG-13),
+/// never touches the file at the target path either. The cancel token is
+/// per-render, so there is nothing to clear here.
 fn cancel_cleanup(
     sink: Box<dyn EncoderSink>,
-    path: &str,
+    output: PartialFile,
     reporter: ExportReporter,
     event_tx: &Sender<AudioEvent>,
 ) {
     drop(sink);
-    let _ = std::fs::remove_file(path);
+    drop(output);
     reporter.error(event_tx, ExportErrorKind::Cancelled, "Bounce cancelled".into());
 }
 
@@ -360,6 +365,10 @@ pub(crate) fn run_export(
         reporter.error(event_tx, ExportErrorKind::NoAudio, "No audio to bounce".into());
         return;
     }
+    // Render the shared FX tail past the last clip end, like the stems,
+    // so reverb / delay / release tails land in the file (code review
+    // ENG-07).
+    let render_end = render_end + super::super::bounce_common::offline_tail_frames(sample_rate);
 
     // Build the export-time resampler first (allocates nothing on disk) so
     // that if it fails we haven't created an output file to clean up.
@@ -379,7 +388,14 @@ pub(crate) fn run_export(
     // Build the encoder sink. Unavailable encoders (e.g. MP3/Opus) error
     // here *before any file is written*, so the app can offer the WAV/FLAC
     // fallback without a partial file lingering on disk.
-    let mut sink = match build_sink(&settings.format, out_sr, std::path::Path::new(&path)) {
+    //
+    // The sink writes to a sibling temp file, renamed over `path` only once
+    // the export is complete (code review ENG-13): every error / cancel
+    // return below drops `output`, which removes the temp file and leaves
+    // whatever was at `path` untouched. Declared before `sink` so the
+    // encoder's file handle is closed before the temp file is removed.
+    let output = PartialFile::new(&path);
+    let mut sink = match build_sink(&settings.format, out_sr, output.temp()) {
         Ok(s) => s,
         Err(e) => {
             reporter.error(event_tx, (&e).into(), e.message().to_string());
@@ -411,6 +427,10 @@ pub(crate) fn run_export(
         master_vol,
         latency_comp: &latency_comp,
         automation,
+        // Normalization keeps float headroom through its gain trim and
+        // true-peak limiter (code review ENG-06); the plain export clips
+        // like live playback does.
+        hard_clip: !settings.normalize.enabled,
     };
     let mut scratch = ChunkScratch::new();
 
@@ -420,8 +440,9 @@ pub(crate) fn run_export(
     let normalize = settings.normalize;
     let (achieved_lufs, achieved_dbtp) = if normalize.enabled {
         // PASS 1 — analyze: render the whole range into the loudness
-        // meters without writing anything. `reset_plugins` before the pass
-        // makes the render deterministic so pass 2 reproduces it exactly.
+        // meters without writing anything. `reset_plugins` (CLAP `reset`,
+        // code review ENG-04) before each pass makes the render
+        // deterministic so pass 2 reproduces the measured pass exactly.
         reset_plugins(plugins);
         let mut measure = LoudnessMeasure::new(sample_rate);
         match render_range(
@@ -440,7 +461,7 @@ pub(crate) fn run_export(
             },
         ) {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, reporter, event_tx);
+                cancel_cleanup(sink, output, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -480,7 +501,7 @@ pub(crate) fn run_export(
         );
         match outcome {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, reporter, event_tx);
+                cancel_cleanup(sink, output, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -525,7 +546,7 @@ pub(crate) fn run_export(
         );
         match outcome {
             RenderOutcome::Cancelled => {
-                cancel_cleanup(sink, &path, reporter, event_tx);
+                cancel_cleanup(sink, output, reporter, event_tx);
                 return;
             }
             RenderOutcome::WriteError(e) => {
@@ -545,8 +566,15 @@ pub(crate) fn run_export(
         }
     }
     reporter.progress(event_tx, ExportPhase::Encode, 1.0);
-    match sink.finalize(&settings.metadata) {
-        Ok(bytes) => reporter.complete(event_tx, path, achieved_lufs, achieved_dbtp, bytes),
-        Err(e) => reporter.error(event_tx, (&e).into(), e.message().to_string()),
+    let bytes = match sink.finalize(&settings.metadata) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            reporter.error(event_tx, (&e).into(), e.message().to_string());
+            return;
+        }
+    };
+    match output.commit() {
+        Ok(()) => reporter.complete(event_tx, path, achieved_lufs, achieved_dbtp, bytes),
+        Err(message) => reporter.error(event_tx, ExportErrorKind::Io, message),
     }
 }

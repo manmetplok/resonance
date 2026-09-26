@@ -368,9 +368,6 @@ pub struct TimelineState {
     pub(super) last_reported_content_height: f32,
     /// Tracks the most recent click on a MIDI clip for double-click detection.
     pub(super) last_midi_click: Option<(Instant, ClipId)>,
-    /// Horizontal scrollbar drag in progress. Stores the x-offset of the
-    /// grab point relative to the left edge of the thumb (in track pixels).
-    pub(super) h_scrollbar_grab: Option<f32>,
     /// Vertical scrollbar drag in progress (y-offset within the thumb).
     pub(super) v_scrollbar_grab: Option<f32>,
     /// Tracks the most recent click on a global track for double-click detection.
@@ -1268,37 +1265,8 @@ impl<'a> TimelineCanvas<'a> {
         // `draw_overlay_into`. Keeping it out of the cached path lets
         // the rest of the timeline geometry stay cached during playback.
 
-        // Smart scrollbars — drawn last so they sit above clips + playhead.
-        let (h_rects, v_rects) = self.scrollbar_rects(bounds);
-
-        let track_color = Color::from_rgba(0.08, 0.08, 0.08, 0.8);
-        let thumb_color = Color::from_rgba(0.45, 0.45, 0.45, 0.85);
-
-        if let Some(sb) = h_rects {
-            frame.fill_rectangle(
-                Point::new(sb.track.x, sb.track.y),
-                Size::new(sb.track.width, sb.track.height),
-                track_color,
-            );
-            frame.fill_rectangle(
-                Point::new(sb.thumb.x, sb.thumb.y),
-                Size::new(sb.thumb.width, sb.thumb.height),
-                thumb_color,
-            );
-        }
-        if let Some(sb) = v_rects {
-            frame.fill_rectangle(
-                Point::new(sb.track.x, sb.track.y),
-                Size::new(sb.track.width, sb.track.height),
-                track_color,
-            );
-            frame.fill_rectangle(
-                Point::new(sb.thumb.x, sb.thumb.y),
-                Size::new(sb.thumb.width, sb.thumb.height),
-                thumb_color,
-            );
-        }
-
+        // The vertical scrollbar is drawn in the uncached overlay pass:
+        // it follows the horizontally-scrolled visible window (VIEW-33).
     }
 
     /// Draw the parts of the timeline that change every frame during
@@ -1409,6 +1377,22 @@ impl<'a> TimelineCanvas<'a> {
             state.take_promote_drag.as_ref(),
             cursor,
         );
+
+        // Smart scrollbar — drawn last so it sits above clips + playhead.
+        // Uncached: its x is the visible window's right edge, which moves
+        // with the outer `Scrollable` (review VIEW-33).
+        if let Some(sb) = self.scrollbar_rects(bounds) {
+            frame.fill_rectangle(
+                Point::new(sb.track.x, sb.track.y),
+                Size::new(sb.track.width, sb.track.height),
+                Color::from_rgba(0.08, 0.08, 0.08, 0.8),
+            );
+            frame.fill_rectangle(
+                Point::new(sb.thumb.x, sb.thumb.y),
+                Size::new(sb.thumb.width, sb.thumb.height),
+                Color::from_rgba(0.45, 0.45, 0.45, 0.85),
+            );
+        }
 
         // The ruler-height local is unused if neither overlay fires;
         // keep it so future overlay additions (e.g. selection brushes)

@@ -388,6 +388,13 @@ impl AuditionScrub<'_> {
             h = h.wrapping_mul(1099511628211);
         };
         mix(self.peaks.len() as u64);
+        // The peak data itself: the length is always `THUMBNAIL_BUCKETS`,
+        // so two files of the same length would otherwise share a
+        // fingerprint and the strip kept drawing the previous one
+        // (review VIEW-36).
+        for &(lo, hi) in self.peaks {
+            mix(((lo.to_bits() as u64) << 32) | hi.to_bits() as u64);
+        }
         mix(self.position_frame);
         mix(self.total_frames);
         mix(self.playing as u64);
@@ -477,5 +484,26 @@ impl canvas::Program<Message> for AuditionScrub<'_> {
             }
         });
         vec![geometry]
+    }
+}
+
+impl crate::Resonance {
+    /// Test-only: the audition scrub strip's cache fingerprint for the
+    /// given inputs (review VIEW-36). Lives here, not in `test_support`,
+    /// because the strip is private to this module.
+    #[doc(hidden)]
+    pub fn test_audition_scrub_fingerprint(
+        peaks: &[(f32, f32)],
+        position_frame: u64,
+        total_frames: u64,
+        playing: bool,
+    ) -> u64 {
+        AuditionScrub {
+            peaks,
+            position_frame,
+            total_frames,
+            playing,
+        }
+        .fingerprint()
     }
 }

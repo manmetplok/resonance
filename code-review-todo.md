@@ -35,10 +35,10 @@ master and updates this table. Agents do **not** edit this file.
 | V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | merged | 47e86611 |
 | M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | merged | a7660033 |
 | M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | merged | 28bf0279 |
-| V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | in progress | |
-| M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | in progress | |
-| M10 socket/presets/test hygiene | CTL-11/UPD-12, STATE-14, FU-D5, STATE-15, MIX-11 | opus | in progress | |
-| M11 vocal pipeline | UPD-08, VIEW-31, VIEW-34, VIEW-35, FU-V2d | opus | in progress | |
+| V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | merged | 57a940cb |
+| M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | merged | c7a9e298 |
+| M10 socket/presets/test hygiene | CTL-11/UPD-12, STATE-14, FU-D5, STATE-15, MIX-11 | opus | merged | 32f76e9b |
+| M11 vocal pipeline | UPD-08, VIEW-31, VIEW-34, VIEW-35, FU-V2d | opus | merged | 500d58ee |
 | M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | in progress | |
 | H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
@@ -75,11 +75,11 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-F1c** (low, UX) WAV mixdown now blocks GUI traffic like bounce-in-place but has no modal, only the master-strip label.
 - [ ] **FU-G3a** (low) `mixer/render/frozen.rs` still linear-resamples freeze caches on rate mismatch; `bounce/resample.rs` uses rubato → two resampler implementations; consolidate on `resonance_common::resample`.
 - [ ] **FU-G3b** (low) no end-to-end test of a loop-record seam at a mismatched device rate (seam flush only covered at resampler level).
-- [ ] **FU-D1** (medium, feature gap) Arrange never followed the playhead (old `auto_follow_playhead` wrote a dead offset, now removed). Implement via scrollable id + `scrollable::scroll_to` from tick using the visible viewport width.
-- [ ] **FU-D2** (low, cleanup) dead horizontal-scroll plumbing: `h_scrollbar_grab`, `ScrollToX`, `scroll_to_x`, `viewport.scroll_offset`.
+- [x] **FU-D1** — fixed @68f4563d; (medium, feature gap) Arrange never followed the playhead (old `auto_follow_playhead` wrote a dead offset, now removed). Implement via scrollable id + `scrollable::scroll_to` from tick using the visible viewport width.
+- [x] **FU-D2** — fixed @68f4563d; (low, cleanup) dead horizontal-scroll plumbing: `h_scrollbar_grab`, `ScrollToX`, `scroll_to_x`, `viewport.scroll_offset`.
 - [ ] **FU-D3** (low) engine `handle_set_bpm` clamps 20..999 and passes NaN; use `sanitize_bpm` there too.
 - [ ] **FU-D4** (low) MIDI-imported tempo points > 300 BPM are now clamped at bar-table rebuild.
-- [ ] **FU-D5** (low, test hygiene) `track_preset_save_prompt` golden reads the real user preset dir (cf. STATE-14).
+- [x] **FU-D5** — fixed @5869f48f; (low, test hygiene) `track_preset_save_prompt` golden reads the real user preset dir (cf. STATE-14).
 - [ ] **FU-M1a** (medium, needs macOS) Cocoa changes for PLG-01/03/05 (+ M8's async destroy) were never compiled: run `cargo check` + `editor_open_cocoa`, `cocoa-plugin-gui editor_size`, `modal_reentrancy` with `-- --ignored` on a Mac.
 - [x] **FU-M1b** — fixed (M8); (low) now that `on_main_thread` runs, a plugin reporting latency while inactive triggers `restart()` on an inactive instance → spurious "failed to reactivate" error; narrow double-restart race.
 - [x] **FU-M1c** — fixed (M8); (low) Wayland re-map waits ≤200 ms for configure then paints anyway (Hyprland quirk) — could be a protocol error on strict compositors; button held across hide stays pressed in egui.
@@ -100,19 +100,24 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M4a** (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
 - [ ] **FU-M4b** (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
 - [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
-- [ ] **FU-V1a** (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
+- [x] **FU-V1a** — fixed @78487a42; (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
 - [ ] **FU-V1b** (low, test infra) `app.update(Message::Browser(SetFilter))` didn't apply the filter in tests while `test_dispatch` did — investigate.
-- [ ] **FU-V1c** note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
+- [x] **FU-V1c** — fixed @68f4563d; note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
 - [ ] **FU-V2a** (medium) VIEW-25 partial: MIDI Import modal now parses off-thread + has a file chooser, but Confirm is still a no-op, Review has no Import button, TempoConflict is a placeholder (doc #158 follow-ups); needs `undo/classify.rs` to stop classifying `Message::Import(_)` as Skip.
 - [ ] **FU-V2b** (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
 - [ ] **FU-V2c** (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
-- [ ] **FU-V2d** (low) a vocal render that finishes after its placement moved into a different tempo region is placed right but rendered at the old tempo.
+- [x] **FU-V2d** — fixed @accf5caf; (low) a vocal render that finishes after its placement moved into a different tempo region is placed right but rendered at the old tempo.
 - [ ] **FU-M8a** (low) with async Cocoa destroy, `editor_size`/`editor_open_cocoa` teardown watchdogs pass trivially — make them wait for the main-thread teardown.
 - [ ] **FU-M8b** (low) `bounce/render.rs` ignores `reset_processing()`'s bool → a plugin that stays dead after export is silent without an error.
 - [ ] **FU-M8c** (low) Cocoa runtime still lacks the PLG-10 bounded `Editor::new` and the held-button release across hide.
 - [ ] **FU-H2a** (low) undo fast path rebuilds `compose.derived_clips` while slow path copies extras → a derived clip whose `MidiClipCreated` echo hasn't landed is dropped on fast-path undo (narrow race).
 - [ ] **FU-H2b** (low) slow-path undo calls `freeze.reset()` → restored Frozen tracks lose their UPD-05 content baseline (blind spot until next freeze).
 - [ ] **FU-H2c** (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
+- [ ] **FU-V3a** (low) `update/project_io/replay/mod.rs:161` resets `viewport.scroll_offset = 0` on load → can disagree with the real Scrollable until its next report.
+- [ ] **FU-V3b** (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
+- [ ] **FU-V3c** (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
+- [ ] **FU-M11a** (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
+- [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 
 ## How to use this file
 
@@ -380,7 +385,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Classify `RequestRemoveTrack` as `Skip` when a confirm is needed. The classifier cannot see state, so either always `Skip` it and have the direct-delete branch re-dispatch `ConfirmRemoveTrack`, or gate the decision in `gates_message`.
 - **Verification:** Add to `resonance-app/tests/mixer`: a track with a clip, dispatch `RequestRemoveTrack` then `CancelRemoveTrack`, and assert that the undo entry count and `is_dirty()` are unchanged.
 
-### [ ] STATE-14 — The test build of the app still writes to the user's real `recent.json`
+### [x] STATE-14 — The test build of the app still writes to the user's real `recent.json` — fixed @5869f48f
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** test-coverage
@@ -389,7 +394,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Give `Resonance` a flag set from `Host`, for example `persist_user_state: bool`, set to false for test hosts, and have `recent::add`, `recent::remove` and `settings::persist` skip disk writes when it is false. Or route those writes through an injectable config root.
 - **Verification:** Add a test in `resonance-app/tests/io` that sets `XDG_CONFIG_HOME` to a temp dir, runs `new_for_test()` plus `ProjectLoaded(Ok(..))`, and asserts that no `resonance/recent.json` exists there.
 
-### [ ] STATE-15 — Different preset names can map to the same file, so saving one overwrites another and deleting one removes the other
+### [x] STATE-15 — Different preset names can map to the same file, so saving one overwrites another and deleting one removes the other — fixed @2623c57f
 - **Severity:** low
 - **Confidence:** high
 - **Category:** data-loss
@@ -472,7 +477,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Land #465 (and, if still wanted, #466/#471) from `ba/epic-32`, rebased onto the current `tick.rs`. That means calling a pure `should_autosave(gate)` from `handle_tick` that requires dirty, an active project, `!io.loading`, no `save_state`, and the interval elapsed. Also add `io.loading` and `bounce/freeze` to its gate (see UPD-06), and require `project_path` to be trustworthy (see UPD-01).
 - **Verification:** `tests/io/` module (`autosave_write.rs` sits alongside): `new_for_test()` with a dirty saved project, advance the clock past `interval_secs`, dispatch `Message::Tick`, and assert `saving()` becomes true or an autosave engine command is captured.
 
-### [ ] UPD-08 — The vocal render epoch map is wiped on every replay: jobs can hang forever and stale renders can alias fresh ones
+### [x] UPD-08 — The vocal render epoch map is wiped on every replay: jobs can hang forever and stale renders can alias fresh ones — fixed @8cfe8cd2
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** concurrency
@@ -492,7 +497,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Engine: give each import job a generation that `ClearAll` bumps, and drop results from older generations; this is the owning dev's call. App: in `clips::imported`, ignore `ClipImported` while `io.loading`, and when the `track_id` isn't in `registry.tracks`.
 - **Verification:** `tests/timeline/` module: `new_for_test()` with a loaded project that has clip 3. Feed `AudioEvent::ClipImported { clip_id: 3, track_id: 99, .. }` and assert clip 3's `total_frames` is unchanged and no clip on track 99 exists.
 
-### [ ] UPD-10 — "Search folder" relink walks the whole directory tree synchronously in `update()`
+### [x] UPD-10 — "Search folder" relink walks the whole directory tree synchronously in `update()` — fixed @a19e6cad
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** performance
@@ -512,7 +517,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Route Enter and B through the same `Request*` → `any_text_input_focused()` → `*Resolved` pattern as `RequestPerformanceToggle`. For Cmd-Z/Y, either do the same or accept it and document it.
 - **Verification:** `tests/control/` or `tests/timeline/` module that already exercises `RequestPerformanceToggle`: add equivalent cases for a `RequestOpenSelectedMidiClip` resolved with `focused = true` and assert `editing_midi_clip` stays `None`.
 
-### [ ] UPD-12 — Socket parent-dir hardening `chmod`s whatever the path resolves to, following symlinks
+### [x] UPD-12 — Socket parent-dir hardening `chmod`s whatever the path resolves to, following symlinks — fixed @9ef9201a (same as CTL-11)
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** security
@@ -838,7 +843,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Clamp the column loop to the visible window. Walk the sorted notes with a moving cursor instead of `any()`. Group clips by track before pairing crossfades.
 - **Verification:** The timeline goldens must be pixel-identical (no re-bless). Optionally add a timing smoke test in the `timeline` binary.
 
-### [ ] VIEW-29 — Batch relink walks the chosen folder tree on the UI thread
+### [x] VIEW-29 — Batch relink walks the chosen folder tree on the UI thread — fixed @a19e6cad (async folder scan)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** performance
@@ -848,7 +853,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Run the walk in `Task::perform` with `spawn_blocking`, and start the imports from the result message. Guard against a modal that was closed in the meantime.
 - **Verification:** Add a `control` group-binary test asserting that `start_batch_relink` returns a non-empty `Task` and does not mutate state until the result message arrives.
 
-### [ ] VIEW-30 — Pool "used ×N" badges and `pool_list.usage_count` go stale after clip delete, split or track removal
+### [x] VIEW-30 — Pool "used ×N" badges and `pool_list.usage_count` go stale after clip delete, split or track removal — fixed @4020e52b
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -858,7 +863,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Recompute after every clip add/remove/split and after track removal, or derive the counts from `clips` when they are read.
 - **Verification:** Add a `control` group-binary test: place, delete, then assert `usage_count == 0`.
 
-### [ ] VIEW-31 — Vocal-roll cache fingerprint misses chord quality/bass, voicebank and voice
+### [x] VIEW-31 — Vocal-roll cache fingerprint misses chord quality/bass, voicebank and voice — fixed @633cdad6
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -868,7 +873,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Hash the chord's `Display` string, `params.voicebank` and `params.voice`.
 - **Verification:** Add a fingerprint unit test in the `compose` binary.
 
-### [ ] VIEW-32 — Vocal lane and drum ribbon canvases have no geometry cache and re-tessellate on every 16 ms tick
+### [x] VIEW-32 — Vocal lane and drum ribbon canvases have no geometry cache and re-tessellate on every 16 ms tick — fixed @5ea94049
 - **Severity:** low
 - **Confidence:** high
 - **Category:** performance
@@ -878,7 +883,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add a `Cache` plus a fingerprint, following `ComposeDrumCanvasState`, and draw the hover wash in an uncached overlay.
 - **Verification:** The compose goldens must be pixel-identical.
 
-### [ ] VIEW-33 — The timeline's in-canvas vertical scrollbar is drawn at the far right end of the song
+### [x] VIEW-33 — The timeline's in-canvas vertical scrollbar is drawn at the far right end of the song — fixed @21e69aa3
 - **Severity:** low
 - **Confidence:** high
 - **Category:** ux
@@ -888,7 +893,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Position the bar from the visible-viewport probe, or move it out of the canvas.
 - **Verification:** Add a golden in the `timeline` binary with a long song. The scrollbar must be visible at the right edge of the window.
 
-### [ ] VIEW-34 — Stacked or very short vocal notes add time that doesn't exist on the timeline, so the vocal drifts behind the MIDI
+### [x] VIEW-34 — Stacked or very short vocal notes add time that doesn't exist on the timeline, so the vocal drifts behind the MIDI — fixed @7afffe1f
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -898,7 +903,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Merge or reject overlapping and zero-slot notes before building, or take the 50 ms floor out of the neighbouring slot so the segment total equals the tick span.
 - **Verification:** Add a `compose` binary test: the summed segment durations must equal the tick span converted to seconds.
 
-### [ ] VIEW-35 — `vocal.generate` with an explicit seed and `lyrics=true` actually uses seed + 1
+### [x] VIEW-35 — `vocal.generate` with an explicit seed and `lyrics=true` actually uses seed + 1 — fixed @df19db92
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -908,7 +913,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** When the seed is explicit, use it directly without bumping.
 - **Verification:** Extend `tests/control/control_vocal_generate.rs`: the melodies from the two calls must be equal and the stored seed must be 1234.
 
-### [ ] VIEW-36 — Audition scrub strip keeps showing the previous file's waveform
+### [x] VIEW-36 — Audition scrub strip keeps showing the previous file's waveform — fixed @ca56cbc8
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -1025,7 +1030,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Return `RpcError::needs_confirmation(...)` in `check_save` (handler only).
 - **Verification:** `control` group (`control_plugin_presets.rs`): assert `ErrorKind::NeedsConfirmation` on a repeated save without `overwrite`.
 
-### [ ] CTL-11 — The socket setup chmods whatever directory the socket path's parent is, and trusts a pre-existing `/tmp/resonance-<uid>`
+### [x] CTL-11 — The socket setup chmods whatever directory the socket path's parent is, and trusts a pre-existing `/tmp/resonance-<uid>` — fixed @9ef9201a
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** security
@@ -1159,7 +1164,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `collect_midi_events`, skip notes whose `note_abs_end <= note_abs_start` (or force `note_abs_end = note_abs_start + 1` so the off lands one sample later); optionally sanitise to a 1-tick minimum at SMF import.
 - **Verification:** `resonance-audio/tests/midi_event_window.rs`: a clip with a zero-duration note; assert either no events or On strictly before Off.
 
-### [ ] MIX-11 — Silent playhead advance at a loop seam snaps to `loop_in` and drops the overshoot
+### [x] MIX-11 — Silent playhead advance at a loop seam snaps to `loop_in` and drops the overshoot — fixed @4338f909
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -1205,7 +1210,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Track a `write_failed: Option<String>` on `TrackRecordingBuf` instead of relying on `writer == None`. On write error: take the writer and call `finalize()` explicitly (report its result), keep `frames_written` as the count of frames known good, and set the flag. In `finalize_wav_file`, treat an already-finalized writer as success when `frames_written > 0`, so the short clip is mapped and emitted. Emit a user-visible `AudioEvent::Error` (or a dedicated recording-error event) from the engine loop the first time a write fails, similar to `poll_overflow`. Same treatment in `roll_audio_pass`.
 - **Verification:** Test in an existing recording test binary: build a `TrackRecordingBuf` whose writer targets a path on a tiny tmpfs or a writer wrapper that fails after N bytes (e.g. make `write_samples_and_peaks` testable over a failing `Write`); drain some frames, force failure, call `finalize_recording`; assert one clip with the pre-failure frames and an error event.
 
-### [ ] ENG-04 — `reset_plugins` never calls `clap_plugin.reset`, so offline renders start from live-playback plugin state
+### [x] ENG-04 — `reset_plugins` never calls `clap_plugin.reset`, so offline renders start from live-playback plugin state — fixed @85c4dd0e
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1225,7 +1230,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Make the engine the authority: in `handle_play` / `handle_record` (and the monitoring enable path), refuse with an `AudioEvent::Error` when `shared.offline_render_count > 0`; or, alternatively, have the audio callback skip plugin processing (output silence) while `offline_render_count > 0`. Keep the app-side gate as UX, not as the guard.
 - **Verification:** Engine test via `engine/thread/test_support.rs` harness: bump `offline_render_count` (hold an `OfflineRenderGuard::mark`), dispatch `AudioCommand::Play`, assert `shared.playing` stays false and an error event is emitted.
 
-### [ ] ENG-06 — Normalized export hard-clips at 0 dBFS *before* the normalization gain and true-peak limiter
+### [x] ENG-06 — Normalized export hard-clips at 0 dBFS *before* the normalization gain and true-peak limiter — fixed @13c63892
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1235,7 +1240,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add a parameter to `render_chunk` (or a `ChunkCtx` flag) that skips the clamp while keeping master volume/automation, and use it for both normalize passes. The limiter already enforces the ceiling; keep the clamp for the non-normalized path so it matches live playback.
 - **Verification:** Test with `encode_buffer_for_test` / `normalize_buffer_for_test`, or an export test on a project with one clip at +6 dBFS: with normalization on, assert the output waveform is a scaled copy of the source (correlation ≈ 1, no flat tops) and the peak is ≤ ceiling.
 
-### [ ] ENG-07 — Master export stops exactly at the last clip end: reverb/delay/synth-release tails are cut, unlike stems (2 s tail) and bounce-in-place
+### [x] ENG-07 — Master export stops exactly at the last clip end: reverb/delay/synth-release tails are cut, unlike stems (2 s tail) and bounce-in-place — fixed @f517ee53 (one 2 s FX-tail policy)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1245,7 +1250,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add the same tail to `render_stop` (share one constant with stems/bounce; optionally make it an `ExportSettings` field, or render until the master output drops below a threshold for N ms with a hard cap). Keep the PDC trim unchanged. Check that `measure_mix` uses the same range so the reported loudness matches the file.
 - **Verification:** Test in the bounce test binary (`tests/bounce_tail_and_master_latency.rs` exists): a MIDI clip ending at T through a delay/reverb plugin; assert the exported frame count ≥ T + tail and non-silent content after T.
 
-### [ ] ENG-08 — Freeze renders with an empty automation snapshot, so frozen audio diverges from live playback
+### [x] ENG-08 — Freeze renders with an empty automation snapshot, so frozen audio diverges from live playback — fixed @3fff5f58
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1255,7 +1260,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Pass the current `AutomationSnapshot` (`ctx.automation.load_full()`) through the `FreezeTrack` spawn path, the way `run_export` receives it, and include the source track's plugin automation lanes in the fingerprint the app compares. Decide whether gain/pan lanes belong in the cache: `freeze_raw` renders pre-fader, so only plugin-param lanes should be baked.
 - **Verification:** Freeze test: a fake or first-party gain plugin with a param lane ramping 0→1; freeze; assert the cache amplitude ramps. Fingerprint test: changing a lane changes the fingerprint.
 
-### [ ] ENG-09 — The pool-import worker thread is not panic-supervised; a decoder panic leaves import rows stuck at "Working"
+### [x] ENG-09 — The pool-import worker thread is not panic-supervised; a decoder panic leaves import rows stuck at "Working" — fixed @0e7a33b7
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** error-handling
@@ -1295,7 +1300,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Track a `processing: bool` next to `active`; skip `process` when it is false. In `reset_processing`, on start failure, deactivate and set `active = false` like `cycle_activation` does, and report it. In `poll_plugin_host_requests`, only report a restart failure once per instance.
 - **Verification:** Fake plugin whose `start_processing` returns false on the 2nd call: after `reset_processing`, assert `process` is not invoked.
 
-### [ ] ENG-13 — A failed export leaves a truncated, invalid file at the target path and has already destroyed the previous file there
+### [x] ENG-13 — A failed export leaves a truncated, invalid file at the target path and has already destroyed the previous file there — fixed @224fc361
 - **Severity:** low
 - **Confidence:** high
 - **Category:** error-handling

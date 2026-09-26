@@ -188,6 +188,9 @@ pub fn remove_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
         r.clips.retain(|c| c.id != *clip_id);
         let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: *clip_id });
     }
+    if !casualties.audio_clips.is_empty() {
+        r.recompute_pool_usage(); // review VIEW-30
+    }
     for clip_id in &casualties.midi_clips {
         r.midi_clips.retain(|c| c.id != *clip_id);
         let _ = r

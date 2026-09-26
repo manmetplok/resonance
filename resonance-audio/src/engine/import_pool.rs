@@ -101,11 +101,29 @@ pub fn import_one_to_pool(
 /// render all rows immediately), then jobs are processed sequentially —
 /// each flips to `Working`, then either emits `AssetImported` followed
 /// by `Done`, or terminates with `ImportFailed`. Files are independent:
-/// one failure never aborts the rest of the batch.
+/// one failure never aborts the rest of the batch — and neither does a
+/// panic (see [`run_pool_import_with`]).
 pub fn run_pool_import(
     jobs: &[(AssetId, String)],
     project_dir: &Path,
     engine_rate: u32,
+    emit: impl FnMut(AudioEvent),
+) {
+    run_pool_import_with(jobs, project_dir, engine_rate, import_one_to_pool, emit);
+}
+
+/// [`run_pool_import`] with the per-file step injected, so a test can make
+/// one file's import panic.
+///
+/// Each file's import runs under `catch_unwind` (code review ENG-09): a
+/// decoder panic on a truncated or crafted file becomes that file's
+/// `ImportFailed` — the row resolves instead of sitting at "Working" —
+/// and the batch moves on to the next file.
+pub fn run_pool_import_with(
+    jobs: &[(AssetId, String)],
+    project_dir: &Path,
+    engine_rate: u32,
+    mut import: impl FnMut(AssetId, &str, &Path, u32) -> Result<PoolImportOutcome, String>,
     mut emit: impl FnMut(AudioEvent),
 ) {
     for (asset_id, path) in jobs {
@@ -122,7 +140,19 @@ pub fn run_pool_import(
             path: path.clone(),
             stage: ImportStage::Working,
         });
-        match import_one_to_pool(*asset_id, path, project_dir, engine_rate) {
+        // `AssertUnwindSafe`: a panicking import leaves nothing shared
+        // behind — its partial output is only the asset file, which the
+        // failure event tells the app to ignore.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            import(*asset_id, path, project_dir, engine_rate)
+        }))
+        .unwrap_or_else(|payload| {
+            Err(format!(
+                "Import failed: decoder panicked: {}",
+                crate::supervise::panic_message(payload.as_ref())
+            ))
+        });
+        match result {
             Ok(outcome) => {
                 emit(AudioEvent::AssetImported {
                     asset_id: outcome.asset_id,
@@ -199,9 +229,21 @@ pub(crate) fn handle_import_audio_to_pool(
     let spawn_result = std::thread::Builder::new()
         .name("resonance-pool-import".into())
         .spawn(move || {
-            run_pool_import(&jobs, &project_dir, engine_rate, |ev| {
-                let _ = event_tx.send(ev);
-            });
+            // Per-file panics are contained inside `run_pool_import`; this
+            // catches anything left (event emission, bookkeeping) so the
+            // thread never dies silently (code review ENG-09).
+            let panic_tx = event_tx.clone();
+            crate::supervise::run_supervised(
+                "pool-import",
+                || {
+                    run_pool_import(&jobs, &project_dir, engine_rate, |ev| {
+                        let _ = event_tx.send(ev);
+                    });
+                },
+                |message| {
+                    let _ = panic_tx.send(AudioEvent::Error(message));
+                },
+            );
         });
     if let Err(e) = spawn_result {
         let _ = ctx.event_tx.send(AudioEvent::Error(format!(

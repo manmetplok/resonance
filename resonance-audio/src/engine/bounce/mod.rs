@@ -57,6 +57,59 @@ pub(crate) use stem_export::export_stems_spawn;
 pub use wav::{encode_buffer_for_test, normalize_buffer_for_test};
 pub(crate) use wav::{run_export, ExportReporter};
 
+/// A render's output file while it is being written (code review ENG-13).
+///
+/// Renderers write to a sibling `<target>.partial` and only
+/// [`commit`](Self::commit) — rename it over the target — once the file
+/// is complete. Until then the target is untouched, so a failed or
+/// cancelled render never truncates or deletes the file it would have
+/// replaced; dropping an uncommitted `PartialFile` removes the temp file.
+/// The rename stays in one directory, so it is atomic on one filesystem.
+pub(super) struct PartialFile {
+    temp: std::path::PathBuf,
+    target: std::path::PathBuf,
+    committed: bool,
+}
+
+impl PartialFile {
+    pub(super) fn new(target: impl Into<std::path::PathBuf>) -> Self {
+        let target = target.into();
+        let mut temp = target.clone().into_os_string();
+        temp.push(".partial");
+        Self {
+            temp: temp.into(),
+            target,
+            committed: false,
+        }
+    }
+
+    /// Where the renderer writes.
+    pub(super) fn temp(&self) -> &std::path::Path {
+        &self.temp
+    }
+
+    /// Move the finished file into place. On failure the temp file is
+    /// removed (on drop) and the target left as it was.
+    pub(super) fn commit(mut self) -> Result<(), String> {
+        std::fs::rename(&self.temp, &self.target).map_err(|e| {
+            format!(
+                "Could not move the finished file into place at {}: {e}",
+                self.target.display()
+            )
+        })?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for PartialFile {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temp);
+        }
+    }
+}
+
 /// RAII marker for "an offline render is running on a worker thread"
 /// (ba todo #1218).
 ///
@@ -201,6 +254,49 @@ pub fn to_wav(
         sample_rate,
         event_tx,
     );
+}
+
+/// Test surface: run the real export renderer ([`run_export`]) with
+/// explicit settings, automation snapshot and cancel token, and return
+/// every event it emitted (`Export*` family). Unlike [`to_wav`] this
+/// reaches the normalization passes and the cancel / temp-file paths.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn export_for_test(
+    path: String,
+    settings: &ExportSettings,
+    cancel: &AtomicBool,
+    shared: &Arc<SharedState>,
+    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
+    busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
+    master: &Arc<RwLock<MasterBus>>,
+    clips: &Arc<RwLock<Vec<AudioClip>>>,
+    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &super::AutomationSnapshot,
+    sample_rate: u32,
+) -> Vec<AudioEvent> {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    run_export(
+        path,
+        settings,
+        ExportReporter::Export,
+        shared,
+        cancel,
+        tracks,
+        busses,
+        master,
+        clips,
+        midi_clips,
+        plugins,
+        tempo_map,
+        automation,
+        sample_rate,
+        &tx,
+    );
+    drop(tx);
+    rx.try_iter().collect()
 }
 
 /// Spawn an offline export on a dedicated worker thread so the engine
@@ -366,6 +462,7 @@ pub fn to_freeze_cache_spawn(
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
 ) -> Arc<AtomicBool> {
@@ -398,6 +495,7 @@ pub fn to_freeze_cache_spawn(
                         &midi_clips,
                         &plugins,
                         &tempo_map,
+                        &automation,
                         sample_rate,
                         &mut progress,
                     );

@@ -4,7 +4,7 @@
 //! this crate is already the single source of truth both sides compile
 //! against (doc #265), so the path rule lives here too.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Env var overriding the control-socket path.
 pub const SOCKET_PATH_ENV: &str = "RESONANCE_CONTROL_SOCKET";
@@ -54,6 +54,66 @@ pub fn resolve_socket_path(
         }
     }
     PathBuf::from(format!("/tmp/resonance-{uid}")).join("control.sock")
+}
+
+/// Create the socket's directory `dir` as a private (`0700`) directory,
+/// or verify an existing one is private (code review CTL-11 / UPD-12).
+///
+/// The socket has no access control of its own — whoever can reach it
+/// drives the DAW — so everything rests on its directory. The directory
+/// is created with mode `0700` in one `mkdir` (no create-then-chmod
+/// window); its ancestors are created normally. Nothing is ever
+/// `chmod`ed: that used to follow a symlink planted at the path, tighten
+/// whatever directory the user pointed an override at, and trust a
+/// `/tmp/resonance-<uid>` another local user had pre-created. An existing
+/// directory must pass [`verify_socket_dir`], else this refuses with
+/// `PermissionDenied` and says why.
+#[cfg(unix)]
+pub fn prepare_socket_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    verify_socket_dir(dir)
+}
+
+/// Whether `dir` is safe to publish (server) or trust (client) a control
+/// socket in: a real directory — not a symlink — owned by this process's
+/// effective uid, with no group or other permission bits. `lstat`s the
+/// final component; returns `PermissionDenied` naming the problem.
+#[cfg(unix)]
+pub fn verify_socket_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let refuse = |why: String| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("refusing control-socket directory {}: {why}", dir.display()),
+        ))
+    };
+    let meta = std::fs::symlink_metadata(dir)?;
+    if meta.file_type().is_symlink() {
+        return refuse("it is a symlink".into());
+    }
+    if !meta.is_dir() {
+        return refuse("it is not a directory".into());
+    }
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let euid = unsafe { libc::geteuid() };
+    if meta.uid() != euid {
+        return refuse(format!("it is owned by uid {}, not {euid}", meta.uid()));
+    }
+    let mode = meta.mode() & 0o7777;
+    if mode & 0o077 != 0 {
+        return refuse(format!(
+            "its mode is {mode:04o}; it must be private to its owner (0700)"
+        ));
+    }
+    Ok(())
 }
 
 /// The process's real uid, for the `/tmp/resonance-<uid>` fallback.

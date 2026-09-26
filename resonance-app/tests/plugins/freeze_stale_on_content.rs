@@ -182,3 +182,93 @@ fn a_tempo_change_marks_it_stale() {
     echo_clip_loads(&mut app, &rx);
     assert!(is_stale(&app), "the notes now play at another tempo");
 }
+
+// ---- plugin automation (code review ENG-08) ------------------------------
+
+/// The freeze bakes the track's plugin-param automation, so editing one of
+/// those lanes changes what the track would render.
+mod plugin_automation {
+    use super::*;
+    use resonance_app::state::PluginSlotState;
+    use resonance_audio::types::ParamInfo;
+    use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
+
+    const SYNTH_TRACK: u64 = 20;
+    const INSTANCE: u64 = 7_001;
+
+    fn frozen_synth_track() -> Resonance {
+        let (mut app, _task, _rx) = Resonance::new_for_test_with_capture();
+        app.test_add_track(SYNTH_TRACK, TrackType::Instrument);
+        app.test_push_track_plugin(
+            SYNTH_TRACK,
+            PluginSlotState::new(
+                INSTANCE,
+                "Test Synth".to_string(),
+                "com.test.synth".to_string(),
+                "/plugins/test.clap".to_string(),
+                vec![ParamInfo {
+                    id: 3,
+                    name: "Cutoff".to_string(),
+                    min_value: 0.0,
+                    max_value: 1.0,
+                    ..Default::default()
+                }],
+                false,
+            ),
+        );
+        app.test_set_freeze_status(
+            SYNTH_TRACK,
+            FreezeStatus::Frozen {
+                cache_ref: FreezeCacheRef::new(
+                    "freeze_20.wav".to_string(),
+                    48_000,
+                    32,
+                    0,
+                    FreezeCacheStatus::Frozen,
+                ),
+            },
+        );
+        app
+    }
+
+    fn lane_on(app: &mut Resonance, target: AutomationTarget) {
+        let lane = AutomationLane::new(
+            1,
+            target,
+            vec![
+                Breakpoint::new(0, 0.0, CurveKind::Linear),
+                Breakpoint::new(48_000, 1.0, CurveKind::Linear),
+            ],
+        );
+        app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane });
+        let _ = app.update(Message::Tick);
+    }
+
+    fn status(app: &Resonance) -> FreezeStatus {
+        app.test_freeze_status(SYNTH_TRACK)
+    }
+
+    #[test]
+    fn a_plugin_param_lane_on_the_track_marks_it_stale() {
+        let mut app = frozen_synth_track();
+        lane_on(
+            &mut app,
+            AutomationTarget::PluginParam {
+                instance: INSTANCE,
+                param_id: 3,
+            },
+        );
+        assert!(
+            matches!(status(&app), FreezeStatus::Stale { .. }),
+            "the frozen render no longer has the track's automation"
+        );
+    }
+
+    #[test]
+    fn a_fader_lane_leaves_the_track_frozen() {
+        let mut app = frozen_synth_track();
+        // Gain automation applies live, after the frozen cache.
+        lane_on(&mut app, AutomationTarget::TrackGain(SYNTH_TRACK));
+        assert!(matches!(status(&app), FreezeStatus::Frozen { .. }));
+    }
+}

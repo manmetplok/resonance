@@ -1162,9 +1162,14 @@ pub enum ViewportMessage {
     ZoomIn,
     ZoomOut,
     ScrollY(f32),
-    /// Horizontal scroll-to, dispatched when the canvas-side trim/drag
-    /// helpers auto-scroll the timeline as the cursor approaches an edge.
-    ScrollToX(f32),
+    /// The arrange view's outer horizontal `Scrollable` moved or resized
+    /// (its `on_scroll`): live x offset, visible width and content width,
+    /// all in px. Feeds playhead follow (review FU-D1).
+    ArrangeScrolled {
+        offset_x: f32,
+        visible_width: f32,
+        content_width: f32,
+    },
     ScrollToY(f32),
     ViewportWidth(f32),
     /// Total available height the timeline canvas + track-header column
@@ -1578,6 +1583,15 @@ pub enum RelinkMessage {
     /// `Some` folder resolves every missing asset whose original filename
     /// exists inside it; `None` if the user cancelled.
     FolderChosen(Option<std::path::PathBuf>),
+    /// The background walk of a [`FolderChosen`](Self::FolderChosen)
+    /// folder finished: the scan's token and the lowercased filename →
+    /// path matches, or `None` if it was cancelled. Starts the imports.
+    ScanFinished(
+        u64,
+        Option<std::collections::HashMap<String, std::path::PathBuf>>,
+    ),
+    /// Cancel the folder search in flight.
+    CancelScan,
     /// A background relink import finished. `Ok` carries the transcoded
     /// asset's fresh metadata (it now lives in the project folder); `Err`
     /// carries the asset/file/reason of a failed import.

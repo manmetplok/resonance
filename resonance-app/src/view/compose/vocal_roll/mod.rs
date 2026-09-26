@@ -243,6 +243,8 @@ pub struct VocalRollFingerprint {
     pub(super) chords_hash: u64,
     pub(super) draft_hash: u64,
     pub(super) lyrics_hash: u64,
+    /// Voice label + voicebank (VIEW-31).
+    pub(super) meta_hash: u64,
     /// Fields that affect the pitch-curve overlay. Tracked so dragging
     /// the portamento / vibrato sliders in the right rail invalidates
     /// the canvas cache and repaints the curve immediately.

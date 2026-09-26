@@ -84,6 +84,11 @@ impl Default for CallTimeouts {
 pub enum CallError {
     /// Could not connect to the socket: the app is (probably) not running.
     NotRunning { path: PathBuf, source: std::io::Error },
+    /// The socket's directory is not one only this user controls (a
+    /// symlink, someone else's, or open to group/other), so whatever
+    /// listens there may not be resonance (code review CTL-11). Refused
+    /// before connecting.
+    UntrustedSocket { path: PathBuf, source: std::io::Error },
     /// The connection dropped mid-call; the next call reconnects.
     Disconnected { source: std::io::Error },
     /// The app accepted the request but did not answer within the read
@@ -110,6 +115,14 @@ impl CallError {
                 "resonance is not running: could not connect to the control socket at {} ({source}). \
                  Start the resonance app (with control enabled, i.e. without RESONANCE_NO_CONTROL=1) \
                  and retry this tool call.",
+                path.display()
+            ),
+            CallError::UntrustedSocket { path, source } => format!(
+                "refusing to connect to the control socket at {}: {source}. The socket's \
+                 directory must be a real directory owned by this user with mode 0700 — another \
+                 local user may have pre-created it. Tell the user; they can remove it (or set \
+                 XDG_RUNTIME_DIR / RESONANCE_CONTROL_SOCKET to a private location) and restart \
+                 resonance. Do not retry until then.",
                 path.display()
             ),
             CallError::Disconnected { source } => format!(
@@ -307,6 +320,25 @@ impl ControlClient {
 
     /// Connect and perform the `control.hello` handshake.
     fn connect(&self) -> Result<Connection, CallError> {
+        // Trust the socket only in a directory only we control (CTL-11).
+        // A missing directory is just an app that is not running.
+        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            match resonance_control::socket::verify_socket_dir(dir) {
+                Ok(()) => {}
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(CallError::NotRunning {
+                        path: self.path.clone(),
+                        source,
+                    })
+                }
+                Err(source) => {
+                    return Err(CallError::UntrustedSocket {
+                        path: self.path.clone(),
+                        source,
+                    })
+                }
+            }
+        }
         let stream = UnixStream::connect(&self.path).map_err(|source| CallError::NotRunning {
             path: self.path.clone(),
             source,

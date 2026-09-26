@@ -176,6 +176,9 @@ pub(super) fn dispatch_bounce(
                 Arc::clone(ctx.midi_clips),
                 Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),
+                // Freeze bakes the track's plugin automation, like export
+                // and bounce do (code review ENG-08).
+                ctx.automation.load_full(),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),
             ));

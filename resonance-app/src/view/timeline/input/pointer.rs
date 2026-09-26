@@ -31,8 +31,9 @@ fn rect_contains(rect: &Rectangle, pos: Point) -> bool {
 }
 
 impl TimelineCanvas<'_> {
-    /// Try to handle the press on a scrollbar (horizontal or vertical).
-    /// Returns `Some` if the event was consumed; `None` to fall through.
+    /// Try to handle the press on the vertical scrollbar. (Horizontal
+    /// scroll is the outer `Scrollable`'s.) Returns `Some` if the event
+    /// was consumed; `None` to fall through.
     fn press_scrollbars(
         &self,
         state: &mut TimelineState,
@@ -40,24 +41,7 @@ impl TimelineCanvas<'_> {
         bounds: Rectangle,
     ) -> UpdateResult {
         let header_height = self.fixed_header_height();
-        let (h_rects, v_rects) = self.scrollbar_rects(bounds);
-
-        if let Some(sb) = h_rects {
-            if rect_contains(&sb.track, pos) {
-                if rect_contains(&sb.thumb, pos) {
-                    state.h_scrollbar_grab = Some(pos.x - sb.thumb.x);
-                } else {
-                    let new_scroll = scroll_from_thumb_pos(
-                        pos.x - sb.thumb.width / 2.0,
-                        sb.travel,
-                        sb.max_scroll,
-                    );
-                    state.h_scrollbar_grab = Some(sb.thumb.width / 2.0);
-                    return captured(Message::Viewport(ViewportMessage::ScrollToX(new_scroll)));
-                }
-                return Some(canvas::Action::capture());
-            }
-        }
+        let v_rects = self.scrollbar_rects(bounds);
 
         if let Some(sb) = v_rects {
             if rect_contains(&sb.track, pos) {
@@ -504,18 +488,9 @@ impl TimelineCanvas<'_> {
             }));
         }
 
-        // Horizontal scrollbar drag.
-        if let Some(grab) = state.h_scrollbar_grab {
-            let (h_rects, _) = self.scrollbar_rects(bounds);
-            if let Some(sb) = h_rects {
-                let new_scroll = scroll_from_thumb_pos(pos.x - grab, sb.travel, sb.max_scroll);
-                return captured(Message::Viewport(ViewportMessage::ScrollToX(new_scroll)));
-            }
-        }
         // Vertical scrollbar drag.
         if let Some(grab) = state.v_scrollbar_grab {
-            let (_, v_rects) = self.scrollbar_rects(bounds);
-            if let Some(sb) = v_rects {
+            if let Some(sb) = self.scrollbar_rects(bounds) {
                 let new_scroll =
                     scroll_from_thumb_pos(pos.y - sb.track.y - grab, sb.travel, sb.max_scroll);
                 return captured(Message::Viewport(ViewportMessage::ScrollToY(new_scroll)));
@@ -610,9 +585,6 @@ impl TimelineCanvas<'_> {
         // was stashed by the last Hover; the update handler reads it.
         if self.drag.is_some() {
             return captured(Message::Drag(DragMessage::Drop));
-        }
-        if state.h_scrollbar_grab.take().is_some() {
-            return Some(canvas::Action::capture());
         }
         if state.v_scrollbar_grab.take().is_some() {
             return Some(canvas::Action::capture());
