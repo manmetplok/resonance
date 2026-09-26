@@ -25,9 +25,83 @@ use std::path::Path;
 use iced::Task;
 use resonance_audio::types::{AssetId, AudioCommand, ClipId, SamplePos, TrackId};
 
-use crate::message::{DropTarget, Message, PoolMessage};
+use crate::message::{DropTarget, Message};
 use crate::state::{PendingImport, PlacementTarget};
 use crate::Resonance;
+
+/// Audio import + placement orchestration (doc #175, ba todo #598).
+/// Drives the end-to-end flow: a multi-file selection (from the "Import
+/// audio…" dialog or a drag-and-drop) is imported into the project pool
+/// via `AudioCommand::ImportAudioToPool`, and — for a drop — each file is
+/// placed as an audio clip once its `AssetImported` event lands. Routed
+/// through `update::pool::handle`.
+///
+/// `ImportFilesToPool` and `ImportAndPlace` are classified
+/// `UndoAction::Record` (see `undo::classify`) so the whole import +
+/// placement is a single undoable action: the undo snapshot is taken up
+/// front, before the import is issued, so one undo reverts the pool
+/// asset(s), any placed clip(s), and a spawned track. `PickFiles` and
+/// `WindowAudioDrop` are entry-point messengers — `PickFiles` opens the
+/// OS dialog (no state change until `ImportFilesToPool` fires back) and
+/// `WindowAudioDrop` resolves to `ImportAndPlace` inside the handler —
+/// so both are classified `UndoAction::Skip`.
+#[derive(Debug, Clone)]
+pub enum PoolMessage {
+    /// Open the OS multi-file audio picker (the "Import audio…" chrome
+    /// button, ba todo #608). The picked paths come back as a
+    /// `ImportFilesToPool` message via `Task::perform`; cancelling the
+    /// dialog yields an empty path list that is silently dropped.
+    /// Classified `UndoAction::Skip` — no state changes at dispatch time.
+    PickFiles,
+    /// An audio file was dropped onto the arrangement window from the OS
+    /// (ba todo #608). The handler resolves the drop to a new audio track
+    /// at the current playhead position and calls through to the shared
+    /// `import()` helper. One message fires per dropped file (iced emits
+    /// one `FileDropped` event per path). Classified `UndoAction::Skip`
+    /// (the resulting `ImportAndPlace` that the handler re-dispatches
+    /// records the actual undo entry).
+    WindowAudioDrop(std::path::PathBuf),
+    /// Import one or more files into the pool **without** placing a clip
+    /// (the "Import audio…" dialog / pool-only path).
+    ImportFilesToPool(Vec<std::path::PathBuf>),
+    /// Import one or more files and place them as clips at `target` (a
+    /// drop on an existing lane, or on the new-audio-track zone).
+    ImportAndPlace {
+        paths: Vec<std::path::PathBuf>,
+        target: DropTarget,
+    },
+    /// Import one or more files and place them at an EXACT position on an
+    /// existing track — no grid snap (control endpoint `clip.place`, doc
+    /// #265).
+    ///
+    /// [`ImportAndPlace`](Self::ImportAndPlace) snaps the drop position to
+    /// the timeline grid at the current zoom, which is right for a pointer
+    /// and wrong for an API: a client that asked for a sample position
+    /// would get a different one depending on how far the user happened to
+    /// be zoomed in. This variant places where it was told.
+    ImportAndPlaceExact {
+        paths: Vec<std::path::PathBuf>,
+        track_id: TrackId,
+        start_sample: SamplePos,
+    },
+    /// Place an asset that is ALREADY in the pool as a clip, with no
+    /// import step (control endpoint `clip.place`, doc #265).
+    ///
+    /// The GUI has no equivalent — dragging a pool row always goes through
+    /// `ImportAndPlace`, which short-circuits to the same placement once
+    /// it sees the file is known. A remote client placing the same
+    /// one-shot forty times should not re-decode it forty times, so this
+    /// skips straight to the placement. `clip_id` is allocated by the
+    /// caller (the derived-clip range, as `MidiClipMessage::CreateEmptyClip`
+    /// does) so the control reply can name the clip immediately.
+    /// Classified `UndoAction::Record`.
+    PlacePooledAsset {
+        clip_id: ClipId,
+        asset_id: AssetId,
+        track_id: TrackId,
+        start_sample: SamplePos,
+    },
+}
 
 /// Audio container extensions accepted by the import entry points (the
 /// chrome button, the window file-drop subscription, and the browser
