@@ -49,6 +49,8 @@ pub(crate) fn completed(r: &mut Resonance, track_id: TrackId, cache_ref: FreezeC
     // a successful completion is canonically `Frozen`.
     cache_ref.status = FreezeCacheStatus::Frozen;
     r.freeze.set(track_id, FreezeStatus::Frozen { cache_ref });
+    // Freezing gates every edit, so the content now is what was rendered.
+    r.note_freeze_content_baseline(track_id);
     advance_batch_if_current(r, track_id);
 }
 

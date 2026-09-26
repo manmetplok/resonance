@@ -47,6 +47,8 @@ mod freeze_persist;
 mod freeze_progress_modal;
 #[path = "plugins/freeze_readonly.rs"]
 mod freeze_readonly;
+#[path = "plugins/freeze_stale_on_content.rs"]
+mod freeze_stale_on_content;
 #[path = "plugins/frozen_track_render.rs"]
 mod frozen_track_render;
 #[path = "plugins/missing_plugin_slot.rs"]

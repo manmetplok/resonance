@@ -390,6 +390,9 @@ impl Resonance {
                         _ => FreezeStatus::Frozen { cache_ref },
                     };
                     self.freeze.set(track_id, status);
+                    // The project was saved with this cache valid, so the
+                    // content just replayed is what it was rendered from.
+                    self.note_freeze_content_baseline(track_id);
                 }
                 Err(e) => {
                     // Missing / corrupt cache: load stale and offer a
@@ -590,6 +593,104 @@ impl Resonance {
         match self.compute_track_freeze_fingerprint(track_id) {
             Some(fingerprint) => fingerprint != cache_ref.render_fingerprint,
             None => false,
+        }
+    }
+
+    /// Fingerprint of what a frozen track's cache was rendered *from* on
+    /// the arrangement side: every MIDI clip on the track (position,
+    /// length, trims, notes, lyrics — in position order, ids excluded so a
+    /// re-derived clip with the same content matches) plus the tempo and
+    /// meter maps, which move ticks in time. Plugin params are left out:
+    /// they arrive asynchronously after a load and are already covered by
+    /// the pre-dispatch freeze gate. `None` when the track is gone
+    /// (code review UPD-05).
+    pub(crate) fn freeze_content_fingerprint(&self, track_id: TrackId) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        if !self.registry.tracks.iter().any(|t| t.id == track_id) {
+            return None;
+        }
+        let mut clips: Vec<&MidiClipState> = self
+            .midi_clips
+            .iter()
+            .filter(|c| c.track_id == track_id)
+            .collect();
+        clips.sort_by_key(|c| (c.start_sample, c.id));
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for clip in clips {
+            clip.start_sample.hash(&mut h);
+            clip.duration_ticks.hash(&mut h);
+            clip.trim_start_ticks.hash(&mut h);
+            clip.trim_end_ticks.hash(&mut h);
+            clip.notes.len().hash(&mut h);
+            for n in &clip.notes {
+                n.note.hash(&mut h);
+                n.velocity.to_bits().hash(&mut h);
+                n.start_tick.hash(&mut h);
+                n.duration_ticks.hash(&mut h);
+            }
+            self.compose
+                .vocal_audio
+                .clip_lyrics
+                .get(&clip.id)
+                .hash(&mut h);
+        }
+        format!("{:?}{:?}", self.tempo_events, self.signature_events).hash(&mut h);
+        Some(h.finish())
+    }
+
+    /// Remember a track's content fingerprint as the one its (valid)
+    /// cache was rendered from. Called when a cache becomes valid: a
+    /// freeze completing, a frozen cache re-attached on load.
+    pub(crate) fn note_freeze_content_baseline(&mut self, track_id: TrackId) {
+        if let Some(fp) = self.freeze_content_fingerprint(track_id) {
+            self.freeze.content_baselines.insert(track_id, fp);
+        }
+    }
+
+    /// After a dispatch: downgrade every `Frozen` track whose arrangement
+    /// content drifted from its baseline to `Stale` (code review UPD-05).
+    /// A track with a derived clip whose engine echo is still pending
+    /// (a GUI regeneration tears the old clip down now and mirrors the
+    /// new one on `MidiClipCreated`) is skipped until the echo lands, so a
+    /// re-derive that reproduces the same notes doesn't read as a change.
+    pub(crate) fn revalidate_frozen_content(&mut self) {
+        if !self
+            .freeze
+            .statuses
+            .values()
+            .any(|s| matches!(s, FreezeStatus::Frozen { .. }))
+        {
+            return;
+        }
+        let frozen: Vec<(TrackId, u64)> = self
+            .freeze
+            .statuses
+            .iter()
+            .filter(|(_, s)| matches!(s, FreezeStatus::Frozen { .. }))
+            .filter_map(|(id, _)| {
+                self.freeze
+                    .content_baselines
+                    .get(id)
+                    .map(|baseline| (*id, *baseline))
+            })
+            .collect();
+        for (track_id, baseline) in frozen {
+            let echo_pending = self
+                .compose
+                .derived_clips
+                .iter()
+                .any(|(&(_, _, t), clip_id)| {
+                    t == track_id && !self.midi_clips.iter().any(|c| c.id == *clip_id)
+                });
+            if echo_pending {
+                continue;
+            }
+            if self
+                .freeze_content_fingerprint(track_id)
+                .is_some_and(|fp| fp != baseline)
+            {
+                self.invalidate_frozen_track(track_id);
+            }
         }
     }
 

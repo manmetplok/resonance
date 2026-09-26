@@ -99,6 +99,10 @@ impl crate::Resonance {
         if commit_after {
             self.commit_undo_gesture();
         }
+        // Compose regeneration, bar shifts, tempo edits and engine echoes
+        // (drained on Tick) reshape a frozen track's content without
+        // passing the gate above (code review UPD-05).
+        self.revalidate_frozen_content();
         task
     }
 
