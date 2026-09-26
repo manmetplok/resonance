@@ -36,7 +36,7 @@ master and updates this table. Agents do **not** edit this file.
 | M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | merged | a7660033 |
 | M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | merged | 28bf0279 |
 | V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | merged | 57a940cb |
-| M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | in progress | |
+| M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | merged | c7a9e298 |
 | M10 socket/presets/test hygiene | CTL-11/UPD-12, STATE-14, FU-D5, STATE-15, MIX-11 | opus | in progress | |
 | M11 vocal pipeline | UPD-08, VIEW-31, VIEW-34, VIEW-35, FU-V2d | opus | in progress | |
 | M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | in progress | |
@@ -1208,7 +1208,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Track a `write_failed: Option<String>` on `TrackRecordingBuf` instead of relying on `writer == None`. On write error: take the writer and call `finalize()` explicitly (report its result), keep `frames_written` as the count of frames known good, and set the flag. In `finalize_wav_file`, treat an already-finalized writer as success when `frames_written > 0`, so the short clip is mapped and emitted. Emit a user-visible `AudioEvent::Error` (or a dedicated recording-error event) from the engine loop the first time a write fails, similar to `poll_overflow`. Same treatment in `roll_audio_pass`.
 - **Verification:** Test in an existing recording test binary: build a `TrackRecordingBuf` whose writer targets a path on a tiny tmpfs or a writer wrapper that fails after N bytes (e.g. make `write_samples_and_peaks` testable over a failing `Write`); drain some frames, force failure, call `finalize_recording`; assert one clip with the pre-failure frames and an error event.
 
-### [ ] ENG-04 — `reset_plugins` never calls `clap_plugin.reset`, so offline renders start from live-playback plugin state
+### [x] ENG-04 — `reset_plugins` never calls `clap_plugin.reset`, so offline renders start from live-playback plugin state — fixed @85c4dd0e
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1228,7 +1228,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Make the engine the authority: in `handle_play` / `handle_record` (and the monitoring enable path), refuse with an `AudioEvent::Error` when `shared.offline_render_count > 0`; or, alternatively, have the audio callback skip plugin processing (output silence) while `offline_render_count > 0`. Keep the app-side gate as UX, not as the guard.
 - **Verification:** Engine test via `engine/thread/test_support.rs` harness: bump `offline_render_count` (hold an `OfflineRenderGuard::mark`), dispatch `AudioCommand::Play`, assert `shared.playing` stays false and an error event is emitted.
 
-### [ ] ENG-06 — Normalized export hard-clips at 0 dBFS *before* the normalization gain and true-peak limiter
+### [x] ENG-06 — Normalized export hard-clips at 0 dBFS *before* the normalization gain and true-peak limiter — fixed @13c63892
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1238,7 +1238,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add a parameter to `render_chunk` (or a `ChunkCtx` flag) that skips the clamp while keeping master volume/automation, and use it for both normalize passes. The limiter already enforces the ceiling; keep the clamp for the non-normalized path so it matches live playback.
 - **Verification:** Test with `encode_buffer_for_test` / `normalize_buffer_for_test`, or an export test on a project with one clip at +6 dBFS: with normalization on, assert the output waveform is a scaled copy of the source (correlation ≈ 1, no flat tops) and the peak is ≤ ceiling.
 
-### [ ] ENG-07 — Master export stops exactly at the last clip end: reverb/delay/synth-release tails are cut, unlike stems (2 s tail) and bounce-in-place
+### [x] ENG-07 — Master export stops exactly at the last clip end: reverb/delay/synth-release tails are cut, unlike stems (2 s tail) and bounce-in-place — fixed @f517ee53 (one 2 s FX-tail policy)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1248,7 +1248,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add the same tail to `render_stop` (share one constant with stems/bounce; optionally make it an `ExportSettings` field, or render until the master output drops below a threshold for N ms with a hard cap). Keep the PDC trim unchanged. Check that `measure_mix` uses the same range so the reported loudness matches the file.
 - **Verification:** Test in the bounce test binary (`tests/bounce_tail_and_master_latency.rs` exists): a MIDI clip ending at T through a delay/reverb plugin; assert the exported frame count ≥ T + tail and non-silent content after T.
 
-### [ ] ENG-08 — Freeze renders with an empty automation snapshot, so frozen audio diverges from live playback
+### [x] ENG-08 — Freeze renders with an empty automation snapshot, so frozen audio diverges from live playback — fixed @3fff5f58
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1258,7 +1258,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Pass the current `AutomationSnapshot` (`ctx.automation.load_full()`) through the `FreezeTrack` spawn path, the way `run_export` receives it, and include the source track's plugin automation lanes in the fingerprint the app compares. Decide whether gain/pan lanes belong in the cache: `freeze_raw` renders pre-fader, so only plugin-param lanes should be baked.
 - **Verification:** Freeze test: a fake or first-party gain plugin with a param lane ramping 0→1; freeze; assert the cache amplitude ramps. Fingerprint test: changing a lane changes the fingerprint.
 
-### [ ] ENG-09 — The pool-import worker thread is not panic-supervised; a decoder panic leaves import rows stuck at "Working"
+### [x] ENG-09 — The pool-import worker thread is not panic-supervised; a decoder panic leaves import rows stuck at "Working" — fixed @0e7a33b7
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** error-handling
@@ -1298,7 +1298,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Track a `processing: bool` next to `active`; skip `process` when it is false. In `reset_processing`, on start failure, deactivate and set `active = false` like `cycle_activation` does, and report it. In `poll_plugin_host_requests`, only report a restart failure once per instance.
 - **Verification:** Fake plugin whose `start_processing` returns false on the 2nd call: after `reset_processing`, assert `process` is not invoked.
 
-### [ ] ENG-13 — A failed export leaves a truncated, invalid file at the target path and has already destroyed the previous file there
+### [x] ENG-13 — A failed export leaves a truncated, invalid file at the target path and has already destroyed the previous file there — fixed @224fc361
 - **Severity:** low
 - **Confidence:** high
 - **Category:** error-handling
