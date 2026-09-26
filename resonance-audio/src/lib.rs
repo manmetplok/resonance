@@ -366,7 +366,7 @@ pub use midi_hardware::MidiOutputRegistry;
 /// event lifecycle (`run_pool_import`) without bringing up the engine
 /// thread or a real audio device.
 #[doc(hidden)]
-pub use engine::{import_one_to_pool, run_pool_import, PoolImportOutcome};
+pub use engine::{import_one_to_pool, run_pool_import, run_pool_import_with, PoolImportOutcome};
 
 /// Test surface for the bounded clip import / project-load worker pool.
 /// Exposed so `tests/load_clip_offthread.rs` can drive the exact queue

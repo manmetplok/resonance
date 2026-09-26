@@ -87,7 +87,7 @@ pub use clips::{
     set_clip_warp_in_place, set_clip_warp_markers_in_place, MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB,
 };
 mod import_pool;
-pub use import_pool::{import_one_to_pool, run_pool_import, PoolImportOutcome};
+pub use import_pool::{import_one_to_pool, run_pool_import, run_pool_import_with, PoolImportOutcome};
 mod import_queue;
 pub use import_queue::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 mod master;
