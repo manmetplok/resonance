@@ -46,15 +46,15 @@ impl ExportMessage {
 pub fn handle(r: &mut Resonance, msg: ExportMessage) -> Task<Message> {
     match msg {
         ExportMessage::Open => {
-            r.export_dialog = Some(ExportDialogState::new());
+            r.modals.export_dialog = Some(ExportDialogState::new());
             Task::none()
         }
         ExportMessage::Close => {
-            r.export_dialog = None;
+            r.modals.export_dialog = None;
             Task::none()
         }
         ExportMessage::SetMode(mode) => {
-            if let Some(dialog) = r.export_dialog.as_mut() {
+            if let Some(dialog) = r.modals.export_dialog.as_mut() {
                 dialog.mode = mode;
             }
             Task::none()

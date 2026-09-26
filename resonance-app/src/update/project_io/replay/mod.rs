@@ -198,8 +198,8 @@ fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
     r.mixer.selected_plugin = None;
     r.interaction.clip_drag = None;
     r.interaction.clip_trim = None;
-    r.confirm_delete_track = None;
-    r.confirm_quit = None;
+    r.modals.confirm_delete_track = None;
+    r.modals.confirm_quit = None;
 
     // Sections / compose.
     r.compose

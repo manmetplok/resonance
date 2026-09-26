@@ -585,7 +585,7 @@ fn bounce(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         // `BounceInPlace` routes an external track to the picker dialog; if
         // it went anywhere else there is nothing to confirm and driving the
         // rest would be a no-op we'd wrongly report as started.
-        if app.bounce_dialog.is_none() {
+        if app.modals.bounce_dialog.is_none() {
             return reject(
                 request,
                 RpcError::unsupported(format!(

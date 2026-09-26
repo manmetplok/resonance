@@ -362,14 +362,14 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             // needs no confirm, so it goes straight to the confirmed
             // delete, recorded exactly as a dispatched `ConfirmRemoveTrack`
             // would be — that delete is the one undo entry.
-            r.confirm_delete_track = Some(id);
+            r.modals.confirm_delete_track = Some(id);
             if !(has_audio || has_midi) {
                 let _ = r.record_undo(&Message::Track(TrackMessage::ConfirmRemoveTrack));
                 return handle(r, TrackMessage::ConfirmRemoveTrack);
             }
         }
         TrackMessage::ConfirmRemoveTrack => {
-            if let Some(id) = r.confirm_delete_track.take() {
+            if let Some(id) = r.modals.confirm_delete_track.take() {
                 r.interaction.deselect_track(id);
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
@@ -384,7 +384,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::CancelRemoveTrack => {
-            r.confirm_delete_track = None;
+            r.modals.confirm_delete_track = None;
         }
         TrackMessage::SetTrackVolume(id, vol_db) => {
             let _ = r.engine.send(AudioCommand::SetTrackVolume {
@@ -653,18 +653,18 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             handle_bounce_in_place(r, track_id);
         }
         TrackMessage::Bounce(BounceMessage::PickDevice(device)) => {
-            if let Some(d) = r.bounce_dialog.as_mut() {
+            if let Some(d) = r.modals.bounce_dialog.as_mut() {
                 d.selected_device = device;
                 d.selected_port = 0;
             }
         }
         TrackMessage::Bounce(BounceMessage::PickPort(port)) => {
-            if let Some(d) = r.bounce_dialog.as_mut() {
+            if let Some(d) = r.modals.bounce_dialog.as_mut() {
                 d.selected_port = port;
             }
         }
         TrackMessage::Bounce(BounceMessage::SetMono(mono)) => {
-            if let Some(d) = r.bounce_dialog.as_mut() {
+            if let Some(d) = r.modals.bounce_dialog.as_mut() {
                 d.mono = mono;
                 // Stereo pairs need an even start channel; switching back
                 // to stereo from a port that became invalid would dump the
@@ -675,7 +675,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::Bounce(BounceMessage::Cancel) => {
-            r.bounce_dialog = None;
+            r.modals.bounce_dialog = None;
         }
         TrackMessage::Bounce(BounceMessage::CancelInProgress) => {
             // Engine clears `bounce_in_progress` when it emits
@@ -692,13 +692,13 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
 }
 
 fn handle_bounce_dialog_confirm(r: &mut Resonance) {
-    let Some(dialog) = r.bounce_dialog.take() else {
+    let Some(dialog) = r.modals.bounce_dialog.take() else {
         return;
     };
     let Some(device) = dialog.selected_device.clone() else {
         r.banners.error_message = Some("Pick an audio input device first".into());
         // Keep the dialog open by re-stashing it.
-        r.bounce_dialog = Some(dialog);
+        r.modals.bounce_dialog = Some(dialog);
         return;
     };
     let Some(source) = r.registry.tracks.iter().find(|t| t.id == dialog.source_track_id) else {
@@ -707,7 +707,7 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
     };
     if r.transport.playing {
         r.banners.error_message = Some("Stop transport before bouncing".into());
-        r.bounce_dialog = Some(dialog);
+        r.modals.bounce_dialog = Some(dialog);
         return;
     }
     // A realtime bounce plays the project live while an offline control
@@ -717,7 +717,7 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
     if r.offline_measure_in_progress() {
         r.banners.error_message =
             Some("A measurement is in progress; bounce again when it finishes".into());
-        r.bounce_dialog = Some(dialog);
+        r.modals.bounce_dialog = Some(dialog);
         return;
     }
 
@@ -736,7 +736,7 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
         input_port_index: dialog.selected_port,
         mono: dialog.mono,
     });
-    r.bounce_in_progress = Some(crate::state::BounceProgressState {
+    r.modals.bounce_in_progress = Some(crate::state::BounceProgressState {
         mode: crate::state::BounceMode::Realtime,
         source_name,
         fraction: 0.0,
@@ -818,7 +818,7 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
 
     match mode {
         BounceMode::External => {
-            r.bounce_dialog = Some(crate::state::BounceDialogState {
+            r.modals.bounce_dialog = Some(crate::state::BounceDialogState {
                 source_track_id: track_id,
                 selected_device: r.input_devices.default_name.clone(),
                 selected_port: 0,
@@ -849,7 +849,7 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
     let track_name = format!("{source_name} bounce");
     let clip_name = track_name.clone();
 
-    r.bounce_in_progress = Some(crate::state::BounceProgressState {
+    r.modals.bounce_in_progress = Some(crate::state::BounceProgressState {
         mode: crate::state::BounceMode::Offline,
         source_name: source_name.clone(),
         fraction: 0.0,

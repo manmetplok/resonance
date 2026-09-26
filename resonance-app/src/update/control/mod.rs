@@ -531,7 +531,7 @@ pub(crate) fn mutation_gate_error(app: &Resonance, method: &str) -> Option<RpcEr
 /// from under an in-flight render. They reuse this exact check (and its
 /// wording) so both surfaces refuse identically.
 pub(crate) fn offline_render_busy_error(app: &Resonance) -> Option<RpcError> {
-    if app.bounce_in_progress.is_some() {
+    if app.modals.bounce_in_progress.is_some() {
         return Some(RpcError::busy(
             "an offline bounce is rendering; retry when it finishes",
         ));

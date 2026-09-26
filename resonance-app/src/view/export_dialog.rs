@@ -18,7 +18,7 @@ use crate::theme;
 use crate::Resonance;
 
 pub(crate) fn view_export_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    let Some(dialog) = r.export_dialog.as_ref() else {
+    let Some(dialog) = r.modals.export_dialog.as_ref() else {
         return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
     };
 

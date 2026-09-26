@@ -69,7 +69,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || r.freeze.any_in_flight()
         || r.io.bouncing
         || r.io.loading
-        || r.bounce_in_progress.is_some()
+        || r.modals.bounce_in_progress.is_some()
         || export_render_in_flight(r)
         || (r.mixer.reference_panel_open && !r.reference.entries.is_empty())
         || r.plugin_catalog.plugin_scan_in_progress
@@ -107,7 +107,7 @@ fn input_monitoring_active(r: &Resonance) -> bool {
 /// An export-dialog stem/mixdown render is in flight.
 fn export_render_in_flight(r: &Resonance) -> bool {
     matches!(
-        r.export_dialog.as_ref().map(|d| &d.phase),
+        r.modals.export_dialog.as_ref().map(|d| &d.phase),
         Some(crate::state::ExportPhase::Rendering { .. })
     )
 }

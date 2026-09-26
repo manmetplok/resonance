@@ -280,27 +280,6 @@ pub struct Resonance {
     /// into the `SetTrackDeviceParams` command. Read-only after
     /// construction (a rescan/reload is a later todo).
     pub(crate) device_registry: resonance_common::DeviceDefinitionRegistry,
-    /// When set, the confirmation dialog for deleting a track with
-    /// content is shown. Holds the track id that the user wants to remove.
-    pub(crate) confirm_delete_track: Option<resonance_audio::types::TrackId>,
-    /// When set, the "Bounce in place" dialog is shown for an external
-    /// MIDI track. Holds the source track id plus the user's current
-    /// device/port selection.
-    pub(crate) bounce_dialog: Option<crate::state::BounceDialogState>,
-    /// When set, the "Import MIDI" modal is shown. Holds the import
-    /// flow's stage, the parsed per-track rows, and the user's tempo /
-    /// placement choices. `None` when the modal is closed.
-    pub(crate) import_dialog: Option<crate::state::ImportDialogState>,
-    /// When set, a bounce-in-place run is in flight. Drives the modal
-    /// progress overlay and gates transport / mutating UI so the user
-    /// can't disturb the render mid-flight. Cleared by
-    /// `TrackBounceCompleted`, `TrackBounceError`, or
-    /// `TrackBounceCancelled`.
-    pub(crate) bounce_in_progress: Option<crate::state::BounceProgressState>,
-    /// When set, the Export modal is open. Holds the shared shell state
-    /// (mode tab, source selection, range, format, destination) - see
-    /// `state::ExportDialogState` and `view::export_dialog`.
-    pub(crate) export_dialog: Option<crate::state::ExportDialogState>,
     /// App-side track-freeze orchestration: per-track freeze status plus
     /// the active "freeze selected / all" batch queue. Driven by the
     /// `FreezeMessage` handlers (ba todo #574) and the engine freeze-event
@@ -318,12 +297,9 @@ pub struct Resonance {
     /// lifecycle handle plus per-connection handshake sessions. Transient
     /// — never persisted, never in the undo snapshot.
     pub(crate) control: crate::state::ControlEndpointState,
-    /// When set, the "unsaved changes" quit-confirmation dialog is shown.
-    /// Holds the window id so we can close it if the user confirms.
-    pub(crate) confirm_quit: Option<iced::window::Id>,
-    /// When set, the app should quit after the current save completes.
-    /// Set by the "Save & Quit" flow in the unsaved-changes dialog.
-    pub(crate) quit_after_save: Option<iced::window::Id>,
+    /// Open-modal / confirmation-dialog flags and their transient input
+    /// (ARCH-06 A6-2). See `state::ModalState`.
+    pub(crate) modals: state::ModalState,
     /// Cache of the most recently observed CLAP state blob per plugin
     /// instance. Populated from `PluginStateSaved` / `AllPluginStatesSaved`
     /// engine events and read into undo snapshots so restores can replay
@@ -798,17 +774,11 @@ impl Resonance {
             plugin_state_cache: std::collections::HashMap::new(),
             plugin_index: std::collections::HashMap::new(),
             next_control_plugin_id: state::ids::CONTROL_PLUGIN_ID_BASE,
-            confirm_delete_track: None,
-            bounce_dialog: None,
-            import_dialog: None,
-            bounce_in_progress: None,
-            export_dialog: None,
             freeze: crate::state::FreezeState::default(),
             dirty: false,
             revision: 0,
             control: crate::state::ControlEndpointState::default(),
-            confirm_quit: None,
-            quit_after_save: None,
+            modals: state::ModalState::default(),
             settings,
             session_id,
             presets: state::PresetState {

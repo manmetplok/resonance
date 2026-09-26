@@ -294,11 +294,11 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 if let Some(ref path) = r.io.project_path {
                     crate::recent::add(&mut r.io.recent_projects, path);
                 }
-                if let Some(id) = r.quit_after_save.take() {
+                if let Some(id) = r.modals.quit_after_save.take() {
                     // Still dirty: the save missed a late edit. Ask again
                     // rather than close over it.
                     if r.dirty {
-                        r.confirm_quit = Some(id);
+                        r.modals.confirm_quit = Some(id);
                         return Task::none();
                     }
                     recovery::close_session(r);
@@ -323,7 +323,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 // modal — the timer will try again. Log and move on.
                 tracing::warn!("Autosave failed: {e}");
             } else {
-                r.quit_after_save = None;
+                r.modals.quit_after_save = None;
                 r.banners.error_message = Some(format!("Save failed: {e}"));
             }
         }

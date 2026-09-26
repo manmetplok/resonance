@@ -106,7 +106,7 @@ pub(super) fn track_bounce_error(r: &mut Resonance, e: resonance_audio::types::E
     // control-API surface — so it is only logged, same as the generic
     // `transport::error` banner above.
     tracing::error!(kind = ?e.kind, "Bounce in place failed: {}", e.message);
-    r.bounce_in_progress = None;
+    r.modals.bounce_in_progress = None;
     r.banners.error_message = Some(format!("Bounce in place failed: {}", e.message));
 }
 
@@ -116,13 +116,13 @@ pub(super) fn track_bounce_cancelled(
 ) {
     // Engine already removed the empty target track; just drop the
     // modal. No banner — the user explicitly cancelled.
-    r.bounce_in_progress = None;
+    r.modals.bounce_in_progress = None;
 }
 
 pub(super) fn bounce_progress(r: &mut Resonance, fraction: f32) {
     // Only one offline render runs at a time: a bounce in place, or the
     // WAV mixdown (FU-F1c).
-    if let Some(state) = r.bounce_in_progress.as_mut() {
+    if let Some(state) = r.modals.bounce_in_progress.as_mut() {
         state.fraction = fraction.clamp(0.0, 1.0);
     } else if r.io.bouncing {
         r.io.bounce_fraction = fraction.clamp(0.0, 1.0);

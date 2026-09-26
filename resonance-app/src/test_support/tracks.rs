@@ -215,7 +215,7 @@ impl Resonance {
     /// can drive the dialog's own messages.
     #[doc(hidden)]
     pub fn test_open_bounce_dialog(&mut self, source_track_id: resonance_audio::types::TrackId) {
-        self.bounce_dialog = Some(state::BounceDialogState {
+        self.modals.bounce_dialog = Some(state::BounceDialogState {
             source_track_id,
             selected_device: None,
             selected_port: 0,
@@ -226,6 +226,6 @@ impl Resonance {
     /// Test-only: the open bounce-in-place dialog, if any.
     #[doc(hidden)]
     pub fn test_bounce_dialog(&self) -> Option<&state::BounceDialogState> {
-        self.bounce_dialog.as_ref()
+        self.modals.bounce_dialog.as_ref()
     }
 }

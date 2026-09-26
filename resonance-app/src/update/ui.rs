@@ -133,19 +133,19 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.interaction.select_additive = mods.command() || mods.shift();
         }
         UiMessage::ConfirmSaveAndQuit => {
-            let window_id = r.confirm_quit.take();
-            r.quit_after_save = window_id;
+            let window_id = r.modals.confirm_quit.take();
+            r.modals.quit_after_save = window_id;
             return r.update(Message::ProjectIo(ProjectIoMessage::SaveProject));
         }
         UiMessage::ConfirmDiscardAndQuit => {
-            if let Some(id) = r.confirm_quit.take() {
+            if let Some(id) = r.modals.confirm_quit.take() {
                 crate::update::project_io::recovery::close_session(r);
                 r.engine.shutdown(std::time::Duration::from_millis(150));
                 return iced::window::close(id);
             }
         }
         UiMessage::CancelQuit => {
-            r.confirm_quit = None;
+            r.modals.confirm_quit = None;
         }
         UiMessage::ToggleGlobalTracks => {
             r.viewport.global_tracks_expanded = !r.viewport.global_tracks_expanded;

@@ -12,7 +12,7 @@ impl Resonance {
     /// overlay.
     #[doc(hidden)]
     pub fn test_import_dialog(&self) -> Option<&state::ImportDialogState> {
-        self.import_dialog.as_ref()
+        self.modals.import_dialog.as_ref()
     }
 
     /// Test-only: borrow the open Export-modal state (`None` when the
@@ -21,7 +21,7 @@ impl Resonance {
     /// reducer without poking at the `pub(crate)` field.
     #[doc(hidden)]
     pub fn test_export_dialog(&self) -> Option<&state::ExportDialogState> {
-        self.export_dialog.as_ref()
+        self.modals.export_dialog.as_ref()
     }
 
     /// Test-only: feed an engine event through the real dispatch so
