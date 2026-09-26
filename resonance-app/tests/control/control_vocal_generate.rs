@@ -316,6 +316,42 @@ fn render_sings_the_authored_notes_and_never_rewrites_them() {
     }
 }
 
+/// UPD-08 (b): a replay wipes the per-lane epoch table, so epochs must
+/// not restart — a render queued before the replay would otherwise share
+/// its epoch with the first one queued after it and install over it.
+#[test]
+fn render_epochs_never_repeat_across_a_full_replay() {
+    let mut app = app_with_project();
+    let def = vocal_lane_with_chords(&mut app);
+    let _: proto::GenerateResult = generate(&mut app, true, Some(42))
+        .result()
+        .expect("vocal.generate succeeds");
+    let render = |app: &mut Resonance| {
+        call(
+            app,
+            "vocal.render",
+            &proto::RenderParams {
+                track_id: Some(ProtoTrackId(TRACK)),
+                section_id: None,
+                voicebank: None,
+            },
+        )
+        .result::<resonance_control::job::JobStarted>()
+        .expect("render returns a job");
+        app.test_vocal_render_epoch(def, TRACK).expect("render queued")
+    };
+    let before = render(&mut app);
+
+    let snapshot = app.test_snapshot_for_undo();
+    app.test_add_track(99, TrackType::Instrument);
+    app.test_begin_restore_from_snapshot(snapshot);
+    app.test_apply_engine_event(resonance_audio::types::AudioEvent::AllCleared);
+    assert_eq!(app.test_vocal_render_epoch(def, TRACK), None, "replay wiped it");
+
+    let after = render(&mut app);
+    assert!(after > before, "post-replay epoch {after} aliases pre-replay {before}");
+}
+
 /// A lane with no notes cannot be rendered into existence: render says
 /// so precisely rather than quietly generating a melody nobody asked for.
 #[test]

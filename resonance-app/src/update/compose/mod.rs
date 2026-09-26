@@ -494,11 +494,22 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             // last of them lands; no-op when no control job covers the
             // lane (a GUI-driven render).
             let (definition_id, track_id) = (data.definition_id, data.track_id);
-            if vocal_audio_install::handle_vocal_audio_ready(r, *data) {
+            let render_epoch = data.render_epoch;
+            let accepted = vocal_audio_install::handle_vocal_audio_ready(r, *data);
+            if accepted {
                 r.control
                     .jobs
                     .complete_vocal_lane(definition_id, track_id, r.revision());
             }
+            // A discarded render with no successor in flight fails the
+            // jobs waiting on it instead of stranding them (UPD-08).
+            vocal_audio_install::settle_render_event(
+                r,
+                definition_id,
+                track_id,
+                render_epoch,
+                accepted,
+            );
         }
         ComposeMessage::VocalAudioFailed {
             definition_id,
@@ -515,14 +526,21 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             // — and only those: before the message carried the lane, a
             // GUI regeneration of lane B erroring killed a control job
             // that covered only lane A.
-            if render_epoch
-                == vocal_audio_install::current_render_epoch(r, definition_id, track_id)
-            {
+            let current = render_epoch
+                == vocal_audio_install::current_render_epoch(r, definition_id, track_id);
+            if current {
                 r.control
                     .jobs
                     .fail_vocal_lane(definition_id, track_id, error.clone());
                 r.compose.last_error = Some(error);
             }
+            vocal_audio_install::settle_render_event(
+                r,
+                definition_id,
+                track_id,
+                render_epoch,
+                current,
+            );
         }
     }
     Task::none()

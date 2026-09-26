@@ -168,6 +168,10 @@ impl Resonance {
             .vocal_audio
             .render_epoch
             .insert((definition_id, track_id), epoch);
+        self.compose
+            .vocal_audio
+            .in_flight_render
+            .insert((definition_id, track_id), epoch);
     }
 
     /// Test-only: install a rendered-vocal-audio clip entry for a lane,

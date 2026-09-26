@@ -87,6 +87,40 @@ pub(super) fn handle_vocal_audio_ready(
     true
 }
 
+/// Record that the render carrying `render_epoch` has reported back
+/// (success or failure) and, when it was stale, fail every control job
+/// still waiting on the lane if no newer render is in flight to resolve
+/// it (code review UPD-08).
+///
+/// A stale completion normally has a successor: a later request bumped
+/// the epoch *and* queued a render, whose event will complete every job
+/// covering the lane. But a replay (slow-path undo, project load) wipes
+/// the epoch table, and a track/section delete bumps it without queuing
+/// anything — then the stale event is the last one the lane will ever
+/// see, and a `vocal.render` job waiting on it would hang until its
+/// client gave up.
+pub(super) fn settle_render_event(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    render_epoch: u64,
+    accepted: bool,
+) {
+    let key = (definition_id, track_id);
+    let in_flight = &mut r.compose.vocal_audio.in_flight_render;
+    if in_flight.get(&key) == Some(&render_epoch) {
+        in_flight.remove(&key);
+    }
+    if !accepted && !in_flight.contains_key(&key) {
+        r.control.jobs.fail_vocal_lane(
+            definition_id,
+            track_id,
+            "the vocal render was discarded: the project changed under it \
+             (undo, project load, or the lane was removed) before it finished",
+        );
+    }
+}
+
 /// The lane's current render epoch — the snapshot a completion (success
 /// or failure) must carry to be about the render that is actually in
 /// flight, rather than one a later request superseded. `0` for a lane

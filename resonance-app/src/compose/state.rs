@@ -69,6 +69,14 @@ pub struct VocalAudioRegistry {
     /// out to every placement of the definition. So the epoch lives
     /// at the render scope (this map), not the install scope (`clips`).
     pub render_epoch: HashMap<(u64, TrackId), u64>,
+    /// Epoch of the latest render actually *queued* per lane and not yet
+    /// reported back. Unlike [`render_epoch`](Self::render_epoch), which
+    /// is also bumped to invalidate (track/section delete) and wiped by a
+    /// replay, an entry here means a completion event is still coming.
+    /// A stale completion with no entry here therefore has nothing
+    /// behind it: control jobs waiting on the lane are failed rather
+    /// than left pending forever (code review UPD-08).
+    pub in_flight_render: HashMap<(u64, TrackId), u64>,
     /// Per-note lyrics for vocal MIDI clips, keyed by clip id. Index i
     /// of the inner vec is the annotation for the i-th note in
     /// `r.midi_clips[clip].notes`. Carries OpenUtau-style slur markers
@@ -94,6 +102,7 @@ impl VocalAudioRegistry {
     pub fn clear(&mut self) {
         self.clips.clear();
         self.render_epoch.clear();
+        self.in_flight_render.clear();
         self.clip_lyrics.clear();
         self.render_cache.clear();
     }

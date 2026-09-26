@@ -327,7 +327,12 @@ fn bump_render_epoch(
         .entry((definition_id, track_id))
         .or_insert(0);
     *entry = plan::next_render_epoch(Some(*entry)).max(global);
-    *entry
+    let epoch = *entry;
+    r.compose
+        .vocal_audio
+        .in_flight_render
+        .insert((definition_id, track_id), epoch);
+    epoch
 }
 
 /// The lane's per-clip content-addressed render cache: an edit only
