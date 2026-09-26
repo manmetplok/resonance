@@ -45,7 +45,8 @@ pub const DETECTOR_RELEASE_MS: f32 = 15.0;
 /// Per-block gate settings, resolved once per `process` call.
 pub struct GateSettings {
     pub threshold_db: f32,
-    /// `1.0` is a hard gate; higher ratios expand more gently.
+    /// Expansion ratio below the threshold: `1.0` is no expansion
+    /// (pass-through), higher is steeper, and ~`20` behaves as a hard gate.
     pub ratio: f32,
     pub attack_ms: f32,
     pub hold_ms: f32,
@@ -75,19 +76,20 @@ pub struct GateSettings {
 /// the RISING (closing) ramp, and its `attack_ms` drives the FALLING
 /// (opening) one.
 ///
-/// Note this crosses the *coefficients*, not the arguments to
-/// [`Ballistics::from_times`]. That matters: `from_times` clamps its
-/// attack argument to a 0.1 ms floor and its release argument to 1.0 ms,
-/// and this gate's attack range reaches down to 0.05 ms. Passing the
-/// times to the opposite parameters would drag the wrong floor along and
-/// quietly turn a 0.05 ms attack into 1 ms.
+/// The opening coefficient is computed here rather than taken from
+/// [`Ballistics::from_times`]: that clamps its attack argument to a
+/// 0.1 ms floor, and this gate's attack range reaches down to 0.05 ms —
+/// the bottom of the knob would silently snap to 0.1 ms (LIB-07). The
+/// floor here is 0.01 ms (and never under one sample). The closing
+/// coefficient keeps `from_times`' release handling (1 ms floor).
 fn gate_ballistics(sample_rate: f32, attack_ms: f32, release_ms: f32) -> Ballistics {
     let named = Ballistics::from_times(sample_rate, attack_ms, release_ms);
+    let open_samples = (attack_ms.max(0.01) * 0.001 * sample_rate.max(1.0)).max(1.0);
     Ballistics {
         // Envelope rising = gate closing = the gate's `release`.
         attack_coef: named.release_coef,
         // Envelope falling = gate opening = the gate's `attack`.
-        release_coef: named.attack_coef,
+        release_coef: (-1.0_f32 / open_samples).exp(),
     }
 }
 
