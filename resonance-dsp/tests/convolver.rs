@@ -306,3 +306,32 @@ fn samples_until_iteration_counts_down_to_the_hop_boundary() {
     c.process_sample(0.0);
     assert_eq!(c.samples_until_iteration(), HOP);
 }
+
+/// DSP-16: a phase offset moves the FFT iteration earlier by that many
+/// samples without touching the latency or the filtering — so several
+/// convolvers can be staggered across host callbacks.
+#[test]
+fn phase_offset_staggers_iterations_but_keeps_latency_and_output() {
+    let ir = noise(HOP + 1, 9);
+    let input = noise(8 * HOP, 10);
+    let mut reference = FftConvolver::new(&ir, HOP);
+    let mut want = input.clone();
+    reference.process_in_place(&mut want);
+    for offset in [1, 37, HOP / 2, HOP - 1] {
+        let mut c = FftConvolver::new(&ir, HOP);
+        c.set_phase_offset(offset);
+        assert_eq!(c.samples_until_iteration(), HOP - offset, "offset {offset}");
+        assert_eq!(c.latency(), HOP);
+        let mut got = input.clone();
+        c.process_in_place(&mut got);
+        let max_err = got
+            .iter()
+            .zip(&want)
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(max_err < 1e-5, "offset {offset}: output moved by {max_err}");
+        // Reset keeps the phase.
+        c.reset();
+        assert_eq!(c.samples_until_iteration(), HOP - offset);
+    }
+    assert!(want.iter().any(|v| v.abs() > 1e-3));
+}

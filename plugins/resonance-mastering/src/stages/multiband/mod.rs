@@ -197,6 +197,23 @@ impl Multiband {
         LinearPhaseLowpass::latency_for(sample_rate)
     }
 
+    /// Stagger the three crossovers' FFT iterations, per crossover and
+    /// channel (see [`LinearPhaseLowpass::set_phase_offsets`]).
+    pub fn set_phase_offsets(&mut self, offsets: [[usize; 2]; 3]) {
+        self.xo1.set_phase_offsets(offsets[0]);
+        self.xo2.set_phase_offsets(offsets[1]);
+        self.xo3.set_phase_offsets(offsets[2]);
+    }
+
+    /// Samples until each crossover channel's next FFT iteration.
+    pub fn iteration_countdowns(&self) -> [[usize; 2]; 3] {
+        [
+            self.xo1.iteration_countdowns(),
+            self.xo2.iteration_countdowns(),
+            self.xo3.iteration_countdowns(),
+        ]
+    }
+
     /// Crossover designs taken from the worker vs. designed inline,
     /// summed over the three lowpasses (diagnostics).
     pub fn design_counts(&self) -> (u64, u64) {

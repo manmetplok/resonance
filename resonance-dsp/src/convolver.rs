@@ -22,6 +22,11 @@
 //! sample-by-sample or block-by-block. Algorithmic latency is exactly
 //! `hop` samples — the first `hop` outputs are zeros.
 //!
+//! Hop phase: every convolver does all its FFT work on one sample in
+//! `hop`. Hosts that run several convolvers side by side can stagger
+//! them with [`FftConvolver::set_phase_offset`], which moves *when* the
+//! iteration runs without changing the latency (DSP-16).
+//!
 //! Allocation discipline: FFT plans, rustfft scratch (used via
 //! `process_with_scratch`), FIFOs, and the FDL are all allocated at
 //! construction; `process_sample` / `process_in_place` never allocate.
@@ -121,6 +126,10 @@ pub struct FftConvolver {
     /// True once an iteration has run since construction/reset, i.e.
     /// the output carries filtered history a hard swap would step.
     primed: bool,
+    /// Samples of virtual (zero) input pre-queued on reset, advancing
+    /// the first iteration by that much; the output FIFO holds `hop −
+    /// phase_offset` zeros, so the latency stays `hop` (DSP-16).
+    phase_offset: usize,
     /// Pre-allocated rustfft work area (sized for both plans) so
     /// `process_with_scratch` never allocates on the audio thread.
     rustfft_scratch: Vec<Complex<f32>>,
@@ -162,6 +171,7 @@ impl FftConvolver {
             xfade_accum: vec![Complex::new(0.0, 0.0); fft_size],
             xfade_pending: false,
             primed: false,
+            phase_offset: 0,
             rustfft_scratch: vec![Complex::new(0.0, 0.0); rustfft_scratch_len],
             fft_forward,
             fft_inverse,
@@ -297,13 +307,30 @@ impl FftConvolver {
         self.hop - self.input_pending.len()
     }
 
+    /// Run the FFT iterations `offset` (mod `hop`) samples earlier in
+    /// the stream than an unstaggered convolver would, so convolvers
+    /// running side by side need not all spend their FFT in the same
+    /// host callback (DSP-16). The latency stays exactly `hop` and the
+    /// output is the same filtering (up to FFT rounding). Resets the
+    /// streaming state, so call it before processing.
+    pub fn set_phase_offset(&mut self, offset: usize) {
+        self.phase_offset = offset % self.hop;
+        self.reset();
+    }
+
     /// Clear the streaming state (history, FIFOs, FDL); keeps the
-    /// impulse response.
+    /// impulse response and the phase offset.
     pub fn reset(&mut self) {
         self.history.fill(0.0);
         self.input_pending.clear();
         self.output_pending.clear();
-        for _ in 0..self.hop {
+        // `phase_offset` zeros of virtual past input, and the rest of
+        // the hop's latency as output zeros: the FIFOs jointly hold
+        // `hop` samples either way.
+        for _ in 0..self.phase_offset {
+            self.input_pending.push(0.0);
+        }
+        for _ in 0..self.hop - self.phase_offset {
             self.output_pending.push(0.0);
         }
         for slot in &mut self.fdl {

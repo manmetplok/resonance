@@ -77,6 +77,17 @@ impl LinearPhaseEq {
         self.fir.design_counts()
     }
 
+    /// Stagger the channels' FFT iterations (see
+    /// [`StereoFir::set_phase_offsets`]).
+    pub fn set_phase_offsets(&mut self, offsets: [usize; 2]) {
+        self.fir.set_phase_offsets(offsets);
+    }
+
+    /// Samples until each channel's next FFT iteration.
+    pub fn iteration_countdowns(&self) -> [usize; 2] {
+        self.fir.iteration_countdowns()
+    }
+
     /// Process one stereo block in place, requesting a redesign first if
     /// any band parameter has changed since the last one.
     pub fn process_stereo(

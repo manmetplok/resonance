@@ -360,6 +360,21 @@ impl StereoFir {
         self.right.crossfade_to_spectrum(spectrum);
     }
 
+    /// Stagger the two channels' FFT iterations by these offsets (DSP-16).
+    /// Resets the streaming state, so set it before processing.
+    pub fn set_phase_offsets(&mut self, [left, right]: [usize; 2]) {
+        self.left.set_phase_offset(left);
+        self.right.set_phase_offset(right);
+    }
+
+    /// Samples until each channel's next FFT iteration.
+    pub fn iteration_countdowns(&self) -> [usize; 2] {
+        [
+            self.left.samples_until_iteration(),
+            self.right.samples_until_iteration(),
+        ]
+    }
+
     /// True while a requested design waits for its hop boundary.
     pub fn is_pending(&self) -> bool {
         self.pending.is_some()

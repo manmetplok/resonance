@@ -69,6 +69,17 @@ impl LinearPhaseLowpass {
         FirGeometry::for_sample_rate(sample_rate).latency()
     }
 
+    /// Stagger the channels' FFT iterations (see
+    /// [`StereoFir::set_phase_offsets`]).
+    pub fn set_phase_offsets(&mut self, offsets: [usize; 2]) {
+        self.fir.set_phase_offsets(offsets);
+    }
+
+    /// Samples until each channel's next FFT iteration.
+    pub fn iteration_countdowns(&self) -> [usize; 2] {
+        self.fir.iteration_countdowns()
+    }
+
     /// Designs taken from the worker vs. designed inline (diagnostics).
     pub fn design_counts(&self) -> (u64, u64) {
         self.fir.design_counts()

@@ -146,6 +146,13 @@ impl OverlapSaveConvolver {
         self.inner.crossfade_to_spectrum(spectrum);
     }
 
+    /// Stagger this convolver's FFT iterations by `offset` samples
+    /// (see [`FftConvolver::set_phase_offset`]); latency unchanged.
+    /// Resets the streaming state.
+    pub fn set_phase_offset(&mut self, offset: usize) {
+        self.inner.set_phase_offset(offset);
+    }
+
     /// Samples to push before the next FFT iteration runs.
     pub fn samples_until_iteration(&self) -> usize {
         self.inner.samples_until_iteration()

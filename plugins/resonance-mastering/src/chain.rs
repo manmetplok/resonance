@@ -17,7 +17,7 @@ use crate::stages::dither::Dither;
 use crate::stages::glue_compressor::GlueCompressor;
 use crate::stages::imager::Imager;
 use crate::stages::limiter::Limiter;
-use crate::stages::linear_phase_eq::{DesignWorker, LinearPhaseEq};
+use crate::stages::linear_phase_eq::{DesignWorker, FirGeometry, LinearPhaseEq};
 use crate::stages::multiband::Multiband;
 use crate::stages::saturator::Saturator;
 use crate::viz::MasteringViz;
@@ -56,6 +56,9 @@ pub struct Chain {
     input_trim_lin: f32,
 }
 
+/// FIR convolvers in the chain: two EQs and three crossovers, stereo.
+const CONVOLVER_COUNT: usize = 10;
+
 /// Whole-plugin bypass crossfade length (DSP-05).
 pub const BYPASS_XFADE_SECONDS: f32 = 0.010;
 
@@ -64,9 +67,22 @@ impl Chain {
         // One background FIR designer for all five linear-phase filters
         // (FU-M2a/FU-M2b); dropped with the chain, off the audio thread.
         let worker = DesignWorker::spawn();
-        let corrective_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
-        let tonal_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
-        let multiband = Multiband::with_worker(sample_rate, max_buffer, Some(&worker));
+        let mut corrective_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
+        let mut tonal_eq = LinearPhaseEq::with_worker(sample_rate, Some(&worker));
+        let mut multiband = Multiband::with_worker(sample_rate, max_buffer, Some(&worker));
+
+        // Spread the ten convolvers' FFT iterations evenly over the hop
+        // so no host callback runs more than one of them (DSP-16) — they
+        // used to all fire in the same one. Latency is unaffected.
+        let hop = FirGeometry::for_sample_rate(sample_rate).hop;
+        let phase = |slot: usize| slot * hop / CONVOLVER_COUNT;
+        corrective_eq.set_phase_offsets([phase(0), phase(5)]);
+        tonal_eq.set_phase_offsets([phase(1), phase(6)]);
+        multiband.set_phase_offsets([
+            [phase(2), phase(7)],
+            [phase(3), phase(8)],
+            [phase(4), phase(9)],
+        ]);
         let limiter = Limiter::new(sample_rate);
         let max_latency = corrective_eq.latency()
             + tonal_eq.latency()
@@ -119,6 +135,18 @@ impl Chain {
             + self.tonal_eq.latency()
             + self.multiband.latency()
             + self.limiter.latency()) as u32
+    }
+
+    /// Samples until each of the ten FIR convolvers runs its next FFT
+    /// iteration (corrective EQ L/R, tonal EQ L/R, crossovers 1–3 L/R).
+    /// Diagnostics for the hop-phase stagger (DSP-16).
+    pub fn convolver_iteration_countdowns(&self) -> [usize; CONVOLVER_COUNT] {
+        let [c, t] = [
+            self.corrective_eq.iteration_countdowns(),
+            self.tonal_eq.iteration_countdowns(),
+        ];
+        let [x1, x2, x3] = self.multiband.iteration_countdowns();
+        [c[0], c[1], t[0], t[1], x1[0], x1[1], x2[0], x2[1], x3[0], x3[1]]
     }
 
     /// Run the chain on a stereo block, honouring the whole-plugin
