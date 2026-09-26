@@ -61,6 +61,7 @@ master and updates this table. Agents do **not** edit this file.
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
+| refactor-intent A-1 (ARCH-01) | A1-2 (3) external_instruments + devices from ProjectFile; slow-path double restore removed | opus | merged | 37ae683a |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 

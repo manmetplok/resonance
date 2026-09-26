@@ -785,6 +785,11 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 - ARCH-08: the 11 plugin manifests no longer name `wayland-plugin-gui` or `egui` (`editor = ["dep:plugin-gui-core", "resonance-plugin/editor-widgets", …]`); `resonance_plugin::editor_host` was already the only source-level platform reference. `plugin-gui-core` stays a direct plugin dep on purpose — it is the platform-neutral half and ~100 `use plugin_gui_core::…` lines read it directly; routing those through `resonance-plugin` would be a large mechanical diff for no layering gain. The one remaining runtime mention in `plugins/` is `resonance-gate`'s macOS-only *dev*-dep on `cocoa-plugin-gui` (the NSApplication pump for `editor_open_cocoa`); the SDK could re-export `test_support` to remove it. `resonance-plugin/src/ui.rs` moved to `resonance_app::plugin_ui`; the SDK has no `iced` dependency. `latency.rs` header corrected.
 - ARCH-10: `tools/arch-invariants` (workspace member; `cargo test -p arch-invariants`) encodes: crate DAG (allowed edges per crate, any dep kind, manifest-declared so macOS edges are checked from Linux), GUI-toolkit/windowing/CLAP ownership, plugins never naming a runtime (manifest + source), `plugins/*` ⇔ members + cdylib (bundle.sh's checks, in the suite), the 11 app test groups closed, no inline `#[cfg(test)]` beyond the ARCHITECTURE.md exception, no `.engine.` under `view/`, no `_ =>` in `control/view_model/`. A3-2's "assert the resonance-audio test roots" belongs here once A3-1 lands.
 
+**A-1 landed (A1-2 step 3) @ 37ae683a.** Notes:
+- `UndoExtras` is down to 6 fields. `restore_external_instruments(&ProjectFile)` is now fast-path only (`replay_diff.rs`); the slow path's only restore is `replay_track` in `replay/entity.rs` (`finalize_undo_restore` no longer re-asserts, since `replay_loaded_project` already clears `r.external_instruments`).
+- Device-param resolution is shared as `ProjectExternalInstrument::device_params` (embedded user definition first, then registry). The fast path used to consult the registry only — the paths differ only if a user device definition was rescanned with different params between snapshot and undo.
+- `Resonance::test_snapshot_undo_extras` has no callers left; delete with `UndoExtras` in A-7.
+
 
 
 ---
