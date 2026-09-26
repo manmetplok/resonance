@@ -104,6 +104,18 @@ pub struct DrumSampler {
     prev_pad_oh: [f32; NUM_PADS],
     prev_pad_balance: [f32; NUM_PADS],
     pad_prev_valid: bool,
+    /// This block's per-pad parameter snapshots, taken by
+    /// [`DrumSampler::begin_block`] and ramped toward from the `prev_*`
+    /// ones by every [`DrumSampler::render_span`] of the block.
+    cur_pad_volume: [f32; NUM_PADS],
+    cur_pad_pan: [f32; NUM_PADS],
+    cur_pad_oh: [f32; NUM_PADS],
+    cur_pad_balance: [f32; NUM_PADS],
+    /// `1 / frames` for the block in progress (0 for an empty block).
+    block_inv_frames: f32,
+    /// True when `begin_block` found nothing to render: spans are no-ops
+    /// and `end_block` only publishes the (silent) OUT meter.
+    block_idle: bool,
 }
 
 impl DrumSampler {
@@ -129,6 +141,12 @@ impl DrumSampler {
             prev_pad_oh: [1.0; NUM_PADS],
             prev_pad_balance: [0.5; NUM_PADS],
             pad_prev_valid: false,
+            cur_pad_volume: [1.0; NUM_PADS],
+            cur_pad_pan: [0.0; NUM_PADS],
+            cur_pad_oh: [1.0; NUM_PADS],
+            cur_pad_balance: [0.5; NUM_PADS],
+            block_inv_frames: 0.0,
+            block_idle: true,
         }
     }
 
@@ -426,7 +444,27 @@ impl DrumSampler {
     /// `outputs`. Expects `outputs.len() >= NUM_OUTPUT_PORTS` — the
     /// caller in `lib.rs` builds the slice from the plugin's per-port
     /// scratch buffers.
+    ///
+    /// Every voice started before the call sounds from frame 0. A caller
+    /// with events inside the block uses [`begin_block`](Self::begin_block),
+    /// [`render_span`](Self::render_span) and [`end_block`](Self::end_block)
+    /// instead, applying each event between spans at its own frame.
     pub fn render_block(
+        &mut self,
+        outputs: &mut [PortBuffers<'_>],
+        frames: usize,
+        params: &DrumParams,
+    ) {
+        self.begin_block(outputs, frames, params);
+        self.render_span(outputs, 0, frames);
+        self.end_block(outputs, frames, params);
+    }
+
+    /// Start a block of `frames` frames: zero every port and snapshot
+    /// the per-pad params the block ramps toward. Follow with one or
+    /// more [`render_span`](Self::render_span) calls covering
+    /// `0..frames` in order, then [`end_block`](Self::end_block).
+    pub fn begin_block(
         &mut self,
         outputs: &mut [PortBuffers<'_>],
         frames: usize,
@@ -438,17 +476,15 @@ impl DrumSampler {
             port.right[..frames].fill(0.0);
         }
 
-        if self.pads.is_empty() && self.retired_pads.is_none() {
-            // Nothing to render — the ports are silent, and the OUT meter
-            // must say so rather than hold its last value.
-            self.publish_out_peak(outputs, frames);
+        self.block_idle = self.pads.is_empty() && self.retired_pads.is_none();
+        if self.block_idle {
             return;
         }
 
         // Snapshot per-pad params once per block so the inner render loop
         // doesn't re-read atomics for every sample. Each param is then
         // linearly ramped from last block's snapshot across this block
-        // (same declick scheme as the master volume below).
+        // (same declick scheme as the master volume in `end_block`).
         let mut pad_volume = [0.0f32; NUM_PADS];
         let mut pad_pan = [0.0f32; NUM_PADS];
         let mut pad_oh = [0.0f32; NUM_PADS];
@@ -472,11 +508,30 @@ impl DrumSampler {
             self.prev_pad_balance = pad_balance;
             self.pad_prev_valid = true;
         }
-        let inv_frames = if frames > 0 {
+        self.cur_pad_volume = pad_volume;
+        self.cur_pad_pan = pad_pan;
+        self.cur_pad_oh = pad_oh;
+        self.cur_pad_balance = pad_balance;
+        self.block_inv_frames = if frames > 0 {
             1.0 / frames as f32
         } else {
             0.0
         };
+    }
+
+    /// Sum every active voice into frames `start..end` of the block begun
+    /// by [`begin_block`](Self::begin_block). A voice started between two
+    /// spans therefore sounds from the frame the second span starts at,
+    /// which is how `process()` honours note-event offsets.
+    pub fn render_span(&mut self, outputs: &mut [PortBuffers<'_>], start: usize, end: usize) {
+        if self.block_idle || start >= end {
+            return;
+        }
+        let inv_frames = self.block_inv_frames;
+        let pad_volume = &self.cur_pad_volume;
+        let pad_pan = &self.cur_pad_pan;
+        let pad_oh = &self.cur_pad_oh;
+        let pad_balance = &self.cur_pad_balance;
 
         for voice in &mut self.voices {
             if !voice.active {
@@ -557,23 +612,26 @@ impl DrumSampler {
             // toward the current one across the block. Pan and balance
             // ramp in gain space, which keeps the path continuous (and
             // linear in the pan position, since stereo_balance is
-            // piecewise-linear).
+            // piecewise-linear). A span that starts mid-block picks the
+            // ramps up where they stand at its first frame (exactly the
+            // start values when it starts at 0).
             let vol_step = (vol1 - vol0) * inv_frames;
             let dest_step = (dest_gain1 - dest_gain0) * inv_frames;
             let pan_l_step = (pan_l1 - pan_l0) * inv_frames;
             let pan_r_step = (pan_r1 - pan_r0) * inv_frames;
-            let mut vol = vol0;
-            let mut dest_gain = dest_gain0;
-            let mut pan_l = pan_l0;
-            let mut pan_r = pan_r0;
+            let at = start as f32;
+            let mut vol = vol0 + vol_step * at;
+            let mut dest_gain = dest_gain0 + dest_step * at;
+            let mut pan_l = pan_l0 + pan_l_step * at;
+            let mut pan_r = pan_r0 + pan_r_step * at;
 
             // Split-borrow the destination port's buffers so the inner
             // loop can write into both channels cheaply.
             let port = &mut outputs[port_index];
-            let port_l = &mut port.left[..frames];
-            let port_r = &mut port.right[..frames];
+            let port_l = &mut port.left[..end];
+            let port_r = &mut port.right[..end];
 
-            for frame in 0..frames {
+            for frame in start..end {
                 if voice.position >= sample.frames {
                     voice.active = false;
                     break;
@@ -603,6 +661,23 @@ impl DrumSampler {
                 }
             }
         }
+    }
+
+    /// Finish the block begun by [`begin_block`](Self::begin_block):
+    /// retire a drained kit, roll the param snapshots forward, apply the
+    /// master volume ramp and publish the OUT meter.
+    pub fn end_block(
+        &mut self,
+        outputs: &mut [PortBuffers<'_>],
+        frames: usize,
+        params: &DrumParams,
+    ) {
+        if self.block_idle {
+            // Nothing to render — the ports are silent, and the OUT meter
+            // must say so rather than hold its last value.
+            self.publish_out_peak(outputs, frames);
+            return;
+        }
 
         // Once the last fading pre-swap voice has ended, the retired
         // kit's samples are unreferenced: hand them to the janitor.
@@ -613,10 +688,10 @@ impl DrumSampler {
         }
 
         // Next block ramps from this block's snapshots.
-        self.prev_pad_volume = pad_volume;
-        self.prev_pad_pan = pad_pan;
-        self.prev_pad_oh = pad_oh;
-        self.prev_pad_balance = pad_balance;
+        self.prev_pad_volume = self.cur_pad_volume;
+        self.prev_pad_pan = self.cur_pad_pan;
+        self.prev_pad_oh = self.cur_pad_oh;
+        self.prev_pad_balance = self.cur_pad_balance;
 
         // Apply master volume in-place over every port. Linearly
         // interpolate from the previous block's value to the current
