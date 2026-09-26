@@ -7,6 +7,8 @@
 //! loop seam, lock contention, audition overlay) without an audio device,
 //! a CLAP plugin or the engine thread.
 
+use std::sync::Arc;
+
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 use ringbuf::traits::{Producer, Split};
@@ -35,7 +37,7 @@ macro_rules! run_callback {
         mix_audio(
             CallbackInputs {
                 channels: $h.channels,
-                shared: &$h.shared,
+                shared: &*$h.shared,
                 tracks: &$h.tracks,
                 busses: &$h.busses,
                 master: &$h.master,
@@ -82,7 +84,11 @@ macro_rules! run_callback {
 /// callback publishes back into shared state.
 #[doc(hidden)]
 pub struct MixAudioHarness {
-    shared: SharedState,
+    /// `Arc` rather than inline so a test can hand a clone to a second
+    /// thread and reposition the playhead *while* a block renders — the
+    /// engine control thread's Seek / Stop race against the callback
+    /// (`tests/playhead_seek_race.rs`).
+    shared: Arc<SharedState>,
     tracks: RwLock<IndexMap<TrackId, Track>>,
     busses: RwLock<IndexMap<BusId, Bus>>,
     master: RwLock<MasterBus>,
@@ -136,8 +142,8 @@ impl MixAudioHarness {
         let tracks: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
         let busses: IndexMap<BusId, Bus> = busses.into_iter().map(|b| (b.id, b)).collect();
         let bus_count = busses.len().max(1);
-        let shared = SharedState::default();
-        shared.aux_sends.store(std::sync::Arc::new(aux_sends));
+        let shared = Arc::new(SharedState::default());
+        shared.aux_sends.store(Arc::new(aux_sends));
         // Room for a few blocks of the widest input we drive, matching the
         // engine's ring sizing policy.
         let ring = ringbuf::HeapRb::<f32>::new(frames * MAX_MONITOR_CHANNELS * 4);
@@ -190,6 +196,14 @@ impl MixAudioHarness {
     /// monitoring and metering flags.
     pub fn shared(&self) -> &SharedState {
         &self.shared
+    }
+
+    /// A second handle on the callback's shared state, for a thread that
+    /// plays the engine control thread against the rendering one (seek
+    /// / stop / MIDI-clock reposition while a block is in flight), or
+    /// for holding the real `OfflineRenderGuard` over the harness.
+    pub fn shared_arc(&self) -> Arc<SharedState> {
+        Arc::clone(&self.shared)
     }
 
     /// Publish a new automation snapshot (as the engine thread does on a

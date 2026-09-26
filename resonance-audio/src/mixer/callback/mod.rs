@@ -67,9 +67,17 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
 
     let frames = block_frames(&inputs, scratch.data.len());
 
+    // The playhead is observed exactly once per block. Every branch renders
+    // from this value and publishes its advance against it
+    // (`common::commit_playhead`), so a Seek / Stop / MIDI-clock reposition
+    // the control thread stores mid-block is never overwritten — and the
+    // timing snapshot, the render and the publish can't disagree about
+    // where the block started (code review MIX-01).
+    let playhead_now = inputs.shared.playhead.load(Ordering::Acquire);
+
     // The reference A/B monitor bypasses everything below it, including
     // the audition overlay.
-    if reference::monitor_reference(&inputs, scratch, frames) {
+    if reference::monitor_reference(&inputs, scratch, playhead_now, frames) {
         return;
     }
 
@@ -77,7 +85,6 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
     // block's bar table for tempo-map-aware MIDI tick→sample conversion in
     // the rendering path; the engine thread publishes tempo changes
     // wait-free via `ArcSwap::store`.
-    let playhead_now = inputs.shared.playhead.load(Ordering::Relaxed);
     let tempo_guard = inputs.tempo_map.load();
     let timing = BlockTiming::new(
         &tempo_guard,
@@ -93,7 +100,7 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
     } else if !inputs.shared.playing.load(Ordering::Relaxed) {
         stopped::render_stopped_block(&inputs, scratch, &timing, monitor);
     } else {
-        play::render_playing_block(&inputs, scratch, &timing, monitor, frames);
+        play::render_playing_block(&inputs, scratch, &timing, monitor, playhead_now, frames);
     }
 
     // Audition preview overlay: summed in after the arrangement + master

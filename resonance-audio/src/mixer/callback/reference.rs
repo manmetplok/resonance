@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::mixer::common::advance_playhead_silent;
+use crate::mixer::common::{advance_playhead_silent, commit_playhead};
 
 use super::context::{CallbackInputs, CallbackScratch};
 
@@ -15,16 +15,19 @@ use super::context::{CallbackInputs, CallbackScratch};
 /// punch-in monitors the live signal, not the reference. The
 /// offline/realtime bounce render paths never consult `shared.reference`,
 /// so exports stay the processed mix regardless of this selection.
+///
+/// `playhead` is the callback's single per-block observation of the
+/// transport (see `mix_audio`).
 pub(super) fn monitor_reference(
     inputs: &CallbackInputs<'_>,
     scratch: &mut CallbackScratch<'_>,
+    playhead: u64,
     frames: usize,
 ) -> bool {
     let shared = inputs.shared;
     if shared.recording.load(Ordering::Relaxed) || shared.count_in_active.load(Ordering::Relaxed) {
         return false;
     }
-    let playhead = shared.playhead.load(Ordering::Relaxed);
     // Latency-match the reference against the mix (doc #260 finding
     // #19): the processed mix at this output position is the timeline of
     // `max comp latency + master-chain latency` ago, so in loop-to-mix
@@ -55,7 +58,9 @@ pub(super) fn monitor_reference(
     // put.
     if shared.playing.load(Ordering::Relaxed) {
         let new_playhead = advance_playhead_silent(shared, playhead, frames as u64);
-        shared.playhead.store(new_playhead, Ordering::Relaxed);
+        // Conditional on nobody having repositioned the transport
+        // mid-block (code review MIX-01).
+        commit_playhead(shared, playhead, new_playhead);
     }
     true
 }

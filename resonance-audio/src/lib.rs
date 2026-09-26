@@ -158,7 +158,8 @@ pub mod __test_support {
         parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
     };
     pub use crate::mixer::{
-        auto_gain_ramp, auto_master_volume, auto_muted, mix_audition_overlay, mix_track_clips,
+        auto_gain_ramp, auto_master_volume, auto_muted, commit_playhead, mix_audition_overlay,
+        mix_track_clips,
         live_instrument_for, monitor_catchup_skip, monitor_read_len, ramped_gain,
         recorded_monitor_gate, MixAudioHarness, MonitorDrain, CLIP_DECLICK_FRAMES,
         MONITOR_DRAIN_STREAK,
