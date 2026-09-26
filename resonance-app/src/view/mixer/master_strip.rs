@@ -122,12 +122,12 @@ impl crate::Resonance {
         // come from `view_caches.fx_plugins` (Rc clone is a refcount
         // bump, no per-frame Vec rebuild).
         let fx_picker_element: Option<Element<'static, Message>> =
-            if self.view_caches.fx_plugins.is_empty() {
+            if self.ui.view_caches.fx_plugins.is_empty() {
                 None
             } else {
                 Some(
                     pick_list(
-                        self.view_caches.fx_plugins.clone(),
+                        self.ui.view_caches.fx_plugins.clone(),
                         None::<ScannedPlugin>,
                         |plugin: ScannedPlugin| {
                             Message::Master(MasterMessage::AddPluginToMaster(plugin))

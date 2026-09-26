@@ -162,7 +162,7 @@ pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
         // the track's automation lanes show as dedicated arrange sub-rows.
         // No engine command, no undo (classified `Skip`), no persistence.
         AutomationMessage::ToggleTrackExpanded(track_id) => {
-            let expanded = &mut r.interaction.automation_expanded_tracks;
+            let expanded = &mut r.ui.interaction.automation_expanded_tracks;
             if !expanded.remove(&track_id) {
                 expanded.insert(track_id);
             }

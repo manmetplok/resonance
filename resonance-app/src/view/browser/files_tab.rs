@@ -34,7 +34,7 @@ pub(super) fn files_body<'a>(r: &'a Resonance) -> Element<'a, Message> {
         col = col.push(Space::new().height(12)).push(shelf);
     }
 
-    if r.browser.current_folder.is_some() {
+    if r.media.browser.current_folder.is_some() {
         col = col
             .push(Space::new().height(12))
             .push(filter_field(r))
@@ -58,7 +58,7 @@ pub(super) fn files_body<'a>(r: &'a Resonance) -> Element<'a, Message> {
 /// panel, plus a trailing WARM star that favourites / unfavourites the
 /// current folder.
 fn breadcrumb_row<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    let crumbs = r.browser.breadcrumb();
+    let crumbs = r.media.browser.breadcrumb();
 
     let mut trail = row![].spacing(2).align_y(alignment::Vertical::Center);
     if crumbs.is_empty() {
@@ -95,8 +95,8 @@ fn breadcrumb_row<'a>(r: &'a Resonance) -> Element<'a, Message> {
         .align_y(alignment::Vertical::Center)
         .spacing(4);
 
-    if let Some(folder) = r.browser.current_folder.as_ref() {
-        header = header.push(favourite_star(folder, r.pool.is_favourite(folder)));
+    if let Some(folder) = r.media.browser.current_folder.as_ref() {
+        header = header.push(favourite_star(folder, r.media.pool.is_favourite(folder)));
     }
 
     container(header).width(Length::Fill).into()
@@ -158,8 +158,9 @@ fn favourite_star<'a>(folder: &Path, favourite: bool) -> Element<'a, Message> {
 /// favourites are shown once (as a favourite). Chips are laid out two per
 /// row so they never overflow the narrow panel.
 fn folder_shelf<'a>(r: &'a Resonance) -> Option<Element<'a, Message>> {
-    let favourites = &r.pool.favourites;
+    let favourites = &r.media.pool.favourites;
     let recents: Vec<&PathBuf> = r
+        .media
         .pool
         .recent_folders
         .iter()
@@ -242,7 +243,7 @@ fn filter_field<'a>(r: &'a Resonance) -> Element<'a, Message> {
             .size(11)
             .color(theme::TEXT_3)
             .line_height(LineHeight::Relative(1.0)),
-        text_input("Filter this folder\u{2026}", &r.browser.filter)
+        text_input("Filter this folder\u{2026}", &r.media.browser.filter)
             .on_input(|s| Message::Browser(BrowserMessage::SetFilter(s)))
             .size(12)
             .padding([4, 6])
@@ -281,7 +282,7 @@ fn filter_field<'a>(r: &'a Resonance) -> Element<'a, Message> {
 /// (ui-work.md §11, review VIEW-27). The scrollable stays outside the lazy
 /// region so its scroll position is never tied to the cache.
 fn folder_listing<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    if r.browser.scanning {
+    if r.media.browser.scanning {
         return placeholder("Scanning\u{2026}");
     }
 
@@ -297,19 +298,19 @@ fn folder_listing<'a>(r: &'a Resonance) -> Element<'a, Message> {
 fn listing_rows(r: &Resonance) -> Element<'static, Message> {
     let mut list = column![].spacing(4);
 
-    for folder in &r.browser.scan.folders {
+    for folder in &r.media.browser.scan.folders {
         list = list.push(folder_row(folder));
     }
 
-    if r.browser.scan.files.is_empty() {
+    if r.media.browser.scan.files.is_empty() {
         // The folder holds no audio at all → empty-folder state. Any
         // subfolders above still show so the user can keep navigating.
-        if !r.browser.scan.folders.is_empty() {
+        if !r.media.browser.scan.folders.is_empty() {
             list = list.push(Space::new().height(8));
         }
         list = list.push(empty_folder_state());
     } else {
-        let matched: Vec<&AudioFileEntry> = r.browser.filtered_files().collect();
+        let matched: Vec<&AudioFileEntry> = r.media.browser.filtered_files().collect();
         if matched.is_empty() {
             // Folder has audio, but the filter hides every row.
             list = list
@@ -332,7 +333,7 @@ fn listing_rows(r: &Resonance) -> Element<'static, Message> {
 /// the region. Hashing allocates nothing.
 pub(crate) fn listing_fingerprint(r: &Resonance) -> u64 {
     use std::hash::{Hash, Hasher};
-    let b = &r.browser;
+    let b = &r.media.browser;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     b.scan.folders.hash(&mut h);
     b.scan.files.len().hash(&mut h);
@@ -393,8 +394,8 @@ fn folder_row<'a>(path: &Path) -> Element<'a, Message> {
 /// row carries a WARM highlight.
 fn audio_row(r: &Resonance, entry: &AudioFileEntry) -> Element<'static, Message> {
     let path = std::path::Path::new(&entry.path);
-    let playing = r.browser.audition.is_playing(path);
-    let selected = r.browser.audition.is_selected(path);
+    let playing = r.media.browser.audition.is_playing(path);
+    let selected = r.media.browser.audition.is_selected(path);
 
     // Type glyph — WARM music note (audio domain).
     let glyph = text(String::from(theme::fa::MUSIC))
@@ -405,7 +406,7 @@ fn audio_row(r: &Resonance, entry: &AudioFileEntry) -> Element<'static, Message>
 
     // Mini waveform thumbnail from the cached scan peaks.
     let thumbnail = Canvas::new(WaveThumbnail {
-        peaks: std::borrow::Cow::Owned(r.browser.scan.thumbnail(&entry.path).to_vec()),
+        peaks: std::borrow::Cow::Owned(r.media.browser.scan.thumbnail(&entry.path).to_vec()),
         muted: false,
     })
     .width(Length::Fixed(THUMB_W))

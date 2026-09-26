@@ -6,13 +6,6 @@ use crate::state;
 use crate::Resonance;
 
 impl Resonance {
-    /// Test-only: read the app-side groove library populated from
-    /// `GrooveExtracted` engine events (ba todo #390).
-    #[doc(hidden)]
-    pub fn test_groove_library(&self) -> &[resonance_audio::quantize::GrooveTemplate] {
-        &self.groove_library
-    }
-
     /// Test-only: read the MIDI editor's Quantize panel settings (todo
     /// #392) so panel-control reducer tests can assert the setter handlers
     /// updated the bound state.

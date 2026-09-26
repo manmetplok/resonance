@@ -98,7 +98,7 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     // The browser panel offsets the arrange-area x of the whole column;
     // the per-row context-menu anchor (todo #581) is baked into each row's
     // `OpenTrackMenu` message, so a browser toggle must rebuild the tree.
-    r.browser.visible.hash(&mut h);
+    r.media.browser.visible.hash(&mut h);
     // Manual track-list virtualization (`build_track_headers`) drops
     // tracks below `scroll_offset_y + viewport_height` from the widget
     // tree; the cache must invalidate on window resize so previously-
@@ -107,11 +107,11 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     // Whether the section band exists changes the fixed-header height
     // of the column, so it must invalidate the lazy cache.
     (!r.compose.placements.is_empty()).hash(&mut h);
-    r.interaction.selected_track.hash(&mut h);
+    r.ui.interaction.selected_track.hash(&mut h);
     // Multi-track selection drives both the per-row highlight and the
     // group-member indent, so the lazy cache must invalidate when it
     // changes or when a group is (un)formed from it.
-    r.interaction.selected_tracks.hash(&mut h);
+    r.ui.interaction.selected_tracks.hash(&mut h);
     for g in r.track_groups.get_all_groups_sorted() {
         g.id.hash(&mut h);
         g.ordered_members.hash(&mut h);
@@ -127,7 +127,7 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         g.macro_solo.hash(&mut h);
         g.macro_level.to_bits().hash(&mut h);
     }
-    r.interaction.selected_global_event.hash(&mut h);
+    r.ui.interaction.selected_global_event.hash(&mut h);
     r.transport.time_sig_num.hash(&mut h);
     r.transport.time_sig_den.hash(&mut h);
     r.transport.bpm.to_bits().hash(&mut h);
@@ -216,6 +216,7 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         }
     }
     let mut takes_expanded: Vec<_> = r
+        .ui
         .interaction
         .take_lane_expanded_tracks
         .iter()
@@ -396,7 +397,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
         &r.external_instruments,
         &r.device_registry,
     );
-    let selected_tracks = &r.interaction.selected_tracks;
+    let selected_tracks = &r.ui.interaction.selected_tracks;
     let mut lane_col = column![].spacing(0);
     for row in visible_rows {
         match row.kind {
@@ -417,7 +418,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                     // cursor position, so the menu anchors a fixed inset into
                     // the row instead. The y is clamped so a menu opened near
                     // the bottom edge stays fully on screen.
-                    let menu_x = if r.browser.visible {
+                    let menu_x = if r.media.browser.visible {
                         theme::BROWSER_WIDTH
                     } else {
                         0.0

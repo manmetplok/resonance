@@ -79,6 +79,7 @@ pub(super) fn try_handle(
 
 fn list(app: &Resonance, request: &Request) -> Response {
     let assets = app
+        .media
         .pool
         .assets
         .iter()
@@ -105,7 +106,7 @@ pub(crate) fn asset_view(app: &Resonance, asset: &crate::state::PoolAsset) -> Po
         channels: asset.channels,
         source_sample_rate: asset.source_sample_rate,
         format: format!("{:?}", asset.format).to_lowercase(),
-        usage_count: app.pool.usage_count(asset.id),
+        usage_count: app.media.pool.usage_count(asset.id),
         missing: asset.missing,
     }
 }
@@ -227,7 +228,7 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
     // Exactly one way of naming the sample.
     let source = match (params.asset_id, params.path.as_deref()) {
         (Some(asset_id), None) => {
-            let Some(asset) = app.pool.assets.iter().find(|a| a.id == asset_id.0) else {
+            let Some(asset) = app.media.pool.assets.iter().find(|a| a.id == asset_id.0) else {
                 return reject(
                     request,
                     RpcError::not_found(format!(
@@ -240,7 +241,7 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
         (None, Some(path)) => {
             // A path already in the pool places from the existing asset
             // instead of importing the same file twice.
-            match app.pool.assets.iter().find(|a| a.original_path == path) {
+            match app.media.pool.assets.iter().find(|a| a.original_path == path) {
                 Some(asset) => Source::Pooled(asset.id, asset.original_path.clone()),
                 None => match check_path(path) {
                     Ok(buf) => Source::File(buf),
@@ -313,7 +314,7 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
                     serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
                 );
             } else {
-                let error = if app.pool.assets.iter().any(|a| a.id == asset_id) {
+                let error = if app.media.pool.assets.iter().any(|a| a.id == asset_id) {
                     format!(
                         "placed clip {clip_id} not found: the placement was dropped \
                          before it reached the project; nothing was placed"
@@ -402,6 +403,7 @@ pub(crate) fn place_result(
 /// the completion hook in `engine_events::pool` shares this definition.
 pub(crate) fn import_result(app: &Resonance, paths: &[String]) -> pool_proto::ImportResult {
     let assets = app
+        .media
         .pool
         .assets
         .iter()

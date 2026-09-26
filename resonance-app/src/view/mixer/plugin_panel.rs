@@ -12,7 +12,7 @@ use crate::theme;
 impl crate::Resonance {
     /// Bottom panel showing the selected plugin's UI.
     pub(super) fn view_plugin_panel(&self) -> Option<Element<'_, Message>> {
-        let selected_id = self.mixer.selected_plugin?;
+        let selected_id = self.ui.mixer.selected_plugin?;
 
         // Find the plugin across all tracks, busses, and the master chain.
         let plugin = self
@@ -197,9 +197,9 @@ impl crate::Resonance {
                 .is_some_and(|p| p.instance_id == instance_id)
         });
         if is_instrument_slot {
-            self.view_caches.instrument_plugins.clone()
+            self.ui.view_caches.instrument_plugins.clone()
         } else {
-            self.view_caches.fx_plugins.clone()
+            self.ui.view_caches.fx_plugins.clone()
         }
     }
 }

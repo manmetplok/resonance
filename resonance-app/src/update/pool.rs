@@ -251,7 +251,7 @@ fn place_pooled_asset(
     track_id: TrackId,
     start_sample: SamplePos,
 ) -> Result<(), String> {
-    let Some(asset) = r.pool.asset(asset_id).cloned() else {
+    let Some(asset) = r.media.pool.asset(asset_id).cloned() else {
         return Err(format!(
             "asset {asset_id} is no longer in the pool; nothing was placed"
         ));
@@ -349,7 +349,7 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
     // user can then drag apart. The common case (a single-file drop, or the
     // pool-only dialog import) needs no such spreading.
     for source_path in &path_strings {
-        r.pool_import.push(PendingImport {
+        r.media.pool_import.push(PendingImport {
             source_path: source_path.clone(),
             target: placement,
             // The import's own undo entry was recorded before dispatch.
@@ -365,8 +365,8 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
     // first means a second import gesture replaces the previous batch's
     // status rows, so the modal always shows the current import's progress
     // rather than stale entries from a prior run.
-    r.import_progress.clear();
-    r.import_progress_modal_open = true;
+    r.media.import_progress.clear();
+    r.media.import_progress_modal_open = true;
 }
 
 /// Snap a raw drop sample position to the timeline grid, reusing the exact

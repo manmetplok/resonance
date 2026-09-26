@@ -317,7 +317,7 @@ pub(crate) fn restore_pool_assets(
     use crate::state::pool::PoolAsset;
 
     // Drop the prior project's assets + usage; keep favourites / recent.
-    r.pool.clear_assets();
+    r.media.pool.clear_assets();
 
     for pa in &project.pool_assets {
         // Resolve the project-relative WAV path against the project dir.
@@ -328,7 +328,7 @@ pub(crate) fn restore_pool_assets(
             None => false,
         };
 
-        r.pool.add(PoolAsset {
+        r.media.pool.add(PoolAsset {
             id: pa.id,
             project_relative_path: pa.project_relative_path.clone(),
             original_path: pa.original_path.clone(),
@@ -357,7 +357,7 @@ pub(crate) fn restore_pool_assets(
     if !reserve_engine_ids {
         return;
     }
-    if let Some(above) = r.pool.max_asset_id() {
+    if let Some(above) = r.media.pool.max_asset_id() {
         let _ = r
             .engine
             .send(resonance_audio::types::AudioCommand::ReserveAssetIds { above });

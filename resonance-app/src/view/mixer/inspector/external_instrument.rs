@@ -179,7 +179,7 @@ fn ext_midi_output_block(
 ) -> Element<'static, Message> {
     let track_id = track.id;
     let out_choices = super::midi_choices_with_override(
-        &r.view_caches.midi_output_choices,
+        &r.ui.view_caches.midi_output_choices,
         track.midi_output_device.as_deref(),
         &r.midi_devices.midi_output_devices,
     );
@@ -193,7 +193,7 @@ fn ext_midi_output_block(
     .width(Length::Fill);
 
     let channel_picker = pick_list(
-        r.view_caches.output_channel_choices.clone(),
+        r.ui.view_caches.output_channel_choices.clone(),
         Some(MidiChannelChoice(Some(track.midi_output_channel.unwrap_or(0)))),
         move |choice| {
             Message::ExternalInstrument(ExternalInstrumentMessage::SetMidiOutChannel(
@@ -224,7 +224,7 @@ fn ext_audio_return_block(
 ) -> Element<'static, Message> {
     let track_id = track.id;
     let configured = track.input_device_name.as_deref();
-    let choices = super::io::return_device_choices(&r.view_caches.input_devices, configured);
+    let choices = super::io::return_device_choices(&r.ui.view_caches.input_devices, configured);
     let selected_device = configured.and_then(|name| {
         use std::borrow::Borrow;
         let slice: &[InputDeviceInfo] = choices.borrow();
@@ -310,6 +310,7 @@ fn ext_patch_block(
     // selected value is the matching cached choice (so its label renders on
     // the closed picker); a `None` id is the "(no device)" clear entry.
     let selected_device = r
+        .ui
         .view_caches
         .device_choices
         .iter()
@@ -323,7 +324,7 @@ fn ext_patch_block(
         .filter(|c| c.id.is_some())
         .map(|c| c.label.clone());
     let device_picker = pick_list(
-        r.view_caches.device_choices.clone(),
+        r.ui.view_caches.device_choices.clone(),
         selected_device,
         move |choice| {
             Message::ExternalInstrument(ExternalInstrumentMessage::SetDevice(
@@ -425,7 +426,7 @@ fn ext_patch_block(
         .into()
     } else {
         let bank_picker = pick_list(
-            r.view_caches.bank_choices.clone(),
+            r.ui.view_caches.bank_choices.clone(),
             Some(BankChoice(ext.bank)),
             move |choice| {
                 Message::ExternalInstrument(ExternalInstrumentMessage::SetBank(track_id, choice.0))
@@ -435,7 +436,7 @@ fn ext_patch_block(
         .padding([5, 8])
         .width(Length::Fill);
         let program_picker = pick_list(
-            r.view_caches.program_choices.clone(),
+            r.ui.view_caches.program_choices.clone(),
             Some(ProgramChoice(ext.program)),
             move |choice| {
                 Message::ExternalInstrument(ExternalInstrumentMessage::SetProgram(

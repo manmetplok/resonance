@@ -271,19 +271,19 @@ impl crate::Resonance {
             .iter()
             .filter_map(|c| c.asset_ref.map(|r| r.asset_id))
             .collect::<Vec<_>>();
-        self.pool.recompute_usage(refs);
+        self.media.pool.recompute_usage(refs);
     }
 
     /// Add an imported asset to the pool and refresh usage counts.
     pub(crate) fn add_pool_asset(&mut self, asset: PoolAsset) {
-        self.pool.add(asset);
+        self.media.pool.add(asset);
         self.recompute_pool_usage();
     }
 
     /// Remove an asset from the pool, returning it if present, and
     /// refresh usage counts.
     pub(crate) fn remove_pool_asset(&mut self, id: AssetId) -> Option<PoolAsset> {
-        let removed = self.pool.remove(id);
+        let removed = self.media.pool.remove(id);
         self.recompute_pool_usage();
         removed
     }
@@ -302,8 +302,8 @@ impl crate::Resonance {
     /// testable; [`Self::persist_media_browser_settings`] calls this then
     /// writes the document out.
     pub(crate) fn sync_media_browser_settings(&mut self) {
-        self.settings.media.favourites = self.pool.favourites.clone();
-        self.settings.media.recent_folders = self.pool.recent_folders.clone();
+        self.settings.media.favourites = self.media.pool.favourites.clone();
+        self.settings.media.recent_folders = self.media.pool.recent_folders.clone();
     }
 
     /// Mirror the pool's favourite / recent-folder lists into user

@@ -59,7 +59,7 @@ pub(super) fn asset_imported(
     // Place the asset as a clip if this file's import queued one. A
     // pool-only import (dialog / `PoolOnly`) queues no clip; a stray
     // asset with no matching entry is left in the pool unplaced.
-    let placed = match r.pool_import.take_matching(&original_path) {
+    let placed = match r.media.pool_import.take_matching(&original_path) {
         // The target track was deleted while the file transcoded: drop
         // the placement rather than push a clip onto a dead id (code
         // review UPD-04). A waiting `clip.place` job fails below.
@@ -152,7 +152,7 @@ pub(super) fn import_progress(
         ImportStage::Working => FileImportProgress::Working,
         ImportStage::Done => FileImportProgress::Done,
     };
-    r.import_progress.upsert(asset_id, path, progress);
+    r.media.import_progress.upsert(asset_id, path, progress);
 }
 
 /// A source file failed to import (decode/transcode error, missing file,
@@ -161,8 +161,8 @@ pub(super) fn import_progress(
 /// surface the reason. The batch's other files are independent and
 /// continue.
 pub(super) fn import_failed(r: &mut Resonance, asset_id: AssetId, path: String, reason: String) {
-    let _ = r.pool_import.take_matching(&path);
-    r.import_progress.upsert(
+    let _ = r.media.pool_import.take_matching(&path);
+    r.media.import_progress.upsert(
         asset_id,
         path.clone(),
         FileImportProgress::Failed {

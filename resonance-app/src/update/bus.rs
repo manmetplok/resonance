@@ -108,7 +108,7 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
                     .busses
                     .push(crate::state::BusState::new(id, order, name));
                 r.registry.resort_busses();
-                r.view_caches.rebuild_output(&r.registry.busses);
+                r.ui.view_caches.rebuild_output(&r.registry.busses);
             }
         }
         BusMessage::RemoveBus(bus_id) => {

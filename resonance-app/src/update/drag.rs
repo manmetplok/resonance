@@ -92,24 +92,24 @@ pub enum DropTarget {
 pub fn handle(app: &mut Resonance, message: DragMessage) -> Task<Message> {
     match message {
         DragMessage::Start(asset) => {
-            app.drag_placement = Some(DragPlacement::new(asset));
+            app.media.drag_placement = Some(DragPlacement::new(asset));
             Task::none()
         }
         DragMessage::Hover { cursor, resolved } => {
-            if let Some(drag) = app.drag_placement.as_mut() {
+            if let Some(drag) = app.media.drag_placement.as_mut() {
                 drag.cursor = cursor;
                 drag.resolved = resolved;
             }
             Task::none()
         }
         DragMessage::Cancel => {
-            app.drag_placement = None;
+            app.media.drag_placement = None;
             Task::none()
         }
         DragMessage::Drop => {
             // Take the drag out first so the preview clears regardless of
             // whether it resolved a target.
-            let Some(drag) = app.drag_placement.take() else {
+            let Some(drag) = app.media.drag_placement.take() else {
                 return Task::none();
             };
             let Some(resolution) = drag.resolved else {

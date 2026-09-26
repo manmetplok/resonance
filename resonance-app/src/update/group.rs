@@ -137,7 +137,7 @@ pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
         }
         GroupMessage::DropMembership => drop_membership(r),
         GroupMessage::CancelMembershipDrag => {
-            r.interaction.membership_drag = None;
+            r.ui.interaction.membership_drag = None;
         }
     }
     Task::none()
@@ -163,7 +163,7 @@ fn toggle_collapse(r: &mut Resonance, group_id: TrackId) {
 /// it can never collide with a real track. The selection is cleared once
 /// the group exists, so the floating bar dismisses itself.
 fn create_group_from_selection(r: &mut Resonance) {
-    let members = r.interaction.selected_tracks.clone();
+    let members = r.ui.interaction.selected_tracks.clone();
     if members.len() < 2 {
         return;
     }
@@ -171,7 +171,7 @@ fn create_group_from_selection(r: &mut Resonance) {
     // (STATE-04, FU-A1c).
     let group_id = r.allocate_track_id();
     r.track_groups.create_group_from_selection(group_id, &members);
-    r.interaction.select_single_track(None);
+    r.ui.interaction.select_single_track(None);
 }
 
 /// Set the group's macro level trim — a multiplicative gain that scales
@@ -286,7 +286,7 @@ fn start_membership_drag(r: &mut Resonance, subject: MembershipDragSubject, curs
             r.track_groups.get_group(group_id).and_then(|g| g.nesting_parent)
         }
     };
-    r.interaction.membership_drag = Some(MembershipDragState {
+    r.ui.interaction.membership_drag = Some(MembershipDragState {
         subject,
         origin_group,
         hover: None,
@@ -301,7 +301,7 @@ fn update_membership_drag(
     target: Option<MembershipDropTarget>,
     cursor_y: f32,
 ) {
-    if let Some(drag) = r.interaction.membership_drag.as_mut() {
+    if let Some(drag) = r.ui.interaction.membership_drag.as_mut() {
         drag.hover = target;
         drag.cursor_y = cursor_y;
     }
@@ -312,7 +312,7 @@ fn update_membership_drag(
 /// registry untouched) when nothing is dragging or no target is hovered —
 /// so a release into empty space cancels rather than mutating.
 fn drop_membership(r: &mut Resonance) {
-    let Some(drag) = r.interaction.membership_drag.take() else {
+    let Some(drag) = r.ui.interaction.membership_drag.take() else {
         return;
     };
     let Some(target) = drag.hover else {

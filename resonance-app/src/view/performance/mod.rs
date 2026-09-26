@@ -298,7 +298,7 @@ impl Resonance {
     /// the `Exit` ghost button. All read straight from the cached transport
     /// labels — no per-frame allocation.
     fn performance_telemetry(&self) -> Element<'_, Message> {
-        let labels = &self.transport_labels;
+        let labels = &self.ui.transport_labels;
 
         // Clock shows just "bar . beat" (drop the sub-division segment that
         // the transport's POSITION block carries).

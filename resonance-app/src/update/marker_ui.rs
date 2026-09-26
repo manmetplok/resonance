@@ -68,29 +68,29 @@ impl MarkerUiMessage {
 pub fn handle(r: &mut Resonance, m: MarkerUiMessage) -> Task<Message> {
     match m {
         MarkerUiMessage::Select(id) => {
-            r.interaction.selected_marker_id = id;
+            r.ui.interaction.selected_marker_id = id;
             // A fresh selection dismisses any open menu so a click on
             // another marker doesn't leave a stale menu floating.
-            r.interaction.marker_menu = None;
+            r.ui.interaction.marker_menu = None;
         }
         MarkerUiMessage::OpenMenu { id, x, y } => {
             // Opening the menu also selects the marker so the ruler flag
             // renders with the accent while the menu is up.
             if r.markers.contains(id) {
-                r.interaction.selected_marker_id = Some(id);
-                r.interaction.marker_rename = None;
-                r.interaction.marker_menu = Some(MarkerMenuState { marker_id: id, x, y });
+                r.ui.interaction.selected_marker_id = Some(id);
+                r.ui.interaction.marker_rename = None;
+                r.ui.interaction.marker_menu = Some(MarkerMenuState { marker_id: id, x, y });
             }
         }
         MarkerUiMessage::CloseMenu => {
-            r.interaction.marker_menu = None;
+            r.ui.interaction.marker_menu = None;
         }
         MarkerUiMessage::BeginRename { id, x, y } => {
             if let Some(marker) = r.markers.get(id) {
                 let text = marker.name.clone();
-                r.interaction.selected_marker_id = Some(id);
-                r.interaction.marker_menu = None;
-                r.interaction.marker_rename = Some(MarkerRenameState {
+                r.ui.interaction.selected_marker_id = Some(id);
+                r.ui.interaction.marker_menu = None;
+                r.ui.interaction.marker_rename = Some(MarkerRenameState {
                     marker_id: id,
                     text,
                     x,
@@ -99,12 +99,12 @@ pub fn handle(r: &mut Resonance, m: MarkerUiMessage) -> Task<Message> {
             }
         }
         MarkerUiMessage::RenameChanged(text) => {
-            if let Some(rename) = r.interaction.marker_rename.as_mut() {
+            if let Some(rename) = r.ui.interaction.marker_rename.as_mut() {
                 rename.text = text;
             }
         }
         MarkerUiMessage::CommitRename => {
-            if let Some(rename) = r.interaction.marker_rename.take() {
+            if let Some(rename) = r.ui.interaction.marker_rename.take() {
                 let name = rename.text.trim().to_string();
                 // Empty names are meaningless for a flag label — drop the
                 // edit rather than blank the marker out. The edit is applied
@@ -119,7 +119,7 @@ pub fn handle(r: &mut Resonance, m: MarkerUiMessage) -> Task<Message> {
             }
         }
         MarkerUiMessage::CancelRename => {
-            r.interaction.marker_rename = None;
+            r.ui.interaction.marker_rename = None;
         }
     }
     Task::none()

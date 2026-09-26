@@ -229,7 +229,7 @@ fn replay_tracks_and_busses(
     }
     r.registry.resort_busses();
     // Output-destination picker depends on the bus list.
-    r.view_caches.rebuild_output(&r.registry.busses);
+    r.ui.view_caches.rebuild_output(&r.registry.busses);
 
     // Replay master FX chain + bypass state.
     entity::replay_master(r, project, loaded);

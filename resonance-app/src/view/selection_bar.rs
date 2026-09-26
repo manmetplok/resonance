@@ -69,6 +69,6 @@ pub(crate) fn selection_bar_with_count(count: usize) -> Element<'static, Message
 }
 
 pub(crate) fn view_selection_bar(r: &Resonance) -> Element<'_, Message> {
-    let count = r.interaction.selected_tracks.len();
+    let count = r.ui.interaction.selected_tracks.len();
     selection_bar_with_count(count)
 }

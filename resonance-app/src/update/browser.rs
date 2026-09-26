@@ -130,11 +130,11 @@ impl BrowserMessage {
 pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
     match message {
         BrowserMessage::ToggleVisible => {
-            app.browser.visible = !app.browser.visible;
+            app.media.browser.visible = !app.media.browser.visible;
         }
 
         BrowserMessage::SelectTab(tab) => {
-            app.browser.tab = tab;
+            app.media.browser.tab = tab;
         }
 
         BrowserMessage::OpenFolder(path) => return open_folder(app, path),
@@ -143,18 +143,18 @@ pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
             // Drop a scan whose folder the user has already navigated away
             // from — a newer scan for the current folder is (or will be)
             // in flight and owns the `scanning` flag.
-            if app.browser.current_folder.as_deref() == Some(folder.as_path()) {
-                app.browser.scan = scan;
-                app.browser.scanning = false;
+            if app.media.browser.current_folder.as_deref() == Some(folder.as_path()) {
+                app.media.browser.scan = scan;
+                app.media.browser.scanning = false;
             }
         }
 
         BrowserMessage::SetFilter(text) => {
-            app.browser.filter = text;
+            app.media.browser.filter = text;
         }
 
         BrowserMessage::ToggleFavourite(path) => {
-            app.pool.toggle_favourite(path);
+            app.media.pool.toggle_favourite(path);
             app.persist_media_browser_settings();
         }
 
@@ -169,28 +169,29 @@ pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
             // frame for whichever row is playing (or, if none, the
             // selected row).
             if let Some(path) = app
+                .media
                 .browser
                 .audition
                 .playing
                 .clone()
-                .or_else(|| app.browser.audition.selected.clone())
+                .or_else(|| app.media.browser.audition.selected.clone())
             {
                 return start_preview(app, path, frame);
             }
         }
 
         BrowserMessage::ToggleLoop => {
-            app.browser.audition.loop_enabled = !app.browser.audition.loop_enabled;
+            app.media.browser.audition.loop_enabled = !app.media.browser.audition.loop_enabled;
             send_audition_options(app);
         }
 
         BrowserMessage::ToggleSync => {
-            app.browser.audition.sync_to_tempo = !app.browser.audition.sync_to_tempo;
+            app.media.browser.audition.sync_to_tempo = !app.media.browser.audition.sync_to_tempo;
             send_audition_options(app);
         }
 
         BrowserMessage::ToggleAutoPlay => {
-            app.browser.audition.auto_play = !app.browser.audition.auto_play;
+            app.media.browser.audition.auto_play = !app.media.browser.audition.auto_play;
         }
     }
     Task::none()
@@ -200,15 +201,15 @@ pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
 /// the per-folder filter, record it as most-recently visited (persisted
 /// to user settings), and start an off-thread scan.
 fn open_folder(app: &mut Resonance, path: PathBuf) -> Task<Message> {
-    app.browser.current_folder = Some(path.clone());
-    app.browser.filter.clear();
+    app.media.browser.current_folder = Some(path.clone());
+    app.media.browser.filter.clear();
     // Drop the previous folder's rows so stale content doesn't flash
     // while the new scan runs.
-    app.browser.scan = FolderScan::default();
-    app.browser.scanning = true;
+    app.media.browser.scan = FolderScan::default();
+    app.media.browser.scanning = true;
 
     // Visiting a folder pushes it to the recent list (user-level state).
-    app.pool.push_recent_folder(path.clone());
+    app.media.pool.push_recent_folder(path.clone());
     app.persist_media_browser_settings();
 
     scan_task(path)
@@ -218,9 +219,9 @@ fn open_folder(app: &mut Resonance, path: PathBuf) -> Task<Message> {
 /// a `Some` target immediately previews. A `None` target clears the
 /// selection and stops any preview.
 fn select(app: &mut Resonance, target: Option<PathBuf>) -> Task<Message> {
-    app.browser.audition.selected = target.clone();
+    app.media.browser.audition.selected = target.clone();
     match target {
-        Some(path) if app.browser.audition.auto_play => start_preview(app, path, 0),
+        Some(path) if app.media.browser.audition.auto_play => start_preview(app, path, 0),
         Some(_) => Task::none(),
         None => {
             stop_preview(app);
@@ -234,9 +235,9 @@ fn select(app: &mut Resonance, target: Option<PathBuf>) -> Task<Message> {
 /// playhead. Also marks `path` as the selected row so the two stay in
 /// sync when playback is started directly from a row's play button.
 fn start_preview(app: &mut Resonance, path: PathBuf, start_frame: u64) -> Task<Message> {
-    app.browser.audition.selected = Some(path.clone());
-    app.browser.audition.playing = Some(path.clone());
-    app.browser.audition.position_frame = start_frame;
+    app.media.browser.audition.selected = Some(path.clone());
+    app.media.browser.audition.playing = Some(path.clone());
+    app.media.browser.audition.position_frame = start_frame;
     let _ = app.engine.send(AudioCommand::AuditionFile { path, start_frame });
     Task::none()
 }
@@ -245,8 +246,8 @@ fn start_preview(app: &mut Resonance, path: PathBuf, start_frame: u64) -> Task<M
 /// playhead. A no-op when nothing is playing, mirroring the engine's
 /// silent no-op on an idle `StopAudition`.
 fn stop_preview(app: &mut Resonance) {
-    if app.browser.audition.playing.take().is_some() {
-        app.browser.audition.position_frame = 0;
+    if app.media.browser.audition.playing.take().is_some() {
+        app.media.browser.audition.position_frame = 0;
         let _ = app.engine.send(AudioCommand::StopAudition);
     }
 }
@@ -256,8 +257,8 @@ fn stop_preview(app: &mut Resonance) {
 /// immediately to any preview already playing.
 fn send_audition_options(app: &mut Resonance) {
     let _ = app.engine.send(AudioCommand::SetAuditionOptions {
-        loop_enabled: app.browser.audition.loop_enabled,
-        sync_to_tempo: app.browser.audition.sync_to_tempo,
+        loop_enabled: app.media.browser.audition.loop_enabled,
+        sync_to_tempo: app.media.browser.audition.sync_to_tempo,
     });
 }
 

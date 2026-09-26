@@ -122,7 +122,7 @@ pub fn build_canvas<'a>(
     app: &'a crate::Resonance,
     clip: &'a MidiClipState,
 ) -> Option<VocalRollCanvas<'a>> {
-    let editor_state = app.interaction.editing_midi_clip.as_ref()?;
+    let editor_state = app.ui.interaction.editing_midi_clip.as_ref()?;
     let definition = find_definition_for_clip(app, clip)?;
     let params = find_vocal_params(definition, clip.track_id)?;
     let voice_label = params.voice.as_str();

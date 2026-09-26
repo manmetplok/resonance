@@ -401,7 +401,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             if let Some(dir) = resonance_common::user_definitions_dir() {
                 registry.scan_dir(&dir);
             }
-            r.view_caches
+            r.ui.view_caches
                 .rebuild_device_choices(&registry.list());
             r.device_registry = registry;
         }

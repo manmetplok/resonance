@@ -459,7 +459,7 @@ impl crate::Resonance {
             Message::MidiEditor(m) => midi_editor_edit_clip(m)
                 .or_else(|| {
                     midi_editor_edits_open_clip(m)
-                        .then(|| self.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id))
+                        .then(|| self.ui.interaction.editing_midi_clip.as_ref().map(|e| e.clip_id))
                         .flatten()
                 })
                 .and_then(|clip_id| self.track_of_midi_clip(clip_id)),

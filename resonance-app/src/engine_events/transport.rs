@@ -35,7 +35,7 @@ pub(super) fn input_devices_listed(
     // Refresh the cached `Rc<[InputDeviceInfo]>` used by the mixer
     // inspector and bounce-dialog pickers so they stop cloning the
     // full Vec every frame.
-    r.view_caches
+    r.ui.view_caches
         .rebuild_input_devices(&r.input_devices.devices);
 }
 
@@ -158,13 +158,13 @@ pub(super) fn export_error(
 
 pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
     r.midi_devices.midi_input_devices = devices;
-    r.view_caches
+    r.ui.view_caches
         .rebuild_midi_input(&r.midi_devices.midi_input_devices);
 }
 
 pub(super) fn midi_output_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
     r.midi_devices.midi_output_devices = devices;
-    r.view_caches
+    r.ui.view_caches
         .rebuild_midi_output(&r.midi_devices.midi_output_devices);
 }
 

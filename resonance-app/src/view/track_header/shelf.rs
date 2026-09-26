@@ -295,7 +295,7 @@ pub(super) fn view_tempo_lane_header(r: &Resonance) -> Element<'static, Message>
 pub(super) fn view_signature_lane_header(r: &Resonance) -> Element<'static, Message> {
     let row_h = theme::GLOBAL_TRACK_SIG_HEIGHT;
 
-    let selected = r.interaction.selected_global_event.and_then(|sel| {
+    let selected = r.ui.interaction.selected_global_event.and_then(|sel| {
         if sel.kind == state::GlobalTrackKind::Signature {
             r.signature_events.get(sel.index).map(|ev| (sel.index, ev))
         } else {

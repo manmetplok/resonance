@@ -298,12 +298,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             // same as before D-4.
             let id = r.allocate_track_id();
             let _ = r.engine.send(AudioCommand::AddTrack { id, name: None });
-            r.mixer.add_track_menu_open = false;
+            r.ui.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddInstrumentTrack => {
             let id = r.allocate_track_id();
             let _ = r.engine.send(AudioCommand::AddInstrumentTrack { id, name: None });
-            r.mixer.add_track_menu_open = false;
+            r.ui.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddExternalInstrumentTrack => {
             // Same track creation as `AddInstrumentTrack`, but the id is
@@ -325,12 +325,12 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 name: None,
             });
             crate::update::external_instrument::enable_external_instrument(r, track_id);
-            r.mixer.add_track_menu_open = false;
+            r.ui.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddVocalTrack => {
             let id = r.allocate_track_id();
             let _ = r.engine.send(AudioCommand::AddVocalTrack { id, name: None });
-            r.mixer.add_track_menu_open = false;
+            r.ui.mixer.add_track_menu_open = false;
         }
         TrackMessage::AddControlTrack { id, kind, name } => {
             use crate::state::ControlTrackKind;
@@ -391,7 +391,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         }
         TrackMessage::ConfirmRemoveTrack => {
             if let Some(id) = r.modals.confirm_delete_track.take() {
-                r.interaction.deselect_track(id);
+                r.ui.interaction.deselect_track(id);
                 if r.compose.expanded_track_id == Some(id) {
                     r.compose.expanded_track_id = None;
                 }
@@ -596,8 +596,8 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::ToggleSubTracksVisible(id) => {
-            if !r.mixer.expanded_sub_track_parents.insert(id) {
-                r.mixer.expanded_sub_track_parents.remove(&id);
+            if !r.ui.mixer.expanded_sub_track_parents.insert(id) {
+                r.ui.mixer.expanded_sub_track_parents.remove(&id);
             }
         }
         TrackMessage::SetTrackOutput(track_id, output) => {
@@ -633,7 +633,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             };
             let _ = r.engine.send(cmd);
             r.presets.pending_track_preset = Some(*preset);
-            r.mixer.add_track_menu_open = false;
+            r.ui.mixer.add_track_menu_open = false;
         }
         TrackMessage::OpenSavePresetPrompt(track_id) => {
             // Seed with the track's own name: it is right often enough
@@ -647,21 +647,21 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 .map(|t| t.name.clone())
                 .unwrap_or_default();
             let exists = crate::presets::user_preset_exists(&name);
-            r.interaction.preset_save = Some(crate::state::PresetSaveState {
+            r.ui.interaction.preset_save = Some(crate::state::PresetSaveState {
                 track_id,
                 name,
                 exists,
             });
-            r.interaction.track_menu = None;
+            r.ui.interaction.track_menu = None;
         }
         TrackMessage::SetSavePresetName(name) => {
-            if let Some(prompt) = r.interaction.preset_save.as_mut() {
+            if let Some(prompt) = r.ui.interaction.preset_save.as_mut() {
                 prompt.exists = crate::presets::user_preset_exists(name.trim());
                 prompt.name = name;
             }
         }
         TrackMessage::CloseSavePresetPrompt => {
-            r.interaction.preset_save = None;
+            r.ui.interaction.preset_save = None;
         }
         TrackMessage::SaveTrackAsPreset {
             track_id,
@@ -817,7 +817,7 @@ fn handle_save_track_as_preset(
 
     r.presets.pending_preset_save = Some(crate::PendingPresetSave { track_id, name });
     let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
-    r.interaction.preset_save = None;
+    r.ui.interaction.preset_save = None;
 }
 
 fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::TrackId) {

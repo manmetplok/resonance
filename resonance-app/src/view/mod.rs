@@ -54,12 +54,12 @@ impl crate::Resonance {
         // Performance mode is a full-bleed, distraction-free surface: it
         // owns its own status bar / footer (built in follow-up todos) and
         // intentionally hides the normal transport chrome below.
-        if matches!(self.view_mode, ViewMode::Performance) {
+        if matches!(self.ui.view_mode, ViewMode::Performance) {
             return self.view_performance_shell();
         }
 
         let transport = transport::view_transport(self);
-        let main_area = match self.view_mode {
+        let main_area = match self.ui.view_mode {
             ViewMode::Arrange => self.view_main_area(),
             ViewMode::Mixer => self.view_mixer(),
             ViewMode::Compose => self.view_compose(),
@@ -157,7 +157,7 @@ impl crate::Resonance {
             stack![base, export_dialog::view_export_dialog_overlay(self)].into()
         } else if self.modals.import_dialog.is_some() {
             stack![base, import_dialog::view_import_dialog_overlay(self)].into()
-        } else if self.import_progress_modal_open {
+        } else if self.media.import_progress_modal_open {
             // Audio-import transcode-progress modal (doc #175, todo #606):
             // shown while the engine copies / transcodes the selected audio
             // files into the project folder. Dismissed once all files settle.
@@ -177,30 +177,30 @@ impl crate::Resonance {
                 missing_plugins_dialog::view_missing_plugins_overlay(self)
             ]
             .into()
-        } else if self.relink.modal_open && !self.relink.modal_targets.is_empty() {
+        } else if self.media.relink.modal_open && !self.media.relink.modal_targets.is_empty() {
             // Missing-files relink modal (doc #175, todo #607): surfaced on
             // load when the project references audio that's gone, and
             // re-openable from the Pool tab's inline `relink` chip.
             stack![base, relink_dialog::view_relink_dialog_overlay(self)].into()
-        } else if self.mixer.settings_open {
+        } else if self.ui.mixer.settings_open {
             stack![base, settings::view_settings_overlay(self)].into()
-        } else if self.mixer.add_track_menu_open {
+        } else if self.ui.mixer.add_track_menu_open {
             stack![base, menus::view_add_track_menu(self)].into()
-        } else if self.mixer.markers_overview_open {
+        } else if self.ui.mixer.markers_overview_open {
             stack![base, markers_overview::view_markers_overview_overlay(self)].into()
         } else if self.compose.drumroll.manager_open
-            && matches!(self.view_mode, ViewMode::Compose)
+            && matches!(self.ui.view_mode, ViewMode::Compose)
         {
             stack![base, compose::drum_groups_manager::view(self)].into()
-        } else if self.interaction.marker_menu.is_some()
-            || self.interaction.marker_rename.is_some()
+        } else if self.ui.interaction.marker_menu.is_some()
+            || self.ui.interaction.marker_rename.is_some()
         {
             // Arrangement-marker context menu / inline rename float above the
             // arrange timeline (todo #369). Only reachable from the ruler, so
             // guarding on the state alone is enough.
             stack![base, menus::view_marker_overlay(self)].into()
-        } else if matches!(self.view_mode, ViewMode::Arrange)
-            && self.interaction.selected_tracks.len() >= 2
+        } else if matches!(self.ui.view_mode, ViewMode::Arrange)
+            && self.ui.interaction.selected_tracks.len() >= 2
         {
             // Floating "Group selected" bar — non-modal, so it layers over
             // the arrange view without blocking it (todo #684).
@@ -218,7 +218,7 @@ impl crate::Resonance {
         // left edge as a peer of the track headers + timeline, so browsing
         // and auditioning never obscures the arrangement. Hidden by default;
         // toggled from the "Media" chrome button / the panel's collapse caret.
-        let main = if self.browser.visible {
+        let main = if self.media.browser.visible {
             row![
                 browser::view_browser_panel(self),
                 track_headers,
@@ -265,7 +265,7 @@ impl crate::Resonance {
         // preset…" name prompt is drawn by the same overlay and outlives
         // the menu that opened it, so it keeps the stack alive on its own
         // (review VIEW-07).
-        if self.interaction.track_menu.is_some() || self.interaction.preset_save.is_some() {
+        if self.ui.interaction.track_menu.is_some() || self.ui.interaction.preset_save.is_some() {
             stack![base, menus::view_track_menu_overlay(self)].into()
         } else {
             base

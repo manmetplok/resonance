@@ -382,6 +382,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
     // thumbnail and live usage counts are runtime-derived and rebuilt on
     // load, so they're left out of the file.
     let pool_assets: Vec<ProjectPoolAsset> = r
+        .media
         .pool
         .assets
         .iter()

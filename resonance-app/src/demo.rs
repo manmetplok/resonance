@@ -123,7 +123,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
     // serving every add) would hand out id 1 again, colliding with
     // `drums` above.
     app.registry.next_track_id = VOCAL_TRACK_ID + 1;
-    app.interaction.select_single_track(Some(2));
+    app.ui.interaction.select_single_track(Some(2));
     // Demo seed bypasses the engine-event handlers that normally keep
     // this cache fresh, so refresh by hand.
     app.compose.refresh_track_count(&app.registry.tracks);
@@ -156,7 +156,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
     app.registry.next_bus_order = 2;
     // Demo seed bypasses the engine event handlers that normally
     // refresh these caches, so refresh them by hand.
-    app.view_caches.rebuild_output(&app.registry.busses);
+    app.ui.view_caches.rebuild_output(&app.registry.busses);
 
     // ---- Clips on the timeline ----
     let bar_ticks = 480 * 6 / 2; // 6/8 → 6 eighth-note beats per bar
@@ -486,15 +486,15 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
     app.registry.tracks = vec![drums, bass, pad, lead, kick, snare, hh, tom];
     app.registry.next_track_order = 8;
     app.registry.next_track_id = 14;
-    app.interaction.select_single_track(Some(1));
+    app.ui.interaction.select_single_track(Some(1));
 
     // Expand the drum parent so the mixer renders its sub-strips —
     // the whole point of the visual is verified in that state.
-    app.mixer.expanded_sub_track_parents.insert(1);
+    app.ui.mixer.expanded_sub_track_parents.insert(1);
 
     // Demo seed bypasses engine-event handlers that normally refresh
     // these caches, so do it by hand.
-    app.view_caches.rebuild_output(&app.registry.busses);
+    app.ui.view_caches.rebuild_output(&app.registry.busses);
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
 }
@@ -520,7 +520,7 @@ pub fn seed_minimal_drum_track_no_busses(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums];
     app.registry.next_track_order = 1;
-    app.interaction.select_single_track(Some(1));
+    app.ui.interaction.select_single_track(Some(1));
     app.compose.refresh_track_count(&app.registry.tracks);
     app.refresh_transport_labels();
 
@@ -607,9 +607,9 @@ pub fn seed_pool_assets(app: &mut Resonance) {
         missing: true,
     };
 
-    app.pool.add(asset1);
-    app.pool.add(asset2);
-    app.pool.add(asset3);
+    app.media.pool.add(asset1);
+    app.media.pool.add(asset2);
+    app.media.pool.add(asset3);
 
     // Link the first audio clip to asset 1 so it renders as "used ×1".
     if let Some(clip) = app.clips.first_mut() {
@@ -668,10 +668,10 @@ pub fn seed_files_folder(app: &mut Resonance) {
         thumbnails.insert(f.path.clone(), make_peaks(48, i as f32 * 0.9));
     }
 
-    app.browser.current_folder = Some(current.clone());
-    app.browser.scanning = false;
-    app.browser.filter.clear();
-    app.browser.scan = crate::state::FolderScan {
+    app.media.browser.current_folder = Some(current.clone());
+    app.media.browser.scanning = false;
+    app.media.browser.filter.clear();
+    app.media.browser.scan = crate::state::FolderScan {
         folders: vec![
             PathBuf::from(format!("{root}/Kicks")),
             PathBuf::from(format!("{root}/Snares")),
@@ -682,8 +682,8 @@ pub fn seed_files_folder(app: &mut Resonance) {
 
     // Favourites (WARM star) + recent (clock) shelf. The current folder is a
     // favourite so the breadcrumb star reads pinned.
-    app.pool.favourites = vec![PathBuf::from("/Users/me/Loops"), current.clone()];
-    app.pool.recent_folders = vec![current, PathBuf::from("/Users/me/Vocals")];
+    app.media.pool.favourites = vec![PathBuf::from("/Users/me/Loops"), current.clone()];
+    app.media.pool.recent_folders = vec![current, PathBuf::from("/Users/me/Vocals")];
 }
 
 /// Seed the Files tab on an **empty** folder — one with no audio — so the
@@ -691,13 +691,13 @@ pub fn seed_files_folder(app: &mut Resonance) {
 pub fn seed_empty_files_folder(app: &mut Resonance) {
     use std::path::PathBuf;
 
-    app.browser.current_folder = Some(PathBuf::from("/sessions/My Project/samples/Empty"));
-    app.browser.scanning = false;
-    app.browser.filter.clear();
-    app.browser.scan = crate::state::FolderScan::default();
+    app.media.browser.current_folder = Some(PathBuf::from("/sessions/My Project/samples/Empty"));
+    app.media.browser.scanning = false;
+    app.media.browser.filter.clear();
+    app.media.browser.scan = crate::state::FolderScan::default();
 
-    app.pool.favourites = vec![PathBuf::from("/Users/me/Loops")];
-    app.pool.recent_folders = vec![PathBuf::from("/Users/me/Vocals")];
+    app.media.pool.favourites = vec![PathBuf::from("/Users/me/Loops")];
+    app.media.pool.recent_folders = vec![PathBuf::from("/Users/me/Vocals")];
 }
 
 /// Seed the audition transport in its **idle** state for snapshots (todo
@@ -709,13 +709,13 @@ pub fn seed_audition_idle(app: &mut Resonance) {
     use std::path::PathBuf;
 
     seed_files_folder(app);
-    let selected = PathBuf::from(app.browser.scan.files[0].path.clone());
-    app.browser.audition.selected = Some(selected);
-    app.browser.audition.playing = None;
-    app.browser.audition.position_frame = 0;
-    app.browser.audition.auto_play = false;
-    app.browser.audition.loop_enabled = false;
-    app.browser.audition.sync_to_tempo = false;
+    let selected = PathBuf::from(app.media.browser.scan.files[0].path.clone());
+    app.media.browser.audition.selected = Some(selected);
+    app.media.browser.audition.playing = None;
+    app.media.browser.audition.position_frame = 0;
+    app.media.browser.audition.auto_play = false;
+    app.media.browser.audition.loop_enabled = false;
+    app.media.browser.audition.sync_to_tempo = false;
 }
 
 /// Seed the audition transport **playing** a row for snapshots (todo #604):
@@ -728,12 +728,12 @@ pub fn seed_audition_playing(app: &mut Resonance) {
     seed_files_folder(app);
     // "Groove Loop.mp3" (index 2) is a 4 s row — long enough that a 40 %
     // playhead reads clearly mid-strip.
-    let entry = app.browser.scan.files[2].clone();
+    let entry = app.media.browser.scan.files[2].clone();
     let path = PathBuf::from(&entry.path);
-    app.browser.audition.selected = Some(path.clone());
-    app.browser.audition.playing = Some(path);
-    app.browser.audition.position_frame = (entry.info.frames as f64 * 0.4) as u64;
-    app.browser.audition.auto_play = true;
-    app.browser.audition.loop_enabled = true;
-    app.browser.audition.sync_to_tempo = true;
+    app.media.browser.audition.selected = Some(path.clone());
+    app.media.browser.audition.playing = Some(path);
+    app.media.browser.audition.position_frame = (entry.info.frames as f64 * 0.4) as u64;
+    app.media.browser.audition.auto_play = true;
+    app.media.browser.audition.loop_enabled = true;
+    app.media.browser.audition.sync_to_tempo = true;
 }

@@ -86,7 +86,7 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // matching clear on the project-open path.
     r.presets.pending_plugin_param_overrides.clear();
     // Placements queued against the old project (code review UPD-04).
-    r.pool_import.clear();
+    r.media.pool_import.clear();
     r.dirty = false;
     let _ = r.engine.send(AudioCommand::ClearAll);
     r.io.has_active_project = true;

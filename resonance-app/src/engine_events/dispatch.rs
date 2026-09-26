@@ -546,11 +546,11 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         // Both are transient UI state — not undoable, not persisted (doc #175,
         // ba todo #597).
         E::AuditionPosition { frame } => {
-            r.browser.audition.position_frame = frame;
+            r.media.browser.audition.position_frame = frame;
         }
         E::AuditionStopped => {
-            r.browser.audition.playing = None;
-            r.browser.audition.position_frame = 0;
+            r.media.browser.audition.playing = None;
+            r.media.browser.audition.position_frame = 0;
         }
         // Freeze progress / lifecycle (ba todo #575). The engine renders
         // off-thread (todo #571/#572) and reports back through these

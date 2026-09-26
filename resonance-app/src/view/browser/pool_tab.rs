@@ -34,7 +34,7 @@ use super::style::{format_duration, format_label, WaveThumbnail, THUMB_H, THUMB_
 /// filename, a format chip, the duration, and a usage badge. Missing rows
 /// carry an inline `relink` chip instead of (or alongside) the usage badge.
 pub(super) fn pool_body<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    if r.pool.assets.is_empty() {
+    if r.media.pool.assets.is_empty() {
         return text("No assets imported yet. Drag audio onto the timeline or use Import audio\u{2026}")
             .size(12)
             .color(theme::TEXT_3)
@@ -43,8 +43,8 @@ pub(super) fn pool_body<'a>(r: &'a Resonance) -> Element<'a, Message> {
 
     let sample_rate = r.sample_rate.max(1);
     let mut list = column![].spacing(4);
-    for asset in &r.pool.assets {
-        let usage = r.pool.usage_count(asset.id);
+    for asset in &r.media.pool.assets {
+        let usage = r.media.pool.usage_count(asset.id);
         list = list.push(pool_asset_row(asset, usage, sample_rate));
     }
 
@@ -206,19 +206,20 @@ struct AuditionTarget<'a> {
 /// assets) so both audition sources drive the same transport. `None` when
 /// nothing is selected or the path is not a known row.
 fn audition_target(r: &Resonance) -> Option<AuditionTarget<'_>> {
-    let audition = &r.browser.audition;
+    let audition = &r.media.browser.audition;
     let path = audition.playing.as_ref().or(audition.selected.as_ref())?;
     let path_str = path.to_string_lossy();
 
-    if let Some(entry) = r.browser.scan.files.iter().find(|e| e.path == path_str) {
+    if let Some(entry) = r.media.browser.scan.files.iter().find(|e| e.path == path_str) {
         return Some(AuditionTarget {
-            peaks: r.browser.scan.thumbnail(&entry.path),
+            peaks: r.media.browser.scan.thumbnail(&entry.path),
             total_frames: entry.info.frames,
             sample_rate: entry.info.sample_rate.max(1),
         });
     }
 
     if let Some(asset) = r
+        .media
         .pool
         .assets
         .iter()
@@ -250,7 +251,7 @@ fn audition_target(r: &Resonance) -> Option<AuditionTarget<'_>> {
 /// never trapped behind a stale fingerprint — per the view-performance rules
 /// (doc #175).
 pub(super) fn audition_transport(r: &Resonance) -> Element<'_, Message> {
-    let audition = &r.browser.audition;
+    let audition = &r.media.browser.audition;
     let target = audition_target(r);
     let playing = audition.playing.is_some();
 

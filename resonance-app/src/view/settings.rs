@@ -68,7 +68,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     // re-enumerates MIDI devices; the override covers a configured
     // device that is currently unplugged.
     let send_choices = midi_choices_with_override(
-        &r.view_caches.midi_output_choices,
+        &r.ui.view_caches.midi_output_choices,
         r.midi_devices.midi_clock_send_device.as_deref(),
         &r.midi_devices.midi_output_devices,
     );
@@ -87,7 +87,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         Message::Ui(UiMessage::ToggleMidiClockRecv),
     );
     let recv_choices = midi_choices_with_override(
-        &r.view_caches.midi_input_choices,
+        &r.ui.view_caches.midi_input_choices,
         r.midi_devices.midi_clock_recv_device.as_deref(),
         &r.midi_devices.midi_input_devices,
     );

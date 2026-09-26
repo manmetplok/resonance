@@ -45,7 +45,7 @@ impl crate::Resonance {
     /// audio clip to inspect (no selection, or the selection is a MIDI
     /// clip). Stacked over the arrange area by `view_main_area`.
     pub(crate) fn view_clip_inspector_flyout(&self) -> Option<Element<'_, Message>> {
-        let clip_id = self.interaction.selected_clip?;
+        let clip_id = self.ui.interaction.selected_clip?;
         let clip = self.clips.iter().find(|c| c.id == clip_id)?;
 
         // A clip is editable for fades when its track is live (not frozen)

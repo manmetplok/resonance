@@ -76,10 +76,10 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
 
     let tabs = container(
         row![
-            tab_button("Arrange", ViewMode::Arrange, r.view_mode),
-            tab_button("Mixer", ViewMode::Mixer, r.view_mode),
-            tab_button("Compose", ViewMode::Compose, r.view_mode),
-            tab_button("Performance", ViewMode::Performance, r.view_mode),
+            tab_button("Arrange", ViewMode::Arrange, r.ui.view_mode),
+            tab_button("Mixer", ViewMode::Mixer, r.ui.view_mode),
+            tab_button("Compose", ViewMode::Compose, r.ui.view_mode),
+            tab_button("Performance", ViewMode::Performance, r.ui.view_mode),
         ]
         .spacing(3)
         .padding(4),
@@ -125,8 +125,8 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
     // picker; dragging audio files onto the window is the other route
     // (see `update.rs::arrange_audio_file_drop`). Styled as a ghost button
     // matching the sibling MIDI Import… button on the right.
-    let media_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Arrange) {
-        let active = r.browser.visible;
+    let media_toggle: Element<'_, Message> = if matches!(r.ui.view_mode, ViewMode::Arrange) {
+        let active = r.media.browser.visible;
         let media_btn = button(
             text("Media")
                 .size(12)
@@ -158,8 +158,8 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
     // the Mix view (the panel lives there), so it's hidden elsewhere; a
     // zero-width spacer keeps the right cluster's spacing identical when
     // absent.
-    let ref_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Mixer) {
-        let active = r.mixer.reference_panel_open;
+    let ref_toggle: Element<'_, Message> = if matches!(r.ui.view_mode, ViewMode::Mixer) {
+        let active = r.ui.mixer.reference_panel_open;
         let btn = button(
             text("REF")
                 .size(11)
@@ -240,7 +240,7 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     // Refreshed by `Resonance::refresh_transport_labels` after every
     // update — the view only reads them, so they can be borrowed as
     // `&str` for the lifetime of the returned Element (no clones).
-    let labels = &r.transport_labels;
+    let labels = &r.ui.transport_labels;
 
     let any_armed = r.registry.tracks.iter().any(|t| t.record_armed);
 
@@ -501,7 +501,7 @@ fn metronome_toggle_button(r: &Resonance) -> Element<'_, Message> {
 /// Flag toggle that opens/closes the arrangement-markers overview popover
 /// (todo #370). Lit with the accent tint while the overview is open.
 fn markers_overview_toggle_button(r: &Resonance) -> Element<'_, Message> {
-    let active = r.mixer.markers_overview_open;
+    let active = r.ui.mixer.markers_overview_open;
     let color = if active { theme::ACCENT } else { theme::TEXT_2 };
     button(centered_icon(fa::FLAG, color, 13, 32))
         .on_press(Message::Ui(UiMessage::ToggleMarkersOverview))

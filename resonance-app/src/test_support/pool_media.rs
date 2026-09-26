@@ -9,7 +9,7 @@ impl Resonance {
     /// `AssetImported` event (ba todo #598).
     #[doc(hidden)]
     pub fn test_pending_import_count(&self) -> usize {
-        self.pool_import.len()
+        self.media.pool_import.len()
     }
 
     /// Test-only: borrow the media pool so persistence / mirror tests can
@@ -17,7 +17,7 @@ impl Resonance {
     /// favourite / recent folder lists.
     #[doc(hidden)]
     pub fn test_pool(&self) -> &crate::state::MediaPool {
-        &self.pool
+        &self.media.pool
     }
 
     /// Test-only: add an imported asset to the pool (and refresh usage),
@@ -87,14 +87,14 @@ impl Resonance {
     /// browser's favourite toggle (ba todo #599).
     #[doc(hidden)]
     pub fn test_pool_add_favourite(&mut self, path: std::path::PathBuf) {
-        self.pool.add_favourite(path);
+        self.media.pool.add_favourite(path);
     }
 
     /// Test-only: record a most-recently-visited folder on the pool,
     /// standing in for the browser's navigation handler (ba todo #599).
     #[doc(hidden)]
     pub fn test_pool_push_recent(&mut self, path: std::path::PathBuf) {
-        self.pool.push_recent_folder(path);
+        self.media.pool.push_recent_folder(path);
     }
 
     /// Test-only: borrow the transient media-browser state so navigation /
@@ -102,7 +102,7 @@ impl Resonance {
     /// current folder, cached scan, filter, tab, and audition transport.
     #[doc(hidden)]
     pub fn test_browser(&self) -> &crate::state::BrowserState {
-        &self.browser
+        &self.media.browser
     }
 
     /// Test-only: the lazy key of the Files-tab folder listing (review
@@ -130,7 +130,7 @@ impl Resonance {
         &self,
         id: resonance_audio::types::AssetId,
     ) -> Option<&crate::state::pool::PoolAsset> {
-        self.pool.asset(id)
+        self.media.pool.asset(id)
     }
 
     /// Test-only: borrow the transient relink state so relink handler
@@ -138,7 +138,7 @@ impl Resonance {
     /// relink error without poking at the `pub(crate)` field.
     #[doc(hidden)]
     pub fn test_relink(&self) -> &crate::state::RelinkState {
-        &self.relink
+        &self.media.relink
     }
 
     /// Test-only: borrow the per-file import-progress tracker so tests can
@@ -146,7 +146,7 @@ impl Resonance {
     /// correctly, without touching the private field directly.
     #[doc(hidden)]
     pub fn test_import_progress(&self) -> &state::ImportProgressTracker {
-        &self.import_progress
+        &self.media.import_progress
     }
 
     /// Test-only: whether the audio-import transcode-progress modal is
@@ -154,7 +154,7 @@ impl Resonance {
     /// is initiated and cleared by `DismissImportProgress`.
     #[doc(hidden)]
     pub fn test_import_progress_modal_open(&self) -> bool {
-        self.import_progress_modal_open
+        self.media.import_progress_modal_open
     }
 
     /// Test-only: directly open or close the import-progress modal without
@@ -162,7 +162,7 @@ impl Resonance {
     /// a deterministic modal state.
     #[doc(hidden)]
     pub fn test_set_import_progress_modal_open(&mut self, open: bool) {
-        self.import_progress_modal_open = open;
+        self.media.import_progress_modal_open = open;
     }
 
     /// Test-only: borrow the audition transport state (playing row, scrub
@@ -170,7 +170,7 @@ impl Resonance {
     /// mirroring (ba todo #597) can assert without reading the private field.
     #[doc(hidden)]
     pub fn test_audition(&self) -> &state::AuditionState {
-        &self.browser.audition
+        &self.media.browser.audition
     }
 
     /// Test-only: directly set the audition `playing` row, standing in for
@@ -178,6 +178,6 @@ impl Resonance {
     /// have a pre-existing playing state to clear.
     #[doc(hidden)]
     pub fn test_set_audition_playing(&mut self, path: Option<std::path::PathBuf>) {
-        self.browser.audition.playing = path;
+        self.media.browser.audition.playing = path;
     }
 }

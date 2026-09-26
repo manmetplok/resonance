@@ -94,7 +94,7 @@ pub fn handle(r: &mut Resonance, m: FreezeMessage) -> Task<Message> {
     // todo #581); acting on an entry closes the menu, and the messages
     // arriving from other surfaces (header toggle, shortcuts) are no-ops
     // on an already-`None` menu.
-    r.interaction.track_menu = None;
+    r.ui.interaction.track_menu = None;
     match m {
         FreezeMessage::FreezeTrack(track_id) => {
             freeze_one(r, track_id);
@@ -398,7 +398,7 @@ pub(crate) fn freezable_tracks(r: &Resonance) -> Vec<TrackId> {
 /// single track selection, so this yields at most one id; the batch path
 /// still works unchanged once multi-select lands.
 pub(crate) fn selected_freezable_tracks(r: &Resonance) -> Vec<TrackId> {
-    r.interaction
+    r.ui.interaction
         .selected_track
         .and_then(|id| r.registry.tracks.iter().find(|t| t.id == id))
         .filter(|t| freezable(t).is_ok())

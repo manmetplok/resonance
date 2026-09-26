@@ -76,7 +76,7 @@ use crate::Resonance;
 /// (`view_main_area`) prepends it to the arrange row so it sits flush
 /// against the left edge, a peer of the track headers + timeline.
 pub(crate) fn view_browser_panel(r: &Resonance) -> Element<'_, Message> {
-    let tab = r.browser.tab;
+    let tab = r.media.browser.tab;
 
     let body: Element<'_, Message> = column![
         header(),

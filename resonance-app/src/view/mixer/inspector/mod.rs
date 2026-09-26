@@ -52,6 +52,7 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     // selected — in which case the lookup misses and the track path
     // takes over.
     let selected_bus = r
+        .ui
         .mixer
         .selected_bus
         .and_then(|id| r.registry.busses.iter().find(|b| b.id == id));
@@ -59,20 +60,23 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
         return chrome(bus::view(r, b));
     }
 
-    let selected_id = r.interaction.selected_track;
+    let selected_id = r.ui.interaction.selected_track;
     let selected = selected_id.and_then(|id| r.registry.tracks.iter().find(|t| t.id == id));
 
     let body: Element<'a, Message> = match selected {
         Some(track) => {
             let signal_collapsed = r
+                .ui
                 .mixer
                 .collapsed_inspector_groups
                 .contains(&MixerInspectorGroup::Signal);
             let routing_collapsed = r
+                .ui
                 .mixer
                 .collapsed_inspector_groups
                 .contains(&MixerInspectorGroup::Routing);
             let chain_collapsed = r
+                .ui
                 .mixer
                 .collapsed_inspector_groups
                 .contains(&MixerInspectorGroup::Chain);
@@ -242,11 +246,11 @@ pub(crate) fn inspector_fingerprint(
         t.playback_source.hash(&mut h);
         r.clips.iter().any(|c| c.track_id == t.id).hash(&mut h);
         // Return-device / device-preset / bank / program pickers.
-        Rc::as_ptr(&r.view_caches.input_devices).hash(&mut h);
-        Rc::as_ptr(&r.view_caches.device_choices).hash(&mut h);
-        Rc::as_ptr(&r.view_caches.bank_choices).hash(&mut h);
-        Rc::as_ptr(&r.view_caches.program_choices).hash(&mut h);
-        Rc::as_ptr(&r.view_caches.output_channel_choices).hash(&mut h);
+        Rc::as_ptr(&r.ui.view_caches.input_devices).hash(&mut h);
+        Rc::as_ptr(&r.ui.view_caches.device_choices).hash(&mut h);
+        Rc::as_ptr(&r.ui.view_caches.bank_choices).hash(&mut h);
+        Rc::as_ptr(&r.ui.view_caches.program_choices).hash(&mut h);
+        Rc::as_ptr(&r.ui.view_caches.output_channel_choices).hash(&mut h);
     }
     for p in &t.plugins {
         p.instance_id.hash(&mut h);
@@ -283,11 +287,11 @@ pub(crate) fn inspector_fingerprint(
     }
     // Cache pointers — when these Rcs are replaced, the inspector
     // needs to redraw with the new options.
-    Rc::as_ptr(&r.view_caches.midi_input_choices).hash(&mut h);
-    Rc::as_ptr(&r.view_caches.midi_output_choices).hash(&mut h);
-    Rc::as_ptr(&r.view_caches.output_choices).hash(&mut h);
-    Rc::as_ptr(&r.view_caches.fx_plugins).hash(&mut h);
-    Rc::as_ptr(&r.view_caches.instrument_plugins).hash(&mut h);
+    Rc::as_ptr(&r.ui.view_caches.midi_input_choices).hash(&mut h);
+    Rc::as_ptr(&r.ui.view_caches.midi_output_choices).hash(&mut h);
+    Rc::as_ptr(&r.ui.view_caches.output_choices).hash(&mut h);
+    Rc::as_ptr(&r.ui.view_caches.fx_plugins).hash(&mut h);
+    Rc::as_ptr(&r.ui.view_caches.instrument_plugins).hash(&mut h);
     // Audio input picker uses `r.input_devices.devices` directly (its options
     // include the per-device channel count, which the cached choice
     // lists above don't carry).
