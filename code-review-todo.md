@@ -17,7 +17,7 @@ master and updates this table. Agents do **not** edit this file.
 | A2 recording+plugin undo | STATE-02, STATE-03 | opus | merged | d47a3916 |
 | B compose sections | VIEW-03, VIEW-04, VIEW-05 | opus | merged | 1f1ae03d |
 | C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | merged | 302009d3 |
-| D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | in progress |  |
+| D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | merged | bb45ccad |
 | E control beat units | CTL-01 | opus | merged | 5f63160a |
 | F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | merged | 2c811666 |
 | F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | merged | eac3b10c |
@@ -58,6 +58,13 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-F1a** (low) if the engine refuses Play as a backstop (e.g. external MIDI-clock master), app mirror `transport.playing` stays true until Stop (banner shows).
 - [ ] **FU-F1b** (low) `measure_mix` acquires its render guard on the worker → sub-quantum window where Play lands and the transport appears to start then stall. Move acquire to the engine thread.
 - [ ] **FU-F1c** (low, UX) WAV mixdown now blocks GUI traffic like bounce-in-place but has no modal, only the master-strip label.
+- [ ] **FU-G3a** (low) `mixer/render/frozen.rs` still linear-resamples freeze caches on rate mismatch; `bounce/resample.rs` uses rubato → two resampler implementations; consolidate on `resonance_common::resample`.
+- [ ] **FU-G3b** (low) no end-to-end test of a loop-record seam at a mismatched device rate (seam flush only covered at resampler level).
+- [ ] **FU-D1** (medium, feature gap) Arrange never followed the playhead (old `auto_follow_playhead` wrote a dead offset, now removed). Implement via scrollable id + `scrollable::scroll_to` from tick using the visible viewport width.
+- [ ] **FU-D2** (low, cleanup) dead horizontal-scroll plumbing: `h_scrollbar_grab`, `ScrollToX`, `scroll_to_x`, `viewport.scroll_offset`.
+- [ ] **FU-D3** (low) engine `handle_set_bpm` clamps 20..999 and passes NaN; use `sanitize_bpm` there too.
+- [ ] **FU-D4** (low) MIDI-imported tempo points > 300 BPM are now clamped at bar-table rebuild.
+- [ ] **FU-D5** (low, test hygiene) `track_preset_save_prompt` golden reads the real user preset dir (cf. STATE-14).
 
 ## How to use this file
 
@@ -530,7 +537,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** After a successful resize, regenerate every lane generator, the drums (`materialize_drum_clips`) and the vocal for all placements of the definition. Rewrite a single-entry `Bars(old_len)` arrangement to the new length, or run `trim_to_fit`/`fill_to_end`.
 - **Verification:** Add a `compose` group-binary module: generate, resize, then assert each derived clip's `duration_ticks` matches the new length and the drum clip covers every bar.
 
-### [ ] VIEW-06 — Typing "nan" in the BPM field collapses every clip to sample 0 and makes the saved project unloadable
+### [x] VIEW-06 — Typing "nan" in the BPM field collapses every clip to sample 0 and makes the saved project unloadable — fixed @f0208269 (sanitize_bpm 20..=300; non-finite rejected; loader falls back)
 - **Severity:** high
 - **Confidence:** high for the parse path (spot-checked), medium for the exact downstream effects
 - **Category:** error-handling
@@ -540,7 +547,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Check `parsed.is_finite()` before the clamp. Put the check in a shared `validate_bpm` also used by the tempo-lane edits and the control API.
 - **Verification:** Add a module to the `control` or `timeline` group binary: send `SetBpmText("nan")` and `CommitBpm`, then assert `transport.bpm` is unchanged and no `SetBpm` command was captured.
 
-### [ ] VIEW-07 — The "Save as preset…" name prompt never renders, then shows up in place of a later context menu
+### [x] VIEW-07 — The "Save as preset…" name prompt never renders, then shows up in place of a later context menu — fixed @aaa06185
 - **Severity:** high
 - **Confidence:** high (spot-checked)
 - **Category:** ux
@@ -552,7 +559,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Gate the stack on `track_menu.is_some() || preset_save.is_some()`, or move the prompt into the root overlay chain.
 - **Verification:** Add a golden snapshot in the `control` or `mixer` group binary: `new_for_test_on(Arrange)`, send `OpenSavePresetPrompt(track)`, and render. The golden must show the prompt. Bless with `RESONANCE_BLESS=1`.
 
-### [ ] VIEW-08 — Inspector BYP button (and several other inspector fields) freeze because the lazy fingerprint doesn't hash them
+### [x] VIEW-08 — Inspector BYP button (and several other inspector fields) freeze because the lazy fingerprint doesn't hash them — fixed @fe17908b
 - **Severity:** high
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
@@ -576,7 +583,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Handle these keys only when `cursor.is_over(bounds)` (the expanded editor already does this for +/-), or when no text input is focused.
 - **Verification:** Add a `compose` group-binary test: focus a lyric `text_input` via `iced_test`, type "s", and assert the note's slur flag is unchanged.
 
-### [ ] VIEW-10 — Clip, fade and loop drags jump sideways after playback auto-follow wrote a stale `viewport.scroll_offset`
+### [x] VIEW-10 — Clip, fade and loop drags jump sideways after playback auto-follow wrote a stale `viewport.scroll_offset` — fixed @8275c04b (removed dead auto_follow_playhead)
 - **Severity:** high
 - **Confidence:** medium (the write path and the reducers are spot-checked; the size of the offset depends on `viewport_width` being the full content width)
 - **Category:** correctness
