@@ -34,6 +34,8 @@ pub(super) fn input_devices_listed(
 pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
     r.transport.recording = true;
     r.transport.recording_start_sample = start_sample;
+    // Each recording session is its own undo entry (STATE-02).
+    r.undo.break_coalesce();
 }
 
 /// The capture ring overflowed during the active take: `dropped_frames`

@@ -179,6 +179,12 @@ impl UndoHistory {
         self.coalesce_key = None;
     }
 
+    /// End any in-progress coalesce run, so the next coalesced record
+    /// starts a fresh entry.
+    pub fn break_coalesce(&mut self) {
+        self.coalesce_key = None;
+    }
+
     // -- Transaction API for multi-message gestures --------------------
 
     /// Open a transaction. Used at the start of a drag / trim gesture;

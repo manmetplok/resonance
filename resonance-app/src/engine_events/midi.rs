@@ -22,6 +22,13 @@ pub(super) fn clip_created(
     if r.midi_clips.iter().any(|c| c.id == clip_id) {
         return;
     }
+    // While recording, a new clip is the one a live MIDI recording opens
+    // on its first note: an undoable edit, snapshotted before it lands
+    // (STATE-02). Outside recording it echoes an app-issued edit whose
+    // message already recorded its own entry.
+    if r.transport.recording {
+        r.record_recording_edit();
+    }
     r.midi_clips.push(MidiClipState {
         id: clip_id,
         track_id,

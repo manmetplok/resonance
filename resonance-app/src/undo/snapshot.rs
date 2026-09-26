@@ -161,6 +161,11 @@ pub enum CoalesceKey {
     MarkerResize(u64),
     /// A group macro level-trim slider drag, keyed by group id (epic #36).
     GroupMacroLevel(u64),
+    /// Everything one recording session lands — every armed track's
+    /// `RecordingFinished`, each cycle-record `TakeCaptured`, the MIDI
+    /// clips a live recording opens — so the whole take is one entry.
+    /// `RecordingStarted` breaks the run, so each session is its own.
+    Recording,
 }
 
 // -------------------------------------------------------------------------

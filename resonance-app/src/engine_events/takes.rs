@@ -66,6 +66,8 @@ pub(super) fn take_captured(
         TakeContent::Audio { clip_ref } => Some(clip_ref),
         TakeContent::Midi { .. } => None,
     };
+    // A take is an undoable edit; snapshot before it lands (STATE-02).
+    r.record_recording_edit();
     let take = Take::new(take_id, pass_index, now_millis(), extent, content);
     r.take_groups.take_captured(group_id, track_id, slot, take);
 
