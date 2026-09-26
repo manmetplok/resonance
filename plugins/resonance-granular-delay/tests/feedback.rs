@@ -291,6 +291,37 @@ fn output_only_route_keeps_the_buffer_clean() {
     }
 }
 
+/// DSP-15: a host block larger than the max declared at `initialize` is
+/// rendered in capacity-sized chunks — bit-identical to the host having
+/// sent those chunks as separate calls — instead of leaving the tail as
+/// dry input with the write head and the grain clock skipping it. Both
+/// routes: Output-only used to reach the DSP unchunked.
+#[test]
+fn oversized_blocks_render_like_max_sized_calls() {
+    for route in [0, 1] {
+        let render = |block: usize| {
+            let mut plugin = feedback_plugin(60.0, 0.5);
+            plugin.params.fb_route.set_value(route);
+            plugin.initialize(SR, 256);
+            let frames = 8 * 1024;
+            let mut left: Vec<f32> = (0..frames)
+                .map(|i| (std::f32::consts::TAU * 220.0 * i as f32 / SR).sin() * 0.7)
+                .collect();
+            let mut right: Vec<f32> = left.iter().map(|s| s * 0.5).collect();
+            run_blocks(&mut plugin, &mut left, &mut right, block);
+            (left, right, plugin.write_head())
+        };
+        let (big_l, big_r, big_head) = render(1024);
+        let (ref_l, ref_r, ref_head) = render(256);
+        assert_eq!(big_head, ref_head, "route {route}: write head skipped frames");
+        assert!(rms(&ref_l[4096..]) > 1e-3, "route {route}: reference is silent");
+        assert!(
+            big_l == ref_l && big_r == ref_r,
+            "route {route}: 1024-frame calls differ from 4 x 256"
+        );
+    }
+}
+
 /// The two topologies measurably differ in re-granulation: with +12 st
 /// grains, FB Pitch on and a sine burst, Wet→Buffer re-granulates
 /// every recirculation so the second repeat climbs another octave,
