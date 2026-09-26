@@ -164,13 +164,26 @@ impl ClapInstance {
         unsafe { load_fn(self.plugin, &stream) }
     }
 
+    /// True while the plugin is activated (and so processed). False only
+    /// after a failed (re)activation.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
     /// Load state with full lifecycle cycle: stop → deactivate → load → activate → start.
     /// This ensures `initialize()` runs again so the plugin picks up new persist fields,
     /// and the post-reactivation latency re-query picks up any latency change the new
     /// state implies (doc #260 finding #10).
+    ///
+    /// Returns true only when the plugin accepted the state *and* is
+    /// active again. A rejected state still reactivates the plugin, with
+    /// whatever state it held before (see [`Self::is_active`] to tell the
+    /// two failures apart). An instance left deactivated by an earlier
+    /// failure is loaded and then brought back up (code review ENG-02).
     pub fn reload_with_state(&mut self, data: &[u8]) -> bool {
         if !self.active {
-            return self.load_state(data);
+            let loaded = self.load_state(data);
+            return self.activate_and_start() && loaded;
         }
         self.cycle_activation(|inst| inst.load_state(data))
     }
@@ -190,9 +203,13 @@ impl ClapInstance {
     }
 
     /// Shared activation cycle: stop → deactivate → `while_deactivated`
-    /// → activate → re-query latency → start. On any failure the plugin
-    /// is left deactivated (`self.active == false`) and `false` is
-    /// returned; `Drop` then skips the deactivate it would otherwise run.
+    /// → activate → re-query latency → start. Reactivation runs even when
+    /// `while_deactivated` fails — a rejected state load leaves the
+    /// plugin's previous state valid, and skipping it would leave the
+    /// plugin silent for good. Returns false if either step failed; on a
+    /// failed reactivation the plugin is left deactivated
+    /// (`self.active == false`) and `Drop` skips the deactivate it would
+    /// otherwise run.
     fn cycle_activation(&mut self, while_deactivated: impl FnOnce(&mut Self) -> bool) -> bool {
         // Stop processing
         if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
@@ -205,10 +222,13 @@ impl ClapInstance {
 
         self.active = false;
 
-        if !while_deactivated(self) {
-            return false;
-        }
+        let ok = while_deactivated(self);
+        self.activate_and_start() && ok
+    }
 
+    /// activate → re-query latency → start, from the deactivated state.
+    /// On failure the plugin is left deactivated and `false` returned.
+    fn activate_and_start(&mut self) -> bool {
         // Reactivate
         if let Some(activate) = unsafe { (*self.plugin).activate } {
             let ok = unsafe { activate(self.plugin, self.sample_rate as f64, 32, 8192) };

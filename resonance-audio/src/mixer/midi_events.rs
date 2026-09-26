@@ -152,7 +152,12 @@ pub(super) fn collect_midi_events(
         };
 
         for note in &clip.notes {
-            let note_end_tick = note.start_tick.saturating_add(note.duration_ticks);
+            // A zero-length note still occupies its start tick for the
+            // rejection tests below, so one sitting exactly on a bound
+            // (e.g. the clip's first tick) is not taken as already over.
+            let note_end_tick = note
+                .start_tick
+                .saturating_add(note.duration_ticks.max(1));
             // Window reject: the note ends before the block starts, or
             // starts after the block ends. Sound because
             // `tick_to_abs_sample` is monotonic in the tick offset and
@@ -161,7 +166,7 @@ pub(super) fn collect_midi_events(
                 continue;
             }
             // Skip notes outside the visible (trimmed) range
-            if note.start_tick + note.duration_ticks <= visible_start {
+            if note_end_tick <= visible_start {
                 continue;
             }
             if note.start_tick >= visible_end {
@@ -184,6 +189,40 @@ pub(super) fn collect_midi_events(
                 effective_end - visible_start,
                 sample_rate,
             );
+
+            // Zero-length note (SMF on/off on one tick, an open
+            // loop-record note, or a tick span that rounds to no
+            // samples): both events share one offset, and the sort
+            // below keys offs first, so the plugin would see Off → On
+            // and hang the voice (MIX-10). Emit On strictly before Off
+            // inside this block instead — the off one frame later, or
+            // the on one frame earlier when the note sits on the last
+            // frame (a later block never emits this note's off).
+            if note_abs_end <= note_abs_start {
+                if note_abs_start >= playhead && note_abs_start < buf_end {
+                    let at = (note_abs_start - playhead) as u32;
+                    let (on_at, off_at) = if (at as usize) + 1 < frames {
+                        (at, at + 1)
+                    } else if at > 0 {
+                        (at - 1, at)
+                    } else {
+                        continue; // one-frame block: no room for both
+                    };
+                    for (is_note_on, sample_offset) in [(true, on_at), (false, off_at)] {
+                        push_capped(
+                            out,
+                            &mut note_ons_queued,
+                            PendingNoteEvent {
+                                is_note_on,
+                                note: note.note,
+                                velocity: if is_note_on { note.velocity } else { 0.0 },
+                                sample_offset,
+                            },
+                        );
+                    }
+                }
+                continue;
+            }
 
             // Emit NoteOn if it falls in this buffer
             if note_abs_start >= playhead && note_abs_start < buf_end {

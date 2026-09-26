@@ -24,9 +24,13 @@ use clap_sys::ext::latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LA
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
+use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
 use clap_sys::stream::clap_istream;
 
-use resonance_audio::__test_support::{ClapInstance, __instance_from_raw_for_test};
+use resonance_audio::__test_support::{
+    reload_plugin_state, ClapInstance, __instance_from_raw_for_test,
+};
+use resonance_audio::types::AudioEvent;
 
 // ---------------------------------------------------------------------------
 // Fake plugin
@@ -48,6 +52,10 @@ struct FakeState {
     activate_calls: u32,
     deactivate_calls: u32,
     load_calls: u32,
+    /// `process()` calls that reached the plugin.
+    process_calls: u32,
+    /// When set, the next `activate()` fails (and clears the flag).
+    fail_next_activate: bool,
 }
 
 unsafe fn fake_state<'a>(plugin: *const clap_plugin) -> &'a mut FakeState {
@@ -67,8 +75,11 @@ unsafe extern "C" fn fake_activate(
     _max_frames: u32,
 ) -> bool {
     let state = fake_state(plugin);
-    state.active = true;
     state.activate_calls += 1;
+    if std::mem::take(&mut state.fail_next_activate) {
+        return false;
+    }
+    state.active = true;
     // Latency changes take effect at activation only (#1125 bridge).
     state.served_latency = state.pending_latency;
     true
@@ -85,6 +96,14 @@ unsafe extern "C" fn fake_start_processing(_plugin: *const clap_plugin) -> bool 
 }
 
 unsafe extern "C" fn fake_stop_processing(_plugin: *const clap_plugin) {}
+
+unsafe extern "C" fn fake_process(
+    plugin: *const clap_plugin,
+    _process: *const clap_process,
+) -> clap_process_status {
+    fake_state(plugin).process_calls += 1;
+    CLAP_PROCESS_CONTINUE
+}
 
 unsafe extern "C" fn fake_latency_get(plugin: *const clap_plugin) -> u32 {
     fake_state(plugin).served_latency
@@ -151,6 +170,8 @@ fn make_instance(initial_latency: u32) -> (ClapInstance, *mut FakeState) {
                 activate_calls: 0,
                 deactivate_calls: 0,
                 load_calls: 0,
+                process_calls: 0,
+                fail_next_activate: false,
             }));
             state_ptr = state;
             let plugin = Box::new(clap_plugin {
@@ -163,7 +184,7 @@ fn make_instance(initial_latency: u32) -> (ClapInstance, *mut FakeState) {
                 start_processing: Some(fake_start_processing),
                 stop_processing: Some(fake_stop_processing),
                 reset: None,
-                process: None,
+                process: Some(fake_process),
                 get_extension: Some(fake_get_extension),
                 on_main_thread: None,
             });
@@ -272,4 +293,81 @@ fn host_get_extension_returns_null_for_unknown_ids() {
     // side stays unserved.
     let ext = unsafe { get_ext(host, CLAP_EXT_STATE.as_ptr()) };
     assert!(ext.is_null());
+}
+
+// ---------------------------------------------------------------------------
+// Failed state loads (code review ENG-02)
+// ---------------------------------------------------------------------------
+
+fn run_block(instance: &mut ClapInstance) {
+    let mut l = [0.0f32; 64];
+    let mut r = [0.0f32; 64];
+    instance.process(&mut l, &mut r, 64);
+}
+
+/// A preset the plugin rejects (the fake refuses anything but 4 bytes)
+/// used to leave it deactivated for good: silent, no error, and every
+/// later load took the `!active` shortcut that never reactivates.
+#[test]
+fn rejected_state_load_reactivates_with_the_previous_state() {
+    let (mut instance, state) = make_instance(100);
+    let state = unsafe { &mut *state };
+
+    assert!(!instance.reload_with_state(&[1, 2, 3]), "load must report failure");
+    assert!(state.active, "plugin left deactivated after a rejected load");
+    assert_eq!(state.activate_calls, 2);
+    assert_eq!(instance.latency_samples(), 100, "previous state kept");
+
+    run_block(&mut instance);
+    assert_eq!(state.process_calls, 1, "process() must reach the plugin again");
+
+    // A good load afterwards takes the normal path.
+    assert!(instance.reload_with_state(&256u32.to_le_bytes()));
+    assert!(state.active);
+    assert_eq!(instance.latency_samples(), 256);
+}
+
+/// When reactivation itself failed, the next load must bring the plugin
+/// back instead of loading into a dead instance.
+#[test]
+fn load_after_failed_reactivation_reactivates() {
+    let (mut instance, state) = make_instance(0);
+    let state = unsafe { &mut *state };
+
+    state.fail_next_activate = true;
+    assert!(!instance.reload_with_state(&64u32.to_le_bytes()));
+    assert!(!state.active, "fake refused activation");
+
+    assert!(instance.reload_with_state(&512u32.to_le_bytes()));
+    assert!(state.active, "a good load must reactivate a failed instance");
+    assert_eq!(instance.latency_samples(), 512);
+    run_block(&mut instance);
+    assert_eq!(state.process_calls, 1);
+}
+
+/// The engine handler's reload surfaces a failure as a user-visible
+/// error naming the instance, and stays quiet on success.
+#[test]
+fn engine_reload_reports_failures_as_errors() {
+    let (mut instance, state) = make_instance(0);
+    let state = unsafe { &mut *state };
+
+    assert!(reload_plugin_state(&mut instance, 77, &32u32.to_le_bytes()).is_none());
+
+    match reload_plugin_state(&mut instance, 77, &[0xff]) {
+        Some(AudioEvent::Error(msg)) => {
+            assert!(msg.contains("77"), "error must name the instance: {msg}");
+            assert!(msg.contains("previous"), "rejected load keeps the old state: {msg}");
+        }
+        other => panic!("expected AudioEvent::Error, got {other:?}"),
+    }
+
+    state.fail_next_activate = true;
+    match reload_plugin_state(&mut instance, 77, &32u32.to_le_bytes()) {
+        Some(AudioEvent::Error(msg)) => {
+            assert!(msg.contains("77"));
+            assert!(msg.contains("silent"), "deactivated plugin must say so: {msg}");
+        }
+        other => panic!("expected AudioEvent::Error, got {other:?}"),
+    }
 }

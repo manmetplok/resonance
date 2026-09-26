@@ -77,7 +77,16 @@ pub struct ClapInstance {
     /// Pending note events to send during next process() call.
     /// Each entry: (is_note_on, key, velocity, sample_offset)
     pub(super) pending_notes: Vec<(bool, u8, f32, u32)>,
-    /// Pre-allocated buffer for CLAP note events.
+    /// Note events a previous process() call could not deliver because
+    /// their offset lay past that call's `frames_count` (a live note
+    /// queued against the whole callback, reaching the head sub-block of
+    /// a loop seam). Re-based to the next call's start and delivered
+    /// there. Same layout as `pending_notes`. Deliberately untouched by
+    /// [`ClapInstance::all_notes_off`]: the seam panics between its two
+    /// sub-blocks, and a carried event belongs to the tail, after it.
+    pub(super) carried_notes: Vec<(bool, u8, f32, u32)>,
+    /// Pre-allocated buffer for CLAP note events (carried + pending, so
+    /// sized for two full queues).
     pub(super) note_event_buf: Vec<clap_event_note>,
     /// Pre-allocated scratch for the CLAP audio output buffer array,
     /// one entry per output port. Reused across every `process_multi`
@@ -136,7 +145,8 @@ impl ClapInstance {
             pending_params: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             param_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
-            note_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
+            carried_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
+            note_event_buf: Vec::with_capacity(2 * crate::limits::MAX_PENDING_NOTES),
             audio_out_buffers,
             audio_out_ptrs,
             transport_bpm: 120.0,
@@ -471,7 +481,9 @@ impl ClapInstance {
     /// the offs), and pending note-offs are superseded by the full
     /// sweep below. Clearing also guarantees all 128 offs always fit
     /// without reallocating `pending_notes` on the audio thread
-    /// (e.g. loop-seam panic during a live MIDI burst).
+    /// (e.g. loop-seam panic during a live MIDI burst). Events carried
+    /// past an earlier sub-block (`carried_notes`) are kept: they are
+    /// timed after the seam this panic marks.
     pub fn all_notes_off(&mut self) {
         const _: () = assert!(crate::limits::MAX_PENDING_NOTES >= 128);
         self.pending_notes.clear();

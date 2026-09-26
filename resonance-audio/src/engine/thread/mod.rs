@@ -575,6 +575,10 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
                 .rec
                 .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
         }
+        // Take-file write failures (disk full, quota): reported from the
+        // drain above, a cycle-record seam or the trailing pass at stop,
+        // so polled every tick rather than only while recording.
+        state.rec.poll_write_errors(ctx.event_tx);
 
         // Audition preview housekeeping: emit AuditionStopped on a natural
         // finish, keep the sync-to-tempo ratio current, and throttle the

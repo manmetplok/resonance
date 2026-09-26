@@ -243,3 +243,58 @@ fn windowed_collector_keeps_long_notes_ending_inside_the_block() {
         "the eight-hundred-beat note's NoteOff must survive the window; got {out:?}"
     );
 }
+
+/// Collect the events of a block over a one-clip arrangement holding a
+/// single zero-length note (`duration_ticks == 0`, as SMF imports and
+/// open loop-record notes produce) at `beat` (0-based; one beat is
+/// 24 000 samples at 120 BPM) of a clip starting at sample 0.
+fn zero_length_note_block(beat: u64, playhead: u64, frames: usize) -> Vec<(bool, u32)> {
+    let tm = flat_map(120.0, 4, 4);
+    let clip = MidiClip {
+        id: 1,
+        track_id: 1,
+        start_sample: 0,
+        duration_ticks: 4 * TICKS_PER_QUARTER_NOTE as u64,
+        notes: vec![MidiNote {
+            note: 36,
+            velocity: 0.9,
+            start_tick: beat * TICKS_PER_QUARTER_NOTE as u64,
+            duration_ticks: 0,
+        }],
+        name: "zero".into(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    };
+    let mut out = Vec::new();
+    collect_midi_events_bounce(&[clip], 1, playhead, frames, &tm, SR, &mut out);
+    out.iter()
+        .filter(|e| e.note == 36)
+        .map(|e| (e.is_note_on, e.sample_offset))
+        .collect()
+}
+
+#[test]
+fn zero_length_note_emits_on_strictly_before_off() {
+    // MIX-10: both events used to land on the same offset with the off
+    // sorted first, so the plugin saw Off → On and the voice hung.
+    let got = zero_length_note_block(1, 24_000 - 40, 128);
+    assert_eq!(got, vec![(true, 40), (false, 41)]);
+}
+
+#[test]
+fn zero_length_note_on_the_last_frame_stays_inside_the_block() {
+    // The note starts on the block's last frame: there is no room for a
+    // later off inside the block, so the on moves one frame earlier
+    // rather than leaving the off to a block that would never emit it.
+    let got = zero_length_note_block(1, 24_000 - 127, 128);
+    assert_eq!(got, vec![(true, 126), (false, 127)]);
+}
+
+#[test]
+fn zero_length_note_on_the_clip_start_is_not_skipped() {
+    // An SMF drum hit on the clip's first tick: its end tick equals the
+    // visible start, which the "ended before the clip" test used to
+    // treat as already over.
+    let got = zero_length_note_block(0, 0, 128);
+    assert_eq!(got, vec![(true, 0), (false, 1)]);
+}

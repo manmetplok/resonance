@@ -127,6 +127,9 @@ pub mod __test_support {
     /// the two lookups that can produce a reason for it — see
     /// `tests/plugin_load_failure.rs` (ba doc #275 P5, todo #1309).
     pub use crate::engine::plugins::{ensure_bundle, plugin_load_failed_event};
+    /// State reload + the error it reports on failure (code review
+    /// ENG-02) — see `tests/clap_latency_tracking.rs`.
+    pub use crate::engine::plugins::reload_plugin_state;
     /// The event pair the engine emits when a plugin editor refuses to
     /// open (ba todo #1347) — see `tests/plugin_editor_state.rs`.
     pub use crate::engine::plugins::plugin_editor_failure_events;

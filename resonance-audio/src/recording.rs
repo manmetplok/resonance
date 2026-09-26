@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -46,7 +46,14 @@ pub struct TrackRecordingBuf {
     pub peak_frames: usize,
 
     /// Total stereo frames written to the WAV so far (post-resample).
+    /// After a write failure: the frames actually salvaged on disk.
     pub frames_written: u64,
+    /// A write to this take's WAV failed: the writer is closed, the file
+    /// was cut back to the whole frames that reached the disk (with a
+    /// header describing them) and `frames_written` counts those. The
+    /// take still becomes a clip; later drains skip the track until the
+    /// next pass opens a fresh writer (code review ENG-03).
+    pub write_failed: bool,
 
     /// 0-indexed starting channel in the interleaved input stream.
     pub input_port: u16,
@@ -102,6 +109,10 @@ pub struct RecordingState {
     /// [`RecordingState::begin_overflow_episode`] when the next take
     /// starts capturing.
     overflow_reported: bool,
+    /// User-facing reports of take-file write failures not yet emitted;
+    /// drained into `AudioEvent::Error` by
+    /// [`RecordingState::poll_write_errors`].
+    write_errors: Vec<String>,
 }
 
 /// Shift a finalized take `shift` samples earlier on the timeline: the
@@ -151,6 +162,17 @@ impl RecordingState {
             start_latch_applied: true,
             deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
             overflow_reported: false,
+            write_errors: Vec::new(),
+        }
+    }
+
+    /// Emit an [`AudioEvent::Error`] for every take-file write failure
+    /// recorded since the last poll. The engine loop calls this every
+    /// tick; [`RecordingState::finalize_recording`] calls it too, so a
+    /// failure found by its final drain is reported with the take.
+    pub fn poll_write_errors(&mut self, event_tx: &Sender<AudioEvent>) {
+        for msg in self.write_errors.drain(..) {
+            let _ = event_tx.send(AudioEvent::Error(msg));
         }
     }
 
@@ -229,6 +251,7 @@ impl RecordingState {
             peak_max: f32::MIN,
             peak_frames: 0,
             frames_written: 0,
+            write_failed: false,
             input_port,
             mono,
         })
@@ -267,6 +290,11 @@ impl RecordingState {
             }
 
             for track_buf in self.buffers.values_mut() {
+                // A take whose file failed stays closed for the rest
+                // of the pass; its salvaged audio is already final.
+                if track_buf.writer.is_none() {
+                    continue;
+                }
                 // Deinterleave this track's channel(s) out of the
                 // multi-channel ring chunk into `deint_scratch`, as
                 // stereo-interleaved input-rate samples.
@@ -306,14 +334,7 @@ impl RecordingState {
                     track_buf.resample_scratch = buf;
                 }
                 if let Err(e) = write_result {
-                    eprintln!(
-                        "recording: write failed for {}: {e}",
-                        track_buf.path.display()
-                    );
-                    // Drop the writer so subsequent drains don't
-                    // keep retrying; finalize will surface a short
-                    // clip or no clip depending on how much made it.
-                    track_buf.writer = None;
+                    self.write_errors.push(salvage_failed_take(track_buf, &e));
                 }
             }
         }
@@ -336,6 +357,8 @@ impl RecordingState {
     ) -> usize {
         self.drain_ring_to_buffers();
         let mut clips_emitted = 0usize;
+        // Tell the user about a failed take file alongside the take.
+        self.poll_write_errors(event_tx);
 
         for (track_id, mut track_buf) in self.buffers.drain() {
             // Hand off the writer-flush / peak-close / WavWriter::finalize
@@ -492,14 +515,21 @@ impl RecordingState {
                         track_buf.path = path;
                         track_buf.clip_id = new_clip_id;
                         track_buf.frames_written = 0;
+                        track_buf.write_failed = false;
                         track_buf.peak_min = f32::MAX;
                         track_buf.peak_max = f32::MIN;
                         track_buf.peak_frames = 0;
                     }
                     Err(e) => {
                         eprintln!("recording: reopen pass writer failed: {e}");
+                        self.write_errors.push(format!(
+                            "Recording stopped on this track: could not open the next take \
+                             file ({e})."
+                        ));
                         // Leave the writer closed; later passes for this
-                        // track simply produce nothing.
+                        // track simply produce nothing — and must not
+                        // re-emit the take that just rolled.
+                        track_buf.frames_written = 0;
                     }
                 }
             }
@@ -653,6 +683,11 @@ fn open_track_wav_file(
 /// `track_buf.writer` is now `None` and the on-disk file is valid;
 /// `Err(_)` means the file should be considered corrupt.
 fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), String> {
+    // A take whose file failed mid-recording was already salvaged and
+    // closed (header fixed, peaks trimmed); the file is valid as is.
+    if track_buf.write_failed {
+        return Ok(());
+    }
     // Flush any trailing resampled frame.
     if let Some(r) = track_buf.resampler.as_mut() {
         track_buf.resample_scratch.clear();
@@ -687,6 +722,104 @@ fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), String> {
     writer
         .finalize()
         .map_err(|e| format!("finalize wav {}: {e}", track_buf.path.display()))
+}
+
+/// Handle a failed write to a take's WAV: close the writer, cut the file
+/// back to the whole frames that actually reached the disk and rewrite
+/// its header to match, so the take up to the failure stays a valid,
+/// mappable clip (code review ENG-03). `frames_written` becomes the
+/// salvaged count (0 if nothing could be recovered) and the peaks are
+/// trimmed to it. Returns the user-facing error message.
+fn salvage_failed_take(track_buf: &mut TrackRecordingBuf, err: &str) -> String {
+    eprintln!(
+        "recording: write failed for {}: {err}",
+        track_buf.path.display()
+    );
+    if let Some(writer) = track_buf.writer.take() {
+        // Best effort: flushes what it can and drops the file handle
+        // (dropping it later could still append buffered bytes behind
+        // the repair below). Its header update usually fails too.
+        let _ = writer.finalize();
+    }
+    track_buf.write_failed = true;
+    let salvaged = repair_wav_data_len(&track_buf.path);
+    let frames = *salvaged.as_ref().unwrap_or(&0);
+    track_buf.frames_written = frames;
+
+    // Keep the peaks in step with the audio that survived.
+    let peak_frames = crate::types::WAVEFORM_PEAK_FRAMES as u64;
+    let want = frames.div_ceil(peak_frames) as usize;
+    if track_buf.peaks.len() < want && track_buf.peak_frames > 0 {
+        track_buf
+            .peaks
+            .push((track_buf.peak_min, track_buf.peak_max));
+    }
+    track_buf.peaks.truncate(want);
+    track_buf.peak_frames = 0;
+    track_buf.peak_min = f32::MAX;
+    track_buf.peak_max = f32::MIN;
+
+    let name = track_buf
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match salvaged {
+        Ok(frames) => format!(
+            "Recording stopped on this track: writing {name} failed ({err}). The take was \
+             kept up to the failure ({frames} frames)."
+        ),
+        Err(e) => format!(
+            "Recording stopped on this track: writing {name} failed ({err}), and the audio \
+             captured so far could not be recovered ({e})."
+        ),
+    }
+}
+
+/// Make a partially written stereo float WAV valid again: find its
+/// `data` chunk, cut the file back to the whole frames present (at most
+/// what a RIFF size field can describe), and rewrite the RIFF and `data`
+/// sizes. Only shrinks the file and overwrites header bytes in place, so
+/// it works on the full disk that caused the failure. Returns the frame
+/// count.
+fn repair_wav_data_len(path: &Path) -> Result<u64, String> {
+    const FRAME_BYTES: u64 = 2 * 4; // stereo f32
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(err)?;
+    let file_len = file.metadata().map_err(err)?.len();
+
+    // Walk the chunk list after "RIFF....WAVE" to the data chunk. Every
+    // chunk before it is complete (hound writes them up front).
+    let mut pos = 12u64;
+    let data_start = loop {
+        if pos + 8 > file_len {
+            return Err("no data chunk".into());
+        }
+        let mut head = [0u8; 8];
+        file.seek(SeekFrom::Start(pos)).map_err(err)?;
+        file.read_exact(&mut head).map_err(err)?;
+        if &head[0..4] == b"data" {
+            break pos + 8;
+        }
+        let size = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as u64;
+        pos += 8 + size + (size & 1);
+    };
+
+    let max_data = (u32::MAX as u64 + 8).saturating_sub(data_start);
+    let data_len = (file_len - data_start).min(max_data) / FRAME_BYTES * FRAME_BYTES;
+    file.set_len(data_start + data_len).map_err(err)?;
+    file.seek(SeekFrom::Start(4)).map_err(err)?;
+    file.write_all(&((data_start + data_len - 8) as u32).to_le_bytes())
+        .map_err(err)?;
+    file.seek(SeekFrom::Start(data_start - 4)).map_err(err)?;
+    file.write_all(&(data_len as u32).to_le_bytes())
+        .map_err(err)?;
+    file.sync_all().map_err(err)?;
+    Ok(data_len / FRAME_BYTES)
 }
 
 /// Write stereo-interleaved samples to the track's WAV writer and
