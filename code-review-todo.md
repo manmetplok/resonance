@@ -24,12 +24,15 @@ master and updates this table. Agents do **not** edit this file.
 | G1 drums timing | DSP-01 | opus | merged | 50dad7db |
 | G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
 | G3 resampler | LIB-01 | opus | merged | ac640b82 |
-| H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | planning (read-only) | |
+| H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | planned → `arch-migration-plan.md`; NOW-steps queued behind M3 (audio) and M4 (undo) to avoid conflicts | |
 | M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | in progress | |
 | M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | in progress | |
 | M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | in progress | |
 | M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
 | M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | in progress | |
+| H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | queued (after M3) | |
+| H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | queued (after M4) | |
+| H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | queued (after M3) | |
 
 ### Follow-ups found while fixing (new todos)
 
