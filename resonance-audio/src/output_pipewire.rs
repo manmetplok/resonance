@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use pipewire as pw;
 use pipewire::spa;
+use thiserror::Error;
 
 use pw::context::ContextRc;
 use pw::core::CoreRc;
@@ -40,11 +41,42 @@ use spa::param::audio::AudioInfoRaw;
 use spa::param::format::{MediaSubtype, MediaType};
 use spa::param::format_utils;
 use spa::param::ParamType;
-use spa::pod::serialize::PodSerializer;
+use spa::pod::serialize::{GenError, PodSerializer};
 use spa::pod::{Object, Pod, Value};
 
 use crate::engine::SharedState;
 use crate::mixer::MixFn;
+use crate::types::{EngineError, EngineErrorKind};
+
+/// Failure standing up the native PipeWire output stream ([`build`]).
+/// Message text matches the historical `format!()` / literal strings.
+/// Always classifies as [`EngineErrorKind::Io`] — a driver/graph
+/// negotiation failure, not a missing entity or a busy engine.
+#[derive(Debug, Error)]
+pub(crate) enum PwOutputError {
+    #[error("PipeWire ThreadLoop::new: {0}")]
+    ThreadLoop(#[source] pw::Error),
+    #[error("PipeWire Context::new: {0}")]
+    Context(#[source] pw::Error),
+    #[error("PipeWire Core::connect: {0}")]
+    CoreConnect(#[source] pw::Error),
+    #[error("PipeWire Stream::new: {0}")]
+    StreamNew(#[source] pw::Error),
+    #[error("PipeWire Stream::register: {0}")]
+    Register(#[source] pw::Error),
+    #[error("PipeWire pod serialize: {0}")]
+    PodSerialize(#[source] GenError),
+    #[error("PipeWire Pod::from_bytes: invalid pod bytes")]
+    InvalidPodBytes,
+    #[error("PipeWire Stream::connect: {0}")]
+    StreamConnect(#[source] pw::Error),
+}
+
+impl From<PwOutputError> for EngineError {
+    fn from(e: PwOutputError) -> Self {
+        EngineError::new(EngineErrorKind::Io, e.to_string())
+    }
+}
 
 /// Handle returned by [`build`]. Owns the PipeWire thread loop, the
 /// core, the stream, and the registered listener. Drop order matters
@@ -111,7 +143,7 @@ pub(crate) fn build(
     quantum: u32,
     max_frames: usize,
     mix: MixFn,
-) -> Result<(PipeWireOutputHandle, u32, u16), String> {
+) -> Result<(PipeWireOutputHandle, u32, u16), PwOutputError> {
     pw::init();
 
     // SAFETY: `ThreadLoopRc::new` is marked unsafe because the
@@ -120,8 +152,7 @@ pub(crate) fn build(
     // `PipeWireOutputHandle` as the stream and ordering Drop so the
     // loop is destroyed last.
     let thread_loop = unsafe {
-        ThreadLoopRc::new(Some("resonance-output"), None)
-            .map_err(|e| format!("PipeWire ThreadLoop::new: {e}"))?
+        ThreadLoopRc::new(Some("resonance-output"), None).map_err(PwOutputError::ThreadLoop)?
     };
     thread_loop.start();
 
@@ -130,11 +161,8 @@ pub(crate) fn build(
     // around any pipewire call that touches them.
     let lock = thread_loop.lock();
 
-    let context = ContextRc::new(&thread_loop, None)
-        .map_err(|e| format!("PipeWire Context::new: {e}"))?;
-    let core = context
-        .connect_rc(None)
-        .map_err(|e| format!("PipeWire Core::connect: {e}"))?;
+    let context = ContextRc::new(&thread_loop, None).map_err(PwOutputError::Context)?;
+    let core = context.connect_rc(None).map_err(PwOutputError::CoreConnect)?;
 
     let mut props = properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
@@ -152,7 +180,7 @@ pub(crate) fn build(
     }
 
     let stream = StreamRc::new(core.clone(), "resonance-output", props)
-        .map_err(|e| format!("PipeWire Stream::new: {e}"))?;
+        .map_err(PwOutputError::StreamNew)?;
 
     let channels_atomic = Arc::new(AtomicU16::new(channels));
     let rate_atomic = Arc::new(AtomicU32::new(sample_rate));
@@ -173,7 +201,7 @@ pub(crate) fn build(
         .state_changed(on_state_changed)
         .process(on_process)
         .register()
-        .map_err(|e| format!("PipeWire Stream::register: {e}"))?;
+        .map_err(PwOutputError::Register)?;
 
     // Ask the graph for interleaved f32 stereo at the engine's rate,
     // with an explicit FL/FR position so the session manager can remap
@@ -197,11 +225,11 @@ pub(crate) fn build(
         std::io::Cursor::new(Vec::new()),
         &Value::Object(pod_obj),
     )
-    .map_err(|e| format!("PipeWire pod serialize: {e}"))?
+    .map_err(PwOutputError::PodSerialize)?
     .0
     .into_inner();
     let pod = Pod::from_bytes(&pod_bytes)
-        .ok_or_else(|| "PipeWire Pod::from_bytes: invalid pod bytes".to_string())?;
+        .ok_or(PwOutputError::InvalidPodBytes)?;
     let mut params = [pod];
 
     stream
@@ -211,7 +239,7 @@ pub(crate) fn build(
             StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
             &mut params,
         )
-        .map_err(|e| format!("PipeWire Stream::connect: {e}"))?;
+        .map_err(PwOutputError::StreamConnect)?;
 
     // Release the loop lock so the RT thread can attach the stream
     // and fire the first `param_changed`.
