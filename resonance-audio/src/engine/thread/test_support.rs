@@ -233,14 +233,6 @@ impl EngineHandlerHarness {
         self.state.project_dir = Some(dir);
     }
 
-    /// Run the real `AudioCommand::ImportClip` handler: queues a decode on
-    /// the import worker, which lands the clip asynchronously.
-    pub fn import_clip(&mut self, track_id: TrackId, path: String, start_sample: u64) {
-        self.with_ctx(|ctx, state| {
-            crate::engine::clips::handle_import_clip(ctx, state, track_id, path, start_sample)
-        });
-    }
-
     /// Run the real `AudioCommand::ImportAudioToPool` handler: spawns the
     /// pool-import worker, whose events arrive asynchronously.
     pub fn import_audio_to_pool(&mut self, paths: Vec<String>) {
@@ -574,7 +566,7 @@ impl EngineHandlerHarness {
     }
 
     /// Block until every job submitted to the clip-import pool so far
-    /// (`ImportClip`, `LoadClipFromWav`, take-clip loads) has finished,
+    /// (`LoadClipFromWav`, take-clip loads) has finished,
     /// so a test can assert that a wrong publish did *not* happen without
     /// a grace sleep that a slow machine outruns (FU-A5a).
     ///
@@ -698,19 +690,40 @@ impl EngineHandlerHarness {
 
     // -- MIDI note edits (code review VIEW-02 / CTL-02) ------------------
 
-    /// Run the real `AudioCommand::CreateMidiClip` handler — the one clip
-    /// path the engine allocates the id for (a GUI-drawn clip).
-    pub fn create_midi_clip(&mut self, track_id: TrackId, start_sample: u64, duration_ticks: u64) {
-        self.with_ctx(|ctx, state| {
+    /// Run the real `AudioCommand::CreateMidiClip` handler (a GUI-drawn
+    /// clip). `clip_id` is mandatory since D-7c: the app allocates it and
+    /// the engine only checks it against the live clip lists, refusing a
+    /// collision with `EngineErrorKind::Internal` rather than inventing
+    /// or reusing an id.
+    pub fn create_midi_clip(
+        &mut self,
+        clip_id: ClipId,
+        track_id: TrackId,
+        start_sample: u64,
+        duration_ticks: u64,
+    ) -> Vec<AudioEvent> {
+        self.with_ctx(|ctx, _state| {
             crate::engine::midi::handle_create_midi_clip(
                 ctx,
-                state,
+                clip_id,
                 track_id,
                 start_sample,
                 duration_ticks,
                 "drawn".into(),
             )
         });
+        self.drain_events()
+    }
+
+    /// A live MIDI clip's name, if it exists. Used to confirm a refused
+    /// duplicate-id `CreateMidiClip` did not rename/replace the clip it
+    /// collided with.
+    pub fn midi_clip_name(&self, clip_id: ClipId) -> Option<String> {
+        self.midi_clips
+            .read()
+            .iter()
+            .find(|c| c.id == clip_id)
+            .map(|c| c.name.clone())
     }
 
     /// Run the real `AudioCommand::LoadMidiClipDirect` handler: a clip

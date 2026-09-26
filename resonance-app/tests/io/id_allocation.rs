@@ -64,6 +64,8 @@ impl FakeEngine {
     /// `engine/midi/clips.rs`, `engine/clips.rs` (FU-A6a): a clip id
     /// handed in (`LoadMidiClipDirect`, `LoadClipFromWav`) raises the
     /// counter only when it is below the app's derived-clip base.
+    /// `CreateMidiClip` (D-7c) is now id-hinted the same way — it no
+    /// longer allocates a fresh id of its own.
     fn clip(&mut self, id: Option<u64>) -> u64 {
         match id {
             Some(h) => {
@@ -219,12 +221,15 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                 });
             }
             AudioCommand::CreateMidiClip {
+                clip_id,
                 track_id,
                 start_sample,
                 duration_ticks,
                 name,
             } => {
-                let clip_id = engine.clip(None);
+                // D-7c: mandatory app-allocated id, honoured verbatim —
+                // same echo shape as `LoadMidiClipDirect` below.
+                let clip_id = engine.clip(Some(clip_id));
                 app.test_apply_engine_event(AudioEvent::MidiClipCreated {
                     clip_id,
                     track_id,
@@ -672,14 +677,18 @@ fn a_new_track_never_takes_a_group_id() {
     assert_partition_holds(&f.app, "after allocating over a group id");
 }
 
-/// FU-A6a: a GUI-drawn MIDI clip (engine-allocated) between two
-/// app-derived ones (`notes.create_clip` draws from
-/// `fresh_derived_clip_id`) must not share an id with either. Before the
-/// engine stopped bumping its counter past app-range ids, the first
-/// derived clip at `base` moved the engine to `base + 1`, the drawn clip
-/// took it, and the next derived clip was handed `base + 1` as well.
+/// D-7c (formerly FU-A6a): a GUI-drawn MIDI clip and two app-derived ones
+/// (`notes.create_clip` draws from `fresh_derived_clip_id`) all come from
+/// the SAME app allocator now — `AudioCommand::CreateMidiClip` carries a
+/// mandatory id since D-7c, so the engine has nothing left to allocate for
+/// a drawn clip. Before D-7c the engine allocated the drawn clip's id
+/// itself; the original FU-A6a bug was the engine's counter chasing the
+/// app's derived range and handing out an id `notes.create_clip` had
+/// already claimed. Also pins the STATE-08 shape every other allocator in
+/// this file gets: the id stays unique across an undo of the draw and a
+/// save/reload.
 #[test]
-fn a_drawn_clip_never_takes_a_derived_clip_id() {
+fn a_drawn_clip_never_shares_an_id_with_a_derived_clip_including_across_undo_and_reload() {
     let mut f = fixture("clips");
     let track_id = f
         .app
@@ -689,8 +698,7 @@ fn a_drawn_clip_never_takes_a_derived_clip_id() {
         .find(|t| matches!(t.track_type, TrackType::Instrument) && t.sub_track.is_none())
         .expect("the demo has an instrument track")
         .id;
-    let seeded: HashSet<ClipId> = f.app.test_midi_clips().iter().map(|c| c.id).collect();
-    let derive = |f: &mut Fixture, bar: u32| {
+    let derive = |f: &mut Fixture, bar: u32| -> ClipId {
         let clip_id = call(
             &mut f.app,
             "notes.create_clip",
@@ -703,25 +711,73 @@ fn a_drawn_clip_never_takes_a_derived_clip_id() {
         echo(&mut f.app, &f.rx, &mut f.engine);
         clip_id
     };
+    // Identified by set difference (same reasoning as `gui_bus` in
+    // `add_round`): a drawn clip's id no longer falls in a range of its
+    // own that would tell it apart from a derived one.
+    let draw = |f: &mut Fixture, start_sample: u64| -> ClipId {
+        let before: HashSet<ClipId> = f.app.test_midi_clips().iter().map(|c| c.id).collect();
+        let _ = f.app.update(Message::Compose(ComposeMessage::CreateMidiClipInSection {
+            track_id,
+            start_sample,
+            length_bars: 1,
+        }));
+        echo(&mut f.app, &f.rx, &mut f.engine);
+        *f.app
+            .test_midi_clips()
+            .iter()
+            .map(|c| c.id)
+            .find(|id| !before.contains(id))
+            .as_ref()
+            .expect("the drawn clip landed")
+    };
 
     let first = derive(&mut f, 40);
     assert!(first >= DERIVED_CLIP_ID_BASE, "control clips come from the derived range");
-    f.app.test_dispatch(Message::Compose(ComposeMessage::CreateMidiClipInSection {
-        track_id,
-        start_sample: 0,
-        length_bars: 1,
-    }));
-    echo(&mut f.app, &f.rx, &mut f.engine);
-    let second = derive(&mut f, 44);
+    let drawn = draw(&mut f, 0);
+    assert!(
+        drawn >= DERIVED_CLIP_ID_BASE,
+        "D-7c: the drawn clip now comes from the same app allocator, got {drawn}"
+    );
+    assert_set("midi clip", &[first, drawn]);
 
-    let ids: Vec<ClipId> = f.app.test_midi_clips().iter().map(|c| c.id).collect();
-    assert_eq!(ids.len(), seeded.len() + 3, "three clips were added: {ids:?}");
-    assert_set("midi clip", &ids);
-    let drawn = *ids
-        .iter()
-        .find(|id| **id != first && **id != second && !seeded.contains(id))
-        .expect("the drawn clip landed");
-    assert!(drawn < DERIVED_CLIP_ID_BASE, "the drawn clip took an engine id, got {drawn}");
+    // STATE-08: undo the draw (a structural change — `midi_clip_set_matches`
+    // is part of `structurally_compatible`, so this takes the `ClearAll` ->
+    // replay path, same as a plugin/bus/track add-undo above) *immediately*,
+    // so it's the draw's own snapshot that's undone rather than whatever
+    // came after it, and draw again: the allocator must not rewind and
+    // reuse the undone id.
+    let _ = f.app.update(Message::Undo);
+    assert!(
+        std::iter::from_fn(|| f.rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
+        "undo must find the draw and start restoring the pre-draw snapshot"
+    );
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(
+        !f.app.test_midi_clips().iter().any(|c| c.id == drawn),
+        "undo removed the clip the draw created"
+    );
+    let redrawn = draw(&mut f, 0);
+    assert_ne!(
+        redrawn, drawn,
+        "undo must not rewind the allocator: the post-undo draw reused the \
+         id the undone draw held"
+    );
+    let second = derive(&mut f, 44);
+    assert_set("midi clip", &[first, second, redrawn]);
+
+    // A reload must not let a further draw or derive collide with
+    // anything the save carried over.
+    save_and_reload(&mut f);
+    let after_reload: HashSet<ClipId> = f.app.test_midi_clips().iter().map(|c| c.id).collect();
+    for id in [first, second, redrawn] {
+        assert!(after_reload.contains(&id), "reload kept clip {id}");
+    }
+
+    let post_reload_derive = derive(&mut f, 48);
+    let post_reload_drawn = draw(&mut f, 960);
+    assert!(!after_reload.contains(&post_reload_derive), "a post-reload derive must not reuse a restored id");
+    assert!(!after_reload.contains(&post_reload_drawn), "a post-reload draw must not reuse a restored id");
+    assert_ne!(post_reload_derive, post_reload_drawn);
 }
 
 /// The one remaining base is named in one place and keeps its order

@@ -23,18 +23,12 @@ pub(super) fn dispatch_midi(
         }
         AudioCommand::AddVocalTrack { id, name } => midi::handle_add_vocal_track(ctx, id, name),
         AudioCommand::CreateMidiClip {
+            clip_id,
             track_id,
             start_sample,
             duration_ticks,
             name,
-        } => midi::handle_create_midi_clip(
-            ctx,
-            state,
-            track_id,
-            start_sample,
-            duration_ticks,
-            name,
-        ),
+        } => midi::handle_create_midi_clip(ctx, clip_id, track_id, start_sample, duration_ticks, name),
         AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,

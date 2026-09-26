@@ -2383,64 +2383,17 @@ fn setting_the_project_dir_reserves_the_ids_of_its_wavs() {
 }
 
 // ---------------------------------------------------------------------------
-// An import queued before `ClearAll` never lands after it (code review UPD-09)
-// ---------------------------------------------------------------------------
-
-/// `ImportClip` decodes on a worker. A project load or slow-path undo
-/// (`ClearAll`) while it ran used to let the worker push the old
-/// project's clip (old id, old track) into the new project's clip list
-/// and tell the app about it after `AllCleared`.
-#[test]
-fn an_import_finishing_after_clear_all_is_dropped() {
-    let dir = make_tempdir("import-vs-clear-all");
-    // Long enough that the decode is still running when `ClearAll` lands.
-    let source = write_dc_take_wav(&dir, 1, 0.5, 48_000 * 30);
-    let project = dir.join("project");
-    std::fs::create_dir_all(project.join("audio")).unwrap();
-
-    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
-    engine.set_project_dir(project.clone());
-    engine.import_clip(7, source.display().to_string(), 0);
-    engine.clear_all();
-
-    // Wait for the worker to finish outright, so a (wrong) push has
-    // happened by the time the list is read (FU-A5a: was a 500 ms grace).
-    engine.settle_imports(std::time::Duration::from_secs(60));
-
-    assert!(engine.clip_ids().is_empty(), "the stale import landed: {:?}", engine.clip_ids());
-    let events = engine.drain_events();
-    let cleared = events
-        .iter()
-        .position(|e| matches!(e, resonance_audio::types::AudioEvent::AllCleared))
-        .expect("ClearAll echoed");
-    assert!(
-        !events[cleared..]
-            .iter()
-            .any(|e| matches!(e, resonance_audio::types::AudioEvent::ClipImported { .. })),
-        "no ClipImported may follow AllCleared"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The `SetProjectDir` handler runs that folder scan on a worker (code
-/// review FU-M12b), yet the first clip id allocated after it — here by
-/// an import — still waits for the reservation.
-#[test]
-fn the_project_dir_scan_runs_off_thread_but_lands_before_the_next_id() {
-    let dir = std::env::temp_dir().join(format!("resonance_fu_m12b_{}", std::process::id()));
-    std::fs::create_dir_all(dir.join("audio")).unwrap();
-    std::fs::write(dir.join("audio/clip_41.wav"), b"").unwrap();
-
-    let mut h = EngineHandlerHarness::new();
-    h.set_project_dir_async(dir.clone());
-    // Allocates an id synchronously; the decode of the (missing) file
-    // fails later on the import worker.
-    h.import_clip(1, dir.join("missing.wav").display().to_string(), 0);
-
-    assert_eq!(h.next_clip_id(), 43, "the import took id 42, past the reserved 41");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
+// (D-7c) `AudioCommand::ImportClip` deleted — no app sender (only this file
+// used it, to reproduce code review UPD-09: an import queued before
+// `ClearAll` must never land after it). `ImportClip`'s worker checked
+// `HandlerState::clear_generation` before publishing; `LoadClipFromWav`'s
+// `submit_clip_load` worker (the closest live analog) does NOT check it —
+// only its own duplicate-id guard — so this test's exact intent has no
+// live command left that actually gives the same guarantee, and rewriting
+// it against `LoadClipFromWav` would assert a protection that isn't there.
+// Not fixed here (out of scope for D-7c): a `LoadClipFromWav`/
+// `LoadTakeClipFromWav` racing a *later* `ClearAll` can in principle still
+// land after it, same shape as `ImportClip` before UPD-09.
 // ---------------------------------------------------------------------------
 // Loop-record seams at a mismatched device rate (code review FU-G3b)
 // ---------------------------------------------------------------------------

@@ -24,6 +24,8 @@ mod bus_plugin_move;
 mod clip_fade_gain_handlers;
 #[path = "engine/clip_warp_handlers.rs"]
 mod clip_warp_handlers;
+#[path = "engine/create_midi_clip_mandatory_id.rs"]
+mod create_midi_clip_mandatory_id;
 #[path = "engine/deferred_clip_commands.rs"]
 mod deferred_clip_commands;
 #[path = "engine/derived_clip_id_partition.rs"]

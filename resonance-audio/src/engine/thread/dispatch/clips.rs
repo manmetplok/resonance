@@ -11,11 +11,6 @@ pub(super) fn dispatch_clips(
     cmd: AudioCommand,
 ) {
     match cmd {
-        AudioCommand::ImportClip {
-            track_id,
-            path,
-            start_sample,
-        } => clips::handle_import_clip(ctx, state, track_id, path, start_sample),
         AudioCommand::ImportAudioToPool { paths } => {
             import_pool::handle_import_audio_to_pool(ctx, state, paths)
         }

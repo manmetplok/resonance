@@ -30,11 +30,6 @@ pub enum AudioCommand {
     Pause,
     Stop,
     SeekTo(SamplePos),
-    ImportClip {
-        track_id: TrackId,
-        path: String,
-        start_sample: SamplePos,
-    },
     /// Import one or more source files into the project pool **without**
     /// placing a clip. Each file is decoded, channel up/down-mixed and
     /// resampled to the project rate, copied into `{project_dir}/audio/`
@@ -761,7 +756,13 @@ pub enum AudioCommand {
     },
 
     // -- MIDI clip commands --
+    /// `clip_id` is mandatory (D-7c): the app allocates it (today's general
+    /// clip allocator, `ComposeState::fresh_derived_clip_id`) and carries it
+    /// here rather than letting the engine invent one. The engine refuses a
+    /// collision with `EngineErrorKind::Internal` instead of overwriting the
+    /// live clip — see `reject_if_clip_id_in_use`.
     CreateMidiClip {
+        clip_id: ClipId,
         track_id: TrackId,
         start_sample: SamplePos,
         duration_ticks: u64,

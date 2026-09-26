@@ -49,17 +49,21 @@ pub(crate) fn handle_add_vocal_track(ctx: &HandlerCtx, id: TrackId, name: Option
         .send(AudioEvent::VocalTrackAdded { track_id: id });
 }
 
+/// `clip_id` is mandatory (D-7c): the app allocates it and the engine no
+/// longer touches `next_clip_id` for this command (that counter still
+/// serves recording until D-7d). A collision is refused rather than
+/// silently replacing the live clip — see `reject_if_clip_id_in_use`.
 pub(crate) fn handle_create_midi_clip(
     ctx: &HandlerCtx,
-    state: &mut HandlerState,
+    clip_id: ClipId,
     track_id: TrackId,
     start_sample: u64,
     duration_ticks: u64,
     name: String,
 ) {
-    crate::engine::clips::settle_clip_id_scan(state, true);
-    let clip_id = state.next_clip_id;
-    state.next_clip_id += 1;
+    if super::super::clips::reject_if_clip_id_in_use(ctx, clip_id) {
+        return;
+    }
     let clip = MidiClip {
         id: clip_id,
         track_id,
