@@ -9,7 +9,9 @@
 //! same `_from`/`_to` escape hatch `registry.rs` and `midi_map.rs` use
 //! to keep their own disk-touching tests off the machine's real files.
 
-use resonance_app::settings::{load_from, persist_to, AppSettings, AutosaveSettings};
+use resonance_app::settings::{
+    load_from, persist_to, AppSettings, ArrangeSettings, AutosaveSettings,
+};
 
 #[test]
 fn autosave_defaults_match_spec() {
@@ -116,4 +118,24 @@ fn corrupt_settings_file_loads_default_and_is_quarantined() {
     assert_eq!(std::fs::read(&corrupt_path).unwrap(), original);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Code review FU-V3b: the playhead-follow switch persists, defaults on,
+/// and a settings file written before it existed still loads.
+#[test]
+fn follow_playhead_defaults_on_and_round_trips() {
+    assert!(AppSettings::default().arrange.follow_playhead);
+    let old: AppSettings = serde_json::from_str(r#"{"autosave": {"enabled": true}}"#)
+        .expect("a pre-FU-V3b file parses");
+    assert!(old.arrange.follow_playhead, "absent section defaults on");
+
+    let off = AppSettings {
+        arrange: ArrangeSettings {
+            follow_playhead: false,
+        },
+        ..AppSettings::default()
+    };
+    let json = serde_json::to_string(&off).expect("serialize");
+    let back: AppSettings = serde_json::from_str(&json).expect("parse");
+    assert_eq!(back, off);
 }

@@ -357,17 +357,19 @@ const FOLLOW_LEAD_FRACTION: f32 = 0.05;
 /// `Scrollable`, scroll so it sits just inside the left edge again. Also
 /// catches a loop wrap or seek behind the view.
 ///
-/// Follow stays out of the way of the user: it is paused by a manual
-/// scroll during playback (`update::viewport::arrange_scrolled`) until
-/// the transport stops, and skipped while a pointer drag on the timeline
-/// is in flight, so content never pages away under the cursor.
+/// Follow stays out of the way of the user: it can be switched off in
+/// Settings, it is paused by a manual scroll during playback
+/// (`update::viewport::arrange_scrolled`) until the transport stops or
+/// the playhead comes back into view (code review FU-V3b), and it is
+/// skipped while a pointer drag on the timeline is in flight, so content
+/// never pages away under the cursor.
 fn follow_playhead(r: &mut Resonance) -> Option<Task<Message>> {
     if !r.transport.playing {
         r.viewport.follow_paused = false;
         return None;
     }
-    if r.view_mode != crate::state::ViewMode::Arrange
-        || r.viewport.follow_paused
+    if !r.settings.arrange.follow_playhead
+        || r.view_mode != crate::state::ViewMode::Arrange
         || r.viewport.visible_width <= 0.0
         || arrange_pointer_drag_active(r)
     {
@@ -378,6 +380,12 @@ fn follow_playhead(r: &mut Resonance) -> Option<Task<Message>> {
         (r.transport.playhead as f64 / r.sample_rate.max(1) as f64) as f32 * vp.zoom;
     let left = vp.follow_pending_x.unwrap_or(vp.scroll_offset);
     if playhead_x >= left && playhead_x < left + vp.visible_width {
+        // In view. After a manual scroll that is the user and the
+        // playhead meeting again: follow resumes from here.
+        r.viewport.follow_paused = false;
+        return None;
+    }
+    if vp.follow_paused {
         return None;
     }
     let max_x = (vp.scroll_content_width - vp.visible_width).max(0.0);

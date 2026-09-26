@@ -1285,6 +1285,9 @@ pub enum UiMessage {
     /// the takes persist, whether their folder is open does not. The comp
     /// ribbon on the track lane stays visible either way.
     ToggleTakeLane(TrackId),
+    /// Switch arrange-view playhead follow on/off (persisted in settings,
+    /// code review FU-V3b).
+    ToggleFollowPlayhead,
     /// Toggle MIDI clock send (engine acts as clock master).
     ToggleMidiClockSend,
     /// Pick the hardware port for MIDI clock send. `None` clears.

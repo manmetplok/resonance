@@ -166,6 +166,12 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         );
     }
 
+    let follow_toggle = toggle_button(
+        "Follow playhead",
+        r.settings.arrange.follow_playhead,
+        Message::Ui(UiMessage::ToggleFollowPlayhead),
+    );
+
     let dialog_content = column![
         title,
         Space::new().height(16),
@@ -174,6 +180,10 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         open_btn,
         save_btn,
         save_as_btn,
+        Space::new().height(20),
+        section("Arrange"),
+        Space::new().height(6),
+        follow_toggle,
         Space::new().height(20),
         plugins_section,
         Space::new().height(20),

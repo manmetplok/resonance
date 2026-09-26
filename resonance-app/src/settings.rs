@@ -62,6 +62,23 @@ pub struct MediaBrowserSettings {
     pub recent_folders: Vec<PathBuf>,
 }
 
+/// Arrange-view preferences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArrangeSettings {
+    /// Page the arrange view along with the playhead during playback
+    /// (review FU-D1). Switchable in Settings (code review FU-V3b).
+    pub follow_playhead: bool,
+}
+
+impl Default for ArrangeSettings {
+    fn default() -> Self {
+        Self {
+            follow_playhead: true,
+        }
+    }
+}
+
 /// Root persisted settings document. Wrapping each section (rather than
 /// persisting [`AutosaveSettings`] at the top level) leaves room for
 /// future settings groups without a format migration.
@@ -73,6 +90,8 @@ pub struct AppSettings {
     /// settings files written before this section existed; `#[serde(default)]`
     /// fills it with empty lists.
     pub media: MediaBrowserSettings,
+    /// Arrange-view preferences; absent on older files, defaulted.
+    pub arrange: ArrangeSettings,
 }
 
 fn settings_file_path() -> Option<PathBuf> {
