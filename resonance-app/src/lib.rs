@@ -271,7 +271,7 @@ pub struct Resonance {
     /// track is a plain track. The MIDI-out / audio-return / monitor / arm
     /// fields live on the track itself; this map holds only the
     /// external-specific bits. Config (not the offline flags) round-trips
-    /// undo via `UndoExtras::external_instruments`.
+    /// undo via `ProjectTrack::external_instrument` in the snapshot's file.
     pub(crate) external_instruments: crate::state::ExternalInstrumentMap,
     /// Device-definition registry (epic #40, doc #201 §2): the bundled
     /// device presets plus any user-authored ones, scanned once at startup.

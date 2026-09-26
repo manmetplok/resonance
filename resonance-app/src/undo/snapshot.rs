@@ -2,9 +2,9 @@
 //! and apply snapshots.
 //!
 //! Three kinds of types live here:
-//! - The snapshot itself (`UndoSnapshot`: a `LoadedProject`) and the
-//!   `UndoExtras` it still carries beside the `ProjectFile` (ARCH-01 A1-2
-//!   folds those into the file one at a time).
+//! - The snapshot itself (`UndoSnapshot`: a `LoadedProject`, nothing
+//!   beside it — ARCH-01 A1-2 folded every former `UndoExtras` field into
+//!   the `ProjectFile`, and A-7 deleted the type).
 //! - The `CoalesceKey` discriminator used by the history stack to merge a
 //!   burst of fader/knob messages into one undo entry.
 //! - The `impl crate::Resonance` blocks for building a snapshot
@@ -20,26 +20,13 @@ use resonance_common::{AutomationLane, AutomationTarget};
 use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
 
-/// State an undo snapshot used to carry beside its `ProjectFile`. Empty:
-/// every field was folded into the file (ARCH-01 A1-2, guarded by
-/// `tests/io/undo_snapshot_fixed_point.rs`) — clip fade/gain, the drum
-/// arrangements, the chord track, the external-instrument config, the
-/// vocal lyrics, the automation lanes, the track freeze status, the
-/// reference A/B content and the compose derived-clip map now travel as
-/// `ProjectClip`, `ProjectSectionDefinition::arrangement`,
-/// `ProjectFile::chord_track`, `ProjectTrack::external_instrument`,
-/// `ProjectMidiClip::vocal_lyrics`, `ProjectFile::automation_lanes`,
-/// `ProjectTrack::freeze`, `ProjectFile::references` /
-/// `reference_settings` and `ProjectFile::derived_clips`. The derived-clip
-/// id counter is not undo state at all (A-6). The type survives only as
-/// the "this replay is an undo" marker in `pending_undo_extras`, which
-/// A-7 replaces with an explicit flag and deletes.
-#[derive(Debug, Clone, Default)]
-pub struct UndoExtras {}
-
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
 /// so snapshots can be fed straight into the existing
-/// `replay_loaded_project` path, plus `extras` for runtime-only state.
+/// `replay_loaded_project` path. Everything undoable travels in the
+/// `ProjectFile` (+ notes + plugin blobs); there is no side-car state
+/// (ARCH-01 A1-2 folded it into the file, guarded by
+/// `tests/io/undo_snapshot_fixed_point.rs`; the derived-clip id counter is
+/// session state, not undo state, A-6).
 #[derive(Debug, Clone)]
 pub struct UndoSnapshot {
     /// Declarative project state in the exact shape the replay path
@@ -48,8 +35,6 @@ pub struct UndoSnapshot {
     /// cause the restore path to reinstantiate the plugin with default
     /// internal state and rely on the replayed parameter values.
     pub project: LoadedProject,
-    /// State re-applied after the replay; see [`UndoExtras`].
-    pub extras: UndoExtras,
 }
 
 impl UndoSnapshot {
@@ -60,8 +45,7 @@ impl UndoSnapshot {
     /// tree derives it now, so this is a plain struct compare; map-valued
     /// fields compare order-independently the same way the old
     /// `serde_json` compare did through its key-sorted objects), and notes
-    /// field by field. The extras are empty (A-6), so there is nothing
-    /// else to compare.
+    /// field by field. Nothing else is captured.
     pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
         let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
             && self.project.midi_notes.iter().all(|(id, notes)| {
@@ -166,7 +150,6 @@ impl crate::Resonance {
                 midi_notes,
                 plugin_states,
             },
-            extras: UndoExtras::default(),
         }
     }
 
@@ -239,7 +222,7 @@ impl crate::Resonance {
     /// `AudioCommand::RestoreTakeGroups` — on the fast path from
     /// `apply_take_groups` inside [`crate::update::try_diff_replay`], on
     /// the slow path from `replay_loaded_project`, which the `AllCleared`
-    /// handler runs immediately before `finalize_undo_restore`. That
+    /// handler runs for the pending undo load. That
     /// command replaces the engine's take-group store wholesale (comp and
     /// active take included, since both ride the `TakeGroup`) and
     /// republishes the comp table, so the engine plays and bounces the
@@ -266,41 +249,25 @@ impl crate::Resonance {
         self.transport.playing = false;
         self.transport.recording = false;
 
-        let UndoSnapshot {
-            project: loaded,
-            extras,
-        } = snapshot;
+        let UndoSnapshot { project: loaded } = snapshot;
 
         // Fast path: structure-identical undo (the common case for
         // fader/knob/transport edits). Drives the engine surgically
         // without tearing down plugin instances.
-        if crate::update::try_diff_replay(self, &loaded, &extras) {
+        if crate::update::try_diff_replay(self, &loaded) {
             return;
         }
 
-        // Slow path: structural change. Stash both halves so the
-        // `AllCleared` handler can run the full replay. The handler
-        // re-establishes `project_path` from the snapshot's project_dir
-        // because `replay_loaded_project` clears it on entry.
+        // Slow path: structural change. Stash the snapshot and mark it an
+        // undo so the `AllCleared` handler runs the full replay with the
+        // undo branches (`io.restoring_undo`; it clears the flag after the
+        // replay). The handler puts `project_path` back because
+        // `replay_loaded_project` clears it on entry.
         self.io.loading = true;
         self.io.pending_load = Some(Box::new(loaded));
-        self.io.pending_undo_extras = Some(extras);
+        self.io.restoring_undo = true;
 
         let _ = self.engine.send(AudioCommand::ClearAll);
-    }
-
-    /// Finish an undo/redo's full replay. Called from the `AllCleared`
-    /// engine-event handler immediately after `replay_loaded_project`
-    /// runs, only when the pending load came from an undo/redo
-    /// (distinguished by `pending_undo_extras.is_some()`). Nothing is left
-    /// to apply: the replay restores everything from the snapshot's
-    /// `ProjectFile` (the compose derived-clip map too, since A-6). A-7
-    /// deletes this together with `UndoExtras`.
-    pub(crate) fn finalize_undo_restore(&mut self, _extras: UndoExtras) {
-        // Take lanes are *not* reconciled here. `replay_loaded_project`
-        // runs immediately before this and ends in `replay_take_groups`,
-        // which sends `RestoreTakeGroups` — see the note on the fast path
-        // in `begin_restore_from_snapshot`.
     }
 
     /// Restore the compose section→clip map from `file` and reserve the

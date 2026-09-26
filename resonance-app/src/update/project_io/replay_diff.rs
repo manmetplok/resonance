@@ -31,7 +31,6 @@ use crate::project::{
     fade_curve_from_tag, send_source_from_tag, LoadedProject, ProjectBus, ProjectClip, ProjectFile,
     ProjectMidiClip, ProjectPlugin, ProjectSend, ProjectTrack,
 };
-use crate::undo::UndoExtras;
 use crate::util::db_to_gain;
 use crate::Resonance;
 
@@ -46,14 +45,10 @@ use super::serialize::build_project_file;
 /// full clear-and-replay pipeline.
 ///
 /// On success the caller must skip the `ClearAll` command — there is no
-/// `AllCleared` event to wait for, and `pending_load` / `pending_undo_extras`
-/// should be cleared immediately rather than left for the `AllCleared`
-/// handler that will never fire.
-pub fn try_diff_replay(
-    r: &mut Resonance,
-    target: &LoadedProject,
-    _extras: &UndoExtras,
-) -> bool {
+/// `AllCleared` event to wait for, so neither `pending_load` nor
+/// `io.restoring_undo` may be set for the `AllCleared` handler that will
+/// never fire.
+pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     let current = build_project_file(r);
     let target_file = &target.file;
 
