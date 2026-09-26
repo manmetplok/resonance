@@ -316,7 +316,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             }
         }
         M::ToggleRecordArm(track_id) => {
-            let default_device = r.default_input_device_name.clone();
+            let default_device = r.input_devices.default_name.clone();
             let auto = r.with_track_mut(track_id, |t| {
                 t.record_armed = !t.record_armed;
                 if t.record_armed && t.input_device_name.is_none() {

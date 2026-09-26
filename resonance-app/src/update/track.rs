@@ -439,7 +439,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::ToggleRecordArm(id) => {
-            let default_device = r.default_input_device_name.clone();
+            let default_device = r.input_devices.default_name.clone();
             let auto_device = r.with_track_mut(id, |t| {
                 t.record_armed = !t.record_armed;
                 if t.record_armed && t.input_device_name.is_none() {
@@ -820,7 +820,7 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
         BounceMode::External => {
             r.bounce_dialog = Some(crate::state::BounceDialogState {
                 source_track_id: track_id,
-                selected_device: r.default_input_device_name.clone(),
+                selected_device: r.input_devices.default_name.clone(),
                 selected_port: 0,
                 mono: false,
             });

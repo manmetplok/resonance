@@ -21,7 +21,7 @@ pub(super) fn audio_input_block(
     let selected_device = track
         .input_device_name
         .as_ref()
-        .and_then(|name| r.input_devices.iter().find(|d| &d.name == name))
+        .and_then(|name| r.input_devices.devices.iter().find(|d| &d.name == name))
         .cloned();
     let device_channels = selected_device.as_ref().map(|d| d.channels).unwrap_or(0);
 

@@ -288,11 +288,11 @@ pub(crate) fn inspector_fingerprint(
     Rc::as_ptr(&r.view_caches.output_choices).hash(&mut h);
     Rc::as_ptr(&r.view_caches.fx_plugins).hash(&mut h);
     Rc::as_ptr(&r.view_caches.instrument_plugins).hash(&mut h);
-    // Audio input picker uses `r.input_devices` directly (its options
+    // Audio input picker uses `r.input_devices.devices` directly (its options
     // include the per-device channel count, which the cached choice
     // lists above don't carry).
-    r.input_devices.len().hash(&mut h);
-    for d in &r.input_devices {
+    r.input_devices.devices.len().hash(&mut h);
+    for d in &r.input_devices.devices {
         d.name.hash(&mut h);
         d.channels.hash(&mut h);
     }

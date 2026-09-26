@@ -86,11 +86,12 @@ fn devices(app: &Resonance, request: &Request) -> Response {
             .collect(),
         audio_inputs: app
             .input_devices
+            .devices
             .iter()
             .map(|d| AudioInputView {
                 name: d.name.clone(),
                 channels: d.channels,
-                default: app.default_input_device_name.as_deref() == Some(d.name.as_str()),
+                default: app.input_devices.default_name.as_deref() == Some(d.name.as_str()),
             })
             .collect(),
     };
@@ -289,7 +290,7 @@ fn set_return(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         );
     }
     if let Some(Some(name)) = &params.device {
-        if !app.input_devices.iter().any(|d| &d.name == name) {
+        if !app.input_devices.devices.iter().any(|d| &d.name == name) {
             return reject(
                 request,
                 RpcError::not_found(format!(
@@ -306,7 +307,7 @@ fn set_return(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             None => find_track(app, id).and_then(|t| t.input_device_name.clone()),
         };
         if let Some(name) = device_name {
-            if let Some(dev) = app.input_devices.iter().find(|d| d.name == name) {
+            if let Some(dev) = app.input_devices.devices.iter().find(|d| d.name == name) {
                 if dev.channels > 0 && port >= dev.channels {
                     return reject(
                         request,
@@ -543,7 +544,7 @@ fn bounce(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             )),
         );
     };
-    if !app.input_devices.iter().any(|d| d.name == device) {
+    if !app.input_devices.devices.iter().any(|d| d.name == device) {
         return reject(
             request,
             RpcError::not_found(format!(

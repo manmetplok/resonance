@@ -75,8 +75,9 @@ pub(crate) struct PendingPluginPresetSave {
 pub struct Resonance {
     pub engine: AudioEngine,
     pub sample_rate: u32,
-    pub(crate) input_devices: Vec<InputDeviceInfo>,
-    pub(crate) default_input_device_name: Option<String>,
+    /// Hardware audio input device list and the OS default (ARCH-06
+    /// A6-2). See `state::InputDevices`.
+    pub(crate) input_devices: state::InputDevices,
     /// Hardware MIDI device lists and clock sync settings (ARCH-06 A6-2).
     /// See `state::MidiDevices`.
     pub(crate) midi_devices: state::MidiDevices,
@@ -778,8 +779,7 @@ impl Resonance {
         let mut app = Self {
             engine,
             sample_rate: 44100, // overwritten by SampleRateDetected event
-            input_devices: Vec::new(),
-            default_input_device_name: None,
+            input_devices: state::InputDevices::default(),
             midi_devices: state::MidiDevices::default(),
             plugin_catalog: state::PluginCatalog::default(),
             missing_plugins: crate::state::MissingPluginState::default(),

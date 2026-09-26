@@ -30,12 +30,13 @@ pub(super) fn input_devices_listed(
     devices: Vec<InputDeviceInfo>,
     default_name: Option<String>,
 ) {
-    r.input_devices = devices;
-    r.default_input_device_name = default_name;
+    r.input_devices.devices = devices;
+    r.input_devices.default_name = default_name;
     // Refresh the cached `Rc<[InputDeviceInfo]>` used by the mixer
     // inspector and bounce-dialog pickers so they stop cloning the
     // full Vec every frame.
-    r.view_caches.rebuild_input_devices(&r.input_devices);
+    r.view_caches
+        .rebuild_input_devices(&r.input_devices.devices);
 }
 
 pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
