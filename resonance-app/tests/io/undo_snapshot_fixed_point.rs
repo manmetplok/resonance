@@ -38,8 +38,12 @@ use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::BuiltinTemplateId;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, ClipId, TrackId, TrackType};
-use resonance_common::{AutomationTarget, CurveKind, FreezeCacheRef, FreezeCacheStatus};
+use resonance_audio::types::{
+    AudioCommand, AudioEvent, ClipId, PluginInstanceId, TrackId, TrackType,
+};
+use resonance_common::{
+    AutomationLane, AutomationTarget, CurveKind, FreezeCacheRef, FreezeCacheStatus,
+};
 use resonance_music_theory::{Chord, ChordQuality, Mode, PitchClass, Scale};
 
 const CHORD_KEY_ID: u64 = 900_001;
@@ -462,7 +466,6 @@ fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
         "compose_next_derived_clip_id",
         x.compose_next_derived_clip_id == y.compose_next_derived_clip_id,
     );
-    check("automation_lanes", x.automation_lanes == y.automation_lanes);
     check(
         "reference",
         x.reference.entries == y.reference.entries
@@ -549,8 +552,9 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     );
     if let Some(&t) = h.tracks.first() {
         assert!(
-            x.automation_lanes
-                .contains_key(&AutomationTarget::TrackGain(t)),
+            file.automation_lanes
+                .iter()
+                .any(|lane| lane.target == AutomationTarget::TrackGain(t)),
             "automation lane landed"
         );
         let track = file
@@ -1013,4 +1017,210 @@ fn a_lyric_normalising_restore_leaves_a_frozen_vocal_track_frozen() {
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
     f.app.test_update(Message::Tick);
     assert!(frozen(&f.app), "slow path: the vocal track stays frozen");
+}
+
+// ---------------------------------------------------------------------------
+// Automation lanes (A-3)
+// ---------------------------------------------------------------------------
+
+/// The live lane map a restore must leave, derived from the snapshot's
+/// `ProjectFile` alone — one lane per target, keyed by its own target,
+/// the way a disk load builds it.
+fn file_lanes(file: &ProjectFile) -> HashMap<AutomationTarget, AutomationLane> {
+    file.automation_lanes
+        .iter()
+        .map(|lane| (lane.target.clone(), lane.clone()))
+        .collect()
+}
+
+/// Some plugin instance in the project — on a track, a bus or the master.
+fn any_plugin(file: &ProjectFile) -> Option<PluginInstanceId> {
+    file.tracks
+        .iter()
+        .flat_map(|t| t.plugins.iter())
+        .chain(file.busses.iter().flat_map(|b| b.plugins.iter()))
+        .chain(file.master_plugins.iter())
+        .map(|p| p.instance_id)
+        .next()
+}
+
+fn automate(app: &mut Resonance, msg: AutomationMessage) {
+    app.test_dispatch(Message::Automation(msg));
+}
+
+fn breakpoint(app: &mut Resonance, target: &AutomationTarget, frame: u64, value: f32) {
+    automate(
+        app,
+        AutomationMessage::AddBreakpoint {
+            target: target.clone(),
+            time_frames: frame,
+            value,
+            curve: CurveKind::Linear,
+        },
+    );
+}
+
+/// The lane targets the automation test drives.
+struct LaneTargets {
+    gain: AutomationTarget,
+    plugin: AutomationTarget,
+    master: AutomationTarget,
+    /// Lives on `doomed`, the track the slow-path round deletes.
+    pan: AutomationTarget,
+    device: AutomationTarget,
+    /// Absent from the snapshot; the edits add it.
+    added: AutomationTarget,
+    doomed: TrackId,
+}
+
+/// The edits between snapshot and restore: lanes edited (a point added,
+/// a point dragged, the Read flag flipped), one deleted, one added.
+fn edit_lanes(app: &mut Resonance, l: &LaneTargets) {
+    breakpoint(app, &l.gain, 144_000, 0.9);
+    automate(
+        app,
+        AutomationMessage::DragBreakpoint {
+            target: l.plugin.clone(),
+            index: 0,
+            time_frames: 12_000,
+            value: 0.05,
+        },
+    );
+    automate(app, AutomationMessage::ToggleRead(l.device.clone()));
+    automate(app, AutomationMessage::RemoveLane(l.master.clone()));
+    breakpoint(app, &l.added, 0, 1.0);
+}
+
+/// `(set, cleared)` automation targets among `cmds`, sorted by debug form.
+fn lane_commands(cmds: &[AudioCommand]) -> (Vec<String>, Vec<String>) {
+    let mut set = Vec::new();
+    let mut cleared = Vec::new();
+    for c in cmds {
+        match c {
+            AudioCommand::SetAutomationLane { lane } => set.push(format!("{:?}", lane.target)),
+            AudioCommand::ClearAutomationLane { target } => cleared.push(format!("{target:?}")),
+            _ => {}
+        }
+    }
+    set.sort();
+    cleared.sort();
+    (set, cleared)
+}
+
+fn assert_lanes_restored(app: &Resonance, path: &str, snapshot: &UndoSnapshot) {
+    assert_eq!(
+        app.test_automation().lanes,
+        file_lanes(&snapshot.project.file),
+        "{path}: the live lanes are the snapshot file's"
+    );
+}
+
+/// Automation lanes on every kind of target — a track, a plugin param,
+/// the master, a track the slow path deletes, an external device param —
+/// round-trip through BOTH restore paths to the snapshot file's lanes,
+/// and each path re-sends the engine exactly the lanes that differ.
+#[test]
+fn automation_lanes_restore_identically_through_both_paths() {
+    let mut f = fixture("automation-lanes", load_demo);
+    let h = handles(&f.app);
+    assert!(h.tracks.len() >= 3, "the demo has three tracks");
+    let plugin = any_plugin(&f.app.test_build_project_file())
+        .expect("the demo has a plugin to automate");
+    let (t0, doomed, ext) = (h.tracks[0], h.tracks[1], h.tracks[h.tracks.len() - 1]);
+    let l = LaneTargets {
+        gain: AutomationTarget::TrackGain(t0),
+        plugin: AutomationTarget::PluginParam {
+            instance: plugin,
+            param_id: 3,
+        },
+        master: AutomationTarget::MasterGain,
+        pan: AutomationTarget::TrackPan(doomed),
+        device: AutomationTarget::DeviceParam {
+            track: ext,
+            param_id: "cutoff".into(),
+        },
+        added: AutomationTarget::TrackMute(t0),
+        doomed,
+    };
+
+    // Seed: several points per lane, added out of order; one lane Read-off.
+    f.app.test_dispatch(Message::ExternalInstrument(
+        ExternalInstrumentMessage::Enable(ext),
+    ));
+    breakpoint(&mut f.app, &l.gain, 96_000, 0.8);
+    breakpoint(&mut f.app, &l.gain, 0, 0.2);
+    breakpoint(&mut f.app, &l.plugin, 48_000, 0.6);
+    breakpoint(&mut f.app, &l.plugin, 24_000, 0.3);
+    breakpoint(&mut f.app, &l.master, 0, 0.7);
+    automate(&mut f.app, AutomationMessage::ToggleRead(l.master.clone()));
+    breakpoint(&mut f.app, &l.pan, 0, 0.5);
+    breakpoint(&mut f.app, &l.device, 0, 0.4);
+    let snapshot = f.app.test_snapshot_for_undo();
+    assert_eq!(
+        snapshot.project.file.automation_lanes.len(),
+        5,
+        "five lanes seeded"
+    );
+    assert_lanes_restored(&f.app, "seeded", &snapshot);
+
+    // What each restore must re-send: every edited lane plus the deleted
+    // one, and clear only the added one. The fast path leaves the
+    // untouched pan lane alone; the slow path re-sends it, since the
+    // track delete dropped it.
+    let expected = |with_pan: bool| {
+        let mut set: Vec<String> = [&l.gain, &l.plugin, &l.master, &l.device]
+            .into_iter()
+            .chain(with_pan.then_some(&l.pan))
+            .map(|t| format!("{t:?}"))
+            .collect();
+        set.sort();
+        (set, vec![format!("{:?}", l.added)])
+    };
+
+    // -- Fast path. --
+    edit_lanes(&mut f.app, &l);
+    assert!(
+        !Resonance::test_snapshot_same_state(&f.app.test_snapshot_for_undo(), &snapshot),
+        "the lane edits change the snapshot"
+    );
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "lane edits take the diff replay"
+    );
+    assert_eq!(lane_commands(&cmds), expected(false), "fast path: engine lane traffic");
+    assert_lanes_restored(&f.app, "fast path", &snapshot);
+    assert_fixed_point(&f, "lanes: fast path", &snapshot);
+    let fast = f.app.test_automation().lanes.clone();
+
+    // -- Slow path: also delete the track that owns the pan lane. --
+    edit_lanes(&mut f.app, &l);
+    f.app
+        .test_dispatch(Message::Track(TrackMessage::RequestRemoveTrack(l.doomed)));
+    f.app
+        .test_dispatch(Message::Track(TrackMessage::ConfirmRemoveTrack));
+    assert!(
+        !f.app.test_automation().lanes.contains_key(&l.pan),
+        "deleting the track dropped its lane"
+    );
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let mut cmds = drain(&f.rx);
+    assert!(
+        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a deleted track forces the full clear-and-replay"
+    );
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    cmds.extend(drain(&f.rx));
+    assert_eq!(lane_commands(&cmds), expected(true), "slow path: engine lane traffic");
+    assert_lanes_restored(&f.app, "slow path", &snapshot);
+    assert_fixed_point(&f, "lanes: slow path", &snapshot);
+
+    assert_eq!(
+        fast,
+        f.app.test_automation().lanes,
+        "both paths restore the same lanes"
+    );
 }
