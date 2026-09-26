@@ -61,6 +61,16 @@ pub struct ProjectIoState {
     /// `None` for a normal project load, `Some` for undo/redo.
     pub pending_undo_extras: Option<crate::undo::UndoExtras>,
     pub bouncing: bool,
+    /// Progress `[0.0, 1.0]` of the in-flight WAV mixdown (`bouncing`),
+    /// from the engine's `BounceProgress` events; drives the blocking
+    /// mixdown progress modal (code review FU-F1c).
+    pub bounce_fraction: f32,
+    /// File name of the in-flight mixdown's target, for the modal title.
+    pub bounce_target: String,
+    /// The user pressed Cancel on the mixdown modal. The engine answers a
+    /// cancel with `BounceError("Bounce cancelled")`, which then clears the
+    /// modal without an error banner.
+    pub bounce_cancel_requested: bool,
     /// When false, the startup modal is shown and interactive
     /// messages are dropped. Flipped true on successful load or
     /// on the first successful save of a new project.

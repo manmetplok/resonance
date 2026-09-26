@@ -118,10 +118,26 @@ fn bounce_excludes_the_reference_and_renders_the_mix() {
         &event_tx,
     );
 
-    match event_rx.try_recv() {
-        Ok(AudioEvent::BounceComplete { .. }) => {}
-        other => panic!("expected BounceComplete, got {other:?}"),
-    }
+    // The WAV mixdown reports whole-percent `BounceProgress` steps for the
+    // app's progress modal (FU-F1c) — monotonic, ending at 1.0, at most
+    // ~one per percent — then `BounceComplete`.
+    let events: Vec<AudioEvent> = event_rx.try_iter().collect();
+    let (last, progress) = events.split_last().expect("bounce must emit events");
+    assert!(
+        matches!(last, AudioEvent::BounceComplete { .. }),
+        "expected BounceComplete last, got {last:?}"
+    );
+    let fractions: Vec<f32> = progress
+        .iter()
+        .map(|e| match e {
+            AudioEvent::BounceProgress { fraction } => *fraction,
+            other => panic!("expected only BounceProgress before completion, got {other:?}"),
+        })
+        .collect();
+    assert!(!fractions.is_empty(), "the mixdown reported no progress");
+    assert!(fractions.len() <= 101, "{} progress events: not rate-limited", fractions.len());
+    assert!(fractions.windows(2).all(|w| w[0] < w[1]), "progress went backwards: {fractions:?}");
+    assert_eq!(fractions.last().copied(), Some(1.0), "progress never reached 100%");
 
     let mut reader = hound::WavReader::open(&path).expect("open bounced wav");
     let samples: Vec<f32> = reader.samples::<f32>().map(|s| s.expect("sample")).collect();

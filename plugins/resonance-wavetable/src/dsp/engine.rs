@@ -8,6 +8,10 @@ use crate::viz::{ScopeCollector, WavetableVizState};
 use crate::dsp::voice::{Voice, VoiceState, MAX_VOICES};
 use crate::dsp::wavetable::Wavetable;
 
+/// Depth of the mono held-note stack. More keys than this held at once is
+/// not a real playing situation; the oldest simply stop being returned to.
+const HELD_NOTES: usize = 16;
+
 pub struct SynthEngine {
     pub(crate) voices: Vec<Voice>,
     /// Indices into `voices` that are not [`VoiceState::Idle`], and how many
@@ -42,6 +46,13 @@ pub struct SynthEngine {
 
     // Last note for portamento
     last_note: Option<u8>,
+
+    /// Keys currently held down, oldest first (FU-G2d). In mono, releasing
+    /// the sounding key while others are still down returns the voice —
+    /// legato — to the most recent of them. Fixed-size so `process()` never
+    /// allocates; when full the oldest key is forgotten.
+    held: [u8; HELD_NOTES],
+    held_len: usize,
 
     // Audio → UI oscilloscope ring. Filled per-sample in `render_block`,
     // published to the shared viz state at the end of each audio block.
@@ -120,6 +131,8 @@ impl SynthEngine {
             delay: StereoDelay::new(44100.0),
             rng: SimpleRng::new(42),
             last_note: None,
+            held: [0; HELD_NOTES],
+            held_len: 0,
             scope_collector: ScopeCollector::new(),
             // 5 ms, the master volume's de-zipper time; the param is
             // already linear gain, so the ramp runs in linear-gain space
@@ -143,6 +156,7 @@ impl SynthEngine {
             .collect();
         self.voice_counter = 0;
         self.last_note = None;
+        self.held_len = 0;
 
         // Load pre-generated wavetables from the bundled blob. Generation
         // happens once at plugin build time (see `build.rs`), not on every
@@ -178,6 +192,7 @@ impl SynthEngine {
         self.active_len = 0;
         self.voice_counter = 0;
         self.last_note = None;
+        self.held_len = 0;
         self.global_lfo1.reset_phase();
         self.global_lfo2.reset_phase();
         self.global_lfo3.reset_phase();
@@ -186,6 +201,7 @@ impl SynthEngine {
     }
 
     pub fn note_on(&mut self, note: u8, velocity: f32, params: &WavetableParams) {
+        self.push_held(note);
         let max_v = params.max_voices.value().max(1) as usize;
         let voice_idx = self.find_free_voice(note, max_v);
 
@@ -225,11 +241,60 @@ impl SynthEngine {
         self.last_note = Some(note);
     }
 
-    pub fn note_off(&mut self, note: u8) {
+    /// A key went up. In mono, if it was the sounding key and other keys
+    /// are still held, the voice returns — legato, gliding when glide is
+    /// on — to the most recent of them instead of releasing (FU-G2d).
+    pub fn note_off(&mut self, note: u8, params: &WavetableParams) {
+        self.remove_held(note);
+        if params.max_voices.value().max(1) == 1 && self.held_len > 0 {
+            let back_to = self.held[self.held_len - 1];
+            let glide = params.glide_enabled.value();
+            self.voice_counter += 1;
+            let age = self.voice_counter;
+            let mut returned = false;
+            for voice in &mut self.voices {
+                if voice.state == VoiceState::Playing && voice.note == note {
+                    voice.legato(back_to, age, glide);
+                    returned = true;
+                }
+            }
+            if returned {
+                self.last_note = Some(back_to);
+            }
+            return;
+        }
+        self.release_note(note);
+    }
+
+    /// A choke: release the note's voice outright, never returning to an
+    /// earlier held key.
+    pub fn choke(&mut self, note: u8) {
+        self.remove_held(note);
+        self.release_note(note);
+    }
+
+    fn release_note(&mut self, note: u8) {
         for voice in &mut self.voices {
             if voice.state == VoiceState::Playing && voice.note == note {
                 voice.release();
             }
+        }
+    }
+
+    fn push_held(&mut self, note: u8) {
+        self.remove_held(note);
+        if self.held_len == HELD_NOTES {
+            self.held.copy_within(1.., 0);
+            self.held_len -= 1;
+        }
+        self.held[self.held_len] = note;
+        self.held_len += 1;
+    }
+
+    fn remove_held(&mut self, note: u8) {
+        if let Some(i) = self.held[..self.held_len].iter().position(|&n| n == note) {
+            self.held.copy_within(i + 1..self.held_len, i);
+            self.held_len -= 1;
         }
     }
 

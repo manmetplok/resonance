@@ -182,6 +182,61 @@ pub(crate) fn section_meter(r: &crate::Resonance, definition_id: u64) -> Section
     meter_at_bar(r, bar)
 }
 
+/// A section whose one vocal render does not fit every bar it plays at
+/// (code review FU-M11b): see [`vocal_tempo_mismatch`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VocalTempoMismatch {
+    /// The tempo the vocal is rendered at ([`section_meter`]'s).
+    pub rendered_bpm: f32,
+    /// The placed tempo that differs most from it.
+    pub other_bpm: f32,
+}
+
+/// A section's vocal is rendered once, at [`section_meter`]'s tempo (its
+/// earliest placement's), and that one WAV is installed at every
+/// placement. Where another placement sits in a different tempo region,
+/// or the tempo changes inside a placement, the audio drifts against the
+/// grid. This detects that so the vocal lane inspector can say so
+/// (FU-M11b); `None` when every placed bar plays at the rendered tempo.
+///
+/// Detection rather than a per-placement render: rendering per tempo would
+/// turn the lane's one vocal clip into one per placement (the vocal-audio
+/// maps, their GC, save/load and the control `song.vocal` view all key on
+/// the lane), and a tempo *change inside* a placement cannot be fixed by
+/// any constant-tempo render anyway.
+///
+/// Samples the tempo at every placed bar start and at each placement's
+/// last sample (a ramp's arrival); tempo changes only happen at bar
+/// boundaries or ramp between them, so that sees every deviation.
+pub(crate) fn vocal_tempo_mismatch(
+    r: &crate::Resonance,
+    definition_id: u64,
+) -> Option<VocalTempoMismatch> {
+    const TOLERANCE_BPM: f32 = 0.01;
+    let len = r.compose.find_definition(definition_id)?.length_bars.max(1);
+    let rendered_bpm = section_meter(r, definition_id).bpm;
+    let tm = &r.tempo_map;
+    let mut other_bpm: Option<f32> = None;
+    for p in r.compose.placements.iter().filter(|p| p.definition_id == definition_id) {
+        let end = p.start_bar.saturating_add(len);
+        let last_sample = tm.bar_to_sample(end).saturating_sub(1);
+        let samples = (p.start_bar..end).map(|b| tm.bar_to_sample(b));
+        for sample in samples.chain(std::iter::once(last_sample)) {
+            let bpm = tm.bpm_at(sample, r.sample_rate);
+            let delta = (bpm - rendered_bpm).abs();
+            if delta > TOLERANCE_BPM
+                && other_bpm.is_none_or(|o| delta > (o - rendered_bpm).abs())
+            {
+                other_bpm = Some(bpm);
+            }
+        }
+    }
+    other_bpm.map(|other_bpm| VocalTempoMismatch {
+        rendered_bpm,
+        other_bpm,
+    })
+}
+
 /// Whether `track_id` is a live track. Lane derivation checks this so a
 /// generator left pointing at a removed track never loads a clip onto it
 /// (the engine accepts any track id) — code review VIEW-12.

@@ -15,6 +15,13 @@
 //! `update/gates.rs` (`freeze_blocks_message`), mirroring the bounce
 //! gate; the Cancel button dispatches `FreezeMessage::CancelFreeze`,
 //! the one whitelisted carve-out.
+//!
+//! The **WAV mixdown** (master strip "Bounce", or control
+//! `render.mixdown`) gates the same traffic (`io.bouncing`) and shows the
+//! same overlay too (code review FU-F1c), fed by the legacy bounce path's
+//! whole-percent `BounceProgress` events; its Cancel dispatches
+//! `ProjectIoMessage::CancelBounce` (the `ProjectIo` family passes the
+//! gate), which flips the export's cooperative cancel token.
 
 use iced::widget::{
     button, column, container, mouse_area, opaque, progress_bar, row, stack, text, Space,
@@ -128,6 +135,34 @@ pub(crate) fn view_freeze_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, 
         fraction,
         caption,
         Message::Freeze(FreezeMessage::CancelFreeze),
+    )
+}
+
+/// The WAV mixdown progress modal (FU-F1c): the bounce overlay titled
+/// with the target file name, fed by `io.bounce_fraction`. Cancel flips
+/// the export's cancel token; once pressed the caption says so until the
+/// engine confirms, and the button's message is a no-op repeat.
+pub(crate) fn view_mixdown_progress_overlay<'a>(r: &'a Resonance) -> Element<'a, Message> {
+    if !r.io.bouncing {
+        return Space::new().width(Length::Fixed(0.0)).height(Length::Fixed(0.0)).into();
+    }
+    let title = text(format!("Bouncing \"{}\"", r.io.bounce_target))
+        .size(18)
+        .font(theme::SERIF_ITALIC_FONT)
+        .color(theme::TEXT_1)
+        .into();
+    let pct = (r.io.bounce_fraction * 100.0).round() as u32;
+    let caption = if r.io.bounce_cancel_requested {
+        format!("{pct}% \u{00b7} cancelling")
+    } else {
+        format!("{pct}%")
+    };
+    progress_dialog(
+        title,
+        "Rendering the full mix offline to a WAV file.",
+        r.io.bounce_fraction,
+        caption,
+        Message::ProjectIo(ProjectIoMessage::CancelBounce),
     )
 }
 
