@@ -482,10 +482,13 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     state.take_clip_park.clear();
     super::takes::publish_take_comp(ctx, state);
 
-    // Reset ID counters
+    // Reset ID counters — except clips: a clip id names its
+    // `audio/clip_{id}.wav`, and a slow-path undo's redo stack (or a
+    // backup) can still reference an id cleared here. Reissuing it let a
+    // new take overwrite that WAV (code review STATE-08); clip ids stay
+    // monotonic for the session.
     state.next_track_id = 1;
     state.next_bus_id = 1;
-    state.next_clip_id = 1;
     state.next_plugin_id = 1;
     state.next_send_id = 1;
     state.next_take_group_id = 1;

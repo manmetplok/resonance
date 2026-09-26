@@ -2368,3 +2368,41 @@ fn a_park_claim_does_not_outlive_its_project() {
         "and the app must still be told the clip arrived"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Clip ids are never handed out twice in a session (code review STATE-08)
+// ---------------------------------------------------------------------------
+
+/// `ClearAll` (a slow-path undo, a project load) reset the clip allocator
+/// to 1. The undone clips' ids became free again although the redo stack
+/// still names them and their `audio/clip_{id}.wav` files, so the next
+/// take reused an id and overwrote the WAV a redo would bring back.
+#[test]
+fn clear_all_keeps_the_clip_allocator_past_every_issued_id() {
+    let mut h = EngineHandlerHarness::new();
+    h.load_clip_from_wav(7, 1, 0, PathBuf::from("/nonexistent/clip_7.wav"), "take".into());
+    assert_eq!(h.next_clip_id(), 8, "precondition: the load reserved id 7");
+
+    h.clear_all();
+
+    assert!(h.next_clip_id() >= 8, "clip id 7 must not be issued again");
+}
+
+/// A fresh session has issued nothing yet, but the project folder holds
+/// the WAVs of clips deleted before it was last saved — which versioned
+/// backups still reference. Pointing the engine at the folder reserves
+/// every `audio/clip_{id}.wav` id in it.
+#[test]
+fn setting_the_project_dir_reserves_the_ids_of_its_wavs() {
+    let dir = std::env::temp_dir().join(format!("resonance_state08_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("audio")).unwrap();
+    std::fs::write(dir.join("audio/clip_41.wav"), b"").unwrap();
+    std::fs::write(dir.join("audio/clip_9.wav"), b"").unwrap();
+    std::fs::write(dir.join("audio/notes.txt"), b"").unwrap();
+
+    let mut h = EngineHandlerHarness::new();
+    h.set_project_dir(dir.clone());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(h.next_clip_id(), 42);
+}

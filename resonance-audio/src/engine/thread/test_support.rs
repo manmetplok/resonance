@@ -142,6 +142,13 @@ impl EngineHandlerHarness {
         self.state.next_take_group_id = id;
     }
 
+    /// What `AudioCommand::SetProjectDir` does: reserve the clip ids of
+    /// the dir's WAVs (code review STATE-08), then point the engine there.
+    pub fn set_project_dir(&mut self, dir: std::path::PathBuf) {
+        crate::engine::clips::reserve_clip_ids_in_project_dir(&mut self.state, &dir);
+        self.state.project_dir = Some(dir);
+    }
+
     /// Run the real `AudioCommand::ClearAll` handler.
     pub fn clear_all(&mut self) {
         self.with_ctx(tracks::handle_clear_all);
