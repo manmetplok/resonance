@@ -601,6 +601,7 @@ fn wire_bar(bar: u32) -> u32 {
 /// Every `global.*` mutator reads its `bar` param through here, so the
 /// conversion and the bar-0 refusal are written once for the namespace.
 pub(super) fn state_bar(bar: u32) -> Result<u32, RpcError> {
+    resonance_control::check_max_bars("bar", bar)?;
     bar.checked_sub(1)
         .ok_or_else(|| RpcError::invalid_params("bars are 1-based; bar must be at least 1"))
 }

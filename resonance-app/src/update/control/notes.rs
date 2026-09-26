@@ -433,6 +433,9 @@ fn create_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
             if bar < 1 {
                 return reject(request, RpcError::invalid_params("start_bar is 1-based"));
             }
+            if let Err(e) = resonance_control::check_max_bars("start_bar", bar) {
+                return reject(request, e);
+            }
             let start = app.tempo_map.bar_to_sample(bar - 1);
             let ticks = match params.length_beats {
                 Some(b) => match beats_to_ticks(b) {
@@ -502,6 +505,9 @@ fn move_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
         (Some(bar), None) => {
             if bar < 1 {
                 return reject(request, RpcError::invalid_params("start_bar is 1-based"));
+            }
+            if let Err(e) = resonance_control::check_max_bars("start_bar", bar) {
+                return reject(request, e);
             }
             bar - 1
         }

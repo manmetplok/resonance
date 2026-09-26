@@ -825,3 +825,58 @@ fn apply_progression_validates_sources_and_fit() {
     // Nothing was applied by any failed attempt.
     assert!(chord_symbols(&sections_view(&mut app), id).is_empty());
 }
+
+// ---------------- bar bounds (CTL-05) ----------------
+
+/// `start_bar` / `length_bars` near `u32::MAX` overflowed the placement
+/// invariants (`start_bar + length_bars`) — a debug panic in `update()`,
+/// and in release a stored placement every later `song.summary` wrapped.
+#[test]
+fn huge_bar_values_are_invalid_params() {
+    let mut app = app_with_project();
+    let id = create_section(&mut app, "Verse", 8);
+    let revision = app.revision();
+    let too_big = resonance_control::MAX_BARS + 1;
+
+    for length_bars in [too_big, u32::MAX] {
+        expect_error(
+            call(
+                &mut app,
+                "section.create",
+                &section_proto::CreateParams {
+                    name: "Huge".to_owned(),
+                    length_bars,
+                    scale: None,
+                    place: true,
+                },
+            ),
+            ErrorKind::InvalidParams,
+        );
+        expect_error(
+            call(
+                &mut app,
+                "section.resize",
+                &section_proto::ResizeParams {
+                    section_id: id.into(),
+                    length_bars,
+                },
+            ),
+            ErrorKind::InvalidParams,
+        );
+    }
+    for start_bar in [too_big, u32::MAX] {
+        expect_error(
+            call(
+                &mut app,
+                "section.place",
+                &section_proto::PlaceParams {
+                    definition_id: id.into(),
+                    start_bar,
+                },
+            ),
+            ErrorKind::InvalidParams,
+        );
+    }
+    assert_eq!(app.revision(), revision, "nothing was committed");
+    assert_eq!(sections_view(&mut app).definitions.len(), 1);
+}

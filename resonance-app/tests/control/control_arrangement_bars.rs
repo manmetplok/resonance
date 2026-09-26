@@ -383,3 +383,48 @@ fn insert_then_remove_restores_every_position() {
     let after: Vec<u64> = app.test_clips().iter().map(|c| c.start_sample).collect();
     assert_eq!(before, after, "insert then remove is the identity");
 }
+
+// ---------------------------------------------------------------------------
+// Bar-count bounds (CTL-05)
+// ---------------------------------------------------------------------------
+
+/// A huge `count` used to overflow u32 in the casualty scan — a panic in
+/// `update()` in debug, and in release a wrapped (empty) cut span that
+/// skipped the confirm gate and then corrupted every marker and event.
+#[test]
+fn huge_bar_counts_are_invalid_params_and_change_nothing() {
+    use resonance_control::ErrorKind;
+    let mut app = app_with_project();
+    push_audio_clip(&mut app, 1, 5);
+    let revision = app.revision();
+
+    let too_big = resonance_control::MAX_BARS + 1;
+    for (method, at_bar, count) in [
+        (proto::REMOVE_BARS, 2, u32::MAX),
+        (proto::REMOVE_BARS, u32::MAX, 1),
+        (proto::REMOVE_BARS, 2, too_big),
+        (proto::INSERT_BARS, 2, u32::MAX),
+        (proto::INSERT_BARS, u32::MAX, 4),
+        (proto::INSERT_BARS, resonance_control::MAX_BARS, 2),
+    ] {
+        let response = if method == proto::REMOVE_BARS {
+            call(
+                &mut app,
+                method,
+                &RemoveBarsParams {
+                    at_bar,
+                    count,
+                    confirm: false,
+                },
+            )
+        } else {
+            call(&mut app, method, &InsertBarsParams { at_bar, count })
+        };
+        let error = response
+            .error
+            .unwrap_or_else(|| panic!("{method} {at_bar}+{count} must be refused"));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams, "{method} {at_bar}+{count}");
+    }
+    assert_eq!(clip_start(&app, 1), Some(4 * BAR), "nothing moved");
+    assert_eq!(app.revision(), revision, "nothing was committed");
+}

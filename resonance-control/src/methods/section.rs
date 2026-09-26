@@ -55,6 +55,7 @@ pub const METHODS: &[&str] = &[
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateParams {
     pub name: String,
+    /// Length in bars, 1..=100000 ([`crate::MAX_BARS`]).
     pub length_bars: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<KeyScale>,
@@ -92,6 +93,7 @@ pub struct RenameParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResizeParams {
     pub section_id: SectionDefinitionId,
+    /// New length in bars, 1..=100000 ([`crate::MAX_BARS`]).
     pub length_bars: u32,
 }
 
@@ -110,7 +112,8 @@ pub struct DeleteParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PlaceParams {
     pub definition_id: SectionDefinitionId,
-    /// 1-based bar to place the section at.
+    /// 1-based bar to place the section at, at most 100000
+    /// ([`crate::MAX_BARS`]).
     pub start_bar: u32,
 }
 

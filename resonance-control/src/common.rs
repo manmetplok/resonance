@@ -6,6 +6,23 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Largest bar value (a 1-based bar, a bar count or a section length)
+/// any method accepts. A hundred thousand bars is over two days of 4/4
+/// at 120 BPM — far past anything musical — while bar arithmetic in the
+/// app is plain `u32`, so an unbounded value overflowed it (CTL-05).
+pub const MAX_BARS: u32 = 100_000;
+
+/// `Err(invalid_params)` when `value` exceeds [`MAX_BARS`]; `field` names
+/// the offending parameter in the message.
+pub fn check_max_bars(field: &str, value: u32) -> Result<(), crate::RpcError> {
+    if value > MAX_BARS {
+        return Err(crate::RpcError::invalid_params(format!(
+            "{field} is {value}, past the limit of {MAX_BARS} bars"
+        )));
+    }
+    Ok(())
+}
+
 /// A resolved song position: both musical (1-based bar, 1-based beat
 /// within the bar, fractional) and absolute sample time.
 ///

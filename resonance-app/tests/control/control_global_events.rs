@@ -1336,3 +1336,24 @@ fn a_run_of_edits_across_both_tracks_undoes_one_edit_at_a_time_back_to_the_start
 fn state(app: &mut Resonance) -> (Vec<(u32, f32)>, Vec<(u32, u8, u8)>) {
     (tempo_pairs(app), meter_triples(app))
 }
+
+// ---------------- bar bounds (CTL-05) ----------------
+
+/// A global event past `MAX_BARS` is refused like bar 0: nothing sane
+/// lives there, and bar arithmetic downstream is plain u32.
+#[test]
+fn events_past_max_bars_are_invalid_params() {
+    let mut app = app_with_project();
+    let before = tempo_pairs(&mut app);
+    for bar in [resonance_control::MAX_BARS + 1, u32::MAX] {
+        let error = add_tempo(&mut app, bar, 100.0)
+            .error
+            .unwrap_or_else(|| panic!("bar {bar} must be refused"));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams);
+        let error = add_signature(&mut app, bar, 3, 4)
+            .error
+            .unwrap_or_else(|| panic!("bar {bar} must be refused"));
+        assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    }
+    assert_eq!(tempo_pairs(&mut app), before);
+}
