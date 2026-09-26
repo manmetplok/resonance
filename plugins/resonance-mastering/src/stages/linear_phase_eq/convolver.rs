@@ -129,6 +129,22 @@ impl OverlapSaveConvolver {
         self.inner.set_impulse_response(h);
     }
 
+    /// Replace the filter with a one-hop crossfade from the current one
+    /// (see [`FftConvolver::crossfade_to_impulse_response`]).
+    pub fn crossfade_to_impulse_response(&mut self, h: &[f32]) {
+        assert!(
+            h.len() <= self.geometry.fir_len,
+            "impulse response must fit in {} taps",
+            self.geometry.fir_len
+        );
+        self.inner.crossfade_to_impulse_response(h);
+    }
+
+    /// True while a crossfaded filter change has not landed yet.
+    pub fn crossfade_pending(&self) -> bool {
+        self.inner.crossfade_pending()
+    }
+
     /// Clear the convolver's streaming state. Keeps the filter response.
     pub fn reset(&mut self) {
         self.inner.reset();

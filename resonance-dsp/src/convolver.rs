@@ -111,6 +111,16 @@ pub struct FftConvolver {
     scratch: Vec<Complex<f32>>,
     /// Multiply-accumulate target, IFFT'd in place.
     accum: Vec<Complex<f32>>,
+    /// Staged replacement filter for a crossfaded IR change (single
+    /// partition only): the FFT'd new IR, and the IFFT target of the
+    /// input filtered by it on the transition iteration.
+    xfade_segment: Vec<Complex<f32>>,
+    xfade_accum: Vec<Complex<f32>>,
+    /// True while `xfade_segment` waits for the next iteration.
+    xfade_pending: bool,
+    /// True once an iteration has run since construction/reset, i.e.
+    /// the output carries filtered history a hard swap would step.
+    primed: bool,
     /// Pre-allocated rustfft work area (sized for both plans) so
     /// `process_with_scratch` never allocates on the audio thread.
     rustfft_scratch: Vec<Complex<f32>>,
@@ -148,6 +158,10 @@ impl FftConvolver {
             output_pending: SampleRing::with_capacity(2 * hop),
             scratch: vec![Complex::new(0.0, 0.0); fft_size],
             accum: vec![Complex::new(0.0, 0.0); fft_size],
+            xfade_segment: vec![Complex::new(0.0, 0.0); fft_size],
+            xfade_accum: vec![Complex::new(0.0, 0.0); fft_size],
+            xfade_pending: false,
+            primed: false,
             rustfft_scratch: vec![Complex::new(0.0, 0.0); rustfft_scratch_len],
             fft_forward,
             fft_inverse,
@@ -220,6 +234,38 @@ impl FftConvolver {
         }
     }
 
+    /// Replace a single-partition impulse response with a crossfade
+    /// (DSP-10): the new IR is FFT'd into a staging slot now, and the
+    /// next iteration renders its hop through both filters, fading
+    /// linearly from old to new across the hop, then adopts the new
+    /// one. `set_impulse_response` switches instantly instead, which
+    /// steps the output by `(h_new − h_old) * x`.
+    ///
+    /// Allocation-free. Before any iteration has run (nothing filtered
+    /// has been output yet) and for multi-partition IRs this falls back
+    /// to the instant switch. A second call before the staged IR lands
+    /// replaces it; callers that redesign per block should rate-limit on
+    /// [`Self::crossfade_pending`] (at most one design per hop).
+    pub fn crossfade_to_impulse_response(&mut self, ir: &[f32]) {
+        let single = Self::segment_count(ir.len(), self.hop) == 1 && self.segments.len() == 1;
+        if !single || !self.primed {
+            self.xfade_pending = false;
+            self.set_impulse_response(ir);
+            return;
+        }
+        for (i, c) in self.xfade_segment.iter_mut().enumerate() {
+            *c = Complex::new(ir.get(i).copied().unwrap_or(0.0), 0.0);
+        }
+        self.fft_forward
+            .process_with_scratch(&mut self.xfade_segment, &mut self.rustfft_scratch);
+        self.xfade_pending = true;
+    }
+
+    /// True while a crossfaded IR change is staged and has not landed.
+    pub fn crossfade_pending(&self) -> bool {
+        self.xfade_pending
+    }
+
     /// Clear the streaming state (history, FIFOs, FDL); keeps the
     /// impulse response.
     pub fn reset(&mut self) {
@@ -233,6 +279,12 @@ impl FftConvolver {
             slot.fill(Complex::new(0.0, 0.0));
         }
         self.fdl_pos = 0;
+        // Nothing filtered is in flight any more: land a staged IR now.
+        if self.xfade_pending {
+            std::mem::swap(&mut self.segments[0], &mut self.xfade_segment);
+            self.xfade_pending = false;
+        }
+        self.primed = false;
     }
 
     /// Process a single sample. Allocation-free.
@@ -315,8 +367,34 @@ impl FftConvolver {
         self.fft_inverse
             .process_with_scratch(accum, &mut self.rustfft_scratch);
         let norm = 1.0 / fft_size as f32;
-        for i in 0..hop {
-            self.output_pending.push(accum[history_len + i].re * norm);
+        if self.xfade_pending {
+            // Transition hop (single partition): render the same input
+            // frame through the staged filter too and fade old → new
+            // across the hop, then adopt the staged filter.
+            let fdl = &self.fdl[fdl_pos];
+            let seg = &self.xfade_segment;
+            for (i, c) in self.xfade_accum.iter_mut().enumerate() {
+                let (a_re, a_im) = (fdl[i].re, fdl[i].im);
+                let (b_re, b_im) = (seg[i].re, seg[i].im);
+                c.re = a_re * b_re - a_im * b_im;
+                c.im = a_re * b_im + a_im * b_re;
+            }
+            self.fft_inverse
+                .process_with_scratch(&mut self.xfade_accum, &mut self.rustfft_scratch);
+            let step = 1.0 / hop as f32;
+            for i in 0..hop {
+                let w = (i + 1) as f32 * step;
+                let old = accum[history_len + i].re;
+                let new = self.xfade_accum[history_len + i].re;
+                self.output_pending.push((old + (new - old) * w) * norm);
+            }
+            std::mem::swap(&mut self.segments[0], &mut self.xfade_segment);
+            self.xfade_pending = false;
+        } else {
+            for i in 0..hop {
+                self.output_pending.push(accum[history_len + i].re * norm);
+            }
         }
+        self.primed = true;
     }
 }

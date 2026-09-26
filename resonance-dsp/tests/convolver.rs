@@ -216,3 +216,50 @@ fn empty_ir_yields_silence() {
     c.process_in_place(&mut buf);
     assert!(buf.iter().all(|v| *v == 0.0), "empty IR must output silence");
 }
+
+/// DSP-10: a crossfaded IR change ramps the output linearly from the
+/// old filter to the new one across exactly one hop, then holds the new
+/// filter; it never steps.
+#[test]
+fn crossfaded_ir_change_ramps_over_one_hop() {
+    let mut unity = vec![0.0_f32; HOP + 1];
+    unity[0] = 1.0;
+    let mut double = vec![0.0_f32; HOP + 1];
+    double[0] = 2.0;
+    let mut c = FftConvolver::new(&unity, HOP);
+    // Prime with DC so the output is a steady 1.0.
+    let mut out = Vec::new();
+    for _ in 0..4 * HOP {
+        out.push(c.process_sample(1.0));
+    }
+    c.crossfade_to_impulse_response(&double);
+    assert!(c.crossfade_pending());
+    for _ in 0..4 * HOP {
+        out.push(c.process_sample(1.0));
+    }
+    assert!(!c.crossfade_pending(), "crossfade never landed");
+    let tail = &out[2 * HOP..];
+    assert!((tail[0] - 1.0).abs() < 1e-4, "not primed: {}", tail[0]);
+    assert!((tail.last().unwrap() - 2.0).abs() < 1e-4, "new IR not adopted");
+    let max_step = tail.windows(2).fold(0.0_f32, |m, w| m.max((w[1] - w[0]).abs()));
+    assert!(
+        max_step <= 1.0 / HOP as f32 + 1e-4,
+        "crossfade stepped by {max_step} (one hop ramp is {})",
+        1.0 / HOP as f32
+    );
+}
+
+/// Before anything has been filtered, a crossfaded change applies at
+/// once (there is nothing to fade from).
+#[test]
+fn crossfade_before_first_iteration_is_instant() {
+    let mut unity = vec![0.0_f32; HOP + 1];
+    unity[0] = 1.0;
+    let mut half = vec![0.0_f32; HOP + 1];
+    half[0] = 0.5;
+    let mut c = FftConvolver::new(&unity, HOP);
+    c.crossfade_to_impulse_response(&half);
+    assert!(!c.crossfade_pending());
+    let out: Vec<f32> = (0..3 * HOP).map(|_| c.process_sample(1.0)).collect();
+    assert!((out[2 * HOP] - 0.5).abs() < 1e-4, "got {}", out[2 * HOP]);
+}

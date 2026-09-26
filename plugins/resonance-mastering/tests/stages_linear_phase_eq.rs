@@ -131,3 +131,46 @@ fn low_band_response_is_independent_of_sample_rate() {
         );
     }
 }
+
+/// DSP-10: a band change used to swap the FIR hard at the next hop, a
+/// step of `(h_new − h_old) * x` in the output. Stepping a +6 dB bell on
+/// a sustained 100 Hz sine must now crossfade: no sample-to-sample jump
+/// beyond the (louder) steady state's own slope.
+#[test]
+fn band_change_crossfades_without_a_step() {
+    let sr = 48_000.0_f32;
+    let mut eq = LinearPhaseEq::new(sr);
+    let n = 3 * sr as usize;
+    let x: Vec<f32> = (0..n)
+        .map(|i| (std::f32::consts::TAU * 100.0 * i as f32 / sr).sin() * 0.25)
+        .collect();
+    let mut out = x.clone();
+    let mut right = x.clone();
+    let flat = [BandConfig::off(); NUM_BANDS];
+    let mut boosted = flat;
+    boosted[0] = BandConfig {
+        enabled: true,
+        band_type: BandType::Bell,
+        freq_hz: 100.0,
+        q: 0.7,
+        gain_db: 6.0,
+    };
+    let block = 256;
+    for (b, (l, r)) in out.chunks_mut(block).zip(right.chunks_mut(block)).enumerate() {
+        // Step once, mid-stream, off any hop boundary.
+        let bands = if b * block >= n / 3 + 1000 { &boosted } else { &flat };
+        eq.process_stereo(l, r, bands);
+    }
+    let latency = eq.latency();
+    let delta = |s: &[f32]| s.windows(2).fold(0.0_f32, |m, w| m.max((w[1] - w[0]).abs()));
+    let steady_new = delta(&out[n - sr as usize..]);
+    assert!(steady_new > 1e-3, "EQ output is silent");
+    let whole = delta(&out[latency + 16..]);
+    assert!(
+        whole < 1.1 * steady_new,
+        "band change stepped the output: max delta {whole} vs steady {steady_new}"
+    );
+    // And the boost did land: the late level is ~+6 dB over the input.
+    let peak = out[n - sr as usize..].iter().fold(0.0_f32, |m, v| m.max(v.abs()));
+    assert!((peak / 0.25 - 2.0).abs() < 0.2, "boost not applied: peak {peak}");
+}
