@@ -18,12 +18,30 @@
 use std::path::Path;
 
 use resonance_common::probe_audio_file;
+use thiserror::Error;
 
 use crate::decode;
 use crate::types::*;
 
-use super::clips::transcode_to_wav;
+use super::clips::{transcode_to_wav, TranscodeError};
 use super::thread::{HandlerCtx, HandlerState};
+
+/// Failure importing one source file into the pool
+/// ([`import_one_to_pool`]). `Probe`/`Decode` carry the still-`String`
+/// `resonance_common` errors verbatim (converted separately, under C-4);
+/// `Transcode` wraps the engine's own typed write error; `Panic` is the
+/// decoder-panic fallback text from [`run_pool_import_with`].
+#[derive(Debug, Error)]
+pub enum ImportError {
+    #[error("{0}")]
+    Probe(String),
+    #[error("{0}")]
+    Decode(String),
+    #[error(transparent)]
+    Transcode(#[from] TranscodeError),
+    #[error("Import failed: decoder panicked: {0}")]
+    Panic(String),
+}
 
 /// Outcome of importing one source file into the project pool. Mirrors
 /// the payload of [`AudioEvent::AssetImported`]; kept as a value type so
