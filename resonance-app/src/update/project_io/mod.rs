@@ -179,6 +179,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 }
                 r.io.has_active_project = true;
                 r.io.last_saved_at = Some(std::time::SystemTime::now());
+                reap_orphaned_vocal_takes(r);
                 if let Some(ref path) = r.io.project_path {
                     crate::recent::add(&mut r.io.recent_projects, path);
                 }
@@ -404,6 +405,32 @@ pub(crate) fn start_queued_save(r: &mut Resonance) {
 /// `saving` flag when no other save is collecting or queued: a manual
 /// save may have started while an autosave was writing, and the
 /// autosave's completion must not wipe its collector (STATE-11).
+/// After a manual save: delete rendered vocal WAVs in the project's
+/// `audio/` that no installed vocal clip points at (FU-B3). Skipped while
+/// a render is in flight — its WAV may already be on disk, waiting for
+/// the completion to install it.
+fn reap_orphaned_vocal_takes(r: &Resonance) {
+    use crate::update::compose::vocal_audio_io;
+    let Some(project) = r.io.project_path.as_deref() else {
+        return;
+    };
+    if !r.compose.vocal_audio.in_flight_render.is_empty() {
+        return;
+    }
+    let keep = r
+        .compose
+        .vocal_audio
+        .clips
+        .values()
+        .map(|(_, path)| path.clone())
+        .collect();
+    let removed =
+        vocal_audio_io::reap_orphaned_takes(&vocal_audio_io::vocal_audio_dir(Some(project)), &keep);
+    if !removed.is_empty() {
+        tracing::info!("[vocal] removed {} unreferenced rendered take(s)", removed.len());
+    }
+}
+
 fn finish_save_write(r: &mut Resonance) {
     if r.io.save_state.is_none() && !r.io.manual_save_queued {
         r.io.saving = false;

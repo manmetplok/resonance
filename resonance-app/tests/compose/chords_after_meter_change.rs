@@ -111,3 +111,30 @@ fn a_straddling_chord_is_trimmed_to_the_new_end() {
     }));
     assert_eq!(app.test_section_chord_spans(id), vec![(0, 4)]);
 }
+
+/// FU-V4b: a project FILE whose chords run past their section's end (a
+/// hand edit, or one saved before FU-V2b) is revalidated on load too.
+#[test]
+fn chords_past_the_section_end_are_revalidated_on_load() {
+    let mut app = app();
+    let id = section_with_chords(&mut app);
+    let mut file = app.test_build_project_file();
+    let def = file
+        .section_definitions
+        .iter_mut()
+        .find(|d| d.id == id)
+        .expect("section saved");
+    // 16 beats long: one chord straddling the end, one wholly past it.
+    let mut straddling = def.chords[2].clone();
+    straddling.id = 900;
+    straddling.start_beat = 14;
+    let mut past = def.chords[2].clone();
+    past.id = 901;
+    past.start_beat = 20;
+    def.chords.retain(|c| c.start_beat < 12);
+    def.chords.push(straddling);
+    def.chords.push(past);
+
+    app.test_replay_loaded_project(file);
+    assert_eq!(app.test_section_chord_spans(id), vec![(0, 4), (8, 4), (14, 2)]);
+}

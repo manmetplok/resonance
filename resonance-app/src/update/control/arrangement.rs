@@ -95,6 +95,9 @@ fn insert_bars(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
     if let Err(e) = check_range(params.at_bar, params.count) {
         return reject(request, e);
     }
+    if let Err(e) = check_song_end_after_insert(app, params.at_bar, params.count) {
+        return reject(request, e);
+    }
     run(
         app,
         request,
@@ -104,6 +107,23 @@ fn insert_bars(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
         },
         params.at_bar,
         params.count,
+    )
+}
+
+/// `check_range` bounds one call's span; repeated inserts before existing
+/// content could still push it past [`resonance_control::MAX_BARS`]
+/// (FU-M5a). When content ends after the cut, the song's last bar after
+/// the shift must stay within the limit too.
+fn check_song_end_after_insert(app: &Resonance, at_bar: u32, count: u32) -> Result<(), RpcError> {
+    let end = super::view_model::song_end_sample(app);
+    if end <= app.tempo_map.bar_to_sample(at_bar - 1) {
+        return Ok(());
+    }
+    let (bar, frac) = app.tempo_map.sample_to_bar(end, app.sample_rate);
+    let last_bar = bar + u32::from(frac > 0.0);
+    resonance_control::check_max_bars(
+        "the song's last bar after the insert",
+        last_bar.saturating_add(count),
     )
 }
 

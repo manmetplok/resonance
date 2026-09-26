@@ -256,7 +256,7 @@ impl<'a> VocalLaneCanvas<'a> {
     /// placement. Falls back to `None` when nothing has been generated
     /// yet — the caller paints the synthetic contour preview instead.
     pub(super) fn vocal_clip(&self, track_id: TrackId) -> Option<&MidiClipState> {
-        let clip_id = *self.derived_clip_ids.get(&track_id)?;
+        let clip_id = self.derived_clip_id(track_id)?;
         self.midi_clips.iter().find(|c| c.id == clip_id)
     }
 

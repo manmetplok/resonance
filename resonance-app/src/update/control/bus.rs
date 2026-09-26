@@ -654,16 +654,7 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     }
 
     let wanted = params.param.trim();
-    let param = entry
-        .params
-        .iter()
-        .find(|p| p.name.eq_ignore_ascii_case(wanted))
-        .or_else(|| {
-            wanted
-                .parse::<u32>()
-                .ok()
-                .and_then(|id| entry.params.iter().find(|p| p.id == id))
-        });
+    let param = super::track::find_param(&entry.params, wanted);
     let Some(param) = param else {
         let known: Vec<&str> = entry.params.iter().map(|p| p.name.as_str()).collect();
         return reject(

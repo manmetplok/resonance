@@ -25,12 +25,51 @@ use crate::compose::ExpressionCurves;
 /// project's `audio/` subdirectory so saves capture the clip; falls
 /// back to a per-process temp dir for unsaved sessions.
 ///
-/// `project_path` is the project *file* (`…/song.rson`), so the audio
-/// directory is its parent's `audio/`.
+/// `project_path` is the `.rproj` project *directory* (the one
+/// `save_project` writes `project.json` into), so the audio directory is
+/// its own `audio/` — not a sibling `audio/` shared with every other
+/// project in the same parent folder, which is where renders used to
+/// land (FU-B3).
 pub fn vocal_audio_dir(project_path: Option<&Path>) -> PathBuf {
     project_path
-        .and_then(|p| p.parent().map(|d| d.join("audio")))
+        .map(|p| p.join("audio"))
         .unwrap_or_else(|| std::env::temp_dir().join("resonance_vocal"))
+}
+
+/// Whether `path` is named like a rendered take ([`render_wav_filename`]).
+fn is_rendered_take(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("vocal_") && n.ends_with(".wav"))
+}
+
+/// Delete the rendered takes in `audio_dir` that are not in `keep`
+/// (FU-B3). Renders are never collected otherwise: a section or placement
+/// delete leaves its WAV behind, because an undo may re-install the clip
+/// while the session runs.
+///
+/// Called after a successful manual save, which copied every live clip
+/// to `audio/clip_<id>.wav` — the only name a saved project, an autosave
+/// or an undo snapshot ever records (`project::clip_audio_file`) — so a
+/// `vocal_*.wav` is needed only while an installed vocal clip (`keep`)
+/// still points at it. Conservative by construction: only direct
+/// children of `audio_dir`, only files named like a take. Returns what it
+/// removed.
+pub fn reap_orphaned_takes(
+    audio_dir: &Path,
+    keep: &std::collections::HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(audio_dir) else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    for path in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+        if path.is_file() && is_rendered_take(&path) && !keep.contains(&path) {
+            unlink_if_exists(&path);
+            removed.push(path);
+        }
+    }
+    removed
 }
 
 /// Best-effort file delete. Missing files (e.g. a previous render

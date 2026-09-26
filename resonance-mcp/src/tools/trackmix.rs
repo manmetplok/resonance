@@ -315,7 +315,8 @@ impl ResonanceMcp {
         description = "Set one plugin parameter, so a track can sound like something other than \
                        the plugin's default patch. param takes the parameter's name \
                        (case-insensitive) or its numeric id as a string — both come from \
-                       track_plugin_params. plugin_id names the plugin; omitted it targets the \
+                       track_plugin_params — or on a com.resonance.* plugin its stable string \
+                       key. plugin_id names the plugin; omitted it targets the \
                        track's instrument, which is the usual case for shaping a synth. A value \
                        outside the parameter's min..=max is rejected with the range rather than \
                        clamped. Repeated sets of the same parameter collapse into one undo \

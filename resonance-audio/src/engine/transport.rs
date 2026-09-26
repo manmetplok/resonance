@@ -376,7 +376,8 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
         state.rec.input_stream = None;
     }
     panic_all_instrument_plugins(ctx);
-    super::midi::close_open_recordings(ctx, state);
+    let pause_sample = ctx.shared.playhead.load(Ordering::SeqCst);
+    super::midi::close_open_recordings(ctx, state, pause_sample);
     // close_open_recordings bails when no recording is active, so call
     // all-notes-off directly to silence hardware synths driven by the
     // timeline.
@@ -389,6 +390,9 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
 pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     let was_recording = ctx.shared.recording.load(Ordering::SeqCst);
     let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
+    // Where the transport stopped: held recorded notes close here, not
+    // at the rewound playhead (code review FU-A2c).
+    let stop_sample = ctx.shared.playhead.load(Ordering::SeqCst);
     ctx.shared.playing.store(false, Ordering::SeqCst);
     ctx.shared.recording.store(false, Ordering::SeqCst);
     ctx.shared.playhead.store(0, Ordering::SeqCst);
@@ -413,7 +417,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     }
 
     panic_all_instrument_plugins(ctx);
-    super::midi::close_open_recordings(ctx, state);
+    super::midi::close_open_recordings(ctx, state, stop_sample);
     state.midi_hw.midi_outputs.all_notes_off_everywhere();
     if was_playing {
         super::midi::clock_send_stop(state);

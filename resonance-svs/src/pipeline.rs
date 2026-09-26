@@ -327,17 +327,28 @@ fn preprocess_acoustic(
 
 /// Map phoneme symbols to the voicebank's token ids.
 ///
-/// A symbol the dictionary lacks is an error listing every missing symbol
-/// (each once, in order of first appearance). It used to fall back to
-/// token 0 (`<PAD>` / `AP`), which rendered breath or silence where the
-/// phoneme should be while the render reported success; callers are
-/// expected to substitute to the voicebank's inventory before this point.
+/// A symbol the dictionary lacks is sung as its nearest substitute the
+/// dictionary has ([`nearest_substitutes`], e.g. Lilia `v` → `f`) — the
+/// same rule the app applies before building segments, repeated here so
+/// a phoneme stream that skipped it still renders (code review FU-M6b).
+/// A symbol with no substitute either is an error listing every such
+/// symbol (each once, in order of first appearance). It used to fall
+/// back to token 0 (`<PAD>` / `AP`), which rendered breath or silence
+/// where the phoneme should be while the render reported success.
+///
+/// [`nearest_substitutes`]: crate::voicebank::phonetics::nearest_substitutes
 pub fn phonemes_to_tokens(map: &HashMap<String, i64>, phonemes: &[String]) -> Result<Vec<i64>> {
     let mut missing: Vec<&str> = Vec::new();
     let tokens: Vec<i64> = phonemes
         .iter()
         .map(|ph| {
-            map.get(ph).copied().unwrap_or_else(|| {
+            if let Some(&token) = map.get(ph) {
+                return token;
+            }
+            let substitute = crate::voicebank::phonetics::nearest_substitutes(ph)
+                .iter()
+                .find_map(|candidate| map.get(*candidate).copied());
+            substitute.unwrap_or_else(|| {
                 if !missing.contains(&ph.as_str()) {
                     missing.push(ph.as_str());
                 }
@@ -349,7 +360,8 @@ pub fn phonemes_to_tokens(map: &HashMap<String, i64>, phonemes: &[String]) -> Re
         Ok(tokens)
     } else {
         Err(anyhow!(
-            "phoneme(s) not in the voicebank dictionary: {}",
+            "phoneme(s) not in the voicebank dictionary, with no substitute it has: {} — \
+             re-spell the lyric or choose a voicebank that sings them",
             missing.join(", ")
         ))
     }

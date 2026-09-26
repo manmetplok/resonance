@@ -32,6 +32,19 @@ fn hermetic() {
     let _ = Resonance::new_for_test();
 }
 
+/// Put a fixture file in place the way the app writes presets: whole,
+/// via a rename. The tests in this binary share one preset directory and
+/// run concurrently, and `load_user_presets` quarantines any `.json` it
+/// cannot parse — so a plain `fs::write` caught half-written by another
+/// test's load was renamed to `.corrupt` under this test's feet, the
+/// guarded save then found no file to protect and succeeded (code review
+/// FU-M12c).
+fn write_whole(path: &std::path::Path, contents: String) {
+    let tmp = path.with_extension("fixture-tmp");
+    std::fs::write(&tmp, contents).unwrap();
+    std::fs::rename(&tmp, path).unwrap();
+}
+
 fn loaded(name: &str) -> bool {
     presets::load_user_presets().iter().any(|p| p.name == name)
 }
@@ -78,7 +91,7 @@ fn a_file_holding_another_preset_is_never_overwritten() {
     // Some other preset occupies the file this name maps to (a case-
     // insensitive filesystem, or a hand-copied file).
     let other = serde_json::to_string(&preset("STATE-15 someone else")).unwrap();
-    std::fs::write(&path, other).unwrap();
+    write_whole(&path, other);
     assert!(presets::save_user_preset(&preset(name)).is_err());
     assert!(loaded("STATE-15 someone else"), "the other preset survives");
     std::fs::remove_file(&path).unwrap();
@@ -94,7 +107,7 @@ fn a_preset_saved_under_the_old_filename_is_found_by_its_name() {
         .unwrap()
         .to_path_buf();
     let legacy = dir.join("STATE-15_legacy_X.json");
-    std::fs::write(&legacy, serde_json::to_string(&preset(name)).unwrap()).unwrap();
+    write_whole(&legacy, serde_json::to_string(&preset(name)).unwrap());
 
     assert!(presets::user_preset_exists(name));
     // Overwriting it replaces the legacy file instead of adding a twin.

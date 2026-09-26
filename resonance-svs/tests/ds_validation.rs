@@ -96,3 +96,20 @@ fn unknown_phonemes_are_an_error_naming_them() {
     let msg = err.to_string();
     assert!(msg.contains("zh") && msg.contains("q"), "{msg}");
 }
+
+/// FU-M6b: a symbol the dictionary lacks is sung as its nearest
+/// substitute the dictionary HAS (Lilia `v` → `f`) before it is an error,
+/// so a phoneme stream that skipped the app's substitution still renders.
+#[test]
+fn a_missing_phoneme_with_a_substitute_in_the_dictionary_is_substituted() {
+    let map: HashMap<String, i64> = [("SP", 0), ("f", 3), ("a", 5)]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    let tokens = phonemes_to_tokens(&map, &["v".into(), "a".into()]).unwrap();
+    assert_eq!(tokens, vec![3, 5], "v is sung as f");
+
+    let err = phonemes_to_tokens(&map, &["zh".into()]).expect_err("no substitute present");
+    let msg = err.to_string();
+    assert!(msg.contains("zh") && msg.contains("substitute"), "{msg}");
+}

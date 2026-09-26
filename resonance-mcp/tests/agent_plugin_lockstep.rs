@@ -307,3 +307,128 @@ fn allow_listed_wire_fields_exist_in_the_schemas() {
         );
     }
 }
+
+/// Every `.rs` file under `dir`, recursively.
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read source dir") {
+        let path = entry.expect("read dir entry").path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// The string keys of every first-party plugin parameter: the first
+/// string literal after each `Param::new(` in `plugins/*/src`. These are
+/// what `set_plugin_param` accepts as a stable `param` (FU-M5c) and what
+/// presets store, so a skill naming one must name one that exists.
+fn first_party_param_keys() -> BTreeSet<String> {
+    let plugins = plugin_dir()
+        .parent()
+        .expect("workspace root")
+        .join("plugins");
+    let mut files = Vec::new();
+    rust_files(&plugins, &mut files);
+    let mut keys = BTreeSet::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("read plugin source");
+        let mut rest = text.as_str();
+        while let Some(at) = rest.find("Param::new(") {
+            rest = &rest[at + "Param::new(".len()..];
+            let Some(literal) = rest.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            if let Some(end) = literal.find('"') {
+                keys.insert(literal[..end].to_owned());
+            }
+        }
+    }
+    keys
+}
+
+/// Snake-case identifiers written as inline code (`` `lim_on` ``).
+fn backticked_snake_tokens(text: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for (i, span) in text.split('`').enumerate() {
+        let is_code = i % 2 == 1;
+        let snake = span.contains('_')
+            && !span.contains("__")
+            && span.starts_with(|c: char| c.is_ascii_lowercase())
+            && span
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if is_code && snake {
+            found.insert(span.to_owned());
+        }
+    }
+    found
+}
+
+/// Inline-code snake tokens that are neither a tool, a schema property
+/// nor a plugin param key: control-protocol method suffixes the skills
+/// quote.
+const PROSE_TOKENS: &[&str] = &["insert_bars"];
+
+/// Every published tool description, joined — job results (`meter.*`)
+/// and generator params are untyped in the schemas and documented there.
+fn description_text() -> String {
+    ResonanceMcp::combined_router()
+        .list_all()
+        .into_iter()
+        .map(|tool| format!("{}\n", tool.description.as_deref().unwrap_or_default()))
+        .collect()
+}
+
+/// Whether `word` occurs in `text` as a whole identifier.
+fn contains_word(text: &str, word: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+    })
+}
+
+/// FU-M5b: skills name plugin parameters (the mastering stage switches)
+/// and wire fields as inline code. Each such token must still exist — as
+/// a published tool, a property in some tool's schema or description, or
+/// a first-party plugin parameter key — or a renamed parameter leaves the
+/// skill setting something that is refused as not found.
+#[test]
+fn skills_inline_identifiers_exist() {
+    let published = tool_names();
+    let schemas = schema_text();
+    let descriptions = description_text();
+    let keys = first_party_param_keys();
+    assert!(
+        keys.contains("lim_on") && keys.contains("threshold"),
+        "sanity check failed: the param-key scan found {} keys",
+        keys.len()
+    );
+    let mut files = Vec::new();
+    markdown_files(&plugin_dir(), &mut files);
+
+    let mut missing = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("read skill markdown");
+        for token in backticked_snake_tokens(&text) {
+            let known = published.contains(&token)
+                || schemas.contains(&format!("\"{token}\""))
+                || contains_word(&descriptions, &token)
+                || keys.contains(&token)
+                || PLUGIN_FILE_KEYS.contains(&token.as_str())
+                || PROSE_TOKENS.contains(&token.as_str());
+            if !known {
+                missing.push(format!("{}: `{token}`", file.display()));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "skills name identifiers that are no tool, schema field or first-party plugin \
+         parameter key:\n{}",
+        missing.join("\n")
+    );
+}

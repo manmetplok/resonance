@@ -184,7 +184,8 @@ impl ResonanceMcp {
         description = "Set one parameter on a plugin inserted on the master — what turns a \
                        limiter that is merely present into one that actually holds a ceiling. \
                        param takes the parameter's name (case-insensitive) or its numeric id as \
-                       a string, both from master_plugin_params. plugin_id names which effect; \
+                       a string, both from master_plugin_params, or on a com.resonance.* plugin \
+                       its stable string key (e.g. \"lim_on\"). plugin_id names which effect; \
                        omitted it targets the master's first, which is unambiguous only on a \
                        one-effect chain. A value outside the parameter's min..=max is rejected \
                        with the range rather than clamped, but a value that rounds onto an \

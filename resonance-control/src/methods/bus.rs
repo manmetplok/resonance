@@ -290,8 +290,9 @@ pub struct SetPluginParamParams {
     /// Which instance of `plugin_id`, 0-based; defaults to the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<u32>,
-    /// The parameter, by name (case-insensitive) or by its numeric id as
-    /// a string. Names come from `bus.plugin_params`.
+    /// The parameter, by name (case-insensitive), by its numeric id as a
+    /// string, or by a first-party plugin's string key (`"lim_on"`).
+    /// Names and ids come from `bus.plugin_params`.
     pub param: String,
     /// New value — a number, or a choice label from
     /// `bus.plugin_params`. Same handling as

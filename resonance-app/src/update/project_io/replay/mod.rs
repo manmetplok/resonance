@@ -210,6 +210,12 @@ fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
         bpm: r.transport.bpm,
     });
     r.rebuild_and_send_tempo();
+    // Chords past a section's end are refused by every edit; hold a
+    // file to the same once the meter is known (code review FU-V4b).
+    let trimmed = crate::update::compose::trim_chords_to_sections(r);
+    if !trimmed.is_empty() {
+        tracing::warn!("trimmed chords past the end of section(s) {trimmed:?} on load");
+    }
     let _ = r.engine.send(AudioCommand::SetTimeSignature {
         numerator: r.transport.time_sig_num,
         denominator: r.transport.time_sig_den,

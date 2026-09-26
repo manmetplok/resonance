@@ -80,3 +80,21 @@ fn bar_removal_drops_deleted_clips_usage() {
     assert!(app.test_clips().is_empty(), "the clip starting in bar 1 is removed");
     assert_eq!(app.test_pool().usage_count(ASSET), 0);
 }
+
+/// FU-V3c: a Compose placement delete removes the placement's installed
+/// audio clips through `purge_placement_outputs`, which used to leave
+/// the pool's count stale.
+#[test]
+fn placement_delete_drops_its_audio_clips_usage() {
+    use resonance_app::compose::ComposeMessage;
+    use resonance_app::message::Message;
+    let mut app = app_with_placed_clip();
+    let placement = app.test_place_section(1, 0);
+    app.test_install_vocal_audio_clip(1, placement, 1, 10, "/tmp/v.wav".into());
+
+    let _ = app.update(Message::Compose(ComposeMessage::DeleteSectionPlacement {
+        placement_id: placement,
+    }));
+    assert!(app.test_clips().is_empty(), "the placement's clip is removed");
+    assert_eq!(app.test_pool().usage_count(ASSET), 0);
+}

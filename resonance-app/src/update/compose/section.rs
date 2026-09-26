@@ -423,8 +423,22 @@ pub(super) fn handle_resize(
 /// stop playing what is gone. A longer meter touches nothing. Runs inside
 /// the signature edit's own dispatch, so it rides that undo entry.
 pub(crate) fn revalidate_chords_after_meter_change(r: &mut crate::Resonance) -> Task<Message> {
+    let changed = trim_chords_to_sections(r);
+    let tasks: Vec<_> = changed
+        .into_iter()
+        .map(|id| rederive_section_clips(r, id))
+        .collect();
+    Task::batch(tasks)
+}
+
+/// Trim every section's chords to its end in the meter at its start — a
+/// straddling chord is shortened, one starting at or past the end
+/// dropped — and return the sections that changed. The load path calls
+/// this alone (code review FU-V4b): a file's derived clips are what was
+/// saved, so nothing is re-derived there.
+pub(crate) fn trim_chords_to_sections(r: &mut crate::Resonance) -> Vec<u64> {
     let ids: Vec<u64> = r.compose.definitions.iter().map(|d| d.id).collect();
-    let mut tasks = Vec::new();
+    let mut changed = Vec::new();
     for id in ids {
         let numerator = super::section_meter(r, id).numerator;
         let Some(def) = r.compose.find_definition_mut(id) else {
@@ -442,10 +456,10 @@ pub(crate) fn revalidate_chords_after_meter_change(r: &mut crate::Resonance) -> 
             }
         }
         if trimmed || def.chords.len() != before {
-            tasks.push(rederive_section_clips(r, id));
+            changed.push(id);
         }
     }
-    Task::batch(tasks)
+    changed
 }
 
 /// Re-derive every generated clip of a section after its length changed
@@ -549,7 +563,7 @@ pub(super) fn handle_delete_with_placements(r: &mut crate::Resonance, definition
 /// playing a section that no longer exists. The vocal WAV is left on
 /// disk: it is shared by the definition's other placements, and an undo
 /// of this delete restores a clip that still points at it.
-fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u64) {
+pub(crate) fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u64) {
     let midi: Vec<_> = r
         .compose
         .derived_clips
@@ -578,9 +592,13 @@ fn purge_placement_outputs(r: &mut crate::Resonance, placement_id: u64) {
         .vocal_audio
         .clips
         .retain(|(_, p, _), _| *p != placement_id);
+    let removed_audio = !audio.is_empty();
     for clip_id in audio {
         let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
         r.clips.retain(|c| c.id != clip_id);
+    }
+    if removed_audio {
+        r.recompute_pool_usage(); // FU-V3c, as VIEW-30 did for other deletes
     }
 }
 
