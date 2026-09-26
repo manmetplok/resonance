@@ -874,24 +874,29 @@ impl DrumGroupsMessage {
     pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
         use crate::undo::UndoAction;
         match self {
-            // Classified as `ComposeMessage::DrumGroups` always was: every
-            // message records.
+            // Focus, the manager modal and the inline rename's begin /
+            // typing / cancel only touch `DrumrollViewState`, which is
+            // session UI and never in the project (A-10: these used to
+            // record — a rename was one entry per keystroke plus two).
+            // The rename lands as one entry, on `CommitRenamePattern`.
             Self::SelectGroup { .. }
             | Self::SelectPattern { .. }
-            | Self::AssignPattern { .. }
+            | Self::BeginRenamePattern { .. }
+            | Self::UpdateRenamePatternText(..)
+            | Self::CancelRenamePattern
+            | Self::OpenManager
+            | Self::CloseManager
+            | Self::ManagerSelectGroup { .. }
+            | Self::ManagerSetFilter(..) => UndoAction::Skip,
+            // Pattern-bank and group edits mutate the persisted drum
+            // patterns / section assignment.
+            Self::AssignPattern { .. }
             | Self::AddPattern
             | Self::DuplicatePattern { .. }
             | Self::DeletePattern { .. }
             | Self::RenamePattern { .. }
             | Self::SetPatternColor { .. }
-            | Self::BeginRenamePattern { .. }
-            | Self::UpdateRenamePatternText(..)
             | Self::CommitRenamePattern
-            | Self::CancelRenamePattern
-            | Self::OpenManager
-            | Self::CloseManager
-            | Self::ManagerSelectGroup { .. }
-            | Self::ManagerSetFilter(..)
             | Self::AddGroup
             | Self::DeleteGroup { .. }
             | Self::RenameGroup { .. }
