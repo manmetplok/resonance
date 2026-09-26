@@ -18,7 +18,10 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{PluginMap, SharedState, StemSource, ensure_tuning_caches, pitch_ratio_curve, render_stem};
+use resonance_audio::__test_support::{
+    attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
+    render_stem, snapshot_tuning_jobs, PluginMap, SharedState, StemSource,
+};
 use resonance_audio::analyze_pitch;
 use resonance_audio::types::*;
 
@@ -289,6 +292,96 @@ fn identity_tuning_keeps_zero_overhead_path() {
     let built = ensure_tuning_caches(&eng.clips, SR);
     assert_eq!(built, 0, "identity tuning must build no cache");
     assert!(eng.clips.read()[0].tuning_render_cache.is_none());
+}
+
+// ---- the off-lock cache pass (code review ARCH-02 A2-3) ------------------
+
+/// Two tuned clips, one untuned clip with a stale cache, one plain clip.
+fn cache_pass_fixture() -> Engine {
+    let frames = SR as usize / 8;
+    let eng = Engine::new();
+    eng.add_master_track(1);
+    eng.push_clip(tone_clip(1, 1, 220.0, frames, Some(full_clip_tuning(hz_to_midi(220.0), frames, 2.0))));
+    eng.push_clip(tone_clip(2, 1, 330.0, frames, Some(full_clip_tuning(hz_to_midi(330.0), frames, -1.0))));
+    let mut stale = tone_clip(3, 1, 440.0, frames, None);
+    stale.tuning_render_cache = Some(vec![0.5; frames * 2]);
+    eng.push_clip(stale);
+    eng.push_clip(tone_clip(4, 1, 110.0, frames, None));
+    eng
+}
+
+fn caches(eng: &Engine) -> Vec<(ClipId, Option<Vec<f32>>)> {
+    eng.clips
+        .read()
+        .iter()
+        .map(|c| (c.id, c.tuning_render_cache.clone()))
+        .collect()
+}
+
+#[test]
+fn three_phase_cache_pass_matches_the_single_call_bitwise() {
+    let single = cache_pass_fixture();
+    let phased = cache_pass_fixture();
+
+    let built_single = ensure_tuning_caches(&single.clips, SR);
+
+    let jobs = snapshot_tuning_jobs(&phased.clips);
+    // Two retunes plus one stale clear; the plain clip is not a job.
+    assert_eq!(jobs.len(), 3);
+    assert_eq!(jobs.iter().filter(|j| j.retune.is_some()).count(), 2);
+    assert_eq!(jobs.iter().find(|j| j.clip_id == 3).map(|j| j.retune.is_none()), Some(true));
+    let built = build_tuning_caches(jobs, SR);
+    let built_phased = attach_tuning_caches(&phased.clips, built);
+
+    assert_eq!(built_single, 2);
+    assert_eq!(built_phased, 2);
+    let a = caches(&single);
+    let b = caches(&phased);
+    assert_eq!(a, b, "the phased pass must produce the identical caches");
+    assert!(a[0].1.is_some() && a[1].1.is_some());
+    assert!(a[2].1.is_none(), "stale cache cleared");
+    assert!(a[3].1.is_none(), "untuned clip stays cache-free");
+}
+
+#[test]
+fn resynthesis_completes_while_another_thread_holds_the_clips_read_lock() {
+    // The freeze worker used to take `clips.write()` for the whole FFT
+    // pass: with a reader pinning the lock the pass could not even start,
+    // and any engine-thread write queued behind the pass. Now the snapshot
+    // shares the lock with the reader and the resynthesis needs no lock
+    // at all — so the worker finishes both *while* this thread still
+    // holds a read guard. (With the old shape this join would deadlock.)
+    let eng = cache_pass_fixture();
+    let pinned = eng.clips.read();
+    let clips = Arc::clone(&eng.clips);
+    let built = std::thread::spawn(move || {
+        let jobs = snapshot_tuning_jobs(&clips);
+        build_tuning_caches(jobs, SR)
+    })
+    .join()
+    .expect("worker");
+    assert_eq!(built.len(), 3);
+    drop(pinned);
+
+    // The attach is the only part that needs the write, and it is one
+    // assignment per clip.
+    assert_eq!(attach_tuning_caches(&eng.clips, built), 2);
+    assert!(eng.clips.read()[0].tuning_render_cache.is_some());
+}
+
+#[test]
+fn attach_skips_a_clip_removed_since_the_snapshot() {
+    let eng = cache_pass_fixture();
+    let jobs = snapshot_tuning_jobs(&eng.clips);
+    let built = build_tuning_caches(jobs, SR);
+    // Clip 2 is deleted between snapshot and attach (an engine-thread
+    // edit landing mid-pass).
+    eng.clips.write().retain(|c| c.id != 2);
+    assert_eq!(attach_tuning_caches(&eng.clips, built), 1);
+    let after = caches(&eng);
+    assert_eq!(after.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![1, 3, 4]);
+    assert!(after[0].1.is_some());
+    assert!(after[1].1.is_none());
 }
 
 // ---- the pure ratio model (no FFT) ---------------------------------------

@@ -140,6 +140,19 @@ impl ChunkScratch {
 /// references to the engine's locked state so the render loop can
 /// re-acquire each lock per chunk (matching live playback's contention
 /// pattern).
+///
+/// Lock scope (code review ARCH-02): [`render_chunk`] holds all five map
+/// read guards for one `BOUNCE_CHUNK` — every plugin's `process()` on
+/// every track — and releases them between chunks. That never stalls
+/// the live callback: every caller runs under an
+/// [`OfflineRenderGuard`](super::OfflineRenderGuard), and while that
+/// gate is up `mix_audio` outputs silence without `try_read`ing any
+/// map. What a chunk-long guard *does* cost is engine-thread latency —
+/// a clip / note / track edit dispatched mid-render queues behind the
+/// chunk (a few ms) — which is the price of the offline render seeing
+/// edits at chunk granularity rather than snapshotting the project. The
+/// graph-publishing migration (ARCH-02 A2-4…) removes the guards
+/// altogether; until then this is by design, not an oversight.
 pub(super) struct ChunkCtx<'a> {
     pub shared: &'a Arc<SharedState>,
     pub tracks: &'a Arc<RwLock<IndexMap<TrackId, Track>>>,

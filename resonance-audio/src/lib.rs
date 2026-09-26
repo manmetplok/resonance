@@ -157,7 +157,10 @@ pub mod __test_support {
         can_fade, crossfade_to_dry, fade_frames, fade_weight, run_faded, save_dry, BypassFade,
         FadeStage, FxDryScratch, BYPASS_FADE_MS,
     };
-    pub use crate::engine::vocal_render::{ensure_tuning_caches, pitch_ratio_curve, retune_clip};
+    pub use crate::engine::vocal_render::{
+        attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
+        retune_clip, snapshot_tuning_jobs, TuningJob,
+    };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::platform::{pw_delay_to_engine_samples, MonitorResampler};
     pub use crate::recording::apply_take_shift;

@@ -61,6 +61,60 @@ fn clips_of(clip: MidiClip) -> Arc<RwLock<Vec<MidiClip>>> {
 // ---------------------------------------------------------------------
 
 #[test]
+fn quantize_computes_off_lock_and_lands_the_same_result_under_a_reader() {
+    // Code review ARCH-02 A2-3: the quantizer runs on a copy taken under
+    // a read guard and swaps the result in under a write. With a reader
+    // pinning the lock the worker gets as far as the swap — observable
+    // deterministically: parking_lot fails `try_read` once a writer is
+    // queued — and lands the identical result once the reader lets go.
+    let clips = clips_of(clip_with(
+        1,
+        vec![note(5, 100, 0.8, 60), note(118, 100, 0.8, 62), note(250, 100, 0.8, 64)],
+    ));
+    let (tx, rx) = unbounded::<AudioEvent>();
+    let reader = clips.read();
+    let worker = {
+        let clips = Arc::clone(&clips);
+        std::thread::spawn(move || {
+            quantize_midi_notes_in_place(
+                &clips,
+                &tx,
+                &TempoMap::default(),
+                SR,
+                1,
+                &[0, 1, 2],
+                Division::straight(GridValue::Sixteenth),
+                1.0,
+                0.0,
+                QuantizeMode::StartOnly,
+                false,
+                false,
+            );
+        })
+    };
+    // The worker's write is queued behind our read guard: it has read
+    // and computed, and is parked on the swap.
+    while clips.try_read().is_some() {
+        std::thread::yield_now();
+    }
+    assert!(rx.is_empty(), "the echo is sent after the swap, not before");
+    drop(reader);
+    worker.join().expect("worker");
+
+    let starts: Vec<u64> = clips.read()[0].notes.iter().map(|n| n.start_tick).collect();
+    assert_eq!(starts, vec![0, 120, 240]);
+    match rx.try_recv() {
+        Ok(AudioEvent::MidiNotesEdited { clip_id, notes }) => {
+            assert_eq!(clip_id, 1);
+            let echoed: Vec<u64> = notes.iter().map(|n| n.start_tick).collect();
+            assert_eq!(echoed, starts, "echo mirrors the stored notes");
+        }
+        other => panic!("expected MidiNotesEdited, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "exactly one event");
+}
+
+#[test]
 fn quantize_snaps_selected_and_emits_one_bulk_event() {
     // Notes slightly off a 16th grid (120 ticks): 5→0, 118→120, 250→240.
     let clips = clips_of(clip_with(

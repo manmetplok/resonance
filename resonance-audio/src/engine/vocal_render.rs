@@ -5,11 +5,17 @@
 //! never pays for it:
 //!
 //! * [`ensure_tuning_caches`] runs **off** the realtime thread (the engine
-//!   control thread / offline bounce-export workers). It takes the clips
-//!   write lock once and, for every clip whose tuning carries edits,
-//!   rebuilds its [`AudioClip::tuning_render_cache`] with the
-//!   formant-preserving resynthesis from `resonance-dsp`. Untuned / identity
-//!   clips have their cache cleared, restoring the zero-overhead path.
+//!   control thread / offline bounce-export workers). In three phases
+//!   (code review ARCH-02 A2-3): [`snapshot_tuning_jobs`] copies each
+//!   tuned clip's source + tuning under a short read guard,
+//!   [`build_tuning_caches`] runs the formant-preserving resynthesis from
+//!   `resonance-dsp` with **no** guard held, and [`attach_tuning_caches`]
+//!   installs the results under one short write. Untuned / identity clips
+//!   have their cache cleared, restoring the zero-overhead path. The
+//!   freeze worker used to hold `clips.write()` across the whole FFT
+//!   pass, which parked the engine thread's next clip edit — and, through
+//!   parking_lot's writer-priority, every audio-callback `try_read` on
+//!   `clips` — for the pass's duration.
 //! * The mixer hot path then reads [`AudioClip::render_frames`], which hands
 //!   back the cached corrected buffer (or the untouched source).
 //!
@@ -50,14 +56,12 @@
 //! ratio is unity, so an analysed-but-untouched clip resynthesises to within
 //! numerical precision of the original.
 
-use std::sync::Arc;
-
 use parking_lot::RwLock;
 use resonance_dsp::FormantShifter;
 use resonance_music_theory::pitch::PitchClass;
 use resonance_music_theory::scale::Scale;
 
-use crate::types::{AudioClip, VocalTuning};
+use crate::types::{AudioClip, ClipId, VocalTuning};
 
 /// Rebuild (or clear) the [`AudioClip::tuning_render_cache`] of every clip in
 /// `clips`, so the next render reads correctly-tuned audio. Call once before
@@ -68,32 +72,90 @@ use crate::types::{AudioClip, VocalTuning};
 /// corrected buffer; all others have their cache cleared, restoring the
 /// zero-overhead source path. Returns the number of clips whose cache was
 /// (re)built, mainly for tests/telemetry.
-pub fn ensure_tuning_caches(clips: &Arc<RwLock<Vec<AudioClip>>>, sample_rate: u32) -> usize {
-    let mut guard = clips.write();
-
-    // Nothing to do — and nothing stale to clear — when no clip is tuned and
-    // none holds a leftover cache. Keeps the common (untuned) project off the
-    // FFT-shifter allocation entirely.
-    let any_tuned = guard.iter().any(|c| {
-        c.tuning_render_cache.is_some()
-            || c.vocal_tuning.as_ref().is_some_and(|t| t.has_edits())
-    });
-    if !any_tuned {
+///
+/// The clips lock is held only by the snapshot and attach phases (a copy
+/// and an assignment per tuned clip); the resynthesis itself runs on
+/// owned data — see the module docs.
+pub fn ensure_tuning_caches(clips: &RwLock<Vec<AudioClip>>, sample_rate: u32) -> usize {
+    let jobs = snapshot_tuning_jobs(clips);
+    if jobs.is_empty() {
         return 0;
     }
+    attach_tuning_caches(clips, build_tuning_caches(jobs, sample_rate))
+}
 
+/// One clip's share of a tuning-cache pass, copied out of the clip table so
+/// the resynthesis can run with no lock held.
+#[derive(Debug, Clone)]
+pub struct TuningJob {
+    pub clip_id: ClipId,
+    /// The clip's interleaved-stereo source PCM plus its tuning, when the
+    /// tuning carries edits; `None` for a clip that only needs its stale
+    /// cache cleared.
+    pub retune: Option<(Vec<f32>, VocalTuning)>,
+}
+
+/// Phase 1 — under a short read guard: one [`TuningJob`] per clip whose
+/// cache state must change (a tuned clip, or an untuned one still holding
+/// a cache). Empty when nothing is tuned and nothing is stale, which keeps
+/// the common (untuned) project off the FFT-shifter allocation entirely.
+pub fn snapshot_tuning_jobs(clips: &RwLock<Vec<AudioClip>>) -> Vec<TuningJob> {
+    let guard = clips.read();
+    guard
+        .iter()
+        .filter_map(|clip| match clip.vocal_tuning.as_ref() {
+            Some(tuning) if tuning.has_edits() => Some(TuningJob {
+                clip_id: clip.id,
+                retune: Some((clip.source.as_frames().to_vec(), tuning.clone())),
+            }),
+            _ if clip.tuning_render_cache.is_some() => Some(TuningJob {
+                clip_id: clip.id,
+                retune: None,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Phase 2 — no lock: resynthesise every job that carries a retune. Pure
+/// over its input, so the caller may hold nothing while it runs. Returns
+/// `(clip id, cache-or-clear)` pairs for [`attach_tuning_caches`].
+pub fn build_tuning_caches(
+    jobs: Vec<TuningJob>,
+    sample_rate: u32,
+) -> Vec<(ClipId, Option<Vec<f32>>)> {
     // One shifter for the whole pass: it holds the FFT plans + window and is
     // re-entrant, so it can retune every clip without per-clip setup cost.
-    let shifter = FormantShifter::new(sample_rate as f32);
+    // Built lazily so a pass that only clears stale caches never plans an
+    // FFT.
+    let mut shifter = None;
+    jobs.into_iter()
+        .map(|job| {
+            let cache = job.retune.map(|(source, tuning)| {
+                let shifter = shifter.get_or_insert_with(|| FormantShifter::new(sample_rate as f32));
+                retune_clip(&source, shifter, &tuning)
+            });
+            (job.clip_id, cache)
+        })
+        .collect()
+}
+
+/// Phase 3 — under a short write guard: install each built cache (or
+/// clear) on its clip. A clip that was removed since the snapshot is
+/// skipped. Returns the number of caches (re)built.
+pub fn attach_tuning_caches(
+    clips: &RwLock<Vec<AudioClip>>,
+    built: Vec<(ClipId, Option<Vec<f32>>)>,
+) -> usize {
     let mut rebuilt = 0;
-    for clip in guard.iter_mut() {
-        let cache = match clip.vocal_tuning.as_ref() {
-            Some(tuning) if tuning.has_edits() => {
-                rebuilt += 1;
-                Some(retune_clip(clip.source.as_frames(), &shifter, tuning))
-            }
-            _ => None,
+    let mut guard = clips.write();
+    for (clip_id, cache) in built {
+        let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
+            continue;
         };
+        if cache.is_some() {
+            rebuilt += 1;
+        }
         clip.tuning_render_cache = cache;
     }
     rebuilt
