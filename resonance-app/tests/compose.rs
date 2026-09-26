@@ -109,6 +109,8 @@ mod templates_scan;
 mod track_delete_lane_cleanup;
 #[path = "compose/vocal_render_inflight_placement.rs"]
 mod vocal_render_inflight_placement;
+#[path = "compose/vocal_rerender_keeps_saved_audio.rs"]
+mod vocal_rerender_keeps_saved_audio;
 #[path = "compose/chords_after_meter_change.rs"]
 mod chords_after_meter_change;
 #[path = "compose/expanded_editor_key_focus.rs"]

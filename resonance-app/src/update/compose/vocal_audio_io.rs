@@ -72,6 +72,33 @@ pub fn reap_orphaned_takes(
     removed
 }
 
+/// Unlink `path` after a re-render superseded the clip that played it —
+/// but only when it is a rendered take (`vocal_*.wav`) that no installed
+/// vocal clip in `installed` still points at (FU-C1a).
+///
+/// After a project load or an undo restore, a lane's clip points at
+/// `audio/clip_<id>.wav`: the file the saved project, its autosave and
+/// every undo snapshot name for that clip. Deleting it on re-render
+/// destroyed the vocal the moment the user undid the re-render or
+/// reopened the saved project. Such files are never a re-render's to
+/// delete; an unreferenced take left behind here is collected by the
+/// save-time reaper ([`reap_orphaned_takes`]) instead.
+///
+/// One render is installed on every placement of its section, so the
+/// same take can back several clips: it stays until the last goes.
+///
+/// Returns whether the file was unlinked.
+pub fn unlink_superseded_take<'a>(
+    path: &Path,
+    installed: impl IntoIterator<Item = &'a PathBuf>,
+) -> bool {
+    if !is_rendered_take(path) || installed.into_iter().any(|p| p == path) {
+        return false;
+    }
+    unlink_if_exists(path);
+    true
+}
+
 /// Best-effort file delete. Missing files (e.g. a previous render
 /// failed to write or was already cleaned up) are silently ignored;
 /// any other error is surfaced via stderr but does not fail the regen.
