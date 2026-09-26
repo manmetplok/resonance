@@ -117,6 +117,12 @@ pub fn seed_demo_content(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums, bass, pad, lead, audio, vocal];
     app.registry.next_track_order = 6;
+    // ARCH-04 D-4: this bypasses the engine, so nothing else bumps
+    // `next_track_id` past these hand-picked ids — without this, the
+    // first real track add after this fixture (the one allocator now
+    // serving every add) would hand out id 1 again, colliding with
+    // `drums` above.
+    app.registry.next_track_id = VOCAL_TRACK_ID + 1;
     app.interaction.select_single_track(Some(2));
     // Demo seed bypasses the engine-event handlers that normally keep
     // this cache fresh, so refresh by hand.
@@ -479,7 +485,7 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
 
     app.registry.tracks = vec![drums, bass, pad, lead, kick, snare, hh, tom];
     app.registry.next_track_order = 8;
-    app.registry.next_sub_track_id = 14;
+    app.registry.next_track_id = 14;
     app.interaction.select_single_track(Some(1));
 
     // Expand the drum parent so the mixer renders its sub-strips —

@@ -24,22 +24,13 @@ pub(super) fn dispatch_tracks(
         AudioCommand::SetTrackSolo { track_id, soloed } => {
             tracks::handle_set_track_solo(ctx, track_id, soloed)
         }
-        AudioCommand::AddTrack { id_hint, name } => {
-            tracks::handle_add_track(ctx, state, id_hint, name)
-        }
+        AudioCommand::AddTrack { id, name } => tracks::handle_add_track(ctx, id, name),
         AudioCommand::CreateSubTrack {
             sub_id,
             parent_track_id,
             output_port_index,
             name,
-        } => tracks::handle_create_sub_track(
-            ctx,
-            state,
-            sub_id,
-            parent_track_id,
-            output_port_index,
-            name,
-        ),
+        } => tracks::handle_create_sub_track(ctx, sub_id, parent_track_id, output_port_index, name),
         AudioCommand::RemoveTrack { track_id } => {
             tracks::handle_remove_track(ctx, state, track_id);
             crate::engine::sidechain::drop_source_routes(

@@ -208,24 +208,32 @@ pub(crate) fn handle_set_track_solo(ctx: &HandlerCtx, track_id: TrackId, soloed:
     }
 }
 
-pub(crate) fn handle_add_track(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    id_hint: Option<TrackId>,
-    name: Option<String>,
-) {
-    let id = id_hint.unwrap_or_else(|| {
-        let i = state.next_track_id;
-        state.next_track_id += 1;
-        i
-    });
-    // A hint below the app's base is an engine-allocated id coming back
-    // on the project-load replay, and the counter has to move past it.
-    // One at or above the base is app-owned (`SUB_TRACK_ID_BASE`): the
-    // app skips ids it holds, so the engine must never start handing
-    // out ids in that range itself.
-    if id_hint.is_some() && id < SUB_TRACK_ID_BASE {
-        state.next_track_id = state.next_track_id.max(id + 1);
+/// Refuse an add whose id is already live in `ctx.tracks`, rather than
+/// silently replacing the track it names — the track twin of
+/// `plugins::reject_if_plugin_id_in_use` (ARCH-04 D-4).
+///
+/// Every add now carries an app-allocated id (`Resonance::allocate_track_id`);
+/// the engine has no allocator of its own left to fall back on, so a
+/// collision here means the app's mirror and the engine's live set have
+/// drifted, not a legitimate retry. `EngineErrorKind::Internal`, same
+/// reasoning as the plugin/bus twins.
+///
+/// Returns `true` (and has already reported the error) when the add must
+/// stop here.
+pub(crate) fn reject_if_track_id_in_use(ctx: &HandlerCtx, id: TrackId) -> bool {
+    if ctx.tracks.read().contains_key(&id) {
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            "track id {id} is already in use; refusing the add rather than replacing the live track"
+        ))));
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn handle_add_track(ctx: &HandlerCtx, id: TrackId, name: Option<String>) {
+    if reject_if_track_id_in_use(ctx, id) {
+        return;
     }
     let name = name.unwrap_or_else(|| format!("Track {}", id));
     let track = Track::new(id, name);
@@ -240,30 +248,17 @@ pub(crate) fn handle_add_track(
 /// reads this field during mixdown to route output ports to the
 /// sub-track's own fader/pan/bus chain.
 ///
-/// Bumping `next_track_id` past `sub_id` is critical: the caller picks
-/// `sub_id` from an app-side counter that doesn't know about the
-/// engine's `next_track_id`. If we don't bump, a later
-/// `AddTrack { id_hint: None }` can allocate an id that already exists
-/// — the `insert` call here silently overwrites the sub-track (or vice
-/// versa) and the GUI's `TrackAdded` handler discards the event as a
-/// duplicate, leaving the user with nothing happening on their `+`
-/// click. This is the same shape as the `id_hint` branch in
-/// `handle_add_track`.
+/// Since ARCH-04 D-4 there is no engine-side track counter left to bump
+/// past `sub_id` — `Resonance::allocate_track_id` is the only allocator
+/// for tracks and sub-tracks alike, so there is nothing here to keep
+/// clear of.
 pub(crate) fn handle_create_sub_track(
     ctx: &HandlerCtx,
-    state: &mut HandlerState,
     sub_id: TrackId,
     parent_track_id: TrackId,
     output_port_index: u32,
     name: String,
 ) {
-    // Bump `next_track_id` past `sub_id` even on the no-op path so an
-    // idempotent replay still leaves the counter in the right place —
-    // but only for an id below the app's base (see `handle_add_track`);
-    // sub-tracks normally live in the app-owned range.
-    if sub_id < SUB_TRACK_ID_BASE {
-        state.next_track_id = state.next_track_id.max(sub_id + 1);
-    }
     // Idempotent: skip if this sub-track already exists. Project load
     // replays saved sub-tracks, then PluginAdded re-fires the
     // auto-create path; the second hit should be a no-op.
@@ -588,8 +583,10 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // `audio/clip_{id}.wav`, and a slow-path undo's redo stack (or a
     // backup) can still reference an id cleared here. Reissuing it let a
     // new take overwrite that WAV (code review STATE-08); clip ids stay
-    // monotonic for the session.
-    state.next_track_id = 1;
+    // monotonic for the session. Tracks have no counter left to reset
+    // (ARCH-04 D-4) — the app is the only track-id allocator, and
+    // `wipe_registry` is what advances it past a freshly loaded project's
+    // ids.
     state.next_take_group_id = 1;
 
     let _ = ctx.event_tx.send(AudioEvent::AllCleared);

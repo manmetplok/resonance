@@ -2,15 +2,16 @@
 //! (doc #251 gap 1 affordance 2, ba todo #1066).
 //!
 //! This message creates an instrument track that starts already in
-//! external-instrument mode. Unlike `AddInstrumentTrack` (which lets the
-//! engine allocate the id), it allocates the track id app-side so the
-//! external state can be enabled on that exact id in the same reducer call —
-//! the engine echoes `InstrumentTrackAdded` for the id a beat later, which
-//! mirrors the track into the registry.
+//! external-instrument mode. Since ARCH-04 D-4 every `AddInstrumentTrack`
+//! is app-allocated, but this message still allocates the id itself
+//! (rather than fire-and-forget) so the external state can be enabled on
+//! that exact id in the same reducer call — the engine echoes
+//! `InstrumentTrackAdded` for the id a beat later, which mirrors the
+//! track into the registry.
 //!
 //! Coverage:
 //!  - dispatching the message enables external mode on a freshly-allocated id
-//!    and emits `AddInstrumentTrack { id_hint: Some(id) }` + a
+//!    and emits `AddInstrumentTrack { id }` + a
 //!    `SetExternalInstrument` engine command;
 //!  - once the engine echoes `InstrumentTrackAdded`, the new track is present
 //!    in the registry AND in the external-instruments map;
@@ -40,18 +41,18 @@ fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<Audi
     cmds
 }
 
-/// The id the app's sub-track counter hands out for the first app-allocated
-/// track. `allocate_sub_track_id` starts from `next_sub_track_id`; a fresh
+/// The id the app's track counter hands out for the first app-allocated
+/// track. `allocate_track_id` starts from `next_track_id`; a fresh
 /// project has no tracks, so the first allocation is deterministic. We read
 /// it back from the emitted command rather than hard-coding it, so the test
-/// stays correct even if the base counter changes.
+/// stays correct even if the counter's starting point changes.
 fn allocated_id_from_add(cmds: &[AudioCommand]) -> TrackId {
     for cmd in cmds {
-        if let AudioCommand::AddInstrumentTrack { id_hint: Some(id), .. } = cmd {
+        if let AudioCommand::AddInstrumentTrack { id, .. } = cmd {
             return *id;
         }
     }
-    panic!("expected an AddInstrumentTrack with an app-allocated id_hint");
+    panic!("expected an AddInstrumentTrack with an app-allocated id");
 }
 
 #[test]
@@ -63,7 +64,7 @@ fn dispatch_emits_add_and_enable_commands() {
 
     let cmds = drain(&rx);
 
-    // The track is created with an app-allocated id hint (so we know the id).
+    // The track is created with an app-allocated id (so we know the id).
     let id = allocated_id_from_add(&cmds);
 
     // The Enable half fires the same engine command as

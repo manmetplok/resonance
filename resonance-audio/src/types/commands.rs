@@ -206,11 +206,14 @@ pub enum AudioCommand {
         track_id: TrackId,
         soloed: bool,
     },
-    /// Add an audio track. When `id_hint`/`name` are provided (e.g. by
-    /// project load), the engine honours them and bumps its allocator
-    /// past the hinted id so subsequent fresh tracks don't collide.
+    /// Add an audio track. Since ARCH-04 D-4 the app allocates every
+    /// track id (`Resonance::allocate_track_id`) and `id` is mandatory;
+    /// the engine has no allocator of its own left and refuses a
+    /// collision (`EngineErrorKind::Internal`,
+    /// `tracks::reject_if_track_id_in_use`) rather than replacing the
+    /// live track.
     AddTrack {
-        id_hint: Option<TrackId>,
+        id: TrackId,
         name: Option<String>,
     },
     RemoveTrack {
@@ -218,10 +221,11 @@ pub enum AudioCommand {
     },
     /// Register an app-side sub-track with the audio engine so the mixer
     /// can drive it from its parent plugin's output port. The app
-    /// allocates the id itself (high range, never colliding with
-    /// engine ids counting up from 1) and passes it here. Called after
-    /// `AudioEvent::PluginAdded` for every non-main output port on a
-    /// multi-output plugin.
+    /// allocates the id itself — the same `Resonance::allocate_track_id`
+    /// every other track add draws from (ARCH-04 D-4; tracks and
+    /// sub-tracks have shared one id space since before that) — and
+    /// passes it here. Called after `AudioEvent::PluginAdded` for every
+    /// non-main output port on a multi-output plugin.
     CreateSubTrack {
         sub_id: TrackId,
         parent_track_id: TrackId,
@@ -593,7 +597,7 @@ pub enum AudioCommand {
     /// Bounce in place — render one instrument track (and any of its
     /// sub-tracks) to a single in-RAM stereo `AudioClip` on
     /// `target_track_id`. The app pre-creates the audio track via
-    /// [`AudioCommand::AddTrack`] with `id_hint = Some(target_track_id)`
+    /// [`AudioCommand::AddTrack`] with `id = target_track_id`
     /// and pre-allocates `target_clip_id` (same allocator pool as
     /// `LoadMidiClipDirect`). Excludes master FX / master volume so the
     /// captured PCM plays back through master once on subsequent
@@ -740,18 +744,19 @@ pub enum AudioCommand {
 
     // -- Instrument track commands --
     /// Add an instrument track. See [`AudioCommand::AddTrack`] for how
-    /// `id_hint`/`name` are honoured.
+    /// `id`/`name` are honoured.
     AddInstrumentTrack {
-        id_hint: Option<TrackId>,
+        id: TrackId,
         name: Option<String>,
     },
 
     // -- Vocal track commands --
     /// Add a vocal track. Engine-side this is an instrument-shaped track
     /// (accepts live MIDI) but its playback path runs through the audio
-    /// clip pipeline so the SVS-rendered WAV is what's heard.
+    /// clip pipeline so the SVS-rendered WAV is what's heard. See
+    /// [`AudioCommand::AddTrack`] for how `id`/`name` are honoured.
     AddVocalTrack {
-        id_hint: Option<TrackId>,
+        id: TrackId,
         name: Option<String>,
     },
 

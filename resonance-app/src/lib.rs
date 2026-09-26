@@ -717,7 +717,10 @@ impl Resonance {
             },
             mixer: MixerUiState::default(),
             registry: TrackRegistry {
-                next_sub_track_id: state::ids::SUB_TRACK_ID_BASE,
+                // ARCH-04 D-4: no base to seed from any more — the app is
+                // the only track-id allocator, so it starts at 1 like the
+                // engine's own counter used to.
+                next_track_id: 1,
                 next_bus_id: state::ids::BUS_ID_BASE,
                 ..TrackRegistry::default()
             },

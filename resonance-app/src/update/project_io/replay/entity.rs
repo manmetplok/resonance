@@ -12,9 +12,9 @@ use crate::Resonance;
 pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &LoadedProject) {
     // Repair sub-track id collisions left by buggier prior versions. If
     // the saved id is already in use by an earlier-loaded track, allocate
-    // a fresh app-side id from `next_sub_track_id` (which the pre-loop
-    // bump already advanced past every saved sub-track id, so this won't
-    // collide with later siblings either).
+    // a fresh app-side id from `next_track_id` (which the pre-loop bump
+    // already advanced past every saved track id, so this won't collide
+    // with later siblings either).
     let track_id = if pt.sub_track.is_some()
         && r.registry.tracks.iter().any(|t| t.id == pt.id)
     {
@@ -38,17 +38,17 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
         });
     } else if pt.track_type == "instrument" {
         let _ = r.engine.send(AudioCommand::AddInstrumentTrack {
-            id_hint: Some(track_id),
+            id: track_id,
             name: Some(pt.name.clone()),
         });
     } else if pt.track_type == "vocal" {
         let _ = r.engine.send(AudioCommand::AddVocalTrack {
-            id_hint: Some(track_id),
+            id: track_id,
             name: Some(pt.name.clone()),
         });
     } else {
         let _ = r.engine.send(AudioCommand::AddTrack {
-            id_hint: Some(track_id),
+            id: track_id,
             name: Some(pt.name.clone()),
         });
     }

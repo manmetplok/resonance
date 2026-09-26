@@ -178,7 +178,7 @@ fn drop_on_new_track_zone_spawns_track_then_places() {
     let new_id = cmds
         .iter()
         .find_map(|c| match c {
-            AudioCommand::AddTrack { id_hint, .. } => Some(id_hint.expect("id reserved")),
+            AudioCommand::AddTrack { id, .. } => Some(*id),
             _ => None,
         })
         .expect("AddTrack sent for new-track drop");

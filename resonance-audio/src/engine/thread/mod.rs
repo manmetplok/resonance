@@ -98,7 +98,6 @@ pub(crate) struct LoopRecordSession {
 /// dispatches: monotonic id counters, the recording session, the loaded
 /// CLAP bundles, and the bounded clip-import worker pool.
 pub(crate) struct HandlerState {
-    pub next_track_id: TrackId,
     pub next_clip_id: ClipId,
     /// Monotonic id allocator for media-pool assets imported via
     /// `AudioCommand::ImportAudioToPool`. Independent of `next_clip_id`:
@@ -281,7 +280,6 @@ impl HandlerState {
         clock_tx: Sender<MidiClockEvent>,
     ) -> Self {
         Self {
-            next_track_id: 1,
             next_clip_id: 1,
             next_asset_id: 1,
             aux_sends: IndexMap::new(),
@@ -438,13 +436,17 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         .event_tx
         .send(AudioEvent::SampleRateDetected { sample_rate });
 
-    // Add a default track
+    // Add a default track. Unprompted by the app — this runs once, before
+    // the command loop below ever reads from `cmd_rx` — so it always gets
+    // id 1: there is no earlier add it could collide with (ARCH-04 D-4;
+    // there is no `next_track_id` counter left to draw this from any
+    // more, so it is a literal, the same way a hand-built fixture like
+    // `demo::seed_demo_content` picks its own ids outright).
     {
-        let id = state.next_track_id;
+        let id: TrackId = 1;
         let track = Track::new(id, "Track 1".to_string());
         ctx.tracks.write().insert(id, track);
         let _ = ctx.event_tx.send(AudioEvent::TrackAdded { track_id: id });
-        state.next_track_id += 1;
     }
 
     loop {

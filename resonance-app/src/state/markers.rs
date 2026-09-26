@@ -89,7 +89,7 @@ pub struct ArrangementMarkers {
     /// Next id to hand out from [`Self::allocate_id`]. Recomputed as
     /// `max(existing id) + 1` whenever the collection is rebuilt from a
     /// persisted `Vec` (see the `From` impl), mirroring how the track
-    /// registry restores `next_sub_track_id` on project load.
+    /// registry restores `next_track_id` on project load.
     next_id: u64,
 }
 

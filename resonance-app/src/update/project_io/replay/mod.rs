@@ -164,15 +164,17 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // domain (`reconcile::app_side::TakeGroups`), just before it re-seeds
     // them; nothing in between reads them.
 
-    // Bump the app-side sub-track id counter past any persisted ids so
-    // new sub-tracks allocated after this load don't collide with
-    // restored ones. Saved projects from buggier prior versions may have
-    // *non-sub-track* ids that fell into the sub-track range; include
-    // every id so the next `allocate_track_id` skip loop has fewer
-    // iterations to do.
+    // Bump the app-side track id counter past every persisted id so a
+    // fresh add after this load doesn't collide with a restored track
+    // (ARCH-04 D-4: this is the ONLY track-id counter now, so this bump
+    // matters for every track, not only ones in the old sub-track range).
+    // `replay_track` (via `entity::replay_track`) mirrors each track
+    // eagerly as it replays, so this pre-loop bump is belt and braces on
+    // top of that eager mirror, not the only thing keeping the next
+    // `allocate_track_id` skip loop short.
     for pt in &project.tracks {
-        if pt.id >= r.registry.next_sub_track_id {
-            r.registry.next_sub_track_id = pt.id + 1;
+        if pt.id >= r.registry.next_track_id {
+            r.registry.next_track_id = pt.id + 1;
         }
     }
 

@@ -253,6 +253,27 @@ impl EngineHandlerHarness {
         });
     }
 
+    /// Run the real `AddTrack` handler (ARCH-04 D-4's
+    /// `EngineErrorKind::Internal` guard: `id` already live refuses the
+    /// add rather than replacing the track). The app allocates every
+    /// track id now, so `id` is mandatory — no more `id_hint`.
+    pub fn add_track(&mut self, id: TrackId, name: Option<String>) -> Vec<AudioEvent> {
+        self.with_ctx(|ctx, _state| tracks::handle_add_track(ctx, id, name));
+        self.drain_events()
+    }
+
+    /// The live track ids, in insertion order. Used to confirm a refused
+    /// duplicate-id `AddTrack` left the registry exactly as it was.
+    pub fn test_track_ids(&self) -> Vec<TrackId> {
+        self.tracks.read().keys().copied().collect()
+    }
+
+    /// A live track's name, if it exists. Used to confirm a refused
+    /// duplicate-id `AddTrack` did not rename the track it collided with.
+    pub fn test_track_name(&self, id: TrackId) -> Option<String> {
+        self.tracks.read().get(&id).map(|t| t.name.clone())
+    }
+
     /// Run the real `AddBus` handler (ARCH-05/C-1's `EngineError::busy`
     /// guard: past `MAX_BUSSES`, the engine refuses rather than adding;
     /// ARCH-04 D-3's `EngineErrorKind::Internal` guard: `id` already live

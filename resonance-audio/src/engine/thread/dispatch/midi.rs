@@ -11,8 +11,8 @@ pub(super) fn dispatch_midi(
     cmd: AudioCommand,
 ) {
     match cmd {
-        AudioCommand::AddInstrumentTrack { id_hint, name } => {
-            midi::handle_add_instrument_track(ctx, state, id_hint, name);
+        AudioCommand::AddInstrumentTrack { id, name } => {
+            midi::handle_add_instrument_track(ctx, id, name);
             // The app enables external mode on an id it allocated itself,
             // so `SetExternalInstrument` can arrive before (or after) the
             // track exists. Re-assert the stored modes now that it does.
@@ -21,9 +21,7 @@ pub(super) fn dispatch_midi(
                 &ctx.tracks.read(),
             );
         }
-        AudioCommand::AddVocalTrack { id_hint, name } => {
-            midi::handle_add_vocal_track(ctx, state, id_hint, name)
-        }
+        AudioCommand::AddVocalTrack { id, name } => midi::handle_add_vocal_track(ctx, id, name),
         AudioCommand::CreateMidiClip {
             track_id,
             start_sample,

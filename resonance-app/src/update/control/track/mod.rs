@@ -13,7 +13,7 @@
 //!
 //! Track creation is asynchronous engine-side (the registry mirrors the
 //! track on the `TrackAdded` echo), so `track.add` allocates the id
-//! app-side and passes it as `id_hint` — the same pattern the
+//! app-side and passes it along — the same pattern the
 //! external-instrument add uses — so the reply can return the real
 //! `track_id` immediately.
 //!
