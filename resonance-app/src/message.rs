@@ -1403,9 +1403,7 @@ pub enum GlobalTrackMessage {
 /// User actions for the MIDI Import modal (see [`crate::state::ImportDialogState`]
 /// and [`crate::view::import_dialog`]). Lifecycle: `Open` → file
 /// chosen/parsed → review / tempo-conflict → `Confirm`, or `Cancel` to
-/// dismiss. The interactions beyond open/close drive the dialog's review
-/// state; the parse task and the actual import land in the follow-up
-/// todos (doc #158), so their orchestration is not wired here yet.
+/// dismiss. Everything before `Confirm` is transient dialog state.
 #[derive(Debug, Clone)]
 pub enum ImportMessage {
     /// Open the modal at the Drop stage.
@@ -1456,7 +1454,13 @@ pub enum ImportMessage {
     SetMergeTarget(Option<TrackId>),
     /// Choose bar- vs time-aligned tempo-conflict resolution.
     SetConflictAlignment(TempoAlignment),
-    /// Confirm and start the import.
+    /// Pick one TempoConflict option: the tempo choice together with its
+    /// alignment (the alignment only matters when keeping the project's).
+    ChooseTempo(TempoChoice, TempoAlignment),
+    /// Accept the TempoConflict stage's choice and move on to Review.
+    ResolveTempo,
+    /// Import the selected tracks — the one message of the flow that
+    /// edits the project, recorded as a single undo entry.
     Confirm,
 }
 

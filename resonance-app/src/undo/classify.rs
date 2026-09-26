@@ -54,9 +54,13 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
         Message::Ui(_) => UndoAction::Skip,
         Message::ProjectIo(_) => UndoAction::Skip,
         Message::Export(_) => UndoAction::Skip,
-        // The import modal is transient dialog state until the actual
-        // import lands (a follow-up todo, doc #158); none of its
-        // interactions mutate the project yet, so nothing to record.
+        // The MIDI Import modal: every interaction is transient dialog
+        // state except Confirm, which lands the whole import — new tracks,
+        // clips, notes and an adopted tempo — as ONE undoable edit (code
+        // review FU-V2a). Its sub-dispatches are absorbed into this entry
+        // (`continue_as_one_undo`), and a Confirm that cannot import is
+        // dropped by `gates_message` before it could record anything.
+        Message::Import(ImportMessage::Confirm) => UndoAction::Record,
         Message::Import(_) => UndoAction::Skip,
         // Missing-file relink (doc #175, todo #600). Opening the OS
         // picker, its cancel results, and starting the background import

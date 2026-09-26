@@ -5,15 +5,32 @@
 //!
 //! The flow walks through stages — drop a file, parse it, review the
 //! detected tracks, reconcile any tempo difference, then confirm. Only
-//! the state model lives here; the per-stage view bodies and the
-//! parse/import orchestration land in the follow-up todos (doc #158).
+//! the state model lives here; the orchestration is `update::import`.
 //!
 //! Every row/summary type is **app-level on purpose**: the orchestration
 //! layer maps the parser's `ImportedSmf` onto these, so the view and
-//! update layers never touch `resonance-audio`'s import internals.
+//! update layers never touch `resonance-audio`'s import internals. The
+//! one exception is [`ImportSource`], the opaque handle Confirm imports
+//! from.
 
+use resonance_audio::midi_io::ImportedSmf;
 use resonance_audio::types::TrackId;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// The full parse behind a Review: every note of every track plus the
+/// file's tempo map. The rows above only carry a preview sample, and
+/// Confirm needs all of it (code review FU-V2a). Shared, never cloned:
+/// equality is identity, since two parses of the same file are still two
+/// different imports.
+#[derive(Debug, Clone)]
+pub struct ImportSource(pub Arc<ImportedSmf>);
+
+impl PartialEq for ImportSource {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
 
 /// Which step of the import flow the modal is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +198,9 @@ pub struct ImportSummary {
 pub struct ParsedImport {
     pub summary: ImportSummary,
     pub rows: Vec<TrackImportRow>,
+    /// The whole parse, which Confirm imports from. `None` only for a
+    /// hand-built review model (tests, previews) — Confirm refuses then.
+    pub source: Option<ImportSource>,
 }
 
 /// Outcome summary shown on the `Imported` stage once the import lands.
@@ -205,6 +225,8 @@ pub struct ImportDialogState {
     pub summary: Option<ImportSummary>,
     /// Per-track UI rows the user reviews and edits.
     pub rows: Vec<TrackImportRow>,
+    /// The full parse `rows` were built from (row `i` is its track `i`).
+    pub source: Option<ImportSource>,
     /// Tempo reconciliation choice.
     pub tempo_choice: TempoChoice,
     /// Tempo-conflict alignment (meaningful only on the `TempoConflict`
@@ -232,6 +254,7 @@ impl ImportDialogState {
             source_path: None,
             summary: None,
             rows: Vec::new(),
+            source: None,
             tempo_choice: TempoChoice::KeepProject,
             tempo_alignment: TempoAlignment::MatchBars,
             placement: Placement::default(),

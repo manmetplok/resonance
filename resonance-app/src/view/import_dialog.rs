@@ -13,9 +13,11 @@
 //! the `ACCENT_DIM` wash + filled-checkbox treatment shared with the
 //! export modal's track rows.
 //!
-//! The other stage bodies (Drop / Parsing / Error / Imported) and the
-//! tempo-conflict + placement controls land in the sibling view todos
-//! (#508 / #507); until then they fall back to a single labelled line.
+//! Review ends in an Import button, enabled exactly when Confirm would be
+//! accepted; TempoConflict offers the three ways to reconcile a tempo
+//! difference and a Continue; Imported reports what landed (code review
+//! FU-V2a). Drop / Parsing / Error stay single labelled lines, and the
+//! placement controls (#507) are not built yet — the defaults apply.
 
 use iced::widget::{
     button, column, container, mouse_area, opaque, row, scrollable, stack, text, text_input, Space,
@@ -23,7 +25,10 @@ use iced::widget::{
 use iced::{alignment, Element, Length};
 
 use crate::message::{ImportMessage, Message};
-use crate::state::{ImportDialogState, ImportStage, ImportSummary, ImportTrackKind, TrackImportRow};
+use crate::state::{
+    ImportDialogState, ImportStage, ImportSummary, ImportTrackKind, TempoAlignment, TempoChoice,
+    TrackImportRow,
+};
 use crate::theme;
 use crate::Resonance;
 
@@ -58,17 +63,44 @@ pub(crate) fn view_import_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
     // dialog widens for Review so the track table breathes.
     let (body, width): (Element<'a, Message>, f32) = match dialog.stage {
         ImportStage::Review => (review_body(dialog), 600.0),
+        ImportStage::TempoConflict => (tempo_conflict_body(r, dialog), 460.0),
+        ImportStage::Imported => (imported_body(dialog), 460.0),
         _ => (stage_placeholder(dialog), 460.0),
     };
 
-    let cancel_btn = button(text("Cancel").size(13).color(theme::TEXT_1))
+    // Once the import has landed the only way on is out.
+    let cancel_label = if dialog.stage == ImportStage::Imported {
+        "Done"
+    } else {
+        "Cancel"
+    };
+    let cancel_btn = button(text(cancel_label).size(13).color(theme::TEXT_1))
         .on_press(Message::Import(ImportMessage::Cancel))
         .padding([8, 18])
         .style(|_theme, status| theme::ghost_button_style(status));
 
-    let button_row = row![Space::new().width(Length::Fill), cancel_btn]
+    // The stage's primary action: Import on Review (enabled exactly when
+    // Confirm would be accepted — `confirm_blocker` is also the gate),
+    // Continue on TempoConflict (code review FU-V2a).
+    let primary: Option<(String, Option<ImportMessage>)> = match dialog.stage {
+        ImportStage::Review => {
+            let selected = dialog.selected_count();
+            let label = format!("Import {}", plural(selected, "track", "tracks"));
+            let enabled = crate::update::import::confirm_blocker(r).is_none();
+            Some((label, enabled.then_some(ImportMessage::Confirm)))
+        }
+        ImportStage::TempoConflict => {
+            Some(("Continue".to_owned(), Some(ImportMessage::ResolveTempo)))
+        }
+        _ => None,
+    };
+
+    let mut button_row = row![Space::new().width(Length::Fill), cancel_btn]
         .spacing(8)
         .align_y(alignment::Vertical::Center);
+    if let Some((label, action)) = primary {
+        button_row = button_row.push(primary_button(label, action));
+    }
 
     let dialog_content = column![
         title,
@@ -125,6 +157,125 @@ fn stage_placeholder<'a>(dialog: &'a ImportDialogState) -> Element<'a, Message> 
     } else {
         label.into()
     }
+}
+
+/// The dialog's primary action button; `None` renders it disabled.
+fn primary_button<'a>(label: String, action: Option<ImportMessage>) -> Element<'a, Message> {
+    let active = action.is_some();
+    let mut b = button(
+        text(label)
+            .size(13)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(if active { theme::BG_0 } else { theme::TEXT_3 }),
+    )
+    .padding([8, 18])
+    .style(move |_theme, status| {
+        if active {
+            theme::primary_button_style(status)
+        } else {
+            theme::ghost_button_style(status)
+        }
+    });
+    if let Some(message) = action {
+        b = b.on_press(Message::Import(message));
+    }
+    b.into()
+}
+
+// ---------------------------------------------------------------------------
+// Tempo-conflict + imported stage bodies
+// ---------------------------------------------------------------------------
+
+/// The file's tempo differs from the project's: offer the three ways to
+/// reconcile them (doc #158). The choice is applied by Confirm.
+fn tempo_conflict_body<'a>(r: &'a Resonance, dialog: &'a ImportDialogState) -> Element<'a, Message> {
+    let project_bpm = r.tempo_events.first().map_or(r.transport.bpm, |e| e.bpm);
+    let file_tempo = dialog
+        .summary
+        .as_ref()
+        .and_then(tempo_range_label)
+        .unwrap_or_else(|| "a different tempo".to_owned());
+    let intro = text(format!(
+        "This file plays at {file_tempo}; the project is at {} BPM.",
+        round_bpm(project_bpm)
+    ))
+    .size(13)
+    .color(theme::TEXT_2);
+
+    let keep = dialog.tempo_choice == TempoChoice::KeepProject;
+    let options = column![
+        tempo_option(
+            "Keep project tempo \u{2014} match bars",
+            "Notes keep their bar and beat positions.",
+            keep && dialog.tempo_alignment == TempoAlignment::MatchBars,
+            ImportMessage::ChooseTempo(TempoChoice::KeepProject, TempoAlignment::MatchBars),
+        ),
+        tempo_option(
+            "Keep project tempo \u{2014} match time",
+            "Notes keep their timing in seconds.",
+            keep && dialog.tempo_alignment == TempoAlignment::MatchTime,
+            ImportMessage::ChooseTempo(TempoChoice::KeepProject, TempoAlignment::MatchTime),
+        ),
+        tempo_option(
+            "Use the file's tempo",
+            "The project adopts the file's tempo map.",
+            !keep,
+            ImportMessage::ChooseTempo(TempoChoice::AdoptFile, dialog.tempo_alignment),
+        ),
+    ]
+    .spacing(6);
+
+    column![intro, Space::new().height(12), options].into()
+}
+
+/// One selectable tempo option: a title + one-line explanation, washed
+/// with the selected-row treatment when it is the current choice.
+fn tempo_option<'a>(
+    title: &'a str,
+    detail: &'a str,
+    selected: bool,
+    on_press: ImportMessage,
+) -> Element<'a, Message> {
+    let content = column![
+        text(title)
+            .size(13)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_1),
+        text(detail).size(12).color(theme::TEXT_2),
+    ]
+    .spacing(2);
+    button(content)
+        .width(Length::Fill)
+        .padding([8, 12])
+        .on_press(Message::Import(on_press))
+        .style(move |_theme, _status| {
+            let s = row_style(selected, false);
+            button::Style {
+                background: s.background,
+                border: s.border,
+                text_color: theme::TEXT_1,
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+/// What the import added.
+fn imported_body<'a>(dialog: &'a ImportDialogState) -> Element<'a, Message> {
+    let line = match dialog.result {
+        Some(res) => format!(
+            "Imported {} into {}, on {}.",
+            plural(res.notes_imported, "note", "notes"),
+            plural(res.clips_added, "clip", "clips"),
+            if res.tracks_created > 0 {
+                plural(res.tracks_created, "new track", "new tracks")
+            } else {
+                "the selected track".to_owned()
+            },
+        ),
+        None => "Import complete.".to_owned(),
+    };
+    text(line).size(13).color(theme::TEXT_2).into()
 }
 
 // ---------------------------------------------------------------------------

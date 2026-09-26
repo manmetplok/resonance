@@ -240,4 +240,26 @@ impl crate::Resonance {
         self.undo.end_compound();
         out
     }
+
+    /// Run `f` as the rest of the edit being dispatched right now: a
+    /// handler whose own message already recorded its undo entry
+    /// (classified `Record`) and that fans out into further dispatches
+    /// through `update()`. Those are absorbed into that one entry — no
+    /// extra snapshot, no extra revision bump — exactly as in
+    /// [`with_compound_undo`](Self::with_compound_undo), except the group
+    /// is armed up front because its opening edit is the caller's own
+    /// message. The MIDI Import dialog's Confirm (code review FU-V2a) is
+    /// the user: one click creates tracks, clips and notes, and may
+    /// rewrite the tempo, all under one undo.
+    pub(crate) fn continue_as_one_undo<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        if self.undo.in_compound() {
+            return f(self);
+        }
+        self.undo.begin_compound();
+        // Arm the group: the dispatching message is its opening edit.
+        let _ = self.undo.absorb_into_compound();
+        let out = f(self);
+        self.undo.end_compound();
+        out
+    }
 }

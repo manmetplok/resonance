@@ -73,24 +73,41 @@ pub(super) fn handle(app: &mut Resonance, request: &Request) -> (Response, Task<
 
     // Resolve the target: an existing clip whose notes are replaced, or
     // a new clip on a track.
-    let (clip_id, track_id, task) = match resolve_target(app, &params, length_ticks) {
-        Ok(target) => target,
-        Err(e) => return reject(request, e),
-    };
-
+    //
     // The notes are already in engine ticks and clip-relative, so the
     // project's tempo map governs where they sound: the CLIP's start is
     // resolved through `tempo_map.bar_to_sample` and the notes ride the
     // map from there, exactly like authored ones. A fixed BPM is never
     // assumed.
-    let write = super::run_via_update(
-        app,
-        Message::MidiEditor(MidiEditorMessage::SetClipNotes {
-            clip_id,
-            notes: notes.clone(),
-        }),
-    );
-    crate::engine_events::midi::optimistic_set_notes(app, clip_id, notes);
+    let (clip_id, track_id, task) = match resolve_target(app, &params) {
+        Ok(Target::Clip { clip_id, track_id }) => {
+            let write = super::run_via_update(
+                app,
+                Message::MidiEditor(MidiEditorMessage::SetClipNotes {
+                    clip_id,
+                    notes: notes.clone(),
+                }),
+            );
+            crate::engine_events::midi::optimistic_set_notes(app, clip_id, notes);
+            (clip_id, track_id, write)
+        }
+        // The same clip write as the GUI import dialog's Confirm.
+        Ok(Target::NewClip {
+            track_id,
+            start_sample,
+            name,
+        }) => {
+            let (clip_id, task) = crate::update::import::create_clip_with_notes(
+                app,
+                track_id,
+                start_sample,
+                notes,
+                name,
+            );
+            (clip_id, track_id, task)
+        }
+        Err(e) => return reject(request, e),
+    };
 
     let result = ImportMidiResult {
         clip_id: resonance_control::ids::ClipId(clip_id),
@@ -101,7 +118,7 @@ pub(super) fn handle(app: &mut Resonance, request: &Request) -> (Response, Task<
         length_beats: length_ticks as f64 / TICKS_PER_QUARTER_NOTE as f64,
         revision: app.revision(),
     };
-    (super::success(request, &result), Task::batch([task, write]))
+    (super::success(request, &result), task)
 }
 
 /// The file's bytes, from exactly one of `path` / `data_base64`.
@@ -221,13 +238,21 @@ fn describe_tracks(smf: &ImportedSmf) -> String {
         .join(", ")
 }
 
-/// Resolve `clip_id` / `track_id` into the clip the notes go into,
-/// creating one when the caller named a track.
-fn resolve_target(
-    app: &mut Resonance,
-    params: &ImportMidiParams,
-    length_ticks: u64,
-) -> Result<(u64, u64, Task<Message>), RpcError> {
+/// Where the imported notes go.
+enum Target {
+    /// An existing clip, whose notes are replaced.
+    Clip { clip_id: u64, track_id: u64 },
+    /// A new clip on `track_id`, created at `start_sample`.
+    NewClip {
+        track_id: u64,
+        start_sample: u64,
+        name: String,
+    },
+}
+
+/// Resolve `clip_id` / `track_id` into the clip the notes go into, or
+/// the new one to create when the caller named a track.
+fn resolve_target(app: &Resonance, params: &ImportMidiParams) -> Result<Target, RpcError> {
     match (params.clip_id, params.track_id) {
         (Some(_), Some(_)) => Err(RpcError::invalid_params(
             "target either an existing clip_id or a track_id, not both",
@@ -248,7 +273,10 @@ fn resolve_target(
             if let Some(error) = frozen_reject(app, track_id) {
                 return Err(error);
             }
-            Ok((clip_id.0, track_id, Task::none()))
+            Ok(Target::Clip {
+                clip_id: clip_id.0,
+                track_id,
+            })
         }
         (None, Some(track_id)) => {
             let track = app
@@ -269,29 +297,14 @@ fn resolve_target(
             if bar < 1 {
                 return Err(RpcError::invalid_params("start_bar is 1-based"));
             }
-            let start_sample = app.tempo_map.bar_to_sample(bar - 1);
-            // Long enough to hold the imported material, rounded up to a
-            // whole bar so the clip lines up with the grid.
-            let bar_ticks =
-                app.transport.time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
-            let duration_ticks = length_ticks.div_ceil(bar_ticks).max(1) * bar_ticks;
-
-            let clip_id = app.compose.fresh_derived_clip_id();
-            let name = params
-                .name
-                .clone()
-                .unwrap_or_else(|| "Imported MIDI".to_owned());
-            let task = super::run_via_update(
-                app,
-                Message::MidiClip(crate::message::MidiClipMessage::CreateEmptyClip {
-                    clip_id,
-                    track_id: track_id.0,
-                    start_sample,
-                    duration_ticks,
-                    name,
-                }),
-            );
-            Ok((clip_id, track_id.0, task))
+            Ok(Target::NewClip {
+                track_id: track_id.0,
+                start_sample: app.tempo_map.bar_to_sample(bar - 1),
+                name: params
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "Imported MIDI".to_owned()),
+            })
         }
     }
 }

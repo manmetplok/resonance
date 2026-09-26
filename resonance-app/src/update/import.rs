@@ -1,22 +1,41 @@
 //! Update handlers for the MIDI Import modal.
 //!
-//! Scope here is the shared shell: open/close plumbing, the file chooser,
-//! the background parse (code review VIEW-25) and the review-stage field
-//! setters. Tempo-conflict resolution and the actual import land in the
-//! follow-up todos (doc #158), so the interaction arms only update the
-//! dialog's transient state — they don't yet touch the project or the
-//! audio engine.
+//! The shared shell (open/close, file chooser, background parse — code
+//! review VIEW-25), the review-stage field setters, the tempo-conflict
+//! choice, and Confirm, which lands the import (code review FU-V2a).
+//!
+//! Confirm is the ONE message of the flow that edits the project: it is
+//! classified `Record` in `undo/classify.rs`, refused up front by
+//! `gates_message` when [`confirm_blocker`] objects, and fans out through
+//! `update()` inside [`Resonance::continue_as_one_undo`] so the new tracks,
+//! clips, notes and any adopted tempo are a single undo entry. The clip
+//! write is [`create_clip_with_notes`], shared with the control API's
+//! `notes.import_midi`, so GUI and control land notes the same way.
+//!
+//! Tempo (doc #158): a file whose tempo differs from the project's stops at
+//! the TempoConflict stage, which asks for one of
+//! - **keep the project tempo, match bars** — the notes keep their
+//!   bar/beat positions and play at the project tempo;
+//! - **keep the project tempo, match time** — the notes keep their
+//!   wall-clock timing, rescaled from the file's tempo map onto the
+//!   project tempo at the import point;
+//! - **use the file tempo** — the project's tempo map is replaced by the
+//!   file's, and the notes keep their bar/beat positions.
 
 use std::path::{Path, PathBuf};
 
+use std::sync::Arc;
+
 use iced::Task;
 
-use resonance_audio::midi_io::{parse_midi_file, ImportedSmf, SmfFormat};
+use resonance_audio::midi_io::{parse_midi_file, ImportedSmf, SmfFormat, TempoEvent};
+use resonance_audio::types::{ClipId, MidiNote, TrackId, TrackType, TICKS_PER_QUARTER_NOTE};
 
-use crate::message::{ImportMessage, Message};
+use crate::message::{ImportMessage, Message, MidiClipMessage, MidiEditorMessage, TrackMessage};
 use crate::state::{
-    ImportDialogState, ImportStage, ImportSummary, ImportTrackKind, ParsedImport, PreviewNote,
-    TrackImportRow,
+    ControlTrackKind, ImportDialogState, ImportResultSummary, ImportSource, ImportStage,
+    ImportSummary, ImportTrackKind, ParsedImport, PlacementMode, PlacementStart, PreviewNote,
+    TempoAlignment, TempoChoice, TrackImportRow,
 };
 use crate::Resonance;
 
@@ -98,6 +117,7 @@ fn parsed_import(smf: &ImportedSmf, file_name: String, project_bpm: f32) -> Pars
             tempo_conflict,
         },
         rows,
+        source: Some(ImportSource(Arc::new(smf.clone()))),
     }
 }
 
@@ -217,6 +237,7 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
                         };
                         d.summary = Some(parsed.summary);
                         d.rows = parsed.rows;
+                        d.source = parsed.source;
                         d.error = None;
                     }
                     Err(reason) => {
@@ -272,10 +293,245 @@ pub fn handle(app: &mut Resonance, message: ImportMessage) -> Task<Message> {
                 d.tempo_alignment = alignment;
             }
         }
-        // The parse→import orchestration lands in a follow-up todo
-        // (doc #158). For now Confirm is a no-op placeholder so the shell
-        // compiles and routes cleanly; it does not yet mutate the project.
-        ImportMessage::Confirm => {}
+        ImportMessage::ChooseTempo(choice, alignment) => {
+            if let Some(d) = app.import_dialog.as_mut() {
+                d.tempo_choice = choice;
+                d.tempo_alignment = alignment;
+            }
+        }
+        ImportMessage::ResolveTempo => {
+            if let Some(d) = app.import_dialog.as_mut() {
+                if d.stage == ImportStage::TempoConflict {
+                    d.stage = ImportStage::Review;
+                }
+            }
+        }
+        ImportMessage::Confirm => return confirm(app),
     }
     Task::none()
+}
+
+/// Why Confirm cannot import right now, or `None` when it can. The one
+/// predicate behind both the `gates_message` refusal and the Import
+/// button's enabled state, so the two never disagree.
+pub(crate) fn confirm_blocker(app: &Resonance) -> Option<String> {
+    let Some(d) = app.import_dialog.as_ref() else {
+        return Some("No import in progress.".to_owned());
+    };
+    if d.stage != ImportStage::Review {
+        return Some("Finish the current step first.".to_owned());
+    }
+    if d.source.is_none() {
+        return Some("Nothing has been parsed to import.".to_owned());
+    }
+    if d.selected_count() == 0 {
+        return Some("Select at least one track to import.".to_owned());
+    }
+    if d.placement.mode == PlacementMode::MergeIntoSelected {
+        let Some(target) = d.placement.merge_target else {
+            return Some("Choose a track to merge into.".to_owned());
+        };
+        let Some(track) = app.registry.tracks.iter().find(|t| t.id == target) else {
+            return Some("The merge target track no longer exists.".to_owned());
+        };
+        if !matches!(track.track_type, TrackType::Instrument | TrackType::Vocal) {
+            return Some("MIDI can only merge into an instrument or vocal track.".to_owned());
+        }
+        if app.freeze.status(target).is_frozen() {
+            return Some("The merge target is frozen; unfreeze it first.".to_owned());
+        }
+    }
+    None
+}
+
+/// Land the reviewed import. Only reached when [`confirm_blocker`] had no
+/// objection (the gate drops it otherwise), and the Confirm message has
+/// already recorded the pre-import undo snapshot.
+fn confirm(app: &mut Resonance) -> Task<Message> {
+    let Some(d) = app.import_dialog.as_ref() else {
+        return Task::none();
+    };
+    let Some(ImportSource(smf)) = d.source.clone() else {
+        return Task::none();
+    };
+    let conflict = d.summary.as_ref().is_some_and(|s| s.tempo_conflict);
+    let adopt_file_tempo = conflict && d.tempo_choice == TempoChoice::AdoptFile;
+    let match_time = conflict
+        && d.tempo_choice == TempoChoice::KeepProject
+        && d.tempo_alignment == TempoAlignment::MatchTime;
+    let placement = d.placement;
+    let file_name = d
+        .summary
+        .as_ref()
+        .map(|s| s.file_name.clone())
+        .unwrap_or_else(|| "Imported MIDI".to_owned());
+    // Row `i` was built from the file's track `i`.
+    let picked: Vec<(String, ImportTrackKind, usize)> = d
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.selected && !r.is_conductor)
+        .map(|(i, r)| (r.name.clone(), r.kind, i))
+        .collect();
+
+    app.continue_as_one_undo(|app| {
+        let mut tasks = Vec::new();
+        if adopt_file_tempo && !smf.tempo_points.is_empty() {
+            let mut points = smf.tempo_points.clone();
+            if points[0].bar != 0 {
+                let bpm = points[0].bpm;
+                points.insert(0, crate::state::TempoEvent { bar: 0, bpm });
+            }
+            app.tempo_events = points;
+            app.rebuild_and_send_tempo();
+            app.sync_tempo_display();
+        }
+
+        let start_sample = match placement.start {
+            PlacementStart::Bar1 => app.tempo_map.bar_to_sample(0),
+            PlacementStart::Playhead => app.transport.playhead,
+        };
+        let project_bpm = app
+            .tempo_map
+            .tempo_at_sample(start_sample, app.sample_rate)
+            .0;
+        let notes_of = |index: usize| -> Vec<MidiNote> {
+            let notes = smf
+                .tracks
+                .get(index)
+                .map(|t| t.notes.clone())
+                .unwrap_or_default();
+            if match_time {
+                retime_notes(&notes, &smf.tempo_events, project_bpm)
+            } else {
+                notes
+            }
+        };
+
+        let mut result = ImportResultSummary {
+            tracks_created: 0,
+            clips_added: 0,
+            notes_imported: 0,
+        };
+        match placement.mode {
+            PlacementMode::NewTracks => {
+                for (name, kind, index) in &picked {
+                    let notes = notes_of(*index);
+                    let track_id = app.registry.allocate_sub_track_id();
+                    tasks.push(app.update(Message::Track(TrackMessage::AddControlTrack {
+                        id: track_id,
+                        kind: match kind {
+                            ImportTrackKind::Instrument => ControlTrackKind::Instrument,
+                            ImportTrackKind::Drum => ControlTrackKind::Drums,
+                            ImportTrackKind::Vocal => ControlTrackKind::Vocal,
+                        },
+                        name: Some(name.clone()),
+                    })));
+                    result.tracks_created += 1;
+                    result.notes_imported += notes.len();
+                    let (_, task) =
+                        create_clip_with_notes(app, track_id, start_sample, notes, name.clone());
+                    tasks.push(task);
+                    result.clips_added += 1;
+                }
+            }
+            PlacementMode::MergeIntoSelected => {
+                // `confirm_blocker` guarantees the target.
+                if let Some(target) = placement.merge_target {
+                    let mut notes: Vec<MidiNote> =
+                        picked.iter().flat_map(|(_, _, i)| notes_of(*i)).collect();
+                    notes.sort_by_key(|n| (n.start_tick, n.note));
+                    result.notes_imported = notes.len();
+                    let (_, task) =
+                        create_clip_with_notes(app, target, start_sample, notes, file_name);
+                    tasks.push(task);
+                    result.clips_added = 1;
+                }
+            }
+        }
+
+        if let Some(d) = app.import_dialog.as_mut() {
+            d.stage = ImportStage::Imported;
+            d.result = Some(result);
+            d.error = None;
+        }
+        Task::batch(tasks)
+    })
+}
+
+/// Create a clip on `track_id` at `start_sample` holding `notes` (engine
+/// ticks, clip-relative), sized up to whole bars. The one clip write both
+/// importers use — the dialog's Confirm and the control API's
+/// `notes.import_midi` — so they land notes identically: an id-hinted
+/// `CreateEmptyClip`, then the bulk `SetClipNotes`, mirrored optimistically
+/// so the notes are readable before the engine echo.
+pub(crate) fn create_clip_with_notes(
+    app: &mut Resonance,
+    track_id: TrackId,
+    start_sample: u64,
+    notes: Vec<MidiNote>,
+    name: String,
+) -> (ClipId, Task<Message>) {
+    let length_ticks = notes
+        .iter()
+        .map(|n| n.start_tick + n.duration_ticks)
+        .max()
+        .unwrap_or(0);
+    let bar_ticks = app.transport.time_sig_num.max(1) as u64 * TICKS_PER_QUARTER_NOTE;
+    let duration_ticks = length_ticks.div_ceil(bar_ticks).max(1) * bar_ticks;
+    let clip_id = app.compose.fresh_derived_clip_id();
+    let create = app.update(Message::MidiClip(MidiClipMessage::CreateEmptyClip {
+        clip_id,
+        track_id,
+        start_sample,
+        duration_ticks,
+        name,
+    }));
+    let write = app.update(Message::MidiEditor(MidiEditorMessage::SetClipNotes {
+        clip_id,
+        notes: notes.clone(),
+    }));
+    crate::engine_events::midi::optimistic_set_notes(app, clip_id, notes);
+    (clip_id, Task::batch([create, write]))
+}
+
+/// Rescale notes from the file's tempo map onto a constant `project_bpm`
+/// so each note keeps its wall-clock onset and length ("keep project
+/// tempo, match time"). Constant across the clip: a project tempo change
+/// inside the imported span is not followed.
+fn retime_notes(notes: &[MidiNote], file_tempo: &[TempoEvent], project_bpm: f32) -> Vec<MidiNote> {
+    let to_project_ticks = |tick: u64| -> u64 {
+        let seconds = file_seconds_at(tick, file_tempo);
+        (seconds * project_bpm as f64 / 60.0 * TICKS_PER_QUARTER_NOTE as f64).round() as u64
+    };
+    notes
+        .iter()
+        .map(|n| {
+            let start = to_project_ticks(n.start_tick);
+            let end = to_project_ticks(n.start_tick + n.duration_ticks);
+            MidiNote {
+                start_tick: start,
+                duration_ticks: end.saturating_sub(start).max(1),
+                ..n.clone()
+            }
+        })
+        .collect()
+}
+
+/// Seconds from the file's start to `tick` under its tick-positioned tempo
+/// map; the SMF default of 120 BPM applies before the first event.
+fn file_seconds_at(tick: u64, tempo: &[TempoEvent]) -> f64 {
+    let tpq = TICKS_PER_QUARTER_NOTE as f64;
+    let mut seconds = 0.0;
+    let mut at = 0u64;
+    let mut bpm = 120.0f64;
+    for event in tempo {
+        if event.tick >= tick {
+            break;
+        }
+        seconds += (event.tick - at) as f64 / tpq * 60.0 / bpm;
+        at = event.tick;
+        bpm = event.bpm as f64;
+    }
+    seconds + (tick - at) as f64 / tpq * 60.0 / bpm
 }
