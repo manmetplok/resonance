@@ -18,7 +18,7 @@ use super::groups::{default_drum_groups, DrumGroup, GROUP_PALETTE};
 /// the groups that make up the pattern. The kit/articulation library is
 /// shared project-wide so duplicating a pattern only forks the *rhythm*,
 /// not the kit definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrumPattern {
     pub id: u64,
     pub name: String,

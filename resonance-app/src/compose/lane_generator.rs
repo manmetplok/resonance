@@ -9,14 +9,14 @@ use serde::{Deserialize, Serialize};
 
 /// Persisted per-track generator configuration within a section. Absent
 /// entry in the map = Manual (no generator for that lane).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LaneGeneratorConfig {
     pub kind: LaneGeneratorKind,
     pub seed: u64,
 }
 
 /// What kind of generator drives a lane.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum LaneGeneratorKind {
     Bass(BassParams),
@@ -31,7 +31,7 @@ pub enum LaneGeneratorKind {
 }
 
 /// Per-voice euclidean configuration for a drum lane.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DrumLaneConfig {
     /// Keyed by pad index.
     #[serde(deserialize_with = "deserialize_usize_keys", default)]
@@ -59,7 +59,7 @@ where
 
 /// Whether a single drum voice is manually edited, euclidean-generated,
 /// or rhythmically locked to the section's shared motif.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode")]
 pub enum DrumVoiceMode {
     Manual,

@@ -80,9 +80,11 @@ impl UndoSnapshot {
     /// True when `self` and `other` describe the same undoable state — the
     /// check that tells a gesture that edited something from a click that
     /// moved nothing (code review STATE-07). Compares every captured part:
-    /// the project file through its serialized form (no `PartialEq` on the
-    /// whole file tree; `serde_json` objects are key-sorted, so map order
-    /// can't differ), notes field by field, and the extras directly.
+    /// the project file by its derived `PartialEq` (ARCH-01 A-8 — the whole
+    /// tree derives it now, so this is a plain struct compare; map-valued
+    /// fields compare order-independently the same way the old
+    /// `serde_json` compare did through its key-sorted objects), notes
+    /// field by field, and the extras directly.
     pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
         let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
             && self.project.midi_notes.iter().all(|(id, notes)| {
@@ -94,7 +96,7 @@ impl UndoSnapshot {
             });
         notes_equal
             && extras_equal(&self.extras, &other.extras)
-            && files_equal(&self.project.file, &other.project.file)
+            && self.project.file == other.project.file
     }
 }
 
@@ -109,17 +111,6 @@ fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
         && a.reference.offset_db.to_bits() == b.reference.offset_db.to_bits()
         && a.reference.trim_db.to_bits() == b.reference.trim_db.to_bits()
         && a.track_freeze == b.track_freeze
-}
-
-/// Compare two project files through their serialized form: the tree
-/// has no `PartialEq`, and `serde_json` objects are key-sorted, so map
-/// order can't differ. Unserializable means "can't prove equality", so
-/// it counts as changed.
-fn files_equal(a: &crate::project::ProjectFile, b: &crate::project::ProjectFile) -> bool {
-    match (serde_json::to_value(a), serde_json::to_value(b)) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => false,
-    }
 }
 
 /// Identifies a continuous-edit source so that a stream of messages
@@ -223,7 +214,7 @@ impl crate::Resonance {
     /// (code review STATE-07). Answered without building a second full
     /// snapshot: the notes are compared in place against `midi_clips`,
     /// the extras against a fresh (small) capture, and only the
-    /// `ProjectFile` is rebuilt for the serialized comparison — no note
+    /// `ProjectFile` is rebuilt for the struct comparison — no note
     /// vectors, plugin blobs or project path are copied. Same verdict as
     /// `before.same_state(&self.snapshot_for_undo())`, cheaper.
     pub(crate) fn gesture_changed_since(&self, before: &UndoSnapshot) -> bool {
@@ -237,7 +228,7 @@ impl crate::Resonance {
             return true;
         }
         let file = crate::update::build_project_file(self);
-        !files_equal(&before.project.file, &file)
+        before.project.file != file
     }
 
     /// The runtime-only state an undo snapshot carries beside its

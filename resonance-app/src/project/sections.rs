@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::compose::{GenerateParams, LaneGeneratorConfig};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectSectionDefinition {
     pub id: u64,
     pub name: String,
@@ -170,7 +170,7 @@ impl From<&ProjectPatternEntry> for crate::compose::PatternEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectSectionPlacement {
     pub id: u64,
     pub definition_id: u64,
@@ -178,7 +178,7 @@ pub struct ProjectSectionPlacement {
     pub start_bar: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectSectionChord {
     pub id: u64,
     /// Beats from section start.
