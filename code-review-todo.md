@@ -28,6 +28,8 @@ master and updates this table. Agents do **not** edit this file.
 | M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | in progress | |
 | M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | in progress | |
 | M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | in progress | |
+| M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
+| M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | in progress | |
 
 ### Follow-ups found while fixing (new todos)
 
