@@ -33,6 +33,8 @@ mod export_dialog_shell;
 mod files_tab_rendering;
 #[path = "io/import_dialog.rs"]
 mod import_dialog;
+#[path = "io/import_dialog_parse.rs"]
+mod import_dialog_parse;
 #[path = "io/import_dialog_review.rs"]
 mod import_dialog_review;
 #[path = "io/import_entry_points.rs"]

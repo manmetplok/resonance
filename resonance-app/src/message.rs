@@ -1512,6 +1512,9 @@ pub enum ImportMessage {
     /// a dialog that was opened purely by the hover (and is still empty), so
     /// a stray drag-over doesn't leave the modal stuck open.
     HoverLeft,
+    /// Open the OS file chooser for a `.mid`/`.midi` file; a pick comes
+    /// back as [`Self::FileChosen`], a cancel as nothing.
+    Choose,
     /// The user picked a file via the file dialog.
     FileChosen(std::path::PathBuf),
     /// A `.mid`/`.midi` file was dropped (onto the window or the modal).
@@ -1520,6 +1523,14 @@ pub enum ImportMessage {
     /// Background parse finished — `Ok` carries the parsed summary + rows,
     /// `Err` a user-facing error string.
     ParseCompleted(Result<ParsedImport, String>),
+    /// The parse task spawned for `path` finished. Applied as
+    /// [`Self::ParseCompleted`] only while the dialog is still parsing
+    /// that same file — a slower parse of a file the user has since
+    /// replaced is dropped.
+    Parsed {
+        path: std::path::PathBuf,
+        result: Result<ParsedImport, String>,
+    },
     /// Toggle whether the row at this index is included in the import.
     ToggleTrack(usize),
     /// Select (`true`) or deselect (`false`) every row at once.
