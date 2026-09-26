@@ -9,11 +9,11 @@
 //! `DrumrollViewState` are session UI. A rename is one gesture, so it is
 //! one entry — the commit.
 
-use resonance_app::compose::messages::DrumGroupsMessage;
-use resonance_app::compose::ComposeMessage;
+use resonance_app::compose::messages::{ChordInspectorMsg, DrumGroupsMessage, LaneInspectorMsg};
+use resonance_app::compose::{ComposeMessage, LaneGeneratorKind};
 use resonance_app::message::{BounceMessage, Message, TrackMessage};
 use resonance_app::state::ViewMode;
-use resonance_app::Resonance;
+use resonance_app::{demo, Resonance};
 use resonance_audio::types::TrackType;
 
 const TRACK: u64 = 1;
@@ -368,4 +368,262 @@ fn bounce_in_place_on_external_track_is_one_entry() {
     let _ = app.update(bounce(BounceMessage::Confirm));
 
     assert_eq!(entries(&app), before + 1, "one bounce, one entry");
+}
+
+// ---------------------------------------------------------------------------
+// FU-A10b: lane/chord inspector sliders and the bulk-lyrics editor coalesce
+// ---------------------------------------------------------------------------
+//
+// Same shape as FU-A10a above: `LaneInspectorMsg`/`ChordInspectorMsg`'s
+// numeric sliders and the bulk-lyrics `text_editor` dispatch one message per
+// slider step or per editor interaction straight into the project, with no
+// begin/commit pair, so without a `CoalesceKey` each one recorded its own
+// entry — and every bulk-lyrics interaction, including a bare cursor move,
+// recorded even though most of them touch nothing.
+
+/// Demo app pinned to Compose with one edit undone (redo available) and a
+/// clean dirty flag, plus the demo's pre-seeded vocal lane identity.
+fn app_with_redo_and_vocal_lane() -> (Resonance, u64, resonance_audio::types::TrackId) {
+    let mut app = app_with_redo(ViewMode::Compose);
+    demo::seed_demo_content(&mut app);
+    app.test_set_dirty(false);
+    let def_id = app.compose_state().definitions[0].id;
+    let track_id = app
+        .compose_state()
+        .definitions[0]
+        .lane_generators
+        .keys()
+        .copied()
+        .next()
+        .expect("demo seeds a vocal lane generator");
+    (app, def_id, track_id)
+}
+
+fn lane_inspector(
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+    msg: LaneInspectorMsg,
+) -> Message {
+    Message::Compose(ComposeMessage::LaneInspector {
+        definition_id,
+        track_id,
+        msg,
+    })
+}
+
+fn vocal_vibrato(app: &Resonance, definition_id: u64, track_id: resonance_audio::types::TrackId) -> f32 {
+    let def = app
+        .compose_state()
+        .definitions
+        .iter()
+        .find(|d| d.id == definition_id)
+        .expect("definition exists");
+    match &def
+        .lane_generators
+        .get(&track_id)
+        .expect("lane generator installed")
+        .kind
+    {
+        LaneGeneratorKind::Vocal(p) => p.vibrato,
+        other => panic!("expected a Vocal lane generator, got {other:?}"),
+    }
+}
+
+/// Five steps of the same lane-inspector slider (vocal vibrato) is one undo
+/// entry, and one undo restores the pre-drag value.
+#[test]
+fn lane_inspector_slider_steps_coalesce_into_one_entry() {
+    let (mut app, def_id, track_id) = app_with_redo_and_vocal_lane();
+    let old_vibrato = vocal_vibrato(&app, def_id, track_id);
+    let before = entries(&app);
+
+    for v in [0.1, 0.2, 0.3, 0.4, 0.5] {
+        let _ = app.update(lane_inspector(
+            def_id,
+            track_id,
+            LaneInspectorMsg::SetVocalVibrato(v),
+        ));
+    }
+
+    assert!((vocal_vibrato(&app, def_id, track_id) - 0.5).abs() < 1e-6);
+    assert_eq!(entries(&app), before + 1, "one slider, one entry");
+
+    let _ = app.update(Message::Undo);
+    assert!(
+        (vocal_vibrato(&app, def_id, track_id) - old_vibrato).abs() < 1e-6,
+        "one undo restores the pre-drag value"
+    );
+}
+
+/// Switching from one lane-inspector slider to another breaks the coalesce
+/// run — each knob has its own key, so this is two entries.
+#[test]
+fn switching_lane_inspector_slider_breaks_the_coalesce_run() {
+    let (mut app, def_id, track_id) = app_with_redo_and_vocal_lane();
+    let before = entries(&app);
+
+    let _ = app.update(lane_inspector(
+        def_id,
+        track_id,
+        LaneInspectorMsg::SetVocalVibrato(0.4),
+    ));
+    let _ = app.update(lane_inspector(
+        def_id,
+        track_id,
+        LaneInspectorMsg::SetVocalTension(0.4),
+    ));
+
+    assert_eq!(entries(&app), before + 2, "different sliders, two entries");
+}
+
+fn motif_complexity(app: &Resonance, definition_id: u64) -> f32 {
+    app.compose_state()
+        .definitions
+        .iter()
+        .find(|d| d.id == definition_id)
+        .expect("definition exists")
+        .motif_source
+        .params()
+        .complexity
+}
+
+fn chord_inspector(definition_id: u64, msg: ChordInspectorMsg) -> Message {
+    Message::Compose(ComposeMessage::ChordInspector { definition_id, msg })
+}
+
+/// Five steps of the same chord-inspector slider (motif complexity) is one
+/// undo entry, and one undo restores the pre-drag value.
+#[test]
+fn chord_inspector_slider_steps_coalesce_into_one_entry() {
+    let mut app = app_with_redo(ViewMode::Compose);
+    demo::seed_demo_content(&mut app);
+    app.test_set_dirty(false);
+    let def_id = app.compose_state().definitions[0].id;
+    let old_complexity = motif_complexity(&app, def_id);
+    let before = entries(&app);
+
+    for c in [0.1, 0.2, 0.3, 0.4, 0.5] {
+        let _ = app.update(chord_inspector(
+            def_id,
+            ChordInspectorMsg::SetMotifComplexity(c),
+        ));
+    }
+
+    assert!((motif_complexity(&app, def_id) - 0.5).abs() < 1e-6);
+    assert_eq!(entries(&app), before + 1, "one slider, one entry");
+
+    let _ = app.update(Message::Undo);
+    assert!(
+        (motif_complexity(&app, def_id) - old_complexity).abs() < 1e-6,
+        "one undo restores the pre-drag value"
+    );
+}
+
+/// Switching from one chord-inspector slider to another breaks the coalesce
+/// run — each knob has its own key, so this is two entries.
+#[test]
+fn switching_chord_inspector_slider_breaks_the_coalesce_run() {
+    let mut app = app_with_redo(ViewMode::Compose);
+    demo::seed_demo_content(&mut app);
+    app.test_set_dirty(false);
+    let def_id = app.compose_state().definitions[0].id;
+    let before = entries(&app);
+
+    let _ = app.update(chord_inspector(
+        def_id,
+        ChordInspectorMsg::SetMotifComplexity(0.3),
+    ));
+    let _ = app.update(chord_inspector(
+        def_id,
+        ChordInspectorMsg::SetMotifLeapChance(0.3),
+    ));
+
+    assert_eq!(entries(&app), before + 2, "different sliders, two entries");
+}
+
+fn bulk_lyrics(
+    definition_id: u64,
+    track_id: resonance_audio::types::TrackId,
+    action: iced::widget::text_editor::Action,
+) -> Message {
+    lane_inspector(
+        definition_id,
+        track_id,
+        LaneInspectorMsg::VocalBulkLyricsAction(action),
+    )
+}
+
+/// Moving the cursor / selecting in the bulk-lyrics editor touches nothing
+/// in the project — it must record no undo entry at all, for any number of
+/// moves.
+#[test]
+fn bulk_lyrics_cursor_moves_are_no_edit() {
+    use iced::widget::text_editor::{Action, Motion};
+
+    let (mut app, def_id, track_id) = app_with_redo_and_vocal_lane();
+
+    assert_no_edit(
+        &mut app,
+        vec![
+            bulk_lyrics(def_id, track_id, Action::Move(Motion::Right)),
+            bulk_lyrics(def_id, track_id, Action::Move(Motion::End)),
+            bulk_lyrics(def_id, track_id, Action::Select(Motion::Left)),
+            bulk_lyrics(def_id, track_id, Action::SelectAll),
+            bulk_lyrics(def_id, track_id, Action::Click(iced::Point::ORIGIN)),
+        ],
+    );
+}
+
+/// The bulk editor's `iced::widget::text_editor::Content` is a session-only
+/// mirror of the canonical `VocalParams::draft` — it isn't part of the
+/// project and isn't touched by undo/redo restore (only re-synced by the
+/// other paths that mutate the draft, `update/compose/lane_inspector/
+/// vocal_params.rs`). So the coalesce test below reads the canonical draft,
+/// not this mirror.
+fn vocal_draft_text(app: &Resonance, definition_id: u64, track_id: resonance_audio::types::TrackId) -> String {
+    let def = app
+        .compose_state()
+        .definitions
+        .iter()
+        .find(|d| d.id == definition_id)
+        .expect("definition exists");
+    match &def
+        .lane_generators
+        .get(&track_id)
+        .expect("lane generator installed")
+        .kind
+    {
+        LaneGeneratorKind::Vocal(p) => p
+            .draft
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => panic!("expected a Vocal lane generator, got {other:?}"),
+    }
+}
+
+/// Typing a burst of characters into the bulk-lyrics editor is one undo
+/// entry, and one undo restores the pre-typing draft.
+#[test]
+fn typing_bulk_lyrics_coalesces_into_one_entry() {
+    use iced::widget::text_editor::{Action, Edit};
+
+    let (mut app, def_id, track_id) = app_with_redo_and_vocal_lane();
+    let old_draft = vocal_draft_text(&app, def_id, track_id);
+    let before = entries(&app);
+
+    for ch in ['h', 'i'] {
+        let _ = app.update(bulk_lyrics(def_id, track_id, Action::Edit(Edit::Insert(ch))));
+    }
+
+    assert!(vocal_draft_text(&app, def_id, track_id).starts_with("hi"));
+    assert_eq!(entries(&app), before + 1, "one typing burst, one entry");
+
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        vocal_draft_text(&app, def_id, track_id),
+        old_draft,
+        "one undo restores the pre-typing draft"
+    );
 }
