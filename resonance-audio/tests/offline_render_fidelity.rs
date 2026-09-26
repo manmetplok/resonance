@@ -338,3 +338,40 @@ fn export_does_not_inherit_live_playback_tails() {
     assert!(unsafe { (*state).reset_calls } >= 1, "export must CLAP-reset every plugin");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+// ---------------------------------------------------------------------------
+// ENG-06 — normalized export keeps float headroom until the limiter
+// ---------------------------------------------------------------------------
+
+#[test]
+fn normalized_export_does_not_hard_clip_overs_before_gain() {
+    // A +6 dBFS sine (peak 2.0) with no master FX: normalizing it to
+    // -14 LUFS needs ~-17 dB of gain, so the file has headroom to spare
+    // and must be a clean, scaled sine — not a flat-topped one.
+    let e = Engine::with_clip(tone(SR as usize, 2.0));
+    let settings = ExportSettings {
+        normalize: NormalizeSpec {
+            enabled: true,
+            mode: NormalizeMode::IntegratedLufs,
+            target_db: -14.0,
+            ceiling_dbtp: -1.0,
+        },
+        ..ExportSettings::default_wav()
+    };
+    let path = tmp("eng06");
+    assert_completed(&e.export(&path, &settings, false));
+    let out = read_f32_wav(&path);
+
+    // Middle 0.5 s, away from the clip's start/end declicks.
+    let mid = &out[(SR as usize / 4) * 2..(3 * SR as usize / 4) * 2];
+    let pk = peak(mid);
+    assert!(pk > 0.05, "normalized export must not be silent (peak {pk})");
+    assert!(pk <= 10f32.powf(-1.0 / 20.0) + 1e-3, "peak {pk} above the ceiling");
+    let rms = (mid.iter().map(|s| s * s).sum::<f32>() / mid.len() as f32).sqrt();
+    let crest = pk / rms;
+    assert!(
+        (crest - std::f32::consts::SQRT_2).abs() < 0.02,
+        "crest {crest}: a sine's is sqrt(2); lower means the overs were hard-clipped"
+    );
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}

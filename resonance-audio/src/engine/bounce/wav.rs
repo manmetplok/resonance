@@ -2,8 +2,10 @@
 //! pluggable encoder sink (doc #196).
 //!
 //! Includes master FX + master volume + hard-clip so the file plays back
-//! identically outside the app. The render loop is format-agnostic — it
-//! produces interleaved stereo `f32` frames and hands them to the active
+//! identically outside the app (a normalized export skips the hard clip
+//! and lets its true-peak limiter set the ceiling — code review ENG-06).
+//! The render loop is format-agnostic — it produces interleaved stereo
+//! `f32` frames and hands them to the active
 //! [`EncoderSink`](super::encoder::EncoderSink), optionally through an
 //! export-time [`ResampleStage`](super::resample::ResampleStage). The
 //! default 32-bit-float WAV path is byte-for-byte the legacy `BounceToWav`
@@ -411,6 +413,10 @@ pub(crate) fn run_export(
         master_vol,
         latency_comp: &latency_comp,
         automation,
+        // Normalization keeps float headroom through its gain trim and
+        // true-peak limiter (code review ENG-06); the plain export clips
+        // like live playback does.
+        hard_clip: !settings.normalize.enabled,
     };
     let mut scratch = ChunkScratch::new();
 

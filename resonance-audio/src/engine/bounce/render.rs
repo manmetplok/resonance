@@ -174,6 +174,12 @@ pub(super) struct ChunkCtx<'a> {
     /// the leading `max_latency()` frames from the output so the
     /// rendered audio lands on the timeline with zero net shift.
     pub latency_comp: &'a LatencyComp,
+    /// Hard-clip the master output to `[-1, 1]` after master volume
+    /// (only read when a chunk runs with `include_master_fx`). The
+    /// normalized export turns it off (code review ENG-06): its gain
+    /// trim + true-peak limiter must see the float overs, not a
+    /// flat-topped signal, and the encoder clamps at quantisation.
+    pub hard_clip: bool,
 }
 
 /// Build a fresh compensation table from the current topology, reading
@@ -281,8 +287,8 @@ pub(super) fn reset_plugins(
 
 /// Render one chunk into `scratch.mix_buf`. The output is interleaved
 /// stereo of length `frames * 2`. When `include_master_fx` is true,
-/// master FX, master volume and hard-clip are applied; otherwise the
-/// raw bus-summed mix is left for the caller (used by bounce-in-place
+/// master FX, master volume and (per [`ChunkCtx::hard_clip`]) hard-clip
+/// are applied; otherwise the raw bus-summed mix is left for the caller (used by bounce-in-place
 /// so master FX aren't applied twice on playback).
 ///
 /// The closure `in_filter` decides which tracks contribute. Any track
@@ -454,12 +460,17 @@ pub(super) fn render_chunk(
             let inv = if frames > 0 { 1.0 / frames as f32 } else { 0.0 };
             for f in 0..frames {
                 let g = g0 + (g1 - g0) * ((f + 1) as f32 * inv);
-                scratch.mix_buf[f * 2] = (scratch.mix_buf[f * 2] * g).clamp(-1.0, 1.0);
-                scratch.mix_buf[f * 2 + 1] = (scratch.mix_buf[f * 2 + 1] * g).clamp(-1.0, 1.0);
+                scratch.mix_buf[f * 2] *= g;
+                scratch.mix_buf[f * 2 + 1] *= g;
             }
         } else {
             for s in &mut scratch.mix_buf[..frames * 2] {
-                *s = (*s * ctx.master_vol).clamp(-1.0, 1.0);
+                *s *= ctx.master_vol;
+            }
+        }
+        if ctx.hard_clip {
+            for s in &mut scratch.mix_buf[..frames * 2] {
+                *s = s.clamp(-1.0, 1.0);
             }
         }
     }

@@ -574,6 +574,7 @@ pub fn render_stem(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        hard_clip: true,
     };
     let mut scratch = ChunkScratch::new();
 
