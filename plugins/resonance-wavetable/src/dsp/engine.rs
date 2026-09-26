@@ -223,6 +223,18 @@ impl SynthEngine {
         }
     }
 
+    /// `(note, current_pitch)` of every non-idle voice, in slot order.
+    ///
+    /// A read-only view for tests and diagnostics: it is how the integration
+    /// tests observe the voice cap and legato glide without reaching into
+    /// crate-private voice state. Not used on the audio path.
+    pub fn sounding_voices(&self) -> impl Iterator<Item = (u8, f32)> + '_ {
+        self.voices
+            .iter()
+            .filter(|v| v.state != VoiceState::Idle)
+            .map(|v| (v.note, v.current_pitch))
+    }
+
     /// Publish the latest audio-thread state to the shared viz atomics.
     /// Called once per audio block by the plugin's `process()`.
     pub fn publish_viz(&mut self, params: &WavetableParams, viz: &WavetableVizState) {
@@ -266,47 +278,53 @@ impl SynthEngine {
         }
     }
 
+    /// Pick the slot for a new note: idle (while under `max_voices`) >
+    /// oldest voice already on this note > oldest releasing > oldest overall.
+    ///
+    /// Every stealing step only considers *sounding* voices. They used to
+    /// search all `MAX_VOICES` slots, and an idle slot keeps a stale age
+    /// (usually 0), so it won "oldest" and the new note played on top of the
+    /// held ones: the `max_voices` ceiling was never enforced, and in mono
+    /// the legato note landed on a fresh voice that could not glide. The
+    /// drums plugin fixed the same bug the same way (`janitor.rs`).
+    ///
+    /// The same-note step comes before the releasing one so a retriggered
+    /// note (and every legato note in mono) takes over its own voice rather
+    /// than a different, releasing one.
     fn find_free_voice(&self, note: u8, max_voices: usize) -> usize {
-        // Count active voices
-        let active_count = self
-            .voices
-            .iter()
-            .filter(|v| v.state != VoiceState::Idle)
-            .count();
+        let sounding = || {
+            self.voices
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.state != VoiceState::Idle)
+        };
+        let active_count = sounding().count();
 
-        // 1. Prefer idle voice
-        if let Some(idx) = self.voices.iter().position(|v| v.state == VoiceState::Idle) {
-            if active_count < max_voices {
+        // 1. Prefer an idle voice, as long as we're under the ceiling.
+        if active_count < max_voices {
+            if let Some(idx) = self.voices.iter().position(|v| v.state == VoiceState::Idle) {
                 return idx;
             }
         }
 
-        // 2. Steal oldest releasing voice
-        if let Some((idx, _)) = self
-            .voices
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| v.state == VoiceState::Releasing)
-            .min_by_key(|(_, v)| v.age)
-        {
-            return idx;
-        }
-
-        // 3. Steal oldest voice with same note
-        if let Some((idx, _)) = self
-            .voices
-            .iter()
-            .enumerate()
+        // 2. Steal the oldest voice already playing this note.
+        if let Some((idx, _)) = sounding()
             .filter(|(_, v)| v.note == note)
             .min_by_key(|(_, v)| v.age)
         {
             return idx;
         }
 
-        // 4. Steal oldest voice overall
-        self.voices
-            .iter()
-            .enumerate()
+        // 3. Steal the oldest releasing voice.
+        if let Some((idx, _)) = sounding()
+            .filter(|(_, v)| v.state == VoiceState::Releasing)
+            .min_by_key(|(_, v)| v.age)
+        {
+            return idx;
+        }
+
+        // 4. Steal the oldest sounding voice.
+        sounding()
             .min_by_key(|(_, v)| v.age)
             .map(|(i, _)| i)
             .unwrap_or(0)
