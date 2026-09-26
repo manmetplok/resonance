@@ -7,7 +7,7 @@ mod common;
 
 use common::{fail, ok, FakeApp};
 use resonance_control::ids::JobId;
-use resonance_control::job::{JobState, JobStatus};
+use resonance_control::job::{JobError, JobState, JobStatus};
 use resonance_control::{ErrorKind, RpcError, PROTOCOL_VERSION};
 use resonance_mcp::{ControlClient, ResonanceMcp};
 use serde_json::{json, Value};
@@ -218,7 +218,9 @@ async fn job_tool_maps_failed_job_to_tool_error() {
                 state: JobState::Error,
                 progress: None,
                 result: None,
-                error: Some("voicebank not found".to_owned()),
+                // `kind` (ARCH-05 / epic C, C-2) surfaces in the tool's
+                // text alongside the message.
+                error: Some(JobError::new("voicebank not found", Some(ErrorKind::NotFound))),
             },
         ),
         other => panic!("unexpected method {other}"),
@@ -227,7 +229,9 @@ async fn job_tool_maps_failed_job_to_tool_error() {
 
     let result = mcp.invoke_job("vocal.render", &json!({}), 1000).await.unwrap();
     assert!(is_error(&result));
-    assert!(text(&result).contains("voicebank not found"), "{}", text(&result));
+    let text = text(&result);
+    assert!(text.contains("voicebank not found"), "{text}");
+    assert!(text.contains("not_found"), "{text}");
 }
 
 #[tokio::test]

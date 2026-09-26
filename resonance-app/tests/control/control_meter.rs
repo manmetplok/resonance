@@ -274,7 +274,7 @@ fn an_engine_failure_fails_the_job_with_its_reason() {
     let status = job_status(&mut app, job);
     assert_eq!(status.state, JobState::Error);
     assert_eq!(
-        status.error.as_deref(),
+        status.error.as_ref().map(|e| e.message.as_str()),
         Some("Another offline render is in progress")
     );
 }
@@ -724,7 +724,7 @@ fn an_error_fails_only_the_job_it_names() {
     let status = job_status(&mut app, render);
     assert_eq!(status.state, JobState::Error);
     assert_eq!(
-        status.error.as_deref(),
+        status.error.as_ref().map(|e| e.message.as_str()),
         Some("Stop transport before measuring the mix")
     );
     assert_eq!(

@@ -48,8 +48,11 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Current state of a job (pending | running | done | error) with optional \
-                       progress 0..1; result carries the job's payload once done. Read-only. \
-                       job_ids come from project_*, vocal_render and render_* results.",
+                       progress 0..1; result carries the job's payload once done. On error, \
+                       error.message is always present and error.kind is set when the failure \
+                       was classified (e.g. not_found, busy, unsupported, internal) — branch on \
+                       kind rather than parsing message. Read-only. job_ids come from project_*, \
+                       vocal_render and render_* results.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]
@@ -62,9 +65,12 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Block until a job reaches done/error or timeout_ms elapses (returns the \
-                       then-current status either way). Waits at most 10 minutes: omitting \
-                       timeout_ms, or passing more than 600000, waits the full 10 minutes. \
-                       Other tool calls keep working while it waits.",
+                       then-current status either way). On error, error.message is always \
+                       present and error.kind is set when the failure was classified (e.g. \
+                       not_found, busy, unsupported, internal) — branch on kind rather than \
+                       parsing message. Waits at most 10 minutes: omitting timeout_ms, or \
+                       passing more than 600000, waits the full 10 minutes. Other tool calls \
+                       keep working while it waits.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]

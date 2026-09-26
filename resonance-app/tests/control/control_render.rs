@@ -5,7 +5,7 @@
 //! duration + sample rate, and render.stems reported `unsupported`.
 
 use resonance_app::{Resonance};
-use resonance_audio::types::AudioEvent;
+use resonance_audio::types::{AudioEvent, ExportErrorKind};
 use resonance_control::job::{JobStarted, JobState, JobStatus};
 use resonance_control::methods::render::MixdownResult;
 use resonance_control::{ErrorKind, Request, Response};
@@ -98,7 +98,7 @@ fn mixdown_completes_with_the_written_wavs_duration_and_rate() {
 }
 
 #[test]
-fn mixdown_failure_fails_the_job_with_the_engine_message() {
+fn mixdown_failure_fails_the_job_with_the_engine_message_and_kind() {
     let dir = tempfile::tempdir().expect("temp dir");
     let target = dir.path().join("mix.wav");
 
@@ -108,10 +108,16 @@ fn mixdown_failure_fails_the_job_with_the_engine_message() {
         request(1, "render.mixdown", json!({ "path": target.display().to_string() })),
     ));
     // A path-less BounceError still resolves the one in-flight export job.
-    app.test_apply_engine_event(AudioEvent::BounceError("no output device".to_owned()));
+    // `EncoderUnavailable` maps to `unsupported` (ARCH-05 / epic C, C-2).
+    app.test_apply_engine_event(AudioEvent::BounceError {
+        kind: ExportErrorKind::EncoderUnavailable,
+        message: "no output device".to_owned(),
+    });
     let status = job_status(&mut app, job);
     assert_eq!(status.state, JobState::Error);
-    assert_eq!(status.error.as_deref(), Some("no output device"));
+    let error = status.error.expect("failed job carries an error");
+    assert_eq!(error.message, "no output device");
+    assert_eq!(error.kind, Some(ErrorKind::Unsupported));
 }
 
 // ---------------- guards ----------------

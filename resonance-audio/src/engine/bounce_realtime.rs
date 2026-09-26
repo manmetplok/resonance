@@ -86,28 +86,30 @@ pub(crate) fn handle_bounce_track_realtime(
 ) {
     if ctx.shared.playing.load(Ordering::Relaxed) {
         let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-            "Stop transport before bouncing".into(),
+            EngineError::busy("Stop transport before bouncing"),
         ));
         return;
     }
     // A realtime bounce is a Play: same gate as `handle_play` (code
     // review MIX-02 / ENG-05), reported on this path's own event.
     if ctx.shared.offline_render_active() {
-        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-            super::bounce::OFFLINE_RENDER_BUSY_MSG.into(),
-        ));
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::busy(
+            super::bounce::OFFLINE_RENDER_BUSY_MSG,
+        )));
         return;
     }
     if state.project_dir.is_none() {
-        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-            "Save the project before bouncing — recording needs a project directory.".into(),
-        ));
+        // Mixed cause (like the "no project directory" sites C-1 left
+        // `Internal`): missing config, not a missing entity.
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::internal(
+            "Save the project before bouncing — recording needs a project directory.",
+        )));
         return;
     }
     if state.pending_bounce.is_some() {
-        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-            "Another bounce is already in progress".into(),
-        ));
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::busy(
+            "Another bounce is already in progress",
+        )));
         return;
     }
 
@@ -122,7 +124,7 @@ pub(crate) fn handle_bounce_track_realtime(
     ) {
         Ok(range) => range,
         Err(msg) => {
-            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(msg.into()));
+            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::unsupported(msg)));
             return;
         }
     };
@@ -132,21 +134,21 @@ pub(crate) fn handle_bounce_track_realtime(
     {
         let tracks_guard = ctx.tracks.read();
         let Some(source) = tracks_guard.get(&source_track_id) else {
-            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-                "Source track not found".into(),
-            ));
+            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::not_found(
+                "Source track not found",
+            )));
             return;
         };
         if source.track_type != TrackType::Instrument {
-            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-                "Bounce in place is only available on instrument tracks".into(),
-            ));
+            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::unsupported(
+                "Bounce in place is only available on instrument tracks",
+            )));
             return;
         }
         if !tracks_guard.contains_key(&target_track_id) {
-            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-                "Target track not found".into(),
-            ));
+            let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::not_found(
+                "Target track not found",
+            )));
             return;
         }
     }
@@ -251,10 +253,12 @@ pub(crate) fn handle_bounce_track_realtime(
         );
         // Also surface a TrackBounceError; begin_recording_stream sent
         // a generic Error already, but the user's "bounce in place"
-        // expectation gets the dedicated channel.
-        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
-            "Failed to start recording for bounce — see audio engine error".into(),
-        ));
+        // expectation gets the dedicated channel. Left `Internal`: the
+        // underlying cause (device unavailable, stream build failure,
+        // ...) was already classified on that generic `Error` event.
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::internal(
+            "Failed to start recording for bounce — see audio engine error",
+        )));
         return;
     }
 
@@ -403,18 +407,21 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
 
     if frames_captured == 0 {
         // No audio reached the WAV. Don't mute the source — the user
-        // hasn't actually replaced its sound with anything yet.
-        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
+        // hasn't actually replaced its sound with anything yet. Left
+        // `Internal`: could be a wrong device name, an unavailable
+        // device, or something else upstream — a hardware condition
+        // this path can observe but not distinguish.
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::internal(
             "Bounce captured no audio from the input device. Check that the picked device is the one your external instrument's audio output is wired to."
-                .into(),
-        ));
+        )));
         return;
     }
     if peak_abs < SILENT_THRESHOLD {
-        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(
+        // Same reasoning: a real signal-path problem the engine can't
+        // name more precisely than "the device delivered near-silence".
+        let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::internal(
             "Bounce recorded silence — the input device opened, but the signal level was effectively zero. Check the cabling between your external instrument and the picked input."
-                .into(),
-        ));
+        )));
         return;
     }
 

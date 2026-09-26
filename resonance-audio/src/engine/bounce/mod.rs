@@ -434,7 +434,9 @@ pub(crate) fn to_audio_clip_spawn(
                     );
                 },
                 |message| {
-                    let _ = panic_tx.send(AudioEvent::TrackBounceError(message));
+                    let _ = panic_tx.send(AudioEvent::TrackBounceError(EngineError::internal(
+                        message,
+                    )));
                 },
             );
         })

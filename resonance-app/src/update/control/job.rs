@@ -9,8 +9,33 @@
 //! then-current status immediately, i.e. a zero-timeout wait.
 
 use crate::Resonance;
+use resonance_audio::types::ExportErrorKind;
 use resonance_control::job::{self, StatusParams, WaitParams};
-use resonance_control::{Request, Response, RpcError};
+use resonance_control::{ErrorKind, Request, Response, RpcError};
+
+/// Map an offline export/bounce failure's [`ExportErrorKind`] onto the
+/// control protocol's [`ErrorKind`] (ARCH-05 / epic C, C-2), so
+/// `JobStatus.error.kind` gives a `render.mixdown` job caller something
+/// to branch on. Lives here, not in `resonance-audio`: the engine sits
+/// below `resonance-control` in the crate DAG (see ARCHITECTURE.md) and
+/// must not depend on it, so this is a hand-kept mirror rather than a
+/// shared type — the same reasoning `EngineErrorKind`'s own doc comment
+/// gives for mirroring `resonance_control::ErrorKind` instead of using it
+/// directly.
+///
+/// `Cancelled` and `NoAudio` have no control-side analog (a cancel is not
+/// really a client-actionable failure, and "nothing to render" is a
+/// project-state problem, not a bad request); both fall back to
+/// `Internal` rather than a kind that would overclaim precision.
+pub(crate) fn export_kind_to_rpc(kind: ExportErrorKind) -> ErrorKind {
+    match kind {
+        ExportErrorKind::EncoderUnavailable => ErrorKind::Unsupported,
+        ExportErrorKind::TransportRunning => ErrorKind::Busy,
+        ExportErrorKind::Io | ExportErrorKind::Cancelled | ExportErrorKind::NoAudio => {
+            ErrorKind::Internal
+        }
+    }
+}
 
 /// Handle a `job.*` request, or `None` when `method` belongs to another
 /// namespace.

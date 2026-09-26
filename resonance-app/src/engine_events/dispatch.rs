@@ -71,7 +71,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             );
         }
         E::BounceComplete { path } => transport::bounce_complete(r, path),
-        E::BounceError(e) => transport::bounce_error(r, e),
+        E::BounceError { kind, message } => transport::bounce_error(r, kind, message),
         E::TrackBounceError(e) => transport::track_bounce_error(r, e),
         E::TrackBounceCancelled { target_track_id } => {
             transport::track_bounce_cancelled(r, target_track_id)

@@ -170,6 +170,7 @@ impl Response {
 ///
 /// Clients branch on this, not on `code` or `message`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     /// A referenced entity (track, clip, section, chord, job, ...) does not exist.

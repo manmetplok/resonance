@@ -6,8 +6,8 @@
 //! bounce / freeze progress overlay, fed by the engine's whole-percent
 //! `BounceProgress` events, with a Cancel that flips the export's
 //! cooperative cancel token (`AudioCommand::CancelBounce`). The engine
-//! answers a cancel with `BounceError("Bounce cancelled")`, which clears
-//! the modal without an error banner.
+//! answers a cancel with `BounceError { kind: Cancelled, message: "Bounce
+//! cancelled" }`, which clears the modal without an error banner.
 
 use crate::common;
 
@@ -16,7 +16,7 @@ use iced_test::simulator::Simulator;
 use resonance_app::message::{Message, ProjectIoMessage, TransportMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{demo, theme, Resonance};
-use resonance_audio::types::{AudioCommand, AudioEvent};
+use resonance_audio::types::{AudioCommand, AudioEvent, ExportErrorKind};
 
 const WINDOW: (f32, f32) = (1440.0, 900.0);
 const MIXDOWN: &str = "/tmp/io-mixdown-progress-modal/My Song.wav";
@@ -121,7 +121,10 @@ fn cancel_passes_the_gate_stops_the_export_and_raises_no_banner() {
     }
 
     // The engine confirms the cancel the way `cancel_cleanup` does.
-    app.test_apply_engine_event(AudioEvent::BounceError("Bounce cancelled".into()));
+    app.test_apply_engine_event(AudioEvent::BounceError {
+        kind: ExportErrorKind::Cancelled,
+        message: "Bounce cancelled".into(),
+    });
     assert!(!app.test_is_bouncing(), "the cancelled mixdown must clear");
     assert!(
         !app.test_error_message_is_set(),
@@ -134,10 +137,16 @@ fn cancel_passes_the_gate_stops_the_export_and_raises_no_banner() {
 fn a_real_failure_after_an_earlier_cancel_still_raises_the_banner() {
     let (mut app, _cmd_rx) = app_mid_mixdown();
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::CancelBounce));
-    app.test_apply_engine_event(AudioEvent::BounceError("Bounce cancelled".into()));
+    app.test_apply_engine_event(AudioEvent::BounceError {
+        kind: ExportErrorKind::Cancelled,
+        message: "Bounce cancelled".into(),
+    });
 
     start_mixdown(&mut app);
-    app.test_apply_engine_event(AudioEvent::BounceError("disk full".into()));
+    app.test_apply_engine_event(AudioEvent::BounceError {
+        kind: ExportErrorKind::Io,
+        message: "disk full".into(),
+    });
     assert_eq!(app.test_error_message(), Some("Bounce failed: disk full"));
 }
 

@@ -68,8 +68,8 @@ pub struct ProjectIoState {
     /// File name of the in-flight mixdown's target, for the modal title.
     pub bounce_target: String,
     /// The user pressed Cancel on the mixdown modal. The engine answers a
-    /// cancel with `BounceError("Bounce cancelled")`, which then clears the
-    /// modal without an error banner.
+    /// cancel with `BounceError { kind: Cancelled, message: "Bounce
+    /// cancelled" }`, which then clears the modal without an error banner.
     pub bounce_cancel_requested: bool,
     /// When false, the startup modal is shown and interactive
     /// messages are dropped. Flipped true on successful load or

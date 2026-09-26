@@ -556,13 +556,24 @@ pub enum AudioEvent {
     BounceComplete {
         path: String,
     },
-    BounceError(String),
+    /// A "bounce to WAV" run failed (or was cancelled). Shares
+    /// [`ExportErrorKind`] with [`AudioEvent::ExportError`] — both fire
+    /// from the same `ExportReporter::error` call in the offline export
+    /// driver (ARCH-05 / epic C, C-2), so the kind is already computed
+    /// at every call site with no separate classification pass needed.
+    BounceError {
+        kind: ExportErrorKind,
+        message: String,
+    },
 
     // -- Stem export (multi-target offline render) --
     /// The stem export could not start at all (transport rolling, empty
-    /// range, or no targets). No files were written. The string is
-    /// user-facing. Per-target failures use `StemExportTargetError`.
-    StemExportError(String),
+    /// range, or no targets). No files were written. `message` is
+    /// user-facing; `kind` classifies why (ARCH-05 / epic C, C-2).
+    /// Per-target failures use `StemExportTargetError`, which stays a
+    /// bare string — a partial-failure queue entry, not a job-ending
+    /// event.
+    StemExportError(EngineError),
     /// A stem export target is starting. `target_index` is its 0-based
     /// position in the queue, `total` the number of targets, and
     /// `fraction` the overall queue progress in `[0.0, 1.0]` at the
@@ -669,8 +680,12 @@ pub enum AudioEvent {
         target_track_id: TrackId,
         clip: Option<BouncedClipData>,
     },
-    /// A "bounce in place" run failed. The string is user-facing.
-    TrackBounceError(String),
+    /// A "bounce in place" run failed. `message` is user-facing; `kind`
+    /// classifies why (ARCH-05 / epic C, C-2) — `EngineError` rather than
+    /// `ExportErrorKind` because this path has no encoder/format
+    /// concept, just the generic engine failure categories (track not
+    /// found, transport busy, unsupported source, ...).
+    TrackBounceError(EngineError),
     /// "Bounce in place" run was cancelled by the user via
     /// `AudioCommand::CancelBounce`. Distinct from `TrackBounceError`
     /// so the app can drop the modal without surfacing a noisy error

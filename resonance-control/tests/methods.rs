@@ -134,6 +134,50 @@ fn job_lifecycle_types_roundtrip() {
     assert_eq!(wait.timeout_ms, None);
 }
 
+/// ARCH-05 / epic C, C-2: `JobStatus.error` gained an optional `kind`
+/// alongside the message it always carried. The new shape round-trips;
+/// an old-shape status — `error` as a bare string, the pre-C-2 wire
+/// format — must still deserialize under the current type so a job
+/// failure recorded (or replayed) before this change doesn't break.
+#[test]
+fn job_error_kind_roundtrips_and_the_old_bare_string_shape_still_deserializes() {
+    use resonance_control::job::JobError;
+    use resonance_control::ErrorKind;
+
+    let status = JobStatus {
+        job_id: JobId(9),
+        state: JobState::Error,
+        progress: None,
+        result: None,
+        error: Some(JobError::new("no such track", Some(ErrorKind::NotFound))),
+    };
+    let wire = serde_json::to_value(&status).unwrap();
+    assert_eq!(
+        wire["error"],
+        json!({"message": "no such track", "kind": "not_found"})
+    );
+    let back: JobStatus = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, status);
+
+    // A kind-less failure serializes without the field at all, not `null`.
+    let untyped = JobStatus {
+        job_id: JobId(9),
+        state: JobState::Error,
+        progress: None,
+        result: None,
+        error: Some(JobError::new("mixdown did not start", None)),
+    };
+    let wire = serde_json::to_value(&untyped).unwrap();
+    assert_eq!(wire["error"], json!({"message": "mixdown did not start"}));
+    let back: JobStatus = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, untyped);
+
+    // The pre-C-2 wire shape: `error` was a bare string.
+    let legacy = json!({"job_id": 9, "state": "error", "error": "disk full"});
+    let back: JobStatus = serde_json::from_value(legacy).unwrap();
+    assert_eq!(back.error, Some(JobError::from("disk full".to_owned())));
+}
+
 #[test]
 fn done_job_carries_the_method_result_payload() {
     let mixdown = render::MixdownResult {

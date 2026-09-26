@@ -79,6 +79,7 @@ mod vocal;
 use reply::{failure, success};
 
 pub(crate) use clip::{import_result, place_result};
+pub(crate) use job::export_kind_to_rpc;
 pub(crate) use plugin_presets::write_saved_state as write_plugin_preset;
 pub(crate) use meter::{mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;

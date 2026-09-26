@@ -52,7 +52,7 @@ impl ExportReporter {
     /// run's expected failures use.
     pub(super) fn error(self, tx: &Sender<AudioEvent>, kind: ExportErrorKind, message: String) {
         let _ = match self {
-            ExportReporter::Bounce => tx.send(AudioEvent::BounceError(message)),
+            ExportReporter::Bounce => tx.send(AudioEvent::BounceError { kind, message }),
             ExportReporter::Export => tx.send(AudioEvent::ExportError { kind, message }),
         };
     }
