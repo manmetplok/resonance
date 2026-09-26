@@ -451,6 +451,7 @@ fn remove_in_app_instrument(r: &mut Resonance, track_id: TrackId) {
         return;
     };
     let is_instrument = r
+        .plugin_catalog
         .available_plugins
         .iter()
         .find(|p| p.clap_plugin_id == first.clap_plugin_id)

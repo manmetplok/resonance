@@ -105,21 +105,22 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     // installed while Resonance is open was invisible until now, because
     // the only scan ran at startup.
     let instrument_count = r
+        .plugin_catalog
         .available_plugins
         .iter()
         .filter(|p| p.is_instrument)
         .count();
     let plugin_summary = text(format!(
         "{} plugin(s) available — {} instrument(s), {} effect(s)",
-        r.available_plugins.len(),
+        r.plugin_catalog.available_plugins.len(),
         instrument_count,
-        r.available_plugins.len() - instrument_count
+        r.plugin_catalog.available_plugins.len() - instrument_count
     ))
     .size(11)
     .color(theme::TEXT_3);
     let rescan_btn = wide_button(
         fa::ARROW_ROTATE_LEFT,
-        if r.plugin_scan_in_progress {
+        if r.plugin_catalog.plugin_scan_in_progress {
             "Scanning..."
         } else {
             "Rescan Plugins"
@@ -135,7 +136,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         rescan_btn,
     ]
     .spacing(6);
-    for failure in &r.plugin_scan_failures {
+    for failure in &r.plugin_catalog.plugin_scan_failures {
         plugins_section = plugins_section.push(
             text(format!("Failed: {} — {}", failure.path, failure.reason))
                 .size(10)

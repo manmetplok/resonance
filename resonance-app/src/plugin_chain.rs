@@ -58,7 +58,8 @@ pub(crate) fn instrument_slot(app: &Resonance, t: &TrackState) -> Option<usize> 
     if t.track_type != TrackType::Instrument {
         return None;
     }
-    let scanned = |id: &str| app.available_plugins.iter().find(|p| p.clap_plugin_id == id);
+    let scanned =
+        |id: &str| app.plugin_catalog.available_plugins.iter().find(|p| p.clap_plugin_id == id);
     if let Some(i) = t
         .plugins
         .iter()

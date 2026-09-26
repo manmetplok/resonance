@@ -164,12 +164,14 @@ fn add_plugin(
         return reject(request, e);
     }
     let Some(plugin) = app
+        .plugin_catalog
         .available_plugins
         .iter()
         .find(|p| p.clap_plugin_id == params.plugin_id)
         .cloned()
     else {
         let valid: Vec<&str> = app
+            .plugin_catalog
             .available_plugins
             .iter()
             .filter(|p| p.is_instrument == matches!(role, PluginRole::Instrument))

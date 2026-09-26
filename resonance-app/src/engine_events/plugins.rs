@@ -369,12 +369,12 @@ pub(crate) fn mirror_track_plugin_move(
 }
 
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
-    r.available_plugins = plugins;
-    r.view_caches.rebuild_plugins(&r.available_plugins);
+    r.plugin_catalog.available_plugins = plugins;
+    r.view_caches.rebuild_plugins(&r.plugin_catalog.available_plugins);
     // A scan answers exactly one `PluginsScanned`, whether it was the
     // startup scan or a live rescan, so this is where a rescan ends
     // (ba todo #1307).
-    r.plugin_scan_in_progress = false;
+    r.plugin_catalog.plugin_scan_in_progress = false;
 }
 
 /// An add that produced no instance (ba doc #275 P5, todo #1309).
@@ -470,7 +470,7 @@ fn mark_slot_missing(r: &mut Resonance, instance_id: PluginInstanceId, reason: &
 /// `PluginsScanned`, so the list is in place by the time the refreshed
 /// catalog lands.
 pub(super) fn scan_failed(r: &mut Resonance, failures: Vec<PluginScanFailure>) {
-    r.plugin_scan_failures = failures;
+    r.plugin_catalog.plugin_scan_failures = failures;
 }
 
 /// Adopt the plugin's own formatting of a parameter it was just given

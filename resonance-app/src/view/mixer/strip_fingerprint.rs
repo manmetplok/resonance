@@ -162,7 +162,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     .hash(&mut h);
     // "+ Instrument" picker options / "No instruments" fallback.
     hash_scanned(&mut h, &r.view_caches.instrument_plugins);
-    r.available_plugins.is_empty().hash(&mut h);
+    r.plugin_catalog.available_plugins.is_empty().hash(&mut h);
     h.finish()
 }
 

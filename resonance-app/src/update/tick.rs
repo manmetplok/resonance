@@ -72,7 +72,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || r.bounce_in_progress.is_some()
         || export_render_in_flight(r)
         || (r.mixer.reference_panel_open && !r.reference.entries.is_empty())
-        || r.plugin_scan_in_progress
+        || r.plugin_catalog.plugin_scan_in_progress
         || r.relink.scanning()
         || !r.control.pending_tracks.is_empty()
         || r.control.jobs.has_live_offline_measure()
