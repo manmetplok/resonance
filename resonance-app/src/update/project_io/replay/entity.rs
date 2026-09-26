@@ -19,7 +19,7 @@ pub(super) fn replay_track(r: &mut Resonance, pt: &ProjectTrack, loaded: &Loaded
         && r.registry.tracks.iter().any(|t| t.id == pt.id)
     {
         let new_id = r.registry.allocate_sub_track_id();
-        eprintln!(
+        tracing::warn!(
             "replay_track: sub-track {:?} id {} collided with existing track; remapped to {}",
             pt.name, pt.id, new_id
         );

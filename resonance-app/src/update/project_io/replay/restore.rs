@@ -162,7 +162,7 @@ pub(crate) fn replay_take_groups(
                         // Loud, because the take is otherwise
                         // indistinguishable from one that simply recorded
                         // silence.
-                        eprintln!(
+                        tracing::warn!(
                             "project load: take {} of group {} has no usable recorded \
                              audio ({reason}) — kept in the lane so the comp stays intact",
                             take.id, group.id

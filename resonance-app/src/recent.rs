@@ -46,7 +46,7 @@ pub fn load() -> Vec<RecentEntry> {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(e) => {
-            eprintln!("recent.json read failed: {e}");
+            tracing::warn!("recent.json read failed: {e}");
             return Vec::new();
         }
     };
@@ -62,7 +62,7 @@ pub fn load() -> Vec<RecentEntry> {
             list
         }
         Err(e) => {
-            eprintln!(
+            tracing::warn!(
                 "recent.json parse failed: {e}; quarantining {} and starting from an empty list",
                 file.display()
             );
@@ -78,17 +78,17 @@ fn persist(list: &[RecentEntry]) {
     };
     if let Some(parent) = file.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("recent.json mkdir failed: {e}");
+            tracing::warn!("recent.json mkdir failed: {e}");
             return;
         }
     }
     match serde_json::to_vec_pretty(list) {
         Ok(bytes) => {
             if let Err(e) = atomic_write(&file, &bytes) {
-                eprintln!("recent.json write failed: {e}");
+                tracing::warn!("recent.json write failed: {e}");
             }
         }
-        Err(e) => eprintln!("recent.json serialize failed: {e}"),
+        Err(e) => tracing::warn!("recent.json serialize failed: {e}"),
     }
 }
 

@@ -393,7 +393,7 @@ fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
             // Loud, because the next save rewrites the file without it:
             // a silent drop turns "this build does not understand one
             // edge" into permanent data loss with nothing to notice.
-            eprintln!(
+            tracing::warn!(
                 "project load: dropping send {} — unknown source kind {:?}",
                 ps.id, ps.source_kind
             );
@@ -410,7 +410,7 @@ fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
             SendSource::Bus(id) => r.registry.busses.iter().any(|b| b.id == id),
         };
         if !source_exists || !r.registry.busses.iter().any(|b| b.id == ps.dest_bus) {
-            eprintln!(
+            tracing::warn!(
                 "project load: dropping send {} — endpoint missing (source {:?}, dest bus {})",
                 ps.id, source, ps.dest_bus
             );
@@ -482,7 +482,7 @@ fn replay_sidechain_routes(r: &mut Resonance, project: &ProjectFile) {
         let Some(source) = crate::project::send_source_from_tag(&pr.source_kind, pr.source_id)
         else {
             // Loud, because the next save rewrites the file without it.
-            eprintln!(
+            tracing::warn!(
                 "project load: dropping sidechain route onto plugin {} — unknown source kind {:?}",
                 pr.plugin_instance_id, pr.source_kind
             );
@@ -496,7 +496,7 @@ fn replay_sidechain_routes(r: &mut Resonance, project: &ProjectFile) {
             // Same reasoning as the send case: seeding a route whose
             // endpoints are missing leaves a phantom the mixer would draw
             // while no key is delivered at all.
-            eprintln!(
+            tracing::warn!(
                 "project load: dropping sidechain route onto plugin {} — endpoint missing \
                  (source {:?})",
                 pr.plugin_instance_id, source

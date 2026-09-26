@@ -427,7 +427,7 @@ impl Resonance {
                 Err(e) => {
                     // Missing / corrupt cache: load stale and offer a
                     // refreeze rather than failing the whole project.
-                    eprintln!(
+                    tracing::warn!(
                         "Freeze cache for track {track_id} unavailable ({e}); loading as stale"
                     );
                     let mut cache_ref = cache_ref;

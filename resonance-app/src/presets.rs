@@ -246,8 +246,8 @@ pub fn load_user_presets() -> Vec<TrackPreset> {
                 match load_preset_file(&path) {
                     Ok(preset) => presets.push(preset),
                     Err(e) => {
-                        eprintln!(
-                            "Warning: preset {} is corrupt ({e}); quarantining it as \
+                        tracing::warn!(
+                            "preset {} is corrupt ({e}); quarantining it as \
                              a .corrupt file rather than overwriting it on the next save",
                             path.display()
                         );

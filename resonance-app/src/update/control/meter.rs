@@ -402,7 +402,7 @@ pub(crate) fn mix_measured(
 pub(crate) fn mix_measure_error(app: &mut Resonance, measure_id: u64, message: String) {
     match app.control.jobs.live_measure(measure_id) {
         Some(_) => app.control.jobs.fail(measure_id, message),
-        None => eprintln!("audio: mix measurement failed: {message}"),
+        None => tracing::warn!("audio: mix measurement failed: {message}"),
     }
 }
 

@@ -44,7 +44,7 @@ pub fn unlink_if_exists(path: &Path) {
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => eprintln!("[vocal] unlink {}: {e}", path.display()),
+        Err(e) => tracing::warn!(path = %path.display(), "[vocal] unlink failed: {e}"),
     }
 }
 

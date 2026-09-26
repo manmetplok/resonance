@@ -500,7 +500,7 @@ pub fn parse_startup_tab() -> Option<ViewMode> {
             "compose" => Some(ViewMode::Compose),
             "performance" => Some(ViewMode::Performance),
             other => {
-                eprintln!(
+                tracing::warn!(
                     "Unknown --tab value '{other}'. Expected arrange|mixer|compose|performance."
                 );
                 None
@@ -621,7 +621,7 @@ impl Resonance {
     ) -> Option<R> {
         let result = self.registry.with_track_mut(id, f);
         if result.is_none() {
-            eprintln!("with_track_mut: no track with id {id:?} (stale message after removal?)");
+            tracing::warn!("with_track_mut: no track {id:?} (stale message after removal?)");
         }
         result
     }
@@ -636,7 +636,7 @@ impl Resonance {
     ) -> Option<R> {
         let result = self.registry.with_bus_mut(id, f);
         if result.is_none() {
-            eprintln!("with_bus_mut: no bus with id {id:?} (stale message after removal?)");
+            tracing::warn!("with_bus_mut: no bus with id {id:?} (stale message after removal?)");
         }
         result
     }
@@ -658,7 +658,7 @@ impl Resonance {
                 // exit cleanly. The app cannot run without an audio
                 // engine; we don't currently support running
                 // headless / engine-offline.
-                eprintln!("Audio engine init failed: {e}");
+                tracing::error!("Audio engine init failed: {e}");
                 rfd::MessageDialog::new()
                     .set_title("Resonance — Audio device not available")
                     .set_description(format!(
@@ -966,7 +966,7 @@ impl Resonance {
                 control_socket::install_bridge(rx);
                 self.control.server = Some(server);
             }
-            Err(e) => eprintln!("control endpoint disabled: {e}"),
+            Err(e) => tracing::warn!("control endpoint disabled: {e}"),
         }
     }
 

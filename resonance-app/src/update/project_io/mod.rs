@@ -210,7 +210,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             if autosave {
                 // A failed autosave must never interrupt the user with a
                 // modal — the timer will try again. Log and move on.
-                eprintln!("Autosave failed: {e}");
+                tracing::warn!("Autosave failed: {e}");
             } else {
                 r.quit_after_save = None;
                 r.error_message = Some(format!("Save failed: {e}"));
@@ -339,7 +339,7 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         (None, true) => match autosave_scratch_dir(r) {
             Some(p) => p,
             None => {
-                eprintln!("Autosave skipped: no cache directory available.");
+                tracing::warn!("Autosave skipped: no cache directory available.");
                 return Task::none();
             }
         },
@@ -353,7 +353,7 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
     // first time the directory is created.
     if let Err(e) = std::fs::create_dir_all(&path) {
         if autosave {
-            eprintln!("Autosave skipped: create dir {}: {e}", path.display());
+            tracing::warn!("Autosave skipped: create dir {}: {e}", path.display());
         } else {
             r.error_message = Some(format!("Create project directory: {e}"));
         }

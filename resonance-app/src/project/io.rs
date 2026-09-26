@@ -416,7 +416,7 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
                 midi_notes.insert(mc.id, notes);
             }
             Err(e) => {
-                eprintln!("Warning: could not load midi file {}: {e}", mc.midi_file);
+                tracing::warn!("could not load midi file {}: {e}", mc.midi_file);
                 midi_notes.insert(mc.id, Vec::new());
             }
         }
@@ -431,8 +431,8 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
                 plugin_states.insert(plugin.instance_id, data);
             }
             Err(e) => {
-                eprintln!(
-                    "Warning: could not load plugin state {}: {e}",
+                tracing::warn!(
+                    "could not load plugin state {}: {e}",
                     plugin.state_file
                 );
             }

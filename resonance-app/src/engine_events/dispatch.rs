@@ -54,9 +54,11 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             playback_samples,
             round_trip_samples,
         } => {
-            eprintln!(
-                "audio: io latency capture={capture_samples} playback={playback_samples} \
-                 round_trip={round_trip_samples} samples"
+            tracing::info!(
+                capture_samples,
+                playback_samples,
+                round_trip_samples,
+                "audio: io latency (samples)"
             );
         }
         E::BounceComplete { path } => transport::bounce_complete(r, path),

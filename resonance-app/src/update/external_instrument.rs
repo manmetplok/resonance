@@ -335,7 +335,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             // doesn't error on a directory that has never been created.
             if let Some(dir) = resonance_common::user_definitions_dir() {
                 if let Err(e) = std::fs::create_dir_all(&dir) {
-                    eprintln!(
+                    tracing::warn!(
                         "RevealUserDefinitionsFolder: could not create {}: {e}",
                         dir.display()
                     );
@@ -436,7 +436,7 @@ pub(crate) fn reveal_path_in_file_manager(path: &std::path::Path) {
     let cmd = ("explorer", &[path.as_os_str()][..]);
 
     if let Err(e) = std::process::Command::new(cmd.0).args(cmd.1).spawn() {
-        eprintln!(
+        tracing::warn!(
             "reveal_path_in_file_manager: failed to open {}: {e}",
             path.display()
         );
