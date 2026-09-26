@@ -40,6 +40,18 @@ pub const RETURN_BUS_ID_BASE: BusId = 2_000_000_000;
 /// hints below this base, as for tracks.
 pub const CONTROL_SEND_ID_BASE: SendId = 2_000_000_000;
 
+/// First clip id the app allocates itself — the clips it derives from
+/// chords, drum patterns and vocal renders, and the other clips it must
+/// name before the engine echoes (`ComposeState::fresh_derived_clip_id`).
+/// Engine clips (GUI-drawn MIDI clips, recordings, imports) count up from
+/// 1, and every path that hands the engine a concrete clip id
+/// (`LoadMidiClipDirect`, `LoadClipFromWav`, the take restore, the
+/// STATE-08 `audio/clip_<id>.wav` scan) bumps `next_clip_id` only for ids
+/// *below* this base, as for tracks. Before that rule (FU-A6a) the first
+/// derived clip dragged the engine's counter to `base + 1`, which is
+/// exactly where the app's derived counter allocated next.
+pub const DERIVED_CLIP_ID_BASE: ClipId = 1 << 40;
+
 /// Where a track's post-fader audio lands. Tracks either sum directly
 /// into the master output (the default, matching pre-bus behaviour) or
 /// route into a named bus for group processing before reaching master.

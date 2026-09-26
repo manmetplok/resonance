@@ -130,7 +130,7 @@ pub(crate) fn handle_load_midi_clip_direct(
         trim_end_ticks,
     };
     ctx.midi_clips.write().push(clip);
-    state.next_clip_id = state.next_clip_id.max(clip_id + 1);
+    crate::engine::clips::reserve_clip_id(&mut state.next_clip_id, clip_id);
     let _ = ctx.event_tx.send(AudioEvent::MidiClipCreated {
         clip_id,
         track_id,
