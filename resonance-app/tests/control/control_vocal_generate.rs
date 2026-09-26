@@ -146,6 +146,32 @@ fn an_explicit_seed_is_reproducible() {
     assert_eq!(pitches(1234), pitches(1234), "the same seed repeats");
 }
 
+/// VIEW-35: an explicit seed is used as given, whether or not lyrics are
+/// rolled too. `lyrics = true` used to bump it once more (S + 1), so the
+/// melody differed from `lyrics = false` with the same seed and S + 1
+/// was persisted.
+#[test]
+fn an_explicit_seed_is_used_verbatim_with_and_without_lyrics() {
+    let mut app = app_with_project();
+    let def = vocal_lane_with_chords(&mut app);
+    let pitches = |app: &mut Resonance, response: Response| {
+        let result: proto::GenerateResult = response.result().expect("vocal.generate succeeds");
+        notes_of(app, u64::from(result.clip_id))
+            .notes
+            .iter()
+            .map(|n| (n.pitch, n.start_tick))
+            .collect::<Vec<_>>()
+    };
+    let response = generate(&mut app, true, Some(1234));
+    let with_lyrics = pitches(&mut app, response);
+    assert_eq!(app.test_lane_generator_seed(def, TRACK), Some(1234));
+
+    let response = generate(&mut app, false, Some(1234));
+    let melody_only = pitches(&mut app, response);
+    assert_eq!(app.test_lane_generator_seed(def, TRACK), Some(1234));
+    assert_eq!(with_lyrics, melody_only, "the same seed gives the same melody");
+}
+
 #[test]
 fn lyrics_false_generates_melody_only() {
     let mut app = app_with_project();

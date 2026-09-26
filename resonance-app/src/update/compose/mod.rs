@@ -635,9 +635,10 @@ pub(crate) fn control_generate_vocal(
         }
     }
     if lyrics {
-        // Seed already pinned above when explicit: mix 0 leaves it be.
-        let mix = if seed.is_some() { 0 } else { 0xBF58476D1CE4E5B9 };
-        vocal_render::roll_vocal_lyrics(r, definition_id, track_id, mix);
+        // Seed already pinned above when explicit: use it as given
+        // (VIEW-35 — `bump_seed` always moves, even with mix 0).
+        let mix = if seed.is_some() { None } else { Some(0xBF58476D1CE4E5B9) };
+        vocal_render::draft_vocal_lyrics(r, definition_id, track_id, mix);
         vocal_lyrics::sync_bulk_lyrics_from_draft(r, definition_id, track_id);
     }
     if seed.is_none() {

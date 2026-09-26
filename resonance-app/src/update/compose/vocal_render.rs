@@ -50,6 +50,18 @@ pub(super) fn roll_vocal_lyrics(
     track_id: TrackId,
     seed_mix: u64,
 ) {
+    draft_vocal_lyrics(r, definition_id, track_id, Some(seed_mix));
+}
+
+/// Draft lyrics for the vocal lane from its seed: bumped by `seed_mix`
+/// first when given, used as-is when `None` (an explicitly pinned seed,
+/// e.g. `vocal.generate seed=S` — VIEW-35).
+pub(super) fn draft_vocal_lyrics(
+    r: &mut crate::Resonance,
+    definition_id: u64,
+    track_id: TrackId,
+    seed_mix: Option<u64>,
+) {
     let Some(def) = r.compose.find_definition_mut(definition_id) else {
         return;
     };
@@ -59,7 +71,9 @@ pub(super) fn roll_vocal_lyrics(
     let LaneGeneratorKind::Vocal(params) = &mut cfg.kind else {
         return;
     };
-    cfg.seed = crate::util::bump_seed(cfg.seed, seed_mix);
+    if let Some(mix) = seed_mix {
+        cfg.seed = crate::util::bump_seed(cfg.seed, mix);
+    }
     let seed = cfg.seed;
     params.draft = resonance_music_theory::generate_lyrics(params, seed);
     r.compose.last_error = None;
