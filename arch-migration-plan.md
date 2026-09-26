@@ -749,3 +749,14 @@ cargo test -p resonance-audio --no-run --message-format=json | jq -r 'select(.re
 xargs rm -f < exes.txt
 time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 ```
+
+
+---
+
+## Progress notes (orchestrator, 2026-09-26)
+
+**H1 landed (A2-1, A2-2, A2-3) @ merge of `arch/H1-engine-locks`.** Corrections to the plan above:
+- A2-1: per-map counters (`SharedState::lock_misses`, `StateMap`) count misses from *every* callback branch, not only playing skips; `render_skip_cycles` remains the skip total. The report reaches the engine loop via `SharedState::cycle_report` (a seqlock of atomics), not an `AudioEvent`; the RT `eprintln!` is gone.
+- A2-3: the "bounce guards stall the callback" scenario is moot since MIX-02's offline-render gate (the callback never `try_read`s maps while an `OfflineRenderGuard` is held). The remaining value of A2-4+ for offline paths is engine-thread latency and determinism, not dropouts. Bounce per-chunk guards documented on `ChunkCtx`, unchanged.
+- A2-2: `Retired` lives on `SharedState` (engine-side Mutex; the audio thread never touches it) rather than `HandlerState`, because publishers only have `&HandlerCtx` and a few run on workers. `Track::{push,retain,set,clear}_plugins` now return the replaced `Arc`; A2-4+ should publish `RenderGraph` through `retire::publish`.
+- Signature changes: `rcu_tempo(ctx, f)`, `ReferencePlayer::publish(&SharedState, …)`, `apply_master_fx_chain` / `pickup_live_midi` gained a parameter.

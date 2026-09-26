@@ -36,7 +36,7 @@ master and updates this table. Agents do **not** edit this file.
 | M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | in progress | |
 | M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | in progress | |
 | V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | in progress | |
-| H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | in progress (+ MIX-04, FU-F2d) | |
+| H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | in progress | |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | queued (after M3) | |
 
@@ -81,7 +81,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M3a** (low) MIX-09: >32-ch device whose capped request is rejected now fails to open input (was: crash-prone).
 - [ ] **FU-M3b** (low) MIX-06: every lock-contended block causes a flush on the next block → sustained notes can be cut during heavy UI edits.
 - [ ] **FU-M3c** (low) MIX-05: muted key sources keep rendering (CPU cost while muted).
-- [ ] **FU-F2d** (medium, upgraded) `bounce_plugin_lock` timing test fails 3/5 standalone — make it deterministic.
+- [x] **FU-F2d** (medium, upgraded) — fixed @829d19e9 (30/30 under CPU load); `bounce_plugin_lock` timing test fails 3/5 standalone — make it deterministic.
 - [ ] **FU-M2a** (medium) DSP-10 partial: linear-phase EQ FIR design still runs on the audio thread (≤1/hop, now crossfaded). Plan: per-EQ design worker + lock-free request slot + double-buffered spectrum; fall back to inline design at hop boundary if result not ready (deterministic for bounce).
 - [ ] **FU-M2b** (medium) mastering multiband crossover lowpass: fixed 4097-tap FIR, hard swap, allocates a Vec on the audio thread on crossover move (= DSP-12) — give it the EQ treatment.
 - [ ] **FU-M2c** (low, perf) granular HQ sinc read ≈80 taps/grain-sample at +24 st (vs 6) — benchmark; bypassed mastering now costs full CPU.
@@ -1074,7 +1074,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Tell the delay lines the tail sub-block is continuous. Add a field to `BlockInputs` (e.g. `wrapped_from: Option<u64>` = `Some(loop_out)` for the seam's tail sub-block, `None` elsewhere, including the bounce) and thread it into `LatencyComp::apply/apply_bus/apply_dry` so the continuity check becomes `st.next_playhead == Some(playhead) || (wrapped_from.is_some() && st.next_playhead == wrapped_from)`. Keep invalidation for real seeks. Update `latency_comp.rs:384` to assert tail continuity across a wrap instead of silence. Pitfall: the `tail_frames == 0` aligned case renders a zero-length tail block which also sets `next_playhead = loop_in`; it must carry `wrapped_from` too so the next buffer (starting at `loop_in`) is not treated as a discontinuity.
 - **Verification:** In `resonance-audio/tests/latency_comp.rs`, add a `MixAudioHarness` (or `RenderBenchHarness`) test: two DC clips on two tracks, `LatencyComp` giving one track a delay of e.g. 64, loop enabled with a seam falling mid-buffer and one aligned; assert no zero samples in the output across the seam and that both tracks' sums stay constant.
 
-### [ ] MIX-04 — Freeing ArcSwap snapshots (LatencyComp / automation / tempo map / frozen cache) can happen on the audio thread
+### [x] MIX-04 — Freeing ArcSwap snapshots (LatencyComp / automation / tempo map / frozen cache) can happen on the audio thread — fixed @f3d90760 (retire queue swept in engine loop)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** rt-safety
@@ -1260,7 +1260,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Activate with `min_frames_count = 1` in both `build_instance` and `cycle_activation` (that is what the host actually does), then drop the `MIN_CLAP_FRAMES` padding in `chunk_span`, or keep it as harmless. Change both call sites together through one shared constant.
 - **Verification:** Fake-plugin test asserting the `activate` args; existing `chunk_span` tests updated if the padding is removed.
 
-### [ ] ENG-11 — `ensure_tuning_caches` holds the clips write lock across a full FFT retune of every tuned clip, on every offline render
+### [x] ENG-11 — `ensure_tuning_caches` holds the clips write lock across a full FFT retune of every tuned clip, on every offline render — fixed @a56c4e4c (tuning caches built off-lock)
 - **Severity:** low
 - **Confidence:** high
 - **Category:** performance
