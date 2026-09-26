@@ -77,6 +77,14 @@ mod live {
 
     const APP_ID: &str = "com.resonance.wpg-size-test";
 
+    /// The live tests run one at a time: the fd count below would
+    /// otherwise see the other test's window.
+    static LIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialize() -> std::sync::MutexGuard<'static, ()> {
+        LIVE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn open(initial: (u32, u32)) -> Editor {
         let editor = Editor::new(
             Blank,
@@ -169,6 +177,7 @@ mod live {
     #[test]
     #[ignore = "opens real windows; needs a live Wayland compositor (hyprctl)"]
     fn a_compositor_resize_is_reported_by_the_handle() {
+        let _live = serialize();
         for (initial, target) in [((960, 540), (1100, 620)), ((720, 480), (860, 560))] {
             let editor = open(initial);
             // Whatever the compositor configured the window to on map —
@@ -195,5 +204,54 @@ mod live {
             );
             assert_eq!(requested, initial, "a requested resize was not reported");
         }
+    }
+
+    /// Open file descriptors on DRM device nodes (`/dev/dri/*`).
+    fn dri_fds() -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .map(|dir| {
+                dir.filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
+                    .filter(|target| target.starts_with("/dev/dri"))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Opening and closing an editor must give back what EGL took (PLG-02).
+    ///
+    /// Each editor initializes an EGL display on its own `wl_display`,
+    /// which makes the driver open a render node and build a screen. Until
+    /// the display was terminated on teardown, every open leaked one DRM
+    /// fd (plus the driver's allocations), and a reopen could be handed the
+    /// previous editor's stale display. The 20th editor must still paint.
+    #[test]
+    #[ignore = "opens real windows; needs a live Wayland compositor"]
+    fn reopening_the_editor_does_not_leak_driver_state() {
+        let _live = serialize();
+        const CYCLES: usize = 20;
+        // One warm-up cycle: the first EGL load may keep process-wide
+        // driver state (the loaded DRI driver itself) for good.
+        open((480, 320)).destroy();
+        let before = dri_fds();
+        for _ in 0..CYCLES {
+            let editor = open((480, 320));
+            stable_size(&editor);
+            editor.destroy();
+        }
+        let after = dri_fds();
+        println!("/dev/dri fds: {before} before, {after} after {CYCLES} open/close cycles");
+        assert!(
+            after <= before,
+            "{} DRM fds leaked over {CYCLES} editor open/close cycles",
+            after - before
+        );
+
+        // …and the next editor still works: it maps, paints and follows
+        // a resize (a stale display would fail here, or kill the thread).
+        let mut editor = open((480, 320));
+        stable_size(&editor);
+        editor.set_size(520, 360).expect("resize refused: editor thread died");
+        assert_eq!(settle(&editor, (520, 360)), (520, 360));
+        editor.destroy();
     }
 }

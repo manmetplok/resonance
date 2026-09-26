@@ -303,6 +303,8 @@ pub(super) fn paint_frame(
     state.frame_callback_pending = Some(Instant::now());
 
     egl_ctx.swap_buffers()?;
+    // The swap attached and committed a buffer: the toplevel is mapped.
+    state.mapped = true;
 
     // Schedule the repaint egui asked for. Immediate requests redraw as
     // soon as pacing allows (as before); finite longer delays become a

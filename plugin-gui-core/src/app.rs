@@ -14,5 +14,8 @@ pub trait EditorApp: Send + 'static {
     fn ui(&mut self, ui: &mut egui::Ui);
 
     /// Called when the window is about to close. Default: no-op.
+    ///
+    /// The host is told separately, by the runtime (see
+    /// [`crate::CloseNotifier`]); an implementation never has to.
     fn on_close(&mut self) {}
 }

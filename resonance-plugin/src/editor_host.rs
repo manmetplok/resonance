@@ -127,6 +127,17 @@ impl PluginEditor for RuntimeEditorHandle {
             .map(|r| r.is_resizable())
             .unwrap_or(false)
     }
+
+    /// Forwarded to the runtime, which raises it after
+    /// [`EditorApp::on_close`] on a user close (and when the editor dies),
+    /// and disarms it in `destroy` — so dropping this handle never reports
+    /// a close. This is what gets every plugin `clap_host_gui.closed()`
+    /// without any plugin implementing anything (PLG-01).
+    fn set_closed_callback(&mut self, on_closed: Box<dyn FnOnce() + Send>) {
+        if let Some(r) = &self.runtime {
+            r.set_closed_callback(on_closed);
+        }
+    }
 }
 
 impl Drop for RuntimeEditorHandle {

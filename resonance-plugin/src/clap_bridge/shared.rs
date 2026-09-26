@@ -6,6 +6,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use clack_extensions::gui::HostGui;
 use clack_extensions::latency::HostLatency;
 use clack_plugin::prelude::*;
 
@@ -220,6 +221,10 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// The currently-open editor, if any. Created by `gui_create`, dropped
     /// by `gui_destroy`.
     pub(crate) editor: Option<Box<dyn PluginEditor>>,
+    /// Serial of the editor in `editor`, bumped on every `gui_create` so a
+    /// self-close report can be matched to the window it came from
+    /// (`HostHandle::report_gui_closed`). Starts at 0, which no editor has.
+    pub(crate) editor_serial: u64,
     /// Extra-state saver harvested from the plugin at construction time.
     /// `None` if the plugin has no extra state. Kept alive across
     /// activate/deactivate so the host can save/load project state while
@@ -230,18 +235,33 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
 impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {
     /// Runs on the main thread in response to `clap_host.request_callback()`.
     ///
-    /// The only thing the bridge defers here is the latency notification:
-    /// `clap_host_latency.changed()` is `[main-thread]`, but a plugin reports
-    /// its new latency from wherever it noticed — typically the audio thread
-    /// inside `process()`, or an editor thread. `set_latency_samples` asks
-    /// for this callback; here we tell the host to re-query, which is what
-    /// makes it recompute plugin delay compensation (ba todo #1296).
+    /// The bridge defers two `[main-thread]` notifications here:
+    ///
+    /// * the latency one: `clap_host_latency.changed()` is `[main-thread]`,
+    ///   but a plugin reports its new latency from wherever it noticed —
+    ///   typically the audio thread inside `process()`, or an editor thread.
+    ///   `set_latency_samples` asks for this callback; here we tell the host
+    ///   to re-query, which is what makes it recompute plugin delay
+    ///   compensation (ba todo #1296);
+    /// * the editor one: the GUI runtime reports a window that closed itself
+    ///   from its own thread (`PluginEditor::set_closed_callback`, wired in
+    ///   `gui_create`); here it becomes `clap_host_gui.closed(true)`, so the
+    ///   host stops showing the editor as open and destroys it (PLG-01). A
+    ///   report from an editor that is no longer the current one — the host
+    ///   destroyed it, and perhaps created another, before this ran — is
+    ///   dropped.
     fn on_main_thread(&mut self) {
-        if !self.host_handle.take_latency_dirty() {
-            return;
+        if self.host_handle.take_latency_dirty() {
+            if let Some(latency) = self.host.shared().get_extension::<HostLatency>() {
+                latency.changed(&mut self.host);
+            }
         }
-        if let Some(latency) = self.host.shared().get_extension::<HostLatency>() {
-            latency.changed(&mut self.host);
+        if let Some(serial) = self.host_handle.take_gui_closed() {
+            if serial == self.editor_serial && self.editor.is_some() {
+                if let Some(gui) = self.host.shared().get_extension::<HostGui>() {
+                    gui.closed(&self.host.shared(), true);
+                }
+            }
         }
     }
 }

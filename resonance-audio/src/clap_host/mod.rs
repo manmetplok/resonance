@@ -73,6 +73,13 @@ pub(super) struct HostData {
     /// deactivate → reactivate cycle. Consumed by
     /// [`ClapInstance::take_host_restart_request`].
     pub restart_requested: AtomicBool,
+    /// Set by `clap_host.request_callback()`: the plugin wants its
+    /// `on_main_thread` run. Consumed by
+    /// [`ClapInstance::run_requested_callback`] on the engine thread,
+    /// which is the CLAP main thread for our instances. The built-in
+    /// bridge relies on it to deliver `clap_host_gui.closed()` for an
+    /// editor the user closed from its own titlebar (PLG-01).
+    pub callback_requested: AtomicBool,
     /// `clap_host_gui` vtable served from `host_get_extension`. Lives
     /// inside the pinned `HostData` for the same reason as
     /// `latency_ext`: the pointer we hand the plugin must stay valid
@@ -207,7 +214,11 @@ unsafe extern "C" fn host_gui_request_hide(_host: *const clap_host) -> bool {
 }
 
 unsafe extern "C" fn host_request_process(_host: *const clap_host) {}
-unsafe extern "C" fn host_request_callback(_host: *const clap_host) {}
+unsafe extern "C" fn host_request_callback(host: *const clap_host) {
+    if let Some(data) = host_data_from(host) {
+        data.callback_requested.store(true, Ordering::Release);
+    }
+}
 
 pub(super) fn create_host_data() -> Pin<Box<HostData>> {
     let mut host_data = Box::pin(HostData {
@@ -228,6 +239,7 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
         },
         latency_changed: AtomicBool::new(false),
         restart_requested: AtomicBool::new(false),
+        callback_requested: AtomicBool::new(false),
         gui_ext: clap_host_gui {
             resize_hints_changed: Some(host_gui_resize_hints_changed),
             request_resize: Some(host_gui_request_resize),

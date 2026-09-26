@@ -22,7 +22,7 @@ use objc2_app_kit::{NSEvent, NSOpenGLPixelFormat, NSOpenGLView, NSTrackingArea, 
 use objc2_foundation::{NSRect, NSRunLoop, NSRunLoopCommonModes, NSTimer};
 
 use plugin_gui_core::repaint::{plan_repaint, repaint_due, RepaintPlan};
-use plugin_gui_core::{EditorApp, EditorError, SharedSize};
+use plugin_gui_core::{CloseNotifier, EditorApp, EditorError, SharedSize};
 
 use crate::input::{self, InputState};
 
@@ -47,6 +47,10 @@ pub(super) struct ViewIvars {
     /// handle reads it to mirror the Wayland handle's send-failure
     /// semantics after its editor thread has exited.
     alive: Arc<AtomicBool>,
+    /// Tells the host the window closed itself (PLG-01). Raised from
+    /// [`EditorView::fire_on_close`], i.e. only on the user-close and
+    /// panic paths; the handle disarms it before a host destroy.
+    closed: CloseNotifier,
     start_time: Instant,
     /// Reentrancy guard: a modal run loop started inside `ui()` (an rfd /
     /// NSOpenPanel dialog) services the main queue and can deliver another
@@ -217,6 +221,7 @@ impl EditorView {
         app: Box<dyn EditorApp>,
         shared_size: SharedSize,
         alive: Arc<AtomicBool>,
+        closed: CloseNotifier,
         editor_id: u64,
     ) -> Result<Retained<Self>, EditorError> {
         let this = Self::alloc(mtm).set_ivars(ViewIvars {
@@ -228,6 +233,7 @@ impl EditorView {
             pending_events: RefCell::new(Vec::new()),
             shared_size,
             alive,
+            closed,
             start_time: Instant::now(),
             in_paint: Cell::new(false),
             needs_repaint: Cell::new(true),
@@ -397,15 +403,38 @@ impl EditorView {
     }
 
     /// Invoke `EditorApp::on_close` exactly once, tolerating (impossible,
-    /// but FFI-adjacent) reentrancy instead of panicking across it.
+    /// but FFI-adjacent) reentrancy instead of panicking across it, then
+    /// tell the host the window is closing on its own (PLG-01).
+    ///
+    /// `on_close` is plugin code running inside an Objective-C callback
+    /// (`windowShouldClose:` or the repaint timer), so a panic in it is
+    /// caught here: unwinding into AppKit aborts the host (PLG-03).
     fn fire_on_close(&self) {
         let ivars = self.ivars();
         if !ivars.on_close_fired.replace(true) {
             if let Ok(mut app) = ivars.app.try_borrow_mut() {
-                app.on_close();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    app.on_close();
+                }));
+                if result.is_err() {
+                    eprintln!("cocoa-plugin-gui: the editor's on_close panicked; closing anyway");
+                }
             }
         }
         ivars.alive.store(false, Ordering::Relaxed);
+        ivars.closed.notify();
+    }
+
+    /// A panic escaped plugin code during a frame. The editor is unusable
+    /// (its `EditorApp` may be mid-mutation), so stop painting it and close
+    /// it through the same deferred path a user close mid-frame takes:
+    /// the next tick fires `on_close`, notifies the host and tears the
+    /// window down. Painting stops at once because `paint` checks `alive`.
+    fn close_after_panic(&self) {
+        eprintln!("cocoa-plugin-gui: the editor's ui() panicked; closing the editor");
+        let ivars = self.ivars();
+        ivars.alive.store(false, Ordering::Relaxed);
+        ivars.close_requested.set(true);
     }
 
     /// Release everything that must die on the main thread: the repaint
@@ -497,8 +526,17 @@ impl EditorView {
         // returns before touching GL).
         let _keep_alive = self.retain();
         ivars.in_paint.set(true);
-        self.paint_inner();
+        // `paint_inner` runs the plugin's `ui()` inside `drawRect:`. A
+        // panic must not unwind into AppKit — that aborts the whole host,
+        // where on Wayland the same bug only ends the editor thread
+        // (PLG-03). Every RefCell borrow it takes is scoped inside it, so
+        // they are released by the unwind before we get back here.
+        let painted =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.paint_inner()));
         ivars.in_paint.set(false);
+        if painted.is_err() {
+            self.close_after_panic();
+        }
     }
 
     fn paint_inner(&self) {

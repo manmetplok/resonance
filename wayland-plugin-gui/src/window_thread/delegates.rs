@@ -178,6 +178,10 @@ impl KeyboardHandler for State {
         _: u32,
         event: KeyEvent,
     ) {
+        // Hidden: drop it, don't queue it for a replay on the next show.
+        if !self.visible {
+            return;
+        }
         self.input
             .process_key(&event, true, &mut self.pending_events);
         self.needs_redraw = true;
@@ -190,6 +194,9 @@ impl KeyboardHandler for State {
         _: u32,
         event: KeyEvent,
     ) {
+        if !self.visible {
+            return;
+        }
         self.input
             .process_key(&event, true, &mut self.pending_events);
         self.needs_redraw = true;
@@ -202,6 +209,9 @@ impl KeyboardHandler for State {
         _: u32,
         event: KeyEvent,
     ) {
+        if !self.visible {
+            return;
+        }
         self.input
             .process_key(&event, false, &mut self.pending_events);
         self.needs_redraw = true;
@@ -228,6 +238,9 @@ impl PointerHandler for State {
         _: &WlPointer,
         events: &[PointerEvent],
     ) {
+        if !self.visible {
+            return;
+        }
         for event in events {
             self.input.process_pointer(event, &mut self.pending_events);
         }
@@ -261,9 +274,9 @@ impl WindowHandler for State {
                 .unwrap_or(self.size.1),
         );
         self.pending_size = Some((w, h));
-        if !self.configured {
-            self.visible = true;
-        }
+        // Deliberately not `visible = true`: a configure means the window
+        // *may* be mapped, not that the host asked for it to be. Painting
+        // (and with it mapping) waits for `Command::Show` (PLG-04).
         self.configured = true;
         self.needs_redraw = true;
         // Decide the decoration mode for this frame.

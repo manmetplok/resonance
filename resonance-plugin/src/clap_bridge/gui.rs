@@ -43,9 +43,19 @@ impl<'a, P: ResonancePlugin> PluginGuiImpl for ClapMainThread<'a, P> {
             .0
             .to_str()
             .map_err(|_| PluginError::Message("invalid GUI api string"))?;
-        let editor = factory
+        let mut editor = factory
             .create(api, configuration.is_floating)
             .ok_or(PluginError::Message("editor creation failed"))?;
+        // Route a self-close (the user closed the window from its own
+        // titlebar) to `clap_host_gui.closed()`, once, for every plugin:
+        // the runtime latches it on the handle from its own thread and
+        // `on_main_thread` delivers it (PLG-01).
+        self.editor_serial += 1;
+        let serial = self.editor_serial;
+        let host_handle = self.host_handle.clone();
+        editor.set_closed_callback(Box::new(move || {
+            host_handle.report_gui_closed(serial);
+        }));
         self.editor = Some(editor);
         Ok(())
     }

@@ -37,6 +37,19 @@ pub trait PluginEditor: Send {
     /// Set the window title. Mostly useful for floating windows so the host
     /// can push e.g. the track name into the title bar.
     fn set_title(&mut self, _title: &str) {}
+
+    /// Register what to run when the window closes *itself* — the user
+    /// closed it from its own titlebar, or the editor died — as opposed to
+    /// the host dropping this editor. The CLAP bridge calls this once,
+    /// right after [`EditorFactory::create`], and uses it to send the host
+    /// `clap_host_gui.closed()`; without it the host keeps the editor
+    /// marked open (PLG-01).
+    ///
+    /// Call `on_closed` at most once, from any thread, and never as part
+    /// of this editor's own drop. If the window already closed by the time
+    /// this is called, call it straight away. The default ignores it,
+    /// which is right for an editor that cannot close on its own.
+    fn set_closed_callback(&mut self, _on_closed: Box<dyn FnOnce() + Send>) {}
 }
 
 /// Factory that produces [`PluginEditor`] instances on demand.
