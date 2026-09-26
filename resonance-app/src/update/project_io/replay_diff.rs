@@ -112,16 +112,10 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     if !midi_clip_set_matches(&a.midi_clips, &b.midi_clips) {
         return false;
     }
-    // Compose: section definitions/placements + drum groups by id only.
+    // Compose: section definitions by id only.
     if !id_set_eq(
         a.section_definitions.iter().map(|d| d.id),
         b.section_definitions.iter().map(|d| d.id),
-    ) {
-        return false;
-    }
-    if !id_set_eq(
-        a.section_placements.iter().map(|p| p.id),
-        b.section_placements.iter().map(|p| p.id),
     ) {
         return false;
     }
@@ -130,7 +124,9 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     // arrangement markers (`Markers`), track groups (`TrackGroups`), drum
     // patterns (`DrumPatterns`, whose diff arm empties the bank for an
     // empty target) and the legacy flat drum-group list it promotes (written
-    // empty by every snapshot).
+    // empty by every snapshot), section placements (`ComposeSections`; a
+    // placement's derived and vocal clips are clips, still gated above, and
+    // the maps keyed by it are rebuilt in `Clips` from the target).
     true
 }
 

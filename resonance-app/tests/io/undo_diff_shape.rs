@@ -320,3 +320,69 @@ fn adding_a_drum_group_undoes_through_the_diff_path() {
     );
     undo_redo_over(&mut f, &before, &added, "drum group add");
 }
+
+// ---------------------------------------------------------------------------
+// Section placements
+// ---------------------------------------------------------------------------
+
+fn compose(msg: ComposeMessage) -> Message {
+    Message::Compose(msg)
+}
+
+/// The first bar after every placement, where a section of the first
+/// definition's length fits.
+fn free_bar(app: &Resonance) -> (u64, u32) {
+    let c = app.compose_state();
+    let def = c.definitions.first().expect("the demo has a section");
+    let end = c
+        .placements
+        .iter()
+        .filter_map(|p| {
+            c.definitions
+                .iter()
+                .find(|d| d.id == p.definition_id)
+                .map(|d| p.start_bar + d.length_bars)
+        })
+        .max()
+        .unwrap_or(0);
+    (def.id, end + 1)
+}
+
+fn placement_ids(app: &Resonance) -> HashSet<u64> {
+    app.compose_state().placements.iter().map(|p| p.id).collect()
+}
+
+/// A fresh placement has no derived clips (nothing is generated until the
+/// user asks), so placing and removing one changes only the placement set.
+#[test]
+fn placing_and_removing_a_section_undoes_through_the_diff_path() {
+    let mut f = fixture("placement");
+    let before = f.app.test_snapshot_for_undo();
+    let ids = placement_ids(&f.app);
+    let (definition_id, start_bar) = free_bar(&f.app);
+
+    let placed = edit(
+        &mut f,
+        compose(ComposeMessage::PlaceSection {
+            definition_id,
+            start_bar,
+        }),
+    );
+    let placement_id = placement_ids(&f.app)
+        .into_iter()
+        .find(|id| !ids.contains(id))
+        .expect("the edit placed a section");
+    assert_eq!(
+        placed.project.file.midi_clips.len(),
+        before.project.file.midi_clips.len(),
+        "a fresh placement generates no clips, or the gate still sees a clip change"
+    );
+    let removed = edit(
+        &mut f,
+        compose(ComposeMessage::DeleteSectionPlacement { placement_id }),
+    );
+
+    step_lands_on(&mut f, Message::Undo, &placed, "undo placement delete");
+    undo_redo_over(&mut f, &before, &placed, "placement add");
+    step_lands_on(&mut f, Message::Redo, &removed, "redo placement delete");
+}
