@@ -387,11 +387,11 @@ pub(crate) enum ReferenceMonitorSource {
 /// can show it without crashing or losing the user's markers.
 ///
 /// Engine ids are reallocated here, from the app's session-monotonic
-/// allocator (hinted on each `LoadReferenceTrack`), not restarted at 1
-/// with the engine's: a late echo from a load `ClearAll` superseded
-/// carries an old id, which must not name a restored entry (FU-A5b).
-/// Entries the restore does not bring back are dropped, in-flight loads
-/// included, so their echoes are stale.
+/// allocator (mandatory on every `LoadReferenceTrack`, ARCH-04 D-5 — the
+/// engine keeps no counter of its own to restart at 1): a late echo from
+/// a load `ClearAll` superseded carries an old id, which must not name a
+/// restored entry (FU-A5b). Entries the restore does not bring back are
+/// dropped, in-flight loads included, so their echoes are stale.
 /// Missing entries — which the engine never hears about — take ids from
 /// a high, disjoint base so a later in-session load can never collide
 /// with one.
@@ -406,7 +406,8 @@ pub(crate) fn restore_references(
     // Drop the previous project's references (entries + settings + any
     // in-flight load bookkeeping), keeping only the live monitor state an
     // undo leaves alone. The engine's own reference state was already
-    // emptied by `ClearAll`, allocator included.
+    // emptied by `ClearAll` (it keeps no id allocator of its own to reset,
+    // ARCH-04 D-5).
     let live_monitor = std::mem::take(&mut r.reference.monitor);
     let next_engine_id = r.reference.next_engine_id;
     let next_marker_id = r.reference.next_marker_id;
@@ -458,10 +459,11 @@ pub(crate) fn restore_references(
 /// Live entries are matched to the saved ones by path, in order. A match
 /// keeps its engine id, decoded audio and analysis, and takes the saved
 /// name and markers (and the saved loudness while its own analysis is
-/// unfinished). A saved entry with no live match is loaded again, under an
-/// id from the app's copy of the engine's allocator; a live entry with no
-/// saved match is removed from the engine. The selection, loudness match
-/// and trim are re-sent only when they changed.
+/// unfinished). A saved entry with no live match is loaded again, under a
+/// fresh id from the app's own allocator (ARCH-04 D-5: the engine has none
+/// of its own left); a live entry with no saved match is removed from the
+/// engine. The selection, loudness match and trim are re-sent only when
+/// they changed.
 pub(crate) fn reconcile_references(r: &mut Resonance, project: &ProjectFile) {
     use crate::reference::ReferenceStatus;
 
@@ -515,7 +517,7 @@ pub(crate) fn reconcile_references(r: &mut Resonance, project: &ProjectFile) {
 }
 
 /// The GUI entry for a saved reference that is not live: re-registered
-/// with the engine under a hinted id when its file exists, else a
+/// with the engine under an app-allocated id when its file exists, else a
 /// `Missing` entry the engine never hears about.
 fn seed_reference_entry(
     r: &mut Resonance,
@@ -531,7 +533,7 @@ fn seed_reference_entry(
         // which the folding layer reconciles onto the entry seeded here
         // (preserving its markers).
         let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
-            id_hint: Some(id),
+            id,
             path: std::path::PathBuf::from(&pr.path),
         });
         (id, ReferenceStatus::Analyzing(ReferenceAnalysisStage::Decoding))

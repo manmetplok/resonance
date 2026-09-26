@@ -267,7 +267,7 @@ impl MixAudioHarness {
             handle_reference_analyzed, register_reference, ReferencePlayer,
         };
         let mut player = ReferencePlayer::new();
-        let id = register_reference(&mut player, None, std::path::PathBuf::from("parity.wav"));
+        let id = register_reference(&mut player, ReferenceId(1), std::path::PathBuf::from("parity.wav"));
         handle_reference_analyzed(&mut player, id, std::sync::Arc::new(pcm), -14.0);
         player.active_id = Some(id);
         player.ab_source = ABSource::Reference;

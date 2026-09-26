@@ -11,13 +11,13 @@ pub(super) fn dispatch_reference(
     cmd: AudioCommand,
 ) {
     match cmd {
-        AudioCommand::LoadReferenceTrack { id_hint, path } => {
+        AudioCommand::LoadReferenceTrack { id, path } => {
             reference::handle_load_reference_track(
                 &mut state.reference,
                 ctx.event_tx,
                 ctx.cmd_tx_retry,
                 ctx.sample_rate,
-                id_hint,
+                id,
                 path,
             )
         }

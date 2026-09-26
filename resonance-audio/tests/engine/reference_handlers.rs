@@ -10,10 +10,10 @@ use std::path::PathBuf;
 
 use crossbeam_channel::{unbounded, Receiver};
 
-use resonance_audio::types::{ABSource, AudioEvent, ReferenceId};
+use resonance_audio::types::{ABSource, AudioEvent, EngineErrorKind, ReferenceId};
 use resonance_audio::{
-    handle_add_ref_marker, handle_clear_active_reference, handle_poll_ab_meters,
-    handle_remove_ref_marker,
+    handle_add_ref_marker, handle_clear_active_reference, handle_load_reference_track,
+    handle_poll_ab_meters, handle_remove_ref_marker,
     handle_remove_reference_track, handle_set_ab_source, handle_set_active_reference,
     handle_set_ref_loop_to_mix, handle_set_ref_loudness_match, handle_set_ref_position,
     handle_set_ref_trim, register_reference, ABMeterTap, ReferencePlayer,
@@ -26,33 +26,72 @@ fn next_event(rx: &Receiver<AudioEvent>) -> AudioEvent {
 }
 
 #[test]
-fn register_reference_allocates_monotonic_ids() {
+fn register_reference_registers_under_the_given_id() {
     let mut player = ReferencePlayer::new();
 
-    // Registration is a pure mutation — it allocates the id and pushes
-    // the (unanalysed) entry without emitting any event; the analysis
-    // worker emits `ReferenceLoaded` once decode + LUFS measurement land.
-    let first = register_reference(&mut player, None, PathBuf::from("/music/ref_master.wav"));
+    // Registration is a pure mutation — it stores the (unanalysed) entry
+    // under the caller-supplied id without emitting any event; the
+    // analysis worker emits `ReferenceLoaded` once decode + LUFS
+    // measurement land. ARCH-04 D-5: the engine has no allocator of its
+    // own left, so the id is mandatory and never invented here.
+    let first = register_reference(&mut player, ReferenceId(1), PathBuf::from("/music/ref_master.wav"));
     assert_eq!(first, ReferenceId(1));
 
-    let second = register_reference(&mut player, None, PathBuf::from("/music/other.flac"));
+    let second = register_reference(&mut player, ReferenceId(2), PathBuf::from("/music/other.flac"));
     assert_eq!(second, ReferenceId(2));
+    assert_eq!(player.entry_has_pcm(ReferenceId(1)), Some(false));
+    assert_eq!(player.entry_has_pcm(ReferenceId(2)), Some(false));
 }
 
+/// ARCH-04 D-5: a second `LoadReferenceTrack` for an id already live is
+/// refused (`EngineErrorKind::Internal`), not honoured as a rename/replace
+/// — the reference twin of `tests/clap_host/plugin_id_duplicate_rejected.rs`
+/// and `tests/engine/bus_id_duplicate_rejected.rs`. Drives the real
+/// `handle_load_reference_track` handler (not just `register_reference`),
+/// so what's proven is that the refused load never reaches the worker-spawn
+/// path either.
 #[test]
-fn register_reference_honours_id_hint_and_bumps_allocator() {
+fn a_duplicate_id_is_refused_and_does_not_replace_the_live_reference() {
     let mut player = ReferencePlayer::new();
+    let (event_tx, event_rx) = unbounded::<AudioEvent>();
+    let (cmd_tx, _cmd_rx) = unbounded();
 
-    assert_eq!(
-        register_reference(&mut player, Some(ReferenceId(10)), PathBuf::from("/a.wav")),
-        ReferenceId(10)
+    handle_load_reference_track(
+        &mut player,
+        &event_tx,
+        &cmd_tx,
+        48_000,
+        ReferenceId(1),
+        PathBuf::from("/a.wav"),
     );
+    assert_eq!(player.entry_has_pcm(ReferenceId(1)), Some(false));
 
-    // A fresh (un-hinted) registration must skip past the hinted id.
-    assert_eq!(
-        register_reference(&mut player, None, PathBuf::from("/b.wav")),
-        ReferenceId(11)
+    // A second load asking for the SAME id is refused outright.
+    handle_load_reference_track(
+        &mut player,
+        &event_tx,
+        &cmd_tx,
+        48_000,
+        ReferenceId(1),
+        PathBuf::from("/b.wav"),
     );
+    let err = event_rx
+        .try_recv()
+        .expect("the refused load reports an error");
+    match err {
+        AudioEvent::Error(e) => assert_eq!(
+            e.kind,
+            EngineErrorKind::Internal,
+            "a duplicate id is a caller invariant violation, not a transient Busy condition"
+        ),
+        other => panic!("expected AudioEvent::Error, got {other:?}"),
+    }
+    assert!(
+        event_rx.try_recv().is_err(),
+        "no further event from the refused load"
+    );
+    // Still exactly the one entry — the refused load did not overwrite it.
+    assert_eq!(player.entry_count(), 1);
 }
 
 #[test]
@@ -60,7 +99,7 @@ fn remove_reference_clears_active_and_emits() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
+    register_reference(&mut player, ReferenceId(1), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     assert!(matches!(next_event(&rx), AudioEvent::ActiveReferenceChanged { id } if id == ReferenceId(1)));
 
@@ -73,21 +112,24 @@ fn remove_reference_clears_active_and_emits() {
 }
 
 #[test]
-fn clear_drops_entries_and_resets_id_allocator() {
+fn clear_drops_every_entry() {
     let mut player = ReferencePlayer::new();
-    register_reference(&mut player, Some(ReferenceId(5)), PathBuf::from("/a.wav"));
-    register_reference(&mut player, None, PathBuf::from("/b.wav")); // -> id 6
+    register_reference(&mut player, ReferenceId(5), PathBuf::from("/a.wav"));
+    register_reference(&mut player, ReferenceId(6), PathBuf::from("/b.wav"));
     assert_eq!(player.entry_has_pcm(ReferenceId(5)), Some(false));
 
     player.clear();
 
-    // Entries are gone...
+    // Entries are gone; id bookkeeping (ARCH-04 D-5) lives entirely on the
+    // app side now, so there is no engine-side allocator left to reset.
     assert_eq!(player.entry_has_pcm(ReferenceId(5)), None);
-    // ...and the id allocator restarts from 1, so a reloaded project's
-    // references re-register from the bottom, matching the app-side restore.
+    assert_eq!(player.entry_has_pcm(ReferenceId(6)), None);
+
+    // A ClearAll'd player accepts a fresh registration under any id the
+    // app hands it — including one it had already seen before the clear.
     assert_eq!(
-        register_reference(&mut player, None, PathBuf::from("/c.wav")),
-        ReferenceId(1)
+        register_reference(&mut player, ReferenceId(5), PathBuf::from("/c.wav")),
+        ReferenceId(5)
     );
 }
 
@@ -100,7 +142,7 @@ fn set_active_reference_requires_existing() {
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     assert!(rx.try_recv().is_err());
 
-    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
+    register_reference(&mut player, ReferenceId(1), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     assert!(matches!(next_event(&rx), AudioEvent::ActiveReferenceChanged { id } if id == ReferenceId(1)));
 }
@@ -111,7 +153,7 @@ fn set_active_reference_requires_existing() {
 fn clear_active_reference_deselects_silently() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
-    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
+    register_reference(&mut player, ReferenceId(1), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     let _ = next_event(&rx);
 
@@ -175,7 +217,7 @@ fn add_and_remove_markers() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
+    register_reference(&mut player, ReferenceId(1), PathBuf::from("/a.wav"));
 
     // The app allocates marker ids (FU-A5a): the engine keeps the one it
     // is handed — it has no allocator that restarts at 1 under a
@@ -235,7 +277,7 @@ fn set_ref_position_seeks_cursor() {
     let mut player = ReferencePlayer::new();
     let (tx, rx) = unbounded::<AudioEvent>();
 
-    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
+    register_reference(&mut player, ReferenceId(1), PathBuf::from("/a.wav"));
 
     handle_set_ref_position(&mut player, &tx, ReferenceId(1), 123_456);
     assert!(matches!(
@@ -296,7 +338,7 @@ fn poll_ab_meters_snapshot_reflects_active_reference() {
         other => panic!("expected ABMeterSnapshot, got {other:?}"),
     }
 
-    register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
+    register_reference(&mut player, ReferenceId(1), PathBuf::from("/a.wav"));
     handle_set_active_reference(&mut player, &tx, ReferenceId(1));
     let _ = next_event(&rx);
 

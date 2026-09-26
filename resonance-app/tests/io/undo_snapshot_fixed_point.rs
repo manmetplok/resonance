@@ -1601,9 +1601,10 @@ fn freeze_states_restore_identically_through_both_paths() {
 // undoable and lives in `ProjectFile::references` / `reference_settings`.
 // Its *monitor* state — which source the A/B switch monitors, loop-to-mix,
 // the meters — is live and never moved by an undo. These tests drive the
-// app through a stand-in for the engine's `ReferencePlayer` (same id
-// allocator, same command semantics), so a restore that updates the GUI
-// mirror without telling the engine shows up as the two disagreeing.
+// app through a stand-in for the engine's `ReferencePlayer` (same
+// mandatory-id command semantics — ARCH-04 D-5 — so a duplicate is
+// refused rather than invented a fresh id), so a restore that updates the
+// GUI mirror without telling the engine shows up as the two disagreeing.
 
 /// The engine's reference state as the command stream leaves it — a
 /// model of `resonance_audio`'s `ReferencePlayer`.
@@ -1611,7 +1612,6 @@ fn freeze_states_restore_identically_through_both_paths() {
 struct EngineRefs {
     ids: Vec<u32>,
     active: Option<u32>,
-    next_id: u32,
     ab_reference: bool,
     loop_to_mix: bool,
     loudness_match: bool,
@@ -1619,17 +1619,15 @@ struct EngineRefs {
     /// `(id, path)` of every load the model registered, in order, so the
     /// test can echo the ones it wants to land.
     loads: Vec<(u32, String)>,
-    /// Commands the engine would mis-handle — a hinted id that is already
-    /// registered, a selection of an id it does not hold.
+    /// Commands the engine would mis-handle — a mandatory id that is
+    /// already registered (ARCH-04 D-5: the engine refuses rather than
+    /// invents one), a selection of an id it does not hold.
     errors: Vec<String>,
 }
 
 impl EngineRefs {
     fn new() -> Self {
-        Self {
-            next_id: 1,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     fn apply(&mut self, cmd: &AudioCommand) {
@@ -1639,23 +1637,15 @@ impl EngineRefs {
                 *self = Self::new();
                 self.errors = errors;
             }
-            AudioCommand::LoadReferenceTrack { id_hint, path } => {
-                let id = match id_hint {
-                    Some(h) => {
-                        self.next_id = self.next_id.max(h.0 + 1);
-                        h.0
-                    }
-                    None => {
-                        self.next_id += 1;
-                        self.next_id - 1
-                    }
-                };
+            AudioCommand::LoadReferenceTrack { id, path } => {
+                let id = id.0;
                 if self.ids.contains(&id) {
                     self.errors
                         .push(format!("LoadReferenceTrack reuses live id {id}"));
+                } else {
+                    self.ids.push(id);
+                    self.loads.push((id, path.to_string_lossy().into_owned()));
                 }
-                self.ids.push(id);
-                self.loads.push((id, path.to_string_lossy().into_owned()));
             }
             AudioCommand::RemoveReferenceTrack { id } => {
                 self.ids.retain(|x| *x != id.0);

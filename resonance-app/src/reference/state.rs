@@ -121,13 +121,14 @@ pub struct ReferenceState {
     /// Most recent load-failure reason, shown until dismissed. Load
     /// failures carry no id, so they live here rather than as an entry.
     pub last_error: Option<String>,
-    /// The reference-id allocator. The app hints every `LoadReferenceTrack`
-    /// with an id from here ([`Self::alloc_engine_id`]), and it is
-    /// session-monotonic — no restore rewinds it, though `ClearAll` resets
-    /// the engine's own — so an id is never handed out twice. That is how
-    /// an echo for a reference the app has since dropped is told apart
-    /// from a live one ([`Self::is_stale`]): before FU-A5b a reopened
-    /// project re-used id 1 and a late echo of the old load landed on it.
+    /// The reference-id allocator. The app hands every `LoadReferenceTrack`
+    /// a mandatory id from here ([`Self::alloc_engine_id`]) — the engine
+    /// keeps no allocator of its own to fall back on (ARCH-04 D-5) — and
+    /// it is session-monotonic, so an id is never handed out twice. That
+    /// is how an echo for a reference the app has since dropped is told
+    /// apart from a live one ([`Self::is_stale`]): before FU-A5b a
+    /// reopened project re-used id 1 and a late echo of the old load
+    /// landed on it.
     pub next_engine_id: u32,
     /// Marker-id allocator, session-monotonic and shared by every
     /// reference (ids only need to be unique per reference). The app owns
@@ -205,8 +206,8 @@ impl ReferenceState {
         id
     }
 
-    /// An id no live or in-flight engine entry uses, for a hinted
-    /// `LoadReferenceTrack`.
+    /// An id no live or in-flight engine entry uses, for the mandatory
+    /// id field on every `LoadReferenceTrack`.
     pub fn alloc_engine_id(&mut self) -> ReferenceId {
         let id = self.next_engine_id.max(1);
         self.next_engine_id = id + 1;

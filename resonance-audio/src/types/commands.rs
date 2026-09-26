@@ -1320,12 +1320,13 @@ pub enum AudioCommand {
     /// The engine decodes it on a worker, measures its integrated
     /// loudness and waveform overview, and emits
     /// `AudioEvent::ReferenceLoaded` (with intermediate
-    /// `ReferenceAnalysisProgress`) or `ReferenceLoadFailed`. When
-    /// `id_hint` is provided (e.g. project load) the engine honours it
-    /// and bumps its allocator past it; otherwise it allocates a fresh
-    /// [`ReferenceId`].
+    /// `ReferenceAnalysisProgress`) or `ReferenceLoadFailed`. `id` is
+    /// mandatory (ARCH-04 D-5): the app is the only allocator left for
+    /// reference ids, and the engine refuses a collision with
+    /// `EngineErrorKind::Internal` rather than silently replacing the
+    /// live entry.
     LoadReferenceTrack {
-        id_hint: Option<ReferenceId>,
+        id: ReferenceId,
         path: PathBuf,
     },
     /// Remove a loaded reference track and free its decoded PCM. Emits
