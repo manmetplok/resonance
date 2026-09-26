@@ -73,7 +73,7 @@ impl crate::Resonance {
             markers: self.markers.as_slice(),
             selected_marker_id: self.interaction.selected_marker_id,
             frozen_tracks,
-            drag: self.drag_placement.as_ref(),
+            drag: self.media.drag_placement.as_ref(),
             automation_expanded_tracks: &self.interaction.automation_expanded_tracks,
             take_groups: &self.take_groups,
             take_lane_expanded_tracks: &self.interaction.take_lane_expanded_tracks,

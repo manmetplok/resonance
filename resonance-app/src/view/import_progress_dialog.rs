@@ -48,19 +48,19 @@ const LIST_MAX_HEIGHT: f32 = 280.0;
 /// The import-progress modal overlay. Returns a zero-sized element when the
 /// modal isn't open, so the caller can stack it unconditionally.
 pub(crate) fn view_import_progress_overlay(r: &Resonance) -> Element<'_, Message> {
-    if !r.import_progress_modal_open {
+    if !r.media.import_progress_modal_open {
         return Space::new()
             .width(Length::Fixed(0.0))
             .height(Length::Fixed(0.0))
             .into();
     }
 
-    let statuses = r.import_progress.statuses();
+    let statuses = r.media.import_progress.statuses();
     // Guard: an empty tracker (before the first ImportProgress event lands) must
     // NOT be treated as "complete" — that would flash a 0-file "Done" state right
     // after the modal opens.  Require at least one entry before declaring the
     // batch finished.
-    let all_done = !statuses.is_empty() && r.import_progress.is_complete();
+    let all_done = !statuses.is_empty() && r.media.import_progress.is_complete();
 
     // Backdrop: blocks clicks while imports are in flight (so the user can't
     // start editing while the engine is mid-transcode); clicking the backdrop

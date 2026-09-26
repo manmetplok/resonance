@@ -64,8 +64,8 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.banners.error_message = None;
         }
         UiMessage::DismissImportProgress => {
-            r.import_progress_modal_open = false;
-            r.import_progress.clear();
+            r.media.import_progress_modal_open = false;
+            r.media.import_progress.clear();
         }
         UiMessage::DismissMissingPlugins => {
             r.missing_plugins.dismiss();

@@ -50,7 +50,7 @@ const LIST_MAX_HEIGHT: f32 = 260.0;
 /// the modal isn't open or has nothing to track, so the caller can stack
 /// it unconditionally.
 pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> {
-    if !r.relink.modal_open || r.relink.modal_targets.is_empty() {
+    if !r.media.relink.modal_open || r.media.relink.modal_targets.is_empty() {
         return Space::new()
             .width(Length::Fixed(0.0))
             .height(Length::Fixed(0.0))
@@ -74,10 +74,11 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
     // removed from the pool while the modal was open is dropped from the
     // list (nothing left to relink onto).
     let rows: Vec<(&PoolAsset, bool)> = r
+        .media
         .relink
         .modal_targets
         .iter()
-        .filter_map(|&id| r.pool.asset(id).map(|a| (a, r.relink.is_in_flight(id))))
+        .filter_map(|&id| r.media.pool.asset(id).map(|a| (a, r.media.relink.is_in_flight(id))))
         .collect();
 
     let total = rows.len();
@@ -129,7 +130,7 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
     .spacing(0);
 
     // A folder search running on its worker: where, and how far it got.
-    if let Some(scan) = r.relink.scan.as_ref() {
+    if let Some(scan) = r.media.relink.scan.as_ref() {
         let dirs = scan.control.dirs_scanned();
         body = body.push(Space::new().height(8));
         body = body.push(
@@ -144,7 +145,7 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
     }
 
     // Surface the most recent relink failure, if any, under the note.
-    if let Some(err) = r.relink.last_error.as_deref() {
+    if let Some(err) = r.media.relink.last_error.as_deref() {
         body = body.push(Space::new().height(8));
         body = body.push(
             text(err)
@@ -168,7 +169,7 @@ pub(crate) fn view_relink_dialog_overlay(r: &Resonance) -> Element<'_, Message> 
 
     // While a folder search runs, its slot becomes the Cancel action (and
     // a second search can't be started).
-    let search_btn = if r.relink.scanning() {
+    let search_btn = if r.media.relink.scanning() {
         button(text("Cancel search").size(13).color(theme::TEXT_1))
             .on_press(Message::Relink(RelinkMessage::CancelScan))
             .padding([8, 18])

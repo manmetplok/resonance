@@ -157,16 +157,16 @@ pub fn handle(r: &mut Resonance, m: RelinkMessage) -> Task<Message> {
             }
         }
         RelinkMessage::ScanFinished(token, found) => return finish_batch_relink(r, token, found),
-        RelinkMessage::CancelScan => r.relink.cancel_scan(),
+        RelinkMessage::CancelScan => r.media.relink.cancel_scan(),
         RelinkMessage::Imported(result) => apply_import(r, result),
         RelinkMessage::ShowModal => {
             // Snapshot the currently-missing assets so the modal can show
             // just-relinked rows as resolved instead of making them vanish.
             let targets: Vec<resonance_audio::types::AssetId> =
-                r.pool.missing_assets().map(|a| a.id).collect();
-            r.relink.open_modal(targets);
+                r.media.pool.missing_assets().map(|a| a.id).collect();
+            r.media.relink.open_modal(targets);
         }
-        RelinkMessage::DismissModal => r.relink.close_modal(),
+        RelinkMessage::DismissModal => r.media.relink.close_modal(),
     }
     Task::none()
 }
@@ -218,21 +218,21 @@ pub(crate) fn start_relink(
 ) -> Task<Message> {
     // Only relink an asset that is genuinely missing; ignore a stale
     // request for one that has since been resolved.
-    match r.pool.asset(asset_id) {
+    match r.media.pool.asset(asset_id) {
         Some(a) if a.missing => {}
         _ => return Task::none(),
     }
-    if r.relink.is_in_flight(asset_id) {
+    if r.media.relink.is_in_flight(asset_id) {
         return Task::none();
     }
     let Some(project_dir) = r.io.project_path.clone() else {
-        r.relink.last_error =
+        r.media.relink.last_error =
             Some("Cannot relink: the project has not been saved to a folder yet.".into());
         return Task::none();
     };
 
-    r.relink.in_flight.insert(asset_id);
-    r.relink.last_error = None;
+    r.media.relink.in_flight.insert(asset_id);
+    r.media.relink.last_error = None;
     spawn_import(asset_id, src_path, project_dir, r.sample_rate)
 }
 
@@ -244,11 +244,11 @@ pub(crate) fn start_relink(
 /// ([`finish_batch_relink`]); nothing is imported before that (review
 /// VIEW-29 / UPD-10). A second pick while a walk runs is ignored.
 pub(crate) fn start_batch_relink(r: &mut Resonance, folder: &Path) -> Task<Message> {
-    if r.relink.scanning() {
+    if r.media.relink.scanning() {
         return Task::none();
     }
     if r.io.project_path.is_none() {
-        r.relink.last_error =
+        r.media.relink.last_error =
             Some("Cannot relink: the project has not been saved to a folder yet.".into());
         return Task::none();
     }
@@ -258,14 +258,14 @@ pub(crate) fn start_batch_relink(r: &mut Resonance, folder: &Path) -> Task<Messa
     }
 
     let control = Arc::new(ScanControl::default());
-    let token = r.relink.next_scan_token;
-    r.relink.next_scan_token += 1;
-    r.relink.scan = Some(RelinkScan {
+    let token = r.media.relink.next_scan_token;
+    r.media.relink.next_scan_token += 1;
+    r.media.relink.scan = Some(RelinkScan {
         token,
         folder: folder.to_path_buf(),
         control: control.clone(),
     });
-    r.relink.last_error = None;
+    r.media.relink.last_error = None;
 
     let folder = folder.to_path_buf();
     Task::perform(
@@ -284,9 +284,9 @@ pub(crate) fn start_batch_relink(r: &mut Resonance, folder: &Path) -> Task<Messa
 /// filenames. An asset already being relinked is skipped, as is one whose
 /// original path has no filename component (shouldn't happen).
 fn wanted_assets(r: &Resonance) -> Vec<(resonance_audio::types::AssetId, String)> {
-    r.pool
+    r.media.pool
         .missing_assets()
-        .filter(|a| !r.relink.is_in_flight(a.id))
+        .filter(|a| !r.media.relink.is_in_flight(a.id))
         .filter_map(|a| asset_file_name(a).map(|name| (a.id, name)))
         .collect()
 }
@@ -302,7 +302,7 @@ fn finish_batch_relink(
     token: u64,
     found: Option<HashMap<String, PathBuf>>,
 ) -> Task<Message> {
-    let Some(scan) = r.relink.scan.take_if(|s| s.token == token) else {
+    let Some(scan) = r.media.relink.scan.take_if(|s| s.token == token) else {
         return Task::none();
     };
     let Some(found) = found else {
@@ -316,7 +316,7 @@ fn finish_batch_relink(
     let mut tasks = Vec::new();
     for (asset_id, name) in wanted_assets(r) {
         if let Some(src) = found.get(&name.to_ascii_lowercase()) {
-            r.relink.in_flight.insert(asset_id);
+            r.media.relink.in_flight.insert(asset_id);
             tasks.push(spawn_import(
                 asset_id,
                 src.clone(),
@@ -326,7 +326,7 @@ fn finish_batch_relink(
         }
     }
     if tasks.is_empty() {
-        r.relink.last_error = Some(format!(
+        r.media.relink.last_error = Some(format!(
             "No missing files were found in {}.",
             scan.folder.display()
         ));
@@ -385,12 +385,12 @@ fn spawn_import(
 fn apply_import(r: &mut Resonance, result: Result<PoolImportOutcome, RelinkError>) {
     match result {
         Ok(outcome) => {
-            r.relink.in_flight.remove(&outcome.asset_id);
+            r.media.relink.in_flight.remove(&outcome.asset_id);
             apply_relinked_asset(r, outcome);
         }
         Err(err) => {
-            r.relink.in_flight.remove(&err.asset_id);
-            r.relink.last_error = Some(format!("Relink failed for {}: {}", err.path, err.reason));
+            r.media.relink.in_flight.remove(&err.asset_id);
+            r.media.relink.last_error = Some(format!("Relink failed for {}: {}", err.path, err.reason));
         }
     }
 }
@@ -402,7 +402,7 @@ fn apply_import(r: &mut Resonance, result: Result<PoolImportOutcome, RelinkError
 /// [`AudioCommand::LoadClipFromWav`] for every clip that references the
 /// asset so the engine memory-maps the now-present file.
 pub(crate) fn apply_relinked_asset(r: &mut Resonance, outcome: PoolImportOutcome) {
-    let Some(asset) = r.pool.asset_mut(outcome.asset_id) else {
+    let Some(asset) = r.media.pool.asset_mut(outcome.asset_id) else {
         // The asset was removed (e.g. deleted from the pool) while the
         // import ran — nothing to relink onto. The WAV on disk is
         // harmless; it'll be ignored.

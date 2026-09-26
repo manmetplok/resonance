@@ -157,7 +157,7 @@ impl crate::Resonance {
             stack![base, export_dialog::view_export_dialog_overlay(self)].into()
         } else if self.modals.import_dialog.is_some() {
             stack![base, import_dialog::view_import_dialog_overlay(self)].into()
-        } else if self.import_progress_modal_open {
+        } else if self.media.import_progress_modal_open {
             // Audio-import transcode-progress modal (doc #175, todo #606):
             // shown while the engine copies / transcodes the selected audio
             // files into the project folder. Dismissed once all files settle.
@@ -177,7 +177,7 @@ impl crate::Resonance {
                 missing_plugins_dialog::view_missing_plugins_overlay(self)
             ]
             .into()
-        } else if self.relink.modal_open && !self.relink.modal_targets.is_empty() {
+        } else if self.media.relink.modal_open && !self.media.relink.modal_targets.is_empty() {
             // Missing-files relink modal (doc #175, todo #607): surfaced on
             // load when the project references audio that's gone, and
             // re-openable from the Pool tab's inline `relink` chip.
@@ -218,7 +218,7 @@ impl crate::Resonance {
         // left edge as a peer of the track headers + timeline, so browsing
         // and auditioning never obscures the arrangement. Hidden by default;
         // toggled from the "Media" chrome button / the panel's collapse caret.
-        let main = if self.browser.visible {
+        let main = if self.media.browser.visible {
             row![
                 browser::view_browser_panel(self),
                 track_headers,

@@ -98,7 +98,7 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     // The browser panel offsets the arrange-area x of the whole column;
     // the per-row context-menu anchor (todo #581) is baked into each row's
     // `OpenTrackMenu` message, so a browser toggle must rebuild the tree.
-    r.browser.visible.hash(&mut h);
+    r.media.browser.visible.hash(&mut h);
     // Manual track-list virtualization (`build_track_headers`) drops
     // tracks below `scroll_offset_y + viewport_height` from the widget
     // tree; the cache must invalidate on window resize so previously-
@@ -417,7 +417,7 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                     // cursor position, so the menu anchors a fixed inset into
                     // the row instead. The y is clamped so a menu opened near
                     // the bottom edge stays fully on screen.
-                    let menu_x = if r.browser.visible {
+                    let menu_x = if r.media.browser.visible {
                         theme::BROWSER_WIDTH
                     } else {
                         0.0

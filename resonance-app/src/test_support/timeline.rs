@@ -170,7 +170,7 @@ impl Resonance {
     /// inputs (the dragged asset, cursor, and resolved drop target).
     #[doc(hidden)]
     pub fn test_drag_placement(&self) -> Option<&crate::state::DragPlacement> {
-        self.drag_placement.as_ref()
+        self.media.drag_placement.as_ref()
     }
 
     /// Test-only: install an in-flight drag directly, standing in for the
@@ -178,7 +178,7 @@ impl Resonance {
     /// render a deterministic drag state without simulating the gesture.
     #[doc(hidden)]
     pub fn test_set_drag_placement(&mut self, drag: crate::state::DragPlacement) {
-        self.drag_placement = Some(drag);
+        self.media.drag_placement = Some(drag);
     }
 
     /// Test-only: build the shared arrange-row layout exactly as the

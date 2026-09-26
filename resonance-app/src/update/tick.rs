@@ -65,7 +65,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || r.transport.recording
         || meters_unsettled(r)
         || input_monitoring_active(r)
-        || r.browser.audition.playing.is_some()
+        || r.media.browser.audition.playing.is_some()
         || r.freeze.any_in_flight()
         || r.io.bouncing
         || r.io.loading
@@ -73,7 +73,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || export_render_in_flight(r)
         || (r.mixer.reference_panel_open && !r.reference.entries.is_empty())
         || r.plugin_catalog.plugin_scan_in_progress
-        || r.relink.scanning()
+        || r.media.relink.scanning()
         || !r.control.pending_tracks.is_empty()
         || r.control.jobs.has_live_offline_measure()
 }
@@ -256,7 +256,7 @@ fn decay_level(level: &mut f32) {
 fn peaks_have_consumers(r: &Resonance) -> bool {
     r.transport.playing
         || r.transport.recording
-        || r.browser.audition.playing.is_some()
+        || r.media.browser.audition.playing.is_some()
         || input_monitoring_active(r)
         || meters_unsettled(r)
 }
@@ -415,7 +415,7 @@ fn arrange_pointer_drag_active(r: &Resonance) -> bool {
         || i.midi_clip_drag.is_some()
         || i.midi_clip_trim.is_some()
         || r.transport.dragging_loop.is_some()
-        || r.drag_placement.is_some()
+        || r.media.drag_placement.is_some()
 }
 
 /// Quantise a BPM to the `{:.1}` precision the transport field displays,

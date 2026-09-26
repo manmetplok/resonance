@@ -126,7 +126,7 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
     // (see `update.rs::arrange_audio_file_drop`). Styled as a ghost button
     // matching the sibling MIDI Import… button on the right.
     let media_toggle: Element<'_, Message> = if matches!(r.view_mode, ViewMode::Arrange) {
-        let active = r.browser.visible;
+        let active = r.media.browser.visible;
         let media_btn = button(
             text("Media")
                 .size(12)

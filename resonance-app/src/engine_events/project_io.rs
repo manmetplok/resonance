@@ -273,10 +273,10 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
             // missing-files relink modal so the user can locate them (doc
             // #175, todo #607). Undo/redo replays skip this — reopening the
             // modal on every history step would be noise.
-            if r.pool.has_missing() {
+            if r.media.pool.has_missing() {
                 let targets: Vec<resonance_audio::types::AssetId> =
-                    r.pool.missing_assets().map(|a| a.id).collect();
-                r.relink.open_modal(targets);
+                    r.media.pool.missing_assets().map(|a| a.id).collect();
+                r.media.relink.open_modal(targets);
             }
 
             // A control-initiated `project.new` (doc #265, todo #1151)

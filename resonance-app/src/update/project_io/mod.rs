@@ -376,7 +376,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.presets.pending_plugin_param_overrides.clear();
             r.freeze.reset();
             // Placements queued against the old project (code review UPD-04).
-            r.pool_import.clear();
+            r.media.pool_import.clear();
             r.dirty = false;
             let _ = r.engine.send(AudioCommand::ClearAll);
             r.io.has_active_project = true;
