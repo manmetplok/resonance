@@ -31,7 +31,7 @@ use resonance_audio::types::TrackId;
 pub struct UndoSnapshot {
     /// Declarative project state in the exact shape the replay path
     /// expects. `plugin_states` is populated from
-    /// `Resonance::plugin_state_cache` at snapshot time; missing entries
+    /// `Resonance::plugin_mirror.state_cache` at snapshot time; missing entries
     /// cause the restore path to reinstantiate the plugin with default
     /// internal state and rely on the replayed parameter values.
     pub project: LoadedProject,
@@ -126,7 +126,7 @@ impl crate::Resonance {
     ///
     /// Parameter values come from live GUI state (via
     /// `build_project_file`), so they are always exact. Opaque CLAP state
-    /// blobs come from `plugin_state_cache`, which refreshes at natural
+    /// blobs come from `plugin_mirror.state_cache`, which refreshes at natural
     /// resting points — plugin add, editor close, project save — and is
     /// therefore slightly stale between those points.
     ///
@@ -161,15 +161,15 @@ impl crate::Resonance {
             }
         };
         for track in &self.registry.tracks {
-            collect(&track.plugins, &mut plugin_states, &self.plugin_state_cache);
+            collect(&track.plugins, &mut plugin_states, &self.plugin_mirror.state_cache);
         }
         for bus in &self.registry.busses {
-            collect(&bus.plugins, &mut plugin_states, &self.plugin_state_cache);
+            collect(&bus.plugins, &mut plugin_states, &self.plugin_mirror.state_cache);
         }
         collect(
             &self.master_plugins,
             &mut plugin_states,
-            &self.plugin_state_cache,
+            &self.plugin_mirror.state_cache,
         );
 
         UndoSnapshot {

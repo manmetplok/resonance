@@ -70,9 +70,9 @@ fn project_plugin(r: &Resonance, p: &crate::state::PluginSlotState) -> ProjectPl
 /// whose `.clap` is missing is absent from `engine_states` — and used to
 /// be absent from the written bundle too, which is what destroyed its
 /// opaque state on the first Save As (ba doc #275, P5). The fallback
-/// comes from [`Resonance::plugin_state_cache`], seeded from the project
-/// file at load time, so what gets written back is byte-for-byte what was
-/// read.
+/// comes from `Resonance::plugin_mirror.state_cache`, seeded from the
+/// project file at load time, so what gets written back is byte-for-byte
+/// what was read.
 ///
 /// Only blobs for slots that are still in a chain are written: a plugin
 /// the user removed has already been dropped from the cache, and this
@@ -96,7 +96,7 @@ pub fn plugin_states_for_save(
             if reported.contains(&slot.instance_id) {
                 continue;
             }
-            if let Some(blob) = r.plugin_state_cache.get(&slot.instance_id) {
+            if let Some(blob) = r.plugin_mirror.state_cache.get(&slot.instance_id) {
                 out.push((slot.instance_id, blob.to_vec()));
             }
         }
@@ -251,7 +251,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
     // Same edge discipline as the sends above, with one extra end to
     // check: a route names a *plugin instance* as well as a source, and
     // the plugin can be anywhere — a track chain, a bus chain, or master.
-    // `plugin_index` is precisely the "every live plugin instance,
+    // `plugin_mirror.index` is precisely the "every live plugin instance,
     // wherever it lives" view, so it is the membership test.
     //
     // Writing a dangling route out is durable damage for the same reason
@@ -267,7 +267,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             .routes
             .iter()
             .filter(|route| {
-                r.plugin_index.contains_key(&route.plugin) && live_source(route.source)
+                r.plugin_mirror.index.contains_key(&route.plugin) && live_source(route.source)
             })
             .map(|route| {
                 let (source_kind, source_id) = send_source_tag(route.source);

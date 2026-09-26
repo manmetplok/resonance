@@ -21,7 +21,7 @@
 //!
 //! No error, no badge, no prompt at any point. The fix keeps both halves
 //! of the plugin's saved state app-side across the load — the opaque CLAP
-//! blob in `plugin_state_cache`, the parameter values in
+//! blob in `plugin_mirror.state_cache`, the parameter values in
 //! `pending_plugin_param_overrides` — and every path that writes project
 //! state reads them back out.
 //!

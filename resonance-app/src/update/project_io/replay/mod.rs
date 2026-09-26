@@ -239,7 +239,7 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     r.midi_clips.clear();
     r.registry.next_track_order = 0;
     r.registry.next_bus_order = 0;
-    r.plugin_index.clear();
+    r.plugin_mirror.index.clear();
     // Drop the previous project's send graph. `ClearAll` empties the
     // engine's aux-send table without echoing an `AuxSendRemoved` per
     // send, so the mirror has to be emptied here or the loaded project
@@ -421,7 +421,7 @@ fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
 /// target: a route onto a plugin this project no longer contains is
 /// dropped rather than replayed.
 ///
-/// Derived from the project file rather than from `r.plugin_index`
+/// Derived from the project file rather than from `r.plugin_mirror.index`
 /// because the index is only rebuilt in `finalize_plugin_chains`, after
 /// this runs — and because the file is the thing being validated.
 fn saved_plugin_instance_ids(project: &ProjectFile) -> std::collections::HashSet<u64> {
@@ -648,7 +648,7 @@ fn replay_vocal(
 }
 
 /// Re-impose the saved plugin-chain order on every track, bus, and the
-/// master chain, then rebuild the `plugin_index` side-index. Sorting in
+/// master chain, then rebuild the `plugin_mirror.index` side-index. Sorting in
 /// place is cheap (Rust's sort is adaptive — already-sorted slices are O(n))
 /// and safely no-ops in the common case where placeholders + events landed
 /// in the expected order.
