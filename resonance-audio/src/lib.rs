@@ -15,6 +15,14 @@
 // of resonance-app) still lints unused imports and dead code exactly as
 // before, so silencing the two lints in the featureless build loses
 // nothing.
+//
+// Why crate-level and not per-item `#[cfg_attr(..)]` (code review
+// FU-H3a, re-measured): dropping this line yields 68 warning sites
+// naming 150-odd items — 104 names in the `engine`/`mixer`/`clap_host`
+// re-export lists, ~45 functions / methods / fields only tests reach,
+// and the two harnesses' whole method sets. Gating each would put a
+// feature attribute on most re-export lists in the crate for no lint
+// that the feature-on builds don't already run.
 #![cfg_attr(not(feature = "test-internals"), allow(dead_code, unused_imports))]
 pub(crate) mod bypass;
 pub(crate) mod clap_host;

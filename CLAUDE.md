@@ -21,12 +21,12 @@ never per-project — see the plugin's README before adding one.
 ## Tests
 
 Run the suite with `./scripts/run-tests.py` (add `-p <crate>` to narrow it).
-Plain `cargo test` works too, but it walks its ~390 test binaries one at a
+Plain `cargo test` works too, but it walks its ~370 test binaries one at a
 time; the script builds with cargo and runs them concurrently, which is 24s
 against 157s for the same tests. It also launches each binary from its own
 crate root, which the golden-image tests need.
 
-Four things to know before adding tests (background in ba doc #285):
+Five things to know before adding tests (background in ba doc #285):
 
 - **Build the app with `Resonance::new_for_test()`**, not `Resonance::new()`.
   The real constructor opens an audio stream, probes devices, loads whatever

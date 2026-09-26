@@ -3,8 +3,8 @@
 
 `cargo test` walks its test targets **serially** — it parallelises the tests
 inside one binary, but runs the binaries one after another. This workspace has
-~620 of them, so that walk is most of the wall clock: 237 s serially against
-67 s at `-j8` for the identical set (ba doc #285 §3).
+~370 of them, so that walk is most of the wall clock: at ~620 it was 237 s
+serially against 67 s at `-j8` for the identical set (ba doc #285 §3).
 
 So this script does what cargo won't: build the test binaries with cargo, then
 run them concurrently. Two details matter and are the reason this is a script
