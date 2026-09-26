@@ -67,7 +67,7 @@ pub use engine::{MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB};
 /// The pure per-file import step behind `ImportAudioToPool`, and its
 /// result. The app's relink flow runs it directly on a worker to re-import
 /// a missing asset under its existing id.
-pub use engine::{import_one_to_pool, PoolImportOutcome};
+pub use engine::{import_one_to_pool, PoolImportOutcome, POOL_IMPORT_CANCELLED};
 pub use midi_hardware::MidiDeviceInfo;
 pub use types::*;
 
