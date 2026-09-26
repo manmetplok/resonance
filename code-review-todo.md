@@ -34,7 +34,7 @@ master and updates this table. Agents do **not** edit this file.
 | V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | merged | 0a8cf2fa |
 | V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | merged | 47e86611 |
 | M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | merged | a7660033 |
-| M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | in progress | |
+| M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | merged | 28bf0279 |
 | V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | in progress | |
 | M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
@@ -55,7 +55,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-B3** (low) vocal WAVs are never garbage-collected after section/placement delete.
 - [ ] **FU-F2a** (low) carried CLAP note events wait for the instrument's next `process()`; if the tail sub-block skips that instrument the note is late, and a carried note-on can land after a Stop panic.
 - [ ] **FU-F2b** (low) ENG-03 salvage rewrites the WAV header in place — may fail on CoW filesystems (btrfs) when the disk is full; then no clip.
-- [ ] **FU-F2c** (low) ENG-12 should reuse the new `activate_and_start()` in `clap_host/state.rs`; `restart()` still bails on inactive instances.
+- [x] **FU-F2c** — fixed (M8); (low) ENG-12 should reuse the new `activate_and_start()` in `clap_host/state.rs`; `restart()` still bails on inactive instances.
 - [ ] **FU-E1** (medium) `update/control/import_midi.rs:275` rounds imported clip length with `time_sig_num * TICKS_PER_QUARTER_NOTE` — wrong for x/8 meters; use `tempo_map.bar_len_ticks_at(bar)`.
 - [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
 - [ ] **FU-G1** (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
@@ -76,9 +76,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-D3** (low) engine `handle_set_bpm` clamps 20..999 and passes NaN; use `sanitize_bpm` there too.
 - [ ] **FU-D4** (low) MIDI-imported tempo points > 300 BPM are now clamped at bar-table rebuild.
 - [ ] **FU-D5** (low, test hygiene) `track_preset_save_prompt` golden reads the real user preset dir (cf. STATE-14).
-- [ ] **FU-M1a** (medium, needs macOS) Cocoa changes for PLG-01/03 were never compiled: run `cargo check` + `editor_open_cocoa`, `cocoa-plugin-gui editor_size`, `modal_reentrancy` with `-- --ignored` on a Mac.
-- [ ] **FU-M1b** (low) now that `on_main_thread` runs, a plugin reporting latency while inactive triggers `restart()` on an inactive instance → spurious "failed to reactivate" error; narrow double-restart race.
-- [ ] **FU-M1c** (low) Wayland re-map waits ≤200 ms for configure then paints anyway (Hyprland quirk) — could be a protocol error on strict compositors; button held across hide stays pressed in egui.
+- [ ] **FU-M1a** (medium, needs macOS) Cocoa changes for PLG-01/03/05 (+ M8's async destroy) were never compiled: run `cargo check` + `editor_open_cocoa`, `cocoa-plugin-gui editor_size`, `modal_reentrancy` with `-- --ignored` on a Mac.
+- [x] **FU-M1b** — fixed (M8); (low) now that `on_main_thread` runs, a plugin reporting latency while inactive triggers `restart()` on an inactive instance → spurious "failed to reactivate" error; narrow double-restart race.
+- [x] **FU-M1c** — fixed (M8); (low) Wayland re-map waits ≤200 ms for configure then paints anyway (Hyprland quirk) — could be a protocol error on strict compositors; button held across hide stays pressed in egui.
 - [ ] **FU-M3a** (low) MIX-09: >32-ch device whose capped request is rejected now fails to open input (was: crash-prone).
 - [ ] **FU-M3b** (low) MIX-06: every lock-contended block causes a flush on the next block → sustained notes can be cut during heavy UI edits.
 - [ ] **FU-M3c** (low) MIX-05: muted key sources keep rendering (CPU cost while muted).
@@ -103,6 +103,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-V2b** (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
 - [ ] **FU-V2c** (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
 - [ ] **FU-V2d** (low) a vocal render that finishes after its placement moved into a different tempo region is placed right but rendered at the old tempo.
+- [ ] **FU-M8a** (low) with async Cocoa destroy, `editor_size`/`editor_open_cocoa` teardown watchdogs pass trivially — make them wait for the main-thread teardown.
+- [ ] **FU-M8b** (low) `bounce/render.rs` ignores `reset_processing()`'s bool → a plugin that stays dead after export is silent without an error.
+- [ ] **FU-M8c** (low) Cocoa runtime still lacks the PLG-10 bounded `Editor::new` and the held-button release across hide.
 
 ## How to use this file
 
@@ -1255,7 +1258,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Wrap each per-file `import_one_to_pool` call in `run_pool_import` with `std::panic::catch_unwind` (or `run_supervised`) and turn a panic into `ImportFailed { reason: "decoder panicked: …" }`, so the batch continues. Optionally wrap the whole thread body too.
 - **Verification:** `run_pool_import` is generic over `emit`, but `import_one_to_pool` is not injectable. Add a seam (a closure parameter, or a test hook) so a test can make one job panic, then assert the events are `Queued×N`, `ImportFailed` for the panicking job, and `Done` for the others.
 
-### [ ] ENG-10 — Plugins are activated with `min_frames_count = 32`, but loop-seam sub-blocks call `process()` with 1–31 frames
+### [x] ENG-10 — Plugins are activated with `min_frames_count = 32`, but loop-seam sub-blocks call `process()` with 1–31 frames — fixed
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -1275,7 +1278,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Snapshot `(clip_id, Arc/clone of source, tuning)` under a read lock, compute the retunes with no lock held, then take the write lock briefly to install results whose tuning is unchanged. Skip clips whose cache is already valid, e.g. with a tuning-generation/hash field on `AudioClip`.
 - **Verification:** Unit test: after `ensure_tuning_caches`, calling it again performs no rebuild (return count 0 when a validity key is added); a concurrency test asserting `clips.try_read()` succeeds while the retune runs (with a long synthetic clip).
 
-### [ ] ENG-12 — `reset_processing` ignores a failed `start_processing`, after which `process()` runs on a non-processing plugin
+### [x] ENG-12 — `reset_processing` ignores a failed `start_processing`, after which `process()` runs on a non-processing plugin — fixed
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -1339,7 +1342,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** On Hide, attach a null buffer and commit (`wl_surface.attach(None,0,0); commit()`) to unmap. On Show, force a redraw, which re-maps with a fresh buffer. For the EGL path, destroy and recreate the `wl_egl_window`, or at least only swap while visible. Clear `pending_events` (and reset `InputState`'s pointer position) on Hide. Don't set `visible = true` in `configure`; paint the first frame only after `Command::Show`.
 - **Verification:** By hand: extend the ignored `the_editor_opens_resizes_and_closes` in `plugins/resonance-gate/tests/editor_open.rs` to call `hide()` and check with `hyprctl clients -j` that the app-id window is gone, then `show()` and check that it is back. Also run `cargo test -p wayland-plugin-gui --test editor_size -- --ignored --nocapture`.
 
-### [ ] PLG-05 — macOS: quitting with an editor open deadlocks the engine thread's `Editor::destroy` against the main thread's `AudioEngine::shutdown` busy-wait
+### [x] PLG-05 — macOS: quitting with an editor open deadlocks the engine thread's `Editor::destroy` against the main thread's `AudioEngine::shutdown` busy-wait — fixed (Cocoa, uncompiled)
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** concurrency
@@ -1349,7 +1352,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Close all plugin GUIs on the main thread before calling `shutdown()`, e.g. with a new `AudioCommand::CloseAllEditors` that the app awaits by pumping, or by having the app drop the handles itself. Alternatively, make `Editor::destroy` on Cocoa asynchronous when the caller isn't the main thread: `exec_async` the teardown and return. The registry id makes that safe, since a late teardown finds nothing. Either way, restate the invariant in `cocoa-plugin-gui/src/lib.rs` as a checked rule.
 - **Verification:** Add a harness=false ignored test in `cocoa-plugin-gui/tests/`: the main thread creates an editor, a worker thread calls `destroy()` while the main thread sleeps 200 ms without pumping; assert the destroy completes (async variant) or document the expected block. Run by hand on macOS with `-- --ignored`.
 
-### [ ] PLG-06 — A panic in the extra-state saver leaves `params_gen` odd forever, which permanently disables both the state-load re-sync and the editor push-back
+### [x] PLG-06 — A panic in the extra-state saver leaves `params_gen` odd forever, which permanently disables both the state-load re-sync and the editor push-back — fixed
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** error-handling
@@ -1359,7 +1362,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Use an RAII guard: `let _publish = self.shared.publish_guard();`, whose `Drop` calls `end_param_publish`. Optionally also wrap `saver.load` in `catch_unwind` so the params half still gets announced.
 - **Verification:** Add a headless test to `resonance-plugin/tests/state_race.rs` with a saver that panics on `load`. Call bridge `state.load` through clack's catch, then assert that `param_publish_gen()` is even and that a subsequent editor-side param write is mirrored into `shared` after one `process()` block.
 
-### [ ] PLG-07 — `HostHandle`'s liveness check is check-then-use, so the "safe to leak into an editor thread that outlives the instance" guarantee doesn't hold under concurrency
+### [x] PLG-07 — `HostHandle`'s liveness check is check-then-use, so the "safe to leak into an editor thread that outlives the instance" guarantee doesn't hold under concurrency — fixed
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** unsafe/ffi
@@ -1369,7 +1372,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Guard calls with a reader count: `alive` becomes an `AtomicUsize` "in-flight" counter plus a retired bit, and `retire()` spins until in-flight reaches 0 after setting the bit. Or take a `parking_lot::RwLock<bool>` read lock around each call, with `retire` taking the write lock. Neither is used from the audio thread in a way that would block it: `retire` only happens after deactivate. Otherwise, reword the docs to forbid use after the editor is destroyed.
 - **Verification:** Add a headless test in `resonance-plugin/tests/` with a fake `clap_host` whose `request_callback` sleeps. Thread A calls `request_callback` in a loop, thread B calls `retire()` and then poisons the fake host. Assert that no call lands after `retire()` returns, and run it under Miri/TSan if available.
 
-### [ ] PLG-08 — `deactivate`/`activate` unconditionally copy `shared` into the plugin, reverting editor edits that the push-back hasn't mirrored yet
+### [x] PLG-08 — `deactivate`/`activate` unconditionally copy `shared` into the plugin, reverting editor edits that the push-back hasn't mirrored yet — fixed
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** concurrency
@@ -1379,7 +1382,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `deactivate`, run the same push-back (plugin → shared, guarded by `params_dirty` / `params_gen` exactly as in `process`) before the shared → plugin copy, and copy only when `params_dirty` is set. In `activate`, likewise only copy when `params_dirty` is set, or run a push-back first. That keeps the #1376 fix, which exists for a load that landed while active.
 - **Verification:** Add a headless test in `resonance-plugin/tests/clap_bridge_params_state.rs`: activate, run one block, write a param directly on the plugin's `Arc<Params>` (the editor path), deactivate, and assert the value survives both deactivate and the next activate.
 
-### [ ] PLG-09 — More than 8 output ports is only caught by a `debug_assert`; in release every `process()` panics
+### [x] PLG-09 — More than 8 output ports is only caught by a `debug_assert`; in release every `process()` panics — fixed
 - **Severity:** low
 - **Confidence:** high
 - **Category:** maintainability
@@ -1389,7 +1392,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `new_shared`, return `PluginError::Message("at most 8 output ports are supported")` when `output_ports.len() > MAX_OUTPUT_PORTS`, with the constant moved to `shared.rs`.
 - **Verification:** Add a headless test in `resonance-plugin/tests/process_abi.rs`: a test plugin with 9 ports fails `new_shared` with that message.
 
-### [ ] PLG-10 — The Wayland ready handshake in `Editor::new` has no bound, unlike teardown
+### [x] PLG-10 — The Wayland ready handshake in `Editor::new` has no bound, unlike teardown — fixed
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** concurrency
