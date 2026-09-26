@@ -53,6 +53,13 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Will be set by the caller (OpenPathSelected); an undo/redo's caller
     // puts this one back, which the freeze restore needs meanwhile.
     let live_project_path = r.io.project_path.take();
+    // An undo/redo never lowers the derived-clip id counter (ARCH-01
+    // A-6); `load_from_project` resets it, so remember it here.
+    let derived_counter_floor = r
+        .io
+        .pending_undo_extras
+        .is_some()
+        .then_some(r.compose.next_derived_clip_id);
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
     // before re-installing entries from the project. Without this,
@@ -109,7 +116,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     replay_midi_clips(r, project, &loaded);
 
     // Rebuild vocal-derived state from the restored clips.
-    replay_vocal(r, project, &loaded);
+    replay_vocal(r, project, &loaded, derived_counter_floor);
 
     // Re-impose the saved plugin-slot order and refresh the side-index.
     finalize_plugin_chains(r, &saved_plugin_order);
@@ -670,14 +677,16 @@ fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedPr
 /// audio clips: the `derived_clips` section→clip map (used by the compose
 /// view) and the vocal-audio clip map (so the next Generate Vocal correctly
 /// tears down old clips rather than stacking on top of them).
-fn replay_vocal(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedProject) {
-    // Drum lanes carry no `lane_generators` entry, so the rebuild needs
-    // the drum-track set to claim their clips too — without it the first
-    // `generate.drums` after a load duplicates every drum clip instead of
-    // replacing it (see `rebuild_derived_clips`).
-    let drum_track_ids = crate::compose::ComposeState::drum_track_ids(&r.registry.tracks);
-    r.compose
-        .rebuild_derived_clips(&r.midi_clips, &r.tempo_map, &drum_track_ids);
+fn replay_vocal(
+    r: &mut Resonance,
+    project: &ProjectFile,
+    loaded: &LoadedProject,
+    derived_counter_floor: Option<u64>,
+) {
+    // The saved map (ARCH-01 A-6), keeping only entries whose clip this
+    // replay installed — `ClearAll` wiped anything else. A legacy file
+    // gets the positional rebuild (`rebuild_derived_clips`).
+    r.restore_derived_clips(project, false, derived_counter_floor);
 
     // Rebuild the vocal audio clip map so subsequent regen tear-downs
     // find the loaded clips and clean them up — otherwise the next

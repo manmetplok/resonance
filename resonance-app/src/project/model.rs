@@ -199,6 +199,16 @@ pub struct ProjectFile {
     /// reload (ARCH-01 A1-2 9a).
     #[serde(default)]
     pub chord_track: ProjectChordTrack,
+    /// The compose model's section→clip map (`ComposeState::derived_clips`)
+    /// verbatim, sorted by key (ARCH-01 A-6). `None` on a project saved
+    /// before this field existed: the load then recovers the map by
+    /// position (`ComposeState::rebuild_derived_clips`). `Some` is
+    /// authoritative — an entry whose clip is not in `midi_clips` (an
+    /// install whose engine echo was pending, or a clip the user deleted)
+    /// is kept by a diff-replay undo and dropped by a full replay; see
+    /// `Resonance::restore_derived_clips`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_clips: Option<Vec<crate::project::sections::ProjectDerivedClip>>,
 }
 
 /// An empty project at the current format version with neutral
@@ -248,6 +258,7 @@ impl Default for ProjectFile {
             performance: ProjectPerformance::default(),
             take_groups: Vec::new(),
             chord_track: ProjectChordTrack::default(),
+            derived_clips: None,
         }
     }
 }
@@ -767,8 +778,7 @@ pub struct ProjectPlugin {
 /// `serde_json`-based `same_state` saw (NaN serializes to `null`, and
 /// `null == null`) — instead of the `NaN != NaN` a derived impl would give,
 /// which would otherwise make every gesture look like a change for as long
-/// as such a plugin stays loaded. Same idiom `extras_equal` already uses for
-/// `reference.offset_db` / `trim_db`.
+/// as such a plugin stays loaded.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectPluginParam {
     pub id: u32,

@@ -52,7 +52,7 @@ use super::serialize::build_project_file;
 pub fn try_diff_replay(
     r: &mut Resonance,
     target: &LoadedProject,
-    extras: &UndoExtras,
+    _extras: &UndoExtras,
 ) -> bool {
     let current = build_project_file(r);
     let target_file = &target.file;
@@ -115,7 +115,7 @@ pub fn try_diff_replay(
     apply_midi_clips(r, &current, target_file, &target.midi_notes);
 
     // -- Compose state (definitions, placements, drum groups, lyrics) --
-    apply_compose(r, target_file, extras);
+    apply_compose(r, target_file);
     apply_track_groups(r, target_file);
     apply_markers(r, target_file);
 
@@ -198,7 +198,7 @@ pub fn try_diff_replay(
     // Mirrors the tail end of `replay_loaded_project` so the Compose tab
     // shows the right vocal audio clips after the restore. The derived
     // MIDI clip map is *not* rebuilt here: `apply_compose` restored the
-    // snapshot's, exactly as `finalize_undo_restore` does (FU-H2a).
+    // snapshot's from `ProjectFile::derived_clips` (FU-H2a, A-6).
     use std::collections::HashSet;
     let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
         .registry
@@ -1054,11 +1054,13 @@ fn apply_midi_clips(
     }
 }
 
-fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
+fn apply_compose(r: &mut Resonance, b: &ProjectFile) {
     // Section definitions / placements — drum arrangements included, from
     // `ProjectSectionDefinition::arrangement` — come back through
-    // `load_from_project`, which clears runtime-only sub-state. After
-    // that, restore the extras captured at snapshot time.
+    // `load_from_project`, which clears runtime-only sub-state — the
+    // derived-clip counter included, which an undo must never lower
+    // (ARCH-01 A-6).
+    let derived_counter_floor = r.compose.next_derived_clip_id;
     r.compose
         .load_from_project(&b.section_definitions, &b.section_placements);
     // Restore the drum pattern bank. Modern snapshots persist
@@ -1068,13 +1070,9 @@ fn apply_compose(r: &mut Resonance, b: &ProjectFile, extras: &UndoExtras) {
     // clears the bank rather than keeping the seeded default.
     restore_drum_patterns(&mut r.compose, b, true);
     // After `apply_midi_clips`, so the counter is reserved past the
-    // restored clips. No rebuild from the mirror: see
-    // `restore_derived_clips` (FU-H2a).
-    r.restore_derived_clips(
-        extras.compose_derived_clips.clone(),
-        extras.compose_next_derived_clip_id,
-        true,
-    );
+    // restored clips. The snapshot's map with every entry, pending echoes
+    // included: see `restore_derived_clips` (FU-H2a, A-6).
+    r.restore_derived_clips(b, true, Some(derived_counter_floor));
     // Lyrics from `ProjectMidiClip::vocal_lyrics`, installed exactly as
     // the full replay does (`replay_midi_clips`). After `apply_midi_clips`,
     // so the note counts they are padded to are the snapshot's; the clip

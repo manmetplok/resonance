@@ -480,5 +480,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         // Global chord track (epic #33). Pure app-side metadata, never
         // sent to the engine; the transient parse-error banner is left out.
         chord_track: crate::project::ProjectChordTrack::from(&r.chord_track),
+        // Compose section→clip map, verbatim (ARCH-01 A-6).
+        derived_clips: Some(r.compose.derived_clips_for_file()),
     }
 }

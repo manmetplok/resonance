@@ -1,8 +1,8 @@
 //! Undo snapshot/restore is a fixed point (ARCH-01 A1-1).
 //!
 //! `build_project_file(restore(snapshot_for_undo(app))) == snapshot.file`,
-//! and the whole snapshot (`ProjectFile` + MIDI notes + `UndoExtras`)
-//! comes back `same_state`, through BOTH restore paths:
+//! and the whole snapshot (`ProjectFile` + MIDI notes; `UndoExtras` is
+//! empty since A-6) comes back `same_state`, through BOTH restore paths:
 //!
 //!   * the structure-preserving diff replay (`try_diff_replay`), reached
 //!     when only scalars changed since the snapshot;
@@ -38,6 +38,7 @@ use resonance_app::demo;
 use resonance_app::message::*;
 use resonance_app::project::{LoadedProject, ProjectExternalInstrument, ProjectFile};
 use resonance_app::reference::{ReferenceMessage, ReferenceStatus};
+use resonance_app::state::ids::DERIVED_CLIP_ID_BASE;
 use resonance_app::state::FreezeStatus;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::BuiltinTemplateId;
@@ -448,7 +449,6 @@ fn assert_file_fixed_point(path: &str, restored: &ProjectFile, snapshot: &Projec
 /// Which parts of two snapshots differ, by name — the diagnostic behind
 /// a `same_state` failure once the project files already match.
 fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
-    let (x, y) = (&a.extras, &b.extras);
     let mut out = Vec::new();
     let mut check = |name: &str, same: bool| {
         if !same {
@@ -464,14 +464,6 @@ fn snapshot_differences(a: &UndoSnapshot, b: &UndoSnapshot) -> Vec<String> {
                 })
             }),
     );
-    check(
-        "compose_derived_clips",
-        x.compose_derived_clips == y.compose_derived_clips,
-    );
-    check(
-        "compose_next_derived_clip_id",
-        x.compose_next_derived_clip_id == y.compose_next_derived_clip_id,
-    );
     check("project file", a.project.file == b.project.file);
     out
 }
@@ -486,11 +478,8 @@ fn assert_fixed_point(f: &Fixture, path: &str, snapshot: &UndoSnapshot) {
     let after = f.app.test_snapshot_for_undo();
     assert!(
         Resonance::test_snapshot_same_state(&after, snapshot),
-        "{path}: the project file matches but these parts of the snapshot do not: {:?}\n\
-         restored extras: {:#?}\nsnapshot extras: {:#?}",
+        "{path}: the project file matches but these parts of the snapshot do not: {:?}",
         snapshot_differences(&after, snapshot),
-        after.extras,
-        snapshot.extras
     );
 }
 
@@ -769,6 +758,20 @@ fn empty_template_restores_to_a_fixed_point() {
 // Derived clips whose engine echo is still in flight (FU-H2a)
 // ---------------------------------------------------------------------------
 
+/// The derived-clip map an undo snapshot carries, from its
+/// `ProjectFile::derived_clips` (A-6).
+fn file_derived(snapshot: &UndoSnapshot) -> HashMap<(u64, u64, TrackId), ClipId> {
+    snapshot
+        .project
+        .file
+        .derived_clips
+        .as_ref()
+        .expect("a snapshot's file always carries the derived-clip map")
+        .iter()
+        .map(|e| ((e.definition_id, e.placement_id, e.track_id), e.clip_id))
+        .collect()
+}
+
 /// Derived-clip entries whose clip the mirror doesn't hold.
 fn unmirrored_derived(app: &Resonance) -> Vec<ClipId> {
     app.compose_state()
@@ -827,7 +830,7 @@ fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
     );
     assert_eq!(
         f.app.compose_state().derived_clips,
-        snapshot.extras.compose_derived_clips,
+        file_derived(&snapshot),
         "the fast path keeps the entry whose echo is still pending"
     );
 
@@ -869,7 +872,7 @@ fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
         Vec::<ClipId>::new(),
         "the slow path leaves no entry for a clip ClearAll wiped"
     );
-    for (key, id) in &snapshot.extras.compose_derived_clips {
+    for (key, id) in &file_derived(&snapshot) {
         if !pending.contains(id) {
             assert_eq!(
                 f.app.compose_state().derived_clips.get(key),
@@ -1925,4 +1928,331 @@ fn reference_monitor_toggles_are_not_snapshot_state() {
         &f.app.test_snapshot_for_undo(),
         &before
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Derived-clip map and counter (A-6)
+// ---------------------------------------------------------------------------
+//
+// The compose section→clip map `(definition, placement, track) → ClipId`
+// is persisted as `ProjectFile::derived_clips` (the map verbatim, pending
+// and dangling entries included), so both undo paths restore it from the
+// snapshot's file; a disk load does too, and a file without the field
+// (every project saved before A-6) still gets the positional rebuild. The
+// derived-clip id counter is not undo state: it is session-monotonic, so
+// an undo never re-issues an id the redo stack still names. See
+// `docs/design/A-6-derived-clips.md`.
+
+type DerivedMap = HashMap<(u64, u64, TrackId), ClipId>;
+
+fn derived_map(app: &Resonance) -> DerivedMap {
+    app.compose_state().derived_clips.clone()
+}
+
+fn derived_counter(app: &Resonance) -> u64 {
+    app.compose_state().next_derived_clip_id
+}
+
+/// Every derived-range id the app holds: mirrored MIDI and audio clips and
+/// the map's values. The counter must stay above all of them.
+fn highest_derived_id(app: &Resonance) -> Option<ClipId> {
+    let file = app.test_build_project_file();
+    app.test_midi_clips()
+        .iter()
+        .map(|mc| mc.id)
+        .chain(file.clips.iter().map(|c| c.id))
+        .chain(app.compose_state().derived_clips.values().copied())
+        .filter(|id| *id >= DERIVED_CLIP_ID_BASE)
+        .max()
+}
+
+fn assert_counter_monotonic(app: &Resonance, path: &str, before: u64) {
+    let after = derived_counter(app);
+    assert!(
+        after >= before,
+        "{path}: the derived-clip counter went back from {before} to {after} — an id \
+         issued before the undo (and still named by the redo stack) would be re-issued"
+    );
+    if let Some(max) = highest_derived_id(app) {
+        assert!(after > max, "{path}: counter {after} not past live id {max}");
+    }
+}
+
+/// A section resize re-derives the section's lanes between the snapshot
+/// and the restore; both paths must bring back the snapshot's map, and
+/// neither may rewind the counter past the ids the resize issued.
+#[test]
+fn a6_derived_clips_restore_through_both_paths_across_a_section_resize() {
+    let mut f = fixture("a6-resize", load_demo);
+    let h = handles(&f.app);
+    let (Some(d), Some(p)) = (h.definition, h.pattern) else {
+        panic!("the demo has a section and a drum pattern");
+    };
+    let at_snapshot = derived_map(&f.app);
+    assert!(
+        at_snapshot.len() >= 2,
+        "the demo derives a vocal and a drum lane, or this test is vacuous: {at_snapshot:?}"
+    );
+    let snapshot = f.app.test_snapshot_for_undo();
+    assert_eq!(file_derived(&snapshot), at_snapshot, "the snapshot's file carries the map");
+
+    // -- Fast path: the drums re-materialise into the same slot ids. --
+    f.app
+        .test_dispatch(Message::Compose(ComposeMessage::Arrangement(
+            ArrangementMessage::AddEntry {
+                definition_id: d,
+                pattern_id: p,
+            },
+        )));
+    echo_midi_clip_loads(&mut f.app, &f.rx);
+    if let Some(&t) = h.tracks.first() {
+        f.app
+            .test_dispatch(Message::Track(TrackMessage::SetTrackVolume(t, -7.0)));
+    }
+    let _ = drain(&f.rx);
+    let before = derived_counter(&f.app);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    assert!(
+        !drain(&f.rx)
+            .iter()
+            .any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a slot-preserving re-materialisation takes the diff replay"
+    );
+    assert_eq!(derived_map(&f.app), at_snapshot, "fast path: the snapshot's map");
+    assert_counter_monotonic(&f.app, "fast path", before);
+
+    // -- Slow path: resize the section (re-derives its lanes), plus a
+    // track so the structural fallback is certain. --
+    let length = f
+        .app
+        .compose_state()
+        .find_definition(d)
+        .map(|def| def.length_bars)
+        .expect("definition");
+    let _ = f
+        .app
+        .update(Message::Compose(ComposeMessage::ResizeSection {
+            definition_id: d,
+            length_bars: length + 1,
+        }));
+    echo_midi_clip_loads(&mut f.app, &f.rx);
+    assert_ne!(
+        derived_map(&f.app),
+        at_snapshot,
+        "the resize must re-derive a lane under a fresh id, or the slow-path counter check is vacuous"
+    );
+    f.app.test_add_track(9_999, TrackType::Audio);
+    let _ = drain(&f.rx);
+    let before = derived_counter(&f.app);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    assert!(drain(&f.rx)
+        .iter()
+        .any(|c| matches!(c, AudioCommand::ClearAll)));
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    let _ = drain(&f.rx);
+    assert_eq!(derived_map(&f.app), at_snapshot, "slow path: the snapshot's map");
+    assert_counter_monotonic(&f.app, "slow path", before);
+    assert_fixed_point(&f, "slow path after a resize", &snapshot);
+}
+
+/// FU-H2a through both paths, restated for A-6: the map a restore brings
+/// back is the one live at snapshot time (now read from the snapshot's
+/// file), a pending entry survives the diff replay, the full replay keeps
+/// exactly the entries whose clip it replayed, and the counter stays past
+/// the pending clip once its echo lands.
+#[test]
+fn a6_a_pending_echo_entry_restores_through_both_paths() {
+    let mut f = fixture("a6-pending", load_demo);
+    let h = handles(&f.app);
+    let (Some(d), Some(p)) = (h.definition, h.pattern) else {
+        panic!("the demo has a section and a drum pattern");
+    };
+    let _ = drain(&f.rx);
+    f.app
+        .test_dispatch(Message::Compose(ComposeMessage::Arrangement(
+            ArrangementMessage::AddEntry {
+                definition_id: d,
+                pattern_id: p,
+            },
+        )));
+    let pending_loads = drain(&f.rx);
+    let pending = unmirrored_derived(&f.app);
+    assert!(!pending.is_empty(), "vacuous: no pending echo");
+    let at_snapshot = derived_map(&f.app);
+    let snapshot = f.app.test_snapshot_for_undo();
+    assert_eq!(
+        file_derived(&snapshot),
+        at_snapshot,
+        "the snapshot's file carries the whole map, the pending entry included"
+    );
+
+    // Fast path.
+    if let Some(&t) = h.tracks.first() {
+        f.app
+            .test_dispatch(Message::Track(TrackMessage::SetTrackVolume(t, -9.0)));
+    }
+    let _ = drain(&f.rx);
+    let before = derived_counter(&f.app);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let _ = drain(&f.rx);
+    assert_eq!(derived_map(&f.app), at_snapshot, "fast path keeps the pending entry");
+    for cmd in pending_loads {
+        if let AudioCommand::LoadMidiClipDirect {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            notes,
+            name,
+            trim_start_ticks,
+            trim_end_ticks,
+        } = cmd
+        {
+            f.app.test_apply_engine_event(AudioEvent::MidiClipCreated {
+                clip_id,
+                track_id,
+                start_sample,
+                duration_ticks,
+                name,
+                notes,
+                trim_start_ticks,
+                trim_end_ticks,
+            });
+        }
+    }
+    assert!(unmirrored_derived(&f.app).is_empty(), "the echo landed");
+    assert_counter_monotonic(&f.app, "fast path, echo landed", before);
+
+    // Slow path.
+    f.app.test_add_track(9_999, TrackType::Audio);
+    let _ = drain(&f.rx);
+    let before = derived_counter(&f.app);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    let _ = drain(&f.rx);
+    let expected: DerivedMap = at_snapshot
+        .iter()
+        .filter(|(_, id)| !pending.contains(id))
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    assert_eq!(derived_map(&f.app), expected, "slow path drops only the wiped clip's entry");
+    assert_counter_monotonic(&f.app, "slow path", before);
+}
+
+/// Save to disk, optionally edit the written `project.json`, and load it
+/// into a fresh app the way `ProjectLoaded` does.
+fn save_and_reload(
+    f: &Fixture,
+    tag: &str,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> (Resonance, Receiver<AudioCommand>) {
+    let file = f.app.test_build_project_file();
+    let midi: Vec<(ClipId, Vec<resonance_audio::types::MidiNote>)> = f
+        .app
+        .test_midi_clips()
+        .iter()
+        .map(|mc| (mc.id, mc.notes.clone()))
+        .collect();
+    let dir = f.root.join(format!("{tag}.rproj"));
+    std::fs::create_dir_all(dir.join("audio")).expect("create reload dir");
+    resonance_app::project::save_project(&dir, &file, &[], &midi).expect("save");
+    let json = dir.join("project.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json).expect("read")).expect("json");
+    edit(&mut value);
+    std::fs::write(&json, serde_json::to_string_pretty(&value).expect("json")).expect("write");
+    let loaded = resonance_app::project::load_project(&dir).expect("load");
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_replay_loaded_project_from(loaded);
+    (app, rx)
+}
+
+/// The two cases where the pre-A-6 positional rebuild disagrees with the
+/// session's map: a derived drum clip the user moved off its bar (the
+/// rebuild loses it, so the next regenerate duplicates it), and a
+/// hand-drawn clip on the vocal lane that starts exactly on the placement
+/// bar (the rebuild claims it, so the next regenerate deletes it).
+/// Returns (drum key, vocal key, hand-drawn clip id).
+fn diverge_from_positional_rebuild(
+    f: &mut Fixture,
+) -> ((u64, u64, TrackId), (u64, u64, TrackId), ClipId) {
+    let map = derived_map(&f.app);
+    let (&drum_key, &drum_clip) = map
+        .iter()
+        .find(|(_, id)| **id >= DERIVED_CLIP_ID_BASE)
+        .expect("the demo materialises a drum clip in the derived range");
+    let (&vocal_key, &vocal_clip) = map
+        .iter()
+        .find(|(_, id)| **id < DERIVED_CLIP_ID_BASE)
+        .expect("the demo seeds its vocal clip below the derived range");
+    let start = |app: &Resonance, id: ClipId| {
+        app.test_midi_clips()
+            .iter()
+            .find(|mc| mc.id == id)
+            .map(|mc| mc.start_sample)
+            .expect("mirrored")
+    };
+    let drum_start = start(&f.app, drum_clip);
+    let vocal_start = start(&f.app, vocal_clip);
+    f.app.test_dispatch(Message::MidiClip(MidiClipMessage::MoveClipTo {
+        clip_id: drum_clip,
+        new_start_sample: drum_start + 12_345,
+    }));
+    let hand_drawn: ClipId = 5_000;
+    f.app.test_push_midi_clip(resonance_app::state::MidiClipState {
+        id: hand_drawn,
+        track_id: vocal_key.2,
+        start_sample: vocal_start,
+        duration_ticks: 960,
+        name: "hand-drawn".into(),
+        notes: Vec::new(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+    let _ = drain(&f.rx);
+    assert_eq!(derived_map(&f.app), map, "neither edit touches the session's map");
+    (drum_key, vocal_key, hand_drawn)
+}
+
+/// A disk round trip keeps the session's map exactly — including the
+/// entries a positional rebuild would get wrong.
+#[test]
+fn a6_derived_clips_survive_a_disk_round_trip() {
+    let mut f = fixture("a6-disk", load_demo);
+    let _ = diverge_from_positional_rebuild(&mut f);
+    let live = derived_map(&f.app);
+    let (reloaded, _rx) = save_and_reload(&f, "reloaded", |v| {
+        assert!(
+            v.get("derived_clips").is_some_and(|d| d.is_array()),
+            "project.json carries the derived-clip map"
+        );
+    });
+    assert_eq!(derived_map(&reloaded), live, "the saved map comes back verbatim");
+    assert!(
+        derived_counter(&reloaded) > highest_derived_id(&reloaded).unwrap_or(0),
+        "a load reserves the counter past every derived id"
+    );
+}
+
+/// A project saved before A-6 has no `derived_clips` key: it loads and
+/// gets the positional rebuild, exactly as before.
+#[test]
+fn a6_a_project_without_the_field_rebuilds_the_map_by_position() {
+    let mut f = fixture("a6-legacy", load_demo);
+    let (drum_key, vocal_key, hand_drawn) = diverge_from_positional_rebuild(&mut f);
+    let live = derived_map(&f.app);
+    let (reloaded, _rx) = save_and_reload(&f, "legacy", |v| {
+        v.as_object_mut()
+            .expect("project.json is an object")
+            .remove("derived_clips");
+    });
+    let mut expected = live.clone();
+    expected.remove(&drum_key);
+    expected.insert(vocal_key, hand_drawn);
+    assert_eq!(
+        derived_map(&reloaded),
+        expected,
+        "a legacy file takes the positional rebuild: the moved drum clip is lost, the \
+         hand-drawn clip on the placement bar is claimed"
+    );
 }

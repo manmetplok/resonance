@@ -212,9 +212,12 @@ pub struct ComposeState {
     /// see `view::compose::visible_x_window`). Runtime-only.
     pub workspace_view: Option<(f32, f32)>,
     /// Generated clips we created, keyed by (definition_id, placement_id,
-    /// track_id). Runtime-only: rebuilt on project load by scanning clip
-    /// names in `r.midi_clips`. The regeneration path uses this to delete
-    /// old clips before issuing fresh ones.
+    /// track_id). Persisted verbatim as `ProjectFile::derived_clips`
+    /// (ARCH-01 A-6), which a load and both undo paths restore through
+    /// `Resonance::restore_derived_clips`; a project saved before that
+    /// field existed gets [`Self::rebuild_derived_clips`] instead. The
+    /// regeneration path uses this to delete old clips before issuing
+    /// fresh ones.
     pub derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
     /// Grouped vocal-render state: installed audio clips, per-clip
     /// lyric annotations, and per-`(def, track)` render epochs. See
@@ -229,7 +232,10 @@ pub struct ComposeState {
     pub pronunciation: crate::compose::vocal_svs::PronunciationState,
     /// Monotonic id used when allocating fresh `ClipId`s for derived
     /// clips. Kept in the high range so it never collides with engine-
-    /// allocated ids coming from `CreateMidiClip`.
+    /// allocated ids coming from `CreateMidiClip`. Not project state: a
+    /// load resets it and reserves past the loaded clips, and an undo
+    /// never lowers it (ARCH-01 A-6), so an id the redo stack still names
+    /// is never re-issued.
     pub next_derived_clip_id: u64,
     /// Per-vocal-lane bulk lyric buffer. Backs the multi-line text editor
     /// that lets the user type a whole section's lyrics at once. Holds
@@ -650,9 +656,9 @@ impl ComposeState {
                 arrangement: arrangement_from_project(d),
             })
             .collect();
-        // Runtime-only state: start each load with an empty derived-clip
-        // map. `update::project_io::replay_loaded_project` will rebuild
-        // it by scanning clip names once the MIDI clips are in place.
+        // Start each load with an empty derived-clip map and counter;
+        // `Resonance::restore_derived_clips` refills both once the MIDI
+        // clips are in place (an undo keeps its live counter as a floor).
         self.derived_clips.clear();
         self.vocal_audio.clear();
         self.pronunciation.clear();
@@ -770,6 +776,25 @@ impl ComposeState {
         }
 
         self.reserve_derived_clip_ids(midi_clips.iter().map(|c| c.id));
+    }
+
+    /// `derived_clips` in its file form (`ProjectFile::derived_clips`):
+    /// every entry, sorted by key so equal maps give equal files.
+    pub fn derived_clips_for_file(&self) -> Vec<crate::project::ProjectDerivedClip> {
+        let mut entries: Vec<_> = self
+            .derived_clips
+            .iter()
+            .map(|(&(definition_id, placement_id, track_id), &clip_id)| {
+                crate::project::ProjectDerivedClip {
+                    definition_id,
+                    placement_id,
+                    track_id,
+                    clip_id,
+                }
+            })
+            .collect();
+        entries.sort_by_key(|e| (e.definition_id, e.placement_id, e.track_id));
+        entries
     }
 
     /// The set of drum-track ids [`rebuild_derived_clips`] needs, read off
