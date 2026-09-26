@@ -74,13 +74,6 @@ use super::tempo_reanchor::{musical_anchors, reanchor_to_tempo};
 use crate::state::{SignatureEvent, TempoEvent};
 use crate::Resonance;
 
-/// Arrangement-marker actions, routed like [`TransportMessage`] and
-/// handled by `update/marker.rs`. The mutating variants
-/// (`AddAtPlayhead`, `Rename`, `Recolor`, `Delete`, `MoveStart`,
-/// `SetRegionEnd`, `LoopToRegion`, `SeedFromSections`) record an undo
-/// entry; the navigation variants (`JumpToNext`, `JumpToPrev`, `JumpTo`,
-/// `PlayFromMarker`) only move the playhead / transport and are not
-/// undoable, mirroring `SeekToSample` / `Play`.
 /// Structural bar shifts. Both variants move everything after the cut
 /// and are recorded as a single undo entry — the whole point of having
 /// them at all is that a restructure is one transaction rather than a
