@@ -428,6 +428,22 @@ impl ComposeState {
         id
     }
 
+    /// The user deleted `clip_id` from the timeline: drop every derived
+    /// entry naming it (code review FU-A6b). Called where the user's
+    /// delete is *sent*, never from the engine's `MidiClipDeleted` echo —
+    /// a regeneration tears a slot's clip down and re-installs it under
+    /// the same id (#275 P1.7), so the echo of that teardown lands after
+    /// the new entry and must not drop it.
+    ///
+    /// Without this the entry dangled: it was saved and snapshotted, kept
+    /// UPD-05 skipping the track as "echo pending" for good, and made a
+    /// section resize (which re-derives exactly the lanes with an entry)
+    /// re-create the clip the user had deleted. Undoing the delete brings
+    /// the entry back from the snapshot's `ProjectFile::derived_clips`.
+    pub fn forget_deleted_derived_clip(&mut self, clip_id: ClipId) {
+        self.derived_clips.retain(|_, id| *id != clip_id);
+    }
+
     pub fn find_definition(&self, id: u64) -> Option<&SectionDefinitionState> {
         self.definitions.iter().find(|d| d.id == id)
     }
@@ -836,6 +852,35 @@ impl ComposeState {
         if let Some(m) = max_used {
             self.next_derived_clip_id = self.next_derived_clip_id.max(m.saturating_add(1));
         }
+    }
+
+    /// Reserve the counter past every `audio/clip_<id>.wav` in the
+    /// derived range under the project dir `dir` (code review FU-A6c).
+    ///
+    /// A vocal render's WAV is `clip_<id>.wav` with a derived id, and it
+    /// outlives its clip: a backup, the autosave or an older undo state
+    /// can still name it after the clip is gone from the saved file. The
+    /// counter is reset on every load and reserved only past the file's
+    /// clips, so without this a reopen re-issued such an id and the next
+    /// render overwrote the WAV (STATE-12 for the derived range). The
+    /// engine's STATE-08 scan covers the ids below the range and skips
+    /// this one since FU-A6a, because the app is its only allocator.
+    ///
+    /// Not persisted in `ProjectFile`: a monotonic value there would break
+    /// the undo fixed point (A-6 §3). A missing or unreadable `audio/`
+    /// reserves nothing.
+    pub(crate) fn reserve_derived_clip_ids_on_disk(&mut self, dir: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
+            return;
+        };
+        self.reserve_derived_clip_ids(entries.flatten().filter_map(|e| {
+            let name = e.file_name();
+            let digits = name.to_str()?.strip_prefix("clip_")?.strip_suffix(".wav")?;
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            digits.parse::<ClipId>().ok()
+        }));
     }
 
     /// Counterpart of [`rebuild_derived_clips`] for the SVS-rendered

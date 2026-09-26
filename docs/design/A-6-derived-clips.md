@@ -47,6 +47,10 @@ Values are ids of `midi_clips` entries, but the map is not a function of
 2. **Dangling** — the user deleted a derived clip on the timeline;
    `midi::clip_deleted` does not touch the map. The regen path then
    `DeleteMidiClip`s a dead id (harmless) and reuses the id for the slot.
+   *Fixed by FU-A6b:* the user-delete sites (`MidiClipMessage::DeleteMidiClip`,
+   `remove_bars` casualties) call `ComposeState::forget_deleted_derived_clip`.
+   Not the echo: a regeneration deletes and re-installs a slot under the
+   same id, and that teardown's `MidiClipDeleted` lands after the new entry.
 
 Conversely a mirrored clip can belong to an entry the positional rebuild would
 never find (a derived clip the user moved or retimed), and the rebuild can
@@ -215,6 +219,16 @@ session had, which undo already did.
 - Dangling entries (user-deleted derived clips) survive a fast-path undo, as
   they did before, and keep suspending UPD-05 on that track. They also make
   `rederive_section_clips` resurrect the deleted lane clip on a resize.
+  **Fixed (FU-A6b):** a user delete drops the entry, so a resize leaves the
+  lane empty (it re-derives only lanes with an entry) and an explicit
+  regenerate installs a new clip under a fresh id; undoing the delete
+  restores clip and entry. Drum clips are still re-materialised from the
+  pattern by any drum edit, as before (the materialiser ignores the map).
 - The derived counter is not seeded from `audio/clip_*.wav` on load, so a
   vocal WAV of a deleted derived clip that a backup still references can be
   overwritten after a reopen (STATE-12 for the derived range).
+  **Fixed (FU-A6c):** `ComposeState::reserve_derived_clip_ids_on_disk`
+  scans the bundle's `audio/` for derived-range ids, from the
+  `DerivedClips` reconcile domain on a disk load and from
+  `SavePathSelected` (Save As into an existing bundle). Undo needs no scan
+  (the counter never goes down). Still not persisted in the file (§3).

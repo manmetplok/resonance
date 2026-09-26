@@ -235,6 +235,9 @@ pub fn remove_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
         }
         r.midi_clips.retain(|c| c.id != *clip_id);
         r.compose.vocal_audio.clip_lyrics.remove(clip_id);
+        // A derived clip the user moved into the span outlives its
+        // placement's purge above; its entry must not dangle (FU-A6b).
+        r.compose.forget_deleted_derived_clip(*clip_id);
         let _ = r
             .engine
             .send(AudioCommand::DeleteMidiClip { clip_id: *clip_id });

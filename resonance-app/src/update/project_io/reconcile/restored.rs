@@ -41,6 +41,10 @@ impl Reconcile for AutomationLanes {
 /// live value in [`LiveCarry::derived_counter_floor`](super::LiveCarry)
 /// and an undo never lowers it; a disk load has none.
 ///
+/// **A disk load scans the bundle.** Derived-range `audio/clip_<id>.wav`
+/// files no loaded clip names (a deleted vocal render a backup still
+/// references) are reserved past too (FU-A6c).
+///
 /// A file without the field (saved before A-6) gets the positional
 /// rebuild, which reads the tempo map — hence after `Timeline` on both
 /// paths. Undo snapshots always carry the field.
@@ -52,6 +56,15 @@ impl Reconcile for DerivedClips {
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         let echoes_in_flight = ctx.origin == Origin::UndoDiff;
         r.restore_derived_clips(new, echoes_in_flight, ctx.live.derived_counter_floor);
+        // A disk load also clears the derived-range WAVs in the bundle
+        // that no loaded clip names (FU-A6c). An undo needs no scan: it
+        // never lowers the live counter, which a load or Save As already
+        // reserved past them.
+        if ctx.origin == Origin::DiskLoad {
+            if let Some(dir) = ctx.project_dir {
+                r.compose.reserve_derived_clip_ids_on_disk(dir);
+            }
+        }
     }
 }
 
