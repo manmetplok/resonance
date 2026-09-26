@@ -202,13 +202,20 @@ impl BounceMessage {
     pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
         use crate::undo::UndoAction;
         match self {
-            // Classified as `TrackMessage::Bounce` always was: every step records.
+            // The input picker's choices and its dismissal only touch
+            // `bounce_dialog`, which is session UI — never in the project.
+            // Cancelling a running bounce asks the engine to stop; nothing
+            // the project holds changes (A-10: these used to record, one
+            // empty entry per click that also wiped the redo stack).
             Self::PickDevice(..)
             | Self::PickPort(..)
             | Self::SetMono(..)
-            | Self::Confirm
             | Self::Cancel
-            | Self::CancelInProgress => UndoAction::Record,
+            | Self::CancelInProgress => UndoAction::Skip,
+            // Confirm adds the target track and starts the render; like a
+            // pool import, the snapshot taken here is the pre-bounce
+            // project the async result lands on top of.
+            Self::Confirm => UndoAction::Record,
         }
     }
 }

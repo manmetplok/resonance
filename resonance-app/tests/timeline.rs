@@ -79,6 +79,8 @@ mod undo_before_echo;
 mod undo_clip_audio_persist;
 #[path = "timeline/undo_view_state_keeps_redo.rs"]
 mod undo_view_state_keeps_redo;
+#[path = "timeline/undo_transient_dialog_state.rs"]
+mod undo_transient_dialog_state;
 #[path = "timeline/render_cache.rs"]
 mod render_cache;
 #[path = "timeline/selection_bar.rs"]

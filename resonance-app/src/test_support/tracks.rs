@@ -209,4 +209,23 @@ impl Resonance {
     pub fn test_selection_bar_view(&self, count: usize) -> iced::Element<'static, crate::message::Message> {
         crate::view::selection_bar::selection_bar_with_count(count)
     }
+
+    /// Test-only: open the realtime bounce-in-place dialog for
+    /// `source_track_id` without staging an external-MIDI track, so a test
+    /// can drive the dialog's own messages.
+    #[doc(hidden)]
+    pub fn test_open_bounce_dialog(&mut self, source_track_id: resonance_audio::types::TrackId) {
+        self.bounce_dialog = Some(state::BounceDialogState {
+            source_track_id,
+            selected_device: None,
+            selected_port: 0,
+            mono: false,
+        });
+    }
+
+    /// Test-only: the open bounce-in-place dialog, if any.
+    #[doc(hidden)]
+    pub fn test_bounce_dialog(&self) -> Option<&state::BounceDialogState> {
+        self.bounce_dialog.as_ref()
+    }
 }
