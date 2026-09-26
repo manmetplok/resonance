@@ -19,10 +19,10 @@ impl ResonanceMcp {
                        output reproducible; omitted it is derived from the section id, so \
                        repeating the call is stable rather than random. \
                        \
-                       chord_count, beats_per_chord and sevenths are in the schema but the app \
-                       IGNORES them: the generator always reads the section's chord grid exactly \
-                       as it stands. Shape the harmony with harmony_apply_progression (which \
-                       does honour beats_per_chord and sevenths) before calling this. \
+                       Omit chord_count, beats_per_chord and sevenths: the generator always \
+                       plays the section's chord grid exactly as it stands, so setting any of \
+                       them is REJECTED. Shape the harmony with harmony_apply_progression \
+                       (which takes beats_per_chord and sevenths) before calling this. \
                        \
                        options is a role-specific object; every field is optional and any \
                        subset works, so `{\"style\": \"Walking\"}` is a valid whole object. \

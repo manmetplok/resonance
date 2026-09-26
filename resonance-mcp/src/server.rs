@@ -23,10 +23,11 @@ use rmcp::model::{
 };
 use rmcp::{ErrorData as McpError, ServerHandler};
 use resonance_control::ids::JobId;
-use resonance_control::job::{JobStarted, JobState, JobStatus, WaitParams};
+use resonance_control::job::{JobStarted, JobState, JobStatus};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Cross-tool guidance sent to the client as server `instructions`.
 const INSTRUCTIONS: &str = "\
@@ -154,13 +155,9 @@ impl ResonanceMcp {
                 )]))
             }
         };
-        let wait = WaitParams {
-            job_id: started.job_id,
-            timeout_ms: Some(wait_ms),
-        };
         match self
             .client
-            .call_typed::<_, JobStatus>(resonance_control::job::WAIT, &wait)
+            .wait_job(started.job_id, Duration::from_millis(wait_ms))
             .await
         {
             Ok(status) => Ok(job_status_result(status, wait_ms)),
@@ -183,19 +180,38 @@ impl ResonanceMcp {
         job_id: JobId,
         params: &impl Serialize,
     ) -> Result<CallToolResult, McpError> {
-        match self.client.call_typed::<_, JobStatus>(method, params).await {
-            Ok(status) => {
-                if status.state == JobState::Error {
-                    Ok(job_failure(&status))
-                } else {
-                    Ok(CallToolResult::structured(status_value(status)))
-                }
-            }
-            Err(error) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "could not query job {job_id}: {}",
-                error.actionable_message()
-            ))])),
-        }
+        let status = self.client.call_typed::<_, JobStatus>(method, params).await;
+        Ok(job_query_result(job_id, status))
+    }
+
+    /// Backs the `job_wait` tool: [`ControlClient::wait_job`] (sliced, so the
+    /// shared connection stays usable while it blocks — CTL-07), with the
+    /// same terminal-state mapping as [`Self::job_query`]. An omitted
+    /// `timeout_ms` waits as long as the app would: 10 minutes.
+    pub async fn wait_for_job(
+        &self,
+        job_id: JobId,
+        timeout_ms: Option<u64>,
+    ) -> Result<CallToolResult, McpError> {
+        let timeout = timeout_ms.map_or(crate::client::MAX_JOB_WAIT, Duration::from_millis);
+        let status = self.client.wait_job(job_id, timeout).await;
+        Ok(job_query_result(job_id, status))
+    }
+}
+
+/// A `job.status` / `job.wait` outcome as a tool result: a failed job is
+/// a tool error, anything else is the structured status.
+fn job_query_result(
+    job_id: JobId,
+    status: Result<JobStatus, crate::client::CallError>,
+) -> CallToolResult {
+    match status {
+        Ok(status) if status.state == JobState::Error => job_failure(&status),
+        Ok(status) => CallToolResult::structured(status_value(status)),
+        Err(error) => CallToolResult::error(vec![ContentBlock::text(format!(
+            "could not query job {job_id}: {}",
+            error.actionable_message()
+        ))]),
     }
 }
 

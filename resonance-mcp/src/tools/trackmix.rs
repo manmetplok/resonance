@@ -65,10 +65,15 @@ impl ResonanceMcp {
                        wavetable synth exposes ~90 parameters and its default patch is only a \
                        starting point. \
                        \
+                       This SETS the instrument: a track has exactly one. If it already has \
+                       one, that instrument is swapped for plugin_id in the same slot (its \
+                       sound settings are discarded; undoable); naming the instrument that is \
+                       already loaded changes nothing, so a retry is safe. Effects stay put. \
+                       \
                        Returns {plugin_id, occurrence, slot} — pass plugin_id and occurrence \
                        straight to track_set_plugin_param instead of re-reading the chain to \
                        work out which instance is the new one.",
-        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<track::AddPluginResult>()
     )]
     async fn track_add_instrument(

@@ -49,8 +49,8 @@ pub mod rpc;
 pub mod socket;
 
 pub use common::{
-    BeatRange, KeyScale, MutationAck, PositionSpec, SongPosition, TimeSignature, TrackKind,
-    TrackOutput, TransportState,
+    check_max_bars, BeatRange, KeyScale, MutationAck, PositionSpec, SongPosition, TimeSignature, TrackKind,
+    TrackOutput, TransportState, MAX_BARS,
 };
 pub use framing::{write_message, FramingError, MessageReader};
 pub use job::{JobStarted, JobState, JobStatus};

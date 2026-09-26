@@ -16,7 +16,10 @@
 //!   it: `claude plugin validate` warns on unknown manifest keys, and a
 //!   warning nobody can fix is a warning everybody learns to ignore;
 //! - every `mcp__resonance__<tool>` mentioned in any `SKILL.md` or
-//!   reference file against the router's actual tool list;
+//!   reference file against the router's actual tool list — and so is
+//!   every BARE `<namespace>_<name>` token (`section_place`, `edit_undo`),
+//!   which is how the skills mostly name tools; the few wire field names
+//!   of that shape are allow-listed and checked against the schemas;
 //! - every `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}` path the
 //!   skills point each other at, against the files on disk. Progressive
 //!   disclosure only works if the pointer resolves: an agent told to read
@@ -188,6 +191,119 @@ fn every_skill_preflights_with_control_hello() {
              but not to the app binary the user actually has open — the handshake is the only \
              thing that catches that skew.",
             file.display(),
+        );
+    }
+}
+
+/// Identifier-shaped tokens in `text` whose first `_`-separated segment
+/// is one of `namespaces` — i.e. things that look like a bare tool name
+/// (`section_place`, `generate_part`). The `mcp__resonance__` prefixed
+/// form is skipped here; [`referenced_tools`] covers it.
+fn bare_tool_like_tokens(text: &str, namespaces: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < text.len() {
+        let c = bytes[i] as char;
+        if !is_ident(c) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < text.len() && is_ident(bytes[i] as char) {
+            i += 1;
+        }
+        // A token glued to a path, a URL or a `${VAR}` is not a tool
+        // name standing on its own.
+        let before = text[..start].chars().next_back();
+        if matches!(before, Some('/' | '.' | '{' | '$' | '-')) {
+            continue;
+        }
+        let token = &text[start..i];
+        if token.starts_with("mcp__") || token.contains("__") {
+            continue;
+        }
+        let Some((head, tail)) = token.split_once('_') else {
+            continue;
+        };
+        if tail.is_empty() || !token.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+            continue;
+        }
+        if namespaces.contains(head) {
+            found.insert(token.to_owned());
+        }
+    }
+    found
+}
+
+/// Tokens shaped like `<namespace>_<word>` that are wire FIELD names, not
+/// tool names. Each must still appear as a property in some published
+/// tool's input or output schema, so a renamed field fails here too.
+const WIRE_FIELDS: &[&str] = &["clip_id", "clip_ids", "section_id", "track_id"];
+
+/// Namespace-shaped keys of the plugin's own files (`lockstep.json`).
+const PLUGIN_FILE_KEYS: &[&str] = &["control_protocol_version"];
+
+/// Every published tool's input and output schema, serialized — enough
+/// to ask "does any schema carry a property named X".
+fn schema_text() -> String {
+    ResonanceMcp::combined_router()
+        .list_all()
+        .into_iter()
+        .map(|tool| {
+            format!(
+                "{}{}",
+                serde_json::to_string(&tool.input_schema).expect("input schema serializes"),
+                serde_json::to_string(&tool.output_schema).expect("output schema serializes"),
+            )
+        })
+        .collect()
+}
+
+/// Skills mostly name tools bare (`section_place`, `edit_undo`), not with
+/// the `mcp__resonance__` prefix. A renamed tool referenced only that way
+/// used to pass the suite (CTL-12), so bare `<namespace>_<name>` tokens
+/// must name published tools too.
+#[test]
+fn skills_bare_tool_names_exist() {
+    let published = tool_names();
+    let namespaces: BTreeSet<String> = published
+        .iter()
+        .filter_map(|t| t.split_once('_').map(|(head, _)| head.to_owned()))
+        .collect();
+    let mut files = Vec::new();
+    markdown_files(&plugin_dir(), &mut files);
+
+    let mut missing = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("read skill markdown");
+        for token in bare_tool_like_tokens(&text, &namespaces) {
+            let known_field = WIRE_FIELDS.contains(&token.as_str())
+                || PLUGIN_FILE_KEYS.contains(&token.as_str());
+            if !published.contains(&token) && !known_field {
+                missing.push(format!("{}: {token}", file.display()));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "skills name tools this server does not publish (or, for a genuine wire field, add it \
+         to WIRE_FIELDS):\n{}",
+        missing.join("\n")
+    );
+}
+
+/// The wire fields [`skills_bare_tool_names_exist`] lets through must
+/// still exist, or the allow-list becomes a hiding place.
+#[test]
+fn allow_listed_wire_fields_exist_in_the_schemas() {
+    let schemas = schema_text();
+    for field in WIRE_FIELDS {
+        assert!(
+            schemas.contains(&format!("\"{field}\"")),
+            "{field} is allow-listed as a wire field but no published tool schema has it — \
+             the field was renamed; update the skills and WIRE_FIELDS"
         );
     }
 }

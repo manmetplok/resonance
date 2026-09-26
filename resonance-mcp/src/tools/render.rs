@@ -62,8 +62,9 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Block until a job reaches done/error or timeout_ms elapses (returns the \
-                       then-current status either way; omit timeout_ms to wait indefinitely). \
-                       Prefer a bounded timeout so the conversation stays responsive.",
+                       then-current status either way). Waits at most 10 minutes: omitting \
+                       timeout_ms, or passing more than 600000, waits the full 10 minutes. \
+                       Other tool calls keep working while it waits.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]
@@ -71,6 +72,6 @@ impl ResonanceMcp {
         &self,
         Parameters(params): Parameters<WaitParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.job_query(job::WAIT, params.job_id, &params).await
+        self.wait_for_job(params.job_id, params.timeout_ms).await
     }
 }

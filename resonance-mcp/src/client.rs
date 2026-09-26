@@ -28,7 +28,19 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use resonance_control::ids::JobId;
+use resonance_control::job::{self, JobStatus, WaitParams};
+
+/// The app's cap on one `job.wait` (`JobBoard::MAX_WAIT`); a
+/// [`ControlClient::wait_job`] never waits longer than this in total.
+pub const MAX_JOB_WAIT: Duration = Duration::from_secs(600);
+
+/// How long each server-side `job.wait` inside
+/// [`ControlClient::wait_job`] blocks — and so the longest any other
+/// call queues behind a job wait for the shared connection.
+pub const JOB_WAIT_SLICE: Duration = Duration::from_millis(250);
 
 /// Env var overriding the control-socket path (same as the app).
 pub use resonance_control::socket::SOCKET_PATH_ENV;
@@ -208,6 +220,41 @@ impl ControlClient {
                     detail: format!("internal task failure: {e}"),
                 })
             })
+    }
+
+    /// Wait for `job_id` to reach a terminal state, for at most `timeout`
+    /// (clamped to [`MAX_JOB_WAIT`], the app's own cap), and return the
+    /// then-current status either way.
+    ///
+    /// The wait is issued as a series of short `job.wait` calls
+    /// ([`JOB_WAIT_SLICE`] each) rather than one long one: there is one
+    /// connection per client and every call holds its mutex for the
+    /// whole round trip, so a single multi-minute `job.wait` stalled every
+    /// other tool call — even a `song_summary` issued in parallel — for
+    /// as long as the job ran (CTL-07). Between slices the connection is
+    /// free, and a cancelled tool call stops at the next slice boundary
+    /// instead of pinning the connection until the server gives up.
+    pub async fn wait_job(
+        self: &Arc<Self>,
+        job_id: JobId,
+        timeout: Duration,
+    ) -> Result<JobStatus, CallError> {
+        let deadline = Instant::now() + timeout.min(MAX_JOB_WAIT);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let slice = remaining.min(JOB_WAIT_SLICE);
+            let params = WaitParams {
+                job_id,
+                timeout_ms: Some(slice.as_millis() as u64),
+            };
+            let status: JobStatus = self.call_typed(job::WAIT, &params).await?;
+            if status.state.is_terminal() || remaining <= slice {
+                return Ok(status);
+            }
+            // Give a call queued on the connection mutex its turn before
+            // the next slice takes the lock again.
+            tokio::task::yield_now().await;
+        }
     }
 
     /// [`Self::call`] with the result deserialized into `T`.

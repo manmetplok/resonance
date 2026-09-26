@@ -287,3 +287,64 @@ async fn combined_router_exposes_every_control_method() {
         "published tool names diverged from the control method list"
     );
 }
+
+/// CTL-07: a long job wait must not hold the one shared connection for
+/// its whole duration. The fake blocks each `job.wait` for its requested
+/// `timeout_ms` (as the app does) and the job never finishes; a
+/// concurrent `song.summary` must still come back promptly instead of
+/// queueing behind the wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_job_wait_does_not_stall_concurrent_calls() {
+    let app = FakeApp::spawn(PROTOCOL_VERSION, move |req| match req.method.as_str() {
+        "render.mixdown" => ok(req, &json!({"job_id": 5})),
+        "job.wait" => {
+            let ms = req
+                .params
+                .as_ref()
+                .and_then(|p| p.get("timeout_ms"))
+                .and_then(Value::as_u64)
+                .unwrap_or(600_000)
+                .min(10_000);
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            ok(
+                req,
+                &JobStatus {
+                    job_id: JobId(5),
+                    state: JobState::Running,
+                    progress: Some(0.5),
+                    result: None,
+                    error: None,
+                },
+            )
+        }
+        "song.summary" => ok(req, &json!({"revision": 1})),
+        other => panic!("unexpected method {other}"),
+    });
+    let mcp = server(&app);
+
+    let waiter = {
+        let mcp = mcp.clone();
+        tokio::spawn(async move {
+            mcp.invoke_job("render.mixdown", &json!({"path": "/tmp/out.wav"}), 4_000)
+                .await
+                .unwrap()
+        })
+    };
+    // Let the wait get onto the connection first.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let start = std::time::Instant::now();
+    let summary = mcp.invoke("song.summary", &json!({})).await.unwrap();
+    let elapsed = start.elapsed();
+    assert!(!is_error(&summary), "{}", text(&summary));
+    assert!(
+        elapsed < std::time::Duration::from_millis(1_500),
+        "song.summary queued behind the job wait for {elapsed:?}"
+    );
+
+    // The wait itself still honours its full bound and reports the job
+    // as still running.
+    let waited = waiter.await.unwrap();
+    assert!(!is_error(&waited), "{}", text(&waited));
+    assert_eq!(structured(&waited)["state"], "running");
+}

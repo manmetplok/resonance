@@ -67,6 +67,10 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // while the startup modal owns the screen (there are no tracks to
         // act on yet), like the other auxiliary overlays.
         | Message::Ui(UiMessage::OpenTrackMenu { .. }) => true,
+        // Focus-gated shortcut envelope: allow — the wrapped message
+        // re-enters `update()` on resolution and meets this gate then.
+        Message::Ui(UiMessage::RequestShortcut(_))
+        | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)

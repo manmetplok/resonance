@@ -49,10 +49,9 @@ Give **exactly one** chord source:
 |---|---|
 | `symbols` | `["Am7", "Dm7", "G7", "Cmaj7"]` |
 | `key` + `numerals` | `{tonic: "A", scale: "minor"}` + `["i","VI","III","VII"]` |
-| `key` + `preset` | `pop`, `axis` (both I V vi IV), `50s`, `doo-wop` (both I vi IV V), `pachelbel`, `andalusian`, `12-bar-blues` |
+| `key` + `preset` | `pop`, `axis` (both I V vi IV), `50s`, `doo-wop` (both I vi IV V), `pachelbel`, `andalusian`, `ii-V-I`, `12-bar-blues` |
 
-Two sources, or a numeral/preset without `key`, is rejected. The advertised
-`ii-V-I` preset is unreachable — write it as numerals `["ii","V","I"]`.
+Two sources, or a numeral/preset without `key`, is rejected.
 
 Three things that bite:
 
@@ -81,9 +80,9 @@ produce an actual part.
 `${CLAUDE_SKILL_DIR}/references/generators.md` has the full option tables per
 role, which styles are worth reaching for, and where each one falls down.
 
-Note that `chord_count`, `beats_per_chord` and `sevenths` appear in
-`generate_part`'s schema but the app **ignores** them — it always reads the
-section's grid as it stands. Shape harmony in step 1, not here.
+Leave `chord_count`, `beats_per_chord` and `sevenths` out of `generate_part`:
+it always reads the section's grid as it stands, and rejects a call that sets
+them. Shape harmony in step 1, not here.
 
 `seed` makes output reproducible; omitted, it derives from the section id, so
 repeating a call is stable rather than random. To get a *different* take, change

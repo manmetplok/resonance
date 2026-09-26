@@ -147,7 +147,7 @@ which reads as "it did nothing". Use it for what the song *starts* in, and
 into 7/8 at the bridge is the same mistake it always was; the fix is now a call,
 not a request to the user.
 
-### Two traps that did not go away
+### What moves when the map changes
 
 **Meter and tempo map first, material second.** A meter or tempo change makes the
 bars after it a different length, and existing clips, markers and automation keep
@@ -156,16 +156,16 @@ finished arrangement lands everything after bar 17 on different bars.
 (`transport_set_tempo` is the one exception — changing the song's *starting*
 tempo re-anchors the arrangement and clips keep their bars.)
 
-**`arrangement_insert_bars` / `arrangement_remove_bars` do not move tempo or
-signature events.** Confirmed defect, not yet fixed — ba todo #1388. Inserting 8
-bars at bar 20 shifts clips, section placements, markers and automation, and
-**strands the 7/8 event at bar 33** while the bridge it was written for moves to
-bar 41. Removing bars *over* an event does not delete or move it either. Now that
-you can create meter changes rather than only users, you are far more likely to
-be the one who hits this. So: if you insert or remove bars in a song with any
-event past the cut, read `global_list_events` afterwards, put the affected events
-back where the music went (`global_add_signature_event`,
-`global_edit_tempo_event`), and **tell the user you had to**.
+**`arrangement_insert_bars` / `arrangement_remove_bars` carry the tempo and
+signature events with the music.** Inserting 8 bars at bar 20 moves a 7/8 event
+at bar 33 to bar 41, together with the bridge it was written for. The song's
+opening event at bar 1 never moves. Removing bars *over* an event clamps it onto
+the cut, so the music after the splice keeps its tempo and meter; if two events
+of one kind land on the cut bar, the later one wins and the other is dropped.
+The result says what happened (`tempo_events_moved`, `signature_events_moved`,
+`tempo_events_removed`, `signature_events_removed`). **Do not repair the global
+tracks by hand afterwards** — they are already right, and "fixing" them moves
+the event a second time. Check with `global_list_events` if you want to see it.
 
 ### Real meter change, or grouping inside the grid?
 
@@ -194,7 +194,7 @@ transport_set_time_signature   # the meter the song STARTS in — bar-1 event on
 transport_set_tempo            # the tempo it starts at
 global_add_signature_event     # ×N, every LATER meter change, addressed by bar
 global_add_tempo_event         # ×N, every later tempo change
-section_create {place: false}  # ×N, keep the section_ids
+section_create {place: false}  # ×N, keep each section_id
 section_place                  # ×M, at explicit start_bars
 section_set_scale              # per section, if the song modulates
 ```
@@ -210,8 +210,8 @@ from.
 
 To insert or remove time inside an existing arrangement, use
 `mcp__resonance__arrangement_insert_bars` / `arrangement_remove_bars` rather than
-re-placing everything by hand — then repair the global tracks by hand, because
-those two do not move tempo or signature events (step 4).
+re-placing everything by hand. They move tempo and signature events with the
+music, so the global tracks need no repair afterwards (step 4).
 
 ## 6. Verify
 

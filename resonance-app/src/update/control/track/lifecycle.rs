@@ -4,7 +4,8 @@
 
 use super::{ack, find_track, frozen_reject, not_found_track, reject};
 use crate::message::{Message, PluginMessage, TrackMessage};
-use crate::update::control::{run_via_update, success};
+use crate::update::control::{run_via_update, success, view_model};
+use crate::update::plugin_replace::{self, ReplaceKind};
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::track::{
@@ -213,6 +214,45 @@ fn add_plugin(
             )),
         );
     }
+    // `add_instrument` SETS the track's instrument (CTL-04). A track has
+    // one sound source: appending a second instrument doubled the CPU,
+    // let the new one overwrite the old one's output, and left every
+    // `plugin_id`-less param edit resolving to the FIRST (unheard) one.
+    // So an existing instrument is swapped in place — the same path as
+    // `track.replace_effect {slot}` — and re-setting the one already
+    // loaded is a no-op, which makes a retry genuinely safe.
+    if matches!(role, PluginRole::Instrument) {
+        let t = find_track(app, params.track_id.0).expect("track checked above");
+        let existing = view_model::plugin_entries(app, t)
+            .into_iter()
+            .find(|e| e.kind == track::PluginKind::Instrument)
+            .and_then(|e| {
+                t.plugins
+                    .get(e.slot as usize)
+                    .map(|p| (e.slot, p.instance_id))
+            });
+        if let Some((slot, instance_id)) = existing {
+            let kind = plugin_replace::classify(app, instance_id, &params.plugin_id);
+            let task = match kind {
+                None | Some(ReplaceKind::AlreadyLoaded) => Task::none(),
+                Some(_) => run_via_update(
+                    app,
+                    Message::Plugin(PluginMessage::ReplacePlugin {
+                        instance_id,
+                        plugin,
+                    }),
+                ),
+            };
+            let result = track::AddPluginResult {
+                plugin_id: params.plugin_id,
+                occurrence: 0,
+                slot,
+                revision: app.revision(),
+            };
+            return (success(request, &result), task);
+        }
+    }
+
     // Compute the handle BEFORE dispatching: the engine appends
     // (`push_plugin`), so the new plugin lands at the current chain
     // length, and its occurrence is the number of copies already there.

@@ -69,12 +69,14 @@ also means `master_move_effect` is rarely what you want here.
 identically to an empty master. Adding it is half the job; the other half is
 `mcp__resonance__master_set_plugin_param`.
 
-Read `mcp__resonance__master_plugin_params` for the real parameter ids, ranges
-and current values before setting anything. Never guess an id. The stage
-switches follow a `<prefix>_on` convention — `glue_on`, `sat_on`, `mb_on`,
-`img_on`, `lim_on`, `dith_on` — and the limiter's controls are `lim_ceiling`
-(dBTP) and `lim_release` (ms), but confirm against `master_plugin_params` rather
-than trusting this paragraph: it is a map, not the territory.
+Read `mcp__resonance__master_plugin_params` for the real parameter names, ids,
+ranges and current values before setting anything. `param` takes a parameter's
+display **name** (case-insensitive) or its numeric `id` from that listing —
+never the plugin's internal string keys like `lim_on`, which are refused as
+not found. The stage switches are "Glue On", "Sat On", "Multiband On",
+"Imager On", "Limiter On" and "Dither On", and the limiter's controls are
+"Ceiling" (dBTP) and "Release" (ms), but confirm against `master_plugin_params`
+rather than trusting this paragraph: it is a map, not the territory.
 
 ## 3. Enable stages one at a time, measuring after each
 
@@ -115,7 +117,7 @@ tradeoff is the whole craft; there is no number that announces it.
 
 ## 5. Dither last, and only if you are reducing bit depth
 
-`dith_on` belongs at the very end of the chain and only when the render target
+"Dither On" belongs at the very end of the chain and only when the render target
 is a lower bit depth than the session. Dithering a 24-bit deliverable adds noise
 for nothing.
 

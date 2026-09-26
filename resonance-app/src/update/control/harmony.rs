@@ -309,8 +309,11 @@ fn resolve_progression(params: &proto::ApplyProgressionParams) -> Result<Vec<Cho
         }
         None => {
             let preset = params.preset.as_deref().unwrap_or_default();
-            let wanted = preset.trim().to_ascii_lowercase();
-            let Some((_, numerals)) = PRESETS.iter().find(|(name, _)| *name == wanted) else {
+            let wanted = preset.trim();
+            let Some((_, numerals)) = PRESETS
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            else {
                 let known: Vec<&str> = PRESETS.iter().map(|(name, _)| *name).collect();
                 return Err(RpcError::invalid_params(format!(
                     "unknown progression preset {preset:?} (one of: {})",

@@ -130,8 +130,11 @@ fn momentary_audition(r: &mut Resonance, pressed: bool) {
             r.reference.momentary_restore = Some(r.reference.ab_source);
         }
         set_ab_source(r, ABSource::Reference);
-    } else {
-        let restore = r.reference.momentary_restore.take().unwrap_or_default();
+    } else if let Some(restore) = r.reference.momentary_restore.take() {
+        // Only a release whose press was seen restores anything. The press
+        // is focus-gated (typing "b" into a field never auditions) but the
+        // release cannot be, and "restoring" the default would knock a
+        // manually chosen Reference source back to the mix (UPD-11).
         set_ab_source(r, restore);
     }
 }

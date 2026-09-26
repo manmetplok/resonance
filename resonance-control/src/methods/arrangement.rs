@@ -48,7 +48,9 @@ pub struct InsertBarsParams {
     /// this bar moves later; anything that starts before it stays, even
     /// if it plays across the insertion point.
     pub at_bar: u32,
-    /// How many bars to insert. Must be at least 1.
+    /// How many bars to insert. Must be at least 1, and the span
+    /// (`at_bar + count - 1`) must end at or before bar 100000
+    /// ([`crate::MAX_BARS`]).
     pub count: u32,
 }
 
@@ -58,7 +60,9 @@ pub struct InsertBarsParams {
 pub struct RemoveBarsParams {
     /// 1-based first bar to remove.
     pub at_bar: u32,
-    /// How many bars to remove. Must be at least 1.
+    /// How many bars to remove. Must be at least 1, and the span
+    /// (`at_bar + count - 1`) must end at or before bar 100000
+    /// ([`crate::MAX_BARS`]).
     pub count: u32,
     /// Required when anything starts inside the removed span — those
     /// clips and placements are deleted.

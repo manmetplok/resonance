@@ -32,7 +32,10 @@ pub(super) fn try_handle(
 
 /// Bars are 1-based on the wire and a shift of zero bars is a no-op the
 /// caller almost certainly did not mean, so both are rejected rather than
-/// silently clamped.
+/// silently clamped. The whole span must also end within
+/// [`resonance_control::MAX_BARS`]: the bar arithmetic behind the edit is
+/// plain `u32`, and a wrapped span skipped `remove_bars`' confirm gate
+/// (CTL-05).
 fn check_range(at_bar: u32, count: u32) -> Result<(), RpcError> {
     if at_bar == 0 {
         return Err(RpcError::invalid_params(
@@ -42,6 +45,10 @@ fn check_range(at_bar: u32, count: u32) -> Result<(), RpcError> {
     if count == 0 {
         return Err(RpcError::invalid_params("count must be at least 1"));
     }
+    resonance_control::check_max_bars("at_bar", at_bar)?;
+    resonance_control::check_max_bars("count", count)?;
+    // Both are bounded, so the sum cannot overflow.
+    resonance_control::check_max_bars("the span's last bar", at_bar + count - 1)?;
     Ok(())
 }
 
@@ -122,7 +129,7 @@ fn remove_bars(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
                 "removing bars {}..{} deletes {} audio clip(s), {} MIDI clip(s) and {} section \
                  placement(s) that start inside them; re-send with \"confirm\": true",
                 params.at_bar,
-                params.at_bar + params.count - 1,
+                params.at_bar.saturating_add(params.count - 1),
                 casualties.audio_clips.len(),
                 casualties.midi_clips.len(),
                 casualties.placements.len(),

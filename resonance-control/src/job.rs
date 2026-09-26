@@ -88,7 +88,8 @@ pub struct StatusParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WaitParams {
     pub job_id: JobId,
-    /// Maximum time to block; omitted means wait indefinitely.
+    /// Maximum time to block, in ms. The app caps every wait at 600000
+    /// (10 minutes); omitted means that cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 }

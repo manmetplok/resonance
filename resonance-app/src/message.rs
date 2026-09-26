@@ -1417,6 +1417,20 @@ pub enum UiMessage {
         forward: bool,
         editing: bool,
     },
+    /// A global keyboard shortcut that is also an ordinary typing key
+    /// (Enter, `B`, Cmd-Z / Cmd-Y). Like [`RequestPerformanceToggle`] it
+    /// does not act directly: the keyboard subscription sees presses a
+    /// focused text field already consumed, so this probes widget focus
+    /// (see [`crate::focus`]) and resolves to [`ShortcutResolved`]
+    /// (UPD-11).
+    RequestShortcut(Box<Message>),
+    /// Result of the focus probe started by [`RequestShortcut`]: the
+    /// wrapped message is dispatched only when no text field held focus
+    /// (`editing == false`).
+    ShortcutResolved {
+        message: Box<Message>,
+        editing: bool,
+    },
     /// Close the audio-import transcode-progress modal (doc #175, todo
     /// #606) once all files have reached a terminal state. Presentational
     /// only — the import already ran; this just hides the overlay and

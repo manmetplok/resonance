@@ -65,6 +65,9 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             RpcError::invalid_params("section length must be at least 1 bar"),
         );
     }
+    if let Err(e) = resonance_control::check_max_bars("length_bars", params.length_bars) {
+        return reject(request, e);
+    }
     let scale = match params.scale.as_ref().map(parse_key_scale).transpose() {
         Ok(s) => s,
         Err(e) => return reject(request, e),
@@ -150,6 +153,9 @@ fn resize(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             RpcError::invalid_params("section length must be at least 1 bar"),
         );
     }
+    if let Err(e) = resonance_control::check_max_bars("length_bars", params.length_bars) {
+        return reject(request, e);
+    }
     let task = super::run_via_update(
         app,
         Message::Compose(ComposeMessage::ResizeSection {
@@ -208,6 +214,9 @@ fn place(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             request,
             RpcError::invalid_params("start_bar is 1-based; bar 0 does not exist"),
         );
+    }
+    if let Err(e) = resonance_control::check_max_bars("start_bar", params.start_bar) {
+        return reject(request, e);
     }
     let before: HashSet<u64> = app.compose.placements.iter().map(|p| p.id).collect();
     let task = super::run_via_update(
