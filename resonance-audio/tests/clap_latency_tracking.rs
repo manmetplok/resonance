@@ -28,7 +28,8 @@ use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE
 use clap_sys::stream::clap_istream;
 
 use resonance_audio::__test_support::{
-    reload_plugin_state, ClapInstance, __instance_from_raw_for_test,
+    reload_plugin_state, service_host_restart_request, ClapInstance,
+    __instance_from_raw_for_test,
 };
 use resonance_audio::types::AudioEvent;
 
@@ -56,6 +57,17 @@ struct FakeState {
     process_calls: u32,
     /// When set, the next `activate()` fails (and clears the flag).
     fail_next_activate: bool,
+    /// When set, every `activate()` fails.
+    fail_all_activates: bool,
+    /// `min_frames_count` of the most recent `activate()` call.
+    last_min_frames: u32,
+    /// When set, the next `start_processing()` fails (and clears it).
+    fail_next_start: bool,
+    /// True between a successful `start_processing` and `stop_processing`.
+    processing: bool,
+    /// `process()` calls that arrived while not processing (a CLAP
+    /// contract violation by the host).
+    process_while_stopped: u32,
 }
 
 unsafe fn fake_state<'a>(plugin: *const clap_plugin) -> &'a mut FakeState {
@@ -71,12 +83,13 @@ unsafe extern "C" fn fake_destroy(_plugin: *const clap_plugin) {}
 unsafe extern "C" fn fake_activate(
     plugin: *const clap_plugin,
     _sample_rate: f64,
-    _min_frames: u32,
+    min_frames: u32,
     _max_frames: u32,
 ) -> bool {
     let state = fake_state(plugin);
     state.activate_calls += 1;
-    if std::mem::take(&mut state.fail_next_activate) {
+    state.last_min_frames = min_frames;
+    if std::mem::take(&mut state.fail_next_activate) || state.fail_all_activates {
         return false;
     }
     state.active = true;
@@ -91,17 +104,28 @@ unsafe extern "C" fn fake_deactivate(plugin: *const clap_plugin) {
     state.deactivate_calls += 1;
 }
 
-unsafe extern "C" fn fake_start_processing(_plugin: *const clap_plugin) -> bool {
+unsafe extern "C" fn fake_start_processing(plugin: *const clap_plugin) -> bool {
+    let state = fake_state(plugin);
+    if std::mem::take(&mut state.fail_next_start) {
+        return false;
+    }
+    state.processing = true;
     true
 }
 
-unsafe extern "C" fn fake_stop_processing(_plugin: *const clap_plugin) {}
+unsafe extern "C" fn fake_stop_processing(plugin: *const clap_plugin) {
+    fake_state(plugin).processing = false;
+}
 
 unsafe extern "C" fn fake_process(
     plugin: *const clap_plugin,
     _process: *const clap_process,
 ) -> clap_process_status {
-    fake_state(plugin).process_calls += 1;
+    let state = fake_state(plugin);
+    state.process_calls += 1;
+    if !state.processing {
+        state.process_while_stopped += 1;
+    }
     CLAP_PROCESS_CONTINUE
 }
 
@@ -172,6 +196,11 @@ fn make_instance(initial_latency: u32) -> (ClapInstance, *mut FakeState) {
                 load_calls: 0,
                 process_calls: 0,
                 fail_next_activate: false,
+                fail_all_activates: false,
+                last_min_frames: 0,
+                fail_next_start: false,
+                processing: false,
+                process_while_stopped: 0,
             }));
             state_ptr = state;
             let plugin = Box::new(clap_plugin {
@@ -370,4 +399,140 @@ fn engine_reload_reports_failures_as_errors() {
         }
         other => panic!("expected AudioEvent::Error, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Activation block size (code review ENG-10)
+// ---------------------------------------------------------------------------
+
+/// The live callback splits a buffer that crosses a loop seam into head
+/// and tail sub-blocks of any length, down to 1 frame. The host must not
+/// promise the plugin a larger minimum than it actually sends.
+#[test]
+fn plugins_are_activated_with_a_minimum_block_of_one_frame() {
+    let (mut instance, state) = make_instance(0);
+    let state = unsafe { &mut *state };
+    assert_eq!(state.last_min_frames, 1, "initial activation");
+    assert!(instance.restart());
+    assert_eq!(state.last_min_frames, 1, "re-activation");
+}
+
+// ---------------------------------------------------------------------------
+// Failed start_processing (code review ENG-12)
+// ---------------------------------------------------------------------------
+
+/// A plugin refusing `start_processing` after `reset_processing`'s stop
+/// used to be left activated-but-not-processing while `process()` kept
+/// being called on it — which CLAP forbids.
+#[test]
+fn a_refused_restart_of_processing_never_leads_to_process_on_a_stopped_plugin() {
+    let (mut instance, state) = make_instance(0);
+    let state = unsafe { &mut *state };
+
+    // Refused once: the reset recovers through a full re-activation.
+    state.fail_next_start = true;
+    assert!(instance.reset_processing());
+    assert!(instance.is_active());
+    run_block(&mut instance);
+    assert_eq!(state.process_calls, 1);
+    assert_eq!(state.process_while_stopped, 0);
+
+    // Refused for good: the instance ends up deactivated and silent.
+    state.fail_next_start = true;
+    state.fail_all_activates = true;
+    assert!(!instance.reset_processing());
+    assert!(!instance.is_active());
+    run_block(&mut instance);
+    assert_eq!(state.process_calls, 1, "process() must not reach a stopped plugin");
+    assert_eq!(state.process_while_stopped, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Servicing restart / latency requests (ENG-12, FU-F2c, FU-M1b)
+// ---------------------------------------------------------------------------
+
+fn request_restart(state: &FakeState) {
+    let host = state.host;
+    unsafe { (*host).request_restart.expect("request_restart fn")(host) };
+}
+
+fn signal_latency_changed(state: &FakeState) {
+    let host = state.host;
+    let get_ext = unsafe { (*host).get_extension }.expect("host get_extension");
+    let ext = unsafe { get_ext(host, CLAP_EXT_LATENCY.as_ptr()) } as *const clap_host_latency;
+    unsafe { (*ext).changed.expect("changed fn")(host) };
+}
+
+/// A plugin that reports a new latency while deactivated (after a failed
+/// re-activation, say) is doing what CLAP allows: the latency is read at
+/// the next activation. It used to trigger `restart()` on the inactive
+/// instance and a spurious "failed to reactivate" error (FU-M1b).
+#[test]
+fn a_latency_change_on_an_inactive_instance_is_not_an_error() {
+    let (mut instance, state) = make_instance(0);
+    let state = unsafe { &mut *state };
+    state.fail_next_activate = true;
+    assert!(!instance.reload_with_state(&64u32.to_le_bytes()));
+    assert!(!instance.is_active());
+    let activations = state.activate_calls;
+
+    signal_latency_changed(state);
+    let (restarted, event) = service_host_restart_request(&mut instance, 5);
+    assert!(!restarted);
+    assert!(event.is_none(), "no error for a legal latency change: {event:?}");
+    assert_eq!(state.activate_calls, activations, "no activation attempted");
+}
+
+/// A restart request on an instance a failed re-activation left
+/// deactivated retries the activation (FU-F2c), and a failure is
+/// reported once, not on every later request (ENG-12).
+#[test]
+fn a_failed_restart_is_retried_and_reported_once() {
+    let (mut instance, state) = make_instance(0);
+    let state = unsafe { &mut *state };
+
+    state.fail_all_activates = true;
+    request_restart(state);
+    let (restarted, event) = service_host_restart_request(&mut instance, 9);
+    assert!(!restarted);
+    match event {
+        Some(AudioEvent::Error(msg)) => assert!(msg.contains('9'), "{msg}"),
+        other => panic!("expected AudioEvent::Error, got {other:?}"),
+    }
+    assert!(!instance.is_active());
+
+    // The plugin keeps asking: retried each time, but reported once.
+    let activations = state.activate_calls;
+    request_restart(state);
+    let (restarted, event) = service_host_restart_request(&mut instance, 9);
+    assert!(!restarted);
+    assert!(event.is_none(), "the failure was already reported: {event:?}");
+    assert_eq!(state.activate_calls, activations + 1, "activation retried");
+
+    // Once it can activate again, the retry brings it back.
+    state.fail_all_activates = false;
+    request_restart(state);
+    let (restarted, event) = service_host_restart_request(&mut instance, 9);
+    assert!(restarted);
+    assert!(event.is_none());
+    assert!(instance.is_active());
+    run_block(&mut instance);
+    assert_eq!(state.process_calls, 1);
+
+    // A fresh failure after a recovery is news again.
+    state.fail_all_activates = true;
+    request_restart(state);
+    let (_, event) = service_host_restart_request(&mut instance, 9);
+    assert!(matches!(event, Some(AudioEvent::Error(_))), "{event:?}");
+}
+
+/// No request pending: nothing happens.
+#[test]
+fn servicing_without_a_request_is_a_no_op() {
+    let (mut instance, state) = make_instance(0);
+    let state = unsafe { &mut *state };
+    let (restarted, event) = service_host_restart_request(&mut instance, 1);
+    assert!(!restarted);
+    assert!(event.is_none());
+    assert_eq!(state.activate_calls, 1);
 }

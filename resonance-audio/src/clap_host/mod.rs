@@ -52,6 +52,15 @@ use parking_lot::Mutex;
 use crate::bypass::{BypassFade, FadeStage};
 use crate::types::PluginInstanceId;
 
+/// `min_frames_count` every plugin is activated with, at creation and on
+/// every re-activation. 1, because that is what the host really sends:
+/// the live callback splits a buffer that crosses a loop seam into head
+/// and tail sub-blocks of any length (ENG-10). CLAP requires
+/// `min_frames_count <= frames_count` on every `process()`.
+pub(super) const ACTIVATE_MIN_FRAMES: u32 = 1;
+/// `max_frames_count` every plugin is activated with.
+pub(super) const ACTIVATE_MAX_FRAMES: u32 = 8192;
+
 // ---------------------------------------------------------------------------
 // Host callbacks
 // ---------------------------------------------------------------------------
