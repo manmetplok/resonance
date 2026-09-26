@@ -55,12 +55,20 @@ master and updates this table. Agents do **not** edit this file.
 | T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | merged | 51000f97 |
 | V5 vocal data loss + canvas leftovers | FU-C1a, FU-C1b, FU-V2c, FU-V3c | opus | merged | 141b3f76 |
 | F1 final follow-ups | FU-G2d, FU-F1c, FU-R1a, FU-M11b | opus | merged | 58dcbbb0 |
-| V6 undo audio + compose culling | FU-V5b, FU-V5a, FU-V2c (rest) | opus | in progress | |
+| V6 undo audio + compose culling | FU-V5b, FU-V5a, FU-V2c (rest) | opus | merged | 06c90633 |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | merged | b9a5e1a4 |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
+
+**Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
+
+**Remaining, needs a human:**
+- macOS: FU-M1a, FU-M8a, FU-M8c, FU-H4a — Cocoa changes (PLG-01/03/05, async destroy) are type-checked only; run `cargo check` + the three ignored Cocoa tests on a Mac.
+- Product decision: FU-B1 — section resize re-rolls generated chord/vocal lanes (hand edits lost). Keep, warn, or preserve?
+- Sound change to confirm: LIB-06 compressor release now matches the knob (was ~1.5–2.5× longer) — revert `cea54427` if unwanted.
+- Architecture epics (not started, suggested for ba): engine render-graph publishing (ARCH-02 A2-4+), state-tax / Reconcile (ARCH-01 rest + ARCH-06 A6-2..4), engine error taxonomy (ARCH-05 A5-3/4), app-owned entity ids (ARCH-04 A4-4), `Arc<Vec<MidiNote>>` + `PartialEq` on ProjectFile (ARCH-09 A9-3), feature-gate model/decode in resonance-common (ARCH-07 A7-3).
 
 ### Follow-ups found while fixing (new todos)
 
@@ -122,7 +130,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-V1c** — fixed @68f4563d; note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
 - [x] **FU-V2a** — fixed @14f059e0; (medium) VIEW-25 partial: MIDI Import modal now parses off-thread + has a file chooser, but Confirm is still a no-op, Review has no Import button, TempoConflict is a placeholder (doc #158 follow-ups); needs `undo/classify.rs` to stop classifying `Message::Import(_)` as Skip.
 - [x] **FU-V2b** — fixed @895ae569; (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
-- [ ] **FU-V2c** [mostly done @514f0c13: chord ruler, track grid/notes, drum grid culled; vocal lane, global rows, expanded editor still per-bar] (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
+- [x] **FU-V2c** — done @514f0c13 + @0199bca0; (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
 - [x] **FU-V2d** — fixed @accf5caf; (low) a vocal render that finishes after its placement moved into a different tempo region is placed right but rendered at the old tempo.
 - [ ] **FU-M8a** (low) with async Cocoa destroy, `editor_size`/`editor_open_cocoa` teardown watchdogs pass trivially — make them wait for the main-thread teardown.
 - [x] **FU-M8b** — fixed @c2fb20fc; (low) `bounce/render.rs` ignores `reset_processing()`'s bool → a plugin that stays dead after export is silent without an error.
@@ -156,8 +164,8 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-C1a** — fixed @ec2cf6a2 (only unreferenced `vocal_*.wav` are ever unlinked); (HIGH, data loss) after a project reload the vocal-clip map points at `clip_<id>.wav`; re-rendering a vocal calls `unlink_if_exists(old_path)` in `vocal_audio_install` and deletes the file the saved project and undo snapshots reference.
 - [x] **FU-C1b** — documented, intentionally not deleted @94da144c; (low) stray `vocal_*.wav` files from before the project-audio-dir fix remain in sibling `audio/` folders.
 - [x] **FU-R1a** — fixed @791719d1 (untitled recovery still startup-only); (low) stale autosave files inside project dirs are never deleted; marker-less scratch dirs (autosave racing Save As) are never GC'd; untitled recovery only offered at startup; non-Linux can't tell a live other instance from a crash.
-- [ ] **FU-V5a** (low) `clip_*.wav` files are never garbage-collected (removed vocal clips leave theirs) — disk only.
-- [ ] **FU-V5b** (medium, pre-existing) slow-path undo reloads audio from `clip_<id>.wav`, which only exists after a save → undoing a vocal re-render (or any unsaved audio clip edit) in a never-saved-since session can come back silent. Consider writing clip WAVs eagerly to the project audio dir or keeping them in memory for undo.
+- [x] **FU-V5a** — fixed @63bc0a9a; (low) `clip_*.wav` files are never garbage-collected (removed vocal clips leave theirs) — disk only.
+- [x] **FU-V5b** — fixed @561a4bff (engine persists clip WAVs at undo snapshot); (medium, pre-existing) slow-path undo reloads audio from `clip_<id>.wav`, which only exists after a save → undoing a vocal re-render (or any unsaved audio clip edit) in a never-saved-since session can come back silent. Consider writing clip WAVs eagerly to the project audio dir or keeping them in memory for undo.
 
 ## How to use this file
 
