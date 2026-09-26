@@ -273,11 +273,28 @@ fn filter_field<'a>(r: &'a Resonance) -> Element<'a, Message> {
 /// The scrollable folder listing: subfolder rows followed by audio rows,
 /// or the empty-folder state when the open folder holds no audio. While an
 /// off-thread scan is in flight a "Scanning…" hint stands in.
+///
+/// The rows sit in a `lazy` region keyed on [`listing_fingerprint`]: the
+/// audition transport below the tab is live (its playhead moves every
+/// tick), and without the cache every tick rebuilt one row per file —
+/// display name, duration and lower-cased filter strings included
+/// (ui-work.md §11, review VIEW-27). The scrollable stays outside the lazy
+/// region so its scroll position is never tied to the cache.
 fn folder_listing<'a>(r: &'a Resonance) -> Element<'a, Message> {
     if r.browser.scanning {
         return placeholder("Scanning\u{2026}");
     }
 
+    let rows = iced::widget::lazy(
+        listing_fingerprint(r),
+        move |_: &u64| -> Element<'static, Message> { listing_rows(r) },
+    );
+    scrollable(rows).height(Length::Fill).into()
+}
+
+/// The listing's rows (see [`folder_listing`]). Built only when the lazy
+/// key changes.
+fn listing_rows(r: &Resonance) -> Element<'static, Message> {
     let mut list = column![].spacing(4);
 
     for folder in &r.browser.scan.folders {
@@ -305,7 +322,34 @@ fn folder_listing<'a>(r: &'a Resonance) -> Element<'a, Message> {
         }
     }
 
-    scrollable(list).height(Length::Fill).into()
+    list.into()
+}
+
+/// Lazy key of the folder listing: everything [`listing_rows`] reads — the
+/// scan (folders, files and their drawn metadata, thumbnails), the filter,
+/// and the selected / playing rows that carry the highlight. The audition
+/// playhead is deliberately absent: it renders in the transport, outside
+/// the region. Hashing allocates nothing.
+pub(crate) fn listing_fingerprint(r: &Resonance) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let b = &r.browser;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    b.scan.folders.hash(&mut h);
+    b.scan.files.len().hash(&mut h);
+    for entry in &b.scan.files {
+        entry.path.hash(&mut h);
+        std::mem::discriminant(&entry.info.format).hash(&mut h);
+        entry.info.duration_secs.to_bits().hash(&mut h);
+        // Thumbnail peaks, by value: a rescan can refresh them.
+        for &(lo, hi) in b.scan.thumbnail(&entry.path) {
+            lo.to_bits().hash(&mut h);
+            hi.to_bits().hash(&mut h);
+        }
+    }
+    b.filter.hash(&mut h);
+    b.audition.selected.hash(&mut h);
+    b.audition.playing.hash(&mut h);
+    h.finish()
 }
 
 /// A subfolder row: a folder glyph, the folder name, and a trailing caret,
@@ -347,7 +391,7 @@ fn folder_row<'a>(path: &Path) -> Element<'a, Message> {
 /// name, a lightly colour-coded format chip, and the duration. The whole
 /// row is a select-to-audition button; the currently-playing / selected
 /// row carries a WARM highlight.
-fn audio_row<'a>(r: &'a Resonance, entry: &'a AudioFileEntry) -> Element<'a, Message> {
+fn audio_row(r: &Resonance, entry: &AudioFileEntry) -> Element<'static, Message> {
     let path = std::path::Path::new(&entry.path);
     let playing = r.browser.audition.is_playing(path);
     let selected = r.browser.audition.is_selected(path);
@@ -361,7 +405,7 @@ fn audio_row<'a>(r: &'a Resonance, entry: &'a AudioFileEntry) -> Element<'a, Mes
 
     // Mini waveform thumbnail from the cached scan peaks.
     let thumbnail = Canvas::new(WaveThumbnail {
-        peaks: r.browser.scan.thumbnail(&entry.path),
+        peaks: std::borrow::Cow::Owned(r.browser.scan.thumbnail(&entry.path).to_vec()),
         muted: false,
     })
     .width(Length::Fixed(THUMB_W))

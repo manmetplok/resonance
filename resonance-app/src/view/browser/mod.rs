@@ -54,6 +54,9 @@ mod files_tab;
 mod pool_tab;
 mod style;
 
+pub(crate) use files_tab::listing_fingerprint;
+pub(crate) use style::WaveThumbnail;
+
 use iced::widget::text::LineHeight;
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{alignment, Element, Length};

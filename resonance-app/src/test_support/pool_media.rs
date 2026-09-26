@@ -105,6 +105,24 @@ impl Resonance {
         &self.browser
     }
 
+    /// Test-only: the lazy key of the Files-tab folder listing (review
+    /// VIEW-27).
+    #[doc(hidden)]
+    pub fn test_files_listing_fingerprint(&self) -> u64 {
+        crate::view::browser::listing_fingerprint(self)
+    }
+
+    /// Test-only: the geometry-cache key of a browser waveform thumbnail
+    /// (review VIEW-27).
+    #[doc(hidden)]
+    pub fn test_wave_thumbnail_key(peaks: &[(f32, f32)], muted: bool) -> u64 {
+        crate::view::browser::WaveThumbnail {
+            peaks: std::borrow::Cow::Borrowed(peaks),
+            muted,
+        }
+        .cache_key()
+    }
+
     /// Test-only: borrow one pool asset by id, so relink tests (ba todo
     /// #600) can assert an asset's missing flag and refreshed metadata.
     #[doc(hidden)]
