@@ -223,7 +223,7 @@ impl ClipSource {
     /// at load time costs one allocation off the RT path and keeps the
     /// hot accessor a plain slice cast.
     fn open_wav_inner(path: &Path) -> Result<(Self, u32), String> {
-        let mapped = crate::io::wav::map_wav_file(path)?;
+        let mapped = crate::io::wav::map_wav_file(path).map_err(|e| e.to_string())?;
         let aligned = (mapped.mmap.as_ptr() as usize + mapped.data_offset_bytes)
             % std::mem::align_of::<f32>()
             == 0;
