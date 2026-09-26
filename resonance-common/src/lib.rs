@@ -50,8 +50,8 @@ pub use device_definition::{
 };
 #[cfg(feature = "model")]
 pub use device_registry::{
-    bundled_definitions, user_definitions_dir, DeviceDefinitionRegistry, DeviceScanError,
-    DEVICE_DEFINITION_EXT,
+    bundled_definitions, user_definitions_dir, DeviceDefinitionRegistry, DeviceLoadError,
+    DeviceSaveError, DeviceScanError, DEVICE_DEFINITION_EXT,
 };
 #[cfg(feature = "model")]
 pub use external_instrument::{ExternalInstrument, PlaybackSource};
