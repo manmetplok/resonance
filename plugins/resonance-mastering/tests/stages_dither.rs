@@ -103,3 +103,87 @@ fn tpdf_sample_is_triangular() {
         "near_zero = {near_zero}, near_edge = {near_edge}"
     );
 }
+
+/// Round to the `bits`-bit grid, as a DAW's integer export does.
+fn quantize(x: f32, bits: i32) -> f32 {
+    let scale = 2.0_f32.powi(bits - 1);
+    (x * scale).round() / scale
+}
+
+/// Power of `err` below `cutoff_hz` (Hann-windowed FFT, summed bins).
+fn in_band_power(err: &[f32], sr: f32, cutoff_hz: f32) -> f64 {
+    use rustfft::num_complex::Complex;
+    let n = err.len();
+    let mut buf: Vec<Complex<f32>> = err
+        .iter()
+        .enumerate()
+        .map(|(i, &e)| {
+            let w = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos();
+            Complex::new(e * w, 0.0)
+        })
+        .collect();
+    rustfft::FftPlanner::new().plan_fft_forward(n).process(&mut buf);
+    let top = (cutoff_hz / sr * n as f32) as usize;
+    buf[1..top].iter().map(|c| c.norm_sqr() as f64).sum()
+}
+
+/// Export noise (output − clean input) below 4 kHz of a −60 dBFS 1 kHz
+/// tone through the dither stage and a 16-bit export quantizer.
+fn export_noise_in_band(noise_shape: bool) -> f64 {
+    let sr = 48_000.0;
+    let n = 1 << 16;
+    let amp = 10f32.powf(-60.0 / 20.0);
+    let clean: Vec<f32> = (0..n)
+        .map(|i| amp * (std::f32::consts::TAU * 1000.0 * i as f32 / sr).sin())
+        .collect();
+    let (mut l, mut r) = (clean.clone(), clean.clone());
+    let cfg = DitherConfig {
+        enabled: true,
+        target_bits: 16,
+        noise_shape,
+    };
+    let mut d = Dither::new();
+    for (bl, br) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+        d.process_stereo(bl, br, &cfg);
+    }
+    let err: Vec<f32> = l
+        .iter()
+        .zip(&clean)
+        .map(|(y, x)| quantize(*y, 16) - x)
+        .collect();
+    in_band_power(&err, sr, 4000.0)
+}
+
+/// DSP-13: noise shaping must lower the in-band floor of the exported
+/// file. Shaping the dither alone cannot — the export's own white
+/// requantization error is untouched — so the stage shapes the total
+/// requantization error by error feedback instead.
+#[test]
+fn noise_shaping_lowers_the_in_band_export_floor() {
+    let flat = export_noise_in_band(false);
+    let shaped = export_noise_in_band(true);
+    assert!(flat > 0.0, "flat export noise must be non-zero");
+    let gain_db = 10.0 * (shaped / flat).log10();
+    assert!(
+        gain_db < -6.0,
+        "shaped in-band noise {gain_db:.2} dB relative to flat (want < -6 dB)"
+    );
+}
+
+/// With shaping on, the stage quantizes to the target grid itself, so a
+/// later export at the same depth is lossless.
+#[test]
+fn noise_shaped_output_sits_on_the_target_grid() {
+    let mut d = Dither::new();
+    let cfg = DitherConfig {
+        enabled: true,
+        target_bits: 16,
+        noise_shape: true,
+    };
+    let mut l: Vec<f32> = (0..4096).map(|i| 0.3 * (i as f32 * 0.01).sin()).collect();
+    let mut r = l.clone();
+    d.process_stereo(&mut l, &mut r, &cfg);
+    for &y in l.iter().chain(&r) {
+        assert_eq!(quantize(y, 16), y, "{y} is off the 16-bit grid");
+    }
+}

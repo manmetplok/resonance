@@ -6,12 +6,18 @@
 //! own export-time quantization, which is exactly what you want for
 //! mastering delivery.
 //!
-//! Optional first-order high-pass noise shaper pushes the dither noise
-//! energy up the spectrum so the audible noise floor is lower at the
-//! same LSB-relative level. Useful for aggressive 16-bit delivery.
+//! Optional first-order noise shaping. Shaping only works around a
+//! quantizer, so with it on the stage requantizes to the target depth
+//! itself, feeding the total requantization error (dither included)
+//! back through `1 − z⁻¹`: the error spectrum tilts up toward Nyquist
+//! and the floor below ~4 kHz drops by ~10 dB at 48 kHz. The output
+//! then sits on the target grid, so the DAW's export at that depth is
+//! lossless. (It used to filter the dither alone, which only added
+//! noise: the export's own white requantization error was untouched —
+//! DSP-13.)
 //!
-//! Per-sample cost: two RNG calls per channel plus (if enabled) one
-//! multiply-add of feedback. Zero added latency.
+//! Per-sample cost: two RNG calls per channel plus (if enabled) a
+//! round and a multiply-add of feedback. Zero added latency.
 
 use resonance_dsp::SimpleRng;
 
@@ -21,7 +27,8 @@ pub struct DitherConfig {
     /// Target bit depth for the dither magnitude. 16 = CD, 20 = broadcast,
     /// 24 = high-res delivery. Dither amplitude scales as `2^-(bits-1)`.
     pub target_bits: i32,
-    /// Apply first-order high-pass shaping to the dither noise.
+    /// Requantize to `target_bits` here with first-order error-feedback
+    /// noise shaping (see the module docs).
     pub noise_shape: bool,
 }
 
@@ -35,14 +42,15 @@ impl Default for DitherConfig {
     }
 }
 
-/// Feedback coefficient for the first-order noise shaper. 0.5 gives a
-/// gentle high-pass tilt, enough to pull low-frequency noise down ~6 dB
-/// without making the top octave objectionable.
-const NS_FEEDBACK: f32 = 0.5;
+/// Error-feedback coefficient: noise transfer `1 − NS_FEEDBACK·z⁻¹`,
+/// a first-order highpass with its zero at DC.
+const NS_FEEDBACK: f32 = 1.0;
 
 pub struct Dither {
     rng_l: SimpleRng,
     rng_r: SimpleRng,
+    /// Previous sample's total requantization error, per channel (noise
+    /// shaping only).
     prev_l: f32,
     prev_r: f32,
 }
@@ -68,21 +76,20 @@ impl Dither {
             return;
         }
         // LSB at the target bit depth for signed-symmetric audio.
-        let lsb = 2.0_f32.powi(-(cfg.target_bits.clamp(8, 32) - 1));
+        let bits = cfg.target_bits.clamp(8, 32);
+        let lsb = 2.0_f32.powi(-(bits - 1));
+        let scale = 2.0_f32.powi(bits - 1);
         let frames = left.len().min(right.len());
         for i in 0..frames {
-            let mut d_l = tpdf_sample(&mut self.rng_l, lsb);
-            let mut d_r = tpdf_sample(&mut self.rng_r, lsb);
+            let d_l = tpdf_sample(&mut self.rng_l, lsb);
+            let d_r = tpdf_sample(&mut self.rng_r, lsb);
             if cfg.noise_shape {
-                let shaped_l = d_l - NS_FEEDBACK * self.prev_l;
-                let shaped_r = d_r - NS_FEEDBACK * self.prev_r;
-                self.prev_l = shaped_l;
-                self.prev_r = shaped_r;
-                d_l = shaped_l;
-                d_r = shaped_r;
+                left[i] = shape(left[i], d_l, scale, lsb, &mut self.prev_l);
+                right[i] = shape(right[i], d_r, scale, lsb, &mut self.prev_r);
+            } else {
+                left[i] += d_l;
+                right[i] += d_r;
             }
-            left[i] += d_l;
-            right[i] += d_r;
         }
     }
 }
@@ -91,6 +98,16 @@ impl Default for Dither {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One error-feedback requantization step: subtract the fed-back error,
+/// add the dither, round to the grid, and keep the new total error.
+#[inline]
+fn shape(x: f32, dither: f32, scale: f32, lsb: f32, err: &mut f32) -> f32 {
+    let v = x - NS_FEEDBACK * *err;
+    let q = ((v + dither) * scale).round() * lsb;
+    *err = q - v;
+    q
 }
 
 /// Generate one TPDF sample scaled to `lsb`: the sum of two independent
