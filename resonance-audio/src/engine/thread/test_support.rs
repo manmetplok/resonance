@@ -340,6 +340,50 @@ impl EngineHandlerHarness {
         }
     }
 
+    /// Block until every job submitted to the clip-import pool so far
+    /// (`ImportClip`, `LoadClipFromWav`, take-clip loads) has finished,
+    /// so a test can assert that a wrong publish did *not* happen without
+    /// a grace sleep that a slow machine outruns (FU-A5a).
+    ///
+    /// How: park one barrier job per worker. The queue is FIFO, so a
+    /// worker only reaches a barrier after every earlier job has been
+    /// dequeued, and a worker sitting in the barrier has finished its
+    /// previous job — once every worker is in one, nothing earlier is
+    /// still running. Panics after `timeout` (a hang guard, not pacing).
+    pub fn settle_imports(&mut self, timeout: std::time::Duration) {
+        use std::sync::{Condvar, Mutex as StdMutex};
+        // (workers arrived, released)
+        let gate = Arc::new((StdMutex::new((0usize, false)), Condvar::new()));
+        for _ in 0..crate::engine::MAX_CONCURRENT_IMPORTS {
+            let gate = Arc::clone(&gate);
+            self.state
+                .imports
+                .submit(move || {
+                    let (lock, cvar) = &*gate;
+                    let mut g = lock.lock().unwrap();
+                    g.0 += 1;
+                    cvar.notify_all();
+                    while !g.1 {
+                        g = cvar.wait(g).unwrap();
+                    }
+                })
+                .expect("spawn a clip-import worker");
+        }
+        // Every submit tops the pool up, so this is every worker there is.
+        let workers = self.state.imports.worker_count();
+        let (lock, cvar) = &*gate;
+        let (mut g, wait) = cvar
+            .wait_timeout_while(lock.lock().unwrap(), timeout, |g| g.0 < workers)
+            .unwrap();
+        // Release the workers either way, so a timeout doesn't strand them.
+        g.1 = true;
+        cvar.notify_all();
+        assert!(
+            !wait.timed_out(),
+            "clip-import jobs still running after {timeout:?}"
+        );
+    }
+
     /// Move the engine's audio clips out of the harness, for handing to a
     /// renderer.
     ///
@@ -465,6 +509,32 @@ impl EngineHandlerHarness {
     /// Every echo the handlers have emitted since the last drain.
     pub fn drain_events(&mut self) -> Vec<AudioEvent> {
         self.event_rx.try_iter().collect()
+    }
+
+    /// Drop the harness and return every event still to come, once every
+    /// worker a handler spawned (a pool-import batch, an import job) has
+    /// exited: each holds a clone of the event sender, so the channel
+    /// disconnects exactly when the last of them is done. The explicit
+    /// replacement for "drain, sleep a grace period, drain again" — a
+    /// late event can't arrive after this returns.
+    ///
+    /// Panics if the workers are still running after `timeout`: a safety
+    /// net against a wedged worker hanging the suite, not a pacing knob,
+    /// so pass something far above the work's worst case.
+    pub fn finish_and_drain_events(self, timeout: std::time::Duration) -> Vec<AudioEvent> {
+        let event_rx = self.event_rx.clone();
+        drop(self);
+        let deadline = std::time::Instant::now() + timeout;
+        let mut events = Vec::new();
+        loop {
+            match event_rx.recv_deadline(deadline) {
+                Ok(ev) => events.push(ev),
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return events,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    panic!("engine workers still running after {timeout:?}; events so far: {events:?}")
+                }
+            }
+        }
     }
 
     /// Run the real `AudioCommand::Play` handler.

@@ -312,37 +312,29 @@ fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
     // A batch queued after the clear belongs to the new project and lands.
     engine.import_audio_to_pool(vec![short.clone()]);
 
-    let mut events = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let fresh_done = |events: &[AudioEvent]| {
+    // Every event either batch will ever send: returns once both workers
+    // have exited, so no late stale event can slip in afterwards (FU-A5a:
+    // this used to be a poll plus a 1.5 s grace sleep).
+    let events = engine.finish_and_drain_events(std::time::Duration::from_secs(300));
+    assert!(
         events.iter().any(|e| {
             matches!(e, AudioEvent::AssetImported { original_path, .. } if *original_path == short)
-        })
-    };
-    while !fresh_done(&events) && std::time::Instant::now() < deadline {
-        events.extend(engine.drain_events());
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(fresh_done(&events), "the post-clear batch never landed");
-    // Grace for a (wrong) late stale event; the fenced batch gives up
-    // after at most the file it was decoding.
-    std::thread::sleep(std::time::Duration::from_millis(1500));
-    events.extend(engine.drain_events());
+        }),
+        "the post-clear batch never landed: {events:?}"
+    );
 
     let cleared = events
         .iter()
         .position(|e| matches!(e, AudioEvent::AllCleared))
         .expect("ClearAll echoed");
-    let mut cancelled: Vec<&str> = Vec::new();
+    let is_cancellation = |e: &AudioEvent| {
+        matches!(e, AudioEvent::ImportFailed { path, reason, .. }
+            if *path != short && reason == resonance_audio::POOL_IMPORT_CANCELLED)
+    };
     let stale: Vec<_> = events[cleared..]
         .iter()
+        .filter(|e| !is_cancellation(e))
         .filter(|e| match e {
-            AudioEvent::ImportFailed { path, reason, .. }
-                if *path != short && reason == resonance_audio::POOL_IMPORT_CANCELLED =>
-            {
-                cancelled.push(path);
-                false
-            }
             AudioEvent::AssetImported { original_path, .. }
             | AudioEvent::ImportFailed { path: original_path, .. }
             | AudioEvent::ImportProgress { path: original_path, .. } => *original_path != short,
@@ -351,9 +343,21 @@ fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
         .collect();
     assert!(stale.is_empty(), "stale batch events after AllCleared: {stale:?}");
     // Every file of the stale batch that had not finished before the clear
-    // is cancelled exactly once.
+    // is cancelled exactly once. The cancellation itself may precede
+    // `AllCleared`: `ClearAll` bumps the generation before it takes the
+    // clip lock, so a worker that emits in that window already sees the
+    // batch stale — that is what failed under load, not a leak.
+    let mut cancelled: Vec<&str> = events
+        .iter()
+        .filter(|e| is_cancellation(e))
+        .map(|e| match e {
+            AudioEvent::ImportFailed { path, .. } => path.as_str(),
+            _ => unreachable!(),
+        })
+        .collect();
     let finished_before: Vec<&str> = events[..cleared]
         .iter()
+        .filter(|e| !is_cancellation(e))
         .filter_map(|e| match e {
             AudioEvent::AssetImported { original_path, .. } => Some(original_path.as_str()),
             AudioEvent::ImportFailed { path, .. } => Some(path.as_str()),
@@ -366,7 +370,7 @@ fn a_pool_import_outlived_by_its_project_never_lands_after_clear_all() {
         .collect();
     cancelled.sort_unstable();
     expected.sort_unstable();
-    assert!(!expected.is_empty(), "the stale batch finished before the clear");
+    assert!(!expected.is_empty(), "the stale batch finished before the clear: {events:?}");
     assert_eq!(cancelled, expected, "one cancellation per unfinished file");
     let _ = std::fs::remove_dir_all(&dir);
 }
