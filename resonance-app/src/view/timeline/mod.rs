@@ -195,19 +195,12 @@ impl TimelineCanvas<'_> {
     pub(crate) fn placement_geometry(&self) -> placement::PlacementGeometry {
         placement::PlacementGeometry {
             header_height: self.fixed_header_height(),
-            track_height: theme::TRACK_HEIGHT,
             scroll_offset_y: self.scroll_offset_y,
             zoom: self.zoom,
             sample_rate: self.sample_rate,
             bpm: self.bpm,
             time_sig_num: self.time_sig_num,
         }
-    }
-
-    /// Arrange-sorted, arrange-visible track ids — the lane order the canvas
-    /// draws in, and the order a drop resolution indexes.
-    pub(crate) fn arrange_track_ids(&self) -> Vec<TrackId> {
-        self.visible_tracks_sorted().iter().map(|t| t.id).collect()
     }
 
     /// Rightmost pixel needed to show all content (clips + MIDI clips).

@@ -30,10 +30,13 @@ impl TimelineCanvas<'_> {
         let y_off = self.scroll_offset_y;
         let track_h = theme::TRACK_HEIGHT;
         let inset = theme::CLIP_LANE_INSET;
-        let sorted_tracks = self.visible_tracks_sorted();
-        let lane_count = sorted_tracks.len();
+        let layout = self.arrange_layout();
 
+        // The targeted lane's (canvas y, height), from the same row layout
+        // the drop was resolved against.
         let lane_index = drag.resolved.as_ref().and_then(|r| r.lane_index);
+        let lane_row = lane_index.and_then(|i| layout.rows().get(i));
+        let lane_rect = lane_row.map(|row| (header_height + row.y_top - y_off, row.height));
         let start_sample = drag.resolved.as_ref().map(|r| match r.target {
             DropTarget::ExistingTrack { start_sample, .. }
             | DropTarget::NewTrack { start_sample } => start_sample,
@@ -42,7 +45,7 @@ impl TimelineCanvas<'_> {
 
         // --- New-audio-track drop zone, below the last lane ---------------
         let zone_h = track_h.min(72.0);
-        let zone_y = header_height + lane_count as f32 * track_h - y_off;
+        let zone_y = header_height + layout.total_height() - y_off;
         if zone_y < bounds.height && zone_y + zone_h > header_height {
             let zone = canvas::Path::rounded_rectangle(
                 Point::new(6.0, zone_y + 6.0),
@@ -80,17 +83,16 @@ impl TimelineCanvas<'_> {
         }
 
         // --- Lit target lane ---------------------------------------------
-        if let Some(i) = lane_index {
-            let lane_y = header_height + i as f32 * track_h - y_off;
-            if lane_y + track_h > header_height && lane_y < bounds.height {
+        if let Some((lane_y, lane_h)) = lane_rect {
+            if lane_y + lane_h > header_height && lane_y < bounds.height {
                 frame.fill_rectangle(
                     Point::new(0.0, lane_y),
-                    Size::new(bounds.width, track_h),
+                    Size::new(bounds.width, lane_h),
                     theme::ACCENT_DIM,
                 );
                 let lane_rect = canvas::Path::rectangle(
                     Point::new(0.5, lane_y + 0.5),
-                    Size::new(bounds.width - 1.0, track_h - 1.0),
+                    Size::new(bounds.width - 1.0, lane_h - 1.0),
                 );
                 frame.stroke(
                     &lane_rect,
@@ -104,8 +106,8 @@ impl TimelineCanvas<'_> {
         // --- Dashed grid-snapped ghost clip ------------------------------
         if let Some(start) = start_sample {
             // Base y of the lane (existing) or the new-track zone.
-            let base_y = match lane_index {
-                Some(i) => header_height + i as f32 * track_h - y_off,
+            let base_y = match lane_rect {
+                Some((lane_y, _)) => lane_y,
                 None => zone_y,
             };
             let ghost_x = self.sample_to_x(start);
@@ -186,12 +188,14 @@ impl TimelineCanvas<'_> {
 
         // Tooltip: target track + bar + any conversion, below the pill.
         if let Some(res) = drag.resolved.as_ref() {
-            let track_name = match lane_index {
-                Some(i) => sorted_tracks
-                    .get(i)
+            let track_name = match res.target {
+                DropTarget::ExistingTrack { track_id, .. } => self
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == track_id)
                     .map(|t| t.name.clone())
                     .unwrap_or_else(|| "Track".to_string()),
-                None => "New audio track".to_string(),
+                DropTarget::NewTrack { .. } => "New audio track".to_string(),
             };
             let mut parts = vec![track_name, res.bar_label.clone()];
             if let Some(conv) = drag.asset.conversion.as_ref() {
