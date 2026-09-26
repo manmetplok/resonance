@@ -28,7 +28,7 @@ master and updates this table. Agents do **not** edit this file.
 | M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | merged | e996ad33 |
 | M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | merged | c28a8a5c |
 | M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | merged | f7ad84e2 |
-| M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
+| M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | merged | 7701e28a |
 | M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | merged | d3b41d37 |
 | M6 theory + small plugins | LIB-02..LIB-09 | opus | merged | 26e1e316 |
 | V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | in progress | |
@@ -42,7 +42,7 @@ master and updates this table. Agents do **not** edit this file.
 ### Follow-ups found while fixing (new todos)
 
 - [ ] **FU-A1a** (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
-- [ ] **FU-A1b** (medium, = UPD-03) edits during `io.loading` are still acked then wiped by replay.
+- [x] **FU-A1b** (medium, = UPD-03) — fixed @137c320a; edits during `io.loading` are still acked then wiped by replay.
 - [ ] **FU-A1c** (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
 - [ ] **FU-G2a** (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
 - [ ] **FU-G2b** (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
@@ -91,6 +91,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M6b** (low) svs: unknown phonemes now fail the render (was: silent token 0); g2p paths that skip voicebank substitution will surface errors.
 - [ ] **FU-M6c** (low) EQ band kind change restarts its stages from zero (can click on loud material); optional ~5 ms crossfade.
 - [ ] **FU-M6d** (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
+- [ ] **FU-M4a** (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
+- [ ] **FU-M4b** (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
+- [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
 
 ## How to use this file
 
@@ -243,7 +246,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** In `restore_track_groups` (both the slow path and `apply_track_groups`), advance `r.registry.next_sub_track_id` past every `tg.id`. Also make `allocate_sub_track_id` skip ids present in `r.track_groups`. That needs the registry to know the group ids, or a group-aware allocator wrapper on `Resonance`. Make `add_group_new` refuse, or debug-assert, on an existing id.
 - **Verification:** Add a module to `resonance-app/tests/mixer` (grouping). Replay a `ProjectFile` that has a group with id 1_000_000_000 and two tracks, select two tracks, dispatch `GroupMessage::CreateGroupFromSelection`, and assert that the registry holds two groups and the original is unchanged.
 
-### [ ] STATE-05 — Deleting a track leaves its MIDI clips, automation lanes and group memberships behind; they are saved and reattach to a later track that reuses the id
+### [x] STATE-05 — Deleting a track leaves its MIDI clips, automation lanes and group memberships behind; they are saved and reattach to a later track that reuses the id — fixed @45c8ab2d
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -264,7 +267,7 @@ framing and the CLAP state stream were checked and found correct.
   Serialization could also filter out entities whose `track_id` is not in the registry, as a defensive second layer.
 - **Verification:** Add a module to `resonance-app/tests/timeline`. Use `new_for_test_with_capture()`, add a track with a MIDI clip and a `TrackGain` lane, and deliver `AudioEvent::TrackRemoved`. Assert that `test_build_project_file()` has no MIDI clip, lane or group member referencing that id, and that `DeleteMidiClip` and `ClearAutomationLane` were captured.
 
-### [ ] STATE-06 — Saving and reloading a MIDI clip loses overlapping same-pitch notes and notes whose velocity rounds to 0
+### [x] STATE-06 — Saving and reloading a MIDI clip loses overlapping same-pitch notes and notes whose velocity rounds to 0 — fixed @4c60a044 (notes stored in project.json; .mid kept as fallback)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** data-loss
@@ -281,7 +284,7 @@ framing and the CLAP state stream were checked and found correct.
   - Clamp the encoded velocity to at least 1.
 - **Verification:** Add a round-trip test to the io group binary (`resonance-app/tests/io`): `save_project` with a clip containing overlapping same-pitch notes and one note with velocity 0.001, then `load_project`, and assert that the notes are equal field by field (use `midi_notes_equal`).
 
-### [ ] STATE-07 — Clicking a clip without dragging records an empty undo entry, clears redo, marks the project dirty and bumps the control revision
+### [x] STATE-07 — Clicking a clip without dragging records an empty undo entry, clears redo, marks the project dirty and bumps the control revision — fixed @71dc5aef
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -308,7 +311,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Make the app the authority for a session-wide high-water mark. After a slow-path replay, send the engine the maximum id ever issued (a new `AudioCommand::ReserveIds { next_clip_id, next_track_id }`), or have `ClearAll` for undo keep the allocators and reset them only on a disk load. After a disk load, seed the value from the ids of the `audio/clip_*.wav` files on disk. Fixing STATE-02 (recording clears redo) also closes the specific redo path.
 - **Verification:** Add to `resonance-app/tests/timeline` with `new_for_test_with_capture()`: record an entry, simulate `RecordingFinished` for clip 7, undo into the slow path, and assert that the replay commands include an id-reservation command whose `next_clip_id` is at least 8. The audio side needs an engine-level test in `resonance-audio/tests`.
 
-### [ ] STATE-09 — Save completion clears `dirty` even when the user edited while the files were being written
+### [x] STATE-09 — Save completion clears `dirty` even when the user edited while the files were being written — fixed @de388a2b
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** data-loss
@@ -348,7 +351,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Either inline MIDI notes and base64 plugin state into the backup JSON, or give content-addressed names to `.mid` and `.bin` files (for example a hash in `state_file` and `midi_file`) so older backups keep resolving to their own versions. Let `load_project` accept any `*.json` inside a bundle, with the project dir resolved to the bundle root.
 - **Verification:** Add to `resonance-app/tests/io`: save, `write_backup`, change a MIDI clip's notes, save again, load the backup with the fixed loader, and assert that it has the original notes.
 
-### [ ] STATE-13 — `RequestRemoveTrack` records an undo entry even when it only opens the delete-confirmation dialog
+### [x] STATE-13 — `RequestRemoveTrack` records an undo entry even when it only opens the delete-confirmation dialog — fixed @ea0f017a
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -400,7 +403,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Resolve the `ProjectLoad` token in `engine_events::project_io::all_cleared` for disk loads, next to the existing `ProjectNew` completion. Keep `fail_token` in `ProjectLoaded(Err)`. Build the result's `revision` after the replay. Pair this with UPD-03 so nothing can mutate during the window.
 - **Verification:** `tests/control/` module: `new_for_test_with_capture()`, run `project.open` via `update::control::execute`, feed `ProjectLoaded(Ok)`, and assert `control_jobs().status(id).state` is not terminal. Then feed `AllCleared` through the engine-event path and assert it is `Done` and that `song.tracks` shows the loaded project.
 
-### [ ] UPD-03 — The mutation gate ignores `io.loading`; control edits during a load or a slow-path undo replay are acknowledged and then silently wiped
+### [x] UPD-03 — The mutation gate ignores `io.loading`; control edits during a load or a slow-path undo replay are acknowledged and then silently wiped — fixed @137c320a
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** concurrency
@@ -410,7 +413,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** In `mutation_gate_error`, return `RpcError::busy("a project load / undo replay is in progress")` when `app.io.loading || app.io.pending_load.is_some()`. Also make the control `edit.undo` response say whether the restore is deferred, or delay the reply. Consider holding the fast tick while `io.loading` so the window stays short.
 - **Verification:** `tests/control/control_mutation_gate.rs` (existing module): set up a structural undo through `new_for_test_with_capture()` and call `edit.undo`. Then call `mixer.set_volume` via `execute` and assert the reply is `busy`.
 
-### [ ] UPD-04 — Queued pool-import placements are never cleared: undo, track delete or project switch still place the clip later
+### [x] UPD-04 — Queued pool-import placements are never cleared: undo, track delete or project switch still place the clip later — fixed @eb6ab142
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -420,7 +423,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Clear `pool_import` (and fail matching `PoolImport` jobs) on `ProjectLoaded(Ok)`, template instantiation, and slow-path undo restore. In `asset_imported`, refuse to place when the target track is not in `registry.tracks`: drop the placement and fail the `clip.place` job with the existing "target track deleted" message. Better still, stamp each `PendingImport` with a project/replay generation counter and ignore events from an older generation.
 - **Verification:** `tests/io/` (or the pool module in `timeline`): `new_for_test_with_capture()`, queue `ImportAndPlaceExact` onto track T, delete T (or run `ProjectLoaded(Ok)` + `AllCleared`), then feed `AudioEvent::AssetImported`. Assert no `ClipState` exists with `track_id == T` and no `LoadClipFromWav` was captured.
 
-### [ ] UPD-05 — Frozen tracks are not invalidated by compose, arrangement or tempo edits; playback keeps the stale frozen render
+### [x] UPD-05 — Frozen tracks are not invalidated by compose, arrangement or tempo edits; playback keeps the stale frozen render — fixed @faca7544 (app-side content fingerprint)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -920,7 +923,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** In `notes.rs::edit`, dispatch `ResizeNote` and `SetNoteVelocity` BEFORE `MoveNote`, while `index` is still valid, and keep the move last. Alternatively, recompute the post-sort index (partition point of `(want_start, …)` with stable-sort tie handling) and use it for the later sub-edits. Keep everything inside the existing `with_compound_undo`. The fix is handler-only, with no wire or tool change.
 - **Verification:** `control` group, `control_notes.rs`: a three-note clip, a `notes.edit` that moves index 0 past the others and also sets duration and velocity. Assert via `song.notes` and via the captured `AudioCommand`s that the moved note carries the new duration and velocity and the others are untouched.
 
-### [ ] CTL-03 — The "one revision bump / one edit_undo per call" contract is broken in three places
+### [x] CTL-03 — The "one revision bump / one edit_undo per call" contract is broken in three places — fixed @3a4a8ce0 (one compound undo per control call)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** api-design
