@@ -210,3 +210,83 @@ fn cpal_fallback_never_drains() {
         );
     }
 }
+
+// -- Input wider than the monitor scratch (code review MIX-09) --------------
+
+use resonance_audio::__test_support::MixAudioHarness;
+use resonance_audio::types::{TempoMap, Track, TrackOutput};
+use std::sync::atomic::Ordering;
+
+const MIX09_BLOCK: usize = 64;
+
+/// A stopped harness with one monitored track on input port 0, and the
+/// ring filled as full as it goes with `in_ch`-channel frames whose
+/// channel `c` carries `c + 1` — so a whole-frame read hands the track
+/// exactly 1.0 and a torn one hands it something else.
+fn wide_input_harness(in_ch: usize) -> MixAudioHarness {
+    let t = Track::new(1, "mon".into());
+    t.set_output(TrackOutput::Master);
+    t.set_monitor_enabled(true);
+    t.set_mono(true);
+    let mut h = MixAudioHarness::new(
+        vec![t],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        TempoMap::default(),
+        MIX09_BLOCK,
+        2,
+        48_000,
+        false,
+    );
+    h.shared().monitoring.store(true, Ordering::Relaxed);
+    h.shared().input_channels.store(in_ch as u16, Ordering::Relaxed);
+    h.shared()
+        .master_volume_bits
+        .store(1.0f32.to_bits(), Ordering::Relaxed);
+    fill_wide(&mut h, in_ch);
+    h
+}
+
+fn fill_wide(h: &mut MixAudioHarness, in_ch: usize) {
+    let frame: Vec<f32> = (0..in_ch).map(|c| (c + 1) as f32).collect();
+    while h.push_monitor(&frame) == in_ch {}
+}
+
+/// More channels than `MAX_INPUT_CHANNELS` (a 64-channel MADI interface
+/// opened through the cpal path): the read used to size itself from the
+/// channel count alone and slice `monitor_temp` out of bounds — a panic
+/// inside the output callback, which kills the stream.
+#[test]
+fn input_wider_than_the_supported_maximum_never_panics_the_callback() {
+    let mut h = wide_input_harness(40);
+    for _ in 0..4 {
+        let out = h.render();
+        assert!(out.iter().all(|s| s.is_finite()));
+        fill_wide(&mut h, 40);
+    }
+}
+
+/// Wider than the callback's scratch but within the supported maximum:
+/// the read clamps to what the scratch holds, in whole frames, so the
+/// interleave never rotates.
+#[test]
+fn input_wider_than_the_scratch_reads_whole_frames_only() {
+    let mut h = wide_input_harness(16);
+    let mut heard = false;
+    for _ in 0..6 {
+        let out = h.render().to_vec();
+        // Port 0 carries 1.0 (the first block ramps up to it from the
+        // fader's resting gain of 0); every other channel is > 1.
+        for &s in &out {
+            assert!(
+                (0.0..=1.0 + 1e-6).contains(&s),
+                "a torn frame fed the track channel data other than port 0: {s}"
+            );
+        }
+        heard |= out.iter().any(|&s| s != 0.0);
+        fill_wide(&mut h, 16);
+    }
+    assert!(heard, "the monitored input must still be heard");
+}
