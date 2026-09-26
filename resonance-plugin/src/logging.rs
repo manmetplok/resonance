@@ -17,12 +17,13 @@ use std::sync::Once;
 
 use tracing_subscriber::EnvFilter;
 
-/// `RUST_LOG` unset: warnings from everything, `info` from the crates
-/// whose `eprintln!`s became `tracing` calls — the lowest level any of
-/// them maps to, so the default output is what it was. Keep in step with
+/// `RUST_LOG` unset: warnings from everything, `info` from the workspace
+/// crates (a target prefix: `resonance` covers every `resonance_*`) —
+/// the lowest level any former `eprintln!` maps to, so the default output
+/// is what it was. Keep in step with
 /// `resonance-app/src/main.rs`.
-pub const DEFAULT_LOG_FILTER: &str = "warn,resonance_audio=info,resonance_common=info,\
-     resonance_plugin=info,resonance_app=info,wayland_plugin_gui=info,cocoa_plugin_gui=info";
+pub const DEFAULT_LOG_FILTER: &str = "warn,resonance=info,resonance_svs=warn,\
+     wayland_plugin_gui=info,cocoa_plugin_gui=info";
 
 /// Install this bundle's stderr subscriber once. Called from the bridge
 /// before anything that can log.
