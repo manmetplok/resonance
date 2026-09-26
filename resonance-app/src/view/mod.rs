@@ -16,7 +16,7 @@ pub(crate) mod editor_panel;
 pub mod freeze_banner;
 pub(crate) mod import_dialog;
 pub(crate) mod import_progress_dialog;
-pub(crate) mod knob;
+pub mod knob;
 pub(crate) mod markers_overview;
 pub(crate) mod menus;
 pub mod midi_editor;

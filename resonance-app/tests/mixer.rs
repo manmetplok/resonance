@@ -81,3 +81,5 @@ mod sidechain_persistence;
 mod tick_gating;
 #[path = "mixer/track_group_registry.rs"]
 mod track_group_registry;
+#[path = "mixer/pan_knob_drag.rs"]
+mod pan_knob_drag;
