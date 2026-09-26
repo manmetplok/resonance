@@ -760,3 +760,11 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 - A2-3: the "bounce guards stall the callback" scenario is moot since MIX-02's offline-render gate (the callback never `try_read`s maps while an `OfflineRenderGuard` is held). The remaining value of A2-4+ for offline paths is engine-thread latency and determinism, not dropouts. Bounce per-chunk guards documented on `ChunkCtx`, unchanged.
 - A2-2: `Retired` lives on `SharedState` (engine-side Mutex; the audio thread never touches it) rather than `HandlerState`, because publishers only have `&HandlerCtx` and a few run on workers. `Track::{push,retain,set,clear}_plugins` now return the replaced `Arc`; A2-4+ should publish `RenderGraph` through `retire::publish`.
 - Signature changes: `rcu_tempo(ctx, f)`, `ReferencePlayer::publish(&SharedState, …)`, `apply_master_fx_chain` / `pickup_live_midi` gained a parameter.
+
+**H2 landed (A1-1, A1-2 (1)(2)(9a), A1-3 first slice).** Corrections:
+- A1-1's `build_project_file(restore(s)) == s.file` cannot see chord_track (it was on neither side); the disk round-trip test (`tests/io/chord_track_persistence.rs`) and the full `same_state` check are what cover it. The fixed-point test (`tests/io/undo_snapshot_fixed_point.rs`) runs demo + 4 templates through both paths.
+- `compose_arrangements` was fully redundant (`to_project_definitions` already writes the full arrangement).
+- `vocal_clip_lyrics` normalisation differs between paths in live state (slow path pads to note count) — compare after normalising in A1-2 (4).
+- `restore_performance` runs only on the slow path — fold into the Reconcile work.
+- Slow-path `freeze.reset()` wipes UPD-05 content baselines — note for A1-2 (6).
+- A1-3: `TransportMessage`, `BusMessage`, `MasterMessage` now live in `update/{transport,bus,master}.rs` with `pub use` re-exports.
