@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use super::thread::HandlerCtx;
 use super::SharedState;
-use crate::types::AudioEvent;
+use crate::types::{AudioEvent, EngineError};
 
 /// Minimum interval between throttled `AuditionPosition` events, matching the
 /// ~60 Hz cadence of the main `PlayheadMoved` reporting.
@@ -189,7 +189,7 @@ pub(crate) fn handle_audition_file(ctx: &HandlerCtx, path: std::path::PathBuf, s
         Err(e) => {
             let _ = ctx
                 .event_tx
-                .send(AudioEvent::Error(format!("audition: {e}")));
+                .send(AudioEvent::Error(EngineError::io(format!("audition: {e}"))));
         }
     }
 }

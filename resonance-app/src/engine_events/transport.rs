@@ -20,9 +20,9 @@ pub(super) fn refused(r: &mut Resonance) {
     r.transport.recording = false;
 }
 
-pub(super) fn error(r: &mut Resonance, e: String) {
-    tracing::error!("Audio engine error: {}", e);
-    r.error_message = Some(e);
+pub(super) fn error(r: &mut Resonance, e: EngineError) {
+    tracing::error!(kind = ?e.kind, "Audio engine error: {}", e.message);
+    r.error_message = Some(e.message);
 }
 
 pub(super) fn input_devices_listed(

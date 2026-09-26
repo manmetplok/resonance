@@ -9,9 +9,10 @@ use resonance_metering::MeterSnapshot;
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    ABSource, AssetId, BusId, ClipId, F0Frame, FadeCurve, InputDeviceInfo, MidiNote, MixMeasurement,
-    NoteBlob, ParamInfo, PluginInstanceId, PluginScanFailure, ReferenceAnalysisStage, ReferenceId,
-    SamplePos, ScannedPlugin, SendId, SendSource, TrackId, WarpAlgorithm, WarpMarker,
+    ABSource, AssetId, BusId, ClipId, EngineError, EngineErrorKind, F0Frame, FadeCurve,
+    InputDeviceInfo, MidiNote, MixMeasurement, NoteBlob, ParamInfo, PluginInstanceId,
+    PluginScanFailure, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId,
+    SendSource, TrackId, WarpAlgorithm, WarpMarker,
 };
 use crate::quantize::GrooveTemplate;
 use resonance_common::FreezeCacheRef;
@@ -133,6 +134,17 @@ impl PluginEditorFailure {
     /// rather than leaving an "Open Editor" affordance that can never work.
     pub fn is_transient(self) -> bool {
         matches!(self, Self::CreateFailed | Self::ShowFailed)
+    }
+
+    /// The [`EngineErrorKind`] this failure classifies as, for the
+    /// accompanying [`AudioEvent::Error`] (see
+    /// [`plugin_editor_failure_events`](crate::engine::plugins::plugin_editor_failure_events)).
+    pub fn engine_error_kind(self) -> EngineErrorKind {
+        match self {
+            Self::UnknownInstance => EngineErrorKind::NotFound,
+            Self::NoEditor | Self::UnsupportedWindowApi => EngineErrorKind::Unsupported,
+            Self::CreateFailed | Self::ShowFailed => EngineErrorKind::Plugin,
+        }
     }
 }
 
@@ -295,7 +307,7 @@ pub enum AudioEvent {
     /// false. Unlike [`AudioEvent::Stopped`] the playhead is untouched —
     /// nothing moved it (FU-F1a).
     TransportRefused,
-    Error(String),
+    Error(EngineError),
     InputDevicesListed {
         devices: Vec<InputDeviceInfo>,
         default_name: Option<String>,

@@ -226,9 +226,9 @@ pub(crate) fn handle_import_audio_to_pool(
     let project_dir = match state.project_dir.clone() {
         Some(dir) => dir,
         None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(
-                "Cannot import audio: no project directory set.".into(),
-            ));
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(
+                "Cannot import audio: no project directory set.",
+            )));
             return;
         }
     };
@@ -317,13 +317,13 @@ pub(crate) fn handle_import_audio_to_pool(
                     );
                 },
                 |message| {
-                    let _ = panic_tx.send(AudioEvent::Error(message));
+                    let _ = panic_tx.send(AudioEvent::Error(EngineError::internal(message)));
                 },
             );
         });
     if let Err(e) = spawn_result {
-        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
             "Failed to spawn pool-import thread: {e}"
-        )));
+        ))));
     }
 }

@@ -21,9 +21,9 @@ pub(crate) fn handle_add_bus(
 ) {
     let mut busses_guard = ctx.busses.write();
     if busses_guard.len() >= MAX_BUSSES {
-        let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(format!(
             "Cannot add bus: maximum of {MAX_BUSSES} busses reached"
-        )));
+        ))));
         return;
     }
     let bus_id = id_hint.unwrap_or_else(|| {
@@ -228,11 +228,11 @@ pub(crate) fn handle_move_plugin_in_bus(
             });
         }
         None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::not_found(format!(
                 "Cannot reorder plugin {} on bus {}: no such bus, or that \
                  plugin is not on its chain",
                 instance_id, bus_id
-            )));
+            ))));
         }
     }
 }

@@ -90,6 +90,7 @@ mod aux_send;
 pub mod sidechain;
 mod clip;
 mod commands;
+mod error;
 mod events;
 mod reference;
 mod measure;
@@ -109,6 +110,7 @@ pub use clip::{
 pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
 pub use commands::AudioCommand;
+pub use error::{EngineError, EngineErrorKind};
 pub use events::{
     AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage, PluginEditorFailure,
 };

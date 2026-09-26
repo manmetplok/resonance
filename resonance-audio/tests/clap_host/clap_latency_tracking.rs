@@ -385,8 +385,8 @@ fn engine_reload_reports_failures_as_errors() {
 
     match reload_plugin_state(&mut instance, 77, &[0xff]) {
         Some(AudioEvent::Error(msg)) => {
-            assert!(msg.contains("77"), "error must name the instance: {msg}");
-            assert!(msg.contains("previous"), "rejected load keeps the old state: {msg}");
+            assert!(msg.message.contains("77"), "error must name the instance: {msg}");
+            assert!(msg.message.contains("previous"), "rejected load keeps the old state: {msg}");
         }
         other => panic!("expected AudioEvent::Error, got {other:?}"),
     }
@@ -394,8 +394,8 @@ fn engine_reload_reports_failures_as_errors() {
     state.fail_next_activate = true;
     match reload_plugin_state(&mut instance, 77, &32u32.to_le_bytes()) {
         Some(AudioEvent::Error(msg)) => {
-            assert!(msg.contains("77"));
-            assert!(msg.contains("silent"), "deactivated plugin must say so: {msg}");
+            assert!(msg.message.contains("77"));
+            assert!(msg.message.contains("silent"), "deactivated plugin must say so: {msg}");
         }
         other => panic!("expected AudioEvent::Error, got {other:?}"),
     }
@@ -496,7 +496,7 @@ fn a_failed_restart_is_retried_and_reported_once() {
     let (restarted, event) = service_host_restart_request(&mut instance, 9);
     assert!(!restarted);
     match event {
-        Some(AudioEvent::Error(msg)) => assert!(msg.contains('9'), "{msg}"),
+        Some(AudioEvent::Error(msg)) => assert!(msg.message.contains('9'), "{msg}"),
         other => panic!("expected AudioEvent::Error, got {other:?}"),
     }
     assert!(!instance.is_active());

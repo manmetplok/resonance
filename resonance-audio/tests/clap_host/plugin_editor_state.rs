@@ -363,9 +363,9 @@ fn failure_events_carry_the_instance_id_and_a_reason() {
     // editor" — it names the instance and the reason.
     match &events[1] {
         AudioEvent::Error(msg) => {
-            assert!(msg.contains("4242"), "error must name the instance: {msg}");
+            assert!(msg.message.contains("4242"), "error must name the instance: {msg}");
             assert!(
-                msg.contains(PluginEditorFailure::CreateFailed.message()),
+                msg.message.contains(PluginEditorFailure::CreateFailed.message()),
                 "error must carry the reason: {msg}"
             );
         }

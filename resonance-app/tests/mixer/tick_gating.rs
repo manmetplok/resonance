@@ -15,7 +15,7 @@ use resonance_app::state::TempoEvent;
 use resonance_app::update::tick;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
+use resonance_audio::types::{AudioCommand, AudioEvent, EngineError, TrackType};
 
 const TRACK: u64 = 1;
 
@@ -381,7 +381,7 @@ fn stream_recovery_leaves_an_unrelated_error_banner_standing() {
     assert!(app.test_error_message().is_some(), "loss raises the banner");
 
     // An unrelated engine error overwrites the single error surface.
-    app.test_handle_engine_event(AudioEvent::Error("disk full".to_string()));
+    app.test_handle_engine_event(AudioEvent::Error(EngineError::internal("disk full")));
     assert_eq!(app.test_error_message(), Some("disk full"));
 
     app.engine.__set_output_stream_lost_for_test(false);

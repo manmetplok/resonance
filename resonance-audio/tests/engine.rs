@@ -24,6 +24,8 @@ mod clip_warp_handlers;
 mod deferred_clip_commands;
 #[path = "engine/device_params_handler.rs"]
 mod device_params_handler;
+#[path = "engine/engine_error_kind.rs"]
+mod engine_error_kind;
 #[path = "engine/external_instrument_handlers.rs"]
 mod external_instrument_handlers;
 #[path = "engine/external_instrument_ping.rs"]

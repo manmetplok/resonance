@@ -23,7 +23,8 @@ use resonance_common::{CompSegment, TakeGroup, TakeGroupId, TakeId};
 
 use crate::clap_host::PluginMap;
 use crate::engine::{
-    automation::AutomationSnapshot, takes, tracks, transport, OfflineRenderGuard, SharedState,
+    automation::AutomationSnapshot, busses, master, takes, tracks, transport, OfflineRenderGuard,
+    SharedState,
 };
 use crate::mixer::CompRenderTable;
 use crate::types::*;
@@ -241,6 +242,21 @@ impl EngineHandlerHarness {
     /// Insert `track` into the live track table, as `AddTrack` would.
     pub fn push_track(&mut self, track: Track) {
         self.tracks.write().insert(track.id, track);
+    }
+
+    /// Run the real `MovePluginInMaster` handler (ARCH-05/C-1's
+    /// `EngineError::not_found` guard: an instance id absent from the
+    /// master chain).
+    pub fn move_plugin_in_master(&mut self, instance_id: PluginInstanceId, to_index: usize) {
+        self.with_ctx(|ctx, _state| {
+            master::handle_move_plugin_in_master(ctx, instance_id, to_index)
+        });
+    }
+
+    /// Run the real `AddBus` handler (ARCH-05/C-1's `EngineError::busy`
+    /// guard: past `MAX_BUSSES`, the engine refuses rather than adding).
+    pub fn add_bus(&mut self, id_hint: Option<BusId>, name: Option<String>) {
+        self.with_ctx(|ctx, state| busses::handle_add_bus(ctx, state, id_hint, name));
     }
 
     /// The frozen source the callback would read for `track_id`.

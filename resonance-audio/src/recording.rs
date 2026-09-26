@@ -179,7 +179,7 @@ impl RecordingState {
     /// failure found by its final drain is reported with the take.
     pub fn poll_write_errors(&mut self, event_tx: &Sender<AudioEvent>) {
         for msg in self.write_errors.drain(..) {
-            let _ = event_tx.send(AudioEvent::Error(msg));
+            let _ = event_tx.send(AudioEvent::Error(EngineError::io(msg)));
         }
     }
 
