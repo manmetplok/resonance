@@ -3,7 +3,8 @@
 Design for `refactor-intent.md` Epic A item 13 (`arch-migration-plan.md`
 ARCH-01 step 3, "A-13 roadmap" in the A-7 progress note). Written against
 master `d6d89413`. This document covers the trait, the driver, and the first
-slice (A-13a, roadmap group 1). Later slices move one group at a time.
+slice (A-13a, roadmap group 1); §7 records the second (A-13b, group 2,
+written against master `c325335a`). Later slices move one group at a time.
 
 ## 1. The problem
 
@@ -224,3 +225,180 @@ references, freeze (FU-A4a), missing-plugins — has origin-dependent bodies:
   the undo paths and `loaded.project_dir` on disk load; the ctx already
   carries `project_dir`, and the full path's `live_project_path` becomes a
   second ctx field or part of the live carry.
+
+## 7. Group (2): A-13b
+
+### The live carry
+
+```rust
+pub struct ReconcileCtx<'a> { origin, project_dir, pub live: LiveCarry<'a> }
+
+#[derive(Clone, Copy, Default)]
+pub struct LiveCarry<'a> {
+    pub project_path: Option<&'a Path>,     // live .rproj path (freeze caches)
+    pub derived_counter_floor: Option<u64>, // None on a disk load
+}
+```
+
+Each entry point fills it at its top, before anything is restored. It holds
+only what the restore itself **overwrites before the domain that needs it
+runs**:
+
+* `project_path` — the full replay `take()`s `io.project_path` (the
+  `AllCleared` handler puts it back after), so `Freeze` could not read it
+  from `r`. The diff path clones it; there it equals `project_dir`.
+* `derived_counter_floor` — `ComposeState::load_from_project` (in
+  `replay_globals` / `apply_compose`) resets the counter before
+  `DerivedClips` runs. Captured at the top of `try_diff_replay` now rather
+  than inside `apply_compose`; nothing in between touches the counter.
+
+The other two items §6 listed turned out not to need carrying: live state a
+restore does not overwrite before its domain runs stays in `Resonance` and is
+read there under the origin.
+
+* **Freeze statuses.** Nothing in either restore reads or writes `r.freeze`
+  before `Freeze` runs (checked: every `.freeze` reader is a message gate,
+  an engine-event handler or the serializer). The full path's top-of-replay
+  `freeze.reset()` (disk load) / `queue = None` (undo) moved into the domain;
+  `apply_freeze_restore` clears the queue itself.
+* **Reference monitor.** `restore_references` already `mem::take`s
+  `r.reference.monitor` itself and nothing before it touches that.
+
+So "carry" is the exception, not the rule: the next group should only add a
+field when a restore step between the top and the domain clobbers the value.
+
+### Stages and the table
+
+`Stage` is now `Timeline, Clips, Content, Tail`. The table (pinned by
+`reconcile_order::the_table_is_the_agreed_order`):
+
+| Stage | Domains |
+|---|---|
+| Timeline | tempo_events, chord_track, markers |
+| Clips | derived_clips |
+| Content | **references**, pool, quantize, performance, track_groups, take_groups |
+| Tail | **external_instruments**, **automation_lanes**, **missing_plugins**, **freeze** |
+
+| Domain | Body by origin |
+|---|---|
+| `DerivedClips` | `restore_derived_clips(file, echoes_in_flight = UndoDiff, live.derived_counter_floor)` |
+| `References` | DiskLoad: `restore_references(File)`; UndoFull: `restore_references(Live)`; UndoDiff: `reconcile_references` |
+| `ExternalInstruments` | `restore_external_instruments(file, after_clear_all)` — one body now (below) |
+| `AutomationLanes` | `restore_automation_lanes` — origin-independent |
+| `MissingPlugins` | DiskLoad: `reset`; UndoFull: `dismiss`; UndoDiff: nothing (re-adds no plugin — as before) |
+| `Freeze` | DiskLoad: `freeze.reset()` + `rehydrate_frozen_tracks(project_dir)`; undo (both): `apply_freeze_restore(tracks, live.project_path)` |
+
+`restore_external_instruments` absorbed `replay_track`'s block: with
+`after_clear_all` it drops the app map (no engine traffic; `ClearAll` emptied
+it) and sends no `SetTrackDeviceParams` for a track with no device — what
+`replay_track` did, pinned by
+`legacy_external_track_without_device_field_loads_and_sends_no_params`.
+Without it (diff path) stale tracks get `ClearExternalInstrument` + an empty
+param map as before. Tracks are asserted in **file order** (the diff path
+iterated a `HashMap`). It is keyed by the file's track id; `replay_track`
+used the remapped id of a legacy colliding sub-track, but sub-tracks cannot
+be made external, so the two never differ in practice. The disk-only
+`ResendExternalInstrumentPatches` stays in `all_cleared`'s disk tail.
+
+Where the stages sit now:
+
+```
+Full path (replay_loaded_project)
+  SetProjectDir, replay_globals [.. SetBpm, ── Timeline ──, chord trim, ..],
+  wipe_registry, tracks/busses/master/sends/sidechain, audio + MIDI clips,
+  replay_vocal [── Clips ──, vocal audio clip map], finalize_plugin_chains,
+  ── Content ── ── Tail ──
+
+Diff path (try_diff_replay)
+  global, tracks, busses, sends, sidechain, master, plugin blobs + params,
+  audio clips, MIDI clips, compose (sections, drum patterns, lyrics),
+  ── Timeline ── ── Clips ── ── Content ── ── Tail ──,
+  resort, vocal audio clip map
+```
+
+On the diff path the four stages are now adjacent (there is no inline code
+left between them).
+
+### Ordering changes (each checked against every reader in between)
+
+Full path:
+
+1. **External instruments** leave `replay_track`: `SetExternalInstrument` /
+   `SetTrackDeviceParams` go out after every track, bus, plugin, clip,
+   reference and Content domain instead of right after each track's
+   `AddTrack` + plugins. Still before the lanes and before the disk-load
+   `ResendExternalInstrumentPatches`. The engine stores the config in a
+   per-track map (`set_external_instrument_in_place` only needs the track to
+   exist) read at render time; app-side nothing between `wipe_registry` and
+   the Tail reads `r.external_instruments`. The capture tests counted
+   commands per track rather than position, except the fixed-point test's
+   "exactly once", which holds. New guard:
+   `the_full_path_sends_external_config_after_the_tracks_and_before_the_lanes`.
+   The `external_instruments.clear()` in `wipe_registry` moved into the
+   domain.
+2. **Missing-plugin reset/dismiss** moves from the top of the replay to the
+   Tail. The refusals that raise the warning are engine events handled after
+   the replay returns (`engine_events::plugins`), and nothing in the replay
+   reads the warning.
+3. **Freeze prep** (`reset` / `queue = None`) moves from the top of the
+   replay into `Freeze` (see the carry above).
+
+Diff path:
+
+4. **Derived clips** move from inside `apply_compose` (before lyrics,
+   references, freeze, external instruments and tempo) to after `Timeline`.
+   None of those read the map or allocate a derived id. The legacy
+   positional rebuild reads the tempo map, so it now sees the *target*'s
+   (the full path's behaviour) — but undo snapshots always carry
+   `derived_clips` (`build_project_file` writes `Some`), so it is not
+   reached from the diff path.
+5. **References** move from after `apply_compose` to the head of Content
+   (after Timeline and Clips). Freeze, external instruments, tempo and the
+   derived map read none of it.
+6. **Freeze** moves from after references to the end of the Tail;
+   **external instruments** from before Timeline to the head of the Tail.
+   Neither reads the other or anything in between; the engine sees
+   `SetExternalInstrument` and a retired freeze's detach commands after
+   `SetTempoEvents` and the Content commands instead of before, and treats
+   them independently.
+
+No capture test depended on any of these positions; every existing guard
+passed unchanged at each commit.
+
+### FU-A4a
+
+Still open (a pure refactor). The fix goes in `Freeze`'s undo arm: for each
+track `apply_freeze_restore` leaves `Frozen` (every one after a `ClearAll`;
+on the diff path, those not frozen before), decode and attach the cache as
+`rehydrate_frozen_tracks` does, downgrading an undecodable one to `Stale`.
+The domain's doc comment says so.
+
+### What groups (3) and (4) need
+
+* **(3) Routing — sends, sidechain routes.** Diff-shaped on both paths
+  (`old` is finally used): after a `ClearAll`, `old = None` means "empty the
+  mirror, send everything"; the `aux.sends.clear()` / `sidechain.clear()`
+  in `wipe_registry` move into the domains as `TakeGroups`' clear did. The
+  full path validates endpoints (drops and warns); the diff path relies on
+  `structurally_compatible` — keep the validation in the shared body.
+  **Stage:** a new `Routing` between `Timeline` and `Clips` fits both paths
+  without reordering anything else: full path right after
+  `replay_tracks_and_busses` (sidechain needs the master chain's plugins,
+  so after `replay_master`), diff path right after `Timeline`. The diff
+  path's sends then go out after the clip moves instead of before them —
+  independent on the engine. Mind the diff path's "removals first" rule.
+* **(4) Globals / transport / compose sections.** `replay_globals` sends
+  every scalar, `apply_global` only changed ones; the UI reset
+  (`selected_clip`, drags, confirm modals) is full-path only;
+  `restore_drum_patterns`' `clear_when_empty` flag differs (`false` on the
+  full path, `true` on the diff path) — a real origin rule to keep. This is
+  where the diff path's tempo should converge to "before the clips": a
+  `Globals` stage before `Timeline` on both paths, which on the diff path
+  means moving Timeline ahead of `apply_audio_clips` / `apply_midi_clips`
+  (a real engine-order change: clip commands would see the target tempo
+  map — the reason A-13a left it). `load_from_project` resets the derived
+  map and counter; the floor is already carried, so moving the compose load
+  is safe for `DerivedClips` as long as it stays before `Clips`.
+* `ctx.project_dir` and `ctx.live.project_path` are the same value on the
+  diff path; once the full path no longer `take()`s `io.project_path`
+  (FU-A7a's `pending_load` payload rework) the carry field can go.
