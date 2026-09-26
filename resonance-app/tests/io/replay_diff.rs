@@ -230,8 +230,12 @@ fn midi_notes_equal_field_wise() {
     assert!(!midi_notes_equal(&[n(60, 0.8, 0, 480)], &[]));
 }
 
+/// The legacy flat `drum_groups` list is not part of the shape (A-13g):
+/// `build_project_file` always writes it empty, so two undo snapshots can
+/// never differ in it, and `DrumPatterns` restores whatever a file carries
+/// on every origin. Drum groups live inside `drum_patterns` now.
 #[test]
-fn drum_group_id_set_change_forces_fallback() {
+fn legacy_drum_group_id_set_change_is_compatible() {
     let mut a = empty_file();
     let mut b = empty_file();
     let g = |id: u64| DrumGroup {
@@ -252,5 +256,5 @@ fn drum_group_id_set_change_forces_fallback() {
     };
     a.drum_groups = vec![g(1)];
     b.drum_groups = vec![g(1), g(2)];
-    assert!(!structurally_compatible(&a, &b));
+    assert!(structurally_compatible(&a, &b));
 }

@@ -303,3 +303,20 @@ fn a_diff_restore_to_an_empty_drum_bank_clears_it() {
         target.project.file.drum_patterns
     );
 }
+
+/// A drum group add (inside a pattern — the bank's shape since epic #38).
+/// Snapshots carry the legacy flat `drum_groups` list empty, so it can
+/// never be what differs between two of them.
+#[test]
+fn adding_a_drum_group_undoes_through_the_diff_path() {
+    let mut f = fixture("drum-group");
+    let before = f.app.test_snapshot_for_undo();
+    let groups = group_count(&f.app);
+    let added = edit(&mut f, drum(DrumGroupsMessage::AddGroup));
+    assert_eq!(group_count(&f.app), groups + 1, "the edit added a group");
+    assert!(
+        before.project.file.drum_groups.is_empty() && added.project.file.drum_groups.is_empty(),
+        "snapshots write the legacy drum_groups list empty"
+    );
+    undo_redo_over(&mut f, &before, &added, "drum group add");
+}
