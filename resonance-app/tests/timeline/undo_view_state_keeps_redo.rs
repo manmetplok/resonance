@@ -72,6 +72,7 @@ fn ready(epoch: u64) -> Message {
         trim_end_frames: 0,
         lead_ticks: 0,
         render_epoch: epoch,
+        bpm: 120.0,
     })))
 }
 

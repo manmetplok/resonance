@@ -257,8 +257,15 @@ fn the_autosave_snapshot_carries_the_missing_plugins_state() {
     let states = app.test_plugin_states_for_save(Vec::new());
     project::save_autosave(scratch.path(), &file, &states, &[]).expect("autosave");
 
-    let blob = std::fs::read(scratch.path().join("plugins").join(format!("plugin_{INSTANCE}.bin")))
-        .expect("the autosave bundle wrote the plugin blob");
+    // The autosave keeps its blobs under `autosave/` (code review STATE-11).
+    let blob = std::fs::read(
+        scratch
+            .path()
+            .join("autosave")
+            .join("plugins")
+            .join(format!("plugin_{INSTANCE}.bin")),
+    )
+    .expect("the autosave bundle wrote the plugin blob");
     assert_eq!(blob, BLOB, "autosave must preserve the blob byte-for-byte");
 }
 

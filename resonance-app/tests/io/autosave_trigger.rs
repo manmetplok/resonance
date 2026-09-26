@@ -66,7 +66,6 @@ fn project_dir() -> PathBuf {
         "resonance_autosave_trigger_{}_{n}",
         std::process::id()
     ));
-    std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
     let dir = root.join("song.rproj");
     std::fs::create_dir_all(&dir).expect("create project dir");
     dir
