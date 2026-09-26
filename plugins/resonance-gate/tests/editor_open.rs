@@ -106,6 +106,41 @@ fn settle(editor: &dyn PluginEditor) -> (u32, u32) {
     last
 }
 
+/// Whether this process has a gate editor window mapped, as the
+/// compositor sees it. Hyprland-specific (`hyprctl clients -j`), which is
+/// fine for a hand-run check; `None` when `hyprctl` is not available, and
+/// the visibility assertions below are then skipped.
+///
+/// Parsed crudely — split per client, match class and our pid — to keep
+/// the test free of a JSON dependency.
+fn gate_window_mapped() -> Option<bool> {
+    let out = std::process::Command::new("hyprctl")
+        .args(["clients", "-j"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let json = String::from_utf8_lossy(&out.stdout);
+    let pid = format!("\"pid\": {},", std::process::id());
+    Some(json.split("\"address\"").any(|client| {
+        client.contains("\"class\": \"com.resonance.gate\"")
+            && client.contains(&pid)
+            && client.contains("\"mapped\": true")
+    }))
+}
+
+/// Poll [`gate_window_mapped`] until it reports `want` or the budget runs
+/// out; returns the last answer (`None`: no `hyprctl`).
+fn wait_mapped(want: bool) -> Option<bool> {
+    let deadline = Instant::now() + SIZE_BUDGET;
+    loop {
+        let seen = gate_window_mapped();
+        if seen.is_none() || seen == Some(want) || Instant::now() >= deadline {
+            return seen;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// Drop `editor` on a scratch thread and report whether the drop
 /// finished inside `budget`.
 ///
@@ -243,8 +278,18 @@ fn the_editor_opens_resizes_and_closes() {
         .create(resonance_plugin::editor_host::native_api(), true)
         .expect("no editor window — run this test from a Wayland session");
 
+    // Created, not shown: nothing may be on screen yet (PLG-04 — the first
+    // configure used to map and paint the window by itself).
+    std::thread::sleep(Duration::from_millis(300));
+    assert_ne!(
+        gate_window_mapped(),
+        Some(true),
+        "the editor mapped a window before the host called show()"
+    );
+
     editor.show();
     let mapped = settle(&*editor);
+    assert_ne!(wait_mapped(true), Some(false), "show() did not map the window");
     assert!(
         mapped.0 > 0 && mapped.1 > 0,
         "the window mapped at {mapped:?}, which cannot be rendered"
@@ -280,14 +325,29 @@ fn the_editor_opens_resizes_and_closes() {
         "resize to {RESIZED:?} was not honoured; handle reports {at_resized:?}"
     );
 
-    // Hiding stops the window drawing; it must not lose the geometry the
-    // host would persist.
+    // Hiding takes the window off screen (PLG-04: it used to stay mapped,
+    // frozen, still taking input); it must not lose the geometry the host
+    // would persist.
     editor.hide();
+    assert_ne!(wait_mapped(false), Some(true), "hide() left the window mapped");
     assert_eq!(
         editor.size(),
         RESIZED,
         "hiding the window changed the size the host reads back"
     );
+
+    // And a hidden window comes back on show — the null-buffer unmap
+    // resets the toplevel, so this is the re-map path — and still works.
+    editor.show();
+    assert_ne!(wait_mapped(true), Some(false), "show() after hide() did not re-map");
+    assert!(
+        editor.set_size(preferred.0, preferred.1),
+        "the editor stopped taking commands after a hide/show cycle"
+    );
+    let reshown = wait_until(&*editor, |seen| seen == preferred);
+    assert_eq!(reshown, preferred, "resize after a hide/show cycle was lost");
+    editor.hide();
+    assert_ne!(wait_mapped(false), Some(true), "the second hide() left the window mapped");
 
     // The point of the whole test.
     let started = Instant::now();

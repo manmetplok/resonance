@@ -142,15 +142,8 @@ impl EditorThread {
             .insert_source(cmd_channel, |event, _, state| {
                 if let calloop_channel::Event::Msg(cmd) = event {
                     match cmd {
-                        Command::Show => {
-                            state.visible = true;
-                            state.needs_redraw = true;
-                        }
-                        Command::Hide => {
-                            state.visible = false;
-                            // On Wayland there's no explicit "hide window" — we
-                            // stop drawing. Unmap would need a null buffer commit.
-                        }
+                        Command::Show => state.show(),
+                        Command::Hide => state.hide(),
                         Command::Resize(w, h) => {
                             state.pending_size = Some((w, h));
                             state.needs_redraw = true;
@@ -181,6 +174,9 @@ impl EditorThread {
             pending_size: None,
             scale: 1.0,
             visible: false,
+            mapped: false,
+            needs_remap: false,
+            remap_deadline: None,
             running: true,
             configured: false,
             needs_redraw: true,
@@ -196,6 +192,8 @@ impl EditorThread {
             decoration_mode: initial_mode,
             prefer_server,
             title: options.title.clone(),
+            app_id: options.app_id.clone(),
+            min_size: options.min_size,
         };
 
         // Drive the loop until we get our first configure event, so EGL can
@@ -265,7 +263,15 @@ impl EditorThread {
                 state.repaint_at = None;
                 state.needs_redraw = true;
             }
-            let timeout = if state.visible && state.needs_redraw {
+            // A re-map after a hide waits for its configure, but only
+            // until the deadline (see `REMAP_CONFIGURE_WAIT`).
+            if let Some(deadline) = state.remap_deadline {
+                if state.configured || now >= deadline {
+                    state.remap_deadline = None;
+                    state.configured = true;
+                }
+            }
+            let timeout = if state.visible && state.configured && state.needs_redraw {
                 match state.frame_callback_pending {
                     // Waiting on the compositor: park until the callback
                     // arrives (wakes dispatch) or the stall deadline.
@@ -278,8 +284,9 @@ impl EditorThread {
             } else {
                 // Idle, but never park past a pending repaint deadline —
                 // that is what turns a 10 Hz `request_repaint_after`
-                // animation into actual frames while the mouse is still.
-                match state.repaint_at {
+                // animation into actual frames while the mouse is still —
+                // nor past a re-map's configure deadline.
+                match state.repaint_at.into_iter().chain(state.remap_deadline).min() {
                     Some(at) => IDLE_BUDGET
                         .min(at.saturating_duration_since(now))
                         .max(Duration::from_millis(1)),
@@ -320,7 +327,13 @@ impl EditorThread {
                 }
             }
 
-            if state.visible && state.needs_redraw && state.frame_callback_pending.is_none() {
+            // `configured` is false only while a re-map after a hide waits
+            // for its configure; no buffer may be attached before it.
+            if state.visible
+                && state.configured
+                && state.needs_redraw
+                && state.frame_callback_pending.is_none()
+            {
                 paint_frame(
                     &mut state,
                     app.as_mut(),

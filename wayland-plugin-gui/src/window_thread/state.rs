@@ -1,17 +1,31 @@
 //! State held by the editor thread, mutated by SCTK dispatch handlers.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::output::OutputState;
 use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::seat::SeatState;
 use smithay_client_toolkit::shell::xdg::window::{DecorationMode, Window};
+use smithay_client_toolkit::shell::WaylandSurface;
 use wayland_client::protocol::wl_keyboard::WlKeyboard;
 use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::Connection;
 
 use crate::input::InputState;
 use crate::size::SharedSize;
+
+/// How long a re-map after [`State::hide`] waits for the compositor's
+/// configure before painting anyway.
+///
+/// xdg-shell says an unmapped toplevel is reset and must be configured
+/// again before a buffer is attached, and wlroots-based compositors enforce
+/// that (attaching early is a protocol error). Hyprland, though, keeps the
+/// toplevel configured across the unmap and sends nothing until a buffer
+/// arrives, so waiting for the configure would leave the window hidden
+/// for good. A resetting compositor answers the initial commit within a
+/// round trip — milliseconds — so this is generous for them and a short
+/// delay on show for the others.
+pub(super) const REMAP_CONFIGURE_WAIT: Duration = Duration::from_millis(200);
 
 // ---------------------------------------------------------------------------
 // State: holds everything SCTK dispatch handlers mutate.
@@ -32,7 +46,21 @@ pub(super) struct State {
     pub(super) shared_size: SharedSize,
     pub(super) pending_size: Option<(u32, u32)>,
     pub(super) scale: f32,
+    /// The host wants the window on screen (`Command::Show`, cleared by
+    /// `Command::Hide`). Nothing is painted — and so nothing is mapped —
+    /// while this is false; a new window starts hidden, per
+    /// `Editor::new`'s "create but do not show".
     pub(super) visible: bool,
+    /// A buffer is attached, i.e. the compositor has mapped the toplevel.
+    /// Set by the first painted frame, cleared by [`State::hide`].
+    pub(super) mapped: bool,
+    /// [`State::hide`] unmapped the toplevel with a null buffer, which
+    /// resets it to its just-created state; [`State::show`] has to redo
+    /// the initial commit / configure round before painting again.
+    pub(super) needs_remap: bool,
+    /// `Some(deadline)` while a re-map waits for its configure; see
+    /// [`REMAP_CONFIGURE_WAIT`].
+    pub(super) remap_deadline: Option<Instant>,
     pub(super) running: bool,
     pub(super) configured: bool,
     pub(super) needs_redraw: bool,
@@ -73,9 +101,63 @@ pub(super) struct State {
     /// Window title, mirrored here so the CSD titlebar can render it without
     /// reaching back into `EditorOptions`.
     pub(super) title: String,
+    /// Also mirrored for the re-map after a hide: unmapping discards every
+    /// toplevel attribute (xdg-shell), so [`State::show`] sets them again.
+    pub(super) app_id: String,
+    pub(super) min_size: (u32, u32),
 }
 
 impl State {
+    /// `Command::Show`. Paints on the next loop turn, which maps the
+    /// window; after a [`State::hide`] it first re-runs the initial
+    /// commit, and the paint waits for the configure that answers it (for
+    /// at most [`REMAP_CONFIGURE_WAIT`]).
+    pub(super) fn show(&mut self) {
+        if self.visible {
+            return;
+        }
+        self.visible = true;
+        self.needs_redraw = true;
+        // Whatever egui last knew about the pointer is stale: it left (or
+        // never entered) while we were hidden.
+        self.pending_events.push(egui::Event::PointerGone);
+        if self.needs_remap {
+            self.needs_remap = false;
+            // The unmap returned the toplevel to the state right after
+            // `get_toplevel`: title, app id and size limits are gone and
+            // a buffer may only be attached after a fresh configure.
+            self.window.set_title(&self.title);
+            self.window.set_app_id(&self.app_id);
+            self.window.set_min_size(Some(self.min_size));
+            self.configured = false;
+            self.remap_deadline = Some(Instant::now() + REMAP_CONFIGURE_WAIT);
+            self.window.commit();
+        }
+    }
+
+    /// `Command::Hide`. Really takes the window off screen: attaching a
+    /// null buffer unmaps the toplevel (xdg-shell), where merely not
+    /// painting left it mapped, frozen and still taking input (PLG-04).
+    /// Input that arrives while hidden is dropped, not queued for a replay
+    /// on the next show.
+    pub(super) fn hide(&mut self) {
+        if !self.visible {
+            return;
+        }
+        self.visible = false;
+        self.pending_events.clear();
+        if self.mapped {
+            let surface = self.window.wl_surface();
+            surface.attach(None, 0, 0);
+            surface.commit();
+            self.mapped = false;
+            self.needs_remap = true;
+            // An unmapped surface gets no frame callbacks; don't let the
+            // one in flight hold up the first frame after a show.
+            self.frame_callback_pending = None;
+        }
+    }
+
     /// Whether the editor must draw its own client-side decoration frame:
     /// true when the compositor negotiated [`DecorationMode::Client`].
     pub(super) fn needs_csd(&self) -> bool {
