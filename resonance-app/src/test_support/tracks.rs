@@ -210,6 +210,16 @@ impl Resonance {
         crate::view::selection_bar::selection_bar_with_count(count)
     }
 
+    /// Test-only: run the startup default-track send that `Resonance::new`
+    /// runs (FU-D4a) — `new_for_test*` is hermetic and never runs it, so a
+    /// test that wants to pin the startup race closed drives it
+    /// explicitly. See `send_startup_default_track`'s doc comment
+    /// (`state/ids.rs`) for what this guards.
+    #[doc(hidden)]
+    pub fn test_send_startup_default_track(&mut self) {
+        self.send_startup_default_track();
+    }
+
     /// Test-only: open the realtime bounce-in-place dialog for
     /// `source_track_id` without staging an external-MIDI track, so a test
     /// can drive the dialog's own messages.

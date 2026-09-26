@@ -195,4 +195,34 @@ impl crate::Resonance {
         );
         id
     }
+
+    /// Create the fresh-session default track — every new session's
+    /// "Track 1" — from the app side, synchronously, as part of
+    /// construction (`Resonance::new`).
+    ///
+    /// Until FU-D4a the engine thread created this track itself,
+    /// unprompted, as a literal id 1, right before its command loop ever
+    /// read anything (`resonance-audio/src/engine/thread/mod.rs`, since
+    /// removed). That raced the app's own counter, which independently
+    /// also starts at 1: a GUI "Add Track" handled before the app had
+    /// mirrored that unprompted `TrackAdded` echo called
+    /// [`Self::allocate_track_id`], got id 1 too, and the engine refused
+    /// the resulting `AddTrack` as a collision with the track it had
+    /// already silently created — a click that visibly did nothing but
+    /// raise an error banner.
+    ///
+    /// Routing the default track through the app's own allocator instead
+    /// closes the window outright rather than narrowing it: this runs
+    /// synchronously inside `Resonance::new`, before iced's event loop
+    /// can deliver any message (GUI or control), so this call is
+    /// unconditionally the *first* `allocate_track_id` call anywhere —
+    /// nothing can ever again race it for id 1, the same way no two GUI
+    /// clicks can race each other (each `update` call runs to completion
+    /// before the next message is dispatched).
+    pub(crate) fn send_startup_default_track(&mut self) {
+        let id = self.allocate_track_id();
+        let _ = self
+            .engine
+            .send(resonance_audio::types::AudioCommand::AddTrack { id, name: None });
+    }
 }
