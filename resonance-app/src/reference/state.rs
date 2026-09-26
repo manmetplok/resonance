@@ -33,7 +33,8 @@ pub enum ReferenceStatus {
 /// [`resonance_audio::types::ReferenceMarker`] in a form the view owns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceMarkerState {
-    /// Per-reference marker id, allocated by the engine.
+    /// Per-reference marker id, allocated by the app
+    /// ([`ReferenceState::alloc_marker_id`]).
     pub id: u32,
     /// Position within the reference track, in sample frames.
     pub position_samples: u64,
@@ -106,7 +107,7 @@ pub struct AbMeters {
 ///   to right now. Never undone, so a history step does not yank the
 ///   monitor around.
 /// - **Runtime bookkeeping** — `last_error`, `pending_loads`,
-///   `next_engine_id`. Neither saved nor undone.
+///   `next_engine_id`, `next_marker_id`. Neither saved nor undone.
 #[derive(Debug, Clone, Default)]
 pub struct ReferenceState {
     /// All loaded references, in load order.
@@ -133,6 +134,13 @@ pub struct ReferenceState {
     /// engine entry. `ClearAll` resets the engine's allocator; the replay
     /// after it resets this one (`restore_references`).
     pub next_engine_id: u32,
+    /// Marker-id allocator, session-monotonic and shared by every
+    /// reference (ids only need to be unique per reference). The app owns
+    /// marker ids (FU-A5a): a restore brings saved markers back into the
+    /// GUI only, so an engine-side allocator restarted at 1 under them.
+    /// Survives every restore; [`Self::alloc_marker_id`] also stays past
+    /// the markers an entry already holds.
+    pub next_marker_id: u32,
 }
 
 /// The monitor half of [`ReferenceState`]: what the A/B switch listens
@@ -181,6 +189,20 @@ impl ReferenceState {
     /// it the next id from its allocator.
     pub fn saw_unhinted_load(&mut self) {
         self.next_engine_id = self.next_engine_id.max(1) + 1;
+    }
+
+    /// A fresh marker id for the reference `ref_id`: past every id this
+    /// session has handed out and every marker the reference holds.
+    pub fn alloc_marker_id(&mut self, ref_id: ReferenceId) -> u32 {
+        let held = self
+            .entries
+            .iter()
+            .find(|e| e.id == ref_id)
+            .and_then(|e| e.markers.iter().map(|m| m.id).max())
+            .map_or(0, |id| id.saturating_add(1));
+        let id = self.next_marker_id.max(held).max(1);
+        self.next_marker_id = id + 1;
+        id
     }
 
     /// An id no live or in-flight engine entry uses, for a hinted

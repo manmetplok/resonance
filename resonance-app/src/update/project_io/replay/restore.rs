@@ -405,8 +405,10 @@ pub(crate) fn restore_references(
     // undo leaves alone. The engine's own reference state was already
     // emptied by `ClearAll`, allocator included.
     let live_monitor = std::mem::take(&mut r.reference.monitor);
+    let next_marker_id = r.reference.next_marker_id;
     r.reference = crate::reference::ReferenceState::default();
     r.reference.next_engine_id = 1;
+    r.reference.next_marker_id = next_marker_id;
 
     let mut next_missing_id: u32 = crate::state::ids::MISSING_REFERENCE_ID_BASE;
     for pr in &project.references {

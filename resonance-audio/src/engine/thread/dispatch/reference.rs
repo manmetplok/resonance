@@ -64,12 +64,14 @@ pub(super) fn dispatch_reference(
         }
         AudioCommand::AddRefMarker {
             ref_id,
+            marker_id,
             position_samples,
             label,
         } => reference::handle_add_ref_marker(
             &mut state.reference,
             ctx.event_tx,
             ref_id,
+            marker_id,
             position_samples,
             label,
         ),

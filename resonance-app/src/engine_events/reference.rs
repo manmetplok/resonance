@@ -1,7 +1,8 @@
 //! App-side folding of reference-track (A/B) engine events into
 //! [`crate::reference::ReferenceState`]. The engine is authoritative for
-//! ids, measured loudness, waveform peaks, and marker ids; these handlers
-//! reconcile the optimistic GUI mirror with what the engine reports.
+//! measured loudness and waveform peaks (the app allocates reference and
+//! marker ids); these handlers reconcile the optimistic GUI mirror with
+//! what the engine reports.
 
 use resonance_audio::types::{
     ABSource, ReferenceAnalysisStage, ReferenceId, SamplePos,
@@ -114,7 +115,8 @@ pub(super) fn marker_added(
     label: String,
 ) {
     if let Some(entry) = r.reference.entry_mut(ref_id) {
-        // Idempotent: the engine is authoritative for the id.
+        // Idempotent: the app allocated the id and listed the marker
+        // when it sent `AddRefMarker`; this is the echo.
         if !entry.markers.iter().any(|mk| mk.id == marker_id) {
             entry.markers.push(ReferenceMarkerState {
                 id: marker_id,

@@ -71,10 +71,9 @@ pub(crate) struct ReferenceEntry {
     /// Gain offset (dB) applied when loudness-matching this reference to
     /// the mix; `0.0` until the offset is computed.
     pub offset_db: f32,
-    /// Comparison markers placed on this reference.
+    /// Comparison markers placed on this reference, under app-allocated
+    /// ids.
     pub markers: Vec<ReferenceMarker>,
-    /// Monotonic per-reference marker id allocator.
-    pub next_marker_id: u32,
 }
 
 impl ReferenceEntry {
@@ -88,7 +87,6 @@ impl ReferenceEntry {
             integrated_lufs: f32::NEG_INFINITY,
             offset_db: 0.0,
             markers: Vec::new(),
-            next_marker_id: 1,
         }
     }
 }
@@ -798,19 +796,21 @@ pub fn handle_set_ref_trim(
     let _ = event_tx.send(AudioEvent::RefTrimChanged { db });
 }
 
-/// `AddRefMarker`: place a comparison marker on a reference.
+/// `AddRefMarker`: place a comparison marker on a reference under the
+/// app-allocated `marker_id`. An id the reference already holds is
+/// replaced, so a re-send is idempotent.
 pub fn handle_add_ref_marker(
     player: &mut ReferencePlayer,
     event_tx: &Sender<AudioEvent>,
     ref_id: ReferenceId,
+    marker_id: u32,
     position_samples: SamplePos,
     label: String,
 ) {
     let Some(entry) = player.entry_mut(ref_id) else {
         return;
     };
-    let marker_id = entry.next_marker_id;
-    entry.next_marker_id += 1;
+    entry.markers.retain(|m| m.id != marker_id);
     entry.markers.push(ReferenceMarker {
         id: marker_id,
         position_samples,

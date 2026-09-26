@@ -1362,11 +1362,14 @@ pub enum AudioCommand {
     SetRefTrim {
         db: f32,
     },
-    /// Add a comparison marker to a reference at a sample position.
-    /// The engine allocates the marker id and emits
-    /// `AudioEvent::RefMarkerAdded`.
+    /// Add a comparison marker to a reference at a sample position,
+    /// under a marker id the app allocated (FU-A5a: the app restores saved
+    /// markers the engine never hears about, so only it can pick an id
+    /// none of them uses). Re-adding an id the reference already holds
+    /// moves that marker. Emits `AudioEvent::RefMarkerAdded`.
     AddRefMarker {
         ref_id: ReferenceId,
+        marker_id: u32,
         position_samples: SamplePos,
         label: String,
     },

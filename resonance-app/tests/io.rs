@@ -83,6 +83,8 @@ mod project_backups;
 mod project_track_groups_persist;
 #[path = "io/reference_disk_round_trip.rs"]
 mod reference_disk_round_trip;
+#[path = "io/reference_echo_races.rs"]
+mod reference_echo_races;
 #[path = "io/relink.rs"]
 mod relink;
 #[path = "io/relink_folder_scan.rs"]
