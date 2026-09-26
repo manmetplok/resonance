@@ -352,6 +352,69 @@ fn render_epochs_never_repeat_across_a_full_replay() {
     assert!(after > before, "post-replay epoch {after} aliases pre-replay {before}");
 }
 
+/// FU-V2d: a render that finishes after the section's tempo changed
+/// (a tempo edit, or its placement moved into another tempo region) was
+/// installed at the right place but sung at the old tempo. It must be
+/// discarded and re-rendered at the section's current tempo, and the job
+/// waiting on it must follow the re-render rather than resolve `done` off
+/// the wrong-tempo audio.
+#[test]
+fn a_render_that_finishes_after_a_tempo_change_is_re_rendered() {
+    use resonance_app::compose::messages::VocalAudioReadyData;
+    use resonance_app::compose::ComposeMessage;
+    use resonance_app::message::Message;
+    use resonance_control::job::JobState;
+
+    let mut app = app_with_project();
+    let def = vocal_lane_with_chords(&mut app);
+    let _: proto::GenerateResult = generate(&mut app, true, Some(42))
+        .result()
+        .expect("vocal.generate succeeds");
+    let job = u64::from(
+        call(
+            &mut app,
+            "vocal.render",
+            &proto::RenderParams {
+                track_id: Some(ProtoTrackId(TRACK)),
+                section_id: None,
+                voicebank: None,
+            },
+        )
+        .result::<resonance_control::job::JobStarted>()
+        .expect("render returns a job")
+        .job_id,
+    );
+    let queued = app.test_vocal_render_epoch(def, TRACK).expect("render queued");
+
+    // The tempo under the section changes while the render runs.
+    call(&mut app, "transport.set_tempo", &serde_json::json!({ "bpm": 90.0 }))
+        .result::<serde_json::Value>()
+        .expect("set_tempo succeeds");
+
+    let wav = std::env::temp_dir().join("resonance-fu-v2d-stale-tempo.wav");
+    std::fs::write(&wav, b"stale").unwrap();
+    let _ = app.update(Message::Compose(ComposeMessage::VocalAudioReady(Box::new(
+        VocalAudioReadyData {
+            definition_id: def,
+            track_id: TRACK,
+            wav_path: wav.clone(),
+            placements: Vec::new(),
+            clip_name: "Verse".to_owned(),
+            trim_start_frames: 0,
+            trim_end_frames: 0,
+            lead_ticks: 0,
+            render_epoch: queued,
+            bpm: 120.0,
+        },
+    ))));
+
+    let now = app.test_vocal_render_epoch(def, TRACK).expect("lane still known");
+    assert!(now > queued, "a re-render at the new tempo was queued");
+    assert!(!wav.exists(), "the wrong-tempo WAV was discarded");
+    let state = app.control_jobs().status(job).expect("job known").state;
+    assert_eq!(state, JobState::Pending, "the job waits for the re-render");
+}
+
 /// A lane with no notes cannot be rendered into existence: render says
 /// so precisely rather than quietly generating a melody nobody asked for.
 #[test]

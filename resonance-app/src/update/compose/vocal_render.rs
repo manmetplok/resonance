@@ -269,8 +269,10 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
         midi_notes: req.midi_notes,
         params: req.params,
     };
+    let bpm = job.bpm;
     spawn_render(
         job,
+        bpm,
         req.definition_id,
         req.track_id,
         req.clip_name,
@@ -354,8 +356,10 @@ fn render_cache_for(
 
 /// Run `job` on a blocking thread and map its outcome onto the message
 /// that installs (or reports) the result.
+#[allow(clippy::too_many_arguments)]
 fn spawn_render(
     job: vocal_audio_io::VocalRenderJob,
+    bpm: f32,
     definition_id: u64,
     track_id: TrackId,
     clip_name: String,
@@ -383,6 +387,7 @@ fn spawn_render(
                     trim_end_frames: trim_end,
                     lead_ticks,
                     render_epoch,
+                    bpm,
                 })),
             ),
             Ok(None) => Message::Tick,

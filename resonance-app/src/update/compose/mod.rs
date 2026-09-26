@@ -495,6 +495,21 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             // lane (a GUI-driven render).
             let (definition_id, track_id) = (data.definition_id, data.track_id);
             let render_epoch = data.render_epoch;
+            // Sung at a tempo the section no longer has (its placement
+            // moved into another tempo region, or the tempo was edited,
+            // while the render ran): re-render instead of installing
+            // audio that drifts against the grid (FU-V2d).
+            if let Some(task) = rerender_on_tempo_change(r, &data) {
+                vocal_audio_io::unlink_if_exists(&data.wav_path);
+                vocal_audio_install::settle_render_event(
+                    r,
+                    definition_id,
+                    track_id,
+                    render_epoch,
+                    false,
+                );
+                return task;
+            }
             let accepted = vocal_audio_install::handle_vocal_audio_ready(r, *data);
             if accepted {
                 r.control
@@ -544,6 +559,33 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// FU-V2d: when a *current* render finished at a tempo the section no
+/// longer has, queue a re-render at the section's tempo now and return
+/// its task. `None` — install as usual — when the render is stale anyway
+/// (the epoch check discards it), the tempo still matches, or no
+/// re-render could be queued (then the old-tempo audio is still better
+/// than none, and the error the re-render reported is left showing).
+fn rerender_on_tempo_change(
+    r: &mut crate::Resonance,
+    data: &crate::compose::messages::VocalAudioReadyData,
+) -> Option<Task<Message>> {
+    let (definition_id, track_id) = (data.definition_id, data.track_id);
+    if data.render_epoch
+        != vocal_audio_install::current_render_epoch(r, definition_id, track_id)
+        || !r.compose.placements.iter().any(|p| p.definition_id == definition_id)
+    {
+        return None;
+    }
+    let now = section_meter(r, definition_id).bpm;
+    if (now - data.bpm).abs() <= 1e-3 {
+        return None;
+    }
+    let task = vocal_render::rerender_vocal_audio(r, definition_id, track_id);
+    let requeued = vocal_audio_install::current_render_epoch(r, definition_id, track_id)
+        != data.render_epoch;
+    requeued.then_some(task)
 }
 
 /// Outcome of a control-endpoint melodic-part generation

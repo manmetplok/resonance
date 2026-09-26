@@ -35,6 +35,7 @@ pub(super) fn handle_vocal_audio_ready(
         trim_end_frames,
         lead_ticks,
         render_epoch,
+        bpm: _,
     } = data;
 
     if render_epoch != current_render_epoch(r, definition_id, track_id) {
