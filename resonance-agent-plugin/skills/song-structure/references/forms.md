@@ -52,9 +52,8 @@ that means one definition placed many times — exactly what placements are for.
 Write the head once, place it at the top and the bottom, place the changes in
 between.
 
-For `harmony_apply_progression`: the advertised `ii-V-I` preset is currently
-unreachable (the app lower-cases the name before matching), so write it as
-numerals `["ii", "V", "I"]`.
+For `harmony_apply_progression`, the `ii-V-I` preset (or numerals
+`["ii", "V", "I"]`) writes the turnaround.
 
 ## Classical
 

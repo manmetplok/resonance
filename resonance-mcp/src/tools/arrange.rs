@@ -199,9 +199,7 @@ impl ResonanceMcp {
                        rejected. \
                        \
                        preset is one of: pop, axis (both I V vi IV), 50s, doo-wop (both I vi IV \
-                       V), pachelbel, andalusian, 12-bar-blues. (The list also advertises \
-                       \"ii-V-I\", but the app lower-cases the name before matching so that one \
-                       is currently unreachable — write it as numerals [\"ii\",\"V\",\"I\"].) \
+                       V), pachelbel, andalusian, ii-V-I, 12-bar-blues (case-insensitive). \
                        key is {tonic, scale} with scale one of chromatic, major, minor, dorian, \
                        phrygian, lydian, mixolydian, locrian, \"harmonic minor\", \
                        \"melodic minor\". \

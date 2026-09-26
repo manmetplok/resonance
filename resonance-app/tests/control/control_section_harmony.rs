@@ -880,3 +880,25 @@ fn huge_bar_values_are_invalid_params() {
     assert_eq!(app.revision(), revision, "nothing was committed");
     assert_eq!(sections_view(&mut app).definitions.len(), 1);
 }
+
+/// CTL-08: the advertised `ii-V-I` preset used to be unreachable — the
+/// lookup lower-cased the request but compared against a mixed-case key.
+#[test]
+fn apply_progression_ii_v_i_preset_matches_case_insensitively() {
+    let mut app = app_with_project();
+    let id = create_section(&mut app, "Turnaround", 4);
+    for preset in ["ii-V-I", "II-v-i"] {
+        let mut params = harmony_proto::ApplyProgressionParams::for_section(id.into());
+        params.key = Some(key("C", "major"));
+        params.preset = Some(preset.to_owned());
+        let response = call(&mut app, "harmony.apply_progression", &params);
+        let _: harmony_proto::ApplyProgressionResult = response
+            .result()
+            .unwrap_or_else(|e| panic!("preset {preset:?} should resolve: {e:?}"));
+        assert_eq!(
+            chord_symbols(&sections_view(&mut app), id),
+            vec!["Dm", "G", "C"],
+            "preset {preset:?}"
+        );
+    }
+}
