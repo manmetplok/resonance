@@ -76,7 +76,7 @@ pub fn import_one_to_pool(
 
     let project_relative_path = asset_relative_path(asset_id);
     let target = project_dir.join(&project_relative_path);
-    transcode_to_wav(&target, &data, engine_rate)?;
+    transcode_to_wav(&target, &data, engine_rate).map_err(|e| e.to_string())?;
 
     let peaks = compute_waveform_peaks(&data);
     let duration_frames = (data.len() / 2) as u64;

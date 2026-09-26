@@ -120,5 +120,5 @@ pub fn write_stereo_wav(
     samples: &[f32],
     sample_rate: u32,
 ) -> Result<(), String> {
-    resonance_audio::transcode_to_wav(path, samples, sample_rate)
+    resonance_audio::transcode_to_wav(path, samples, sample_rate).map_err(|e| e.to_string())
 }

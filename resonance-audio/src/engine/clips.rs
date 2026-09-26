@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::RwLock;
+use thiserror::Error;
 
 use crate::decode;
 use crate::types::*;
@@ -1043,6 +1044,7 @@ pub(crate) fn handle_persist_clip_wavs(ctx: &HandlerCtx, state: &HandlerState) {
         if !linked {
             let tmp = target.with_extension("wav.tmp");
             let written = transcode_to_wav(&tmp, source.as_frames(), ctx.sample_rate)
+                .map_err(|e| e.to_string())
                 .and_then(|()| std::fs::rename(&tmp, &target).map_err(|e| e.to_string()));
             if let Err(e) = written {
                 let _ = std::fs::remove_file(&tmp);
@@ -1068,12 +1070,50 @@ pub(crate) fn handle_persist_clip_wavs(ctx: &HandlerCtx, state: &HandlerState) {
     }
 }
 
+/// Failure writing a stereo-interleaved f32 buffer to a 32-bit float WAV
+/// ([`transcode_to_wav`]). Message text matches the historical
+/// `format!()` strings.
+#[derive(Debug, Error)]
+pub enum TranscodeError {
+    #[error("create {path}: {source}")]
+    CreateDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("create {path}: {source}")]
+    Create {
+        path: String,
+        #[source]
+        source: hound::Error,
+    },
+    #[error("write sample: {source}")]
+    WriteSample {
+        #[source]
+        source: hound::Error,
+    },
+    #[error("finalize wav: {source}")]
+    Finalize {
+        #[source]
+        source: hound::Error,
+    },
+}
+
+impl From<TranscodeError> for EngineError {
+    fn from(e: TranscodeError) -> Self {
+        EngineError::new(EngineErrorKind::Io, e.to_string())
+    }
+}
+
 /// Write a stereo-interleaved f32 buffer to a 32-bit float WAV.
 /// Creates the target directory if needed. Used by both the import
 /// transcode path and the save-time fallback for in-RAM clips.
-pub fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+pub fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), TranscodeError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| TranscodeError::CreateDir {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
     }
     let spec = WavSpec {
         channels: 2,
@@ -1081,15 +1121,17 @@ pub fn transcode_to_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Resul
         bits_per_sample: 32,
         sample_format: SampleFormat::Float,
     };
-    let mut writer =
-        WavWriter::create(path, spec).map_err(|e| format!("create {}: {e}", path.display()))?;
+    let mut writer = WavWriter::create(path, spec).map_err(|e| TranscodeError::Create {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     for &s in samples {
         writer
             .write_sample(s)
-            .map_err(|e| format!("write sample: {e}"))?;
+            .map_err(|e| TranscodeError::WriteSample { source: e })?;
     }
     writer
         .finalize()
-        .map_err(|e| format!("finalize wav: {e}"))?;
+        .map_err(|e| TranscodeError::Finalize { source: e })?;
     Ok(())
 }
