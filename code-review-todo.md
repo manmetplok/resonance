@@ -71,6 +71,7 @@ master and updates this table. Agents do **not** edit this file.
 | FU-A6a (from A-6) | Clip-id collision: engine bumped `next_clip_id` into the derived range (drawn clip = next derived clip id; also on reopen via STATE-08 WAV scan). Engine now reserves only below `DERIVED_CLIP_ID_BASE` | opus | merged | 6942f712 |
 | FU-A10a (from A-10) | Coalesced undo: track name, drum group name + 5 knobs, vocal theme / line text; `BounceInPlace` → Skip + recorded `BounceInPlaceOffline` | sonnet | merged | a8a5f234 |
 | refactor-intent A-13a (ARCH-01) | `Reconcile` trait + `DOMAINS` table + staged driver; tempo, chord, markers, pool, quantize, performance, track groups, take groups migrated | opus | merged | b18300be |
+| refactor-intent A-13b (ARCH-01) | Reconcile group 2: derived clips, references, external instruments, lanes, missing plugins, freeze; `LiveCarry`; stages Timeline/Clips/Content/Tail | opus | merged | 5aeec0c2 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
