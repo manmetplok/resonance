@@ -75,6 +75,8 @@ mod undo_noop_gesture;
 mod render_cache;
 #[path = "timeline/selection_bar.rs"]
 mod selection_bar;
+#[path = "timeline/snap_signature_map.rs"]
+mod snap_signature_map;
 #[path = "timeline/take_comp_edits.rs"]
 mod take_comp_edits;
 #[path = "timeline/take_group_mirror.rs"]
