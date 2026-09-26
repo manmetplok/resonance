@@ -22,11 +22,20 @@ struct FeedbackChain {
     dc: DcBlocker,
 }
 
+/// DC-blocker corner inside the feedback loop. Higher than the 5 Hz
+/// full-range default on purpose: the loop compounds it on every
+/// recirculation, so offset (and sub-sonic build-up from the tanh) has
+/// to drain within a few repeats, while 20 Hz still costs a repeat only
+/// ~1 dB at 40 Hz. Fixed in Hz, so repeats thin out identically at
+/// every sample rate (DSP-04; the old fixed pole sat at 38 Hz at 48 kHz
+/// and 152 Hz at 192 kHz).
+const FEEDBACK_DC_CUTOFF_HZ: f32 = 20.0;
+
 impl FeedbackChain {
-    fn new() -> Self {
+    fn new(sample_rate: f32) -> Self {
         Self {
             filter: OnePole::new(),
-            dc: DcBlocker::default(),
+            dc: DcBlocker::new(FEEDBACK_DC_CUTOFF_HZ, sample_rate),
         }
     }
 
@@ -101,8 +110,8 @@ impl FeedbackStage {
             ring_l: vec![0.0; ring_len],
             ring_r: vec![0.0; ring_len],
             mask: ring_len - 1,
-            chain_l: FeedbackChain::new(),
-            chain_r: FeedbackChain::new(),
+            chain_l: FeedbackChain::new(sample_rate),
+            chain_r: FeedbackChain::new(sample_rate),
             pos: 0,
             recirc_fade: SwapFader::new(fade_leg),
             recirc_goal: 0.0,

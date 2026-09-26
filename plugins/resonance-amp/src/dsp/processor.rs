@@ -64,6 +64,12 @@ impl AmpProcessor {
         self.output_gain_smoother.set_sample_rate(sample_rate);
         self.input_gain_smoother.reset(input_gain);
         self.output_gain_smoother.reset(output_gain);
+        // Corner fixed in Hz so a 7-string's low B (31 Hz) keeps its
+        // weight at every project rate (DSP-04).
+        self.dc_l
+            .set_cutoff(DcBlocker::DEFAULT_CUTOFF_HZ, sample_rate);
+        self.dc_r
+            .set_cutoff(DcBlocker::DEFAULT_CUTOFF_HZ, sample_rate);
         self.dc_l.reset();
         self.dc_r.reset();
     }

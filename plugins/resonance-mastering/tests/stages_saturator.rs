@@ -360,3 +360,53 @@ fn constant_input_engages_epsilon_fallback_exactly() {
     // DC before the blocker's ~200-sample time constant eats it.
     assert!(left[2].abs() > 0.05, "wet path silent on constant input");
 }
+
+/// Level (dB re input) of a 40 Hz sine through the fully-wet saturator
+/// at `sr`, measured by single-bin DFT over the settled second half.
+fn saturator_40hz_gain_db(sr: f32) -> f64 {
+    let mut s = Saturator::new(sr);
+    let cfg = SaturatorConfig {
+        enabled: true,
+        drive_db: 0.0,
+        character: 0.0,
+        mix: 1.0,
+        shaper: Shaper::Smooth,
+    };
+    let n = (sr * 2.0) as usize;
+    let x: Vec<f32> = (0..n)
+        .map(|i| (std::f64::consts::TAU * 40.0 * i as f64 / sr as f64).sin() as f32 * 0.05)
+        .collect();
+    let mut left = x.clone();
+    let mut right = x.clone();
+    for (l, r) in left.chunks_mut(512).zip(right.chunks_mut(512)) {
+        s.process_stereo(l, r, &cfg);
+    }
+    let bin = |sig: &[f32]| {
+        let (mut re, mut im) = (0.0_f64, 0.0_f64);
+        for (i, &v) in sig.iter().enumerate().skip(n / 2) {
+            let ph = std::f64::consts::TAU * 40.0 * i as f64 / sr as f64;
+            re += v as f64 * ph.cos();
+            im += v as f64 * ph.sin();
+        }
+        (re * re + im * im).sqrt()
+    };
+    let out = bin(&left);
+    assert!(out > 0.0, "saturator output is silent at {sr} Hz");
+    20.0 * (out / bin(&x)).log10()
+}
+
+/// DSP-04: the saturator's wet-path DC blocker used a fixed pole, so the
+/// master lost more bass the higher the project rate (−1.5 dB at 60 Hz
+/// at 48 kHz, −8.7 dB at 192 kHz). The 40 Hz level through the stage
+/// must not depend on the sample rate.
+#[test]
+fn bass_level_is_independent_of_sample_rate() {
+    let g48 = saturator_40hz_gain_db(48_000.0);
+    for sr in [44_100.0_f32, 96_000.0, 192_000.0] {
+        let g = saturator_40hz_gain_db(sr);
+        assert!(
+            (g - g48).abs() < 0.2,
+            "40 Hz through the saturator: {g:.2} dB at {sr} Hz vs {g48:.2} dB at 48 kHz"
+        );
+    }
+}

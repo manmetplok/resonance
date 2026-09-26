@@ -191,6 +191,12 @@ impl Saturator {
             .set_low_shelf(sample_rate, 100.0, 0.707, 2.0);
         self.lf_shelf_r
             .set_low_shelf(sample_rate, 100.0, 0.707, 2.0);
+        // The wet path is the whole master at mix 1.0: keep the DC
+        // corner at 5 Hz in Hz, not in samples (DSP-04).
+        self.dc_l
+            .set_cutoff(DcBlocker::DEFAULT_CUTOFF_HZ, sample_rate);
+        self.dc_r
+            .set_cutoff(DcBlocker::DEFAULT_CUTOFF_HZ, sample_rate);
         self.drive_sm.set_sample_rate(sample_rate);
         self.character_sm.set_sample_rate(sample_rate);
         self.mix_sm.set_sample_rate(sample_rate);

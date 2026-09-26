@@ -409,7 +409,11 @@ fn every_model_loads_and_shapes_the_signal() {
         };
         // Rebuild the same input and check the output is not a scalar
         // multiple of it. A neural amp is a waveshaper; a linear
-        // best-fit must leave a substantial residual.
+        // best-fit must leave a substantial residual. 5%, not 10%: the
+        // LSTM fixture is a mild model (~8.5% on this swell), and the
+        // old fixed-pole DC blocker's 38 Hz phase shift used to supply
+        // the rest (DSP-04). The gain-only branch this guards against
+        // leaves ~0.
         let total = (BLOCKS * BLOCK) as u64;
         let mut dry = Vec::with_capacity(audio.len());
         for block in 0..BLOCKS {
@@ -440,11 +444,12 @@ fn every_model_loads_and_shapes_the_signal() {
             .sum();
         let energy: f64 = audio.iter().map(|o| (*o as f64) * (*o as f64)).sum();
         assert!(
-            resid > 0.1 * energy,
-            "scenario `{}` output is within 10% of a scaled copy of its input — \
+            resid > 0.05 * energy,
+            "scenario `{}` output is within 5% of a scaled copy of its input — \
              the model is not shaping anything, so the golden would pin a gain \
-             stage",
-            s.name
+             stage (residual/energy = {:.4})",
+            s.name,
+            resid / energy.max(1e-30)
         );
     }
 }
