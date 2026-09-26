@@ -119,3 +119,63 @@ fn repeated_note_reuses_its_voice() {
     assert_eq!(notes, vec![48, 52, 55, 59]);
     assert!(loudest > 1e-3, "rendered silence");
 }
+
+/// Mono legato does not retrigger (FU-G2d): a note pressed while another is
+/// held takes over the voice *without* restarting its envelopes. The voice
+/// used to be stolen and re-`trigger`ed, so the amp envelope jumped from
+/// its sustain level back into the attack — an audible swell on every
+/// legato note. Also checked without glide: legato is a mono property, not
+/// a portamento one.
+#[test]
+fn mono_legato_does_not_retrigger_the_envelope() {
+    for glide in [false, true] {
+        let params = WavetableParams::new();
+        params.max_voices.set_value(1);
+        params.glide_enabled.set_value(glide);
+        params.glide_time.set_value(50.0);
+        // Fast attack and decay into a low sustain: a retrigger would lift
+        // the level from 0.2 back toward 1.0 within a few milliseconds.
+        params.amp_env.attack.set_value(0.002);
+        params.amp_env.decay.set_value(0.01);
+        params.amp_env.sustain.set_value(0.2);
+        params.amp_env.release.set_value(0.5);
+        let mut engine = SynthEngine::new();
+        engine.initialize(SR);
+
+        render(&mut engine, &params, &[note_on(48)]);
+        let mut sustain_peak = 0.0f32;
+        for i in 0..40 {
+            let p = peak(&render(&mut engine, &params, &[]));
+            if i >= 30 {
+                sustain_peak = sustain_peak.max(p);
+            }
+        }
+        assert!(sustain_peak > 1e-3, "glide={glide}: rendered silence");
+
+        // Legato G3 while C3 is still held; watch the next ~50 ms.
+        let mut after = peak(&render(&mut engine, &params, &[note_on(55)]));
+        for _ in 0..18 {
+            after = after.max(peak(&render(&mut engine, &params, &[])));
+        }
+        assert!(
+            after < sustain_peak * 1.5,
+            "glide={glide}: legato note retriggered the envelope \
+             (sustain peak {sustain_peak:.3}, after legato {after:.3})"
+        );
+        let voices: Vec<(u8, f32)> = engine.sounding_voices().collect();
+        assert_eq!(voices.len(), 1, "glide={glide}: mono played {voices:?}");
+        assert_eq!(voices[0].0, 55, "glide={glide}: legato note not taken over");
+
+        // A note after the key was *released* still retriggers.
+        engine.note_off(55);
+        render(&mut engine, &params, &[]);
+        let mut fresh = peak(&render(&mut engine, &params, &[note_on(60)]));
+        for _ in 0..4 {
+            fresh = fresh.max(peak(&render(&mut engine, &params, &[])));
+        }
+        assert!(
+            fresh > sustain_peak * 2.0,
+            "glide={glide}: a detached note did not retrigger ({fresh:.3})"
+        );
+    }
+}
