@@ -1,7 +1,8 @@
 //! App-side folding of reference-track (A/B) engine events into
 //! [`crate::reference::ReferenceState`]. The engine is authoritative for
-//! ids, measured loudness, waveform peaks, and marker ids; these handlers
-//! reconcile the optimistic GUI mirror with what the engine reports.
+//! measured loudness and waveform peaks (the app allocates reference and
+//! marker ids); these handlers reconcile the optimistic GUI mirror with
+//! what the engine reports.
 
 use resonance_audio::types::{
     ABSource, ReferenceAnalysisStage, ReferenceId, SamplePos,
@@ -11,30 +12,34 @@ use resonance_metering::MeterSnapshot;
 use crate::reference::{AbMeters, ReferenceEntry, ReferenceMarkerState, ReferenceStatus};
 use crate::Resonance;
 
-/// Recover the queued name/path for a not-yet-registered reference id.
-/// Loads are processed in dispatch order, so the oldest pending path
-/// belongs to the first new id we hear about.
-fn take_pending(r: &mut Resonance) -> Option<String> {
-    r.reference.pending_loads.pop_front()
+/// Whether an event for an unlisted `id` should register it. A load the
+/// app sent is listed from the start, so an unlisted id is either the
+/// stale echo of one it has dropped — the analysis worker of a removed,
+/// undone or superseded reference runs on and still reports (FU-A5b) —
+/// or one the app never issued, which is taken as it comes.
+fn registers(r: &mut Resonance, id: ReferenceId) -> bool {
+    if r.reference.is_stale(id) {
+        return false;
+    }
+    r.reference.saw_engine_id(id);
+    true
 }
 
 pub(super) fn analysis_progress(r: &mut Resonance, id: ReferenceId, stage: ReferenceAnalysisStage) {
-    r.reference.saw_engine_id(id);
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.status = ReferenceStatus::Analyzing(stage);
         return;
     }
-    // First we've heard of this id — register a provisional entry so the
+    // An id the app never issued: register a provisional entry so the
     // view can show the "analysing…" stage before `ReferenceLoaded`.
-    let path = take_pending(r).unwrap_or_default();
-    let name = std::path::Path::new(&path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(str::to_owned)
-        .unwrap_or_default();
-    r.reference
-        .entries
-        .push(ReferenceEntry::analyzing(id, name, path, stage));
+    if registers(r, id) {
+        r.reference.entries.push(ReferenceEntry::analyzing(
+            id,
+            String::new(),
+            String::new(),
+            stage,
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -47,7 +52,6 @@ pub(super) fn loaded(
     waveform_peaks: Vec<(f32, f32)>,
     length_samples: u64,
 ) {
-    r.reference.saw_engine_id(id);
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.name = name;
         entry.path = path;
@@ -56,9 +60,11 @@ pub(super) fn loaded(
         entry.length_samples = length_samples;
         entry.status = ReferenceStatus::Loaded;
     } else {
-        // No provisional entry (no analysis-progress was seen) — register
-        // the finished reference directly. Drain the pending path it used.
-        let _ = take_pending(r);
+        // Not listed: register the finished reference directly, unless it
+        // is a stale echo.
+        if !registers(r, id) {
+            return;
+        }
         r.reference.entries.push(ReferenceEntry {
             id,
             name,
@@ -74,9 +80,17 @@ pub(super) fn loaded(
 }
 
 pub(super) fn load_failed(r: &mut Resonance, path: String, reason: String) {
-    // A failed load never allocated an id, so drop the matching pending
-    // path (oldest, FIFO) and surface the reason as a dismissable notice.
-    let _ = take_pending(r);
+    // The failure carries no id: mark the oldest still-analysing entry of
+    // that path as failed, so it stops showing a spinner, and surface the
+    // reason as a dismissable notice.
+    if let Some(entry) = r
+        .reference
+        .entries
+        .iter_mut()
+        .find(|e| e.path == path && matches!(e.status, ReferenceStatus::Analyzing(_)))
+    {
+        entry.status = ReferenceStatus::Error(reason.clone());
+    }
     r.reference.last_error = Some(format!("{path}: {reason}"));
 }
 
@@ -114,7 +128,8 @@ pub(super) fn marker_added(
     label: String,
 ) {
     if let Some(entry) = r.reference.entry_mut(ref_id) {
-        // Idempotent: the engine is authoritative for the id.
+        // Idempotent: the app allocated the id and listed the marker
+        // when it sent `AddRefMarker`; this is the echo.
         if !entry.markers.iter().any(|mk| mk.id == marker_id) {
             entry.markers.push(ReferenceMarkerState {
                 id: marker_id,

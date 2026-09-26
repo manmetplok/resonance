@@ -8,8 +8,6 @@
 //! — handlers mutate this mirror optimistically and the engine echoes
 //! authoritative values back through `engine_events::reference`.
 
-use std::collections::VecDeque;
-
 use resonance_audio::types::{ABSource, ReferenceAnalysisStage, ReferenceId};
 use resonance_metering::MeterSnapshot;
 
@@ -33,7 +31,8 @@ pub enum ReferenceStatus {
 /// [`resonance_audio::types::ReferenceMarker`] in a form the view owns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceMarkerState {
-    /// Per-reference marker id, allocated by the engine.
+    /// Per-reference marker id, allocated by the app
+    /// ([`ReferenceState::alloc_marker_id`]).
     pub id: u32,
     /// Position within the reference track, in sample frames.
     pub position_samples: u64,
@@ -105,8 +104,8 @@ pub struct AbMeters {
 /// - **Monitor** — [`ReferenceMonitorState`]: what the user is listening
 ///   to right now. Never undone, so a history step does not yank the
 ///   monitor around.
-/// - **Runtime bookkeeping** — `last_error`, `pending_loads`,
-///   `next_engine_id`. Neither saved nor undone.
+/// - **Runtime bookkeeping** — `last_error`, `next_engine_id`,
+///   `next_marker_id`. Neither saved nor undone.
 #[derive(Debug, Clone, Default)]
 pub struct ReferenceState {
     /// All loaded references, in load order.
@@ -122,17 +121,21 @@ pub struct ReferenceState {
     /// Most recent load-failure reason, shown until dismissed. Load
     /// failures carry no id, so they live here rather than as an entry.
     pub last_error: Option<String>,
-    /// Paths whose `LoadReferenceTrack` has been dispatched but whose
-    /// engine-allocated id is not yet known. Drained FIFO when the first
-    /// analysis event for a new id arrives, to recover its name / path.
-    pub pending_loads: VecDeque<String>,
-    /// The app's copy of the engine's reference-id allocator: past every
-    /// id the engine has registered, or will register for a load already
-    /// sent. A restore that brings a reference back hints its id from
-    /// here ([`Self::alloc_engine_id`]), so it never collides with a live
-    /// engine entry. `ClearAll` resets the engine's allocator; the replay
-    /// after it resets this one (`restore_references`).
+    /// The reference-id allocator. The app hints every `LoadReferenceTrack`
+    /// with an id from here ([`Self::alloc_engine_id`]), and it is
+    /// session-monotonic — no restore rewinds it, though `ClearAll` resets
+    /// the engine's own — so an id is never handed out twice. That is how
+    /// an echo for a reference the app has since dropped is told apart
+    /// from a live one ([`Self::is_stale`]): before FU-A5b a reopened
+    /// project re-used id 1 and a late echo of the old load landed on it.
     pub next_engine_id: u32,
+    /// Marker-id allocator, session-monotonic and shared by every
+    /// reference (ids only need to be unique per reference). The app owns
+    /// marker ids (FU-A5a): a restore brings saved markers back into the
+    /// GUI only, so an engine-side allocator restarted at 1 under them.
+    /// Survives every restore; [`Self::alloc_marker_id`] also stays past
+    /// the markers an entry already holds.
+    pub next_marker_id: u32,
 }
 
 /// The monitor half of [`ReferenceState`]: what the A/B switch listens
@@ -177,10 +180,29 @@ impl ReferenceState {
         }
     }
 
-    /// Note a `LoadReferenceTrack` sent without a hint: the engine gives
-    /// it the next id from its allocator.
-    pub fn saw_unhinted_load(&mut self) {
-        self.next_engine_id = self.next_engine_id.max(1) + 1;
+    /// Whether an engine event for `id` is an echo of a reference the app
+    /// has dropped — removed, undone, or superseded by a restore: an id
+    /// this app handed out that is no longer listed. (A load is listed
+    /// from the moment it is sent, so its own echoes are never stale.)
+    /// Ids past the allocator were never issued here and are not stale.
+    pub fn is_stale(&self, id: ReferenceId) -> bool {
+        id.0 < self.next_engine_id
+            && id.0 < crate::state::ids::MISSING_REFERENCE_ID_BASE
+            && self.index_of(id).is_none()
+    }
+
+    /// A fresh marker id for the reference `ref_id`: past every id this
+    /// session has handed out and every marker the reference holds.
+    pub fn alloc_marker_id(&mut self, ref_id: ReferenceId) -> u32 {
+        let held = self
+            .entries
+            .iter()
+            .find(|e| e.id == ref_id)
+            .and_then(|e| e.markers.iter().map(|m| m.id).max())
+            .map_or(0, |id| id.saturating_add(1));
+        let id = self.next_marker_id.max(held).max(1);
+        self.next_marker_id = id + 1;
+        id
     }
 
     /// An id no live or in-flight engine entry uses, for a hinted

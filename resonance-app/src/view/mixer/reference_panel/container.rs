@@ -16,7 +16,8 @@ use super::bodies;
 /// inline within the populated body so the rest of the panel stays usable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanelState {
-    /// No references loaded and no pending load.
+    /// No references listed (a load is listed as analysing from the
+    /// moment it is sent).
     Empty,
     /// At least one reference is mid-analysis.
     Analyzing,
@@ -36,11 +37,7 @@ fn classify(state: &ReferenceState) -> PanelState {
         if state.last_error.is_some() {
             return PanelState::Error;
         }
-        if state.pending_loads.is_empty() {
-            return PanelState::Empty;
-        }
-        // A load is dispatched but no analysis event has arrived yet.
-        return PanelState::Populated;
+        return PanelState::Empty;
     }
     if state
         .entries

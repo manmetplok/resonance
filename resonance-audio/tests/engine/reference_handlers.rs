@@ -177,7 +177,10 @@ fn add_and_remove_markers() {
 
     register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/a.wav"));
 
-    handle_add_ref_marker(&mut player, &tx, ReferenceId(1), 48_000, "drop".into());
+    // The app allocates marker ids (FU-A5a): the engine keeps the one it
+    // is handed — it has no allocator that restarts at 1 under a
+    // reference whose saved markers only the app restored.
+    handle_add_ref_marker(&mut player, &tx, ReferenceId(1), 7, 48_000, "drop".into());
     let first_marker = match next_event(&rx) {
         AudioEvent::RefMarkerAdded {
             ref_id,
@@ -186,6 +189,7 @@ fn add_and_remove_markers() {
             label,
         } => {
             assert_eq!(ref_id, ReferenceId(1));
+            assert_eq!(marker_id, 7, "the app's id is kept");
             assert_eq!(position_samples, 48_000);
             assert_eq!(label, "drop");
             marker_id
@@ -193,16 +197,25 @@ fn add_and_remove_markers() {
         other => panic!("expected RefMarkerAdded, got {other:?}"),
     };
 
-    // Marker ids are monotonic per reference.
-    handle_add_ref_marker(&mut player, &tx, ReferenceId(1), 96_000, "chorus".into());
-    let second_marker = match next_event(&rx) {
-        AudioEvent::RefMarkerAdded { marker_id, .. } => marker_id,
-        other => panic!("expected RefMarkerAdded, got {other:?}"),
-    };
-    assert_ne!(first_marker, second_marker);
+    handle_add_ref_marker(&mut player, &tx, ReferenceId(1), 3, 96_000, "chorus".into());
+    assert!(matches!(
+        next_event(&rx),
+        AudioEvent::RefMarkerAdded { marker_id: 3, .. }
+    ));
+
+    // Re-adding a held id moves that marker instead of duplicating it.
+    handle_add_ref_marker(&mut player, &tx, ReferenceId(1), 3, 12_000, "chorus".into());
+    assert!(matches!(
+        next_event(&rx),
+        AudioEvent::RefMarkerAdded { marker_id: 3, position_samples: 12_000, .. }
+    ));
+    handle_remove_ref_marker(&mut player, &tx, ReferenceId(1), 3);
+    assert!(matches!(next_event(&rx), AudioEvent::RefMarkerRemoved { marker_id: 3, .. }));
+    handle_remove_ref_marker(&mut player, &tx, ReferenceId(1), 3);
+    assert!(rx.try_recv().is_err(), "no second marker 3 was left behind");
 
     // Adding to an unknown reference is a no-op.
-    handle_add_ref_marker(&mut player, &tx, ReferenceId(42), 0, "x".into());
+    handle_add_ref_marker(&mut player, &tx, ReferenceId(42), 1, 0, "x".into());
     assert!(rx.try_recv().is_err());
 
     handle_remove_ref_marker(&mut player, &tx, ReferenceId(1), first_marker);

@@ -6,10 +6,12 @@
 use std::path::PathBuf;
 
 use iced::Task;
-use resonance_audio::types::{ABSource, AudioCommand, ReferenceId, SamplePos};
+use resonance_audio::types::{
+    ABSource, AudioCommand, ReferenceAnalysisStage, ReferenceId, SamplePos,
+};
 
 use crate::message::Message;
-use crate::reference::ReferenceMessage;
+use crate::reference::{ReferenceEntry, ReferenceMarkerState, ReferenceMessage};
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: ReferenceMessage) -> Task<Message> {
@@ -49,6 +51,14 @@ pub fn handle(r: &mut Resonance, m: ReferenceMessage) -> Task<Message> {
     Task::none()
 }
 
+/// A reference's display name until the engine reports one: the file
+/// stem, as the engine derives it.
+pub(crate) fn reference_name(path: &std::path::Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
 /// Audio container extensions the reference loader accepts, shared by the
 /// file picker filter and the window file-drop subscription so both honour
 /// the same set.
@@ -72,16 +82,21 @@ fn pick_file_dialog() -> Task<Message> {
 }
 
 fn load_requested(r: &mut Resonance, path: PathBuf) {
-    // The engine allocates the id, so we can't register an entry yet —
-    // queue the path so the first analysis event for the new id can
-    // recover its name. Clear any stale load-error notice.
+    // The app picks the id (FU-A5b) and lists the reference at once, as
+    // analysing (FU-A5c): the load is then part of the project — and of
+    // any undo snapshot taken from here on — before the engine's first
+    // echo, so an undo that predates it drops it and one that does not
+    // keeps it. Clear any stale load-error notice.
     r.reference.last_error = None;
-    r.reference
-        .pending_loads
-        .push_back(path.to_string_lossy().into_owned());
-    r.reference.saw_unhinted_load();
+    let id = r.reference.alloc_engine_id();
+    r.reference.entries.push(ReferenceEntry::analyzing(
+        id,
+        reference_name(&path),
+        path.to_string_lossy().into_owned(),
+        ReferenceAnalysisStage::Decoding,
+    ));
     let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
-        id_hint: None,
+        id_hint: Some(id),
         path,
     });
 }
@@ -154,15 +169,26 @@ fn trim_changed(r: &mut Resonance, db: f32) {
 }
 
 fn add_marker(r: &mut Resonance, ref_id: ReferenceId, position_samples: SamplePos, label: String) {
-    // The engine allocates the marker id and echoes `RefMarkerAdded`, so
-    // we only dispatch here — no optimistic entry without a stable id.
-    if r.reference.index_of(ref_id).is_some() {
-        let _ = r.engine.send(AudioCommand::AddRefMarker {
-            ref_id,
+    // The app allocates the marker id (FU-A5a) — restored markers exist
+    // only here, so the engine cannot pick one that misses them — and
+    // lists the marker now; the engine's `RefMarkerAdded` echo is a no-op.
+    if r.reference.index_of(ref_id).is_none() {
+        return;
+    }
+    let marker_id = r.reference.alloc_marker_id(ref_id);
+    if let Some(entry) = r.reference.entry_mut(ref_id) {
+        entry.markers.push(ReferenceMarkerState {
+            id: marker_id,
             position_samples,
-            label,
+            label: label.clone(),
         });
     }
+    let _ = r.engine.send(AudioCommand::AddRefMarker {
+        ref_id,
+        marker_id,
+        position_samples,
+        label,
+    });
 }
 
 fn remove_marker(r: &mut Resonance, ref_id: ReferenceId, marker_id: u32) {
