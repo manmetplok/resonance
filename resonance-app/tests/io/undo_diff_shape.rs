@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use resonance_app::demo;
-use resonance_app::message::{MarkerMessage, Message};
+use resonance_app::message::{GroupMessage, MarkerMessage, Message};
 use resonance_app::project::ProjectFile;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::reconcile::{domain_order, Origin};
@@ -196,4 +196,33 @@ fn adding_and_removing_a_marker_undoes_through_the_diff_path() {
     step_lands_on(&mut f, Message::Undo, &added, "undo marker delete");
     undo_redo_over(&mut f, &before, &added, "marker add");
     step_lands_on(&mut f, Message::Redo, &removed, "redo marker delete");
+}
+
+// ---------------------------------------------------------------------------
+// Track groups
+// ---------------------------------------------------------------------------
+
+#[test]
+fn creating_a_track_group_undoes_through_the_diff_path() {
+    let mut f = fixture("track-group");
+    let tracks: Vec<_> = f
+        .app
+        .test_registry()
+        .tracks
+        .iter()
+        .filter(|t| t.sub_track.is_none())
+        .map(|t| t.id)
+        .take(2)
+        .collect();
+    assert_eq!(tracks.len(), 2, "the demo has two top-level tracks to group");
+    let before = f.app.test_snapshot_for_undo();
+    f.app.test_set_selected_tracks(tracks);
+    let added = edit(&mut f, Message::Group(GroupMessage::CreateGroupFromSelection));
+    assert_eq!(
+        added.project.file.track_groups.len(),
+        before.project.file.track_groups.len() + 1,
+        "the edit created a group"
+    );
+    // Undo removes the group, redo brings it back.
+    undo_redo_over(&mut f, &before, &added, "track group create");
 }
