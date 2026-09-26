@@ -32,6 +32,8 @@ mod vocal_render_cache;
 mod vocal_render_plan;
 #[path = "vocal/vocal_segment_pronunciation.rs"]
 mod vocal_segment_pronunciation;
+#[path = "vocal/vocal_segment_timing.rs"]
+mod vocal_segment_timing;
 #[path = "vocal/vocal_tuning_mirror.rs"]
 mod vocal_tuning_mirror;
 #[path = "vocal/voicebank_curve_support.rs"]
