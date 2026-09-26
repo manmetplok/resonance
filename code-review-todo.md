@@ -13,8 +13,8 @@ master and updates this table. Agents do **not** edit this file.
 
 | Batch | Items | Model | Status | Merge |
 |---|---|---|---|---|
-| A1 project open/load | STATE-01/UPD-01, UPD-02, STATE-04 | opus | in progress | |
-| A2 recording+plugin undo | STATE-02, STATE-03 | opus | queued | |
+| A1 project open/load | STATE-01/UPD-01, UPD-02, STATE-04 | opus | merged | 46c87319 |
+| A2 recording+plugin undo | STATE-02, STATE-03 | opus | in progress |  |
 | B compose sections | VIEW-03, VIEW-04, VIEW-05 | opus | in progress | |
 | C editor input | VIEW-01, VIEW-09, VIEW-02, CTL-02 | opus | in progress | |
 | D misc view | VIEW-06, VIEW-07, VIEW-08, VIEW-10 | opus | queued | |
@@ -123,7 +123,7 @@ framing and the CLAP state stream were checked and found correct.
 
 ## App state / undo / project persistence
 
-### [ ] STATE-01 — A failed project open leaves `project_path` and the engine's project dir pointing at the project that failed, so saves, recordings and undo then write into it or read from it
+### [x] STATE-01 — A failed project open leaves `project_path` and the engine's project dir pointing at the project that failed, so saves, recordings and undo then write into it or read from it — fixed @6a22ff1f
 - **Severity:** high
 - **Confidence:** high
 - **Category:** data-loss
@@ -163,7 +163,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** In `try_diff_replay`, for every slot, diff `a.params` against `b.params` from the two `ProjectFile`s. For each changed id, send `SetPluginParam` and set `slot.params[..].current_value`. A parameter missing from `b` means it is back at default, so use `default_value`. Do this *after* `push_all_plugin_states`, so the explicit values win over the stale blob, as the slow path does. Also consider refreshing `plugin_state_cache` (`SavePluginState`) when a coalesced param run ends, so the blob is not older than the snapshot.
 - **Verification:** Add a module to `resonance-app/tests/plugins`. Use `new_for_test_with_capture()`, a project path, and a plugin slot with two params (use the existing `test_support/mixer_plugins.rs` helpers). Dispatch two `SetPluginParam` calls for different params, then `Message::Undo`. Assert that the mirror shows the first param still at its new value and the second back at its old value, that a `SetPluginParam` for the second param was captured, and that `test_build_project_file()` agrees.
 
-### [ ] STATE-04 — New track-group ids can collide with groups loaded from a project: the counter is never advanced past loaded group ids
+### [x] STATE-04 — New track-group ids can collide with groups loaded from a project: the counter is never advanced past loaded group ids — fixed @69d5eec0
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
@@ -314,7 +314,7 @@ framing and the CLAP state stream were checked and found correct.
 
 ## App update loop / engine events / control socket
 
-### [ ] UPD-01 — A failed project open repoints the *current* project at the failed path (save/undo/recording then write into the wrong folder)
+### [x] UPD-01 — A failed project open repoints the *current* project at the failed path (save/undo/recording then write into the wrong folder) — fixed @6a22ff1f (same as STATE-01)
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
@@ -324,7 +324,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Don't change `project_path` or the engine dir until the load succeeds. Carry the path in the task, for example `ProjectLoaded(Result<..>, PathBuf)`, or stash it in `io.pending_open_path`. On `Ok`, assign it and send `SetProjectDir`. On `Err`, leave both alone. Pitfall: `all_cleared` currently reads `project_path` to restore it after `replay_loaded_project` nulls it, so assign it in the `Ok` arm before sending `ClearAll`.
 - **Verification:** New module in `tests/io/`: `Resonance::new_for_test_with_capture()` with a saved project at path A. Dispatch `OpenPathSelected(Some(tmp_dir_without_project_json))` and then feed `ProjectLoaded(Err(..))`. Assert `project_path()` is still A and that no `SetProjectDir(B)` command was captured.
 
-### [ ] UPD-02 — `project.open` job reports `done` before the project has loaded; readbacks and edits right after `job.wait` hit the OLD project
+### [x] UPD-02 — `project.open` job reports `done` before the project has loaded; readbacks and edits right after `job.wait` hit the OLD project — fixed @e344d9c6
 - **Severity:** high
 - **Confidence:** high
 - **Category:** concurrency
