@@ -255,6 +255,9 @@ fn set_track_frozen_source_attaches_and_unfreeze_detaches() {
 /// A cache rendered at another rate is converted by the shared
 /// band-limited resampler when the engine publishes it, so the mixer
 /// reads it frame for frame at the engine rate (code review FU-G3a).
+/// The conversion runs on a worker, not the engine command thread; it
+/// attaches when it lands — at the latest before an offline render
+/// (FU-A4c).
 #[test]
 fn a_frozen_source_at_another_rate_is_converted_on_publish() {
     let mut h = resonance_audio::test_support::EngineHandlerHarness::new();
@@ -263,6 +266,7 @@ fn a_frozen_source_at_another_rate_is_converted_on_publish() {
     let source = FrozenSource::new(cache_ref.clone(), Arc::new(vec![0.25; 44_100 * 2]), 44_100, 44_100);
 
     h.set_track_frozen_source(1, Some(source));
+    h.settle_frozen_conversions(true);
 
     let published = h.frozen_source(1).expect("attached");
     assert_eq!(published.sample_rate, SR, "published at the engine rate");
@@ -270,4 +274,30 @@ fn a_frozen_source_at_another_rate_is_converted_on_publish() {
     assert_eq!(published.samples.len(), SR as usize * 2);
     assert!(published.samples.iter().all(|&s| (s - 0.25).abs() < 1e-4), "DC stays DC");
     assert_eq!(published.cache_ref, cache_ref, "the file's metadata is kept");
+}
+
+fn frozen_44k(seconds: usize) -> FrozenSource {
+    let cache_ref = FreezeCacheRef::new("c.wav".into(), 44_100, 32, 1, FreezeCacheStatus::Frozen);
+    let frames = 44_100 * seconds;
+    FrozenSource::new(cache_ref, Arc::new(vec![0.25; frames * 2]), 44_100, frames as u64)
+}
+
+/// A conversion superseded before it lands never attaches: an unfreeze
+/// (or a newer cache) wins, and so does a project clear, since track ids
+/// are reused by the next project (FU-A4c).
+#[test]
+fn a_superseded_frozen_conversion_never_attaches() {
+    let mut h = resonance_audio::test_support::EngineHandlerHarness::new();
+    h.push_track(Track::new(1, "frozen".into()));
+
+    h.set_track_frozen_source(1, Some(frozen_44k(1)));
+    h.set_track_frozen_source(1, None);
+    h.settle_frozen_conversions(true);
+    assert!(h.frozen_source(1).is_none(), "the unfreeze wins");
+
+    h.set_track_frozen_source(1, Some(frozen_44k(1)));
+    h.clear_all();
+    h.push_track(Track::new(1, "next project".into()));
+    h.settle_frozen_conversions(true);
+    assert!(h.frozen_source(1).is_none(), "the old project's cache stays out");
 }

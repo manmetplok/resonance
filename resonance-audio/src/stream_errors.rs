@@ -21,7 +21,7 @@
 //! since cpal 0.17, so we do *not* need to forward to cpal — the
 //! recovery has already happened by the time `err_fn` fires.
 
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -153,14 +153,39 @@ pub fn format_underrun_line(label: &str, report: &UnderrunReport) -> String {
 /// FU-H6b). cpal runs `err_fn` on its ALSA worker — the audio thread —
 /// so it only counts here; the engine loop drains the counts, rate-limits
 /// the underruns through an [`UnderrunRateLimiter`] and formats + logs.
-/// A backend-specific error's description string is not kept (storing
-/// it would allocate); its kind is.
-#[derive(Debug, Default)]
+/// A backend-specific error's description is copied, truncated to
+/// [`STREAM_ERROR_TEXT_MAX`] bytes, into a fixed atomic byte buffer — no
+/// allocation — and turned back into text on the engine side (FU-A4c).
+#[derive(Debug)]
 pub struct StreamErrorLatch {
     underruns: AtomicU64,
     errors: AtomicU64,
     /// The most recent non-underrun error's kind ([`Self::kind_name`]).
     last_error_kind: AtomicU8,
+    /// The latest backend-specific description, `text_len` bytes of it.
+    text: [AtomicU8; STREAM_ERROR_TEXT_MAX],
+    text_len: AtomicU8,
+    /// Exclusive access to `text` / `text_len` for whichever side sets it
+    /// first; the other skips (the writer drops that text, the reader
+    /// takes it next tick). Never waited on.
+    text_busy: AtomicBool,
+}
+
+/// Bytes of a backend-specific stream error's description the
+/// [`StreamErrorLatch`] keeps.
+pub const STREAM_ERROR_TEXT_MAX: usize = 160;
+
+impl Default for StreamErrorLatch {
+    fn default() -> Self {
+        Self {
+            underruns: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            last_error_kind: AtomicU8::new(0),
+            text: std::array::from_fn(|_| AtomicU8::new(0)),
+            text_len: AtomicU8::new(0),
+            text_busy: AtomicBool::new(false),
+        }
+    }
 }
 
 impl StreamErrorLatch {
@@ -173,7 +198,10 @@ impl StreamErrorLatch {
             }
             cpal::StreamError::DeviceNotAvailable => 1,
             cpal::StreamError::StreamInvalidated => 2,
-            cpal::StreamError::BackendSpecific { .. } => 3,
+            cpal::StreamError::BackendSpecific { err } => {
+                self.store_text(&err.description);
+                3
+            }
         };
         self.last_error_kind.store(kind, Ordering::Relaxed);
         self.errors.fetch_add(1, Ordering::Release);
@@ -194,6 +222,40 @@ impl StreamErrorLatch {
                 Self::kind_name(self.last_error_kind.load(Ordering::Relaxed)),
             )
         })
+    }
+
+    /// Audio-thread side: keep `text` (cut on a char boundary at
+    /// [`STREAM_ERROR_TEXT_MAX`] bytes). Atomics only; dropped if the
+    /// engine side is reading at that moment.
+    fn store_text(&self, text: &str) {
+        if self.text_busy.swap(true, Ordering::Acquire) {
+            return;
+        }
+        let mut len = text.len().min(STREAM_ERROR_TEXT_MAX);
+        while !text.is_char_boundary(len) {
+            len -= 1;
+        }
+        for (slot, &byte) in self.text.iter().zip(&text.as_bytes()[..len]) {
+            slot.store(byte, Ordering::Relaxed);
+        }
+        self.text_len.store(len as u8, Ordering::Relaxed);
+        self.text_busy.store(false, Ordering::Release);
+    }
+
+    /// Engine-loop side: the latest backend-specific error description,
+    /// once (cleared by the call). `None` when there is none, or when the
+    /// audio side is writing one right now (it is picked up next call).
+    pub fn take_error_text(&self) -> Option<String> {
+        if self.text_busy.swap(true, Ordering::Acquire) {
+            return None;
+        }
+        let len = self.text_len.swap(0, Ordering::Relaxed) as usize;
+        let bytes: Vec<u8> = self.text[..len]
+            .iter()
+            .map(|b| b.load(Ordering::Relaxed))
+            .collect();
+        self.text_busy.store(false, Ordering::Release);
+        (len > 0).then(|| String::from_utf8_lossy(&bytes).into_owned())
     }
 
     fn kind_name(kind: u8) -> &'static str {

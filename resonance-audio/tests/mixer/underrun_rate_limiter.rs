@@ -165,3 +165,28 @@ fn stream_error_latch_counts_on_the_audio_side_and_drains_on_the_engine_side() {
     assert_eq!(latch.take_errors(), Some((2, "stream configuration invalidated")));
     assert_eq!(latch.take_errors(), None);
 }
+
+/// A backend-specific error's text reaches the engine side too (FU-A4c):
+/// the audio side copies it into a fixed buffer — cut on a char boundary,
+/// never allocating — and the engine side takes it once.
+#[test]
+fn stream_error_latch_carries_backend_text_to_the_engine_side() {
+    use resonance_audio::test_support::STREAM_ERROR_TEXT_MAX;
+    let latch = StreamErrorLatch::default();
+    let backend = |description: String| cpal::StreamError::BackendSpecific {
+        err: cpal::BackendSpecificError { description },
+    };
+    latch.record(&backend("snd_pcm_recover: -32 (Broken pipe)".into()));
+    assert_eq!(latch.take_errors(), Some((1, "backend-specific error")));
+    assert_eq!(
+        latch.take_error_text().as_deref(),
+        Some("snd_pcm_recover: -32 (Broken pipe)")
+    );
+    assert_eq!(latch.take_error_text(), None, "taken once");
+
+    // Longer than the buffer, with a multi-byte char straddling the cut.
+    let long = format!("{}é tail", "x".repeat(STREAM_ERROR_TEXT_MAX - 1));
+    latch.record(&backend(long));
+    let text = latch.take_error_text().expect("kept");
+    assert_eq!(text, "x".repeat(STREAM_ERROR_TEXT_MAX - 1), "cut before the char");
+}

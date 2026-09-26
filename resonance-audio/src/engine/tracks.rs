@@ -78,18 +78,97 @@ pub(crate) fn handle_set_track_fx_bypass(ctx: &HandlerCtx, track_id: TrackId, by
 /// audio thread reads it wait-free.
 pub(crate) fn handle_set_track_frozen_source(
     ctx: &HandlerCtx,
+    state: &mut HandlerState,
     track_id: TrackId,
     source: Option<FrozenSource>,
 ) {
+    // A newer command for this track supersedes a conversion in flight.
+    state.frozen_conversions.retain(|p| p.track_id != track_id);
     // A cache rendered at another rate (a project frozen at 44.1 kHz,
-    // opened at 48 kHz) is converted here, on the control thread, so the
-    // audio thread reads it frame for frame (code review FU-G3a).
-    let source = source.map(|s| Arc::new(s.at_rate(ctx.sample_rate)));
+    // opened at 48 kHz) is converted to the engine rate so the audio
+    // thread reads it frame for frame (code review FU-G3a) — on a worker,
+    // not here: it costs ~2.7 ms per audio second, and a project load
+    // sends one per frozen track (FU-A4c). Until it lands the track has
+    // no cache (never the previous one, which may be other content), and
+    // `settle_frozen_conversions` attaches it.
+    let source = match source {
+        Some(s) if s.sample_rate != ctx.sample_rate && s.sample_rate != 0 => {
+            let rate = ctx.sample_rate;
+            let generation = state.clear_generation.load(Ordering::SeqCst);
+            match std::thread::Builder::new()
+                .name("freeze-cache-resample".into())
+                .spawn(move || s.at_rate(rate))
+            {
+                Ok(handle) => {
+                    state.frozen_conversions.push(PendingFrozenConversion {
+                        track_id,
+                        generation,
+                        handle,
+                    });
+                    None
+                }
+                // The source went with the closure; nothing to attach.
+                Err(e) => {
+                    let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                        "Could not convert track {track_id}'s freeze cache to the engine \
+                         sample rate ({e}); it plays unfrozen."
+                    )));
+                    None
+                }
+            }
+        }
+        other => other,
+    };
+    publish_frozen_source(ctx, track_id, source.map(Arc::new));
+}
+
+/// Publish `source` as `track_id`'s frozen cache. A replaced cache can be
+/// tens of MB; it is retired, not dropped here, so the callback's
+/// block-long load can never be its last owner (code review MIX-04).
+fn publish_frozen_source(ctx: &HandlerCtx, track_id: TrackId, source: Option<Arc<FrozenSource>>) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
-        // A replaced cache can be tens of MB; it is retired, not dropped
-        // here, so the callback's block-long load can never be its last
-        // owner (code review MIX-04).
         super::retire::publish_opt(&track.frozen_source, source, &ctx.shared.retired);
+    }
+}
+
+/// A freeze cache being converted to the engine rate on a worker
+/// (FU-A4c).
+pub(crate) struct PendingFrozenConversion {
+    track_id: TrackId,
+    /// `HandlerState::clear_generation` when it started: a project cleared
+    /// since then (track ids are reused) discards the result.
+    generation: u64,
+    handle: std::thread::JoinHandle<FrozenSource>,
+}
+
+/// Attach finished freeze-cache conversions to their tracks. With `wait`,
+/// join the ones still running first — every offline render does, so a
+/// bounce right after a project load renders the frozen tracks from
+/// their caches; the engine loop polls without waiting.
+pub(crate) fn settle_frozen_conversions(ctx: &HandlerCtx, state: &mut HandlerState, wait: bool) {
+    if state.frozen_conversions.is_empty() {
+        return;
+    }
+    let generation = state.clear_generation.load(Ordering::SeqCst);
+    let pending = std::mem::take(&mut state.frozen_conversions);
+    for p in pending {
+        if !wait && !p.handle.is_finished() {
+            state.frozen_conversions.push(p);
+            continue;
+        }
+        match p.handle.join() {
+            Ok(source) if p.generation == generation => {
+                publish_frozen_source(ctx, p.track_id, Some(Arc::new(source)));
+            }
+            Ok(_) => {}
+            Err(_) => {
+                let _ = ctx.event_tx.send(AudioEvent::Error(format!(
+                    "Could not convert track {}'s freeze cache to the engine sample rate; \
+                     it plays unfrozen.",
+                    p.track_id
+                )));
+            }
+        }
     }
 }
 
@@ -107,7 +186,8 @@ pub(crate) fn retire_removed_track(track: Track, retired: &super::Retired) {
 /// Detach a track's frozen source so playback resumes through the live
 /// instrument + FX chain. Equivalent to `SetTrackFrozenSource { source: None }`,
 /// kept as a distinct command so the intent reads clearly at the call site.
-pub(crate) fn handle_unfreeze_track(ctx: &HandlerCtx, track_id: TrackId) {
+pub(crate) fn handle_unfreeze_track(ctx: &HandlerCtx, state: &mut HandlerState, track_id: TrackId) {
+    state.frozen_conversions.retain(|p| p.track_id != track_id);
     if let Some(track) = ctx.tracks.read().get(&track_id) {
         super::retire::publish_opt(&track.frozen_source, None, &ctx.shared.retired);
     }

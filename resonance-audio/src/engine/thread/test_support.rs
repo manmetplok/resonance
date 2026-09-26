@@ -221,7 +221,16 @@ impl EngineHandlerHarness {
 
     /// Run the real `SetTrackFrozenSource` handler.
     pub fn set_track_frozen_source(&mut self, track_id: TrackId, source: Option<FrozenSource>) {
-        self.with_ctx(|ctx, _| tracks::handle_set_track_frozen_source(ctx, track_id, source));
+        self.with_ctx(|ctx, state| {
+            tracks::handle_set_track_frozen_source(ctx, state, track_id, source)
+        });
+    }
+
+    /// Land freeze-cache conversions (FU-A4c): wait for every one in
+    /// flight with `wait` (what an offline render does), else only the
+    /// finished ones (the engine loop's poll).
+    pub fn settle_frozen_conversions(&mut self, wait: bool) {
+        self.with_ctx(|ctx, state| tracks::settle_frozen_conversions(ctx, state, wait));
     }
 
     /// Insert `track` into the live track table, as `AddTrack` would.

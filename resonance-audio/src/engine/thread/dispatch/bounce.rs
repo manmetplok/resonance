@@ -50,6 +50,9 @@ pub(super) fn dispatch_bounce(
     state: &mut HandlerState,
     cmd: AudioCommand,
 ) {
+    // Every offline render reads the frozen caches: land the ones still
+    // being converted to the engine rate first (FU-A4c).
+    crate::engine::tracks::settle_frozen_conversions(ctx, state, true);
     match cmd {
         // Legacy WAV bounce: a thin shim over the generalized export path
         // with default 32-bit-float WAV settings (doc #196).
