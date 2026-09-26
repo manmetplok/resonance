@@ -295,6 +295,34 @@ fn stopped_branch_counts_its_misses_without_a_render_skip() {
     assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
 }
 
+/// ARCH-05 A5-2: a host buffer larger than the scratch is clamped, and
+/// the callback only latches the sizes into `SharedState` — the engine
+/// loop takes them once and logs them. Later oversize blocks change
+/// nothing.
+#[test]
+fn oversize_host_buffer_is_latched_for_the_engine_loop_once() {
+    let mut h = playing_harness();
+    assert_eq!(h.shared().oversize_buffer.take_unreported(), None);
+
+    h.render();
+    assert_eq!(h.shared().oversize_buffer.take_unreported(), None);
+
+    h.set_host_buffer_frames(FRAMES * 2);
+    let out = h.render();
+    // Clamped: only the scratch's worth rendered, the tail stays silent.
+    assert!(out[..FRAMES * 2].iter().any(|&s| s != 0.0));
+    assert!(out[FRAMES * 2..].iter().all(|&s| s == 0.0));
+    assert_eq!(
+        h.shared().oversize_buffer.take_unreported(),
+        Some((FRAMES as u64 * 2, FRAMES as u64))
+    );
+    assert_eq!(h.shared().oversize_buffer.take_unreported(), None);
+
+    h.set_host_buffer_frames(FRAMES * 4);
+    h.render();
+    assert_eq!(h.shared().oversize_buffer.take_unreported(), None);
+}
+
 #[test]
 fn verbose_mode_reports_unconditionally_on_its_interval() {
     let shared = SharedState::default();

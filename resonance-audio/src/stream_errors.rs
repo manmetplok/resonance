@@ -5,7 +5,7 @@
 //! `err_fn` instead of writing them to stderr inside cpal itself
 //! (see the cpal 0.17.0 changelog). On a busy desktop with PipeWire /
 //! ALSA-compat that easily fires multiple times a second under normal
-//! UI load, so naively `eprintln!`-ing every event spams the log even
+//! UI load, so naively logging every event spams the log even
 //! though the stream itself recovers silently.
 //!
 //! [`UnderrunRateLimiter`] coalesces those events into one summary line
@@ -13,7 +13,7 @@
 //! immediately so a real problem is still visible right away). Other
 //! `StreamError` variants (`DeviceNotAvailable`, `StreamInvalidated`,
 //! `BackendSpecific`) are rare and load-bearing — those still go
-//! through `eprintln!` directly.
+//! through `tracing::error!` directly.
 //!
 //! See `tests/mixer/underrun_rate_limiter.rs` for behaviour coverage.
 //!

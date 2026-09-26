@@ -230,7 +230,7 @@ fn list_audio_paths(dir: &Path) -> Vec<String> {
         Ok(entries) => entries,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("scan_audio_folder: {}: {e}", dir.display());
+                tracing::warn!("scan_audio_folder: {}: {e}", dir.display());
             }
             return Vec::new();
         }

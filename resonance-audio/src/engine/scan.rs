@@ -215,7 +215,7 @@ fn load_bundles(
                 // difference between "this plugin does not exist" and
                 // "this plugin is broken", and only one of those is
                 // the user's to fix (ba todo #1307).
-                eprintln!("Failed to scan {}: {}", path.display(), e);
+                tracing::warn!("Failed to scan {}: {}", path.display(), e);
                 failures.push(PluginScanFailure {
                     path: real_path_str,
                     reason: e,
@@ -262,7 +262,7 @@ fn report(
     // once per scan, naming the fix and where we looked.
     if !scanned.iter().any(|p| p.is_instrument) {
         let dirs: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
-        eprintln!(
+        tracing::warn!(
             "plugins: no instruments found ({} plugin(s) scanned in [{}]). \
              The first-party plugins under plugins/ are CLAP bundles that must be \
              built first: run scripts/bundle.sh, then rescan. Until then \

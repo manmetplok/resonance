@@ -1038,6 +1038,22 @@ invariant test; app-crate sweep right after M12 merges. Taxonomy = EPIC
 "engine error taxonomy" (A5-3, A5-4 as 3 todos). The finding's severity should
 be read as *consistency*, not *correctness*: nothing string-matches today.
 
+**Progress (H6, branch `arch/H6-tracing`):** A5-1 done for resonance-audio
+(32 sites), resonance-common (5), resonance-plugin (1), wayland-plugin-gui (6),
+cocoa-plugin-gui (4, unbuilt on Linux beyond `cargo check`); app `main.rs`
+installs the subscriber (default `warn,resonance=info,resonance_svs=warn,
+wayland_plugin_gui=info,cocoa_plugin_gui=info`, no `log` bridge). Deviation:
+`resonance-plugin` also depends on `tracing-subscriber` and installs the same
+subscriber from `ClapBridge::new_shared` (`src/logging.rs`) — a CLAP cdylib has
+its own tracing dispatcher, so without it every swept `resonance-common` /
+plugin-SDK / editor-runtime event inside a bundle would be dropped. A5-2 done:
+`cycle_load::OversizeBufferLatch` on `SharedState`, logged by the engine tick.
+Invariants: `library_crates_log_through_tracing_not_stderr`,
+`audio_callback_never_logs`. Remaining: the app sweep (49 sites), plugin crates
+(amp 6 / drums 2 / ir 1 — none in `process()`, allow-listed by file), and the
+cpal `err_fn` logs (`engine/mod.rs`, `platform.rs`), which on ALSA run on the
+audio thread's worker — rate-limited, but still formatted there.
+
 ---
 
 ## ARCH-06 — `Resonance` and `message.rs` hub files

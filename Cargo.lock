@@ -1066,6 +1066,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "plugin-gui-core",
+ "tracing",
 ]
 
 [[package]]
@@ -4892,6 +4893,8 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4927,6 +4930,7 @@ dependencies = [
  "rubato",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -4938,6 +4942,7 @@ dependencies = [
  "serde_json",
  "symphonia",
  "time",
+ "tracing",
 ]
 
 [[package]]
@@ -5145,6 +5150,8 @@ dependencies = [
  "resonance-plugin",
  "serde",
  "serde_json",
+ "tracing",
+ "tracing-subscriber",
  "wayland-plugin-gui",
 ]
 
@@ -6949,6 +6956,7 @@ dependencies = [
  "plugin-gui-core",
  "raw-window-handle",
  "smithay-client-toolkit 0.20.0",
+ "tracing",
  "wayland-client",
  "wayland-egl",
  "wayland-protocols",

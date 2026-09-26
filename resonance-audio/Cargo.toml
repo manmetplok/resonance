@@ -27,6 +27,7 @@ arc-swap.workspace = true
 memmap2 = "0.9"
 bytemuck.workspace = true
 serde.workspace = true
+tracing.workspace = true
 flacenc = { version = "0.5.1", default-features = false, features = ["par"] }
 rubato = "0.16"
 # MP3 export (libmp3lame, built from bundled C source — no system lib).

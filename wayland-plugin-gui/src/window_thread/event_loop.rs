@@ -58,13 +58,13 @@ impl EditorThread {
         match result {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
-                eprintln!("wpg: editor thread exited with error: {}", err);
+                tracing::error!("wpg: editor thread exited with error: {}", err);
                 // Try to send the error; the main thread may have given up already.
                 let _ = ready_tx.try_send(Err(err));
             }
             Err(_) => {
                 // The panic hook already printed the message.
-                eprintln!("wpg: editor thread panicked; closing the editor");
+                tracing::error!("wpg: editor thread panicked; closing the editor");
                 let _ = ready_tx.try_send(Err(EditorError::ChannelClosed));
             }
         }
@@ -290,7 +290,7 @@ impl EditorThread {
                 }
             };
             if let Err(e) = event_loop.dispatch(timeout, &mut state) {
-                eprintln!("wayland-plugin-gui: dispatch error: {e}");
+                tracing::error!("wayland-plugin-gui: dispatch error: {e}");
                 break;
             }
 

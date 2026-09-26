@@ -366,7 +366,7 @@ impl RecordingState {
             // state-mutation (clip emission, event broadcast, file removal
             // for empty or out-of-range takes).
             if let Err(e) = finalize_wav_file(&mut track_buf) {
-                eprintln!("recording: {e}");
+                tracing::error!("recording: {e}");
                 continue;
             }
 
@@ -407,7 +407,7 @@ impl RecordingState {
             let source = match ClipSource::open_wav(&track_buf.path) {
                 Ok(src) => src,
                 Err(e) => {
-                    eprintln!("recording: mmap {} failed: {e}", track_buf.path.display());
+                    tracing::error!("recording: mmap {} failed: {e}", track_buf.path.display());
                     continue;
                 }
             };
@@ -497,7 +497,7 @@ impl RecordingState {
             if reopen {
                 close_pass_writer(track_buf);
             } else if let Err(e) = finalize_wav_file(track_buf) {
-                eprintln!("recording: {e}");
+                tracing::error!("recording: {e}");
                 continue;
             }
 
@@ -522,7 +522,7 @@ impl RecordingState {
                         track_buf.peak_frames = 0;
                     }
                     Err(e) => {
-                        eprintln!("recording: reopen pass writer failed: {e}");
+                        tracing::error!("recording: reopen pass writer failed: {e}");
                         self.write_errors.push(format!(
                             "Recording stopped on this track: could not open the next take \
                              file ({e})."
@@ -545,7 +545,7 @@ impl RecordingState {
             let source = match ClipSource::open_wav(&finished_path) {
                 Ok(src) => src,
                 Err(e) => {
-                    eprintln!("recording: mmap {} failed: {e}", finished_path.display());
+                    tracing::error!("recording: mmap {} failed: {e}", finished_path.display());
                     continue;
                 }
             };
@@ -640,7 +640,7 @@ fn close_pass_writer(track_buf: &mut TrackRecordingBuf) {
             tail.clear();
             r.flush(&mut tail);
             if let Err(e) = write_samples_and_peaks(track_buf, &tail) {
-                eprintln!(
+                tracing::error!(
                     "recording: seam flush failed for {}: {e}",
                     track_buf.path.display()
                 );
@@ -658,7 +658,7 @@ fn close_pass_writer(track_buf: &mut TrackRecordingBuf) {
     }
     if let Some(writer) = track_buf.writer.take() {
         if let Err(e) = writer.finalize() {
-            eprintln!(
+            tracing::error!(
                 "recording: finalize pass wav {}: {e}",
                 track_buf.path.display()
             );
@@ -713,7 +713,7 @@ fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), String> {
         if !track_buf.resample_scratch.is_empty() {
             let tail: Vec<f32> = std::mem::take(&mut track_buf.resample_scratch);
             if let Err(e) = write_samples_and_peaks(track_buf, &tail) {
-                eprintln!(
+                tracing::error!(
                     "recording: flush failed for {}: {e}",
                     track_buf.path.display()
                 );
@@ -749,7 +749,7 @@ fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), String> {
 /// salvaged count (0 if nothing could be recovered) and the peaks are
 /// trimmed to it. Returns the user-facing error message.
 fn salvage_failed_take(track_buf: &mut TrackRecordingBuf, err: &str) -> String {
-    eprintln!(
+    tracing::error!(
         "recording: write failed for {}: {err}",
         track_buf.path.display()
     );

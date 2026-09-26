@@ -375,7 +375,7 @@ impl EditorView {
             static TICKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let n = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
             if n <= 3 || n % 60 == 0 {
-                eprintln!("cpg: tick #{n}");
+                tracing::info!("cpg: tick #{n}");
             }
         }
         let ivars = self.ivars();
@@ -417,7 +417,7 @@ impl EditorView {
                     app.on_close();
                 }));
                 if result.is_err() {
-                    eprintln!("cocoa-plugin-gui: the editor's on_close panicked; closing anyway");
+                    tracing::error!("cocoa-plugin-gui: the editor's on_close panicked; closing anyway");
                 }
             }
         }
@@ -431,7 +431,7 @@ impl EditorView {
     /// the next tick fires `on_close`, notifies the host and tears the
     /// window down. Painting stops at once because `paint` checks `alive`.
     fn close_after_panic(&self) {
-        eprintln!("cocoa-plugin-gui: the editor's ui() panicked; closing the editor");
+        tracing::error!("cocoa-plugin-gui: the editor's ui() panicked; closing the editor");
         let ivars = self.ivars();
         ivars.alive.store(false, Ordering::Relaxed);
         ivars.close_requested.set(true);
@@ -667,7 +667,7 @@ impl EditorView {
             // the target.
             ivars.needs_repaint.set(true);
             if frame_n >= target.max(1) && !FIRED.swap(true, Ordering::Relaxed) {
-                eprintln!("cpg: CPG_TEST_CLOSE_AT performing close at frame {frame_n}");
+                tracing::info!("cpg: CPG_TEST_CLOSE_AT performing close at frame {frame_n}");
                 if let Some(win) = self.window() {
                     use objc2_foundation::NSObjectNSDelayedPerforming;
                     // Deferred to the next run-loop turn: performClose

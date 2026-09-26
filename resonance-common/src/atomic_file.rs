@@ -106,7 +106,7 @@ pub fn quarantine_corrupt(path: &Path) {
     corrupt_name.push(".corrupt");
     let corrupt_path = path.with_file_name(corrupt_name);
     if let Err(e) = std::fs::rename(path, &corrupt_path) {
-        eprintln!(
+        tracing::error!(
             "quarantine corrupt file {} -> {}: {e}",
             path.display(),
             corrupt_path.display()

@@ -102,7 +102,7 @@ impl Editor {
             Startup::Failed(err) => return Err(err),
             Startup::Disconnected => return Err(EditorError::ChannelClosed),
             Startup::TimedOut => {
-                eprintln!(
+                tracing::warn!(
                     "wayland-plugin-gui: the compositor did not configure the editor \
                      window within {:?}; giving up",
                     CREATE_TIMEOUT
@@ -202,7 +202,7 @@ impl Editor {
             if !join_with_timeout(thread, DESTROY_JOIN_TIMEOUT) {
                 // Not the RT audio thread — teardown may report like
                 // its neighbours (see EditorThread::run) do.
-                eprintln!(
+                tracing::warn!(
                     "wayland-plugin-gui: editor thread did not exit within {:?} \
                      (plugin ui() blocked?); detaching it instead of wedging \
                      the host thread",

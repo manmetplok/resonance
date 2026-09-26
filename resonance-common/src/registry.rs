@@ -92,7 +92,7 @@ pub fn load_registry() -> InstalledRegistry {
 pub fn load_registry_from(path: &Path) -> InstalledRegistry {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-            eprintln!(
+            tracing::warn!(
                 "{} is corrupt ({e}); quarantining and starting from an empty registry",
                 path.display()
             );

@@ -11,6 +11,11 @@ clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "4541f
 # bridge through the real C ABI (instantiate → activate → latency query).
 clack-host = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18", default-features = false, features = ["clack-plugin"] }
 thiserror = "2"
+# Logging facade (ARCH-05). Library crates depend on `tracing` only; the
+# subscriber is installed by the binaries (the app, and each CLAP bundle via
+# `resonance-plugin`, whose cdylib carries its own copy of the dispatcher).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"
