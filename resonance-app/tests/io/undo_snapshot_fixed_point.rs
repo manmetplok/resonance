@@ -20,8 +20,13 @@
 //! the `ProjectFile` (A1-2): a field that stops being restored shows up
 //! here as a JSON diff or a `same_state` mismatch.
 //!
-//! Compare through serde JSON: `ProjectFile` has no `PartialEq` and the
-//! serialized form is what a save writes, so it is the shape that matters.
+//! Compare through serde JSON for diagnostics: a pretty-printed diff finds
+//! the first differing line, which a bare struct `assert_eq!` on a
+//! thousand-field `ProjectFile` would not. `ProjectFile` derives
+//! `PartialEq` since ARCH-01 A-8 (`same_state` / `gesture_changed_since`
+//! compare structs now, not JSON) — see
+//! `struct_equality_agrees_with_json_equality_across_fixtures` below for the
+//! guard that the two ways of comparing a file agree.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1223,4 +1228,86 @@ fn automation_lanes_restore_identically_through_both_paths() {
         f.app.test_automation().lanes,
         "both paths restore the same lanes"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Struct `PartialEq` vs. the old `serde_json` compare (ARCH-01 A-8)
+// ---------------------------------------------------------------------------
+
+/// The pre-A-8 `same_state` / `gesture_changed_since` file comparison:
+/// kept here only as the historical baseline this file's guard test checks
+/// the new derived `PartialEq` against, never for production use again.
+/// `serde_json::to_value` maps a NaN/infinite float to `Value::Null` rather
+/// than failing, so two files that both carry one in the same field compare
+/// equal here even though a derived `PartialEq` would call them unequal
+/// (`NaN != NaN`) — the trap `ProjectPluginParam`'s hand-written `PartialEq`
+/// exists for.
+fn json_file_equal(a: &ProjectFile, b: &ProjectFile) -> bool {
+    match (serde_json::to_value(a), serde_json::to_value(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// For one fixture: build a snapshot, restore it onto itself through the
+/// real undo restore path (a) and apply one small scalar edit (b), and
+/// assert struct `PartialEq` and the old JSON compare agree at every step —
+/// both on whether the files are equal, and (so a vacuous "both always say
+/// unequal" can't pass) on what the answer actually is.
+fn check_struct_vs_json_equality(name: &str, load: impl FnOnce(&mut Resonance, &Path)) {
+    let mut f = fixture(name, load);
+    let before = f.app.test_snapshot_for_undo();
+
+    // (a) A snapshot vs. itself after a round-trip restore. Nothing
+    // changed since the snapshot was taken, so this takes the
+    // structure-preserving diff replay — the common "click that moved
+    // nothing" case `same_state` exists to detect.
+    f.app.test_begin_restore_from_snapshot(before.clone());
+    let restored = f.app.test_snapshot_for_undo();
+    let struct_eq = before.project.file == restored.project.file;
+    let json_eq = json_file_equal(&before.project.file, &restored.project.file);
+    assert_eq!(
+        struct_eq, json_eq,
+        "{name}: struct/JSON file equality disagree on a round-trip restore"
+    );
+    assert!(
+        struct_eq,
+        "{name}: a round-trip restore of an unchanged snapshot must be a no-op"
+    );
+
+    // (b) A snapshot vs. one after a small, real edit (toggling the
+    // metronome — present on every fixture, structural on none of them,
+    // so every fixture takes the same code path here).
+    f.app.test_dispatch(Message::Transport(TransportMessage::ToggleMetronome));
+    let edited = f.app.test_snapshot_for_undo();
+    let struct_eq = before.project.file == edited.project.file;
+    let json_eq = json_file_equal(&before.project.file, &edited.project.file);
+    assert_eq!(
+        struct_eq, json_eq,
+        "{name}: struct/JSON file equality disagree on a small edit"
+    );
+    assert!(
+        !struct_eq,
+        "{name}: the edit must actually change the file, or this test is vacuous"
+    );
+}
+
+// `check_struct_vs_json_equality`'s fixture tags are prefixed `eq-` so its
+// `resonance-undo-fixed-point-<tag>-<pid>` scratch directory can never
+// collide with another test's fixture of the same base name — the fixed-
+// point tests above run concurrently with this one, in the same process
+// (same pid), so a shared tag would race on the same directory.
+#[test]
+fn struct_equality_agrees_with_json_equality_across_fixtures() {
+    check_struct_vs_json_equality("eq-demo", load_demo);
+    check_struct_vs_json_equality(
+        "eq-vocal-songwriting",
+        load_template(BuiltinTemplateId::VocalSongwriting),
+    );
+    check_struct_vs_json_equality(
+        "eq-band-recording",
+        load_template(BuiltinTemplateId::BandRecording),
+    );
+    check_struct_vs_json_equality("eq-beatmaking", load_template(BuiltinTemplateId::Beatmaking));
+    check_struct_vs_json_equality("eq-empty", load_template(BuiltinTemplateId::Empty));
 }

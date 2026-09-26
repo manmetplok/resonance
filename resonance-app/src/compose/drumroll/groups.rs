@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// and carries an independent pattern (sized to `cycle`) plus an
 /// articulation weight used by the generator to pick which pad fires when
 /// the group's step is on.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrumGroupPad {
     /// Display name (e.g. "Closed", "Half Open").
     pub name: String,
@@ -45,7 +45,7 @@ impl DrumGroupPad {
 /// every section of the song so reorganising your kit doesn't fragment
 /// per-section state. Per-section variations (cycle, pattern) live on the
 /// section's lane generator config instead.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrumGroup {
     pub id: u64,
     /// Display name shown in the lane and the manager.

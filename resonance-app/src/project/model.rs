@@ -25,7 +25,7 @@ pub const PROJECT_JSON: &str = "project.json";
 pub const AUTOSAVE_JSON: &str = "project.autosave.json";
 
 /// On-disk project format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectFile {
     pub version: u32,
     pub sample_rate: u32,
@@ -386,7 +386,7 @@ impl Default for ProjectReferenceSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectTrack {
     pub id: u64,
     pub name: String,
@@ -540,7 +540,7 @@ impl ProjectExternalInstrument {
 }
 
 /// On-disk bus state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectBus {
     pub id: u64,
     pub name: String,
@@ -675,7 +675,7 @@ fn default_track_type() -> String {
     "audio".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectPlugin {
     pub instance_id: u64,
     /// Whether this ONE slot was bypassed, independently of the chain's
@@ -727,7 +727,19 @@ pub struct ProjectPlugin {
 /// param id; `name` is carried alongside purely so a human reading
 /// `project.json` can tell what a numeric id means (it is never used to
 /// match on load — a renamed param must still restore).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `value` is a plugin's own self-reported parameter value (`PluginSlotState`
+/// mirrors it verbatim — see the type doc above), so unlike every other float
+/// reachable from `ProjectFile` it is never clamped or sanitized by the app: a
+/// misbehaving CLAP plugin can report NaN. `PartialEq` is hand-written rather
+/// than derived (ARCH-01 A-8) so a NaN that hasn't changed between two undo
+/// snapshots still compares equal — matching what the old
+/// `serde_json`-based `same_state` saw (NaN serializes to `null`, and
+/// `null == null`) — instead of the `NaN != NaN` a derived impl would give,
+/// which would otherwise make every gesture look like a change for as long
+/// as such a plugin stays loaded. Same idiom `extras_equal` already uses for
+/// `reference.offset_db` / `trim_db`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectPluginParam {
     pub id: u32,
     #[serde(default)]
@@ -735,7 +747,19 @@ pub struct ProjectPluginParam {
     pub value: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl PartialEq for ProjectPluginParam {
+    fn eq(&self, other: &Self) -> bool {
+        // `==` first (matches ordinary IEEE-754 equality — and the old
+        // JSON compare — for every normal value, including `0.0 == -0.0`);
+        // the `to_bits()` fallback only changes the outcome for NaN, which
+        // `==` always calls unequal even against itself.
+        self.id == other.id
+            && self.name == other.name
+            && (self.value == other.value || self.value.to_bits() == other.value.to_bits())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectClip {
     pub id: u64,
     pub track_id: u64,
@@ -874,7 +898,7 @@ pub fn audio_format_from_tag(tag: &str) -> resonance_common::AudioFormat {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectMidiClip {
     pub id: u64,
     pub track_id: u64,

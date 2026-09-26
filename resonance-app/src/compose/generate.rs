@@ -20,7 +20,7 @@ use super::ChordState;
 /// `SectionDefinitionState` so the UI can remember the user's choices
 /// across sections (e.g. the bass track style sticks to "walking"
 /// for a specific verse even if another section uses "root hold").
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GenerateParams {
     /// Chord count for the progression walker.
     pub chord_count: u32,

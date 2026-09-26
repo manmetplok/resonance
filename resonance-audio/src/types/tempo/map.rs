@@ -32,7 +32,7 @@ where
 }
 
 /// A tempo change point on the tempo track.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TempoPoint {
     /// 0-based bar number where this tempo takes effect.
     pub bar: u32,
@@ -41,7 +41,7 @@ pub struct TempoPoint {
 }
 
 /// A time signature change point on the signature track.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SignaturePoint {
     /// 0-based bar number where this signature takes effect.
     pub bar: u32,

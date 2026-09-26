@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A named point or ranged region on the arrangement timeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArrangementMarker {
     pub id: u64,
     pub name: String,

@@ -44,7 +44,7 @@ pub use table::{HarmonicFunction, MarkovTable, TableRegistry};
 /// Describes how to generate material for a section. Serialized with an
 /// internally-tagged `"type"` discriminator so new variants extend the
 /// JSON schema without breaking existing project files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum GeneratorSpec {
     /// Sample a chord progression from a Markov chain over scale degrees.
