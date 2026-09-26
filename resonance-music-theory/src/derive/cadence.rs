@@ -91,10 +91,12 @@ pub(in crate::derive) fn plan_cadence_goal(is_consequent: bool, rng: &mut XorShi
     }
 }
 
-/// Pitch class of a 1-based scale degree.
+/// Pitch class of a 1-based scale degree. Degrees resolve against
+/// [`crate::scale::Mode::degree_intervals`], so a chromatic key uses its
+/// major parent; degree 0 is treated as 1.
 pub(in crate::derive) fn scale_degree_pc(scale: &Scale, degree: u8) -> u8 {
-    let intervals = scale.mode.intervals();
-    let idx = (degree as usize - 1) % intervals.len();
+    let intervals = scale.mode.degree_intervals();
+    let idx = (degree.max(1) as usize - 1) % intervals.len();
     (scale.root.to_semitone() + intervals[idx]) % 12
 }
 
@@ -106,7 +108,7 @@ pub(in crate::derive) fn scale_degree_of(scale: &Scale, midi: u8) -> Option<u8> 
     let offset = (pc + 12 - root) % 12;
     scale
         .mode
-        .intervals()
+        .degree_intervals()
         .iter()
         .position(|&iv| iv == offset)
         .map(|i| (i + 1) as u8)

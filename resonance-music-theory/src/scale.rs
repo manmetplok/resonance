@@ -46,6 +46,25 @@ impl Mode {
         }
     }
 
+    /// The seven-degree table that roman numerals and scale degrees
+    /// (1..=7) resolve against. Identical to [`Mode::intervals`] for every
+    /// heptatonic mode; `Chromatic` has no degrees of its own, so its
+    /// degrees resolve against the major (ionian) parent on the same root —
+    /// I–IV–V in C chromatic is C–F–G, matching the chord track's tonic.
+    pub fn degree_intervals(self) -> &'static [u8; 7] {
+        match self {
+            Mode::Chromatic | Mode::Major => &[0, 2, 4, 5, 7, 9, 11],
+            Mode::Minor => &[0, 2, 3, 5, 7, 8, 10],
+            Mode::Dorian => &[0, 2, 3, 5, 7, 9, 10],
+            Mode::Phrygian => &[0, 1, 3, 5, 7, 8, 10],
+            Mode::Lydian => &[0, 2, 4, 6, 7, 9, 11],
+            Mode::Mixolydian => &[0, 2, 4, 5, 7, 9, 10],
+            Mode::Locrian => &[0, 1, 3, 5, 6, 8, 10],
+            Mode::HarmonicMinor => &[0, 2, 3, 5, 7, 8, 11],
+            Mode::MelodicMinor => &[0, 2, 3, 5, 7, 9, 11],
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Mode::Chromatic => "chromatic",

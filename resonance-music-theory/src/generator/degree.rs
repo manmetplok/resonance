@@ -169,7 +169,7 @@ impl Degree {
     /// A non-zero inversion becomes a slash bass on the chord (ii6 in C
     /// major → Dm/F).
     pub fn to_chord(self, scale: Scale) -> Chord {
-        let intervals = scale.mode.intervals();
+        let intervals = scale.mode.degree_intervals();
         let idx = ((self.root.saturating_sub(1)) % 7) as usize;
         let mut root_offset = intervals[idx] as i32;
         if self.flat {

@@ -67,7 +67,7 @@ pub struct ProgressionParams {
 /// scale. `seventh` extends the triad to a 7th chord when the scale's
 /// 7th scale-tone forms a recognisable quality.
 pub fn diatonic_chord(scale: Scale, degree: u8, seventh: bool) -> Chord {
-    let ivs = scale.mode.intervals();
+    let ivs = scale.mode.degree_intervals();
     let d = ((degree.saturating_sub(1)) % 7) as usize;
     let root_offset = ivs[d] as i32;
 
