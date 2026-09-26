@@ -574,7 +574,10 @@ impl ComposeState {
                 id: d.id,
                 name: d.name.clone(),
                 color: d.color,
-                length_bars: d.length_bars,
+                // The GUI and control API bound a length to
+                // 1..=MAX_SECTION_BARS; a file is held to the same, since
+                // the Compose views loop over every bar (FU-V2c).
+                length_bars: d.length_bars.clamp(1, super::invariants::MAX_SECTION_BARS),
                 chords: d
                     .chords
                     .iter()
@@ -618,12 +621,22 @@ impl ComposeState {
         self.expression_curves.clear();
         self.expression_dock = ExpressionDockState::default();
         self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
+        let definitions = &self.definitions;
         self.placements = placements
             .iter()
-            .map(|p| SectionPlacementState {
-                id: p.id,
-                definition_id: p.definition_id,
-                start_bar: p.start_bar,
+            .map(|p| {
+                // A placement ends inside MAX_SECTION_BARS, like one made
+                // in the app (FU-V2c): pull a late one back to end there.
+                let length = definitions
+                    .iter()
+                    .find(|d| d.id == p.definition_id)
+                    .map_or(1, |d| d.length_bars);
+                let latest = super::invariants::MAX_SECTION_BARS - length;
+                SectionPlacementState {
+                    id: p.id,
+                    definition_id: p.definition_id,
+                    start_bar: p.start_bar.min(latest),
+                }
             })
             .collect();
         self.selected_placement_id = self.placements.first().map(|p| p.id);

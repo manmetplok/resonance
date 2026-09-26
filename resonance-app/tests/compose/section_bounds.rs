@@ -126,3 +126,34 @@ fn a_chord_at_u32_max_is_rejected_without_panicking() {
     let definition = &app.compose_state().definitions[0];
     assert!(definition.chords.is_empty());
 }
+
+/// FU-V2c: the same bounds hold for a project FILE — a hand-edited or
+/// corrupt length must not reach the per-bar view loops unclamped, and a
+/// placement may not end past the limit either.
+#[test]
+fn section_lengths_and_placements_from_a_file_are_clamped() {
+    use resonance_app::compose::ComposeState;
+    use resonance_app::project::{ProjectSectionDefinition, ProjectSectionPlacement};
+
+    let parsed: Vec<ProjectSectionDefinition> = serde_json::from_value(serde_json::json!([
+        {"id": 1, "name": "Huge", "color": [0, 0, 0], "length_bars": u32::MAX},
+        {"id": 2, "name": "Empty", "color": [0, 0, 0], "length_bars": 0},
+        {"id": 3, "name": "Late", "color": [0, 0, 0], "length_bars": 8},
+    ]))
+    .expect("definitions parse");
+    let placements: Vec<ProjectSectionPlacement> = serde_json::from_value(serde_json::json!([
+        {"id": 10, "definition_id": 3, "start_bar": MAX_BARS - 2},
+    ]))
+    .expect("placements parse");
+
+    let mut state = ComposeState::default();
+    state.load_from_project(&parsed, &placements);
+
+    let lengths: Vec<u32> = state.definitions.iter().map(|d| d.length_bars).collect();
+    assert_eq!(lengths, vec![MAX_BARS, 1, 8]);
+    assert_eq!(
+        state.placements[0].start_bar,
+        MAX_BARS - 8,
+        "the placement is pulled back to end at the limit"
+    );
+}
