@@ -35,7 +35,7 @@ master and updates this table. Agents do **not** edit this file.
 | V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | merged | 47e86611 |
 | M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | merged | a7660033 |
 | M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | merged | 28bf0279 |
-| V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | in progress | |
+| V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | merged | 57a940cb |
 | M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | in progress | |
 | M10 socket/presets/test hygiene | CTL-11/UPD-12, STATE-14, FU-D5, STATE-15, MIX-11 | opus | in progress | |
 | M11 vocal pipeline | UPD-08, VIEW-31, VIEW-34, VIEW-35, FU-V2d | opus | in progress | |
@@ -75,8 +75,8 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-F1c** (low, UX) WAV mixdown now blocks GUI traffic like bounce-in-place but has no modal, only the master-strip label.
 - [ ] **FU-G3a** (low) `mixer/render/frozen.rs` still linear-resamples freeze caches on rate mismatch; `bounce/resample.rs` uses rubato → two resampler implementations; consolidate on `resonance_common::resample`.
 - [ ] **FU-G3b** (low) no end-to-end test of a loop-record seam at a mismatched device rate (seam flush only covered at resampler level).
-- [ ] **FU-D1** (medium, feature gap) Arrange never followed the playhead (old `auto_follow_playhead` wrote a dead offset, now removed). Implement via scrollable id + `scrollable::scroll_to` from tick using the visible viewport width.
-- [ ] **FU-D2** (low, cleanup) dead horizontal-scroll plumbing: `h_scrollbar_grab`, `ScrollToX`, `scroll_to_x`, `viewport.scroll_offset`.
+- [x] **FU-D1** — fixed @68f4563d; (medium, feature gap) Arrange never followed the playhead (old `auto_follow_playhead` wrote a dead offset, now removed). Implement via scrollable id + `scrollable::scroll_to` from tick using the visible viewport width.
+- [x] **FU-D2** — fixed @68f4563d; (low, cleanup) dead horizontal-scroll plumbing: `h_scrollbar_grab`, `ScrollToX`, `scroll_to_x`, `viewport.scroll_offset`.
 - [ ] **FU-D3** (low) engine `handle_set_bpm` clamps 20..999 and passes NaN; use `sanitize_bpm` there too.
 - [ ] **FU-D4** (low) MIDI-imported tempo points > 300 BPM are now clamped at bar-table rebuild.
 - [ ] **FU-D5** (low, test hygiene) `track_preset_save_prompt` golden reads the real user preset dir (cf. STATE-14).
@@ -100,9 +100,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M4a** (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
 - [ ] **FU-M4b** (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
 - [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
-- [ ] **FU-V1a** (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
+- [x] **FU-V1a** — fixed @78487a42; (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
 - [ ] **FU-V1b** (low, test infra) `app.update(Message::Browser(SetFilter))` didn't apply the filter in tests while `test_dispatch` did — investigate.
-- [ ] **FU-V1c** note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
+- [x] **FU-V1c** — fixed @68f4563d; note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
 - [ ] **FU-V2a** (medium) VIEW-25 partial: MIDI Import modal now parses off-thread + has a file chooser, but Confirm is still a no-op, Review has no Import button, TempoConflict is a placeholder (doc #158 follow-ups); needs `undo/classify.rs` to stop classifying `Message::Import(_)` as Skip.
 - [ ] **FU-V2b** (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
 - [ ] **FU-V2c** (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
@@ -113,6 +113,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-H2a** (low) undo fast path rebuilds `compose.derived_clips` while slow path copies extras → a derived clip whose `MidiClipCreated` echo hasn't landed is dropped on fast-path undo (narrow race).
 - [ ] **FU-H2b** (low) slow-path undo calls `freeze.reset()` → restored Frozen tracks lose their UPD-05 content baseline (blind spot until next freeze).
 - [ ] **FU-H2c** (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
+- [ ] **FU-V3a** (low) `update/project_io/replay/mod.rs:161` resets `viewport.scroll_offset = 0` on load → can disagree with the real Scrollable until its next report.
+- [ ] **FU-V3b** (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
+- [ ] **FU-V3c** (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
 
 ## How to use this file
 
@@ -492,7 +495,7 @@ framing and the CLAP state stream were checked and found correct.
 - **Suggested fix:** Engine: give each import job a generation that `ClearAll` bumps, and drop results from older generations; this is the owning dev's call. App: in `clips::imported`, ignore `ClipImported` while `io.loading`, and when the `track_id` isn't in `registry.tracks`.
 - **Verification:** `tests/timeline/` module: `new_for_test()` with a loaded project that has clip 3. Feed `AudioEvent::ClipImported { clip_id: 3, track_id: 99, .. }` and assert clip 3's `total_frames` is unchanged and no clip on track 99 exists.
 
-### [ ] UPD-10 — "Search folder" relink walks the whole directory tree synchronously in `update()`
+### [x] UPD-10 — "Search folder" relink walks the whole directory tree synchronously in `update()` — fixed @a19e6cad
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** performance
@@ -838,7 +841,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Clamp the column loop to the visible window. Walk the sorted notes with a moving cursor instead of `any()`. Group clips by track before pairing crossfades.
 - **Verification:** The timeline goldens must be pixel-identical (no re-bless). Optionally add a timing smoke test in the `timeline` binary.
 
-### [ ] VIEW-29 — Batch relink walks the chosen folder tree on the UI thread
+### [x] VIEW-29 — Batch relink walks the chosen folder tree on the UI thread — fixed @a19e6cad (async folder scan)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** performance
@@ -848,7 +851,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Run the walk in `Task::perform` with `spawn_blocking`, and start the imports from the result message. Guard against a modal that was closed in the meantime.
 - **Verification:** Add a `control` group-binary test asserting that `start_batch_relink` returns a non-empty `Task` and does not mutate state until the result message arrives.
 
-### [ ] VIEW-30 — Pool "used ×N" badges and `pool_list.usage_count` go stale after clip delete, split or track removal
+### [x] VIEW-30 — Pool "used ×N" badges and `pool_list.usage_count` go stale after clip delete, split or track removal — fixed @4020e52b
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
@@ -868,7 +871,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Hash the chord's `Display` string, `params.voicebank` and `params.voice`.
 - **Verification:** Add a fingerprint unit test in the `compose` binary.
 
-### [ ] VIEW-32 — Vocal lane and drum ribbon canvases have no geometry cache and re-tessellate on every 16 ms tick
+### [x] VIEW-32 — Vocal lane and drum ribbon canvases have no geometry cache and re-tessellate on every 16 ms tick — fixed @5ea94049
 - **Severity:** low
 - **Confidence:** high
 - **Category:** performance
@@ -878,7 +881,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add a `Cache` plus a fingerprint, following `ComposeDrumCanvasState`, and draw the hover wash in an uncached overlay.
 - **Verification:** The compose goldens must be pixel-identical.
 
-### [ ] VIEW-33 — The timeline's in-canvas vertical scrollbar is drawn at the far right end of the song
+### [x] VIEW-33 — The timeline's in-canvas vertical scrollbar is drawn at the far right end of the song — fixed @21e69aa3
 - **Severity:** low
 - **Confidence:** high
 - **Category:** ux
@@ -908,7 +911,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** When the seed is explicit, use it directly without bumping.
 - **Verification:** Extend `tests/control/control_vocal_generate.rs`: the melodies from the two calls must be equal and the stored seed must be 1234.
 
-### [ ] VIEW-36 — Audition scrub strip keeps showing the previous file's waveform
+### [x] VIEW-36 — Audition scrub strip keeps showing the previous file's waveform — fixed @ca56cbc8
 - **Severity:** low
 - **Confidence:** high
 - **Category:** correctness
