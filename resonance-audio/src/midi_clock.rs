@@ -14,6 +14,50 @@ use std::time::Instant;
 
 use crossbeam_channel::Sender;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
+use thiserror::Error;
+
+use crate::types::{EngineError, EngineErrorKind};
+
+/// Failure opening or connecting the hardware MIDI clock output/input.
+/// `direction` is `"output"` or `"input"`, matching the historical
+/// message text (`"create midi clock {direction}: ..."`, ...).
+#[derive(Debug, Error)]
+pub enum MidiClockError {
+    #[error("create midi clock {direction}: {source}")]
+    Create {
+        direction: &'static str,
+        #[source]
+        source: midir::InitError,
+    },
+    #[error("midi clock {direction} port not found: {name}")]
+    PortNotFound { direction: &'static str, name: String },
+    #[error("connect midi clock {direction} {name}: {source}")]
+    ConnectOutput {
+        direction: &'static str,
+        name: String,
+        #[source]
+        source: midir::ConnectError<MidiOutput>,
+    },
+    #[error("connect midi clock {direction} {name}: {source}")]
+    ConnectInput {
+        direction: &'static str,
+        name: String,
+        #[source]
+        source: midir::ConnectError<MidiInput>,
+    },
+}
+
+impl From<MidiClockError> for EngineError {
+    fn from(e: MidiClockError) -> Self {
+        let kind = match &e {
+            MidiClockError::PortNotFound { .. } => EngineErrorKind::NotFound,
+            MidiClockError::Create { .. }
+            | MidiClockError::ConnectOutput { .. }
+            | MidiClockError::ConnectInput { .. } => EngineErrorKind::Io,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
 
 /// Standard MIDI System Real-Time messages used by the clock protocol.
 const STATUS_CLOCK: u8 = 0xF8;
@@ -79,7 +123,7 @@ impl MidiClockSender {
         &mut self,
         device: Option<String>,
         enabled: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), MidiClockError> {
         // If the configuration didn't actually change, leave the
         // existing connection in place.
         if self.enabled == enabled && self.device_name == device {
@@ -97,16 +141,25 @@ impl MidiClockSender {
             return Ok(());
         };
 
-        let output = MidiOutput::new("resonance-clock-out")
-            .map_err(|e| format!("create midi clock output: {e}"))?;
+        let output = MidiOutput::new("resonance-clock-out").map_err(|e| MidiClockError::Create {
+            direction: "output",
+            source: e,
+        })?;
         let port = output
             .ports()
             .into_iter()
             .find(|p| output.port_name(p).map(|n| n == name).unwrap_or(false))
-            .ok_or_else(|| format!("midi clock output port not found: {name}"))?;
+            .ok_or_else(|| MidiClockError::PortNotFound {
+                direction: "output",
+                name: name.clone(),
+            })?;
         let conn = output
             .connect(&port, "resonance-clock-out-conn")
-            .map_err(|e| format!("connect midi clock output {name}: {e}"))?;
+            .map_err(|e| MidiClockError::ConnectOutput {
+                direction: "output",
+                name: name.clone(),
+                source: e,
+            })?;
         self.conn = Some(conn);
         Ok(())
     }
@@ -226,7 +279,7 @@ impl MidiClockReceiver {
         &mut self,
         device: Option<String>,
         enabled: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), MidiClockError> {
         if self.enabled == enabled && self.device_name == device {
             return Ok(());
         }
@@ -241,13 +294,18 @@ impl MidiClockReceiver {
             return Ok(());
         };
 
-        let input = MidiInput::new("resonance-clock-in")
-            .map_err(|e| format!("create midi clock input: {e}"))?;
+        let input = MidiInput::new("resonance-clock-in").map_err(|e| MidiClockError::Create {
+            direction: "input",
+            source: e,
+        })?;
         let port = input
             .ports()
             .into_iter()
             .find(|p| input.port_name(p).map(|n| n == name).unwrap_or(false))
-            .ok_or_else(|| format!("midi clock input port not found: {name}"))?;
+            .ok_or_else(|| MidiClockError::PortNotFound {
+                direction: "input",
+                name: name.clone(),
+            })?;
 
         let tx = self.tx.clone();
         let conn = input
@@ -262,7 +320,11 @@ impl MidiClockReceiver {
                 },
                 (),
             )
-            .map_err(|e| format!("connect midi clock input {name}: {e}"))?;
+            .map_err(|e| MidiClockError::ConnectInput {
+                direction: "input",
+                name: name.clone(),
+                source: e,
+            })?;
         self._conn = Some(conn);
         Ok(())
     }

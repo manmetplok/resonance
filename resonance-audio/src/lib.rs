@@ -183,7 +183,7 @@ pub mod test_support {
     /// The RIFF/WAVE chunk walk behind `ClipSource::open_wav` — a pure
     /// function over bytes, so `tests/io/wav_chunk_parse.rs` can drive every
     /// malformed-header case without touching the filesystem.
-    pub use crate::io::wav::{locate_wav_float_data, WavDataChunk};
+    pub use crate::io::wav::{locate_wav_float_data, WavDataChunk, WavParseError};
     pub use crate::latency::{
         add_external_offsets, bus_chain_latencies, chain_latencies, comp_latency_clamped,
         compensation_delays, master_chain_latency, slot_latency, LatencyComp,

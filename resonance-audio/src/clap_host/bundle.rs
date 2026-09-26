@@ -24,11 +24,64 @@ use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY
 use clap_sys::host::clap_host;
 
 use clap_sys::plugin::clap_plugin;
+use thiserror::Error;
 
-use crate::types::PluginDescInfo;
+use crate::types::{EngineError, EngineErrorKind, PluginDescInfo};
 
 use super::instance::ClapInstance;
 use super::{create_host_data, HostData};
+
+/// Failure loading a `.clap` bundle or standing up one of its plugin
+/// instances. Every variant here is a CLAP loading/lifecycle failure —
+/// message text matches the historical `format!()` / literal strings,
+/// and they all classify as [`EngineErrorKind::Plugin`].
+#[derive(Debug, Error)]
+pub enum ClapBundleError {
+    #[error("Invalid path encoding")]
+    InvalidPathEncoding,
+    #[error("Invalid path: {0}")]
+    InvalidPath(#[source] std::ffi::NulError),
+    #[error("Failed to load library: {0}")]
+    LoadLibrary(#[source] libloading::Error),
+    #[error("No clap_entry symbol: {0}")]
+    NoEntrySymbol(#[source] libloading::Error),
+    #[error("clap_entry is null")]
+    NullEntry,
+    #[error("clap_entry.init is null")]
+    NullInitFn,
+    #[error("clap_entry.init() failed")]
+    EntryInitFailed,
+    #[error("clap_entry.get_factory is null")]
+    NullGetFactoryFn,
+    #[error("No plugin factory found")]
+    NoFactory,
+    #[error("factory.get_plugin_count is null")]
+    NullGetCountFn,
+    #[error("factory.get_plugin_descriptor is null")]
+    NullGetDescFn,
+    #[error("factory.create_plugin is null")]
+    NullCreatePluginFn,
+    #[error("Invalid plugin id: {0}")]
+    InvalidPluginId(#[source] std::ffi::NulError),
+    #[error("Failed to create plugin '{0}'")]
+    CreatePluginFailed(String),
+    #[error("plugin.init() failed")]
+    PluginInitFailed,
+    #[error("plugin.activate() failed")]
+    PluginActivateFailed,
+    #[error("plugin.start_processing() failed")]
+    PluginStartProcessingFailed,
+    /// Test-only path (`__instance_from_raw_for_test`): the hand-rolled
+    /// build closure returned a null plugin.
+    #[error("test build fn returned a null plugin")]
+    TestPluginNull,
+}
+
+impl From<ClapBundleError> for EngineError {
+    fn from(e: ClapBundleError) -> Self {
+        EngineError::new(EngineErrorKind::Plugin, e.to_string())
+    }
+}
 
 pub struct ClapBundle {
     /// The `dlopen` handle, wrapped so it is never closed — see the
@@ -54,49 +107,46 @@ pub struct ClapBundle {
 
 impl ClapBundle {
     /// Load a .clap shared library file.
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| "Invalid path encoding".to_string())?;
-        let path_cstring = CString::new(path_str).map_err(|e| format!("Invalid path: {}", e))?;
+    pub fn load(path: &Path) -> Result<Self, ClapBundleError> {
+        let path_str = path.to_str().ok_or(ClapBundleError::InvalidPathEncoding)?;
+        let path_cstring = CString::new(path_str).map_err(ClapBundleError::InvalidPath)?;
 
         // `path` may be a macOS-style bundle directory; dlopen needs the
         // binary inside it. `clap_entry.init()` still receives the
         // original `.clap` path either way, as entry.h specifies.
         let library = unsafe { libloading::Library::new(bundle_binary_path(path)) }
-            .map_err(|e| format!("Failed to load library: {}", e))?;
+            .map_err(ClapBundleError::LoadLibrary)?;
 
         let entry: *const clap_plugin_entry = unsafe {
             let symbol: libloading::Symbol<*const clap_plugin_entry> =
                 library
                     .get(b"clap_entry")
-                    .map_err(|e| format!("No clap_entry symbol: {}", e))?;
+                    .map_err(ClapBundleError::NoEntrySymbol)?;
             *symbol
         };
 
         if entry.is_null() {
-            return Err("clap_entry is null".to_string());
+            return Err(ClapBundleError::NullEntry);
         }
 
-        let init_fn =
-            unsafe { (*entry).init }.ok_or_else(|| "clap_entry.init is null".to_string())?;
+        let init_fn = unsafe { (*entry).init }.ok_or(ClapBundleError::NullInitFn)?;
         let ok = unsafe { init_fn(path_cstring.as_ptr()) };
         if !ok {
-            return Err("clap_entry.init() failed".to_string());
+            return Err(ClapBundleError::EntryInitFailed);
         }
 
-        let get_factory = unsafe { (*entry).get_factory }
-            .ok_or_else(|| "clap_entry.get_factory is null".to_string())?;
+        let get_factory =
+            unsafe { (*entry).get_factory }.ok_or(ClapBundleError::NullGetFactoryFn)?;
         let factory_ptr = unsafe { get_factory(CLAP_PLUGIN_FACTORY_ID.as_ptr()) };
         if factory_ptr.is_null() {
-            return Err("No plugin factory found".to_string());
+            return Err(ClapBundleError::NoFactory);
         }
         let factory = factory_ptr as *const clap_plugin_factory;
 
-        let get_count = unsafe { (*factory).get_plugin_count }
-            .ok_or_else(|| "factory.get_plugin_count is null".to_string())?;
-        let get_desc = unsafe { (*factory).get_plugin_descriptor }
-            .ok_or_else(|| "factory.get_plugin_descriptor is null".to_string())?;
+        let get_count =
+            unsafe { (*factory).get_plugin_count }.ok_or(ClapBundleError::NullGetCountFn)?;
+        let get_desc =
+            unsafe { (*factory).get_plugin_descriptor }.ok_or(ClapBundleError::NullGetDescFn)?;
 
         let count = unsafe { get_count(factory) };
         let mut descriptors = Vec::new();
@@ -193,19 +243,18 @@ impl ClapBundle {
         &self,
         plugin_id: &str,
         sample_rate: u32,
-    ) -> Result<ClapInstance, String> {
-        let create = unsafe { (*self.factory).create_plugin }
-            .ok_or_else(|| "factory.create_plugin is null".to_string())?;
+    ) -> Result<ClapInstance, ClapBundleError> {
+        let create =
+            unsafe { (*self.factory).create_plugin }.ok_or(ClapBundleError::NullCreatePluginFn)?;
 
         let host_data = create_host_data();
         let host_ptr = &host_data.clap_host as *const clap_host;
 
-        let plugin_id_c =
-            CString::new(plugin_id).map_err(|e| format!("Invalid plugin id: {}", e))?;
+        let plugin_id_c = CString::new(plugin_id).map_err(ClapBundleError::InvalidPluginId)?;
 
         let plugin = unsafe { create(self.factory, host_ptr, plugin_id_c.as_ptr()) };
         if plugin.is_null() {
-            return Err(format!("Failed to create plugin '{}'", plugin_id));
+            return Err(ClapBundleError::CreatePluginFailed(plugin_id.to_string()));
         }
 
         build_instance(plugin, host_data, sample_rate)
@@ -221,7 +270,7 @@ pub(super) fn build_instance(
     plugin: *const clap_plugin,
     host_data: Pin<Box<HostData>>,
     sample_rate: u32,
-) -> Result<ClapInstance, String> {
+) -> Result<ClapInstance, ClapBundleError> {
     // Init
     if let Some(init_fn) = unsafe { (*plugin).init } {
         let ok = unsafe { init_fn(plugin) };
@@ -229,7 +278,7 @@ pub(super) fn build_instance(
             if let Some(destroy) = unsafe { (*plugin).destroy } {
                 unsafe { destroy(plugin) };
             }
-            return Err("plugin.init() failed".to_string());
+            return Err(ClapBundleError::PluginInitFailed);
         }
     }
 
@@ -335,7 +384,7 @@ pub(super) fn build_instance(
             if let Some(destroy) = unsafe { (*plugin).destroy } {
                 unsafe { destroy(plugin) };
             }
-            return Err("plugin.activate() failed".to_string());
+            return Err(ClapBundleError::PluginActivateFailed);
         }
     }
 
@@ -368,7 +417,7 @@ pub(super) fn build_instance(
             if let Some(destroy) = unsafe { (*plugin).destroy } {
                 unsafe { destroy(plugin) };
             }
-            return Err("plugin.start_processing() failed".to_string());
+            return Err(ClapBundleError::PluginStartProcessingFailed);
         }
     }
 

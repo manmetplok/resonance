@@ -257,10 +257,10 @@ pub(crate) fn begin_recording_stream(
             // Keep the legacy behaviour: the transport rolls even when
             // the recording stream could not be opened.
             ctx.shared.playing.store(true, Ordering::SeqCst);
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
-                "Failed to start recording: {}",
-                e
-            ))));
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::new(
+                e.kind(),
+                format!("Failed to start recording: {}", e),
+            )));
             return;
         }
     };

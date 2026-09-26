@@ -103,7 +103,7 @@ fn extensible_pcm_subformat_is_rejected() {
     let mut body = chunk(b"fmt ", &fmt_extensible(1)); // WAVE_FORMAT_PCM
     body.extend_from_slice(&chunk(b"data", &[0u8; 32]));
     let err = locate_wav_float_data(&riff(&body)).expect_err("integer PCM is not mappable");
-    assert!(err.contains("unsupported format code 1"), "{err}");
+    assert!(err.to_string().contains("unsupported format code 1"), "{err}");
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn extensible_fmt_chunk_shorter_than_the_guid_is_rejected() {
     let mut body = chunk(b"fmt ", &short);
     body.extend_from_slice(&chunk(b"data", &[0u8; 32]));
     let err = locate_wav_float_data(&riff(&body)).expect_err("truncated extensible fmt");
-    assert!(err.contains("extensible fmt chunk too small"), "{err}");
+    assert!(err.to_string().contains("extensible fmt chunk too small"), "{err}");
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn garbage_and_truncated_headers_are_rejected() {
     ];
     for (bytes, expected) in cases {
         let err = locate_wav_float_data(bytes).expect_err("must reject");
-        assert!(err.contains(expected), "for {bytes:?}: {err}");
+        assert!(err.to_string().contains(expected), "for {bytes:?}: {err}");
     }
 }
 
@@ -149,7 +149,7 @@ fn garbage_and_truncated_headers_are_rejected() {
 fn missing_data_chunk_is_rejected() {
     let body = chunk(b"fmt ", &fmt_float(2, SR, 32));
     let err = locate_wav_float_data(&riff(&body)).expect_err("no data chunk");
-    assert!(err.contains("no data chunk found"), "{err}");
+    assert!(err.to_string().contains("no data chunk found"), "{err}");
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn data_chunk_before_fmt_is_rejected() {
     let mut body = chunk(b"data", &[0u8; 32]);
     body.extend_from_slice(&chunk(b"fmt ", &fmt_float(2, SR, 32)));
     let err = locate_wav_float_data(&riff(&body)).expect_err("data before fmt");
-    assert!(err.contains("data chunk before fmt chunk"), "{err}");
+    assert!(err.to_string().contains("data chunk before fmt chunk"), "{err}");
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn a_chunk_that_overruns_the_file_is_rejected() {
     bytes.extend_from_slice(&1_000_000u32.to_le_bytes());
     bytes.extend_from_slice(&[0u8; 16]);
     let err = locate_wav_float_data(&bytes).expect_err("overrunning chunk");
-    assert!(err.contains("overruns file"), "{err}");
+    assert!(err.to_string().contains("overruns file"), "{err}");
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn mono_and_non_float_and_zero_rate_fmt_chunks_are_rejected() {
         let mut body = chunk(b"fmt ", &fmt);
         body.extend_from_slice(&chunk(b"data", &[0u8; 32]));
         let err = locate_wav_float_data(&riff(&body)).expect_err("must reject");
-        assert!(err.contains(expected), "{err}");
+        assert!(err.to_string().contains(expected), "{err}");
     }
 }
 
@@ -192,7 +192,7 @@ fn fmt_chunk_too_small_is_rejected() {
     let mut body = chunk(b"fmt ", &[0u8; 12]);
     body.extend_from_slice(&chunk(b"data", &[0u8; 32]));
     let err = locate_wav_float_data(&riff(&body)).expect_err("stub fmt chunk");
-    assert!(err.contains("fmt chunk too small"), "{err}");
+    assert!(err.to_string().contains("fmt chunk too small"), "{err}");
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn a_data_chunk_that_is_not_whole_stereo_frames_is_rejected() {
     let err = found
         .stereo_frame_count()
         .expect_err("half a frame is not loadable");
-    assert!(err.contains("not a multiple of stereo f32 frames"), "{err}");
+    assert!(err.to_string().contains("not a multiple of stereo f32 frames"), "{err}");
 }
 
 /// A `data` chunk that is only 2-byte aligned must still load and play

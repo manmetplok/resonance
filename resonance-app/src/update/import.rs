@@ -155,7 +155,7 @@ const GM_DRUM_CHANNEL: u8 = 9;
 /// [`spawn_parse`]). `project_bpm` decides whether the file's tempo
 /// conflicts with the project's.
 pub fn parse_import_file(path: &Path, project_bpm: f32) -> Result<ParsedImport, String> {
-    let smf = parse_midi_file(path)?;
+    let smf = parse_midi_file(path).map_err(|e| e.to_string())?;
     let file_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

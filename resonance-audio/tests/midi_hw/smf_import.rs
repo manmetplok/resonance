@@ -5,8 +5,10 @@ use midly::num::{u15, u24, u28, u4, u7};
 use midly::{
     Format, Header, MetaMessage, MidiMessage, Smf, Timing, Track, TrackEvent, TrackEventKind,
 };
-use resonance_audio::midi_io::{parse_midi_file, parse_smf_bytes, SignatureEvent, SmfFormat};
-use resonance_audio::types::bar_len_ticks;
+use resonance_audio::midi_io::{
+    parse_midi_file, parse_smf_bytes, MidiIoError, SignatureEvent, SmfFormat,
+};
+use resonance_audio::types::{bar_len_ticks, EngineError, EngineErrorKind};
 
 /// Serialize an `Smf` made of `(delta, kind)` tracks to bytes. Each track
 /// is terminated with an End-of-Track meta event.
@@ -449,13 +451,19 @@ fn track_name_falls_back_to_instrument_name() {
 fn format2_is_rejected() {
     let bytes = encode(Format::Sequential, 480, vec![vec![(0, note_on(0, 60, 100))]]);
     let err = parse_smf_bytes(&bytes).unwrap_err();
-    assert!(err.contains("Format 2"), "unexpected error: {err}");
+    assert!(matches!(err, MidiIoError::UnsupportedFormat2));
+    let msg = err.to_string();
+    assert!(msg.contains("Format 2"), "unexpected error: {msg}");
+    assert_eq!(EngineError::from(err).kind, EngineErrorKind::Unsupported);
 }
 
 #[test]
 fn corrupt_bytes_are_rejected() {
     let err = parse_smf_bytes(b"this is not a midi file").unwrap_err();
-    assert!(err.contains("parse smf"), "unexpected error: {err}");
+    assert!(matches!(err, MidiIoError::Parse { .. }));
+    let msg = err.to_string();
+    assert!(msg.contains("parse smf"), "unexpected error: {msg}");
+    assert_eq!(EngineError::from(err).kind, EngineErrorKind::Unsupported);
 }
 
 #[test]

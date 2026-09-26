@@ -218,7 +218,7 @@ fn load_bundles(
                 tracing::warn!("Failed to scan {}: {}", path.display(), e);
                 failures.push(PluginScanFailure {
                     path: real_path_str,
-                    reason: e,
+                    reason: e.to_string(),
                 });
             }
         }

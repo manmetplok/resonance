@@ -7,8 +7,28 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-use super::{ClipId, SamplePos, TrackId};
+use super::{ClipId, EngineError, SamplePos, TrackId};
+
+/// Failure loading a clip's backing WAV file. Thin wrapper around
+/// [`crate::io::wav::WavIoError`] — this module's own logic (the
+/// misaligned-data-chunk fallback to an in-RAM copy, the sample-rate
+/// mismatch resample) has no failure path of its own; every error
+/// originates in the file I/O / RIFF parse `crate::io::wav` does.
+#[derive(Debug, Error)]
+pub enum ClipError {
+    #[error(transparent)]
+    Wav(#[from] crate::io::wav::WavIoError),
+}
+
+impl From<ClipError> for EngineError {
+    fn from(e: ClipError) -> Self {
+        match e {
+            ClipError::Wav(w) => w.into(),
+        }
+    }
+}
 
 /// A single MIDI note in a clip.
 #[derive(Debug, Clone)]
@@ -185,7 +205,7 @@ impl ClipSource {
     /// aligned — see [`ClipSource::open_wav_inner`]. Every WAV this app
     /// writes is aligned, so that is a fallback for externally-authored
     /// files, not a path the app takes on its own output.
-    pub fn open_wav(path: &Path) -> Result<Self, String> {
+    pub fn open_wav(path: &Path) -> Result<Self, ClipError> {
         Self::open_wav_inner(path).map(|(source, _)| source)
     }
 
@@ -197,7 +217,7 @@ impl ClipSource {
     /// the correct pitch and speed. The resample happens at load time,
     /// off the audio thread; the next project save re-encodes the clip
     /// to disk at the engine rate.
-    pub fn open_wav_at_rate(path: &Path, engine_sample_rate: u32) -> Result<Self, String> {
+    pub fn open_wav_at_rate(path: &Path, engine_sample_rate: u32) -> Result<Self, ClipError> {
         let (source, wav_sample_rate) = Self::open_wav_inner(path)?;
         if wav_sample_rate == engine_sample_rate {
             return Ok(source);
@@ -222,7 +242,7 @@ impl ClipSource {
     /// PANICS on misalignment, and it runs on the audio thread. Copying
     /// at load time costs one allocation off the RT path and keeps the
     /// hot accessor a plain slice cast.
-    fn open_wav_inner(path: &Path) -> Result<(Self, u32), String> {
+    fn open_wav_inner(path: &Path) -> Result<(Self, u32), ClipError> {
         let mapped = crate::io::wav::map_wav_file(path)?;
         let aligned = (mapped.mmap.as_ptr() as usize + mapped.data_offset_bytes)
             % std::mem::align_of::<f32>()

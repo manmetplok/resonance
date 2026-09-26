@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_channel::Sender;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use ringbuf::traits::Consumer;
+use thiserror::Error;
 
 use crate::decode::StreamingLinearResampler;
 use crate::types::*;
@@ -26,6 +27,59 @@ use crate::types::*;
 /// drain chunk. 4096 samples × up to 16 input channels gives us a
 /// comfortable ceiling; larger chunks loop.
 const DRAIN_SCRATCH_LEN: usize = 4096;
+
+/// Failure in the streaming-recording write path: opening or closing a
+/// take's WAV writer, writing a sample, or repairing a partially
+/// written file after a failed write. Message text matches the
+/// historical `format!()` strings (all of these ultimately reach the
+/// user through [`RecordingState::poll_write_errors`], which has
+/// always classified every one of them as [`EngineErrorKind::Io`] —
+/// consistent with every variant here being a filesystem failure).
+#[derive(Debug, Error)]
+pub enum RecordingError {
+    #[error("create audio dir {path}: {source}")]
+    CreateAudioDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("create wav {path}: {source}")]
+    CreateWav {
+        path: String,
+        #[source]
+        source: hound::Error,
+    },
+    #[error("finalize wav {path}: {source}")]
+    FinalizeWav {
+        path: String,
+        #[source]
+        source: hound::Error,
+    },
+    #[error("writer already closed")]
+    WriterClosed,
+    #[error("write_sample {channel}: {source}")]
+    WriteSample {
+        channel: &'static str,
+        #[source]
+        source: hound::Error,
+    },
+    #[error("no data chunk")]
+    NoDataChunk,
+    #[error("{path}: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl From<RecordingError> for EngineError {
+    fn from(e: RecordingError) -> Self {
+        // Every recording-path failure is a filesystem/OS I/O failure —
+        // matches `poll_write_errors`'s historical `EngineError::io(msg)`.
+        EngineError::io(e.to_string())
+    }
+}
 
 /// Per-track recording scratch: the streaming WAV writer, the target
 /// path, the pre-allocated clip id, incremental waveform peaks, an
@@ -233,7 +287,7 @@ impl RecordingState {
         input_sample_rate: u32,
         input_port: u16,
         mono: bool,
-    ) -> Result<TrackRecordingBuf, String> {
+    ) -> Result<TrackRecordingBuf, RecordingError> {
         let audio_dir = project_dir.join("audio");
         let (path, writer) = open_track_wav_file(&audio_dir, clip_id, engine_sample_rate)?;
 
@@ -342,7 +396,8 @@ impl RecordingState {
                     track_buf.resample_scratch = buf;
                 }
                 if let Err(e) = write_result {
-                    self.write_errors.push(salvage_failed_take(track_buf, &e));
+                    self.write_errors
+                        .push(salvage_failed_take(track_buf, &e.to_string()));
                 }
             }
         }
@@ -684,9 +739,11 @@ fn open_track_wav_file(
     audio_dir: &Path,
     clip_id: ClipId,
     engine_sample_rate: u32,
-) -> Result<(PathBuf, WavWriter<BufWriter<File>>), String> {
-    std::fs::create_dir_all(audio_dir)
-        .map_err(|e| format!("create audio dir {}: {e}", audio_dir.display()))?;
+) -> Result<(PathBuf, WavWriter<BufWriter<File>>), RecordingError> {
+    std::fs::create_dir_all(audio_dir).map_err(|e| RecordingError::CreateAudioDir {
+        path: audio_dir.display().to_string(),
+        source: e,
+    })?;
     let path = audio_dir.join(format!("clip_{clip_id}.wav"));
 
     let spec = WavSpec {
@@ -695,8 +752,10 @@ fn open_track_wav_file(
         bits_per_sample: 32,
         sample_format: SampleFormat::Float,
     };
-    let writer = WavWriter::create(&path, spec)
-        .map_err(|e| format!("create wav {}: {e}", path.display()))?;
+    let writer = WavWriter::create(&path, spec).map_err(|e| RecordingError::CreateWav {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     Ok((path, writer))
 }
 
@@ -710,7 +769,7 @@ fn open_track_wav_file(
 /// whose writer is already closed. A return value of `Ok(())` means
 /// `track_buf.writer` is now `None` and the on-disk file is valid;
 /// `Err(_)` means the file should be considered corrupt.
-fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), String> {
+fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), RecordingError> {
     // A take whose file failed mid-recording was already salvaged and
     // closed (header fixed, peaks trimmed); the file is valid as is.
     if track_buf.write_failed {
@@ -745,11 +804,12 @@ fn finalize_wav_file(track_buf: &mut TrackRecordingBuf) -> Result<(), String> {
     // data chunk size. If this fails the file is unusable.
     let Some(writer) = track_buf.writer.take() else {
         // Writer was dropped earlier due to a write error.
-        return Err("writer already closed".into());
+        return Err(RecordingError::WriterClosed);
     };
-    writer
-        .finalize()
-        .map_err(|e| format!("finalize wav {}: {e}", track_buf.path.display()))
+    writer.finalize().map_err(|e| RecordingError::FinalizeWav {
+        path: track_buf.path.display().to_string(),
+        source: e,
+    })
 }
 
 /// Handle a failed write to a take's WAV: close the writer, cut the file
@@ -847,9 +907,12 @@ enum WavRepair {
 /// filesystems. Where even that fails, the frames are read back into
 /// memory rather than lost ([`WavRepair::HeaderStale`]). `Err` only when
 /// the audio could not be located or read at all.
-fn repair_wav_data_len(path: &Path) -> Result<WavRepair, String> {
+fn repair_wav_data_len(path: &Path) -> Result<WavRepair, RecordingError> {
     const FRAME_BYTES: u64 = 2 * 4; // stereo f32
-    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let err = |e: std::io::Error| RecordingError::Io {
+        path: path.display().to_string(),
+        source: e,
+    };
     // Reading needs no free space; open for writing only if we can.
     let (mut file, open_rw_error) = match std::fs::OpenOptions::new()
         .read(true)
@@ -857,7 +920,7 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, String> {
         .open(path)
     {
         Ok(f) => (f, None),
-        Err(e) => (File::open(path).map_err(err)?, Some(err(e))),
+        Err(e) => (File::open(path).map_err(err)?, Some(e)),
     };
     let file_len = file.metadata().map_err(err)?.len();
 
@@ -866,7 +929,7 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, String> {
     let mut pos = 12u64;
     let data_start = loop {
         if pos + 8 > file_len {
-            return Err("no data chunk".into());
+            return Err(RecordingError::NoDataChunk);
         }
         let mut head = [0u8; 8];
         file.seek(SeekFrom::Start(pos)).map_err(err)?;
@@ -881,9 +944,12 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, String> {
     let max_data = (u32::MAX as u64 + 8).saturating_sub(data_start);
     let data_len = (file_len - data_start).min(max_data) / FRAME_BYTES * FRAME_BYTES;
 
-    let rewrite = |file: &mut File| -> Result<(), String> {
+    let rewrite = |file: &mut File| -> Result<(), RecordingError> {
         if let Some(e) = &open_rw_error {
-            return Err(e.clone());
+            return Err(RecordingError::Io {
+                path: path.display().to_string(),
+                source: std::io::Error::new(e.kind(), e.to_string()),
+            });
         }
         file.set_len(data_start + data_len).map_err(err)?;
         file.seek(SeekFrom::Start(4)).map_err(err)?;
@@ -918,7 +984,7 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, String> {
                 .collect();
             Ok(WavRepair::HeaderStale {
                 samples,
-                header_error,
+                header_error: header_error.to_string(),
             })
         }
     }
@@ -930,7 +996,7 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, String> {
 fn take_clip_source(path: &Path, salvaged: &mut Option<Vec<f32>>) -> Result<ClipSource, String> {
     match salvaged.take() {
         Some(samples) => Ok(ClipSource::Memory(samples)),
-        None => ClipSource::open_wav(path),
+        None => ClipSource::open_wav(path).map_err(|e| e.to_string()),
     }
 }
 
@@ -940,9 +1006,9 @@ fn take_clip_source(path: &Path, salvaged: &mut Option<Vec<f32>>) -> Result<Clip
 fn write_samples_and_peaks(
     track_buf: &mut TrackRecordingBuf,
     samples: &[f32],
-) -> Result<(), String> {
+) -> Result<(), RecordingError> {
     let Some(writer) = track_buf.writer.as_mut() else {
-        return Err("writer already closed".into());
+        return Err(RecordingError::WriterClosed);
     };
     if samples.is_empty() {
         return Ok(());
@@ -952,12 +1018,14 @@ fn write_samples_and_peaks(
     for f in 0..frames {
         let l = samples[f * 2];
         let r = samples[f * 2 + 1];
-        writer
-            .write_sample(l)
-            .map_err(|e| format!("write_sample L: {e}"))?;
-        writer
-            .write_sample(r)
-            .map_err(|e| format!("write_sample R: {e}"))?;
+        writer.write_sample(l).map_err(|e| RecordingError::WriteSample {
+            channel: "L",
+            source: e,
+        })?;
+        writer.write_sample(r).map_err(|e| RecordingError::WriteSample {
+            channel: "R",
+            source: e,
+        })?;
 
         let mono = (l + r) * 0.5;
         if mono < track_buf.peak_min {
