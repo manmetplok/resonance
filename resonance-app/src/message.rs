@@ -15,8 +15,8 @@ use crate::state::{
     TempoChoice, ViewMode,
 };
 use resonance_audio::types::{
-    AssetId, BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendId,
-    SendSource, TrackId,
+    AssetId, BusId, ClipId, FadeCurve, PluginInstanceId, SamplePos, ScannedPlugin, SendSource,
+    TrackId,
 };
 use resonance_audio::PoolImportOutcome;
 use resonance_common::{TakeGroupId, TakeId, TimelineRange};
@@ -37,6 +37,7 @@ pub use crate::update::marker_ui::MarkerUiMessage;
 pub use crate::update::master::MasterMessage;
 pub use crate::update::midi_clip::MidiClipMessage;
 pub use crate::update::midi_editor::MidiEditorMessage;
+pub use crate::update::mixer::MixerMessage;
 pub use crate::update::track::{BounceMessage, TrackMessage};
 pub use crate::update::transport::TransportMessage;
 pub use crate::update::vocal_tuning::VocalTuningMessage;
@@ -116,50 +117,6 @@ pub enum Message {
     Redo,
     /// The window manager requested that the window be closed.
     WindowCloseRequested(iced::window::Id),
-}
-
-/// Aux-send + return-bus actions raised from the Mixer inspector's
-/// ROUTING group. Every variant maps to one engine command (or, for
-/// [`CreateReturnFromSend`](MixerMessage::CreateReturnFromSend), a short
-/// ordered sequence). The handlers never mutate the send graph directly:
-/// the engine validates each command and echoes `AuxSendChanged` /
-/// `AuxSendRemoved` / `BusRoleChanged`, which the engine-event mirror
-/// (ba todo #478) folds into [`AuxSendState`](crate::state::AuxSendState).
-/// That single-writer rule keeps the GUI from showing a route the engine
-/// rejected as cyclic.
-#[derive(Debug, Clone)]
-pub enum MixerMessage {
-    /// Create a new aux send from `source` into return bus `dest` with
-    /// default routing (0 dB, post-fader, enabled). The engine allocates
-    /// the [`SendId`].
-    AddSend { source: SendSource, dest: BusId },
-    /// Create an aux send whose id the *app* chose up front, with
-    /// explicit level and tap point, so a caller can use the id without
-    /// waiting for the engine's `AuxSendChanged` echo (ba doc #273).
-    /// Same hint pattern as [`BusMessage::AddBusWithId`].
-    AddSendWithId {
-        id: SendId,
-        source: SendSource,
-        dest: BusId,
-        level_db: f32,
-        pre_fader: bool,
-    },
-    /// Remove the send with this id.
-    RemoveSend(SendId),
-    /// Set a send's level in dB (slider drag). Coalesces into a single
-    /// undo entry per drag, like the volume/pan faders.
-    SetSendLevel(SendId, f32),
-    /// Re-route an existing send into a different return bus.
-    SetSendDest(SendId, BusId),
-    /// Flip a send between a pre- and post-fader source tap.
-    ToggleSendPreFader(SendId),
-    /// Enable / disable a send while keeping its routing and level.
-    ToggleSendEnabled(SendId),
-    /// Mark a bus as an aux *return* bus, or clear the flag.
-    SetBusReturnRole(BusId, bool),
-    /// Create a brand-new FX return bus and route `source` into it in one
-    /// gesture: add a bus, flag it as a return, then upsert the send.
-    CreateReturnFromSend { source: SendSource },
 }
 
 #[derive(Debug, Clone)]
