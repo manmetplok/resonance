@@ -203,6 +203,49 @@ pub fn to_wav(
     );
 }
 
+/// Test surface: run the real export renderer ([`run_export`]) with
+/// explicit settings, automation snapshot and cancel token, and return
+/// every event it emitted (`Export*` family). Unlike [`to_wav`] this
+/// reaches the normalization passes and the cancel / temp-file paths.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn export_for_test(
+    path: String,
+    settings: &ExportSettings,
+    cancel: &AtomicBool,
+    shared: &Arc<SharedState>,
+    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
+    busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
+    master: &Arc<RwLock<MasterBus>>,
+    clips: &Arc<RwLock<Vec<AudioClip>>>,
+    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &super::AutomationSnapshot,
+    sample_rate: u32,
+) -> Vec<AudioEvent> {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    run_export(
+        path,
+        settings,
+        ExportReporter::Export,
+        shared,
+        cancel,
+        tracks,
+        busses,
+        master,
+        clips,
+        midi_clips,
+        plugins,
+        tempo_map,
+        automation,
+        sample_rate,
+        &tx,
+    );
+    drop(tx);
+    rx.try_iter().collect()
+}
+
 /// Spawn an offline export on a dedicated worker thread so the engine
 /// dispatch loop is not blocked. A 5-minute project takes hundreds of
 /// ms to render and previously froze every other command until the file

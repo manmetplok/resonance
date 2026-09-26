@@ -420,8 +420,9 @@ pub(crate) fn run_export(
     let normalize = settings.normalize;
     let (achieved_lufs, achieved_dbtp) = if normalize.enabled {
         // PASS 1 — analyze: render the whole range into the loudness
-        // meters without writing anything. `reset_plugins` before the pass
-        // makes the render deterministic so pass 2 reproduces it exactly.
+        // meters without writing anything. `reset_plugins` (CLAP `reset`,
+        // code review ENG-04) before each pass makes the render
+        // deterministic so pass 2 reproduces the measured pass exactly.
         reset_plugins(plugins);
         let mut measure = LoudnessMeasure::new(sample_rate);
         match render_range(

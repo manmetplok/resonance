@@ -262,6 +262,12 @@ pub fn chunk_span(remaining: u64) -> (usize, usize) {
 /// Reset every plugin so the bounce starts from a clean state. Without
 /// this, leftover envelope phase / reverb tail / etc. from previous
 /// playback would bleed into the first frame.
+///
+/// The stop/start cycle alone carries no reset semantics in CLAP (and is
+/// a no-op for the first-party clack plugins), so it is followed by the
+/// real `clap_plugin.reset()` (code review ENG-04), which is what clears
+/// tails and kills voices — first-party plugins map it to their
+/// `Plugin::reset`.
 pub(super) fn reset_plugins(
     plugins: &Arc<RwLock<PluginMap>>,
 ) {
@@ -269,6 +275,7 @@ pub(super) fn reset_plugins(
     for mutex in plugins_guard.values() {
         let mut inst = lock_plugin_for_bounce(mutex);
         inst.0.reset_processing();
+        inst.0.reset();
     }
 }
 

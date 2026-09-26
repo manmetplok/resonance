@@ -563,6 +563,28 @@ impl ClapInstance {
         &self.pending_notes
     }
 
+    /// CLAP `clap_plugin.reset()`: clear every buffer and kill every
+    /// voice (reverb / delay tails, envelopes, filter state) without
+    /// touching parameter values (code review ENG-04). Also drops the
+    /// host-side note queues, so a note queued by live playback can't
+    /// fire into whatever runs next. `[audio-thread & active]`: the
+    /// caller holds the instance mutex, so no `process()` is in flight;
+    /// the offline renderers call it as their audio thread before each
+    /// pass. A no-op on an inactive instance.
+    pub fn reset(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.pending_notes.clear();
+        self.carried_notes.clear();
+        self.idle_hold_frames = 0;
+        // SAFETY: `self.plugin` is the live plugin this instance owns;
+        // `active` holds, and `&mut self` means no process() runs.
+        if let Some(reset) = unsafe { (*self.plugin).reset } {
+            unsafe { reset(self.plugin) };
+        }
+    }
+
     /// Latch the current transport state so the next process() call can
     /// forward it to the plugin via `clap_event_transport`.
     pub fn set_transport(&mut self, bpm: f64, num: u16, den: u16, playing: bool, pos_beats: f64) {
