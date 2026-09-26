@@ -21,6 +21,14 @@ use resonance_plugin::{Smoother, SmoothingStyle};
 use crate::params::CompressorParams;
 use crate::viz::{CompressorViz, HISTORY_STEP_SAMPLES};
 
+/// Decay time of the peak detector. Short and fixed — just enough to
+/// bridge the gaps between a waveform's peaks — so the user's release acts
+/// once, on the gain-reduction envelope, instead of being cascaded with a
+/// second, identical release on the detector (LIB-06). A release knob set
+/// shorter than this also shortens the detector, so it is never slower
+/// than asked.
+pub const PEAK_DETECTOR_RELEASE_MS: f32 = 5.0;
+
 pub struct CompressorDsp {
     sample_rate: f32,
 
@@ -195,7 +203,8 @@ impl CompressorDsp {
         // Attack/release coefficients: one-pole exponential convergence.
         // `exp(-1 / (time_seconds * sr))` is the fraction kept each sample.
         let ballistics = Ballistics::from_times(self.sample_rate, attack_ms, release_ms);
-        let release_coef = ballistics.release_coef;
+        let detector_release_ms = release_ms.min(PEAK_DETECTOR_RELEASE_MS);
+        let peak_release_coef = (-1.0 / (detector_release_ms * 0.001 * self.sample_rate)).exp();
 
         // Update SC HPF coefficients once per block. When the HPF is
         // disabled we bypass by using an identity biquad (same coefficient
@@ -255,14 +264,14 @@ impl CompressorDsp {
                 0.0
             };
 
-            // Peak envelope: fast attack, exponential decay. The release
-            // coefficient is also used for the peak decay here so the
-            // detector respects the user's release time.
+            // Peak envelope: instant attack, short fixed decay
+            // ([`PEAK_DETECTOR_RELEASE_MS`]). The user's release is applied
+            // once, by the GR ballistics below.
             let abs_sample = det_sample.abs();
             self.peak_env = if abs_sample > self.peak_env {
                 abs_sample
             } else {
-                abs_sample + (self.peak_env - abs_sample) * release_coef
+                abs_sample + (self.peak_env - abs_sample) * peak_release_coef
             };
 
             // RMS envelope: 30 ms mean-square smoother.
